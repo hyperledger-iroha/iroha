@@ -21,6 +21,7 @@ public final class HttpClientRejectCodeOkHttpTests {
   @Test
   public void okHttpTransportSurfacesRejectHeader() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(TransactionCompatibilityTestSupport.compatibleCapabilitiesResponse());
       server.enqueue(
           new MockResponse()
               .setResponseCode(400)
@@ -45,8 +46,11 @@ public final class HttpClientRejectCodeOkHttpTests {
       assertEquals(400, response.statusCode());
       assertEquals("PRTRY:TX_SIGNATURE_MISSING", response.rejectCode().orElse(null));
 
+      final RecordedRequest capabilities = server.takeRequest(1, TimeUnit.SECONDS);
+      TransactionCompatibilityTestSupport.assertCompatibleCapabilitiesRequest(capabilities);
       final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
       assertNotNull("mock server must observe submission", recorded);
+      assertEquals("POST", recorded.getMethod());
       assertEquals("/v1/pipeline/transactions", recorded.getPath());
     }
   }

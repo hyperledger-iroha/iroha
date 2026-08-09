@@ -32,6 +32,7 @@ use std::{
 pub use crate::ivm::{
     AccelerationPolicy, HardwareCapabilities, IvmBuilder, IvmConfig, IvmConfigBuilder,
 };
+pub use crate::stack_policy::IvmStackPolicy;
 use crate::{VMError, host::IVMHost, ivm::IVM, metadata::ProgramMetadata, syscalls};
 
 /// Runtime operations exposed by the VM core.

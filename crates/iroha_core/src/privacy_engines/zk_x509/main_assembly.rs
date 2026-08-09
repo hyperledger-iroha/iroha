@@ -10,7 +10,7 @@
 //! prover-side differential invariant; the independent aggregate verifier
 //! enforces the committed numeric constraints.
 
-use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyX509ExtendedKeyUsageV1};
+use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
 use p256::ecdsa::Signature as P256Signature;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -22,8 +22,8 @@ use super::{
     },
     codec::ZkX509WitnessV1,
     der_air::{
-        ZkX509DerAirErrorV1, ZkX509DerEkuV1, ZkX509Rfc5280StatementV1, ZkX509Rfc5280TraceV1,
-        build_zk_x509_rfc5280_trace_v1, certificate_slot_2_active_v1, rfc5280_io_witnesses_v1,
+        ZkX509DerAirErrorV1, ZkX509Rfc5280TraceV1, build_zk_x509_rfc5280_trace_v1,
+        certificate_slot_2_active_v1, rfc5280_io_witnesses_v1,
     },
     der_stark::{ZkX509DerStarkBaseV1, ZkX509DerStarkErrorV1, build_zk_x509_der_stark_base_v1},
     io_air::{
@@ -66,24 +66,15 @@ use super::{
         ZkX509ShaCallScheduleV1, ZkX509ShaCallWitnessV1, validate_zk_x509_sha_call_witnesses_v1,
     },
     stark::{
-        ZkX509MainVerifierProfileV1, ZkX509StarkErrorV1,
-        construct_zk_x509_main_verifier_profile_v1, validate_zk_x509_main_verifier_profile_v1,
+        ZkX509MainVerifierProfileV1, ZkX509StarkErrorV1, construct_zk_x509_main_verifier_profile_v1,
     },
+    verifier_profile::rfc_statement_with_crl_number_v1,
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
-use crate::privacy_state::PrivacyZkX509AuthoritativeStateV1;
-
-/// Stable identity of the canonical production material assembler.
-pub(crate) const ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-main-assembly-v1-incompatible:strict-reference-prover-invariant:exact-der-rfc-projection-ca-sources:29-verifier-positioned-sha-witnesses:five-p256-equations:optional-slot2-rfc-zero-source-and-public-valid-dummy-selector:statement-compiled-deduplicated-sequential-byte-io:exact-witness-declaration-replay:logical-active-row-census:exact49-registrations:no-host-verification-substitute:verifier-terminal-replay=complete:activation=governance-gated";
 
 const P256_SIGNATURES_V1: usize = 5;
 const PROJECTION_SHA_CALLS_V1: usize = 7;
 const PROJECTION_SHARED_PREFIX_BASE_CHANNELS_V1: usize = 5;
-const KEY_USAGE_DIGITAL_SIGNATURE_V1: u16 = 1 << 0;
-const KEY_USAGE_CONTENT_COMMITMENT_V1: u16 = 1 << 1;
-const KEY_USAGE_KEY_ENCIPHERMENT_V1: u16 = 1 << 2;
-const KEY_USAGE_KEY_AGREEMENT_V1: u16 = 1 << 4;
 
 /// Challenge-independent byte-memory material committed by MAIN.
 #[derive(Clone, PartialEq, Eq)]
@@ -276,9 +267,6 @@ pub(crate) enum ZkX509MainAssemblyErrorV1 {
     /// A canonical source, role, ordering, or fixed-width conversion failed.
     #[error("zk-X509 MAIN source assembly is invalid")]
     Source,
-    /// Revalidation did not reproduce the exact canonical assembly.
-    #[error("zk-X509 MAIN assembly differs from its canonical source replay")]
-    ReplayMismatch,
     /// Bounded allocation or checked arithmetic failed.
     #[error("zk-X509 MAIN assembly resource envelope is exceeded")]
     Resource,
@@ -288,86 +276,6 @@ impl From<ZkX509StarkErrorV1> for ZkX509MainAssemblyErrorV1 {
     fn from(_: ZkX509StarkErrorV1) -> Self {
         Self::Registration
     }
-}
-
-/// Rebuild all challenge-independent material from externally retained source
-/// references and reject any omission, reorder, duplicate, or substitution.
-///
-/// The assembly deliberately owns no second copy of the private witness or
-/// governed source records.
-pub(crate) fn validate_zk_x509_main_trace_assembly_v1(
-    assembly: &ZkX509MainTraceAssemblyV1,
-    statement: &IrohaZkX509StarkP256StatementV1,
-    governance: ZkX509GovernanceV1<'_>,
-    witness: &ZkX509WitnessV1,
-) -> Result<(), ZkX509MainAssemblyErrorV1> {
-    validate_zk_x509_main_verifier_profile_v1(assembly.verifier_profile)?;
-    let expected = build_zk_x509_main_trace_assembly_v1(statement, governance, witness)?;
-    if assembly.relation_output != expected.relation_output
-        || assembly.rfc_trace != expected.rfc_trace
-        || assembly.der_base != expected.der_base
-        || assembly.rfc_base != expected.rfc_base
-        || assembly.projection_trace != expected.projection_trace
-        || assembly.ca_accumulator_trace != expected.ca_accumulator_trace
-        || assembly.sha_schedule != expected.sha_schedule
-        || assembly.sha_witnesses != expected.sha_witnesses
-        || assembly.p256_witnesses != expected.p256_witnesses
-        || assembly.p256_materials != expected.p256_materials
-        || assembly.optional_certificate_selection != expected.optional_certificate_selection
-        || assembly.io != expected.io
-        || assembly.verifier_profile != expected.verifier_profile
-    {
-        return Err(ZkX509MainAssemblyErrorV1::ReplayMismatch);
-    }
-    Ok(())
-}
-
-fn rfc_statement_with_crl_number_v1(
-    statement: &IrohaZkX509StarkP256StatementV1,
-    crl_number: u64,
-) -> ZkX509Rfc5280StatementV1 {
-    let key_usage = u16::from(statement.key_usage.digital_signature.is_required())
-        * KEY_USAGE_DIGITAL_SIGNATURE_V1
-        | u16::from(statement.key_usage.content_commitment.is_required())
-            * KEY_USAGE_CONTENT_COMMITMENT_V1
-        | u16::from(statement.key_usage.key_encipherment.is_required())
-            * KEY_USAGE_KEY_ENCIPHERMENT_V1
-        | u16::from(statement.key_usage.key_agreement.is_required()) * KEY_USAGE_KEY_AGREEMENT_V1;
-    let extended_key_usages = statement
-        .extended_key_usages
-        .iter()
-        .map(|usage| match usage {
-            PrivacyX509ExtendedKeyUsageV1::ClientAuthentication => {
-                ZkX509DerEkuV1::ClientAuthentication
-            }
-            PrivacyX509ExtendedKeyUsageV1::DocumentSigning => ZkX509DerEkuV1::DocumentSigning,
-            PrivacyX509ExtendedKeyUsageV1::WalletIdentity => ZkX509DerEkuV1::WalletIdentity,
-        })
-        .collect();
-    ZkX509Rfc5280StatementV1 {
-        presentation_not_before_unix_seconds: statement.presentation_not_before_unix_seconds,
-        presentation_not_after_unix_seconds: statement.presentation_not_after_unix_seconds,
-        leaf_key_usage: key_usage,
-        leaf_extended_key_usages: extended_key_usages,
-        crl_number,
-        disclosed_attribute_indices: statement
-            .disclosed_attributes
-            .iter()
-            .map(|attribute| attribute.index)
-            .collect(),
-    }
-}
-
-/// Compile verifier-owned RFC public input from the typed statement and
-/// trusted authoritative state.
-///
-/// The CRL number is deliberately read from state here; no proof metadata or
-/// prover-supplied governance selector participates in this construction.
-pub(crate) fn compile_zk_x509_rfc_statement_from_authoritative_state_v1(
-    statement: &IrohaZkX509StarkP256StatementV1,
-    authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
-) -> ZkX509Rfc5280StatementV1 {
-    rfc_statement_with_crl_number_v1(statement, authoritative_state.crl_record().crl_number)
 }
 
 fn projection_witness_v1(

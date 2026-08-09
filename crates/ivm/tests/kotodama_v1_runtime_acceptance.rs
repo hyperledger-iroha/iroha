@@ -184,6 +184,35 @@ seiyaku MixedTailRuntime {
 }
 
 #[test]
+fn result_if_let_executes_both_tags_and_binds_only_the_selected_payload() {
+    let source = r#"
+seiyaku ResultIfLetRuntime {
+  fn via_ok(Result<int, bool> value) -> int {
+    if let Result::ok(item) = value { item } else { 9 }
+  }
+
+  fn via_err(Result<int, bool> value) -> int {
+    if let Result::err(failure) = value {
+      if failure { 7 } else { 6 }
+    } else {
+      8
+    }
+  }
+
+  view fn run() -> int {
+    via_ok(Result::ok(4)) * 1000
+      + via_ok(Result::err(true)) * 100
+      + via_err(Result::err(true)) * 10
+      + via_err(Result::ok(5))
+  }
+}
+"#;
+
+    let vm = compile_and_run(source);
+    assert_eq!(common::decode_i64_register(&vm, 10), 4978);
+}
+
+#[test]
 fn state_map_get_distinguishes_absent_present_zero_and_removal() {
     let source = r#"
 seiyaku StateMapOptionAcceptance {

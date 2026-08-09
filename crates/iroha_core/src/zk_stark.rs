@@ -138,7 +138,6 @@ fn stark_air_circuit_id_targets_soracloud_fhe_relation(circuit_id: &str) -> bool
         iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
         iroha_data_model::soracloud::SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
         iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
-        iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
         iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
     ]
     .into_iter()
@@ -2044,7 +2043,7 @@ fn fri_round_challenge(
     challenge(params, "stark:fri:r:k", &tb)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 fn synthesize_stark_fri_envelope_from_values(
     params: StarkFriParamsV1,
     transcript_label: String,
@@ -2291,6 +2290,7 @@ pub fn stark_air_public_digest_from_composition(
 /// composition evaluations are the result of their arithmetic constraint system. This helper commits
 /// those already-evaluated vectors and emits transcript-derived AIR openings bound to the same FRI
 /// query roots replayed by the verifier.
+#[cfg(test)]
 pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
     params: StarkFriParamsV1,
     transcript_label: String,

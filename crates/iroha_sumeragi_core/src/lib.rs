@@ -15,6 +15,8 @@
 #[cfg(all(verus_only, feature = "verus"))]
 use vstd::prelude::*;
 
+#[path = "../../iroha_core/src/sumeragi/v2_core/committee.rs"]
+mod committee;
 #[path = "../../iroha_core/src/sumeragi/v2_core/quorum.rs"]
 mod quorum;
 #[macro_use]
@@ -36,6 +38,10 @@ mod wal;
 #[path = "effective_lock_verus_proofs.rs"]
 mod zz_effective_lock_verus_proofs;
 
+pub use committee::{
+    Committee, CommitteeError, CommitteeRole, MAX_COMMITTEE_SIZE, MIN_COMMITTEE_SIZE,
+    ValidatorIndex,
+};
 pub use quorum::{Quorum, QuorumError};
 pub use reducer::{
     BodyState, DurableCommitReceipt, Effect, EquivocationEvidence, EquivocationKind, Event,
@@ -45,11 +51,11 @@ pub use reducer::{
 pub use scheduler::{ScheduleState, ScheduledWork};
 pub use types::{
     CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, EventTag, Generation,
-    HeightContext, HeightContextError, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PROTOCOL_VERSION_V3,
-    PayloadChunk, PayloadManifest, Phase, Proposal, ProposalJustification, QuorumCertificate,
-    Round, SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject,
-    TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote,
-    VotingMode, VotingPower,
+    HeightContext, HeightContextError, MAX_FAULT_TOLERANCE, MAX_VOTING_ROSTER_LEN,
+    MIN_FAULT_TOLERANCE, MIN_VOTING_ROSTER_LEN, OpaqueSignature, PROTOCOL_VERSION_V4, PayloadChunk,
+    PayloadManifest, Phase, Proposal, ProposalJustification, QuorumCertificate, Round,
+    SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
+    TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote, VotingMode, VotingPower,
 };
 pub use wal::{
     DurableState, EncodedWalFrame, PersistenceId, RecoveredWalRecord, ReplayError,

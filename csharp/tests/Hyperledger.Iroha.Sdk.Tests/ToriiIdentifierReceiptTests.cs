@@ -35,7 +35,7 @@ public sealed class ToriiIdentifierReceiptTests
     [InlineData("payload.opaque_id", " opaque-1 ")]
     [InlineData("payload.receipt_hash", " receipt-1 ")]
     [InlineData("payload.uaid", " uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef ")]
-    [InlineData("payload.account_id", " sorauﾛ1Nmerchant ")]
+    [InlineData("payload.account_id", " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT ")]
     [InlineData("payload.execution.backend", " bfv-programmed-sha3-256-v1 ")]
     [InlineData("attestation.signature", " ABCD ")]
     public void IdentifierResolveResponseRejectsPaddedReceiptFields(string field, string value)
@@ -181,7 +181,7 @@ public sealed class ToriiIdentifierReceiptTests
             "opaque_id" => valid with { OpaqueId = "opaque-2" },
             "receipt_hash" => valid with { ReceiptHash = "receipt-2" },
             "uaid" => valid with { Uaid = "uaid:1111111111111111111111111111111111111111111111111111111111111111" },
-            "account_id" => valid with { AccountId = "sorauﾛ1Ncustomer" },
+            "account_id" => valid with { AccountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV" },
             "resolved_at_ms" => valid with { ResolvedAtMilliseconds = 1710000000001L },
             "expires_at_ms" => valid with { ExpiresAtMilliseconds = 1710003600001L },
             "backend" => valid with { Backend = "bfv-programmed-sha3-256-v2" },
@@ -233,7 +233,7 @@ public sealed class ToriiIdentifierReceiptTests
         Assert.Equal("phone#retail", receipt.PolicyId);
         Assert.Equal("opaque-1", receipt.OpaqueId);
         Assert.Equal("receipt-1", receipt.ReceiptHash);
-        Assert.Equal("sorauﾛ1Nmerchant", receipt.AccountId);
+        Assert.Equal("sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT", receipt.AccountId);
         Assert.Equal(1710000000000L, receipt.ResolvedAtMilliseconds);
         Assert.Equal(1710003600000L, receipt.ExpiresAtMilliseconds);
         Assert.Equal("bfv-programmed-sha3-256-v1", receipt.Backend);
@@ -473,7 +473,7 @@ public sealed class ToriiIdentifierReceiptTests
 
     [Theory]
     [InlineData("policy_id", " phone#retail ")]
-    [InlineData("owner", " sorauﾛ1Nissuer ")]
+    [InlineData("owner", " sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT ")]
     [InlineData("normalization", " phone_e164 ")]
     [InlineData("resolver_public_key", " ed25519:0123456789abcdef ")]
     [InlineData("backend", " bfv-programmed-sha3-256-v1 ")]
@@ -580,7 +580,7 @@ public sealed class ToriiIdentifierReceiptTests
         return new JsonObject
         {
             ["policy_id"] = "phone#retail",
-            ["owner"] = "sorauﾛ1Nissuer",
+            ["owner"] = "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
             ["active"] = true,
             ["normalization"] = "phone_e164",
             ["resolver_public_key"] = "ed25519:0123456789abcdef",
@@ -598,7 +598,7 @@ public sealed class ToriiIdentifierReceiptTests
         return """
             {
               "policy_id": "phone#retail",
-              "owner": "sorauﾛ1Nissuer",
+              "owner": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "active": true,
               "normalization": "phone_e164",
               "resolver_public_key": "ed25519:0123456789abcdef",
@@ -635,7 +635,7 @@ public sealed class ToriiIdentifierReceiptTests
         return $$"""
             {
                 "policy_id": "phone#retail",
-                "account_id": "sorauﾛ1Nmerchant",
+                "account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
                 "opaque_id": "opaque-1",
                 "receipt_hash": "receipt-1",
                 "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -675,7 +675,7 @@ public sealed class ToriiIdentifierReceiptTests
         return """
             {
                 "policy_id": "phone#retail",
-                "account_id": "sorauﾛ1Nmerchant",
+                "account_id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
                 "opaque_id": "opaque-1",
                 "receipt_hash": "receipt-1",
                 "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",

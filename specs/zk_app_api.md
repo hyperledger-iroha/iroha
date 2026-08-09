@@ -21,13 +21,21 @@ ledger paths:
   `iroha_zkp_halo2::OpenVerifyEnvelope` format. It does not consult the
   verifying-key registry, does not enforce ledger circuit/schema policy, and is
   not a substitute for `iroha_core::zk::verify_backend_with_timing_guardrails`.
-  The generator vectors carried for transparent reproducibility must equal the
-  deterministic V1 derivation for the advertised curve and `n`; callers cannot
-  select another parameter set. The complete canonical parameter fingerprint
-  is absorbed into the opening transcript. Torii applies the configured total
-  body ceiling before decoding, then applies finite batch, per-envelope,
-  curve-`k`, and transcript-label ceilings. The embedding API requires those
-  limits explicitly; the no-limit Torii handler has been removed.
+  The wire carries only a `(version, curve, n)` selector; the verifier derives
+  the deterministic V1 generators and callers cannot submit another parameter
+  set. The complete derived parameter fingerprint is absorbed into the opening
+  transcript. The route fails closed unless `zk.halo2.enabled` is true and
+  admits work through Torii's general and heavy-query limits before moving
+  decoding and verification to a blocking worker; owned permits remain with
+  that physical worker if the HTTP request is cancelled. Requests must declare
+  exactly one `Content-Type`: `application/json` (optionally with the single
+  parameter `charset=utf-8`) or parameter-free `application/x-norito`. Torii
+  applies the configured total body ceiling before decoding, bounds the native
+  Norito batch length before allocating the outer vector, and rejects JSON
+  base64 strings that cannot fit `max_envelope_bytes` before allocating their
+  decoded buffers. It then applies finite batch, per-envelope, curve-`k`, and
+  transcript-label ceilings. The embedding API requires those limits
+  explicitly; the no-limit Torii handler has been removed.
 
 The pre-release decode-only `/v1/zk/verify` and `/v1/zk/submit-proof` routes
 were removed. To request ledger-authoritative proof verification, submit a
@@ -37,6 +45,24 @@ instruction) through the ordinary transaction pipeline.
 Runtime-critical surfaces such as governance ballots/tallies, confidential
 assets, `IvmProved`, and registry-backed STARK/Halo2 flows continue to use the
 guarded core verifier path instead.
+
+## Confidential-tree read endpoints
+
+- `POST /v1/zk/roots` returns a bounded suffix of mutation-time persisted roots.
+  It validates fixed frontier/current-root metadata plus bounded history and
+  checkpoint shape, but never rebuilds commitments or recomputes prefix roots.
+  Snapshot decode/recovery is the boundary that fully projects the ordered
+  commitment prefix and authenticates those persisted values.
+- `POST /v1/zk/merkle-path` accepts at most 128 distinct commitments. It scans
+  the frontier once to record requested positions and multiplicity, builds one
+  compact authenticated tree projection, compares the projection root and
+  frontier with persisted metadata, and derives every requested path plus the
+  next-zero path from that projection. Work is `O(N + k * tree_depth)` and each
+  stored commitment is leaf-hashed once per request, rather than once per path.
+
+Both routes retain Torii's general and heavy-query admission permits inside a
+blocking worker through physical completion. Their responses identify the exact
+committed block height and hash evaluated by the retained immutable state view.
 
 ## Attachments
 
@@ -55,7 +81,7 @@ Endpoints:
  - `GET  /v1/zk/proofs/count` — return `{ count }` for the same filter set.
 - Proof endpoints enforce Torii’s dedicated guardrails:
   - Body limits: proof submission payloads exceeding `torii.proof_max_body_bytes` are rejected.
-  - Rate limit: `torii.proof_rate_per_minute` + `torii.proof_burst` (returns `429` + `Retry-After` using `torii.proof_retry_after_secs` unless `api_allow_cidrs` bypasses).
+  - Rate limit: `torii.proof_rate_per_minute` + `torii.proof_burst` (returns `429` + `Retry-After` using `torii.proof_retry_after_secs` unless `api_rate_limit_bypass_cidrs` bypasses rate limiting only).
   - Pagination: `torii.proof_max_list_limit` caps `limit`; larger requests fail with `CapacityLimit` (429).
   - Timeout: list/count handlers abort after `torii.proof_request_timeout_ms` wall-clock.
   - Egress throttling: proof fetches are shaped by `torii.proof_egress_bytes_per_sec` + `torii.proof_egress_burst_bytes`; throttled responses return `Retry-After` with the proof retry hint.
@@ -300,7 +326,7 @@ When the worker exhausts the byte or time budget, it stops scheduling new attach
 ## Security and Operations
 
 - The app API is subject to rate limits; limits are enforced per endpoint key. You can require an API token for app-facing endpoints via `require_api_token=true` and set `api_tokens`.
-- CIDR allowlist (`api_allow_cidrs`) can bypass rate limits for trusted origins.
+- CIDR allowlist (`api_rate_limit_bypass_cidrs`) can bypass rate limits for selected origins; it grants no authentication, internal-read, or routed-visibility privilege.
 - These endpoints do not change consensus outcomes. You can disable the prover worker (`zk_prover_enabled=false`) without impacting validation or execution.
 
 ## CLI Helpers
@@ -463,9 +489,10 @@ iroha ledger trigger register \
 ## Governance Endpoints (ZK Ballots)
 
 For submitting ZK ballots and building transaction skeletons, refer to the
-Governance App API document. These strict request schemas do not accept
-`private_key`; Torii returns a skeleton for clients to sign locally and submit:
-- POST `/v1/gov/ballots/zk` — base DTO returning a `CastZkBallot` skeleton.
+Governance App API document. These strict request schemas and their nested
+window, provenance, proof, and public-input objects reject unknown fields and
+all private-key aliases before dispatch; Torii returns a skeleton for clients
+to sign locally and submit:
 - POST `/v1/gov/ballots/zk-v1` — v1-style DTO with explicit envelope fields.
 - POST `/v1/gov/ballots/zk-v1/ballot-proof` — accepts canonical V1 `BallotProof` JSON directly.
 

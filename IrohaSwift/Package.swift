@@ -9,6 +9,7 @@ import Glibc
 
 let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let bridgeRelativePath = "../dist/NoritoBridge.xcframework"
+let requiredBridgeAbiVersion = 21
 let repositoryDirectory = packageDirectory.deletingLastPathComponent().standardizedFileURL
 let configuredArtifactDirectory = ProcessInfo.processInfo.environment[
     "MOBILE_SDK_APPLE_ARTIFACT_DIR"
@@ -141,6 +142,21 @@ func validateBridgeArtifact(at artifactRoot: URL) -> String? {
                 return "error: NoritoBridge.xcframework slice \(identifier) is missing \(relativePath)."
             }
         }
+    }
+
+    let artifactManifestURL = artifactRoot.appendingPathComponent(
+        "NoritoBridge.artifacts.json"
+    )
+    guard
+        let manifestData = try? Data(contentsOf: artifactManifestURL),
+        let manifest = try? JSONSerialization.jsonObject(with: manifestData)
+            as? [String: Any],
+        let bridgeAbiVersion = manifest["native_bridge_abi_version"] as? Int
+    else {
+        return "error: NoritoBridge.xcframework is missing readable ABI-bound artifact metadata."
+    }
+    guard bridgeAbiVersion == requiredBridgeAbiVersion else {
+        return "error: NoritoBridge.xcframework requires exact native bridge ABI \(requiredBridgeAbiVersion); found \(bridgeAbiVersion)."
     }
 
     return nil

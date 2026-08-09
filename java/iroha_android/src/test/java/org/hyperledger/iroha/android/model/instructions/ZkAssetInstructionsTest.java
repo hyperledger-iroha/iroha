@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.model.instructions;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.NativeSignedTransaction;
@@ -22,8 +23,7 @@ public final class ZkAssetInstructionsTest {
     confidentialEncryptedPayloadIsStrictAndDefensive();
     confidentialEncryptedPayloadMatchesRustWireFixture();
     proofAttachmentValidatesBackendAndJsonShape();
-    shieldInstructionValidatesCanonicalFieldsAndCopiesBytes();
-    unshieldInstructionValidatesInputsOutputsAndProof();
+    retiredGenericConfidentialSurfacesAreAbsent();
     registerZkAssetInstructionValidatesModeAndVerifierIds();
     nativeSignerZkMethodsRejectBadInputsBeforeNativeDispatch();
     nativeSignerFeePaymentRejectsInvalidBoundsBeforeNativeDispatch();
@@ -154,67 +154,23 @@ public final class ZkAssetInstructionsTest {
     expectThrows(() -> ProofVerifierKeyRef.fromWireId("missing-separator"));
   }
 
-  private static void shieldInstructionValidatesCanonicalFieldsAndCopiesBytes() {
-    final byte[] commitment = fill(0x7a, 32);
-    final ShieldInstruction instruction =
-        ShieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setFrom("alice")
-            .setAmount("340282366920938463463374607431768211456.25")
-            .setNoteCommitment(commitment)
-            .setEncryptedPayload(samplePayload())
-            .build();
-    commitment[0] = 0;
-    assert "Shield".equals(instruction.toArguments().get("action"));
-    assert "340282366920938463463374607431768211456.25".equals(instruction.amount());
-    assert instruction.noteCommitment()[0] == 0x7a;
-    final byte[] exposed = instruction.noteCommitment();
-    exposed[0] = 0;
-    assert instruction.noteCommitment()[0] == 0x7a;
-
-    expectThrows(() -> ShieldInstruction.builder().setAmount("01"));
-    expectThrows(() -> ShieldInstruction.builder().setAmount("-1"));
-    expectThrows(() -> ShieldInstruction.builder().setAmount("1.0"));
-    expectThrows(() -> ShieldInstruction.builder().setNoteCommitment(new byte[32]));
-  }
-
-  private static void unshieldInstructionValidatesInputsOutputsAndProof() {
-    final byte[] input = fill(0x20, 32);
-    final byte[] output = fill(0x21, 32);
-    final byte[] root = fill(0x22, 32);
-    final UnshieldInstruction instruction =
-        UnshieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setTo("bob")
-            .setPublicAmount("0.25")
-            .addInput(input)
-            .addOutput(output)
-            .setProof(sampleProof())
-            .setRootHint(root)
-            .build();
-    input[0] = 0;
-    output[0] = 0;
-    root[0] = 0;
-    assert "Unshield".equals(instruction.toArguments().get("action"));
-    assert "0.25".equals(instruction.publicAmount());
-    expectThrows(() -> UnshieldInstruction.builder().setPublicAmount("00.25"));
-    expectThrows(() -> UnshieldInstruction.builder().setPublicAmount("-0.25"));
-    assert instruction.inputs().size() == 1;
-    assert instruction.outputs().size() == 1;
-    assert instruction.inputs().get(0)[0] == 0x20;
-    assert instruction.outputs().get(0)[0] == 0x21;
-    assert instruction.rootHint()[0] == 0x22;
-
-    expectThrows(
-        () -> UnshieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setTo("bob")
-            .setPublicAmount("1")
-            .setProof(sampleProof())
-            .build());
-    expectThrows(() -> UnshieldInstruction.builder().addInput(new byte[32]));
-    expectThrows(() -> UnshieldInstruction.builder().addOutput(fill(1, 31)));
-    expectThrows(() -> UnshieldInstruction.builder().setRootHint(fill(1, 31)));
+  private static void retiredGenericConfidentialSurfacesAreAbsent() {
+    final String packageName = "org.hyperledger.iroha.android.model.instructions.";
+    final String[][] variants = {{"Shi", "eld"}, {"Zk", "Transfer"}, {"Un", "shield"}};
+    for (final String[] parts : variants) {
+      final String variant = parts[0] + parts[1];
+      try {
+        Class.forName(packageName + variant + "Instruction");
+        throw new AssertionError("retired generic instruction class is still present: " + variant);
+      } catch (ClassNotFoundException expected) {
+        // Expected: ABI V1 exposes only typed Kagemusha movement flows.
+      }
+      for (java.lang.reflect.Method method : NativeSignerBridge.class.getDeclaredMethods()) {
+        final String name = method.getName();
+        assert !name.equals("encode" + variant + "SignedTransaction");
+        assert !name.equals("nativeEncode" + variant + "SignedTransaction");
+      }
+    }
   }
 
   private static void registerZkAssetInstructionValidatesModeAndVerifierIds() {
@@ -224,60 +180,23 @@ public final class ZkAssetInstructionsTest {
             .setMode(ZkAssetMode.HYBRID)
             .setAllowShield(true)
             .setAllowUnshield(false)
-            .setTransferVerifyingKey("halo2/ipa:transfer-v2")
             .build();
     assert instruction.kind() == InstructionKind.REGISTER;
     assert "Hybrid".equals(instruction.toArguments().get("mode"));
     assert "false".equals(instruction.toArguments().get("allow_unshield"));
-    assert ZkAssetMode.fromWireName("ZkNative") == ZkAssetMode.ZK_NATIVE;
-    expectThrows(() -> ZkAssetMode.fromWireName("zk-native"));
-    expectThrows(() -> RegisterZkAssetInstruction.builder().setTransferVerifyingKey("halo2/ipa"));
+    assert ZkAssetMode.HYBRID.bridgeCode() == 0;
+    expectThrows(() -> ZkAssetMode.fromWireName("ZkNative"));
+
+    final LinkedHashMap<String, String> retiredArguments =
+        new LinkedHashMap<>(instruction.toArguments());
+    retiredArguments.put("vk_transfer", "halo2/ipa:transfer-v2");
+    expectThrows(() -> RegisterZkAssetInstruction.fromArguments(retiredArguments));
   }
 
   private static void nativeSignerZkMethodsRejectBadInputsBeforeNativeDispatch() {
-    final ShieldInstruction shield =
-        ShieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setFrom("alice")
-            .setAmount("1")
-            .setNoteCommitment(fill(1, 32))
-            .setEncryptedPayload(samplePayload())
-            .build();
-    final UnshieldInstruction unshield =
-        UnshieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setTo("bob")
-            .setPublicAmount("1")
-            .addInput(fill(2, 32))
-            .setProof(sampleProof())
-            .build();
     final RegisterZkAssetInstruction register =
         RegisterZkAssetInstruction.builder().setAsset("rose#wonderland").build();
 
-    expectThrows(
-        () ->
-            NativeSignerBridge.encodeShieldSignedTransaction(
-                SigningAlgorithm.ED25519,
-                "chain",
-                AccountAddress.DEFAULT_I105_DISCRIMINANT,
-                "alice",
-                -1,
-                null,
-                shield,
-                new byte[] {1},
-                noFeePayment()));
-    expectThrows(
-        () ->
-            NativeSignerBridge.encodeUnshieldSignedTransaction(
-                SigningAlgorithm.ED25519,
-                " chain ",
-                AccountAddress.DEFAULT_I105_DISCRIMINANT,
-                "alice",
-                0,
-                null,
-                unshield,
-                new byte[] {1},
-                noFeePayment()));
     expectThrows(
         () ->
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
@@ -289,18 +208,6 @@ public final class ZkAssetInstructionsTest {
                 0L,
                 register,
                 new byte[] {1},
-                noFeePayment()));
-    expectThrows(
-        () ->
-            NativeSignerBridge.encodeShieldSignedTransaction(
-                SigningAlgorithm.ED25519,
-                "chain",
-                AccountAddress.DEFAULT_I105_DISCRIMINANT,
-                "alice",
-                0,
-                null,
-                shield,
-                new byte[0],
                 noFeePayment()));
   }
 
@@ -342,10 +249,10 @@ public final class ZkAssetInstructionsTest {
   private static void nativeSignerZkMethodsBindFeePaymentWhenBridgeAvailable()
       throws Exception {
     assert NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION == 21;
-    assert NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION == 1;
+    assert NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION == 3;
     if (!NativeSignerBridge.isNativeAvailable()) {
       throw new AssertionError(
-          "connect_norito_bridge ABI 21 native-signer contract revision 1 is required");
+          "connect_norito_bridge ABI 21 native-signer contract revision 3 is required");
     }
 
     final byte[] seed = new byte[32];
@@ -386,47 +293,6 @@ public final class ZkAssetInstructionsTest {
             feePayment),
         feePayment);
 
-    final ShieldInstruction shield =
-        ShieldInstruction.builder()
-            .setAsset(gasAssetId)
-            .setFrom(authority)
-            .setAmount("1")
-            .setNoteCommitment(fill(3, 32))
-            .setEncryptedPayload(samplePayload())
-            .build();
-    assertNativeFeePayment(
-        NativeSignerBridge.encodeShieldSignedTransaction(
-            SigningAlgorithm.ED25519,
-            "00000042",
-            AccountAddress.DEFAULT_I105_DISCRIMINANT,
-            authority,
-            1_736_000_000_001L,
-            null,
-            shield,
-            keypair.privateKey(),
-            feePayment),
-        feePayment);
-
-    final UnshieldInstruction unshield =
-        UnshieldInstruction.builder()
-            .setAsset(gasAssetId)
-            .setTo(authority)
-            .setPublicAmount("1")
-            .addInput(fill(4, 32))
-            .setProof(sampleProof())
-            .build();
-    assertNativeFeePayment(
-        NativeSignerBridge.encodeUnshieldSignedTransaction(
-            SigningAlgorithm.ED25519,
-            "00000042",
-            AccountAddress.DEFAULT_I105_DISCRIMINANT,
-            authority,
-            1_736_000_000_002L,
-            null,
-            unshield,
-            keypair.privateKey(),
-            feePayment),
-        feePayment);
   }
 
   private static void assertNativeFeePayment(
@@ -448,15 +314,6 @@ public final class ZkAssetInstructionsTest {
 
   private static ConfidentialEncryptedPayload samplePayload() {
     return new ConfidentialEncryptedPayload(fill(0x11, 32), fill(0x22, 24), new byte[] {0x33, 0x34});
-  }
-
-  private static ProofAttachment sampleProof() {
-    return new ProofAttachment(
-        "halo2/ipa",
-        new byte[] {0x44},
-        new ProofVerifierKeyRef("halo2/ipa", "unshield-v3"),
-        fill(0x55, 32),
-        null);
   }
 
   private static byte[] fill(final int value, final int size) {
@@ -498,4 +355,5 @@ public final class ZkAssetInstructionsTest {
     }
     throw new AssertionError("expected exception");
   }
+
 }

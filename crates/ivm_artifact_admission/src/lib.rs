@@ -570,127 +570,150 @@ fn manifest_state_descriptors(states: &[EmbeddedStateDescriptor]) -> Vec<StateDe
         .collect()
 }
 
-fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
-    enum Fragment<'a> {
-        Type {
-            ty: &'a EmbeddedStateType,
-            depth: usize,
-        },
-        Text(&'a str),
-        Capacity(u8),
-    }
+enum ManifestStateTypeFragment<'a> {
+    Type {
+        ty: &'a EmbeddedStateType,
+        depth: usize,
+    },
+    Text(&'a str),
+    Capacity(u8),
+}
 
+fn manifest_state_type_name(ty: &EmbeddedStateType) -> String {
     let mut output = String::new();
-    let mut pending = vec![Fragment::Type { ty, depth: 1 }];
+    let mut pending = vec![ManifestStateTypeFragment::Type { ty, depth: 1 }];
     while let Some(fragment) = pending.pop() {
         match fragment {
-            Fragment::Text(text) => output.push_str(text),
-            Fragment::Capacity(capacity) => {
+            ManifestStateTypeFragment::Text(text) => output.push_str(text),
+            ManifestStateTypeFragment::Capacity(capacity) => {
                 write!(&mut output, "{capacity}").expect("writing to a String cannot fail");
             }
-            Fragment::Type { ty, depth } => {
-                assert!(
-                    depth <= MAX_EMBEDDED_STATE_TYPE_DEPTH_V1,
-                    "validated embedded state type exceeds the V1 nesting limit"
-                );
-                let child_depth = depth
-                    .checked_add(1)
-                    .expect("validated embedded state type depth cannot overflow");
-                match ty {
-                    EmbeddedStateType::Int => output.push_str("int"),
-                    EmbeddedStateType::Decimal => output.push_str("decimal"),
-                    EmbeddedStateType::Quantity => output.push_str("quantity"),
-                    EmbeddedStateType::Bool => output.push_str("bool"),
-                    EmbeddedStateType::String => output.push_str("string"),
-                    EmbeddedStateType::Bytes => output.push_str("bytes"),
-                    EmbeddedStateType::DataSpaceId => output.push_str("DataSpaceId"),
-                    EmbeddedStateType::AccountId => output.push_str("AccountId"),
-                    EmbeddedStateType::AssetDefinitionId => {
-                        output.push_str("AssetDefinitionId");
-                    }
-                    EmbeddedStateType::AssetId => output.push_str("AssetId"),
-                    EmbeddedStateType::NftId => output.push_str("NftId"),
-                    EmbeddedStateType::DomainId => output.push_str("DomainId"),
-                    EmbeddedStateType::Name => output.push_str("Name"),
-                    EmbeddedStateType::Json => output.push_str("Json"),
-                    EmbeddedStateType::Tuple(items) => {
-                        output.push('(');
-                        pending.push(Fragment::Text(")"));
-                        for (index, item) in items.iter().enumerate().rev() {
-                            pending.push(Fragment::Type {
-                                ty: item,
-                                depth: child_depth,
-                            });
-                            if index != 0 {
-                                pending.push(Fragment::Text(", "));
-                            }
-                        }
-                    }
-                    EmbeddedStateType::Struct { name, fields } => {
-                        output.push_str(name);
-                        output.push('{');
-                        pending.push(Fragment::Text("}"));
-                        for (index, field) in fields.iter().enumerate().rev() {
-                            pending.push(Fragment::Type {
-                                ty: &field.ty,
-                                depth: child_depth,
-                            });
-                            pending.push(Fragment::Text(": "));
-                            pending.push(Fragment::Text(&field.name));
-                            if index != 0 {
-                                pending.push(Fragment::Text(", "));
-                            }
-                        }
-                    }
-                    EmbeddedStateType::StateMap { key, value } => {
-                        output.push_str("StateMap<");
-                        pending.push(Fragment::Text(">"));
-                        pending.push(Fragment::Type {
-                            ty: value,
-                            depth: child_depth,
-                        });
-                        pending.push(Fragment::Text(", "));
-                        pending.push(Fragment::Type {
-                            ty: key,
-                            depth: child_depth,
-                        });
-                    }
-                    EmbeddedStateType::Option(value) => {
-                        output.push_str("Option<");
-                        pending.push(Fragment::Text(">"));
-                        pending.push(Fragment::Type {
-                            ty: value,
-                            depth: child_depth,
-                        });
-                    }
-                    EmbeddedStateType::Result { ok, err } => {
-                        output.push_str("Result<");
-                        pending.push(Fragment::Text(">"));
-                        pending.push(Fragment::Type {
-                            ty: err,
-                            depth: child_depth,
-                        });
-                        pending.push(Fragment::Text(", "));
-                        pending.push(Fragment::Type {
-                            ty: ok,
-                            depth: child_depth,
-                        });
-                    }
-                    EmbeddedStateType::List { element, capacity } => {
-                        output.push_str("List<");
-                        pending.push(Fragment::Text(">"));
-                        pending.push(Fragment::Capacity(*capacity));
-                        pending.push(Fragment::Text(", "));
-                        pending.push(Fragment::Type {
-                            ty: element,
-                            depth: child_depth,
-                        });
-                    }
-                }
+            ManifestStateTypeFragment::Type { ty, depth } => {
+                schedule_manifest_state_type_name(ty, depth, &mut output, &mut pending);
             }
         }
     }
     output
+}
+
+fn manifest_scalar_state_type_name(ty: &EmbeddedStateType) -> Option<&'static str> {
+    match ty {
+        EmbeddedStateType::Int => Some("int"),
+        EmbeddedStateType::Decimal => Some("decimal"),
+        EmbeddedStateType::Quantity => Some("quantity"),
+        EmbeddedStateType::Bool => Some("bool"),
+        EmbeddedStateType::String => Some("string"),
+        EmbeddedStateType::Bytes => Some("bytes"),
+        EmbeddedStateType::DataSpaceId => Some("DataSpaceId"),
+        EmbeddedStateType::AccountId => Some("AccountId"),
+        EmbeddedStateType::AssetDefinitionId => Some("AssetDefinitionId"),
+        EmbeddedStateType::AssetId => Some("AssetId"),
+        EmbeddedStateType::NftId => Some("NftId"),
+        EmbeddedStateType::DomainId => Some("DomainId"),
+        EmbeddedStateType::Name => Some("Name"),
+        EmbeddedStateType::Json => Some("Json"),
+        EmbeddedStateType::Tuple(_)
+        | EmbeddedStateType::Struct { .. }
+        | EmbeddedStateType::StateMap { .. }
+        | EmbeddedStateType::Option(_)
+        | EmbeddedStateType::Result { .. }
+        | EmbeddedStateType::List { .. } => None,
+    }
+}
+
+fn schedule_manifest_state_type_name<'a>(
+    ty: &'a EmbeddedStateType,
+    depth: usize,
+    output: &mut String,
+    pending: &mut Vec<ManifestStateTypeFragment<'a>>,
+) {
+    assert!(
+        depth <= MAX_EMBEDDED_STATE_TYPE_DEPTH_V1,
+        "validated embedded state type exceeds the V1 nesting limit"
+    );
+    if let Some(name) = manifest_scalar_state_type_name(ty) {
+        output.push_str(name);
+        return;
+    }
+    let child_depth = depth
+        .checked_add(1)
+        .expect("validated embedded state type depth cannot overflow");
+    match ty {
+        EmbeddedStateType::Tuple(items) => {
+            output.push('(');
+            pending.push(ManifestStateTypeFragment::Text(")"));
+            for (index, item) in items.iter().enumerate().rev() {
+                pending.push(ManifestStateTypeFragment::Type {
+                    ty: item,
+                    depth: child_depth,
+                });
+                if index != 0 {
+                    pending.push(ManifestStateTypeFragment::Text(", "));
+                }
+            }
+        }
+        EmbeddedStateType::Struct { name, fields } => {
+            output.push_str(name);
+            output.push('{');
+            pending.push(ManifestStateTypeFragment::Text("}"));
+            for (index, field) in fields.iter().enumerate().rev() {
+                pending.push(ManifestStateTypeFragment::Type {
+                    ty: &field.ty,
+                    depth: child_depth,
+                });
+                pending.push(ManifestStateTypeFragment::Text(": "));
+                pending.push(ManifestStateTypeFragment::Text(&field.name));
+                if index != 0 {
+                    pending.push(ManifestStateTypeFragment::Text(", "));
+                }
+            }
+        }
+        EmbeddedStateType::StateMap { key, value } => {
+            output.push_str("StateMap<");
+            pending.push(ManifestStateTypeFragment::Text(">"));
+            pending.push(ManifestStateTypeFragment::Type {
+                ty: value,
+                depth: child_depth,
+            });
+            pending.push(ManifestStateTypeFragment::Text(", "));
+            pending.push(ManifestStateTypeFragment::Type {
+                ty: key,
+                depth: child_depth,
+            });
+        }
+        EmbeddedStateType::Option(value) => {
+            output.push_str("Option<");
+            pending.push(ManifestStateTypeFragment::Text(">"));
+            pending.push(ManifestStateTypeFragment::Type {
+                ty: value,
+                depth: child_depth,
+            });
+        }
+        EmbeddedStateType::Result { ok, err } => {
+            output.push_str("Result<");
+            pending.push(ManifestStateTypeFragment::Text(">"));
+            pending.push(ManifestStateTypeFragment::Type {
+                ty: err,
+                depth: child_depth,
+            });
+            pending.push(ManifestStateTypeFragment::Text(", "));
+            pending.push(ManifestStateTypeFragment::Type {
+                ty: ok,
+                depth: child_depth,
+            });
+        }
+        EmbeddedStateType::List { element, capacity } => {
+            output.push_str("List<");
+            pending.push(ManifestStateTypeFragment::Text(">"));
+            pending.push(ManifestStateTypeFragment::Capacity(*capacity));
+            pending.push(ManifestStateTypeFragment::Text(", "));
+            pending.push(ManifestStateTypeFragment::Type {
+                ty: element,
+                depth: child_depth,
+            });
+        }
+        _ => unreachable!("scalar embedded state types returned before compound formatting"),
+    }
 }
 
 fn header_declares_contract_minor_one(artifact: &[u8]) -> bool {

@@ -209,7 +209,7 @@ mod tests {
         let account = iroha_test_samples::ALICE_ID.clone();
         let domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("static domain id");
-        let def_id = AssetDefinitionId::new(
+        let def_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "cash".parse().expect("static asset name"),
         );
@@ -218,6 +218,7 @@ mod tests {
             &mut state,
             &domain_id,
             &def_id,
+            "cash",
             &[(account.clone(), uaid, 777u64)],
             None,
         );
@@ -246,7 +247,7 @@ mod tests {
         let account = iroha_test_samples::ALICE_ID.clone();
         let domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("static domain id");
-        let def_id = AssetDefinitionId::new(
+        let def_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "cash".parse().expect("static asset name"),
         );
@@ -271,6 +272,7 @@ mod tests {
             &mut state,
             &domain_id,
             &def_id,
+            "cash",
             &[(account.clone(), uaid, 5u64)],
             Some(&[(account.clone(), uaid, second_dataspace)]),
         );
@@ -296,11 +298,11 @@ mod tests {
         let account = iroha_test_samples::ALICE_ID.clone();
         let domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("static domain id");
-        let global_def_id = AssetDefinitionId::new(
+        let global_def_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "cash".parse().expect("static asset name"),
         );
-        let scoped_def_id = AssetDefinitionId::new(
+        let scoped_def_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "voucher".parse().expect("static asset name"),
         );
@@ -326,9 +328,15 @@ mod tests {
             account.clone(),
             uaid,
             &[
-                (global_def_id.clone(), AssetBalanceScope::Global, 5u64),
+                (
+                    global_def_id.clone(),
+                    "cash",
+                    AssetBalanceScope::Global,
+                    5u64,
+                ),
                 (
                     scoped_def_id.clone(),
+                    "voucher",
                     AssetBalanceScope::Dataspace(second_dataspace),
                     9u64,
                 ),
@@ -371,6 +379,7 @@ mod tests {
         state: &mut State,
         domain_id: &DomainId,
         def_id: &AssetDefinitionId,
+        definition_name: &str,
         accounts: &[(AccountId, UniversalAccountId, u64)],
         bindings: Option<&[(AccountId, UniversalAccountId, DataSpaceId)]>,
     ) {
@@ -385,9 +394,13 @@ mod tests {
                     Domain::new(domain_id.clone()).build(&ALICE_ID),
                 );
             }
-            let definition = AssetDefinition::numeric(def_id.clone())
-                .with_name(def_id.name().to_string())
-                .build(&ALICE_ID);
+            let definition = AssetDefinition::numeric(
+                def_id.clone(),
+                definition_name.to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&ALICE_ID);
             world.asset_definitions.insert(def_id.clone(), definition);
             world.track_asset_definition_domain(def_id);
 
@@ -426,7 +439,7 @@ mod tests {
         domain_id: &DomainId,
         account_id: AccountId,
         uaid: UniversalAccountId,
-        assets: &[(AssetDefinitionId, AssetBalanceScope, u64)],
+        assets: &[(AssetDefinitionId, &str, AssetBalanceScope, u64)],
         bindings: Option<&[(AccountId, UniversalAccountId, DataSpaceId)]>,
     ) {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -440,10 +453,14 @@ mod tests {
                     Domain::new(domain_id.clone()).build(&ALICE_ID),
                 );
             }
-            for (def_id, _, _) in assets {
-                let definition = AssetDefinition::numeric(def_id.clone())
-                    .with_name(def_id.name().to_string())
-                    .build(&ALICE_ID);
+            for (def_id, definition_name, _, _) in assets {
+                let definition = AssetDefinition::numeric(
+                    def_id.clone(),
+                    (*definition_name).to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&ALICE_ID);
                 world.asset_definitions.insert(def_id.clone(), definition);
                 world.track_asset_definition_domain(def_id);
             }
@@ -453,7 +470,7 @@ mod tests {
                 .accounts
                 .insert(account_id.clone(), Owned::new(details));
             world.uaid_accounts.insert(uaid, account_id.clone());
-            for (def_id, scope, amount) in assets {
+            for (def_id, _, scope, amount) in assets {
                 let asset_id =
                     AssetId::with_scope(def_id.clone(), account_id.clone(), scope.clone());
                 world

@@ -33,9 +33,13 @@ fn simulate_transfer_quantity() {
         "simulate_transfer_quantity",
         starting_amount,
         &amount_to_transfer,
-        |id| {
-            let name = id.name().to_string();
-            AssetDefinition::numeric(id).with_name(name)
+        |id, name| {
+            AssetDefinition::numeric(
+                id,
+                name,
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         },
         Mint::asset_quantity,
         Transfer::asset_quantity,
@@ -89,7 +93,10 @@ fn simulate_transfer(
     context: &'static str,
     starting_amount: Quantity,
     amount_to_transfer: &Quantity,
-    asset_definition_ctr: impl FnOnce(AssetDefinitionId) -> <AssetDefinition as Registered>::With,
+    asset_definition_ctr: impl FnOnce(
+        AssetDefinitionId,
+        String,
+    ) -> <AssetDefinition as Registered>::With,
     mint_ctr: impl FnOnce(Quantity, AssetId) -> Mint<Quantity, Asset>,
     transfer_ctr: impl FnOnce(AssetId, Quantity, AccountId) -> Transfer<Asset, Quantity, Account>,
 ) {
@@ -102,9 +109,11 @@ fn simulate_transfer(
 
     let (alice_id, mouse_id) = generate_two_ids();
     let create_mouse = create_mouse(mouse_id.clone());
-    let asset_definition_id = asset_definition_id_for(context);
-    let create_asset =
-        Register::asset_definition(asset_definition_ctr(asset_definition_id.clone()));
+    let (asset_definition_id, asset_definition_name) = asset_definition_id_for(context);
+    let create_asset = Register::asset_definition(asset_definition_ctr(
+        asset_definition_id.clone(),
+        asset_definition_name,
+    ));
     let mint_asset = mint_ctr(
         starting_amount,
         AssetId::new(asset_definition_id.clone(), alice_id.clone()),
@@ -172,12 +181,13 @@ fn create_mouse(mouse_id: AccountId) -> Register<Account> {
     Register::account(Account::new(mouse_id.clone()))
 }
 
-fn asset_definition_id_for(context: &str) -> AssetDefinitionId {
+fn asset_definition_id_for(context: &str) -> (AssetDefinitionId, String) {
     let name = format!("camomile_{context}");
-    AssetDefinitionId::new(
+    let id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id should be valid"),
         name.parse().expect("asset name should be valid"),
-    )
+    );
+    (id, name)
 }
 
 #[test]
@@ -189,11 +199,13 @@ fn should_fail_if_asset_not_found() {
     let iroha = network.client();
 
     let (alice_id, mouse_id) = generate_two_ids();
-    let asset_definition_id = asset_definition_id_for(context);
-    let create_asset_definition = Register::asset_definition(
-        AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name(asset_definition_id.name().to_string()),
-    );
+    let (asset_definition_id, asset_definition_name) = asset_definition_id_for(context);
+    let create_asset_definition = Register::asset_definition(AssetDefinition::numeric(
+        asset_definition_id.clone(),
+        asset_definition_name,
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ));
     let asset_id = AssetId::new(asset_definition_id.clone(), alice_id);
     let transfer_asset = Transfer::asset_quantity(asset_id.clone(), 20_u32, mouse_id.clone());
 

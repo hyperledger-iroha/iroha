@@ -1519,11 +1519,6 @@ fn validate_fill_custody(
             .asset_escrows
             .get(&child_id)
             .is_some()
-            || state_transaction
-                .world
-                .anonymous_asset_escrows
-                .get(&child_id)
-                .is_some()
         {
             return Err(corrupt_state(
                 "derived orderbook settlement channel custody already exists",
@@ -2353,7 +2348,6 @@ impl Execute for MatchSorafsOrderbook {
             super::escrow::close_filled_orderbook_order_asset_lock(
                 state_transaction,
                 &binding.escrow_id,
-                authority,
                 &entry.record.owner,
                 &binding.asset_definition,
                 &binding.initial_xor_locked.clone().into_quantity(),
@@ -2598,7 +2592,6 @@ impl Execute for MaintainSorafsOrderbook {
                 super::escrow::expire_orderbook_order_asset_lock(
                     state_transaction,
                     &binding.escrow_id,
-                    authority,
                     &record.owner,
                     &binding.asset_definition,
                     &binding.initial_xor_locked.clone().into_quantity(),
@@ -2613,7 +2606,6 @@ impl Execute for MaintainSorafsOrderbook {
             super::escrow::expire_orderbook_channel_asset_lock(
                 state_transaction,
                 &orderbook_settlement_escrow_id(channel.channel_id),
-                authority,
             )
             .map_err(|error| {
                 corrupt_state(format!(
@@ -4040,10 +4032,16 @@ mod tests {
     fn state_with_accounts(keypairs: &[&KeyPair]) -> State {
         let authority = account(keypairs[0]);
         let asset_definition = settlement_asset_definition();
-        let domain = Domain::new(asset_definition.domain().clone()).build(&authority);
-        let definition = AssetDefinition::numeric(asset_definition.clone())
-            .with_name("XOR".to_owned())
-            .build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("sorafs", "universal").expect("settlement domain"))
+                .build(&authority);
+        let definition = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let accounts = keypairs
             .iter()
             .map(|keypair| {
@@ -4077,7 +4075,7 @@ mod tests {
     }
 
     fn settlement_asset_definition() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("sorafs", "universal").expect("settlement domain"),
             "xor".parse().expect("settlement asset name"),
         )
@@ -4101,10 +4099,16 @@ mod tests {
         let provider_id = account(provider);
         let treasury_id = account(treasury);
         let asset_definition = settlement_asset_definition();
-        let domain = Domain::new(asset_definition.domain().clone()).build(&buyer_id);
-        let definition = AssetDefinition::numeric(asset_definition.clone())
-            .with_name("XOR".to_owned())
-            .build(&buyer_id);
+        let domain =
+            Domain::new(DomainId::try_new("sorafs", "universal").expect("settlement domain"))
+                .build(&buyer_id);
+        let definition = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&buyer_id);
         let buyer_asset = Asset::new(
             AssetId::of(asset_definition.clone(), buyer_id.clone()),
             micro_quantity(buyer_balance_micro),
@@ -4171,7 +4175,6 @@ mod tests {
         crate::smartcontracts::isi::escrow::close_filled_orderbook_order_asset_lock(
             state_transaction,
             &parent_id,
-            settlement,
             buyer,
             &settlement_asset_definition(),
             &amount,
@@ -4563,67 +4566,7 @@ mod tests {
         norito::to_bytes(value).expect("encode canonical fixture")
     }
 
-    #[test]
-    fn policy_activation_is_permissioned_and_exactly_chained() {
-        let operator = keypair(0x11);
-        let authority = account(&operator);
-        let state = state_with_accounts(&[&operator]);
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-
-        let first = policy();
-        let first_digest = first.digest().expect("digest first policy");
-        SetSorafsOrderbookPolicy::new(first.clone())
-            .execute(&authority, &mut stx)
-            .expect("first policy activates");
-        let stored = read_policy(stx.world())
-            .expect("read policy")
-            .expect("policy");
-        assert_eq!(stored.policy_digest, first_digest);
-        assert_eq!(stored.activated_at_unix, NOW);
-
-        for invalid in {
-            let mut gap = first.clone();
-            gap.revision = 3;
-            gap.predecessor_policy_digest = Some(first_digest);
-            let mut branch = first.clone();
-            branch.revision = 2;
-            branch.predecessor_policy_digest = Some([0x44; 32]);
-            let mut market_swap = first.clone();
-            market_swap.revision = 2;
-            market_swap.predecessor_policy_digest = Some(first_digest);
-            market_swap.market_id = [0xB5; 32];
-            [gap, branch, market_swap]
-        } {
-            assert!(
-                SetSorafsOrderbookPolicy::new(invalid.clone())
-                    .execute(&authority, &mut stx)
-                    .is_err()
-            );
-            assert_eq!(
-                read_policy(stx.world())
-                    .expect("read unchanged policy")
-                    .expect("policy")
-                    .policy_digest,
-                first_digest
-            );
-        }
-
-        let mut second = first;
-        second.revision = 2;
-        second.predecessor_policy_digest = Some(first_digest);
-        second.paused = true;
-        SetSorafsOrderbookPolicy::new(second.clone())
-            .execute(&authority, &mut stx)
-            .expect("exact successor activates");
-        assert_eq!(
-            read_policy(stx.world())
-                .expect("read successor")
-                .expect("policy")
-                .policy_digest,
-            second.digest().expect("digest successor")
-        );
-    }
+    include!("sorafs/orderbook_policy_tests.rs");
 
     #[test]
     fn policy_activation_rejects_missing_permission_without_state_mutation() {
@@ -7012,8 +6955,8 @@ mod tests {
             .clone();
 
         let configured_asset = stx.gov.sorafs_pin_fee_asset_id.clone();
-        stx.gov.sorafs_pin_fee_asset_id = AssetDefinitionId::new(
-            configured_asset.domain().clone(),
+        stx.gov.sorafs_pin_fee_asset_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("sorafs", "universal").expect("settlement domain"),
             "not_xor".parse().expect("wrong asset name"),
         );
         assert!(

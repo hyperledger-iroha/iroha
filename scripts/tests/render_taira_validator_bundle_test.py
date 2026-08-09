@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import stat
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
-
+import tomllib
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "render_taira_validator_bundle.py"
-SPEC = importlib.util.spec_from_file_location("render_taira_validator_bundle", MODULE_PATH)
+SPEC = importlib.util.spec_from_file_location(
+    "render_taira_validator_bundle", MODULE_PATH
+)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader  # pragma: no cover
 sys.modules[SPEC.name] = MODULE
@@ -26,12 +28,8 @@ TAIRA_SECRETS_EXAMPLE_PATH = (
 )
 TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 TAIRA_CHAIN_DISCRIMINANT = 369
-TAIRA_CITIZEN_ID = (
-    "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-)
-TAIRA_GENESIS_DEPLOYER_ID = (
-    "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A"
-)
+TAIRA_CITIZEN_ID = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+TAIRA_GENESIS_DEPLOYER_ID = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A"
 TAIRA_GAS_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 TAIRA_CONSENSUS_FINGERPRINT = (
     "0x341dc1312934c312e6fb5cc8fab0902acaa54c2ce3d60fd67ddac8969eea0a54"
@@ -65,13 +63,46 @@ COUNCIL_KEY_1 = "ed01202152F8D19B791D24453242E15F2EAB6CB7CFFA7B6A5ED30097960E069
 COUNCIL_KEY_2 = "ed012022FC297792F0B6FFC0BFCFDB7EDB0C0AA14E025A365EC0E342E86E3829CB74B6"
 COUNCIL_KEY_3 = "ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"
 SORACLOUD_SIGNER_HANDLE = "hsm://soracloud/runtime-mutation/primary"
-SORACLOUD_SIGNER_AUTHORITY = (
-    "testuﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7"
-)
+SORACLOUD_SIGNER_AUTHORITY = "testuﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7"
 SORACLOUD_SIGNER_PUBLIC_KEY_HEX = (
     "4164bf554923ece1fd412d241036d863a6ae430476c898248b8237d77534cfc4"
 )
 SORACLOUD_SIGNER_POLICY_DIGEST_HEX = "95" * 32
+ONBOARDING_TOKEN = "bootstrap-api-token-0123456789abcdef"
+
+
+def test_native_onboarding_token_hash_tool_receives_secret_only_on_stdin(
+    tmp_path: Path,
+) -> None:
+    record = tmp_path / "record.json"
+    tool = tmp_path / "onboarding-token-hash"
+    tool.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "token = sys.stdin.buffer.read().decode('ascii')\n"
+        f"open({str(record)!r}, 'w').write(json.dumps({{"
+        "'token': token, 'argv': sys.argv, 'env': dict(os.environ)}))\n"
+        f"print({'ab' * 32!r})\n",
+        encoding="utf-8",
+    )
+    tool.chmod(0o700)
+
+    digest = MODULE._blake3_token_hash(ONBOARDING_TOKEN, tool)
+
+    invocation = json.loads(record.read_text(encoding="utf-8"))
+    assert digest == "blake3:" + "ab" * 32
+    assert invocation["token"] == ONBOARDING_TOKEN
+    assert ONBOARDING_TOKEN not in json.dumps(invocation["argv"])
+    assert ONBOARDING_TOKEN not in json.dumps(invocation["env"])
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["short", "x" * 257, "x" * 31 + " ", "é" * 32],
+)
+def test_onboarding_token_hash_rejects_noncanonical_secrets(token: str) -> None:
+    with pytest.raises(ValueError, match="onboarding token must contain"):
+        MODULE._blake3_token_hash(token)
 
 
 def test_taira_templates_require_no_backend_offline_enrollment() -> None:
@@ -102,9 +133,9 @@ def test_taira_runtime_paths_and_deploy_rate_are_release_pinned() -> None:
     assert config["torii"]["address"] == "addr:0.0.0.0:18080#2F16"
     assert config["torii"]["deploy_rate_per_origin_per_sec"] == 4
     assert config["torii"]["deploy_burst_per_origin"] == 8
-    assert config["sumeragi"]["block"]["max_payload_bytes"] == 21 * MODULE.MIB
-    assert config["sumeragi"]["queues"]["body_source_bytes"] == 43 * MODULE.MIB
-    assert config["sumeragi"]["queues"]["body_bytes"] == 7 * 43 * MODULE.MIB
+    assert config["sumeragi"]["block"]["max_payload_bytes"] == 16 * MODULE.MIB
+    assert config["sumeragi"]["queues"]["body_source_bytes"] == 33 * MODULE.MIB
+    assert config["sumeragi"]["queues"]["body_bytes"] == 7 * 33 * MODULE.MIB
     assert (
         config["network"]["max_frame_bytes_block_sync"]
         == MODULE.TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES
@@ -282,9 +313,7 @@ def test_checked_in_taira_genesis_contract_deployment_gate_is_release_pinned() -
         ],
         "deployer_gas_mints": [
             {
-                "destination": (
-                    f"{TAIRA_GAS_ASSET_ID}#{TAIRA_GENESIS_DEPLOYER_ID}"
-                ),
+                "destination": (f"{TAIRA_GAS_ASSET_ID}#{TAIRA_GENESIS_DEPLOYER_ID}"),
                 "object": "100000001",
             }
         ],
@@ -359,6 +388,8 @@ def test_checked_in_taira_genesis_gas_parameters_are_structured_parameters() -> 
 BASE_CONFIG = """# baseline
 public_key = "peer-1-public"
 private_key = "peer-1-private"
+soranet_transport_public_key = "peer-1-soranet-public"
+soranet_transport_private_key = "peer-1-soranet-private"
 
 trusted_peers = [
   "peer-1-public@taira-validator-1.sora.org:1337",
@@ -366,6 +397,10 @@ trusted_peers = [
 trusted_peers_pop = [
   { public_key = "peer-1-public", pop_hex = "peer-1-pop" },
 ]
+
+[genesis]
+public_key = "genesis-public"
+expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
 
 [network]
 address = "0.0.0.0:1337"
@@ -375,12 +410,12 @@ max_frame_bytes_block_sync = 23068672
 max_frame_bytes_tx_gossip = 11534336
 
 [sumeragi.block]
-max_payload_bytes = 22020096
+max_payload_bytes = 16777216
 
 [sumeragi.queues]
 authenticated_non_validator_sources = 2
-body_bytes = 315621376
-body_source_bytes = 45088768
+body_bytes = 242221056
+body_source_bytes = 34603008
 
 [torii]
 address = "0.0.0.0:18080"
@@ -431,8 +466,26 @@ trusted_council_keys = ["REPLACE_WITH_TAIRA_SORAFS_COUNCIL_PUBLIC_KEY"]
 signature_threshold = "REPLACE_WITH_TAIRA_SORAFS_COUNCIL_SIGNATURE_THRESHOLD"
 """
 
+RELEASE_PRIVACY_ISSUER_SECTION = """
+[torii.privacy_bootle_lantern_issuer]
+enabled = true
+state_dir = "/var/lib/iroha/taira-validator-1/privacy/bootle-lantern/issuer"
+max_inflight = 2
+authorization_lifetime_blocks = 300
+max_records = 4096
+max_total_bytes = 13557760
+terminal_retention_blocks = 4096
+issuer_id_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+policy_id_hex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+runtime_provider_registry_handle = "runtime://privacy/bootle-lantern/taira-primary"
+runtime_provider_registry_revision = 1
+runtime_provider_registry_policy_digest_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+"""
 
-def _write_roster(path: Path, validator_count: int = 4, inline_private_keys: bool = True) -> None:
+
+def _write_roster(
+    path: Path, validator_count: int = 4, inline_private_keys: bool = True
+) -> None:
     validators = []
     for index in range(1, validator_count + 1):
         entry = [
@@ -442,7 +495,13 @@ def _write_roster(path: Path, validator_count: int = 4, inline_private_keys: boo
             f'public_key = "peer-{index}-public"',
         ]
         if inline_private_keys:
-            entry.append(f'private_key = "peer-{index}-private"')
+            entry.extend(
+                [
+                    f'private_key = "peer-{index}-private"',
+                    f'soranet_transport_public_key = "peer-{index}-soranet-public"',
+                    f'soranet_transport_private_key = "peer-{index}-soranet-private"',
+                ]
+            )
         entry.extend(
             [
                 f'pop_hex = "peer-{index}-pop"',
@@ -463,7 +522,7 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
         "[shared]",
         'account_onboarding_authority = "bootstrap-authority"',
         'account_onboarding_private_key = "bootstrap-private-key"',
-        'account_onboarding_api_token = "bootstrap-api-token"',
+        f'account_onboarding_api_token = "{ONBOARDING_TOKEN}"',
         'account_onboarding_credential_id = "local-dev"',
         'account_onboarding_scope_dataspace = "is2"',
         'torii_faucet_authority = "faucet-authority"',
@@ -490,6 +549,8 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
                 "[[validators]]",
                 f'slug = "taira-validator-{index}"',
                 f'private_key = "peer-{index}-private"',
+                f'soranet_transport_public_key = "peer-{index}-soranet-public"',
+                f'soranet_transport_private_key = "peer-{index}-soranet-private"',
                 "",
             ]
         )
@@ -515,14 +576,13 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     )
     assert 'public_key = "peer-3-public"' in config
     assert 'private_key = "peer-3-private"' in config
-    assert (
-        'public_address = "addr:taira-validator-3.sora.org:1337#99FF"' in config
-    )
+    assert 'soranet_transport_public_key = "peer-3-soranet-public"' in config
+    assert 'soranet_transport_private_key = "peer-3-soranet-private"' in config
+    assert 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' in config
+    assert 'public_address = "addr:taira-validator-3.sora.org:1337#99FF"' in config
     assert 'address = "addr:0.0.0.0:1337#BF18"' in config
     assert 'address = "addr:0.0.0.0:18080#2F16"' in config
-    assert (
-        '"peer-4-public@addr:taira-validator-4.sora.org:1337#E168"' in config
-    )
+    assert '"peer-4-public@addr:taira-validator-4.sora.org:1337#E168"' in config
     assert '{ public_key = "peer-2-public", pop_hex = "peer-2-pop" }' in config
     assert 'authority = "bootstrap-authority"' in config
     assert 'authority = "faucet-authority"' in config
@@ -532,16 +592,14 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert 'algorithm = "ed25519"' in config
     assert f'public_key_hex = "{SORACLOUD_SIGNER_PUBLIC_KEY_HEX}"' in config
     assert "revision = 1" in config
-    assert (
-        f'policy_digest_hex = "{SORACLOUD_SIGNER_POLICY_DIGEST_HEX}"' in config
-    )
+    assert f'policy_digest_hex = "{SORACLOUD_SIGNER_POLICY_DIGEST_HEX}"' in config
     assert "escrow_accounts" not in config
     assert 'id = "local-dev"' in config
     assert 'scope = { dataspace = "is2" }' in config
-    assert MODULE._blake3_token_hash("bootstrap-api-token") in config
+    assert MODULE._blake3_token_hash(ONBOARDING_TOKEN) in config
     assert "bootstrap-private-key" not in config
     assert "faucet-private-key" not in config
-    assert "bootstrap-api-token" not in config
+    assert ONBOARDING_TOKEN not in config
     runtime_dir = output_dir / "taira-validator-3" / "runtime"
     onboarding_key = runtime_dir / "onboarding-signer.key"
     faucet_key = runtime_dir / "faucet-signer.key"
@@ -558,7 +616,7 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert str(faucet_key.resolve()) not in config
     assert onboarding_key.read_text(encoding="utf-8") == "bootstrap-private-key\n"
     assert faucet_key.read_text(encoding="utf-8") == "faucet-private-key\n"
-    assert token_file.read_text(encoding="utf-8") == "bootstrap-api-token\n"
+    assert token_file.read_text(encoding="utf-8") == ONBOARDING_TOKEN + "\n"
     assert stat.S_IMODE(output_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE((output_dir / "taira-validator-3").stat().st_mode) == 0o700
     assert stat.S_IMODE(runtime_dir.stat().st_mode) == 0o700
@@ -573,19 +631,20 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
         in config
     )
     assert "signature_threshold = 2" in config
-    assert (
-        'manifest_directory = "/etc/iroha/taira-validator/manifests"' in config
-    )
+    assert 'manifest_directory = "/etc/iroha/taira-validator/manifests"' in config
     assert 'cache_directory = "/etc/iroha/taira-validator/manifests"' in config
-    assert (
-        'envelopes_dir = "/etc/iroha/taira-validator/sorafs_admission"' in config
-    )
+    assert 'envelopes_dir = "/etc/iroha/taira-validator/sorafs_admission"' in config
     assert not (output_dir / "taira-validator-3" / "kagemusha").exists()
-    assert stat.S_IMODE(
-        (output_dir / "taira-validator-3" / "sorafs_admission").stat().st_mode
-    ) == 0o700
+    assert (
+        stat.S_IMODE(
+            (output_dir / "taira-validator-3" / "sorafs_admission").stat().st_mode
+        )
+        == 0o700
+    )
 
-    manifest_path = output_dir / "taira-validator-3" / "manifests" / "governance.manifest.json"
+    manifest_path = (
+        output_dir / "taira-validator-3" / "manifests" / "governance.manifest.json"
+    )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["lane"] == "governance"
     assert manifest["governance"] == "parliament"
@@ -596,6 +655,315 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
         {"validator": "test-validator-3", "peer_id": "peer-3-public"},
         {"validator": "test-validator-4", "peer_id": "peer-4-public"},
     ]
+
+
+def test_render_bundle_rejects_roster_slug_traversal_before_writing(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    escaped = tmp_path / "escaped"
+    _write_roster(roster_path)
+    roster_path.write_text(
+        roster_path.read_text(encoding="utf-8").replace(
+            'slug = "taira-validator-1"', 'slug = "../escaped"', 1
+        ),
+        encoding="utf-8",
+    )
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="slug must be exactly"):
+        MODULE.render_bundle(
+            base_config_path, roster_path, output_dir, secrets_path=secrets_path
+        )
+
+    assert not output_dir.exists()
+    assert not escaped.exists()
+
+
+@pytest.mark.parametrize(
+    "relative_target",
+    (
+        "taira-validator-1/config.toml",
+        "taira-validator-1/runtime/onboarding-signer.key",
+        "taira-validator-1/manifests/governance.manifest.json",
+    ),
+)
+def test_render_bundle_never_follows_planted_output_symlinks(
+    tmp_path: Path, relative_target: str
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    planted = output_dir / relative_target
+    victim = tmp_path / "victim"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+    victim.write_text("must-survive\n", encoding="utf-8")
+    victim.chmod(0o600)
+    planted.parent.mkdir(parents=True, mode=0o700)
+    for parent in (output_dir, output_dir / "taira-validator-1"):
+        parent.chmod(0o700)
+    if planted.parent.name in {"runtime", "manifests"}:
+        planted.parent.chmod(0o700)
+    planted.symlink_to(victim)
+
+    with pytest.raises(ValueError, match="safe regular file"):
+        MODULE.render_bundle(
+            base_config_path, roster_path, output_dir, secrets_path=secrets_path
+        )
+
+    assert victim.read_text(encoding="utf-8") == "must-survive\n"
+
+
+def test_render_bundle_never_overwrites_a_hardlinked_output(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    planted = output_dir / "taira-validator-1/config.toml"
+    victim = tmp_path / "victim"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+    victim.write_text("must-survive\n", encoding="utf-8")
+    victim.chmod(0o600)
+    planted.parent.mkdir(parents=True, mode=0o700)
+    output_dir.chmod(0o700)
+    planted.parent.chmod(0o700)
+    os.link(victim, planted)
+
+    with pytest.raises(ValueError, match="safe regular file"):
+        MODULE.render_bundle(
+            base_config_path, roster_path, output_dir, secrets_path=secrets_path
+        )
+
+    assert victim.read_text(encoding="utf-8") == "must-survive\n"
+
+
+def test_release_privacy_issuer_is_enabled_only_on_designated_peer_one(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(
+        BASE_CONFIG + RELEASE_PRIVACY_ISSUER_SECTION,
+        encoding="utf-8",
+    )
+
+    MODULE.render_bundle(
+        base_config_path,
+        roster_path,
+        output_dir,
+        secrets_path=secrets_path,
+    )
+
+    for index in range(1, 5):
+        config = tomllib.loads(
+            (output_dir / f"taira-validator-{index}" / "config.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        issuer = config["torii"]["privacy_bootle_lantern_issuer"]
+        assert issuer["enabled"] is (index == 1)
+        assert issuer["state_dir"] == (
+            f"/var/lib/iroha/taira-validator-{index}/privacy/bootle-lantern/issuer"
+        )
+        if index == 1:
+            assert set(issuer) == (
+                MODULE.TAIRA_PRIVACY_ISSUER_BASE_FIELDS
+                | MODULE.TAIRA_PRIVACY_ISSUER_BINDING_FIELDS
+            )
+            assert issuer["runtime_provider_registry_revision"] == 1
+        else:
+            assert set(issuer) == MODULE.TAIRA_PRIVACY_ISSUER_BASE_FIELDS
+            for field in MODULE.TAIRA_PRIVACY_ISSUER_BINDING_FIELDS:
+                assert field not in issuer
+
+
+def test_bundle_local_release_render_binds_every_runtime_path_inside_reset(
+    tmp_path: Path,
+) -> None:
+    bundle_root = tmp_path / "private-reset"
+    bundle_root.mkdir(mode=0o700)
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(
+        BASE_CONFIG + RELEASE_PRIVACY_ISSUER_SECTION,
+        encoding="utf-8",
+    )
+    expected_hash = "00" * 31 + "01"
+
+    written = MODULE.render_bundle(
+        base_config_path,
+        roster_path,
+        bundle_root / "rendered",
+        secrets_path=secrets_path,
+        genesis_expected_hash=expected_hash,
+        bundle_root=bundle_root,
+    )
+
+    assert len(written) == 4
+    assert not (bundle_root / "rendered/.gitignore").exists()
+    for index, config_path in enumerate(written, start=1):
+        root = config_path.parent
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        assert config["genesis"]["file"] == str(bundle_root / "genesis.signed.nrt")
+        assert config["genesis"]["expected_hash"] == expected_hash
+        issuer = config["torii"]["privacy_bootle_lantern_issuer"]
+        assert issuer["state_dir"] == str(
+            root / "runtime/privacy/bootle-lantern/issuer"
+        )
+        assert issuer["enabled"] is (index == 1)
+        assert config["nexus"]["registry"]["manifest_directory"] == str(
+            root / "manifests"
+        )
+        assert config["nexus"]["registry"]["cache_directory"] == str(root / "manifests")
+        assert config["sorafs"]["discovery"]["admission"]["envelopes_dir"] == str(
+            root / "configs/soranexus/taira/sorafs_admission"
+        )
+        assert not (root / "sorafs_admission").exists()
+
+
+def test_bundle_local_release_render_rejects_output_outside_bundle(
+    tmp_path: Path,
+) -> None:
+    bundle_root = tmp_path / "private-reset"
+    bundle_root.mkdir(mode=0o700)
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="bundle_root/rendered"):
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            tmp_path / "foreign-rendered",
+            secrets_path=secrets_path,
+            bundle_root=bundle_root,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda section: section.replace(
+            'policy_id_hex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"\n',
+            "",
+            1,
+        ),
+        lambda section: section.replace("max_inflight = 2", "max_inflight = 3", 1),
+        lambda section: section.replace("enabled = true", 'enabled = "true"', 1),
+        lambda section: (
+            section + 'runtime_provider_registry_policy_digest_hex_alias = "00"\n'
+        ),
+    ),
+    ids=("partial-binding", "wrong-bound", "non-boolean", "unknown-binding"),
+)
+def test_release_privacy_issuer_template_rejects_adversarial_mutations(
+    tmp_path: Path,
+    mutation,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(
+        BASE_CONFIG + mutation(RELEASE_PRIVACY_ISSUER_SECTION),
+        encoding="utf-8",
+    )
+
+    with pytest.raises((ValueError, tomllib.TOMLDecodeError)):
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            tmp_path / "out",
+            secrets_path=secrets_path,
+        )
+
+
+def test_render_bundle_binds_exact_genesis_hash_after_signing(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+    expected_hash = "00" * 31 + "01"
+
+    written = MODULE.render_bundle(
+        base_config_path,
+        roster_path,
+        output_dir,
+        secrets_path=secrets_path,
+        genesis_expected_hash=expected_hash,
+    )
+
+    config = written[0].read_text(encoding="utf-8")
+    assert f'expected_hash = "{expected_hash}"' in config
+    assert MODULE.GENESIS_EXPECTED_HASH_PLACEHOLDER not in config
+
+
+@pytest.mark.parametrize("expected_hash", ["00" * 32, "AA" * 31 + "01", "short"])
+def test_render_bundle_rejects_invalid_genesis_hash(
+    tmp_path: Path, expected_hash: str
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="genesis_expected_hash"):
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            tmp_path / "out",
+            secrets_path=secrets_path,
+            genesis_expected_hash=expected_hash,
+        )
+
+
+def test_render_bundle_rejects_a_template_without_expected_hash(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(
+        BASE_CONFIG.replace(
+            'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"\n', ""
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="mandatory.*expected_hash"):
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            tmp_path / "out",
+            secrets_path=secrets_path,
+        )
 
 
 def test_render_bundle_uses_explicit_canonical_install_root(tmp_path: Path) -> None:
@@ -627,14 +995,10 @@ def test_render_bundle_uses_explicit_canonical_install_root(tmp_path: Path) -> N
         'private_key_file = "/srv/iroha/taira-validator/runtime/'
         'faucet-signer.key"' in config
     )
-    assert (
-        'manifest_directory = "/srv/iroha/taira-validator/manifests"' in config
-    )
+    assert 'manifest_directory = "/srv/iroha/taira-validator/manifests"' in config
     assert 'cache_directory = "/srv/iroha/taira-validator/manifests"' in config
     assert "kagemusha_release_policy_path" not in config
-    assert (
-        'envelopes_dir = "/srv/iroha/taira-validator/sorafs_admission"' in config
-    )
+    assert 'envelopes_dir = "/srv/iroha/taira-validator/sorafs_admission"' in config
 
 
 def test_render_bundle_rejects_relative_install_root(tmp_path: Path) -> None:
@@ -667,15 +1031,11 @@ def test_render_bundle_rejects_relative_install_root(tmp_path: Path) -> None:
 
 def test_socket_addresses_are_crc_bound_and_fail_closed() -> None:
     assert (
-        MODULE._canonical_socket_address(
-            "TAIRA-VALIDATOR-1.SORA.ORG:1337", "fixture"
-        )
+        MODULE._canonical_socket_address("TAIRA-VALIDATOR-1.SORA.ORG:1337", "fixture")
         == "addr:taira-validator-1.sora.org:1337#D426"
     )
     assert (
-        MODULE._canonical_socket_address(
-            "addr:127.0.0.1:39080#4B72", "fixture"
-        )
+        MODULE._canonical_socket_address("addr:127.0.0.1:39080#4B72", "fixture")
         == "addr:127.0.0.1:39080#4B72"
     )
 
@@ -690,10 +1050,14 @@ def test_socket_addresses_are_crc_bound_and_fail_closed() -> None:
         except ValueError:
             pass
         else:  # pragma: no cover - defensive assertion
-            raise AssertionError(f"renderer accepted invalid socket address {invalid!r}")
+            raise AssertionError(
+                f"renderer accepted invalid socket address {invalid!r}"
+            )
 
 
-def test_render_bundle_injects_public_roster_into_unsigned_genesis(tmp_path: Path) -> None:
+def test_render_bundle_injects_public_roster_into_unsigned_genesis(
+    tmp_path: Path,
+) -> None:
     roster_path = tmp_path / "validator_roster.toml"
     secrets_path = tmp_path / "validator_secrets.toml"
     base_config_path = tmp_path / "config.toml"
@@ -769,9 +1133,17 @@ def test_render_bundle_injects_public_roster_into_unsigned_genesis(tmp_path: Pat
     signing_command = (output_dir / "genesis-signing-command.txt").read_text(
         encoding="utf-8"
     )
-    assert "$TAIRA_GENESIS_PRIVATE_KEY" in signing_command
+    assert '"$TAIRA_GENESIS_EXTERNAL_SIGNER"' in signing_command
+    assert "private-key" not in signing_command.lower()
+    assert "kagami" not in signing_command.lower()
+    assert "--unsigned-genesis" in signing_command
+    assert "--peer-config" in signing_command
+    assert "--signed-genesis-out" in signing_command
     assert "taira-validator-1/config.toml" in signing_command
     assert f"--bound-manifest-out {output_dir / 'genesis.json'}" in signing_command
+    assert (
+        f"--expected-hash-out {output_dir / 'genesis.expected_hash'}" in signing_command
+    )
 
 
 def test_genesis_renderer_preserves_fresh_contract_deployment_gate(
@@ -780,7 +1152,7 @@ def test_genesis_renderer_preserves_fresh_contract_deployment_gate(
     roster_path = tmp_path / "validator_roster.toml"
     output_dir = tmp_path / "out"
     _write_roster(roster_path)
-    output_dir.mkdir()
+    output_dir.mkdir(mode=0o700)
     validators = MODULE.load_roster(roster_path)
     checked_in = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
 
@@ -864,6 +1236,8 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 'account_id = "test-validator-1"',
                 'public_key = "peer-1-public"',
                 'private_key = "peer-1-private"',
+                'soranet_transport_public_key = "peer-1-soranet-public"',
+                'soranet_transport_private_key = "peer-1-soranet-private"',
                 'pop_hex = "peer-1-pop"',
                 'public_address = "taira-validator-1.sora.org:1337"',
                 "",
@@ -872,6 +1246,8 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 'account_id = "test-validator-2"',
                 'public_key = "peer-2-public"',
                 'private_key = "peer-2-private"',
+                'soranet_transport_public_key = "peer-2-soranet-public"',
+                'soranet_transport_private_key = "peer-2-soranet-private"',
                 'pop_hex = "peer-2-pop"',
                 'public_address = "taira-validator-2.sora.org:1337"',
                 "",
@@ -880,6 +1256,8 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 'account_id = "test-validator-3"',
                 'public_key = "peer-3-public"',
                 'private_key = "peer-3-private"',
+                'soranet_transport_public_key = "peer-3-soranet-public"',
+                'soranet_transport_private_key = "peer-3-soranet-private"',
                 'pop_hex = "peer-3-pop"',
                 'public_address = "taira-validator-3.sora.org:1337"',
                 "",
@@ -888,6 +1266,8 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 'account_id = "test-validator-4"',
                 'public_key = "peer-4-public"',
                 'private_key = "peer-4-private"',
+                'soranet_transport_public_key = "peer-4-soranet-public"',
+                'soranet_transport_private_key = "peer-4-soranet-private"',
                 'pop_hex = "peer-4-pop"',
                 'public_address = "taira-validator-4.sora.org:1337"',
                 "",
@@ -923,18 +1303,30 @@ def test_load_roster_rejects_more_than_protocol_maximum(tmp_path: Path) -> None:
     try:
         MODULE.load_roster(roster_path)
     except ValueError as error:
-        assert "at most 128 validators" in str(error)
+        assert "at most 31 validators" in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("load_roster accepted a roster above the protocol maximum")
 
 
-def test_render_bundle_scales_body_budget_for_five_validators(tmp_path: Path) -> None:
+def test_load_roster_rejects_non_three_f_plus_one_geometry(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path, validator_count=5)
+
+    try:
+        MODULE.load_roster(roster_path)
+    except ValueError as error:
+        assert "exact 3f + 1 validator committee" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("load_roster accepted non-3f+1 committee geometry")
+
+
+def test_render_bundle_scales_body_budget_for_seven_validators(tmp_path: Path) -> None:
     roster_path = tmp_path / "validator_roster.toml"
     secrets_path = tmp_path / "validator_secrets.toml"
     base_config_path = tmp_path / "config.toml"
     output_dir = tmp_path / "out"
-    _write_roster(roster_path, validator_count=5, inline_private_keys=False)
-    _write_secrets(secrets_path, validator_count=5)
+    _write_roster(roster_path, validator_count=7, inline_private_keys=False)
+    _write_secrets(secrets_path, validator_count=7)
     base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
 
     MODULE.render_bundle(
@@ -945,12 +1337,12 @@ def test_render_bundle_scales_body_budget_for_five_validators(tmp_path: Path) ->
     )
 
     rendered = MODULE._load_toml(
-        output_dir / "taira-validator-5" / "config.toml"
+        output_dir / "taira-validator-7" / "config.toml"
     )
     queues = rendered["sumeragi"]["queues"]
     assert queues["authenticated_non_validator_sources"] == 2
-    assert queues["body_source_bytes"] == 45_088_768
-    assert queues["body_bytes"] == 8 * queues["body_source_bytes"]
+    assert queues["body_source_bytes"] == 34_603_008
+    assert queues["body_bytes"] == 10 * queues["body_source_bytes"]
 
 
 def test_render_bundle_rejects_non_positive_queue_template_values(
@@ -961,13 +1353,13 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
 
     malformed = {
         "authenticated_non_validator_sources": ["0", "-1", '"2"', "true"],
-        "body_bytes": ["0", "-1", '"315621376"', "true"],
-        "body_source_bytes": ["0", "-1", '"45088768"', "true"],
+        "body_bytes": ["0", "-1", '"242221056"', "true"],
+        "body_source_bytes": ["0", "-1", '"34603008"', "true"],
     }
     defaults = {
         "authenticated_non_validator_sources": 2,
-        "body_bytes": 315621376,
-        "body_source_bytes": 45088768,
+        "body_bytes": 242221056,
+        "body_source_bytes": 34603008,
     }
     for key, values in malformed.items():
         for index, value in enumerate(values):
@@ -994,15 +1386,21 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
     [
         (
             "max_payload_bytes",
-            "22020096",
+            "16777216",
             str(MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES - 1),
-            "must be at least 22020096 bytes",
+            "must equal the revision-4 protocol ceiling of 16777216 bytes",
+        ),
+        (
+            "max_payload_bytes",
+            "16777216",
+            str(MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES + 1),
+            "must equal the revision-4 protocol ceiling of 16777216 bytes",
         ),
         (
             "body_source_bytes",
-            "45088768",
+            "34603008",
             str(MODULE.TAIRA_BODY_SOURCE_MIN_BYTES - 1),
-            "must be at least 44270600 bytes",
+            "must be at least 33784840 bytes",
         ),
         (
             "max_frame_bytes_block_sync",
@@ -1024,7 +1422,7 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
         ),
     ],
 )
-def test_render_bundle_rejects_privacy_transport_corridor_below_boundary(
+def test_render_bundle_rejects_invalid_privacy_transport_corridor(
     tmp_path: Path,
     field: str,
     current: str,
@@ -1046,20 +1444,25 @@ def test_render_bundle_rejects_privacy_transport_corridor_below_boundary(
         MODULE.render_bundle(base_config_path, roster_path, tmp_path / "out")
 
 
-def test_genesis_renderer_rejects_da_payload_one_byte_below_privacy_corridor(
+@pytest.mark.parametrize("delta", [-1, 1])
+def test_genesis_renderer_rejects_da_payload_outside_protocol_ceiling(
     tmp_path: Path,
+    delta: int,
 ) -> None:
     roster_path = tmp_path / "validator_roster.toml"
     _write_roster(roster_path)
     validators = MODULE.load_roster(roster_path)
     genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
     genesis["sumeragi_v2"]["da_layout"]["max_payload_size_bytes"] = (
-        MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES - 1
+        MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES + delta
     )
     base_genesis_path = tmp_path / "genesis.json"
     base_genesis_path.write_text(json.dumps(genesis), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="must be at least 22020096"):
+    with pytest.raises(
+        ValueError,
+        match="must equal the revision-4 protocol ceiling of 16777216",
+    ):
         MODULE.render_genesis_template(
             base_genesis_path,
             validators,
@@ -1114,9 +1517,63 @@ def test_load_roster_merges_private_keys_from_secrets(tmp_path: Path) -> None:
 
     assert validators[0].private_key == "peer-1-private"
     assert validators[-1].private_key == "peer-4-private"
+    assert validators[0].soranet_transport_public_key == "peer-1-soranet-public"
+    assert validators[-1].soranet_transport_private_key == "peer-4-soranet-private"
 
 
-def test_render_bundle_rejects_unpopulated_template_placeholders(tmp_path: Path) -> None:
+def test_secret_material_requires_each_validator_transport_pair(tmp_path: Path) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    secrets_path.write_text(
+        secrets_path.read_text(encoding="utf-8").replace(
+            'soranet_transport_private_key = "peer-2-soranet-private"\n',
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="soranet_transport_private_key"):
+        MODULE.load_secret_material(secrets_path)
+
+
+def test_load_roster_rejects_duplicate_transport_public_keys(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path)
+    roster_path.write_text(
+        roster_path.read_text(encoding="utf-8").replace(
+            'soranet_transport_public_key = "peer-2-soranet-public"',
+            'soranet_transport_public_key = "peer-1-soranet-public"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="soranet_transport_public_key.*duplicated"):
+        MODULE.load_roster(roster_path)
+
+
+def test_load_roster_rejects_streaming_identity_reuse(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_roster(roster_path, inline_private_keys=False)
+    _write_secrets(secrets_path)
+    secrets_path.write_text(
+        secrets_path.read_text(encoding="utf-8").replace(
+            'streaming_identity_public_key = "streaming-public-key"',
+            'streaming_identity_public_key = "peer-1-soranet-public"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must not reuse the shared streaming identity"):
+        MODULE.load_roster(roster_path, secrets_path=secrets_path)
+
+
+def test_render_bundle_rejects_unpopulated_template_placeholders(
+    tmp_path: Path,
+) -> None:
     roster_path = tmp_path / "validator_roster.toml"
     base_config_path = tmp_path / "config.toml"
     output_dir = tmp_path / "out"
@@ -1128,7 +1585,9 @@ def test_render_bundle_rejects_unpopulated_template_placeholders(tmp_path: Path)
     except ValueError as error:
         assert "template placeholder values" in str(error)
     else:  # pragma: no cover - defensive assertion
-        raise AssertionError("render_bundle accepted placeholder secrets without a secrets file")
+        raise AssertionError(
+            "render_bundle accepted placeholder secrets without a secrets file"
+        )
 
 
 def test_secret_material_rejects_invalid_sorafs_council_quorum(tmp_path: Path) -> None:
@@ -1217,8 +1676,7 @@ def test_secret_material_rejects_removed_or_incomplete_signer_shapes(
         raise AssertionError("incomplete structural onboarding secrets were accepted")
 
     secrets_path.write_text(
-        "[shared]\n"
-        'torii_faucet_authority = "authority"\n',
+        '[shared]\ntorii_faucet_authority = "authority"\n',
         encoding="utf-8",
     )
     try:

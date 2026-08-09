@@ -2,8 +2,9 @@
 EXTENDS SumeragiV2Quorums, FiniteSetTheorems, TLAPS
 
 (***************************************************************************
-Deductive dual-quorum proofs.  This module is imported only by TLAPS proof
-modules, keeping the executable TLC model independent of the TLAPS library.
+Deductive dual-quorum proofs.  This module is imported only by theorem-bearing
+modules, including AsyncNetwork for its in-place proofs; it contributes proof
+metadata without changing the executable transition relation.
 ***************************************************************************)
 
 THEOREM DualQuorumCarriesBothThresholds ==

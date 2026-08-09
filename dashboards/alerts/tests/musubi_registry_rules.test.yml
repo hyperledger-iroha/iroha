@@ -1,0 +1,159 @@
+rule_files:
+  - ../musubi_registry_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'musubi_publication_phase_age_seconds{phase="validation"}'
+        values: '901 961 1021 1081 1141 1201 1261'
+      - series: 'musubi_publication_phase_age_seconds{phase="replication"}'
+        values: '1801 1861 1921 1981 2041 2101 2161 2221 2281 2341 2401 2461'
+      - series: 'musubi_replication_shortfall_releases'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'musubi_ingest_deadletters_total{reason="receipt_expired"}'
+        values: '0 0 1 1 1 1 1 1 1 1 1 1'
+      - series: 'musubi_integrity_failures_total{surface="provider_readback"}'
+        values: '0 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'musubi_cache_corruption_total{operation="verify"}'
+        values: '0 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'musubi_cursor_failures_total{reason="stale_revision"}'
+        values: '0 0 2 4 6 8 10 12 14 16 18 20'
+      - series: 'musubi_governance_rejections_total{action="set_role",reason="unauthorized"}'
+        values: '0 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'musubi_storage_bytes_used'
+        values: '96 96 96 96 96 96 96 96 96 96 96 96'
+      - series: 'musubi_storage_bytes_capacity'
+        values: '100 100 100 100 100 100 100 100 100 100 100 100'
+    alert_rule_test:
+      - alertname: MusubiPublicationPhaseStalled
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              phase: validation
+              severity: warning
+            exp_annotations:
+              summary: "Musubi publication phase is stalled"
+              description: |
+                A Musubi publication has remained in phase=validation for
+                more than 15 minutes. Resume it by operation ID from the secret-free
+                journal and inspect finalized evidence before retrying any mutation.
+      - alertname: MusubiReplicationOrReadbackStalled
+        eval_time: 11m
+        exp_alerts:
+          - exp_labels:
+              phase: replication
+              severity: critical
+            exp_annotations:
+              summary: "Musubi replication or readback is stalled"
+              description: |
+                A publication has remained in phase=replication for more
+                than 30 minutes. Confirm three distinct finalized provider
+                completions and two-provider readback before allowing publication.
+      - alertname: MusubiReplicationShortfall
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Musubi releases are below replication quorum"
+              description: |
+                One or more Musubi releases have fewer than three healthy replicas
+                and must be excluded from fresh resolution. Preserve locked fetches
+                while a valid location remains and repair storage availability.
+      - alertname: MusubiIngestDeadletters
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels:
+              reason: receipt_expired
+              severity: critical
+            exp_annotations:
+              summary: "Musubi seed-ingress deadletters detected"
+              description: |
+                Authenticated seed ingress produced deadletters for bounded
+                reason=receipt_expired. Quarantine the affected operation,
+                verify receipt signatures and expiry, and do not bypass ingress.
+      - alertname: MusubiIntegrityFailure
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels:
+              surface: provider_readback
+              severity: critical
+            exp_annotations:
+              summary: "Musubi commitment verification failed"
+              description: |
+                Musubi detected an integrity failure at surface=provider_readback.
+                Stop publication or serving for the affected archive, retain the
+                evidence, and follow the integrity incident procedure.
+      - alertname: MusubiCacheCorruption
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels:
+              operation: verify
+              severity: warning
+            exp_annotations:
+              summary: "Musubi immutable cache corruption detected"
+              description: |
+                Cache operation=verify found a corrupt validated
+                descendant. Use authenticated cache repair; never derive a deletion
+                target from Musubi.lock or replace an immutable destination.
+      - alertname: MusubiCursorFailureSpike
+        eval_time: 11m
+        exp_alerts:
+          - exp_labels:
+              reason: stale_revision
+              severity: warning
+            exp_annotations:
+              summary: "Musubi query cursor failures elevated"
+              description: |
+                Bounded cursor reason=stale_revision exceeded the expected
+                retry rate. Confirm finalized height/hash and index revision
+                stability; clients should restart the exact query without a cursor.
+      - alertname: MusubiUnauthorizedGovernanceChange
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels:
+              action: set_role
+              severity: critical
+            exp_annotations:
+              summary: "Unauthorized Musubi governance mutation attempted"
+              description: |
+                Musubi rejected action=set_role as unauthorized. Retain
+                the transaction evidence, verify package membership and revisions,
+                and escalate repeated attempts to the security response owner.
+      - alertname: MusubiStoragePressure
+        eval_time: 11m
+        exp_alerts: []
+      - alertname: MusubiStoragePressureCritical
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Musubi archive or cache storage pressure is critical"
+              description: |
+                Musubi storage utilization has exceeded 95%. Suspend new admission
+                if necessary, repair replica placement, and do not perform broad or
+                lockfile-directed deletion.
+  - interval: 1m
+    input_series:
+      - series: 'musubi_publication_phase_age_seconds{phase="validation"}'
+        values: '0 60 120 180 240 300'
+      - series: 'musubi_replication_shortfall_releases'
+        values: '0 0 0 0 0 0'
+      - series: 'musubi_storage_bytes_used'
+        values: '40 40 40 40 40 40'
+      - series: 'musubi_storage_bytes_capacity'
+        values: '100 100 100 100 100 100'
+    alert_rule_test:
+      - alertname: MusubiPublicationPhaseStalled
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: MusubiReplicationShortfall
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: MusubiStoragePressure
+        eval_time: 5m
+        exp_alerts: []
+      - alertname: MusubiStoragePressureCritical
+        eval_time: 5m
+        exp_alerts: []

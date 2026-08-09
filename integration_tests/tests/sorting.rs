@@ -77,12 +77,16 @@ fn correct_pagination_assets_after_creating_new_one() {
 
     for i in 0..N_ASSETS {
         let asset_name = format!("xor{i}");
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("Valid"),
             asset_name.parse().expect("Valid"),
         );
-        let asset_definition =
-            AssetDefinition::numeric(asset_definition_id.clone()).with_name(asset_name);
+        let asset_definition = AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            asset_name,
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        );
         let asset = Asset::new(AssetId::new(asset_definition_id, account_id.clone()), 1u32);
 
         if missing_indices.contains(&i) {
@@ -328,15 +332,19 @@ fn correct_sorting_of_entities() -> Result<()> {
     let n = 10_u32;
     for i in 0..n {
         let asset_name = format!("xor_{i}");
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("Valid"),
             asset_name.parse().expect("Valid"),
         );
         let mut asset_metadata = Metadata::default();
         asset_metadata.insert(sort_by_metadata_key.clone(), n - i - 1);
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name(asset_name)
-            .with_metadata(asset_metadata.clone());
+        let asset_definition = AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            asset_name,
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .with_metadata(asset_metadata.clone());
 
         metadata_of_assets.push(asset_metadata);
         asset_definitions.push(asset_definition_id);
@@ -511,15 +519,19 @@ fn metadata_sorting_descending() {
     let n = 10_u32;
     for i in 0..n {
         let asset_name = format!("xor_{i}");
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("Valid"),
             asset_name.parse().expect("Valid"),
         );
         let mut asset_metadata = Metadata::default();
         asset_metadata.insert(sort_by_metadata_key.clone(), n - i - 1);
-        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name(asset_name)
-            .with_metadata(asset_metadata.clone());
+        let asset_definition = AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            asset_name,
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .with_metadata(asset_metadata.clone());
 
         metadata_of_assets.push(asset_metadata);
         asset_definitions.push(asset_definition_id);

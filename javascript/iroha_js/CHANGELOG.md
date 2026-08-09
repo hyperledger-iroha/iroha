@@ -4,9 +4,38 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Closed every governance mutation request shape before network I/O and reject
+  all retired private-key aliases, including inside ZK public inputs and the
+  nested V1 ballot proof. Deploy proposals now expose exact typed public
+  manifest provenance and reject the ignored `limits` field; legacy ZK public
+  inputs are closed to their six wire fields. Plain-ballot durations use
+  canonical u64 decimal strings and accept zero. Added typed Parliament ballot
+  parity for `/v1/gov/parliament/ballots`; governance drafts remain locally
+  signed. Finalize uses the shared governance hash grammar, enact accepts only
+  the exact lowercase committed proposal id, protected namespaces are exact
+  printable-ASCII tokens, and Ministry agenda drafts now validate a closed,
+  recursively secret-free typed V1 proposal while preserving full-u64
+  timestamps losslessly.
+- Replaced offset pagination on the six Explorer world collections with bounded,
+  opaque seek cursors. Node and browser clients now send `cursor`/`limit`,
+  validate the `{limit,next_cursor,has_more}` continuation contract, and the NFT
+  and RWA async iterators advance only through server-issued cursors.
+- Removed the generic `Shield`, `ZkTransfer`, and `Unshield` transaction surface
+  from ABI V1. JavaScript builders, TypeScript declarations, exports, and Norito
+  discriminants now fail closed; typed Kagemusha top-up/redemption routes and
+  their underlying proof helpers remain available.
+- Added a Node-only native authenticated `BlockProofs` verifier. It accepts
+  bounded canonical bridge-finality, exact executed-`SignedBlockWire`, and
+  proof archives; pins the application-selected chain, height context, and
+  expected entry hash; verifies Sumeragi-v2 roster PoPs and aggregate finality
+  in Rust; derives the non-serializable proof anchor only from that verified
+  artifact; and enforces immediate successor state. Browser builds fail closed
+  until a digest-pinned Rust finality-verifier WASM is shipped. Torii exposes
+  the finality and `BlockProofs` archives but not yet the exact executed block
+  wire required to assemble this verification input from public routes alone.
 - Replaced asset-selected offline readiness discovery with the universal
-  `getOfflineCapability()`/`OfflineStatus` contract. Deprecated selector-based
-  shims now ignore the selector and never add an asset query parameter.
+  `getOfflineCapability()`/`OfflineStatus` contract. The first-release hard cut
+  removes selector-taking readiness methods, normalizers, types, and exports.
 - Bound validation-fee policy and payout-lifecycle proposal fingerprints to
   the complete first-release PLAIN electorate rules. Both native exports now
   validate exact JSON and compute canonical `ProposalKind` fingerprints, and
@@ -30,9 +59,12 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   before account derivation, closing an untrusted-input CPU exhaustion path.
 - Added browser ledger evidence reads for headers, state roots, state QCs, and
   canonical Norito `BlockProofs`. The SDK validates the exact proof schema and
-  frame checksum, decodes bounded entry/result audit paths plus FASTPQ
-  transcripts, and locally verifies the Iroha BLAKE2b Merkle paths without
-  claiming to verify the node-provided finality QC.
+  frame checksum, requires aligned entry/result commitments and proofs, decodes
+  bounded audit paths plus FASTPQ transcripts, and binds those transcripts to
+  a caller-supplied, independently authenticated executed-block projection
+  while locally verifying the Iroha BLAKE2b Merkle paths. The SDK exposes no
+  response-to-anchor factory and does not claim to authenticate that anchor or
+  verify the node-provided finality QC.
 - Added browser Connect `SignRequestRaw` support and a canonical-request auth
   adapter. Apps can request the explicit `sign_raw` permission, keep account
   keys inside the approved wallet, and sign the exact Torii canonical message
@@ -415,7 +447,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   definitions now encode the same order enum to keep JS-04 validation/typedef
   parity green.
 - Added governance HTTP helpers (`governanceProposeDeployContract`,
-  `governanceSubmitPlainBallot`, `governanceSubmitZkBallot`,
+  `governanceSubmitPlainBallot`, `governanceSubmitParliamentBallot`,
   `governanceSubmitZkBallotV1`, `governanceSubmitZkBallotProofV1`) with input
   validation, README snippets, and TypeScript definitions so the JS SDK covers
   the `/v1/gov/proposals/deploy-contract` and ballot DTOs described in

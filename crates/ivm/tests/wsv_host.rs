@@ -60,10 +60,11 @@ fn test_balance_syscall_permission() {
         .unwrap();
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-        "asset".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
 
     let wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),
@@ -128,10 +129,11 @@ fn test_transfer_syscall_permission() {
         .unwrap();
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-        "asset".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
 
     let wsv = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), Quantity::from(50_u64)),
@@ -184,10 +186,11 @@ fn test_mint_syscall_permission() {
         .unwrap();
     let _alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-        "asset".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
 
     let wsv =
         MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Quantity::zero())]);

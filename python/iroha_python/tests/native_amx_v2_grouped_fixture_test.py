@@ -9,6 +9,7 @@ from typing import Any, get_type_hints
 
 import pytest
 
+import iroha_python.client as iroha_python_client
 from iroha_python import (
     SumeragiDiagnosticsSnapshot,
     SumeragiLaneSettlementCommitment,
@@ -16,9 +17,13 @@ from iroha_python import (
     SumeragiNativeAmxPhase,
     SumeragiNativeAmxSourceId,
     SumeragiNativeAmxTransactionEntrypointHash,
+    SumeragiV2ExecutionCommitment,
 )
 from iroha_torii_client.client import (
     SumeragiDiagnosticsStatus as CanonicalSumeragiDiagnosticsStatus,
+)
+from iroha_torii_client.native_amx import (
+    compute_native_amx_application_manifest_singleton_root,
 )
 
 
@@ -110,6 +115,21 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
             raise ValueError(message)
 
     require(execution["native_amx_application_manifest_version"] == 1, "manifest version")
+    try:
+        parsed_execution = SumeragiV2ExecutionCommitment.from_payload(
+            execution,
+            "golden.application_evidence.execution_commitment",
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("execution commitment") from error
+    require(parsed_execution.merge_carrier is not None, "merge carrier")
+    assert parsed_execution.merge_carrier is not None
+    require(parsed_execution.merge_carrier.version == 1, "merge carrier version")
+    require(
+        parsed_execution.merge_carrier.entry_hash
+        == execution["merge_carrier"]["entry_hash"],
+        "merge carrier entry hash",
+    )
     require(
         execution["native_amx_application_manifest_count"] == len(artifacts) == 1,
         "manifest count",
@@ -120,16 +140,26 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
     require(artifact["version"] == 1 and leaf["version"] == 1, "artifact version")
     require(artifact["leaf_index"] == proof["leaf_index"] == 0, "proof position")
     require(proof["audit_path"] == [], "singleton proof path")
+    expected_manifest_root = compute_native_amx_application_manifest_singleton_root(
+        artifact["leaf_hash"]
+    )
     require(
-        artifact["manifest_leaf_count"] == 1
+        artifact["manifest_leaf_count"]
+        == execution["native_amx_application_manifest_count"]
         and artifact["manifest_root"]
         == execution["native_amx_application_manifest_root"]
-        == artifact["leaf_hash"],
+        == expected_manifest_root,
         "manifest root",
     )
     require(
         leaf["executed_block_wire_hash"] == execution["executed_block_wire_hash"],
         "executed wire",
+    )
+    require(
+        isinstance(execution.get("executed_block_wire_len"), int)
+        and not isinstance(execution["executed_block_wire_len"], bool)
+        and execution["executed_block_wire_len"] == 49,
+        "executed wire length",
     )
     require(
         leaf["predecessor_height"] + 1 == leaf["participant_height"],
@@ -232,6 +262,12 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
     assert fixture["format"] == "iroha-native-amx-v2-grouped"
     assert fixture["fixture_version"] == 1
     assert fixture["rust_owner"] == "iroha_data_model::block::consensus"
+    assert {
+        "coherent_duplicate_validator_set",
+        "coherent_over_quorum_requirement",
+        "execution_commitment_merge_carrier_wrong_version",
+        "execution_commitment_missing_merge_carrier_field",
+    } <= {control["id"] for control in fixture["negative_controls"]}
 
     payload = fixture["golden"]["receipt_group"]
     parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
@@ -336,12 +372,28 @@ def test_native_amx_source_and_entrypoint_domains_are_distinct_public_types() ->
     )
 
 
+def test_grouped_native_amx_v2_corpus_includes_required_controls() -> None:
+    identifiers = {
+        control["id"] for control in _fixture()["negative_controls"]
+    }
+    assert {
+        "coherent_forged_validator_set_hash",
+        "coherent_stale_descriptor_hash",
+        "coherent_stale_proposal_hash",
+        "coherent_stale_settlement_hash",
+        "manifest_leaf_hash_tampering",
+        "non_canonical_validator_peer_id",
+    }.issubset(identifiers)
+
+
 @pytest.mark.parametrize(
     "control",
     _fixture()["negative_controls"],
     ids=lambda control: control["id"],
 )
-def test_grouped_native_amx_v2_negative_corpus(control: dict[str, Any]) -> None:
+def test_grouped_native_amx_v2_negative_corpus(
+    control: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
     fixture = _fixture()
     assert control["expectation"] == "reject"
     for mutation in control["mutations"]:
@@ -362,3 +414,36 @@ def test_grouped_native_amx_v2_negative_corpus(control: dict[str, Any]) -> None:
         CanonicalSumeragiDiagnosticsStatus.from_payload(diagnostics)
     with pytest.raises((RuntimeError, TypeError, ValueError)):
         SumeragiDiagnosticsSnapshot.from_payload(diagnostics)
+
+    if control["id"] == "short_aggregate_signature":
+        # ML-MUT-API-03 deliberately weakens one real SDK check. The Rust-owned
+        # control must then cross the Python accept boundary, proving that the
+        # corpus detects this exact 96-byte signature-length regression.
+        strict_byte_vector = iroha_python_client._strict_byte_vector
+
+        def weakened_ml_mut_api_03_byte_vector(
+            value: Any, length: int, context: str
+        ) -> tuple[int, ...]:
+            if (
+                context == "native AMX v2 attestation QC bls_aggregate_signature"
+                and length == 96
+                and isinstance(value, list)
+                and len(value) == 95
+            ):
+                return strict_byte_vector(value, 95, context)
+            return strict_byte_vector(value, length, context)
+
+        monkeypatch.setattr(
+            iroha_python_client,
+            "_strict_byte_vector",
+            weakened_ml_mut_api_03_byte_vector,
+        )
+        weakened = SumeragiLaneSettlementCommitment.from_payload(mutated_group)
+        assert (
+            len(
+                weakened.native_amx_receipts[0]
+                .legs[0]
+                .prepare_qc.bls_aggregate_signature
+            )
+            == 95
+        )

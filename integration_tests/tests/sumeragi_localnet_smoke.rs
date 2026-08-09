@@ -22,20 +22,22 @@ use futures_util::{
 };
 use integration_tests::sandbox;
 use iroha::{
-    crypto::{Algorithm, KeyPair},
+    client::Client,
+    crypto::{Algorithm, HashOf, KeyPair},
     data_model::{
         Level,
         account::{Account, AccountId, OpaqueAccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::consensus::SumeragiDiagnosticsStatus,
+        block::{Header, consensus::SumeragiDiagnosticsStatus},
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
+        events::time::{ExecutionTime, TimeEventFilter},
         identifier::{
             IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId,
             IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
         },
         isi::{
-            Instruction, InstructionBox, Log, Mint, Register, SetParameter, Transfer,
+            Instruction, InstructionBox, Log, Mint, Register, SetKeyValue, SetParameter, Transfer,
             identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
             ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
@@ -48,11 +50,13 @@ use iroha::{
         },
         parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
         peer::PeerId,
-        prelude::{FindAccountById, FindAssetById, Quantity},
+        prelude::{Action, FindAccountById, FindAssetById, Quantity, Repeats},
+        query::block::prelude::FindBlocks,
         ram_lfe::{
             RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
             RamLfeProgramId, RamLfeProgramPolicy, RamLfeReceiptAttestation,
         },
+        trigger::Trigger,
     },
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
@@ -65,6 +69,8 @@ use iroha_crypto::{
     ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
     try_bfv_programmed_public_parameters_with_program,
 };
+use iroha_data_model::{HasMetadata, prelude::QueryBuilderExt};
+use iroha_primitives::json::Json;
 use iroha_test_network::{
     Network, NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
 };
@@ -80,6 +86,9 @@ use reqwest::Client as HttpClient;
 use tempfile::tempdir;
 use tokio::{sync::Mutex, task, time::sleep};
 use toml::{Table, Value as TomlValue};
+
+#[path = "sumeragi_localnet_smoke/idle_chain.rs"]
+mod idle_chain;
 
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
@@ -306,14 +315,14 @@ fn checked_localnet_smoke_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPai
 }
 
 fn route_stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
 
 fn route_fee_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("universal", "universal").expect("fee asset domain"),
         "xor".parse().expect("fee asset name"),
     )
@@ -369,15 +378,25 @@ fn route_multilane_genesis_post_topology_transactions(
         .into(),
         Register::account(Account::new(gas_account_id.clone())).into(),
         Register::asset_definition(
-            AssetDefinition::new(stake_asset_id.clone(), Default::default())
-                .with_name(ROUTE_STAKE_ASSET_NAME.to_owned())
-                .with_metadata(Metadata::default()),
+            AssetDefinition::new(
+                stake_asset_id.clone(),
+                ROUTE_STAKE_ASSET_NAME.to_owned(),
+                Default::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(Metadata::default()),
         )
         .into(),
         Register::asset_definition(
-            AssetDefinition::new(fee_asset_id.clone(), Default::default())
-                .with_name(ROUTE_FEE_ASSET_NAME.to_owned())
-                .with_metadata(Metadata::default()),
+            AssetDefinition::new(
+                fee_asset_id.clone(),
+                ROUTE_FEE_ASSET_NAME.to_owned(),
+                Default::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(Metadata::default()),
         )
         .into(),
         Mint::asset_quantity(
@@ -585,7 +604,7 @@ fn realistic_transfer_domain_id() -> DomainId {
 }
 
 fn realistic_transfer_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         realistic_transfer_domain_id(),
         "transfer_coin".parse().expect("transfer asset name"),
     )
@@ -1062,7 +1081,7 @@ async fn submit_ram_lfe_emails_paced(
             .into();
             let transaction = submit_account.clients[0]
                 .build_transaction_from_items([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index));
-            let payload = submit_account.clients[0].prepare_transaction_payload(&transaction);
+            let payload = Client::prepare_transaction_payload(&transaction);
             submit_prepared_to_accept_quorum(
                 &submit_account.clients,
                 &payload,
@@ -1145,7 +1164,7 @@ async fn submit_transfers_paced(
             .into();
             let transaction = source_account.clients[0]
                 .build_transaction_from_items([instruction], iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), realistic_load_metadata(index));
-            let payload = source_account.clients[0].prepare_transaction_payload(&transaction);
+            let payload = Client::prepare_transaction_payload(&transaction);
             submit_prepared_to_accept_quorum(
                 &source_account.clients,
                 &payload,
@@ -2972,7 +2991,7 @@ async fn run_realistic_30tps_localnet(
                     ]),
                 )
                 .write(
-                    ["torii", "api_allow_cidrs"],
+                    ["torii", "api_rate_limit_bypass_cidrs"],
                     TomlValue::Array(vec![
                         TomlValue::String("127.0.0.0/8".into()),
                         TomlValue::String("::1/128".into()),
@@ -3006,10 +3025,12 @@ async fn run_realistic_30tps_localnet(
                 .with_genesis_instruction(Register::domain(Domain::new(
                     realistic_transfer_domain_id(),
                 )))
-                .with_genesis_instruction(Register::asset_definition(
-                    AssetDefinition::numeric(transfer_asset_definition_id.clone())
-                        .with_name("Realistic Transfer Coin".to_owned()),
-                ));
+                .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+                    transfer_asset_definition_id.clone(),
+                    "Realistic Transfer Coin",
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )));
             for account in &transfer_load_accounts {
                 builder = builder
                     .with_genesis_instruction(Register::account(Account::new(account.id.clone())))
@@ -3758,155 +3779,13 @@ async fn run_realistic_30tps_localnet(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)]
 async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
-    init_instruction_registry();
-    let _guard = LOCALNET_SMOKE_GUARD
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .await;
+    idle_chain::run_permissioned_progress().await
+}
 
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_real_genesis_keypair()
-        .with_block_cadence(SMOKE_PIPELINE_TIME)
-        .with_genesis_instruction(SetParameter::new(Parameter::Block(
-            BlockParameter::MaxTransactions(nonzero!(1_u64)),
-        )))
-        .with_permissioned_consensus()
-        .with_config_layer(|layer| {
-            layer
-                .write(["network", "transaction_gossip_period_ms"], 200_i64)
-                .write(
-                    ["network", "transaction_gossip_restricted_fallback"],
-                    "public_overlay",
-                )
-                .write(
-                    ["network", "transaction_gossip_restricted_public_payload"],
-                    "forward",
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    2_000_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    1_i64,
-                );
-        });
-
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(permissioned_localnet_produces_blocks_within_bound),
-    )
-    .await?
-    else {
-        ensure!(
-            !fail_on_sandbox_skip(),
-            "sandboxed skip surfaced and {} is enabled",
-            FAIL_ON_SANDBOX_SKIP_ENV
-        );
-        return Ok(());
-    };
-
-    let result: Result<()> = async {
-        wait_for_status_responses(&network, Duration::from_secs(30)).await?;
-        let baseline_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
-        let baseline_height = baseline_statuses
-            .iter()
-            .map(|status| status.blocks)
-            .min()
-            .unwrap_or_default();
-        let warmup_height = baseline_height.saturating_add(1);
-        for peer in network.peers() {
-            let message = format!("localnet warmup block {}", peer.mnemonic());
-            peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-                .wrap_err_with(|| {
-                    format!("failed to submit warmup log instruction to {}", peer.mnemonic())
-                })?;
-        }
-        wait_for_converged_height(&network, warmup_height, Duration::from_secs(45)).await?;
-        let warmup_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
-        let baseline_height = warmup_statuses
-            .iter()
-            .map(|status| status.blocks)
-            .min()
-            .unwrap_or_default();
-        let baseline_view_changes: Vec<u64> = warmup_statuses
-            .iter()
-            .map(|status| status.view_changes.into())
-            .collect();
-        let peer_count = network.peers().len();
-        let fault_tolerance = peer_count.saturating_sub(1) / 3;
-        let max_extra_view_changes = u64::try_from(fault_tolerance.saturating_add(2))
-            .unwrap_or(u64::MAX);
-
-        ensure!(!network.peers().is_empty(), "network must have at least one peer");
-        for peer in network.peers() {
-            let message = format!("localnet bounded block {}", peer.mnemonic());
-            peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-                .wrap_err_with(|| {
-                    format!("failed to submit log instruction to {}", peer.mnemonic())
-                })?;
-        }
-
-        let target_height = baseline_height.saturating_add(1);
-        let start = Instant::now();
-        wait_for_converged_height(&network, target_height, Duration::from_secs(45)).await?;
-        let elapsed = start.elapsed();
-        ensure!(
-            elapsed <= Duration::from_secs(15),
-            "block production exceeded bound: elapsed={:?}",
-            elapsed
-        );
-
-        let after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
-        ensure!(
-            after_statuses
-                .iter()
-                .all(|status| status.blocks >= target_height),
-            "not all peers reached target height {target_height}: {after_statuses:?}"
-        );
-        for (idx, status) in after_statuses.iter().enumerate() {
-            let before = baseline_view_changes.get(idx).copied().unwrap_or_default();
-            ensure!(
-                u64::from(status.view_changes) <= before.saturating_add(max_extra_view_changes),
-                "peer {idx} experienced repeated view changes: before={before}, after={}, max_extra={max_extra_view_changes}",
-                status.view_changes,
-            );
-        }
-        let min_view_changes = after_statuses
-            .iter()
-            .map(|status| u64::from(status.view_changes))
-            .min()
-            .unwrap_or_default();
-        let max_view_changes = after_statuses
-            .iter()
-            .map(|status| u64::from(status.view_changes))
-            .max()
-            .unwrap_or_default();
-        ensure!(
-            max_view_changes.saturating_sub(min_view_changes) <= max_extra_view_changes,
-            "view_change counters diverged across peers: {after_statuses:?}"
-        );
-
-        network.shutdown().await;
-        Ok(())
-    }
-    .await;
-
-    if sandbox::handle_result(
-        result,
-        stringify!(permissioned_localnet_produces_blocks_within_bound),
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-    Ok(())
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permissioned_idle_chain_advances_only_for_external_or_internal_work() -> Result<()> {
+    idle_chain::run().await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -4877,7 +4756,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     ]),
                 )
                 .write(
-                    ["torii", "api_allow_cidrs"],
+                    ["torii", "api_rate_limit_bypass_cidrs"],
                     TomlValue::Array(vec![
                         TomlValue::String("127.0.0.0/8".into()),
                         TomlValue::String("::1/128".into()),
@@ -5547,7 +5426,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                     ]),
                 )
                 .write(
-                    ["torii", "api_allow_cidrs"],
+                    ["torii", "api_rate_limit_bypass_cidrs"],
                     TomlValue::Array(vec![
                         TomlValue::String("127.0.0.0/8".into()),
                         TomlValue::String("::1/128".into()),
@@ -10217,45 +10096,4 @@ fn realistic_artifact_summary(
     }
 }
 
-fn config_fingerprint(root: &Path) -> Result<Option<String>> {
-    if !root.exists() {
-        return Ok(None);
-    }
-    let mut paths = Vec::new();
-    collect_config_paths(root, &mut paths);
-    if paths.is_empty() {
-        return Ok(None);
-    }
-    paths.sort();
-    let mut hasher = Blake3Hasher::new();
-    for path in paths {
-        hasher.update(path.to_string_lossy().as_bytes());
-        let contents = fs::read(&path).wrap_err_with(|| format!("read {}", path.display()))?;
-        hasher.update(&contents);
-    }
-    Ok(Some(hasher.finalize().to_hex().to_string()))
-}
-
-fn collect_config_paths(root: &Path, output: &mut Vec<PathBuf>) {
-    let entries = match fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_config_paths(&path, output);
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if name.contains("config")
-            && path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
-        {
-            output.push(path);
-        }
-    }
-}
+include!("sumeragi_localnet_smoke/config_paths.rs");

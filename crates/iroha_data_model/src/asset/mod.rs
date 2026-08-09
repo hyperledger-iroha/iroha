@@ -12,7 +12,7 @@ pub mod policy;
 pub mod transfer_control;
 pub mod value;
 
-pub use alias::AssetDefinitionAlias;
+pub use alias::{AssetDefinitionAlias, ResolvedAssetDefinitionAliasV1};
 pub use definition::{AssetBalancePolicy, AssetDefinition, Mintable, NewAssetDefinition};
 pub use id::{AssetBalanceScope, AssetDefinitionId, AssetId};
 pub use policy::{
@@ -33,7 +33,7 @@ pub type AssetTotalQuantityMap = btree_map::BTreeMap<AssetDefinitionId, Quantity
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {
     pub use super::{
-        alias::AssetDefinitionAlias,
+        alias::{AssetDefinitionAlias, ResolvedAssetDefinitionAliasV1},
         definition::{AssetBalancePolicy, AssetDefinition, Mintable, NewAssetDefinition},
         id::{AssetBalanceScope, AssetDefinitionId, AssetId},
         policy::{

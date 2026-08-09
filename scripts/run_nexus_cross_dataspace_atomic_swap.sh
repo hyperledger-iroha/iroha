@@ -12,7 +12,7 @@ Options:
   --release               Run tests with --release
   --all-nexus             Run the full Nexus integration subset (nexus:: filter)
   --cross-dataspace-fault-soak
-                          Run the ignored two-hour 12-peer rotating-validator soak
+                          Run the ignored two-hour 13-peer global rotating-validator soak
   --cross-dataspace-seed <SEED>
                           Soak seed (nexus-cross-dataspace-v1-seed-00..09)
   --cross-dataspace-soak-duration-secs <SECONDS>
@@ -24,11 +24,10 @@ Options:
                           Run both mandatory non-ignored four-peer release gates
   --target-dir <PATH>     Set CARGO_TARGET_DIR for the test run
   --evidence-dir <PATH>   Persist exact per-run logs and completion accounting
-  --fast                  Run cargo via scripts/cargo_fast.sh when available
-  --fast-zero-debug       With --fast, set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
-  --fast-no-incremental   With --fast, set CARGO_INCREMENTAL=0
+  --fast                  Rejected: release validation uses only pinned Cargo
+  --fast-zero-debug       Rejected with the removed fast path
+  --fast-no-incremental   Rejected with the removed fast path
   --keep-dirs             Preserve temp network directories (IROHA_TEST_NETWORK_KEEP_DIRS=1)
-  --no-skip-build         Do not set IROHA_TEST_SKIP_BUILD=1
   --capture               Do not pass --nocapture to cargo test
   --test-threads <N>      Set --test-threads (default: 1)
   --env <KEY=VALUE>       Extra environment variable (repeatable)
@@ -61,7 +60,6 @@ readonly CROSS_DATASPACE_FAULT_SOAK_DURATION_SECS=7200
 CROSS_DATASPACE_SEED=""
 CROSS_DATASPACE_FAULT_SOAK_DURATION=""
 KEEP_DIRS=false
-SKIP_BUILD=true
 NO_CAPTURE=false
 TEST_THREADS="1"
 EXTRA_ENV=()
@@ -151,10 +149,6 @@ while [[ $# -gt 0 ]]; do
       KEEP_DIRS=true
       shift
       ;;
-    --no-skip-build)
-      SKIP_BUILD=false
-      shift
-      ;;
     --capture)
       NO_CAPTURE=true
       shift
@@ -225,7 +219,7 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" && "$PROFILE" != "release" ]]; then
 fi
 for extra in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do
   case "${extra%%=*}" in
-    IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|IROHA_MULTILANE_RELEASE_MODE|IROHA_RUN_IGNORED|IROHA_RELEASE_PREBUILT_MANIFEST_SHA256)
+    CARGO_HOME|CARGO_TARGET_DIR|PATH|RUSTUP_HOME|RUSTUP_TOOLCHAIN|IROHA_RELEASE_ARTIFACT_ROOT|IROHA_RELEASE_CANCEL_REQUEST_PATH|IROHA_TEST_SKIP_BUILD|IROHA_TEST_ALLOW_REENTRANT_BUILD|IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|IROHA_MULTILANE_RELEASE_MODE|IROHA_RUN_IGNORED|IROHA_RELEASE_PREBUILT_MANIFEST_SHA256)
       echo "--env may not override reserved cross-dataspace evidence control ${extra%%=*}" >&2
       exit 2
       ;;
@@ -234,6 +228,7 @@ done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 cd "$repo_root"
+source "${repo_root}/scripts/sumeragi_v2_release_process_policy.sh"
 release_head_commit="${IROHA_RELEASE_HEAD_COMMIT:-}"
 release_head_tree="${IROHA_RELEASE_HEAD_TREE:-}"
 release_source_manifest_sha256="${IROHA_RELEASE_SOURCE_MANIFEST_SHA256:-}"
@@ -254,25 +249,46 @@ fi
 readonly release_head_commit release_head_tree
 readonly release_source_manifest_sha256 release_cargo_lock_sha256
 readonly release_prebuilt_manifest_sha256
-cargo_runner=(cargo)
-if [[ "$USE_CARGO_FAST" == true ]]; then
-  cargo_fast_script="${repo_root}/scripts/cargo_fast.sh"
-  if [[ ! -x "${cargo_fast_script}" ]]; then
-    echo "scripts/cargo_fast.sh is not available or not executable" >&2
-    exit 2
-  fi
-  cargo_runner=("${cargo_fast_script}")
-  if [[ "$FAST_ZERO_DEBUG" == true ]]; then
-    cargo_runner+=("--zero-debug")
-  fi
-  if [[ "$FAST_NO_INCREMENTAL" == true ]]; then
-    cargo_runner+=("--no-incremental")
-  fi
-  echo "[nexus-cross-swap] using scripts/cargo_fast.sh for cargo commands"
-elif [[ "$FAST_ZERO_DEBUG" == true || "$FAST_NO_INCREMENTAL" == true ]]; then
-  echo "--fast-zero-debug and --fast-no-incremental require --fast" >&2
+if [[ "$USE_CARGO_FAST" == true \
+  || "$FAST_ZERO_DEBUG" == true \
+  || "$FAST_NO_INCREMENTAL" == true ]]; then
+  echo "fast Cargo paths are forbidden; use the pinned no-interference wrapper" >&2
   exit 2
 fi
+
+if [[ -n "$TARGET_DIR" ]]; then
+  if [[ -n "${CARGO_TARGET_DIR:-}" && "$CARGO_TARGET_DIR" != "$TARGET_DIR" ]]; then
+    echo "--target-dir disagrees with inherited CARGO_TARGET_DIR" >&2
+    exit 2
+  fi
+  export CARGO_TARGET_DIR="$TARGET_DIR"
+fi
+if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+  nexus_invocation_root="$(
+    mktemp -d /private/tmp/iroha-sumeragi-v2-nexus-cross.XXXXXX
+  )"
+  mkdir -m 0700 -- \
+    "$nexus_invocation_root/target" \
+    "$nexus_invocation_root/artifacts"
+  export CARGO_TARGET_DIR="$nexus_invocation_root/target"
+  export IROHA_RELEASE_ARTIFACT_ROOT="$nexus_invocation_root/artifacts"
+  export IROHA_RELEASE_CANCEL_REQUEST_PATH="$nexus_invocation_root/cancel-request.json"
+elif [[ -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  && -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  nexus_output_root="$(
+    mktemp -d /private/tmp/iroha-sumeragi-v2-nexus-output.XXXXXX
+  )"
+  mkdir -m 0700 -- "$nexus_output_root/artifacts"
+  export IROHA_RELEASE_ARTIFACT_ROOT="$nexus_output_root/artifacts"
+  export IROHA_RELEASE_CANCEL_REQUEST_PATH="$nexus_output_root/cancel-request.json"
+elif [[ -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  || -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  echo "IROHA_RELEASE_ARTIFACT_ROOT and IROHA_RELEASE_CANCEL_REQUEST_PATH must be supplied together" >&2
+  exit 2
+fi
+require_external_cargo_target_dir "$repo_root"
+require_external_release_artifact_root "$repo_root"
+require_disjoint_release_roots "$repo_root"
 
 if [[ -z "${IROHA_TEST_NETWORK_PERMIT_DIR+x}" ]]; then
   PERMIT_DIR_OVERRIDE="$(mktemp -d)"
@@ -281,12 +297,6 @@ fi
 ENV_VARS=("NORITO_SKIP_BINDINGS_SYNC=1")
 if [[ "$KEEP_DIRS" == true ]]; then
   ENV_VARS+=("IROHA_TEST_NETWORK_KEEP_DIRS=1")
-fi
-if [[ "$SKIP_BUILD" == true ]]; then
-  ENV_VARS+=("IROHA_TEST_SKIP_BUILD=1")
-fi
-if [[ -n "$TARGET_DIR" ]]; then
-  ENV_VARS+=("CARGO_TARGET_DIR=${TARGET_DIR}")
 fi
 if [[ -n "$PERMIT_DIR_OVERRIDE" ]]; then
   ENV_VARS+=("IROHA_TEST_NETWORK_PERMIT_DIR=${PERMIT_DIR_OVERRIDE}")
@@ -297,34 +307,15 @@ fi
 for extra in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do
   ENV_VARS+=("$extra")
 done
+# Test processes must consume the top-level attested bundle. Keep these final so
+# neither inherited state nor caller-supplied extras can reopen Cargo-under-Cargo.
+ENV_VARS+=("IROHA_TEST_SKIP_BUILD=1")
+ENV_VARS+=("IROHA_TEST_ALLOW_REENTRANT_BUILD=0")
 # This proof launcher must never translate a sandbox-denied localnet into a
 # successful test. Append the requirement after caller-supplied values so an
 # `--env` override cannot weaken it.
 ENV_VARS+=("IROHA_TEST_REQUIRE_NETWORK=1")
 ENV_VARS+=("IROHA_TEST_NETWORK_START_ATTEMPTS=1")
-
-wait_for_cargo_idle() {
-  while true; do
-    local snapshot active
-    snapshot="$(ps -axo pid,etime,command)"
-    printf '%s\n' "$snapshot" >&2
-    active="$(
-      awk -v self_pid="$$" '
-        NR > 1 && $1 != self_pid && $0 !~ /<defunct>/ &&
-        ($0 ~ /(^|[[:space:]\/])cargo([[:space:]]|$)/ ||
-         $0 ~ /(^|[[:space:]\/])rustc([[:space:]]|$)/) {
-          print
-        }
-      ' <<<"$snapshot"
-    )"
-    if [[ -z "$active" ]]; then
-      return
-    fi
-    echo "[nexus-cross-swap] waiting for active Cargo/rustc processes:" >&2
-    printf '%s\n' "$active" >&2
-    sleep 5
-  done
-}
 
 sha256_file() {
   local path="$1"
@@ -395,11 +386,7 @@ validate_multilane_release_markers() {
   fi
 }
 
-if [[ "$USE_CARGO_FAST" == true ]]; then
-  CARGO_TEST_CMD=("${cargo_runner[@]}" -- test)
-else
-  CARGO_TEST_CMD=("${cargo_runner[@]}" test)
-fi
+CARGO_TEST_CMD=(test)
 if [[ "$PROFILE" == "release" ]]; then
   CARGO_TEST_CMD+=("--release")
 fi
@@ -419,9 +406,11 @@ if [[ "$RUN_SCOPE" == "nexus" ]]; then
     --
     "${TEST_ARGS[@]}"
   )
-  echo "Command: ${ENV_VARS[*]} ${CMD[*]}"
-  wait_for_cargo_idle
-  env "${ENV_VARS[@]}" "${CMD[@]}"
+  echo "Command: ${ENV_VARS[*]} cargo +1.93.1 ${CMD[0]} -j1 ${CMD[*]:1}"
+  (
+    export "${ENV_VARS[@]}"
+    run_cargo "${CMD[@]}"
+  )
   exit
 fi
 
@@ -434,12 +423,12 @@ if [[ "$RUN_SCOPE" == "native-amx" ]]; then
     --list
   )
   native_amx_test_list="$(
-    wait_for_cargo_idle
-    env "${ENV_VARS[@]}" "${LIST_CMD[@]}"
+    export "${ENV_VARS[@]}"
+    run_cargo "${LIST_CMD[@]}"
   )"
   native_amx_ignored_test_list="$(
-    wait_for_cargo_idle
-    env "${ENV_VARS[@]}" "${LIST_CMD[@]}" --ignored
+    export "${ENV_VARS[@]}"
+    run_cargo "${LIST_CMD[@]}" --ignored
   )"
   if ! grep -Fqx -- "${NATIVE_AMX_FAULT_SOAK_TEST}: test" \
     <<<"$native_amx_test_list"; then
@@ -468,10 +457,13 @@ if [[ "$RUN_SCOPE" == "native-amx" ]]; then
     return "$status"
   }
   trap cleanup_native_amx_run_log EXIT
-  echo "Command: ${ENV_VARS[*]} ${CMD[*]}"
+  echo "Command: ${ENV_VARS[*]} IROHA_RUN_IGNORED=1 cargo +1.93.1 ${CMD[0]} -j1 ${CMD[*]:1}"
   set +e
-  wait_for_cargo_idle
-  env "${ENV_VARS[@]}" IROHA_RUN_IGNORED=1 "${CMD[@]}" 2>&1 | tee "$NATIVE_AMX_RUN_LOG"
+  (
+    export "${ENV_VARS[@]}"
+    export IROHA_RUN_IGNORED=1
+    run_cargo "${CMD[@]}"
+  ) 2>&1 | tee "$NATIVE_AMX_RUN_LOG"
   native_amx_pipeline_status=("${PIPESTATUS[@]}")
   set -e
   if ((native_amx_pipeline_status[0] != 0 || native_amx_pipeline_status[1] != 0)); then
@@ -484,17 +476,19 @@ if [[ "$RUN_SCOPE" == "native-amx" ]]; then
 fi
 
 if [[ -z "$EVIDENCE_DIR" ]]; then
-  if [[ -n "$TARGET_DIR" ]]; then
-    EVIDENCE_DIR="${TARGET_DIR%/}/nexus-cross-dataspace"
-  else
-    EVIDENCE_DIR="${repo_root}/target/nexus-cross-dataspace"
-  fi
+  EVIDENCE_DIR="${IROHA_RELEASE_ARTIFACT_ROOT}/nexus-cross-dataspace"
 fi
 if [[ -L "$EVIDENCE_DIR" ]]; then
   echo "evidence directory must not be a symlink: ${EVIDENCE_DIR}" >&2
   exit 1
 fi
-mkdir -p -- "$EVIDENCE_DIR"
+mkdir -p -m 0700 -- "$EVIDENCE_DIR"
+EVIDENCE_DIR="$(
+  python3 -I -S -c \
+    'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
+    "$EVIDENCE_DIR"
+)"
+require_release_artifact_directory "$EVIDENCE_DIR"
 
 if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
   multilane_completion_pointer="${IROHA_MULTILANE_FOUR_PEER_COMPLETION_PATH_FILE:-}"
@@ -527,12 +521,12 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
       --list
     )
     test_list="$(
-      wait_for_cargo_idle
-      env "${ENV_VARS[@]}" "${LIST_CMD[@]}"
+      export "${ENV_VARS[@]}"
+      run_cargo "${LIST_CMD[@]}"
     )"
     ignored_test_list="$(
-      wait_for_cargo_idle
-      env "${ENV_VARS[@]}" "${LIST_CMD[@]}" --ignored
+      export "${ENV_VARS[@]}"
+      run_cargo "${LIST_CMD[@]}" --ignored
     )"
     if [[ "$(grep -Fxc -- "${test_name}: test" <<<"$test_list" || true)" != 1 ]]; then
       echo "missing or renamed mandatory multilane release test: ${test_name}" >&2
@@ -555,11 +549,13 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
       --show-output
       "${TEST_ARGS[@]}"
     )
-    echo "Command: ${ENV_VARS[*]} IROHA_MULTILANE_RELEASE_MODE=1 ${CMD[*]}"
+    echo "Command: ${ENV_VARS[*]} IROHA_MULTILANE_RELEASE_MODE=1 cargo +1.93.1 ${CMD[0]} -j1 ${CMD[*]:1}"
     set +e
-    wait_for_cargo_idle
-    env "${ENV_VARS[@]}" IROHA_MULTILANE_RELEASE_MODE=1 "${CMD[@]}" \
-      2>&1 | tee "$run_log"
+    (
+      export "${ENV_VARS[@]}"
+      export IROHA_MULTILANE_RELEASE_MODE=1
+      run_cargo "${CMD[@]}"
+    ) 2>&1 | tee "$run_log"
     run_pipeline_status=("${PIPESTATUS[@]}")
     set -e
     if ((run_pipeline_status[0] != 0 || run_pipeline_status[1] != 0)); then
@@ -577,6 +573,7 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
     echo "mandatory multilane four-peer release gates passed ${passed_runs}/4" >&2
     exit 1
   fi
+  release_gate_boundary "nexus-four-peer:before-completion-publication" || exit $?
   completion_path="${evidence_run_dir}/COMPLETED.tsv"
   completion_tmp="${evidence_run_dir}/.COMPLETED.tsv.$$"
   printf '%s\t%s\n' \
@@ -598,6 +595,7 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
   publish_completion_path \
     "$completion_path" \
     "$multilane_completion_pointer"
+  release_gate_boundary "nexus-four-peer:after-completion-publication" || exit $?
   echo "[nexus-cross-swap] mandatory four-peer multilane release gates passed 4/4; completion=${completion_path}"
   exit
 fi
@@ -613,8 +611,8 @@ if [[ "$RUN_SCOPE" == "cross-fault-soak" ]]; then
   LIST_CMD+=("--ignored")
 fi
 cross_test_list="$(
-  wait_for_cargo_idle
-  env "${ENV_VARS[@]}" "${LIST_CMD[@]}"
+  export "${ENV_VARS[@]}"
+  run_cargo "${LIST_CMD[@]}"
 )"
 if [[ "$RUN_SCOPE" == "case" ]]; then
   required_cross_test="$CROSS_DATASPACE_CASE_TEST"
@@ -648,10 +646,12 @@ if [[ "$RUN_SCOPE" == "case" ]]; then
       --exact
       "${TEST_ARGS[@]}"
     )
-    echo "Command: ${RUN_ENV[*]} ${CMD[*]}"
+    echo "Command: ${RUN_ENV[*]} cargo +1.93.1 ${CMD[0]} -j1 ${CMD[*]:1}"
     set +e
-    wait_for_cargo_idle
-    env "${RUN_ENV[@]}" "${CMD[@]}" 2>&1 | tee "$run_log"
+    (
+      export "${RUN_ENV[@]}"
+      run_cargo "${CMD[@]}"
+    ) 2>&1 | tee "$run_log"
     run_pipeline_status=("${PIPESTATUS[@]}")
     set -e
     if ((run_pipeline_status[0] != 0 || run_pipeline_status[1] != 0)); then
@@ -668,6 +668,7 @@ if [[ "$RUN_SCOPE" == "case" ]]; then
     echo "cross-dataspace seed matrix passed ${passed_runs}/${CROSS_DATASPACE_SEED_COUNT}" >&2
     exit 1
   fi
+  release_gate_boundary "nexus-seed-matrix:before-completion-publication" || exit $?
   completion_path="${evidence_run_dir}/COMPLETED.tsv"
   completion_tmp="${evidence_run_dir}/.COMPLETED.tsv.$$"
   printf '%s\t%s\n' \
@@ -686,6 +687,7 @@ if [[ "$RUN_SCOPE" == "case" ]]; then
     >"$completion_tmp"
   mv -- "$completion_tmp" "$completion_path"
   publish_completion_path "$completion_path"
+  release_gate_boundary "nexus-seed-matrix:after-completion-publication" || exit $?
   echo "[nexus-cross-swap] strict ${passed_runs}/${CROSS_DATASPACE_SEED_COUNT} seed matrix passed; completion=${completion_path}"
   exit
 fi
@@ -708,10 +710,12 @@ CMD=(
   --ignored
   "${TEST_ARGS[@]}"
 )
-echo "Command: ${RUN_ENV[*]} ${CMD[*]}"
+echo "Command: ${RUN_ENV[*]} cargo +1.93.1 ${CMD[0]} -j1 ${CMD[*]:1}"
 set +e
-wait_for_cargo_idle
-env "${RUN_ENV[@]}" "${CMD[@]}" 2>&1 | tee "$run_log"
+(
+  export "${RUN_ENV[@]}"
+  run_cargo "${CMD[@]}"
+) 2>&1 | tee "$run_log"
 fault_soak_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 if ((fault_soak_pipeline_status[0] != 0 || fault_soak_pipeline_status[1] != 0)); then
@@ -719,6 +723,7 @@ if ((fault_soak_pipeline_status[0] != 0 || fault_soak_pipeline_status[1] != 0));
   exit 1
 fi
 validate_exact_test_log "$CROSS_DATASPACE_FAULT_SOAK_TEST" "$run_log"
+release_gate_boundary "nexus-fault-soak:before-completion-publication" || exit $?
 completion_path="${evidence_run_dir}/COMPLETED.tsv"
 completion_tmp="${evidence_run_dir}/.COMPLETED.tsv.$$"
 printf '%s\t%s\n' \
@@ -739,4 +744,5 @@ printf '%s\t%s\n' \
   >"$completion_tmp"
 mv -- "$completion_tmp" "$completion_path"
 publish_completion_path "$completion_path"
+release_gate_boundary "nexus-fault-soak:after-completion-publication" || exit $?
 echo "[nexus-cross-swap] exact ${CROSS_DATASPACE_FAULT_SOAK_DURATION}s fault soak passed; completion=${completion_path}"

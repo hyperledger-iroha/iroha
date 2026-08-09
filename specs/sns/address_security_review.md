@@ -4,8 +4,12 @@
 
 # Sora Address Security Review (ADDR-7)
 
-This note records the implemented address security and collision-monitoring
-controls:
+This note records diagnostics retained for rejecting pre-release selector
+payloads. Shipping V1 account addresses are universal and selector-free; Local
+digests are not encoded in canonical I105, used as World keys, or derived from
+node configuration.
+
+The historical controls:
 
 - quantify the collision probability for the Local digest selectors and
   document why Local‑12 (12-byte digest) is acceptable while Local‑8 is not;
@@ -20,16 +24,14 @@ controls:
 
 ### 1.1 Derivation summary
 
-- The Local selector is derived by computing a keyed Blake2s MAC over the
+- Test-vector tooling derives the historical Local selector by computing a keyed Blake2s MAC over the
   canonical domain string using the static key
   `SORA-LOCAL-K:v1` (`crates/iroha_data_model/src/account/address.rs:102`).
 - `compute_local_digest` truncates the Blake2s output to 12 bytes (96 bits) and
-  embeds it into the Local selector (`AccountAddress::compute_local_digest`,
+  records it as diagnostic vector metadata (`compute_local_digest`,
   `crates/iroha_data_model/src/account/address.rs:885`).
-- The result is referred to as “Local‑12”. Older Local‑8 payloads truncated the
-  digest to 8 bytes (64 bits) and are now rejected with
-  `AccountAddressError::LocalDigestTooShort`
-  (`crates/iroha_data_model/src/account/address.rs:1071`).
+- The result is referred to as “Local‑12”. Selector-bearing Local‑12 and Local‑8
+  payloads are both noncanonical in V1 and are rejected by strict decoding.
 
 ### 1.2 Collision budget
 
@@ -41,14 +43,15 @@ controls:
 | 10⁹ (multi-network aggregate) | ~6.3 × 10⁻¹² | ~2.7 × 10⁻² |
 
 The values use the birthday approximation `n(n-1)/(2·2ᵇ)` with `b = 96` or `64`.
-At global scale the Local‑12 digest still yields a <10⁻¹¹ collision expectation,
-while Local‑8 would have produced a measurable ~2.7 % collision probability.
+These historical probabilities explain why Local‑8 was unsafe. They are not a
+shipping collision budget: canonical V1 account identity contains no truncated
+domain digest.
 
 ### 1.3 Regression artefacts
 
-- `fixtures/account/address_vectors.json` publishes canonical Local selectors
-  (Local‑12), i105, and i105 encodings. Regenerate via
-  `cargo xtask address-vectors` to prove encoder determinism.
+- `fixtures/account/address_vectors.json` publishes selector-free canonical
+  addresses plus historical selector diagnostics and negative cases. Regenerate
+  via `cargo xtask address-vectors` to prove encoder determinism.
 - `scripts/address_local_toolkit.sh` + `specs/sns/local_to_global_toolkit.md`
 
 ## 2. Telemetry & alerting
@@ -85,8 +88,8 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
 - The canonical I105 representation appends the half-width Iroha poem to
   the same alphabet (`specs/account_structure.md`) so IME/Kana inputs can be
   rendered deterministically across locales.
-- All domain labels (for both Local selectors and Global registry entries) run
-  through Norm v1 (NFC + strict UTS‑46 + ASCII policy)
+- All explicit domain and SNS alias labels run through Norm v1 (NFC + strict
+  UTS‑46 + ASCII policy)
   (`specs/references/address_norm_v1.md:1`), preventing spoofing via
   confusables and mixed-normalization inputs.
 - Wallet/explorer UX requirements in

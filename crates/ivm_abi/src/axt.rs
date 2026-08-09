@@ -980,13 +980,12 @@ impl HostAxtState {
         }
         if let Some(p) = proof {
             validate_proof_blob(&p)?;
-            if let Some(expiry) = p.expiry_slot {
-                if let Some(slot) = current_slot
-                    && slot > 0
-                    && slot > expiry
-                {
-                    return Err(VMError::PermissionDenied);
-                }
+            if let Some(expiry) = p.expiry_slot
+                && let Some(slot) = current_slot
+                && slot > 0
+                && slot > expiry
+            {
+                return Err(VMError::PermissionDenied);
             }
             self.proofs.insert(dsid, p);
         } else {

@@ -263,7 +263,7 @@ def test_direct_contract_call_and_canonical_ivm_are_first_class_variants(
     source, target, payloads, _ = populate_valid_corpus(tmp_path)
     contract_call = {
         "arguments": [0, 255],
-        "contract_address": "tairac1contract",
+        "contract_address": "irohac1contract",
         "entrypoint": "run",
         "expected_code_hash": "hash:value",
     }

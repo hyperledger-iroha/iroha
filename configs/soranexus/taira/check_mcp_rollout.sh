@@ -38,6 +38,7 @@ VALIDATOR_PROGRESS_SAMPLES="${VALIDATOR_PROGRESS_SAMPLES:-3}"
 VALIDATOR_PROGRESS_DELAY_SECONDS="${VALIDATOR_PROGRESS_DELAY_SECONDS:-2}"
 VALIDATOR_ALIGNMENT_ATTEMPTS="${VALIDATOR_ALIGNMENT_ATTEMPTS:-10}"
 EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
+EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT="${EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT:-}"
 EXPECTED_TAIRA_CHAIN_ID=""
 PUBLIC_LANE_ID="${PUBLIC_LANE_ID:-0}"
 CONTRACT_NAMESPACE="${CONTRACT_NAMESPACE:-universal}"
@@ -69,7 +70,9 @@ Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url 
                             [--curl-connect-timeout-seconds N]
                             [--curl-max-time-seconds N]
                             [--expected-chain-id UUID]
-                            [--expected-git-sha 7_TO_40_HEX_SHA] [--skip-write-canary]
+                            [--expected-git-sha 7_TO_40_HEX_SHA]
+                            [--expected-dpn-validator-release-commit 40_HEX_COMMIT]
+                            [--skip-write-canary]
 
 Verify that Taira's native Torii MCP endpoint is live locally and/or publicly.
 For a single public-node devex check, prefer the first-class CLI:
@@ -92,7 +95,7 @@ The check fails unless:
   - when `--expected-git-sha` is supplied, GET /status reports a matching
     `build.git_commit_sha` (published and expected values must be 7 to 40
     hexadecimal characters; short or full prefix matches are accepted)
-  - GET /v1/sumeragi/status reports wire-revision-3 durable reducer state
+  - GET /v1/sumeragi/status reports wire-revision-4 durable reducer state
   - GET /v1/pipeline/transactions/status reaches the canonical typed status
     handler (the no-hash probe returns HTTP 400), while the retired
     /v1/transactions/status alias remains unmounted (HTTP 404)
@@ -332,6 +335,14 @@ while [[ $# -gt 0 ]]; do
       EXPECTED_TAIRA_GIT_SHA="$2"
       shift 2
       ;;
+    --expected-dpn-validator-release-commit)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --expected-dpn-validator-release-commit" >&2
+        exit 1
+      }
+      EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT="$2"
+      shift 2
+      ;;
     --expected-chain-id)
       [[ $# -ge 2 ]] || {
         echo "missing value for --expected-chain-id" >&2
@@ -421,6 +432,11 @@ if [[ -n "$EXPECTED_TAIRA_GIT_SHA" ]]; then
   fi
   EXPECTED_TAIRA_GIT_SHA="$(printf '%s' "$EXPECTED_TAIRA_GIT_SHA" | tr 'A-F' 'a-f')"
 fi
+if [[ -n "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" \
+  && ! "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "--expected-dpn-validator-release-commit must be one exact lowercase 40-character commit" >&2
+  exit 1
+fi
 
 if [[ -n "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 1 ]]; then
   echo "--write-config and --skip-write-canary are mutually exclusive" >&2
@@ -505,9 +521,9 @@ JSONRPC_INITIALIZED='{"jsonrpc":"2.0","method":"notifications/initialized"}'
 REQUIRED_TOOL_NAMES=(
   "iroha.health"
   "iroha.sumeragi.status"
-  "iroha.musubi.search"
-  "iroha.musubi.release.get"
-  "iroha.musubi.instructions.yank_release"
+  "iroha.musubi.queries.exact_package"
+  "iroha.musubi.queries.exact_release"
+  "iroha.musubi.instructions.release_yank_set"
   "iroha.transactions.submit"
   "iroha.transactions.submit_and_wait"
 )
@@ -605,6 +621,10 @@ if [[ $SKIP_PUBLIC -eq 0 ]]; then
     echo "public Taira rollout requires --expected-git-sha with the exact full 40-character commit" >&2
     exit 1
   fi
+  if [[ ! "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "public Taira rollout requires --expected-dpn-validator-release-commit with the exact full 40-character commit" >&2
+    exit 1
+  fi
   if [[ $VALIDATOR_PROGRESS_SAMPLES -lt 3 ]]; then
     echo "public Taira rollout requires at least three advancing validator fleet samples" >&2
     exit 1
@@ -681,6 +701,7 @@ http_request() {
   local method="$1"
   local url="$2"
   local payload="${3:-}"
+  local accept="${4:-application/json}"
   local body_file header_file error_file
   local curl_output curl_rc
   # The first-release /v1 API has no version-negotiation request header.
@@ -689,7 +710,7 @@ http_request() {
     --silent
     --show-error
     -H
-    "accept: application/json"
+    "accept: ${accept}"
     --connect-timeout
     "$MCP_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS"
     --max-time
@@ -1053,7 +1074,7 @@ check_status_snapshot() {
     sed -n '1,20p' "$last_headers" >&2 || true
     exit 1
   fi
-  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" <<'PY'
+  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" <<'PY'
 import json
 import re
 import sys
@@ -1062,6 +1083,7 @@ label = sys.argv[1]
 path = sys.argv[2]
 expected_git_sha = sys.argv[5].strip()
 require_exact_git_sha = sys.argv[6] == "1"
+expected_dpn_commit = sys.argv[7].strip()
 with open(path, "r", encoding="utf-8") as handle:
     payload = json.load(handle)
 
@@ -1111,6 +1133,24 @@ if expected_git_sha:
         print(
             f"{label}: /status build git SHA {build_git_sha} does not match "
             f"expected {expected_git_sha}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+if expected_dpn_commit:
+    published_dpn_commit = build.get("dpn_validator_release_commit") if isinstance(build, dict) else None
+    if (
+        not isinstance(published_dpn_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", published_dpn_commit) is None
+    ):
+        print(
+            f"{label}: /status did not publish one exact build.dpn_validator_release_commit",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if published_dpn_commit != expected_dpn_commit:
+        print(
+            f"{label}: /status DPN validator release commit {published_dpn_commit} "
+            f"does not exactly match {expected_dpn_commit}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1173,7 +1213,7 @@ with open(path, "r", encoding="utf-8") as handle:
 
 if not isinstance(status, dict):
     fail("expected the flattened Sumeragi v2 status object")
-if status.get("protocol_version") != 3:
+if status.get("protocol_version") != 4:
     fail(
         "expected the Sumeragi v2 reducer status; legacy RBC/recovery status "
         "is not accepted for Taira rollout"
@@ -1465,7 +1505,7 @@ check_ordinary_health() {
 
   health_url="$(normalize_root_url "$root")/health"
   echo "==> ${label}: GET ${health_url}" >&2
-  http_request GET "$health_url"
+  http_request GET "$health_url" "" "text/plain"
   if [[ "$last_status" != "200" ]]; then
     echo "${label}: /health failed with HTTP ${last_status}" >&2
     sed -n '1,80p' "$last_body" >&2 || true
@@ -1480,7 +1520,7 @@ check_ordinary_readyz() {
 
   readiness_url="$(normalize_root_url "$root")/readyz"
   echo "==> ${label}: GET ${readiness_url}" >&2
-  http_request GET "$readiness_url"
+  http_request GET "$readiness_url" "" "text/plain"
   if [[ "$last_status" != "200" ]]; then
     echo "${label}: /readyz failed with HTTP ${last_status}" >&2
     sed -n '1,80p' "$last_body" >&2 || true
@@ -1601,12 +1641,12 @@ capture_validator_fleet_sample() {
       return 1
     fi
 
-    if ! python3 - "$label" "$status_copy" "$last_body" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$dataspace_summary" >>"$records_file" <<'PY'
+    if ! python3 - "$label" "$status_copy" "$last_body" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$dataspace_summary" "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" >>"$records_file" <<'PY'
 import json
 import re
 import sys
 
-label, status_path, sumeragi_path, expected_sha, require_exact_raw, dataspace_summary_raw = sys.argv[1:]
+label, status_path, sumeragi_path, expected_sha, require_exact_raw, dataspace_summary_raw, expected_dpn_commit = sys.argv[1:]
 require_exact_sha = require_exact_raw == "1"
 with open(status_path, "r", encoding="utf-8") as handle:
     node_status = json.load(handle)
@@ -1695,6 +1735,21 @@ if expected_sha:
         raise SystemExit(
             f"validator {label}: build git SHA {published} does not match {expected_sha}"
         )
+build = node_status.get("build") or {}
+published_dpn_commit = build.get("dpn_validator_release_commit")
+if expected_dpn_commit:
+    if (
+        not isinstance(published_dpn_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", published_dpn_commit) is None
+    ):
+        raise SystemExit(
+            f"validator {label}: /status omitted one exact DPN validator release commit"
+        )
+    if published_dpn_commit != expected_dpn_commit:
+        raise SystemExit(
+            f"validator {label}: DPN validator release commit {published_dpn_commit} "
+            f"does not exactly match {expected_dpn_commit}"
+        )
 
 def canonical(value):
     return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
@@ -1717,6 +1772,7 @@ record = {
     "committed_subject": canonical(status.get("last_committed_subject")),
     "commit_qc": canonical(status.get("last_commit_qc")),
     "dataspace_catalog": canonical(dataspace_summary),
+    "dpn_validator_release_commit": published_dpn_commit,
 }
 print(json.dumps(record, ensure_ascii=True, sort_keys=True))
 PY
@@ -1755,6 +1811,7 @@ for record in records[1:]:
         "quorum",
         "status_blocks",
         "dataspace_catalog",
+        "dpn_validator_release_commit",
         "committed_height",
         "committed_block_hash",
         "committed_subject",
@@ -1781,6 +1838,7 @@ summary = {
     "committed_subject": baseline["committed_subject"],
     "commit_qc": baseline["commit_qc"],
     "dataspace_catalog": baseline["dataspace_catalog"],
+    "dpn_validator_release_commit": baseline["dpn_validator_release_commit"],
     "nodes": sorted(nodes),
 }
 print(json.dumps(summary, ensure_ascii=True, sort_keys=True))
@@ -1870,11 +1928,10 @@ check_route_parity() {
   check_route_status "$label" GET "${root_url}/v1/transactions/status" "404" \
     "retired transaction-status compatibility route must remain unmounted" \
     "" "route_not_found"
-  check_route_status "$label" GET "${root_url}/v1/musubi/packages?query=&limit=1" "200" \
-    "Musubi package search route"
-  check_route_status "$label" POST "${root_url}/v1/musubi/instructions/yank-release" "200" \
-    "Musubi pre-signing instruction builder route" \
-    '{"package":"dex.universal/swap-core@1.2.3","reason":"rollout preflight"}'
+  check_route_status "$label" POST "${root_url}/v1/musubi/queries/ordered-prefix" "400" \
+    "Musubi V1 typed ordered-prefix route should reject an empty request" '{}'
+  check_route_status "$label" POST "${root_url}/v1/musubi/instructions/release-yank-set" "400" \
+    "Musubi V1 typed yank instruction builder should reject an empty request" '{}'
   check_route_status "$label" POST "${root_url}/v1/contracts/deploy" "404" \
     "retired server-side contract deploy route must remain unmounted" '{}' \
     "route_not_found"

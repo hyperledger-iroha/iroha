@@ -78,7 +78,7 @@ fn block_header(height: u64) -> BlockHeader {
 }
 
 fn contract_address() -> iroha_data_model::smart_contract::ContractAddress {
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         .parse()
         .expect("contract address")
 }
@@ -182,7 +182,7 @@ fn plain_ballot(
     CastPlainBallot {
         referendum_id: referendum_id.to_string(),
         owner: owner.clone(),
-        amount,
+        amount: amount.into(),
         duration_blocks,
         direction,
     }
@@ -301,7 +301,7 @@ fn torii_zk_ballot_rejected_on_plain_referendum() {
 
     let alice = random_authority();
     let mut state = new_state_with_accounts(&[&alice]);
-    let bundle = zk_testkit::tiny_add_bundle();
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
     let vk_name = bundle.vk_id.name.clone();
@@ -353,7 +353,7 @@ fn torii_zk_ballot_rejected_on_plain_referendum() {
     }
 
     let rid = referendum_id(&state);
-    let proof_b64 = bundle.proof_b64.clone();
+    let proof_b64 = bundle.proof_b64();
     let public_inputs = zk_public_inputs(&alice);
     {
         let mut tx = block.transaction();

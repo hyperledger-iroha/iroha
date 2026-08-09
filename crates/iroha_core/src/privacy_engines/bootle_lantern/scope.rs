@@ -21,6 +21,9 @@ use super::{params::APPLICATION_MODULUS_V1, ring::ApplicationPolynomialV1};
 /// Domain for the algebraic credential-scope term.
 pub const BOOTLE_LANTERN_CREDENTIAL_SCOPE_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.lazer-falcon512-credential-scope.v1";
+/// Domain for the reusable credential-scope identity digest.
+pub(crate) const BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha.privacy.bootle-lantern.credential-scope-digest.v1";
 const CONCRETE_PROFILE_ID_V1: &[u8] = b"lazer-falcon512-concrete-specialization";
 const PROTOCOL_ID_V1: &[u8] = b"iroha-bootle-lantern-anoncred-v1";
 const SCOPE_VERSION_V1: [u8; 2] = 1_u16.to_be_bytes();
@@ -28,6 +31,8 @@ const SCOPE_VERSION_V1: [u8; 2] = 1_u16.to_be_bytes();
 pub const BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1: u16 = 61_445;
 /// Maximum 16-bit proposals consumed for one scope coefficient.
 pub const BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1: u32 = 4_096;
+/// Canonical reusable-scope schema owned by the implementation that absorbs it.
+pub const BOOTLE_LANTERN_CREDENTIAL_SCOPE_SCHEMA_V1: &[u8] = b"scope-xof:SHAKE256-framed-u32be-uniform-mod12289-accept<61445-max4096-per-coefficient|included:protocol+concrete-profile+version+chain-id+canonical-genesis-hash+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest+issuer-id+policy-id+epoch+policy-record-digest+issuer-parameter-id+issuer-parameter-digest|excluded:action-index+transaction-intent-digest|rotation:every-included-field-invalidates-existing-credential";
 
 /// Reusable governed scope permanently signed into one credential.
 ///
@@ -141,17 +146,15 @@ impl BootleLanternCredentialScopeV1 {
         for polynomial in &mut output {
             let mut coefficients = [0_u16; 64];
             for coefficient in &mut coefficients {
-                let mut accepted = None;
-                for _ in 0..BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1 {
-                    let mut bytes = [0_u8; 2];
-                    reader.read(&mut bytes);
-                    let candidate = u16::from_be_bytes(bytes);
-                    if candidate < BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1 {
-                        accepted = Some(candidate % APPLICATION_MODULUS_V1);
-                        break;
-                    }
-                }
-                *coefficient = accepted.ok_or(CredentialScopeErrorV1::SamplingExhausted)?;
+                *coefficient = bounded_scope_coefficient_v1(
+                    BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1,
+                    || {
+                        let mut bytes = [0_u8; 2];
+                        reader.read(&mut bytes);
+                        u16::from_be_bytes(bytes)
+                    },
+                )
+                .ok_or(CredentialScopeErrorV1::SamplingExhausted)?;
             }
             *polynomial = ApplicationPolynomialV1::new(coefficients)
                 .map_err(|_| CredentialScopeErrorV1::InternalInvariant)?;
@@ -161,10 +164,7 @@ impl BootleLanternCredentialScopeV1 {
 
     pub(crate) fn digest(&self) -> Result<[u8; 32], CredentialScopeErrorV1> {
         let mut state = Shake256::default();
-        absorb_frame(
-            &mut state,
-            b"iroha.privacy.bootle-lantern.credential-scope-digest.v1",
-        )?;
+        absorb_frame(&mut state, BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1)?;
         self.absorb_fields(&mut state)?;
         let mut reader = state.finalize_xof();
         let mut digest = [0_u8; 32];
@@ -217,6 +217,19 @@ impl BootleLanternCredentialScopeV1 {
     }
 }
 
+fn bounded_scope_coefficient_v1<F>(max_attempts: u32, mut next_candidate: F) -> Option<u16>
+where
+    F: FnMut() -> u16,
+{
+    for _ in 0..max_attempts {
+        let candidate = next_candidate();
+        if candidate < BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1 {
+            return Some(candidate % APPLICATION_MODULUS_V1);
+        }
+    }
+    None
+}
+
 fn absorb_frame(state: &mut Shake256, value: &[u8]) -> Result<(), CredentialScopeErrorV1> {
     let length = u32::try_from(value.len()).map_err(|_| CredentialScopeErrorV1::FieldTooLarge)?;
     state.update(&length.to_be_bytes());
@@ -245,4 +258,277 @@ pub enum CredentialScopeErrorV1 {
     /// A closed arithmetic invariant failed.
     #[error("Bootle/Lantern credential scope internal invariant failed")]
     InternalInvariant,
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_data_model::privacy::{
+        BootleLanternAllowedAttributeValuesV1, BootleLanternIssuerPublicMatrixV1,
+        BootleLanternPolynomialV1, PrivacyTransactionIntentDigestV1,
+    };
+    use sha2::{Digest as _, Sha256};
+
+    use super::*;
+
+    const fn raw(value: u8) -> [u8; 32] {
+        [value; 32]
+    }
+
+    fn kat_scope() -> BootleLanternCredentialScopeV1 {
+        BootleLanternCredentialScopeV1 {
+            chain_id: "scope-kat".parse().expect("chain id"),
+            genesis_hash: raw(2),
+            parameter_id: PrivacyParameterIdV1::new(raw(3)),
+            parameter_digest: PrivacyParameterDigestV1::new(raw(4)),
+            verifier_digest: PrivacyVerifierDigestV1::new(raw(5)),
+            statement_schema_digest: PrivacyStatementSchemaDigestV1::new(raw(6)),
+            engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(7)),
+            issuer_id: PrivacyIssuerIdV1::new(raw(8)),
+            policy_id: PrivacyPolicyIdV1::new(raw(9)),
+            policy_epoch: 10,
+            policy_record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new(raw(11)),
+            issuer_parameter_id: PrivacyParameterIdV1::new(raw(12)),
+            issuer_parameter_digest: PrivacyParameterDigestV1::new(raw(13)),
+        }
+    }
+
+    fn context() -> PrivacyStatementContextV1 {
+        PrivacyStatementContextV1 {
+            chain_id: "scope-validation".parse().expect("chain id"),
+            action_index: 3,
+            transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(raw(1)),
+            parameter_id: PrivacyParameterIdV1::new(raw(2)),
+            parameter_digest: PrivacyParameterDigestV1::new(raw(3)),
+            verifier_digest: PrivacyVerifierDigestV1::new(raw(4)),
+            statement_schema_digest: PrivacyStatementSchemaDigestV1::new(raw(5)),
+            engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(6)),
+        }
+    }
+
+    fn active_policy() -> BootleLanternIssuerPolicyV1 {
+        let first_column = core::array::from_fn(|row| BootleLanternPolynomialV1 {
+            coefficients: (0..64)
+                .map(|coefficient| {
+                    u16::try_from(row * 64 + coefficient + 1).expect("fixture coefficient")
+                })
+                .collect(),
+        });
+        let issuer_public_matrix =
+            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
+                .expect("canonical dense multiplication matrix");
+        let mut policy = BootleLanternIssuerPolicyV1 {
+            issuer_id: PrivacyIssuerIdV1::new(raw(7)),
+            policy_id: PrivacyPolicyIdV1::new(raw(8)),
+            epoch: 1,
+            lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
+            issuer_parameter_id: PrivacyParameterIdV1::new(raw(9)),
+            issuer_parameter_digest: PrivacyParameterDigestV1::new(raw(10)),
+            issuer_public_matrix,
+            required_disclosure_bitmap: 0,
+            allowed_values: (0..BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1)
+                .map(|_| BootleLanternAllowedAttributeValuesV1 { values: Vec::new() })
+                .collect(),
+            record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
+        };
+        policy.issuer_parameter_digest = policy
+            .computed_issuer_parameter_digest()
+            .expect("issuer parameter digest");
+        policy.record_digest = policy.computed_record_digest().expect("policy digest");
+        policy.validate().expect("valid fixture policy");
+        policy
+    }
+
+    fn application_term_digest(scope: &BootleLanternCredentialScopeV1) -> Vec<u8> {
+        let term = scope.application_term().expect("scope expansion");
+        let mut encoded = Vec::with_capacity(2 * BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 * 64);
+        for polynomial in term {
+            for coefficient in polynomial.coefficients() {
+                encoded.extend_from_slice(&coefficient.to_le_bytes());
+            }
+        }
+        Sha256::digest(encoded).to_vec()
+    }
+
+    #[test]
+    fn scope_uniform_rejection_boundaries_and_cap_are_exact() {
+        assert_eq!(
+            BOOTLE_LANTERN_SCOPE_APPLICATION_ACCEPTANCE_LIMIT_V1,
+            APPLICATION_MODULUS_V1 * (u16::MAX / APPLICATION_MODULUS_V1)
+        );
+        assert_eq!(
+            bounded_scope_coefficient_v1(1, || 61_444),
+            Some(APPLICATION_MODULUS_V1 - 1)
+        );
+        assert_eq!(bounded_scope_coefficient_v1(1, || 61_445), None);
+        assert_eq!(bounded_scope_coefficient_v1(0, || 0), None);
+
+        let mut proposals = 0_u32;
+        assert_eq!(
+            bounded_scope_coefficient_v1(BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1, || {
+                proposals += 1;
+                61_445
+            },),
+            None
+        );
+        assert_eq!(proposals, BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1);
+
+        proposals = 0;
+        assert_eq!(
+            bounded_scope_coefficient_v1(BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1, || {
+                proposals += 1;
+                if proposals == BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1 {
+                    61_444
+                } else {
+                    61_445
+                }
+            },),
+            Some(APPLICATION_MODULUS_V1 - 1)
+        );
+        assert_eq!(proposals, BOOTLE_LANTERN_SCOPE_MAX_COEFFICIENT_ATTEMPTS_V1);
+    }
+
+    #[test]
+    fn scope_digest_and_application_term_match_independent_kat() {
+        let scope = kat_scope();
+        assert_eq!(
+            scope.digest().expect("scope digest"),
+            hex::decode("31d0e4e8d38bdb1c70bfa20d832d694924023922026df83c92164e4b38d40709")
+                .expect("hex")
+                .as_slice()
+        );
+        assert_eq!(
+            &scope.application_term().expect("scope term")[0].coefficients()[..16],
+            &[
+                3_936, 11_740, 11_923, 4_008, 8_590, 8_443, 9_761, 10_082, 1_401, 10_900, 11_799,
+                7_699, 4_506, 2_834, 4_670, 4_468,
+            ]
+        );
+        assert_eq!(
+            application_term_digest(&scope),
+            hex::decode("a95e7b11b0d368acfdc669610dce1b8d63530fac6dd9fb7c46215cfd0e108f50")
+                .expect("hex")
+        );
+    }
+
+    #[test]
+    fn every_included_scope_field_changes_digest_and_application_term() {
+        let scope = kat_scope();
+        let expected_digest = scope.digest().expect("base digest");
+        let expected_term = scope.application_term().expect("base term");
+        let mut mutations = Vec::new();
+        macro_rules! mutate {
+            ($field:ident, $value:expr) => {{
+                let mut candidate = scope.clone();
+                candidate.$field = $value;
+                mutations.push((stringify!($field), candidate));
+            }};
+        }
+        mutate!(chain_id, "scope-kat-mutated".parse().expect("chain id"));
+        mutate!(genesis_hash, raw(22));
+        mutate!(parameter_id, PrivacyParameterIdV1::new(raw(23)));
+        mutate!(parameter_digest, PrivacyParameterDigestV1::new(raw(24)));
+        mutate!(verifier_digest, PrivacyVerifierDigestV1::new(raw(25)));
+        mutate!(
+            statement_schema_digest,
+            PrivacyStatementSchemaDigestV1::new(raw(26))
+        );
+        mutate!(
+            engine_manifest_digest,
+            PrivacyEngineManifestDigestV1::new(raw(27))
+        );
+        mutate!(issuer_id, PrivacyIssuerIdV1::new(raw(28)));
+        mutate!(policy_id, PrivacyPolicyIdV1::new(raw(29)));
+        mutate!(policy_epoch, 30);
+        mutate!(
+            policy_record_digest,
+            PrivacyBootleLanternIssuerPolicyDigestV1::new(raw(31))
+        );
+        mutate!(issuer_parameter_id, PrivacyParameterIdV1::new(raw(32)));
+        mutate!(
+            issuer_parameter_digest,
+            PrivacyParameterDigestV1::new(raw(33))
+        );
+
+        for (field, mutation) in mutations {
+            assert_ne!(
+                mutation.digest().expect("mutated digest"),
+                expected_digest,
+                "{field} was not digest-bound"
+            );
+            assert_ne!(
+                mutation.application_term().expect("mutated term"),
+                expected_term,
+                "{field} was not algebraically bound"
+            );
+        }
+    }
+
+    #[test]
+    fn action_index_and_transaction_intent_are_presentation_only() {
+        let policy = active_policy();
+        let base_context = context();
+        let base =
+            BootleLanternCredentialScopeV1::new(&base_context, raw(20), &policy).expect("scope");
+        let mut changed_context = base_context;
+        changed_context.action_index = 4_000;
+        changed_context.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(raw(21));
+        let changed =
+            BootleLanternCredentialScopeV1::new(&changed_context, raw(20), &policy).expect("scope");
+
+        assert_eq!(changed, base);
+        assert_eq!(changed.digest(), base.digest());
+        assert_eq!(changed.application_term(), base.application_term());
+    }
+
+    #[test]
+    fn revoked_policy_and_zero_reusable_bindings_fail_closed() {
+        let context = context();
+        let policy = active_policy();
+        assert!(matches!(
+            BootleLanternCredentialScopeV1::new(&context, [0; 32], &policy),
+            Err(CredentialScopeErrorV1::ZeroBinding("genesis_hash"))
+        ));
+
+        let mut revoked = policy.clone();
+        revoked.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
+        revoked.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        revoked.record_digest = revoked.computed_record_digest().expect("revoked digest");
+        assert!(matches!(
+            BootleLanternCredentialScopeV1::new(&context, raw(20), &revoked),
+            Err(CredentialScopeErrorV1::InvalidPolicy)
+        ));
+
+        let mut zero_issuer = policy.clone();
+        zero_issuer.issuer_id = PrivacyIssuerIdV1::new([0; 32]);
+        assert!(matches!(
+            BootleLanternCredentialScopeV1::new(&context, raw(20), &zero_issuer),
+            Err(CredentialScopeErrorV1::InvalidPolicy)
+        ));
+
+        let mut zero_contexts = Vec::new();
+        macro_rules! zero_context {
+            ($field:ident, $value:expr) => {{
+                let mut candidate = context.clone();
+                candidate.$field = $value;
+                zero_contexts.push(candidate);
+            }};
+        }
+        zero_context!(parameter_id, PrivacyParameterIdV1::new([0; 32]));
+        zero_context!(parameter_digest, PrivacyParameterDigestV1::new([0; 32]));
+        zero_context!(verifier_digest, PrivacyVerifierDigestV1::new([0; 32]));
+        zero_context!(
+            statement_schema_digest,
+            PrivacyStatementSchemaDigestV1::new([0; 32])
+        );
+        zero_context!(
+            engine_manifest_digest,
+            PrivacyEngineManifestDigestV1::new([0; 32])
+        );
+        for zero_context in zero_contexts {
+            assert!(matches!(
+                BootleLanternCredentialScopeV1::new(&zero_context, raw(20), &policy),
+                Err(CredentialScopeErrorV1::ZeroBinding(_))
+            ));
+        }
+    }
 }

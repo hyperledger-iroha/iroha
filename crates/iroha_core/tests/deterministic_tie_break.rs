@@ -27,11 +27,14 @@ fn build_world() -> (
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&a1);
     let ad: AssetDefinition = AssetDefinition::new(
-        iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
+        "coin".to_owned(),
         NumericSpec::default(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
     )
     .build(&a1);
     let acc1 = Account::new(a1.clone()).build(&a1);

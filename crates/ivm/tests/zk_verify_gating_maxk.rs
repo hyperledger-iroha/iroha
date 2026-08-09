@@ -8,7 +8,7 @@ use ivm::{
 fn build_envelope_bytes() -> Vec<u8> {
     let envelope = OpenVerifyEnvelope::new(
         BackendTag::Halo2IpaPasta,
-        host::LABEL_TRANSFER,
+        host::LABEL_VOTE_BALLOT,
         [1; 32],
         vec![1, 2, 3],
         vec![4, 5, 6],
@@ -44,7 +44,7 @@ fn max_k_configuration_does_not_admit_without_verifier_registry() {
     };
     let mut host = DefaultHost::new().with_zk_halo2_config(cfg);
     let _gas = host
-        .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
+        .syscall(syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
         .expect("syscall ok");
     assert_eq!(vm.register(10), 0);
     assert_eq!(vm.register(11), host::ERR_BACKEND);
@@ -66,7 +66,7 @@ fn verify_gated_by_enabled_flag_returns_zero() {
     };
     let mut host = DefaultHost::new().with_zk_halo2_config(cfg);
     let _ = host
-        .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
+        .syscall(syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
         .expect("syscall ok");
     assert_eq!(vm.register(10), 0, "verify must be disabled by config");
     assert_eq!(vm.register(11), host::ERR_DISABLED);

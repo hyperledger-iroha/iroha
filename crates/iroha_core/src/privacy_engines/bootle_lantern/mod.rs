@@ -12,9 +12,12 @@ pub mod compression;
 mod credential_sampling;
 mod falcon512;
 mod holder_aes256;
+pub mod holder_store;
+pub mod issuance_store;
 pub mod issuer;
 pub mod params;
 pub mod proof;
+mod randomness;
 pub mod relation;
 pub mod ring;
 pub mod sampling;
@@ -28,6 +31,25 @@ use iroha_data_model::privacy::{
 use rand_core_06::{CryptoRng, RngCore};
 use thiserror::Error;
 
+pub(crate) use credential_sampling::{
+    BOOTLE_CREDENTIAL_RANDOMNESS_PROFILE_DESCRIPTOR_V1,
+    CREDENTIAL_RANDOMNESS_NORM_SQUARED_BOUND_V1, CREDENTIAL_RANDOMNESS_POLYNOMIALS_V1,
+    MAX_CREDENTIAL_RANDOMNESS_COEFFICIENT_PROPOSALS_V1,
+    MAX_CREDENTIAL_RANDOMNESS_VECTOR_ATTEMPTS_V1,
+};
+pub(crate) use falcon512::{
+    BOOTLE_LANTERN_FALCON512_DEFAULT_KEYGEN_CANDIDATES_V1,
+    BOOTLE_LANTERN_FALCON512_IMPLEMENTATION_PROVENANCE_V1,
+    BOOTLE_LANTERN_FALCON512_KEYGEN_PARITY_ATTEMPTS_V1,
+    BOOTLE_LANTERN_FALCON512_MAPPING_DESCRIPTOR_V1,
+    BOOTLE_LANTERN_FALCON512_PREIMAGE_PROPOSALS_PER_COEFFICIENT_V1,
+    BOOTLE_LANTERN_FALCON512_PREIMAGE_TOTAL_PROPOSALS_V1,
+    BOOTLE_LANTERN_FALCON512_PROFILE_DESCRIPTOR_V1,
+};
+pub(crate) use issuance_store::BOOTLE_LANTERN_ISSUANCE_STORE_PROFILE_DESCRIPTOR_V1;
+pub(crate) use issuer::BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1;
+pub(crate) use randomness::BOOTLE_LANTERN_ISSUANCE_RANDOMNESS_DESCRIPTOR_V1;
+pub(crate) use scope::BOOTLE_LANTERN_CREDENTIAL_SCOPE_DIGEST_DOMAIN_V1;
 pub(crate) use toolbox::application_relation_digest_v1;
 
 /// The complete first-release fixed-profile prover, verifier, strict codec,

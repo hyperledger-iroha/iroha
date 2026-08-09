@@ -1,5 +1,7 @@
 //! Contracts helpers.
 
+mod local_debug_rendering;
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -39,6 +41,10 @@ use ivm::kotodama::driver::{
     load_source_project_manifest as load_kotodama_source_project_manifest,
 };
 use reqwest::StatusCode;
+
+use local_debug_rendering::{
+    build_local_debug_entrypoint, render_durable_state_overlay, render_queued_instructions,
+};
 
 use crate::{
     Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override, wait_for_transaction_status,
@@ -260,11 +266,11 @@ pub struct DevCallArgs {
     #[arg(long)]
     pub authority: Option<String>,
     /// Hex-encoded private key override used to sign and submit the call directly.
-    #[arg(long, value_name = "HEX", conflicts_with = "scaffold_only")]
+    #[arg(long, value_name = "HEX", conflicts_with = "draft_only")]
     pub private_key: Option<String>,
-    /// Request an unsigned transaction scaffold instead of direct submission.
+    /// Request the exact unsigned transaction payload instead of direct submission.
     #[arg(long)]
-    pub scaffold_only: bool,
+    pub draft_only: bool,
     /// Contract entrypoint selector.
     #[arg(long)]
     pub entrypoint: String,
@@ -1183,7 +1189,7 @@ impl DevCallArgs {
             profile_config.as_ref(),
             &authority,
             self.private_key.as_deref(),
-            self.scaffold_only,
+            self.draft_only,
         )?;
         let contract_alias = resolve_contract_manifest_alias(
             &contract.alias,
@@ -1531,9 +1537,9 @@ fn resolve_dev_contract_private_key<C: RunContext>(
     profile_config: Option<&Config>,
     authority: &AccountId,
     private_key_hex: Option<&str>,
-    scaffold_only: bool,
+    draft_only: bool,
 ) -> Result<Option<PrivateKey>> {
-    if scaffold_only {
+    if draft_only {
         return Ok(None);
     }
     if let Some(private_key_hex) = private_key_hex {
@@ -2227,10 +2233,13 @@ pub struct DeriveAddressArgs {
     /// Successful deploy nonce consumed for address derivation
     #[arg(long)]
     pub deploy_nonce: u64,
-    /// Public network profile used for Bech32m contract-address derivation
+    /// Exact chain identifier committed into the contract address
+    #[arg(long)]
+    pub chain_id: ChainId,
+    /// Public network profile used to decode the authority account literal
     #[arg(long)]
     pub profile: Option<String>,
-    /// Explicit chain discriminant used for Bech32m contract-address derivation
+    /// Explicit chain discriminant used to decode the authority account literal
     #[arg(long)]
     pub chain_discriminant: Option<u16>,
     /// Optional numeric dataspace id override for non-default dataspaces
@@ -2251,7 +2260,7 @@ impl Run for DeriveAddressArgs {
             .wrap_err("failed to decode --authority")?;
         let dataspace_id = resolve_contract_dataspace_id_hint(&self.dataspace, self.dataspace_id)?;
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            chain_discriminant,
+            &self.chain_id,
             &authority,
             self.deploy_nonce,
             dataspace_id,
@@ -2264,6 +2273,7 @@ impl Run for DeriveAddressArgs {
             "dataspace": (self.dataspace),
             "dataspace_id": (dataspace_id.as_u64()),
             "deploy_nonce": (self.deploy_nonce),
+            "chain_id": (self.chain_id),
             "profile": (profile_name),
             "chain_discriminant": (chain_discriminant),
             "contract_address": (contract_address),
@@ -2388,13 +2398,13 @@ pub struct CallArgs {
     #[arg(long)]
     pub authority: Option<String>,
     /// Hex-encoded private key override used to sign and submit the call directly.
-    #[arg(long, value_name = "HEX", conflicts_with = "scaffold_only")]
+    #[arg(long, value_name = "HEX", conflicts_with = "draft_only")]
     pub private_key: Option<String>,
-    /// Request an unsigned transaction scaffold instead of direct submission.
+    /// Request the exact unsigned transaction payload instead of direct submission.
     #[arg(long, conflicts_with = "simulate")]
-    pub scaffold_only: bool,
+    pub draft_only: bool,
     /// Simulate the contract call locally on Torii without submitting a transaction.
-    #[arg(long, conflicts_with_all = ["scaffold_only", "private_key", "wait"])]
+    #[arg(long, conflicts_with_all = ["draft_only", "private_key", "wait"])]
     pub simulate: bool,
     /// Run Torii simulation first and include the server-side execution trace in the submit response.
     #[arg(long, conflicts_with = "simulate")]
@@ -2424,7 +2434,7 @@ impl Run for CallArgs {
                 context,
                 &authority,
                 self.private_key.as_deref(),
-                self.scaffold_only,
+                self.draft_only,
             )?
         };
         let target = resolve_contract_target(self.target)?;
@@ -2785,9 +2795,9 @@ fn resolve_contract_call_private_key<C: RunContext>(
     context: &C,
     authority: &AccountId,
     private_key_hex: Option<&str>,
-    scaffold_only: bool,
+    draft_only: bool,
 ) -> Result<Option<PrivateKey>> {
-    if scaffold_only {
+    if draft_only {
         return Ok(None);
     }
     if let Some(private_key_hex) = private_key_hex {
@@ -3339,52 +3349,6 @@ fn execute_local_contract_debug_call<C: RunContext>(
         durable_state_mutation_count,
         durable_state_overlay: durable_state_overlay_json,
     })
-}
-
-fn build_local_debug_entrypoint(
-    descriptor: &ivm::EmbeddedEntrypointDescriptor,
-    entrypoint_pc: u64,
-) -> LocalContractDebugEntrypoint {
-    LocalContractDebugEntrypoint {
-        name: descriptor.name.clone(),
-        kind: format!("{:?}", descriptor.kind),
-        pc: entrypoint_pc,
-        return_type: descriptor.return_type.clone(),
-        params: descriptor
-            .params
-            .iter()
-            .map(|param| LocalContractDebugParam {
-                name: param.name.clone(),
-                type_name: param.type_name.clone(),
-            })
-            .collect(),
-    }
-}
-
-fn render_queued_instructions(
-    queued: &[iroha::data_model::isi::InstructionBox],
-) -> Result<norito::json::Value> {
-    let values = queued
-        .iter()
-        .map(norito::json::to_value)
-        .collect::<Result<Vec<_>, _>>()
-        .wrap_err("failed to serialize queued instructions")?;
-    Ok(norito::json::Value::Array(values))
-}
-
-fn render_durable_state_overlay(
-    overlay: &BTreeMap<StatePath, Option<Vec<u8>>>,
-) -> Result<norito::json::Value> {
-    let mut object = norito::json::Map::new();
-    for (path, value) in overlay {
-        object.insert(
-            path.as_ref().to_owned(),
-            value.as_ref().map_or(norito::json::Value::Null, |bytes| {
-                norito::json::Value::from(format!("0x{}", hex::encode(bytes)))
-            }),
-        );
-    }
-    Ok(norito::json::Value::Object(object))
 }
 
 fn build_local_debug_budget(
@@ -4104,7 +4068,6 @@ mod tests {
             }),
             None,
         );
-
         assert!(response.get("operation_receipt").is_none());
         assert!(response.get("tx_hash_hex").is_none());
         assert_eq!(
@@ -4126,6 +4089,7 @@ mod tests {
             "normalized_payload",
             "transaction_scaffold_b64",
             "signed_transaction_b64",
+            "transaction_payload_b64",
             "signing_message_b64",
         ] {
             assert!(
@@ -5832,13 +5796,9 @@ mod tests {
         .expect("encode contract arguments");
         let arguments = ContractArgumentRecord::try_new(argument_bytes)
             .expect("bounded contract argument record");
-        let contract_address = ContractAddress::derive(
-            iroha::account_address::chain_discriminant(),
-            &authority,
-            1,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive contract address");
+        let contract_address =
+            ContractAddress::derive(&ctx.config().chain, &authority, 1, DataSpaceId::UNIVERSAL)
+                .expect("derive contract address");
 
         let fixture_domain =
             Domain::new(DomainId::try_new("fixture", "universal").expect("valid fixture domain"))
@@ -6052,7 +6012,7 @@ mod tests {
     fn resolve_contract_target_accepts_contract_address() {
         let authority = fixture_account(0x41);
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             1,
             iroha::data_model::nexus::DataSpaceId::new(0),

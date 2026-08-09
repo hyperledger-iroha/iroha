@@ -42,6 +42,16 @@ def test_run_java_parity_checks_fails_without_jdk_in_strict_mode(
         MODULE.run_java_parity_checks()
 
 
+def test_run_java_parity_checks_rejects_skip_in_strict_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NORITO_JAVA_SKIP_TESTS", "1")
+    monkeypatch.setenv("NORITO_JAVA_STRICT", "1")
+
+    with pytest.raises(MODULE.CheckError, match="forbidden in strict Java parity mode"):
+        MODULE.run_java_parity_checks()
+
+
 def test_java_checks_are_strict_when_ci_true(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NORITO_JAVA_STRICT", raising=False)
     monkeypatch.setenv("CI", "true")
@@ -72,6 +82,16 @@ def test_run_kotlin_parity_checks_fails_without_jdk_in_strict_mode(
     monkeypatch.setattr(MODULE, "ensure_java_tool", lambda _tool: None)
 
     with pytest.raises(MODULE.CheckError, match="javac not found"):
+        MODULE.run_kotlin_parity_checks()
+
+
+def test_run_kotlin_parity_checks_rejects_skip_in_strict_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NORITO_KOTLIN_SKIP_TESTS", "1")
+    monkeypatch.setenv("NORITO_KOTLIN_STRICT", "1")
+
+    with pytest.raises(MODULE.CheckError, match="forbidden in strict Kotlin parity mode"):
         MODULE.run_kotlin_parity_checks()
 
 
@@ -106,3 +126,32 @@ def test_main_requires_kotlin_binding_updates_for_norito_changes(
 
     stderr = capsys.readouterr().err
     assert "kotlin/core-jvm" in stderr
+
+
+def test_main_force_all_runs_every_binding_lane_on_clean_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setenv("NORITO_BINDINGS_CHECK_ALL", "1")
+    monkeypatch.setattr(MODULE, "determine_base_ref", lambda: "origin/main")
+    monkeypatch.setattr(MODULE, "compute_merge_base", lambda _base_ref: "merge-base")
+    monkeypatch.setattr(MODULE, "gather_flags", lambda _merge_base: MODULE.PathFlags())
+    monkeypatch.setattr(MODULE, "run_python_parity_checks", lambda: calls.append("python"))
+    monkeypatch.setattr(MODULE, "run_java_parity_checks", lambda: calls.append("java"))
+    monkeypatch.setattr(MODULE, "run_kotlin_parity_checks", lambda: calls.append("kotlin"))
+
+    assert MODULE.main() == 0
+    assert calls == ["python", "java", "kotlin"]
+
+
+def test_ci_binding_gate_is_forced_strict_and_workflow_owned() -> None:
+    root = MODULE.REPO_ROOT
+    gate = (root / "ci" / "check_norito_bindings_sync.sh").read_text(encoding="utf-8")
+    workflow = (root / ".github" / "workflows" / "openapi.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'export NORITO_BINDINGS_CHECK_ALL="1"' in gate
+    assert 'export NORITO_JAVA_STRICT="1"' in gate
+    assert 'export NORITO_KOTLIN_STRICT="1"' in gate
+    assert "bash ci/check_norito_bindings_sync.sh" in workflow

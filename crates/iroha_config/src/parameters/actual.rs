@@ -28,7 +28,7 @@ use std::{
 use error_stack::{Report, ResultExt};
 use iroha_config_base::{WithOrigin, read::ConfigReader, toml::TomlSource, util::Bytes};
 use iroha_crypto::{
-    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey,
+    Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, RamLfeSecret,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
     },
@@ -65,6 +65,7 @@ use iroha_data_model::{
     },
     oracle::KeyedHash,
     peer::{Peer, PeerId},
+    privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -80,7 +81,14 @@ use iroha_primitives::{
     numeric::{Numeric, Quantity, XorQuantity},
     unique_vec::UniqueVec,
 };
+
+#[path = "actual_sorafs_reputation.rs"]
+mod sorafs_reputation;
 use norito::{codec::Encode, streaming::EntropyMode};
+pub use sorafs_reputation::{
+    SorafsReputationFinalizedArchiveRetentionAuthority, SorafsReputationRuntime,
+    SorafsReserveTransparencyRuntime,
+};
 use thiserror::Error;
 use url::Url;
 pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy};
@@ -547,15 +555,24 @@ impl Default for SoracloudRuntimeHuggingFace {
 pub struct FromTomlSourceError;
 
 impl Root {
-    /// A shorthand to read config from a single provided TOML.
-    /// For testing purposes.
+    /// Read config from exactly one provided TOML source.
+    ///
+    /// Ambient process environment variables are deliberately ignored. This
+    /// constructor is used by offline signing, bundle admission, and tests,
+    /// where allowing the caller's shell to rewrite the supplied artifact
+    /// would make validation non-reproducible. Runtime startup uses
+    /// [`ConfigReader`] directly and retains its normal environment overlay.
     /// # Errors
     /// If config reading/parsing fails.
     pub fn from_toml_source(src: TomlSource) -> Result<Self, FromTomlSourceError> {
-        user::Root::read_and_complete(ConfigReader::new().with_toml_source(src))
-            .change_context(FromTomlSourceError)?
-            .parse()
-            .change_context(FromTomlSourceError)
+        user::Root::read_and_complete(
+            ConfigReader::new()
+                .with_env(iroha_config_base::env::MockEnv::new())
+                .with_toml_source(src),
+        )
+        .change_context(FromTomlSourceError)?
+        .parse()
+        .change_context(FromTomlSourceError)
     }
 
     /// Check whether the configuration already enables Sora/Nexus-only features.
@@ -621,12 +638,7 @@ impl Root {
         }
 
         self.apply_storage_memory_budget();
-        let Some(max_disk) = self
-            .nexus
-            .storage
-            .local_budget_bytes
-            .map(|budget| budget.get())
-        else {
+        let Some(max_disk) = self.nexus.storage.local_budget_bytes.map(Bytes::get) else {
             return;
         };
         debug_assert!(max_disk > 0, "parsed storage budgets are non-zero");
@@ -651,6 +663,10 @@ impl Root {
         &mut self,
         filesystem_budgets: &[NexusStorageFilesystemBudget],
     ) -> core::result::Result<NonZeroU64, NexusStorageBudgetApplicationError> {
+        validate_filesystem_storage_budgets(
+            filesystem_budgets,
+            self.nexus.storage.disk_budget_weights,
+        )?;
         let aggregate_budget_bytes =
             filesystem_budgets
                 .iter()
@@ -737,23 +753,34 @@ struct NexusStorageComponentCaps {
 
 impl NexusStorageComponentCaps {
     fn add_budget(&mut self, component: NexusStorageBudgetComponent, budget_bytes: u64) {
+        let target = match component {
+            NexusStorageBudgetComponent::Kura => &mut self.kura_bytes,
+            NexusStorageBudgetComponent::WsvCold => &mut self.wsv_cold_bytes,
+            NexusStorageBudgetComponent::Sorafs => &mut self.sorafs_bytes,
+            NexusStorageBudgetComponent::SoranetSpool => &mut self.soranet_spool_bytes,
+            NexusStorageBudgetComponent::SoravpnSpool => &mut self.soravpn_spool_bytes,
+        };
+        *target = target
+            .checked_add(budget_bytes)
+            .expect("validated storage component budgets cannot overflow");
+    }
+
+    fn budget_for(self, component: NexusStorageBudgetComponent) -> u64 {
         match component {
-            NexusStorageBudgetComponent::Kura => {
-                self.kura_bytes = self.kura_bytes.saturating_add(budget_bytes);
-            }
-            NexusStorageBudgetComponent::WsvCold => {
-                self.wsv_cold_bytes = self.wsv_cold_bytes.saturating_add(budget_bytes);
-            }
-            NexusStorageBudgetComponent::Sorafs => {
-                self.sorafs_bytes = self.sorafs_bytes.saturating_add(budget_bytes);
-            }
-            NexusStorageBudgetComponent::SoranetSpool => {
-                self.soranet_spool_bytes = self.soranet_spool_bytes.saturating_add(budget_bytes);
-            }
-            NexusStorageBudgetComponent::SoravpnSpool => {
-                self.soravpn_spool_bytes = self.soravpn_spool_bytes.saturating_add(budget_bytes);
-            }
+            NexusStorageBudgetComponent::Kura => self.kura_bytes,
+            NexusStorageBudgetComponent::WsvCold => self.wsv_cold_bytes,
+            NexusStorageBudgetComponent::Sorafs => self.sorafs_bytes,
+            NexusStorageBudgetComponent::SoranetSpool => self.soranet_spool_bytes,
+            NexusStorageBudgetComponent::SoravpnSpool => self.soravpn_spool_bytes,
         }
+    }
+
+    fn total(self) -> u64 {
+        NexusStorageBudgetComponent::ORDER
+            .into_iter()
+            .map(|component| self.budget_for(component))
+            .try_fold(0_u64, u64::checked_add)
+            .expect("proportional component shares cannot exceed their source budget")
     }
 }
 
@@ -783,7 +810,7 @@ fn derive_global_nexus_storage_component_caps(
     weights: NexusStorageWeights,
 ) -> NexusStorageComponentCaps {
     let total_bps = u64::from(weights.total_bps().max(1));
-    let budget = |bps: u16| max_disk_bytes.saturating_mul(u64::from(bps)) / total_bps;
+    let budget = |bps: u16| proportional_budget_bytes(max_disk_bytes, bps, total_bps);
 
     let mut caps = NexusStorageComponentCaps {
         kura_bytes: budget(weights.kura_blocks_bps),
@@ -792,16 +819,22 @@ fn derive_global_nexus_storage_component_caps(
         soranet_spool_bytes: budget(weights.soranet_spool_bps),
         soravpn_spool_bytes: budget(weights.soravpn_spool_bps),
     };
-    let allocated = caps
-        .kura_bytes
-        .saturating_add(caps.wsv_cold_bytes)
-        .saturating_add(caps.sorafs_bytes)
-        .saturating_add(caps.soranet_spool_bytes)
-        .saturating_add(caps.soravpn_spool_bytes);
-    caps.kura_bytes = caps
-        .kura_bytes
-        .saturating_add(max_disk_bytes.saturating_sub(allocated));
+    let allocated = caps.total();
+    caps.add_budget(
+        NexusStorageBudgetComponent::Kura,
+        max_disk_bytes
+            .checked_sub(allocated)
+            .expect("proportional component shares cannot exceed the source budget"),
+    );
     caps
+}
+
+fn proportional_budget_bytes(total_bytes: u64, weight: u16, total_weight: u64) -> u64 {
+    if total_weight == 0 {
+        return 0;
+    }
+    let share = u128::from(total_bytes) * u128::from(weight) / u128::from(total_weight);
+    u64::try_from(share).expect("a proportional share cannot exceed its u64 source budget")
 }
 
 fn derive_filesystem_nexus_storage_component_caps(
@@ -815,17 +848,9 @@ fn derive_filesystem_nexus_storage_component_caps(
             &filesystem_group.components,
             weights,
         );
-        caps.kura_bytes = caps.kura_bytes.saturating_add(group_caps.kura_bytes);
-        caps.wsv_cold_bytes = caps
-            .wsv_cold_bytes
-            .saturating_add(group_caps.wsv_cold_bytes);
-        caps.sorafs_bytes = caps.sorafs_bytes.saturating_add(group_caps.sorafs_bytes);
-        caps.soranet_spool_bytes = caps
-            .soranet_spool_bytes
-            .saturating_add(group_caps.soranet_spool_bytes);
-        caps.soravpn_spool_bytes = caps
-            .soravpn_spool_bytes
-            .saturating_add(group_caps.soravpn_spool_bytes);
+        for component in NexusStorageBudgetComponent::ORDER {
+            caps.add_budget(component, group_caps.budget_for(component));
+        }
     }
     caps
 }
@@ -845,12 +870,16 @@ fn split_filesystem_budget_across_components(
     let mut allocated = 0_u64;
     for component in components {
         let budget =
-            budget_bytes.saturating_mul(u64::from(component.weight_bps(weights))) / divisor;
+            proportional_budget_bytes(budget_bytes, component.weight_bps(weights), divisor);
         caps.add_budget(*component, budget);
-        allocated = allocated.saturating_add(budget);
+        allocated = allocated
+            .checked_add(budget)
+            .expect("proportional component shares cannot exceed their source budget");
     }
 
-    let remainder = budget_bytes.saturating_sub(allocated);
+    let remainder = budget_bytes
+        .checked_sub(allocated)
+        .expect("proportional component shares cannot exceed their source budget");
     if remainder == 0 {
         return caps;
     }
@@ -862,6 +891,71 @@ fn split_filesystem_budget_across_components(
         caps.add_budget(first_component, remainder);
     }
     caps
+}
+
+fn validate_filesystem_storage_budgets(
+    filesystem_budgets: &[NexusStorageFilesystemBudget],
+    weights: NexusStorageWeights,
+) -> core::result::Result<(), NexusStorageBudgetApplicationError> {
+    if filesystem_budgets.is_empty() {
+        return Err(NexusStorageBudgetApplicationError::NoFilesystemBudgets);
+    }
+
+    let mut seen_components = BTreeSet::new();
+    for (group_index, filesystem_group) in filesystem_budgets.iter().enumerate() {
+        if filesystem_group.components.is_empty() {
+            return Err(NexusStorageBudgetApplicationError::EmptyComponentSet { group_index });
+        }
+        if let Some(window) = filesystem_group
+            .components
+            .windows(2)
+            .find(|window| window[0] == window[1])
+        {
+            return Err(NexusStorageBudgetApplicationError::DuplicateComponent {
+                component: window[0],
+            });
+        }
+        if let Some(window) = filesystem_group
+            .components
+            .windows(2)
+            .find(|window| window[0] > window[1])
+        {
+            return Err(
+                NexusStorageBudgetApplicationError::NonCanonicalComponentOrder {
+                    group_index,
+                    previous: window[0],
+                    current: window[1],
+                },
+            );
+        }
+        for component in &filesystem_group.components {
+            if !seen_components.insert(*component) {
+                return Err(NexusStorageBudgetApplicationError::DuplicateComponent {
+                    component: *component,
+                });
+            }
+        }
+
+        let caps = split_filesystem_budget_across_components(
+            filesystem_group.budget_bytes.get(),
+            &filesystem_group.components,
+            weights,
+        );
+        if let Some(component) = filesystem_group
+            .components
+            .iter()
+            .copied()
+            .find(|component| caps.budget_for(*component) == 0)
+        {
+            return Err(
+                NexusStorageBudgetApplicationError::ZeroComponentAllocation {
+                    group_index,
+                    component,
+                },
+            );
+        }
+    }
+    Ok(())
 }
 
 fn min_nonzero_bytes(current: Bytes<u64>, limit: u64) -> Bytes<u64> {
@@ -991,6 +1085,8 @@ mod sora_profile_tests {
 chain = "00000000-0000-0000-0000-000000000000"
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
+soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
 trusted_peers_pop = [
   { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
 ]
@@ -1004,6 +1100,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -1321,13 +1418,19 @@ signature_threshold = 1
     fn derived_storage_budget_rejects_an_overflowing_internal_aggregate() {
         let mut root = minimal_root();
         root.nexus.enabled = true;
-        let budget = |bytes| NexusStorageFilesystemBudget {
-            budget_bytes: NonZeroU64::new(bytes).expect("non-zero budget"),
-            components: vec![NexusStorageBudgetComponent::Kura],
-        };
+        let filesystem_budgets = [
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(u64::MAX).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::Kura],
+            },
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(1).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::WsvCold],
+            },
+        ];
 
         let error = root
-            .apply_derived_storage_budget(&[budget(u64::MAX), budget(1)])
+            .apply_derived_storage_budget(&filesystem_budgets)
             .expect_err("the aggregate must use checked arithmetic");
 
         assert_eq!(error, NexusStorageBudgetApplicationError::AggregateOverflow);
@@ -1335,6 +1438,117 @@ signature_threshold = 1
             root.nexus.storage.effective_local_budget_bytes.is_none(),
             "an invalid aggregate must be rejected before mutating effective configuration"
         );
+    }
+
+    #[test]
+    fn derived_storage_budget_rejects_inconsistent_component_metadata_before_mutation() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+
+        let empty = NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+            components: Vec::new(),
+        };
+        assert_eq!(
+            root.apply_derived_storage_budget(&[empty])
+                .expect_err("empty component sets must be rejected"),
+            NexusStorageBudgetApplicationError::EmptyComponentSet { group_index: 0 }
+        );
+
+        let noncanonical = NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+            components: vec![
+                NexusStorageBudgetComponent::Sorafs,
+                NexusStorageBudgetComponent::Kura,
+            ],
+        };
+        assert!(matches!(
+            root.apply_derived_storage_budget(&[noncanonical]),
+            Err(
+                NexusStorageBudgetApplicationError::NonCanonicalComponentOrder {
+                    group_index: 0,
+                    ..
+                }
+            )
+        ));
+
+        let duplicate_within_group = NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+            components: vec![
+                NexusStorageBudgetComponent::Kura,
+                NexusStorageBudgetComponent::Kura,
+            ],
+        };
+        assert_eq!(
+            root.apply_derived_storage_budget(&[duplicate_within_group])
+                .expect_err("within-group duplicates must be rejected"),
+            NexusStorageBudgetApplicationError::DuplicateComponent {
+                component: NexusStorageBudgetComponent::Kura,
+            }
+        );
+
+        let duplicate = [
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::Kura],
+            },
+            NexusStorageFilesystemBudget {
+                budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
+                components: vec![NexusStorageBudgetComponent::Kura],
+            },
+        ];
+        assert_eq!(
+            root.apply_derived_storage_budget(&duplicate)
+                .expect_err("cross-group duplicates must be rejected"),
+            NexusStorageBudgetApplicationError::DuplicateComponent {
+                component: NexusStorageBudgetComponent::Kura,
+            }
+        );
+
+        assert!(
+            root.nexus.storage.effective_local_budget_bytes.is_none(),
+            "invalid filesystem metadata must not mutate effective configuration"
+        );
+    }
+
+    #[test]
+    fn derived_storage_budget_rejects_zero_component_caps() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        let budget = NexusStorageFilesystemBudget {
+            budget_bytes: NonZeroU64::new(1).expect("non-zero budget"),
+            components: vec![
+                NexusStorageBudgetComponent::Kura,
+                NexusStorageBudgetComponent::Sorafs,
+            ],
+        };
+
+        assert_eq!(
+            root.apply_derived_storage_budget(&[budget])
+                .expect_err("zero means unlimited to component cap consumers"),
+            NexusStorageBudgetApplicationError::ZeroComponentAllocation {
+                group_index: 0,
+                component: NexusStorageBudgetComponent::Sorafs,
+            }
+        );
+        assert!(root.nexus.storage.effective_local_budget_bytes.is_none());
+    }
+
+    #[test]
+    fn storage_budget_splitting_is_exact_at_u64_max() {
+        let weights = NexusStorageWeights::default();
+        let global = derive_global_nexus_storage_component_caps(u64::MAX, weights);
+        assert_eq!(global.total(), u64::MAX);
+
+        let filesystem = split_filesystem_budget_across_components(
+            u64::MAX,
+            &NexusStorageBudgetComponent::ORDER,
+            weights,
+        );
+        assert_eq!(filesystem.total(), u64::MAX);
+        for component in NexusStorageBudgetComponent::ORDER {
+            assert!(filesystem.budget_for(component) > 0);
+        }
     }
 
     #[test]
@@ -1351,14 +1565,13 @@ signature_threshold = 1
     }
 
     #[test]
-    fn soranet_vpn_defaults_construct_with_canonical_accounts() {
+    fn soranet_vpn_defaults_construct_with_canonical_operator_account() {
         let config = SoranetVpn::default();
         assert!(!config.enabled);
         assert_eq!(
-            config.escrow_account_id,
+            config.operator_account_id,
             defaults::governance::bond_escrow_account_id()
         );
-        assert_eq!(config.operator_account_id, config.escrow_account_id);
     }
 }
 
@@ -1369,12 +1582,12 @@ pub struct Common {
     pub chain: ChainId,
     /// Key pair for signing transactions and blocks.
     pub key_pair: KeyPair,
+    /// Dedicated Ed25519 key pair for the SoraNet transport handshake.
+    pub soranet_transport_key_pair: KeyPair,
     /// Local peer description.
     pub peer: Peer,
     /// Trusted peers including self.
     pub trusted_peers: WithOrigin<TrustedPeers>,
-    /// Default domain label used only when encoding/compressing `AccountAddress` selectors.
-    pub default_account_domain_label: WithOrigin<String>,
     /// I105 chain discriminant / network prefix applied when encoding addresses.
     pub chain_discriminant: WithOrigin<u16>,
 }
@@ -1560,10 +1773,6 @@ pub struct SoranetVpn {
     pub meter_family: String,
     /// Optional 32-byte shared secret used to mint helper-authenticated VPN tickets.
     pub helper_ticket_secret: Option<[u8; 32]>,
-    /// XOR asset definition used for escrowed VPN fees.
-    pub fee_asset_id: String,
-    /// Account that receives escrowed VPN lease fees.
-    pub escrow_account_id: AccountId,
     /// Relay operator account eligible for receipt settlement.
     pub operator_account_id: AccountId,
     /// Fixed prepaid XOR lease fee.
@@ -1576,8 +1785,12 @@ pub struct SoranetVpn {
     pub excluded_routes: Vec<String>,
     /// DNS servers pushed to VPN clients.
     pub dns_servers: Vec<String>,
-    /// Optional SHA-256 SPKI pin for the relay TLS certificate.
-    pub relay_tls_spki_sha256_hex: Option<String>,
+    /// Relay Ed25519 identity selected from the authenticated guard directory.
+    pub relay_id: Option<[u8; 32]>,
+    /// Path to the exact Norito guard-directory snapshot used for VPN trust.
+    pub guard_directory_path: Option<PathBuf>,
+    /// Externally provisioned digest authenticating the exact snapshot bytes.
+    pub guard_directory_digest: Option<[u8; 32]>,
 }
 
 impl Default for SoranetVpn {
@@ -1597,12 +1810,6 @@ impl Default for SoranetVpn {
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
             helper_ticket_secret: None,
-            fee_asset_id: defaults::soranet::vpn::fee_asset_id(),
-            escrow_account_id: AccountId::parse_encoded(
-                &defaults::soranet::vpn::escrow_account_id(),
-            )
-            .expect("default vpn escrow account id")
-            .into_account_id(),
             operator_account_id: AccountId::parse_encoded(
                 &defaults::soranet::vpn::operator_account_id(),
             )
@@ -1613,7 +1820,9 @@ impl Default for SoranetVpn {
             route_pushes: defaults::soranet::vpn::route_pushes(),
             excluded_routes: defaults::soranet::vpn::excluded_routes(),
             dns_servers: defaults::soranet::vpn::dns_servers(),
-            relay_tls_spki_sha256_hex: None,
+            relay_id: None,
+            guard_directory_path: None,
+            guard_directory_digest: None,
         }
     }
 }
@@ -2712,10 +2921,6 @@ pub struct Concurrency {
     pub prover_stack_bytes: usize,
     /// Stack size (bytes) for Sumeragi helper threads.
     pub sumeragi_stack_bytes: usize,
-    /// Guest stack size (bytes) for IVM instances.
-    pub guest_stack_bytes: u64,
-    /// Gas→stack multiplier (bytes of stack available per unit of gas).
-    pub gas_to_stack_multiplier: u64,
 }
 
 impl Concurrency {
@@ -2730,22 +2935,11 @@ impl Concurrency {
             scheduler_stack_bytes: defaults::concurrency::SCHEDULER_STACK_BYTES,
             prover_stack_bytes: defaults::concurrency::PROVER_STACK_BYTES,
             sumeragi_stack_bytes: defaults::concurrency::SUMERAGI_STACK_BYTES,
-            guest_stack_bytes: defaults::concurrency::GUEST_STACK_BYTES,
-            gas_to_stack_multiplier: defaults::concurrency::GAS_TO_STACK_MULTIPLIER,
         }
     }
 
     /// Validate stack sizes to ensure they are non-zero and within sane bounds.
     pub fn validate(&self) -> core::result::Result<(), Report<ParseError>> {
-        let max_guest = defaults::concurrency::GUEST_STACK_BYTES_MAX;
-        if self.guest_stack_bytes == 0 || self.guest_stack_bytes > max_guest {
-            return Err(
-                Report::new(ParseError::InvalidConcurrencyConfig).attach(format!(
-                    "guest_stack_bytes must be in [1, {}], got {}",
-                    max_guest, self.guest_stack_bytes
-                )),
-            );
-        }
         if self.tokio_stack_bytes < defaults::concurrency::TOKIO_STACK_BYTES_MIN
             || self.tokio_stack_bytes > defaults::concurrency::TOKIO_STACK_BYTES_MAX
         {
@@ -2774,10 +2968,6 @@ impl Concurrency {
                 )),
             );
         }
-        if self.gas_to_stack_multiplier == 0 {
-            return Err(Report::new(ParseError::InvalidConcurrencyConfig)
-                .attach("gas_to_stack_multiplier must be non-zero"));
-        }
         Ok(())
     }
 }
@@ -2789,17 +2979,13 @@ pub struct Genesis {
     /// Genesis account public key
     pub public_key: PublicKey,
     /// Path to the operator-provisioned signed `GenesisBlock`.
-    ///
-    /// Normal startup derives the exact genesis-instance trust anchor from this artifact when it
-    /// is present. A restart without the artifact must configure [`Self::expected_hash`].
     pub file: Option<WithOrigin<PathBuf>>,
     /// Optional path to genesis manifest JSON for validation at startup.
     pub manifest_json: Option<WithOrigin<PathBuf>>,
-    /// Exact genesis consensus-header hash used as a normal-startup trust anchor.
+    /// Exact genesis consensus-header hash used as the startup trust anchor.
     ///
-    /// This may be omitted when a local signed genesis file is configured. When both are present,
-    /// they must identify the same signed genesis instance.
-    pub expected_hash: Option<HashOf<BlockHeader>>,
+    /// Configuration normalization requires this value independently of the signed artifact.
+    pub expected_hash: HashOf<BlockHeader>,
 }
 
 /// Transaction queue settings.
@@ -3151,6 +3337,12 @@ impl NexusStorageBudgetComponent {
     }
 }
 
+impl fmt::Display for NexusStorageBudgetComponent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// One runtime-derived filesystem group inside the Nexus storage budget.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NexusStorageFilesystemBudget {
@@ -3169,6 +3361,40 @@ pub enum NexusStorageBudgetApplicationError {
     /// The checked sum of per-filesystem budgets exceeded `u64`.
     #[error("aggregate runtime Nexus storage budget overflowed u64")]
     AggregateOverflow,
+    /// A filesystem group contains no managed storage components.
+    #[error("runtime Nexus storage filesystem group {group_index} has no components")]
+    EmptyComponentSet {
+        /// Zero-based filesystem group index.
+        group_index: usize,
+    },
+    /// Components within one filesystem group are not in strict canonical order.
+    #[error(
+        "runtime Nexus storage filesystem group {group_index} is not canonically ordered: {previous} precedes {current}"
+    )]
+    NonCanonicalComponentOrder {
+        /// Zero-based filesystem group index.
+        group_index: usize,
+        /// Component immediately before the ordering violation.
+        previous: NexusStorageBudgetComponent,
+        /// Component at the ordering violation.
+        current: NexusStorageBudgetComponent,
+    },
+    /// A component appears in more than one filesystem budget group.
+    #[error("runtime Nexus storage component {component} appears in multiple filesystem groups")]
+    DuplicateComponent {
+        /// Repeated storage component.
+        component: NexusStorageBudgetComponent,
+    },
+    /// A non-zero filesystem budget is too small to constrain one of its components.
+    #[error(
+        "runtime Nexus storage filesystem group {group_index} allocates zero bytes to {component}"
+    )]
+    ZeroComponentAllocation {
+        /// Zero-based filesystem group index.
+        group_index: usize,
+        /// Component whose weighted cap would be zero (which means unlimited downstream).
+        component: NexusStorageBudgetComponent,
+    },
 }
 
 /// Storage budget configuration for Nexus-enabled nodes.
@@ -3926,10 +4152,7 @@ fn execution_policy_duration(value: Duration) -> (u64, u32) {
 fn execution_policy_canonical_set<'a, T: Encode + 'a>(
     values: impl IntoIterator<Item = &'a T>,
 ) -> Vec<Vec<u8>> {
-    let mut encoded = values
-        .into_iter()
-        .map(|value| value.encode())
-        .collect::<Vec<_>>();
+    let mut encoded = values.into_iter().map(Encode::encode).collect::<Vec<_>>();
     encoded.sort_unstable();
     encoded.dedup();
     encoded
@@ -4438,12 +4661,7 @@ pub fn execution_policy_digest_v1(
     let per_provider_submitters = sorafs_telemetry
         .per_provider_submitters
         .iter()
-        .map(|(provider, accounts)| {
-            (
-                provider.clone(),
-                execution_policy_canonical_set(accounts.iter()),
-            )
-        })
+        .map(|(provider, accounts)| (*provider, execution_policy_canonical_set(accounts.iter())))
         .collect::<Vec<_>>();
     policy.push(
         "governance.sorafs_telemetry.per_provider_submitters",
@@ -4728,8 +4946,8 @@ pub struct Confidential {
     pub policy_transition_delay_blocks: u64,
     /// Grace window around policy activation.
     pub policy_transition_window_blocks: u64,
-    /// Commitment tree root history length.
-    pub tree_roots_history_len: u64,
+    /// Non-zero commitment tree root history length.
+    pub tree_roots_history_len: NonZeroUsize,
     /// Frontier checkpoint interval.
     pub tree_frontier_checkpoint_interval: u64,
     /// Maximum verifier entries allowed in registry.
@@ -6448,8 +6666,8 @@ pub struct Kura {
     pub block_sync_roster_retention: NonZeroUsize,
     /// Number of recent roster sidecars retained alongside the block store.
     pub roster_sidecar_retention: NonZeroUsize,
-    /// Distinct remote peers that must advertise a canonical block before local body eviction.
-    pub eviction_required_replicas: NonZeroUsize,
+    /// Authenticated replica-advert retention, expiry, and refresh policy.
+    pub replica_advert: KuraReplicaAdvertPolicy,
     /// Whether to append new blocks as JSONL to `blocks.jsonl` under the active Kura lane.
     pub debug_output_new_blocks: bool,
     /// Maximum merge-ledger entries cached in memory (0 = default).
@@ -6458,6 +6676,183 @@ pub struct Kura {
     pub fsync_mode: FsyncMode,
     /// Interval used when batching fsync calls.
     pub fsync_interval: Duration,
+}
+
+/// Authenticated replica-advert policy used to authorize canonical body eviction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KuraReplicaAdvertPolicy {
+    /// Distinct remote peers that must advertise a canonical block before local body eviction.
+    pub eviction_required_replicas: NonZeroUsize,
+    /// Authenticated historical advert keys retained immediately before the protected in-memory
+    /// block tail.
+    pub evictable_window: NonZeroUsize,
+    /// Lifetime of one authenticated remote replica observation.
+    pub ttl: Duration,
+    /// Cadence for proactively refreshing selected-keeper replica adverts.
+    pub refresh_interval: Duration,
+}
+
+/// Protocol upper bound on authenticated selected-keeper observations retained per canonical
+/// block identity.
+pub const KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT: usize =
+    consensus_v2::MAX_VALIDATORS_PER_HEIGHT;
+
+/// Minimum configurable lifetime of one authenticated remote replica observation.
+pub const KURA_REPLICA_ADVERT_TTL_MIN: Duration = Duration::from_millis(2);
+/// Maximum configurable lifetime of one authenticated remote replica observation.
+pub const KURA_REPLICA_ADVERT_TTL_MAX: Duration = Duration::from_secs(60 * 60);
+/// Minimum configurable cadence for proactively refreshing replica adverts.
+pub const KURA_REPLICA_ADVERT_REFRESH_INTERVAL_MIN: Duration = Duration::from_millis(1);
+
+/// Invalid authenticated replica-advert policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum KuraReplicaAdvertPolicyError {
+    /// The configured eviction floor cannot be met by a protocol-valid validator roster.
+    #[error("Kura eviction replica floor {actual} exceeds the protocol validator limit {maximum}")]
+    RequiredReplicasAboveProtocolLimit {
+        /// Configured distinct remote-replica floor.
+        actual: usize,
+        /// Protocol validator-count limit.
+        maximum: usize,
+    },
+    /// The protected tail and evictable advert window overflow the platform size type.
+    #[error(
+        "Kura protected block tail {blocks_in_memory} plus replica-advert evictable window {evictable_window} exceeds the platform size representation"
+    )]
+    RegistryKeyCapacityOverflow {
+        /// Configured protected in-memory block tail.
+        blocks_in_memory: usize,
+        /// Configured body-evictable historical advert window.
+        evictable_window: usize,
+    },
+    /// The bounded outer registry times the per-key keeper limit overflows the platform size type.
+    #[error(
+        "Kura replica-advert registry key capacity {key_capacity} times the protocol keeper limit {keepers_per_key} exceeds the platform size representation"
+    )]
+    RegistryEntryCapacityOverflow {
+        /// Representable outer replica-advert key capacity.
+        key_capacity: usize,
+        /// Protocol-selected keeper limit applied to every key.
+        keepers_per_key: usize,
+    },
+    /// The observation lifetime is shorter than the supported two-millisecond floor.
+    #[error("Kura replica-advert TTL {actual:?} is below the 2 ms minimum")]
+    TtlBelowMinimum {
+        /// Configured observation lifetime.
+        actual: Duration,
+    },
+    /// The observation lifetime exceeds the supported one-hour ceiling.
+    #[error("Kura replica-advert TTL {actual:?} exceeds the 1 hour maximum")]
+    TtlAboveMaximum {
+        /// Configured observation lifetime.
+        actual: Duration,
+    },
+    /// The proactive refresh cadence is shorter than the supported one-millisecond floor.
+    #[error("Kura replica-advert refresh interval {actual:?} is below the 1 ms minimum")]
+    RefreshIntervalBelowMinimum {
+        /// Configured proactive refresh cadence.
+        actual: Duration,
+    },
+    /// The proactive refresh cadence exceeds half of the observation lifetime.
+    #[error(
+        "Kura replica-advert refresh interval {refresh_interval:?} exceeds half of TTL {ttl:?}"
+    )]
+    RefreshIntervalAboveHalfTtl {
+        /// Configured proactive refresh cadence.
+        refresh_interval: Duration,
+        /// Configured observation lifetime.
+        ttl: Duration,
+    },
+}
+
+impl KuraReplicaAdvertPolicy {
+    /// Validate the complete replica-advert policy and return its bounded outer key capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed policy error when the eviction floor exceeds the protocol roster bound,
+    /// registry geometry overflows, the TTL is outside `2 ms..=1 hour`, or the refresh cadence is
+    /// below 1 ms or greater than half the TTL.
+    pub fn validate(
+        self,
+        blocks_in_memory: NonZeroUsize,
+    ) -> core::result::Result<NonZeroUsize, KuraReplicaAdvertPolicyError> {
+        if self.eviction_required_replicas.get() > KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT {
+            return Err(
+                KuraReplicaAdvertPolicyError::RequiredReplicasAboveProtocolLimit {
+                    actual: self.eviction_required_replicas.get(),
+                    maximum: KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT,
+                },
+            );
+        }
+
+        let key_capacity =
+            kura_replica_advert_registry_key_capacity(blocks_in_memory, self.evictable_window)
+                .ok_or_else(
+                    || KuraReplicaAdvertPolicyError::RegistryKeyCapacityOverflow {
+                        blocks_in_memory: blocks_in_memory.get(),
+                        evictable_window: self.evictable_window.get(),
+                    },
+                )?;
+        kura_replica_advert_registry_entry_capacity(blocks_in_memory, self.evictable_window)
+            .ok_or_else(
+                || KuraReplicaAdvertPolicyError::RegistryEntryCapacityOverflow {
+                    key_capacity: key_capacity.get(),
+                    keepers_per_key: KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT,
+                },
+            )?;
+
+        if self.ttl < KURA_REPLICA_ADVERT_TTL_MIN {
+            return Err(KuraReplicaAdvertPolicyError::TtlBelowMinimum { actual: self.ttl });
+        }
+        if self.ttl > KURA_REPLICA_ADVERT_TTL_MAX {
+            return Err(KuraReplicaAdvertPolicyError::TtlAboveMaximum { actual: self.ttl });
+        }
+        if self.refresh_interval < KURA_REPLICA_ADVERT_REFRESH_INTERVAL_MIN {
+            return Err(KuraReplicaAdvertPolicyError::RefreshIntervalBelowMinimum {
+                actual: self.refresh_interval,
+            });
+        }
+        if self.refresh_interval > self.ttl.checked_div(2).unwrap_or_default() {
+            return Err(KuraReplicaAdvertPolicyError::RefreshIntervalAboveHalfTtl {
+                refresh_interval: self.refresh_interval,
+                ttl: self.ttl,
+            });
+        }
+
+        Ok(key_capacity)
+    }
+}
+
+/// Compute the outer replica-advert registry capacity.
+///
+/// The newest `blocks_in_memory` keys overlap the protected body tail. The additional window is
+/// therefore required to leave exactly that many older, body-evictable identities resident.
+#[must_use]
+pub fn kura_replica_advert_registry_key_capacity(
+    blocks_in_memory: NonZeroUsize,
+    evictable_window: NonZeroUsize,
+) -> Option<NonZeroUsize> {
+    blocks_in_memory
+        .get()
+        .checked_add(evictable_window.get())
+        .and_then(NonZeroUsize::new)
+}
+
+/// Compute the maximum number of authenticated peer observations in the replica-advert registry.
+///
+/// Admission authenticates each peer as a selected CommitQC signer, whose count is bounded by the
+/// protocol validator limit. Keeping this multiplication checked makes the complete nested-map
+/// allocation geometry representable on every supported target.
+#[must_use]
+pub fn kura_replica_advert_registry_entry_capacity(
+    blocks_in_memory: NonZeroUsize,
+    evictable_window: NonZeroUsize,
+) -> Option<NonZeroUsize> {
+    kura_replica_advert_registry_key_capacity(blocks_in_memory, evictable_window)?
+        .get()
+        .checked_mul(KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT)
+        .and_then(NonZeroUsize::new)
 }
 
 impl Default for Queue {
@@ -6792,6 +7187,7 @@ impl Sumeragi {
         .max(1);
         if runtime_progress_reserve
             .checked_add(runtime_completion_reserve)
+            .and_then(|reserved| reserved.checked_add(1))
             .is_none_or(|reserved| reserved >= runtime_command_capacity)
         {
             return Err(SumeragiV2ConfigError::InvalidQueueAllocation);
@@ -6804,8 +7200,8 @@ impl Sumeragi {
             self.queues.authenticated_non_validator_sources.get(),
         )?;
         let minimum_body_queue_capacity = authenticated_non_validator_source_capacity
-            .checked_mul(2)
-            .and_then(|hubs| hubs.checked_add(6))
+            .checked_mul(3)
+            .and_then(|hubs| hubs.checked_add(7))
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 authenticated non-validator outer-ingress message minimum",
             ))?;
@@ -6829,6 +7225,9 @@ impl Sumeragi {
                 .expect("static recommended transport-completion manifest fits u64");
         let timeout_vote_reserve = u64::try_from(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES)
             .expect("static timeout-vote reserve fits u64");
+        let certified_fence_escape_reserve =
+            u64::try_from(defaults::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES)
+                .expect("static certified fence-escape reserve fits u64");
         let lane_progress_bytes = u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES)
             .expect("static certified lane-source limit fits u64");
         let lane_completion_bytes = u64::try_from(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES)
@@ -6848,6 +7247,7 @@ impl Sumeragi {
             ))?;
         let minimum_body_source_bytes = ordinary_bytes
             .checked_add(completion_bytes)
+            .and_then(|minimum| minimum.checked_add(certified_fence_escape_reserve))
             .and_then(|minimum| minimum.checked_add(timeout_vote_reserve))
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 per-source canonical outer-ingress wire-byte minimum",
@@ -6859,6 +7259,7 @@ impl Sumeragi {
                 max_payload_bytes,
                 envelope_headroom,
                 manifest_wire_bytes,
+                certified_fence_escape_reserve,
                 timeout_vote_reserve,
                 lane_progress_bytes,
                 lane_completion_bytes,
@@ -7539,9 +7940,9 @@ pub enum SumeragiV2ConfigError {
         authenticated_non_validator_sources: u64,
     },
     /// The per-source canonical wire-byte budget cannot isolate ordinary and
-    /// payload-completion envelopes plus one timeout vote.
+    /// payload-completion envelopes plus one certified escape and timeout vote.
     #[error(
-        "Sumeragi v2 per-source canonical outer-ingress wire-byte capacity {actual} is below minimum {minimum} for max payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest wire bytes, {lane_progress_bytes} bytes of lane progress, {lane_completion_bytes} bytes of lane completion, and {timeout_vote_reserve} reserved timeout-vote bytes"
+        "Sumeragi v2 per-source canonical outer-ingress wire-byte capacity {actual} is below minimum {minimum} for max payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest wire bytes, {lane_progress_bytes} bytes of lane progress, {lane_completion_bytes} bytes of lane completion, {certified_fence_escape_reserve} reserved certified-fence-escape bytes, and {timeout_vote_reserve} reserved timeout-vote bytes"
     )]
     BodySourceBytesTooSmall {
         /// Configured per-source capacity.
@@ -7554,6 +7955,8 @@ pub enum SumeragiV2ConfigError {
         envelope_headroom: u64,
         /// Recommended manifest wire bytes included in the completion partition.
         manifest_wire_bytes: u64,
+        /// Fixed bytes isolated for a TC, CommitQC, or CommitQC response.
+        certified_fence_escape_reserve: u64,
         /// Fixed bytes isolated from ordinary traffic for a timeout vote.
         timeout_vote_reserve: u64,
         /// Minimum ordinary region required by an atomic lane certificate.
@@ -8048,8 +8451,12 @@ pub struct Torii {
     pub api_fee_receiver: Option<String>,
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
     pub soranet_privacy_ingest: SoranetPrivacyIngest,
-    /// CIDR allowlist for bypassing API rate limits (IPv4/IPv6).
-    pub api_allow_cidrs: Vec<String>,
+    /// Optional authenticated native Bootle/Lantern blind-issuance service.
+    pub privacy_bootle_lantern_issuer: Option<ToriiBootleLanternIssuer>,
+    /// CIDRs whose effective transport sources bypass API rate limits only.
+    pub api_rate_limit_bypass_cidrs: Vec<String>,
+    /// Exact effective transport source hosts trusted for internal API reads and routing.
+    pub internal_api_trusted_cidrs: Vec<String>,
     /// Optional Torii base URLs used to fetch peer telemetry metadata.
     pub peer_telemetry_urls: Vec<Url>,
     /// Peer telemetry geo lookup configuration.
@@ -8070,6 +8477,8 @@ pub struct Torii {
     pub preauth_burst_per_ip: Option<NonZeroU32>,
     /// Optional temporary ban duration applied on repeated violations.
     pub preauth_temp_ban: Option<Duration>,
+    /// Maximum number of temporary pre-auth bans retained in memory.
+    pub preauth_ban_capacity: NonZeroUsize,
     /// Explicit source hosts allowed to bypass pre-auth limits.
     pub preauth_allow_cidrs: Vec<String>,
     /// Optional per-scheme pre-auth concurrency caps.
@@ -8199,6 +8608,36 @@ pub struct Torii {
     pub webhook_security: WebhookSecurity,
     /// Push notification delivery configuration.
     pub push: Push,
+}
+
+/// Non-secret production policy for native Bootle/Lantern blind issuance.
+///
+/// Issuer trapdoors, authentication credentials, and provider implementations
+/// are runtime-injected and are deliberately absent from configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToriiBootleLanternIssuer {
+    /// Durable one-shot authorization store directory.
+    pub state_dir: PathBuf,
+    /// Exact non-zero bound on concurrent native issuance operations.
+    pub max_inflight: NonZeroUsize,
+    /// Exact governed issuer identity resolved from committed state.
+    pub issuer_id: PrivacyIssuerIdV1,
+    /// Exact governed policy identity resolved from committed state.
+    pub policy_id: PrivacyPolicyIdV1,
+    /// Number of committed blocks for which a fresh authorization is valid.
+    pub authorization_lifetime_blocks: u64,
+    /// Maximum retained authorization records.
+    pub max_records: usize,
+    /// Maximum reserved canonical authorization-store bytes.
+    pub max_total_bytes: u64,
+    /// Terminal records retained after their authoritative horizon.
+    pub terminal_retention_blocks: u64,
+    /// Deployment-owned provider-registry handle.
+    pub runtime_provider_registry_handle: String,
+    /// Exact non-zero provider-registry policy revision.
+    pub runtime_provider_registry_revision: u64,
+    /// Exact non-zero provider-registry public-policy digest.
+    pub runtime_provider_registry_policy_digest: [u8; 32],
 }
 
 /// Transaction-history visibility/auth configuration for Torii app API.
@@ -8917,18 +9356,31 @@ pub struct ToriiRamLfe {
 }
 
 /// Per-program secret/signer material for the Torii RAM-LFE runtime.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToriiRamLfeProgram {
     /// On-chain RAM-LFE program handled by this runtime entry.
     pub program_id: iroha_data_model::ram_lfe::RamLfeProgramId,
     /// Hidden derivation secret committed by the on-chain program policy.
-    pub secret: Vec<u8>,
+    pub secret: RamLfeSecret,
     /// Hidden BFV RAM-FHE program executed by this runtime entry.
     pub hidden_program: iroha_crypto::HiddenRamFheProgram,
     /// Private key used to sign receipts for this program.
-    pub signer_private_key: ExposedPrivateKey,
+    pub signer_private_key: PrivateKey,
     /// Optional receipt TTL enforced by the runtime.
     pub receipt_ttl: Option<Duration>,
+}
+
+impl fmt::Debug for ToriiRamLfeProgram {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ToriiRamLfeProgram")
+            .field("program_id", &self.program_id)
+            .field("secret", &self.secret)
+            .field("hidden_program", &"[REDACTED hidden RAM-FHE program]")
+            .field("signer_private_key", &"[REDACTED RAM-LFE signer]")
+            .field("receipt_ttl", &self.receipt_ttl)
+            .finish()
+    }
 }
 
 /// Per-scheme cap applied by the Torii pre-auth gate.
@@ -9847,6 +10299,9 @@ pub struct SorafsStorage {
     /// Finalized queries, threshold signing, Governance DAG publication, and
     /// native journal transaction submission remain runtime-injected.
     pub reputation_runtime: Option<SorafsReputationRuntime>,
+    /// Restart-safe finalized reserve-event feed into the durable
+    /// transparency source index.
+    pub reserve_transparency_runtime: Option<SorafsReserveTransparencyRuntime>,
     /// Authenticated immutable archive used to retain compacted finalized PoR
     /// replay records.
     ///
@@ -9943,7 +10398,7 @@ pub struct SorafsGovernanceDagService {
     pub ipfs_api_url: Option<String>,
     /// Public-head mode (`signed_http` or `ipns`).
     pub head_mode: String,
-    /// Signed-head HTTP endpoint used by `signed_http` mode.
+    /// Signed-head HTTP endpoint providing strong-ETag compare-and-swap.
     pub signed_head_url: Option<String>,
     /// IPNS name resolved by `ipns` mode.
     pub ipns_name: Option<String>,
@@ -9989,12 +10444,6 @@ pub struct SorafsGovernanceDagService {
     pub max_response_bytes: Bytes<u64>,
     /// Maximum request payload bytes accepted from local feeds.
     pub max_request_bytes: Bytes<u64>,
-    /// Maximum entries retained in the deterministic IPLD mirror.
-    pub mirror_max_entries: usize,
-    /// Maximum canonical block bytes retained in the deterministic IPLD mirror.
-    pub mirror_max_bytes: Bytes<u64>,
-    /// Maximum age of the source signed head at publication time.
-    pub max_head_age_secs: u64,
     /// Maximum future clock skew accepted for source blocks and heads.
     pub max_future_skew_secs: u64,
     /// Permit plain HTTP endpoints (intended only for isolated test deployments).
@@ -10161,63 +10610,8 @@ pub struct SorafsPdpProviderPolicy {
     pub terminal_retention_secs: u64,
 }
 
-/// One governed PoP dual-control approver.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SorafsPopApprovalSigner {
-    /// Stable payload-free signer identifier.
-    pub signer_id: String,
-    /// Raw Ed25519 public key bytes.
-    pub public_key: [u8; 32],
-    /// Finalized epoch at which the signer is revoked.
-    pub revoked_at_epoch: Option<u64>,
-}
-
-/// Non-secret production policy for the Torii PoP credential service.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SorafsPopCredentialService {
-    /// Durable issuer checkpoint directory.
-    pub issuer_state_dir: PathBuf,
-    /// Encrypted wallet-vault directory.
-    pub wallet_state_dir: PathBuf,
-    /// Exact active finalized issuer-policy digest.
-    pub issuer_policy_digest: [u8; 32],
-    /// Governed issuer identifier.
-    pub issuer_id: String,
-    /// Non-secret runtime HSM key handle.
-    pub issuer_hsm_key_id: String,
-    /// Governed raw Ed25519 issuer public key.
-    pub issuer_public_key: [u8; 32],
-    /// Non-secret runtime hybrid recipient-key handle.
-    pub enrollment_recipient_key_id: String,
-    /// Digest of the exact hybrid enrollment-recipient public key.
-    pub enrollment_recipient_public_key_digest: [u8; 32],
-    /// Non-secret runtime wallet wrapping-key handle.
-    pub wallet_wrapping_key_id: String,
-    /// Non-secret deployment runtime-provider registry handle.
-    pub runtime_provider_registry_handle: String,
-    /// Exact non-zero deployment registry policy revision.
-    pub runtime_provider_registry_revision: u64,
-    /// Exact deployment registry policy digest.
-    pub runtime_provider_registry_policy_digest: [u8; 32],
-    /// Required distinct active approval count.
-    pub approval_quorum: u8,
-    /// Canonically signer-id-ordered approval authority.
-    pub approval_signers: Vec<SorafsPopApprovalSigner>,
-    /// Maximum pending encrypted enrollments.
-    pub max_pending_enrollments: u32,
-    /// Maximum durable registry outbox entries.
-    pub max_outbox_entries: u32,
-    /// Maximum durable dead letters.
-    pub max_dead_letters: u32,
-    /// Maximum consumed proof nullifiers.
-    pub max_seen_nullifiers: u32,
-    /// Submission attempts before terminal dead-lettering.
-    pub max_submission_attempts: u16,
-    /// Registry worker cadence.
-    pub worker_interval: Duration,
-    /// Maximum absolute skew between finalized and runtime clock time.
-    pub max_finalized_time_skew: Duration,
-}
+mod sorafs_pop_credentials;
+pub use sorafs_pop_credentials::{SorafsPopApprovalSigner, SorafsPopCredentialService};
 
 /// Non-secret production policy for finalized-chain moderation orchestration.
 #[derive(Debug, Clone)]
@@ -10230,6 +10624,9 @@ pub struct SorafsModerationOrchestrator {
     pub checkpoint_store_revision: u64,
     /// Exact checkpoint-store public-policy digest.
     pub checkpoint_store_policy_digest: [u8; 32],
+    /// Archive-lifetime-stable Ed25519 trust anchor for sealed checkpoint statements.
+    /// HSM-internal rotation must preserve this public identity in V1.
+    pub checkpoint_store_attestation_public_key: [u8; 32],
     /// Governance authority used only for deterministic deadline maintenance.
     pub maintenance_authority: AccountId,
     /// Identity-pinned runtime-only moderation transaction signer handle.
@@ -10262,6 +10659,24 @@ pub struct SorafsModerationOrchestrator {
     pub panel_notification_revision: u64,
     /// Exact panel-notification adapter public-policy digest.
     pub panel_notification_policy_digest: [u8; 32],
+    /// Identity-pinned immutable panel-notification receipt archive handle.
+    pub panel_notification_archive_handle: String,
+    /// Exact non-zero receipt archive adapter revision.
+    pub panel_notification_archive_revision: u64,
+    /// Exact receipt archive adapter public-policy digest.
+    pub panel_notification_archive_policy_digest: [u8; 32],
+    /// Stable non-secret receipt archive namespace identity.
+    pub panel_notification_archive_id: [u8; 32],
+    /// Bootstrap Ed25519 archive signer anchoring the sealed epoch log.
+    pub panel_notification_archive_bootstrap_public_key: [u8; 32],
+    /// Exact Ed25519 public key authenticating durable archive readback.
+    pub panel_notification_archive_public_key: [u8; 32],
+    /// Inclusive final generation authorized for the predecessor archive signer.
+    pub panel_notification_archive_predecessor_revocation_generation: Option<u64>,
+    /// Prior-signer authorization signature for the current transition.
+    pub panel_notification_archive_predecessor_authorization_signature: Option<[u8; 64]>,
+    /// New-signer proof-of-possession signature for the current transition.
+    pub panel_notification_archive_new_key_possession_signature: Option<[u8; 64]>,
     /// Maximum appeals and activated cases in one complete finalized snapshot.
     pub max_cases: usize,
     /// Maximum finalized typed events retained in one snapshot.
@@ -10276,6 +10691,8 @@ pub struct SorafsModerationOrchestrator {
     pub max_submit_attempts: u32,
     /// Maximum canonical checkpoint size.
     pub checkpoint_max_bytes: Bytes<u64>,
+    /// Maximum canonical panel-notification archive artifact size.
+    pub panel_notification_archive_max_bytes: Bytes<u64>,
     /// Finalized reconciliation and maintenance cadence.
     pub worker_interval: Duration,
     /// Maximum native maintenance actions emitted in one scan.
@@ -10365,103 +10782,6 @@ pub struct SorafsEvidenceViewer {
     pub transparency_publisher_policy_digest: [u8; 32],
     /// Exact Ed25519 transparency-head verification key.
     pub transparency_publisher_public_key: [u8; 32],
-}
-
-/// Public binding for the reputation finalized-archive retention authority.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SorafsReputationFinalizedArchiveRetentionAuthority {
-    /// Identity-pinned credential-free sealed-CAS provider handle.
-    pub handle: String,
-    /// Exact non-zero adapter and public-policy revision.
-    pub revision: u64,
-    /// Exact non-zero digest of the authority's public policy.
-    pub policy_digest: [u8; 32],
-}
-
-/// Non-secret production policy for the committed SoraFS reputation runtime.
-#[derive(Debug, Clone)]
-pub struct SorafsReputationRuntime {
-    /// Private directory containing canonical projector/publication checkpoints.
-    pub state_dir: PathBuf,
-    /// Deterministic private root for the immutable finalized reputation archive.
-    pub finalized_archive_root: PathBuf,
-    /// Maximum bytes accepted for one canonical finalized archive record.
-    pub finalized_archive_max_record_bytes: u64,
-    /// Maximum immutable records admitted in each finalized archive namespace.
-    pub finalized_archive_max_entries: usize,
-    /// Maximum aggregate canonical anchor and policy bytes admitted.
-    pub finalized_archive_max_total_bytes: u64,
-    /// Maximum admitted lag between the Kura tip and the finalized archive head.
-    pub finalized_archive_max_kura_tip_lag_blocks: u64,
-    /// External authority required before any finalized-prefix retention.
-    pub finalized_archive_retention_authority:
-        Option<SorafsReputationFinalizedArchiveRetentionAuthority>,
-    /// Inclusive first finalized block in the governed scoring window.
-    pub window_start_height: u64,
-    /// Inclusive final block and mandatory signing-material target.
-    pub window_end_height: u64,
-    /// Identity-pinned finalized-query adapter handle.
-    pub finalized_query_handle: String,
-    /// Identity-pinned external monotonic journal-checkpoint provider handle.
-    pub journal_checkpoint_provider_handle: String,
-    /// Exact non-zero journal-checkpoint provider contract revision.
-    pub journal_checkpoint_provider_revision: u64,
-    /// Exact journal-checkpoint provider public-policy digest.
-    pub journal_checkpoint_provider_policy_digest: [u8; 32],
-    /// Identity-pinned runtime-only journal transaction submitter handle.
-    pub journal_transaction_submitter_handle: String,
-    /// Exact non-zero journal transaction submitter adapter and public-policy revision.
-    pub journal_transaction_submitter_revision: u64,
-    /// Exact journal transaction submitter public-policy digest.
-    pub journal_transaction_submitter_policy_digest: [u8; 32],
-    /// Identity-pinned external threshold-signer adapter handle.
-    pub threshold_signer_handle: String,
-    /// Exact non-zero threshold-signer adapter and public-policy revision.
-    pub threshold_signer_revision: u64,
-    /// Exact threshold-signer public-policy digest.
-    pub threshold_signer_policy_digest: [u8; 32],
-    /// Identity-pinned Governance DAG publication/readback adapter handle.
-    pub governance_dag_handle: String,
-    /// Exact non-zero Governance DAG adapter and public-policy revision.
-    pub governance_dag_revision: u64,
-    /// Exact Governance DAG public-policy digest.
-    pub governance_dag_policy_digest: [u8; 32],
-    /// Exact governed Governance DAG publisher peer identity.
-    pub governance_publisher_peer_id: Vec<u8>,
-    /// Exact governed Ed25519 Governance DAG publisher public key.
-    pub governance_publisher_public_key: [u8; 32],
-    /// Exact-anchor reconciliation cadence.
-    pub poll_interval: Duration,
-    /// Maximum items requested from one native finalized query page.
-    pub page_items: u32,
-    /// Maximum native pages accepted in one coherent ingest batch.
-    pub max_pages_per_batch: u32,
-    /// Maximum provider accumulators retained.
-    pub max_providers: u32,
-    /// Maximum typed events staged in one atomic projector batch.
-    pub max_pending_events: u32,
-    /// Maximum exact-replay receipts retained.
-    pub max_replay_receipts: u32,
-    /// Maximum external-delivery failures retained before dead-lettering.
-    pub max_material_delivery_failures: u32,
-    /// Maximum canonical projector checkpoint size.
-    pub ingest_checkpoint_max_bytes: Bytes<u64>,
-    /// Maximum canonical publication checkpoint size.
-    pub publication_checkpoint_max_bytes: Bytes<u64>,
-    /// Governed PoR-success weight.
-    pub por_success_bps: u16,
-    /// Governed PDP-success weight.
-    pub pdp_success_bps: u16,
-    /// Governed PoTR-success weight.
-    pub potr_success_bps: u16,
-    /// Governed latency-health weight.
-    pub latency_bps: u16,
-    /// Governed upheld-dispute penalty weight.
-    pub dispute_bps: u16,
-    /// Governed stream-token violation penalty weight.
-    pub token_violation_bps: u16,
-    /// Governed unresolved-repair penalty weight.
-    pub repair_breach_bps: u16,
 }
 
 /// Non-secret production policy for the supervised SoraFS hedging/billing runtime.
@@ -10806,6 +11126,7 @@ impl Default for SorafsStorage {
             moderation_orchestrator: None,
             evidence_viewer: None,
             reputation_runtime: None,
+            reserve_transparency_runtime: None,
             por_replay_archive: None,
             hedging_billing_runtime: None,
             provider_ingest_runtime: None,
@@ -10867,9 +11188,6 @@ impl Default for SorafsGovernanceDagService {
             dns_timeout: Duration::from_millis(service::DNS_TIMEOUT_MS),
             max_response_bytes: service::MAX_RESPONSE_BYTES,
             max_request_bytes: service::MAX_REQUEST_BYTES,
-            mirror_max_entries: service::MIRROR_MAX_ENTRIES,
-            mirror_max_bytes: service::MIRROR_MAX_BYTES,
-            max_head_age_secs: service::MAX_HEAD_AGE_SECS,
             max_future_skew_secs: service::MAX_FUTURE_SKEW_SECS,
             allow_insecure_http: service::ALLOW_INSECURE_HTTP,
             allow_private_ipfs_endpoint: service::ALLOW_PRIVATE_IPFS_ENDPOINT,
@@ -11114,6 +11432,24 @@ pub struct SorafsTokenConfig {
     pub signer_handle: Option<String>,
     /// Exact Ed25519 public key bound to the runtime signer.
     pub signer_public_key: Option<[u8; 32]>,
+    /// Exact non-zero deployment adapter revision bound to the runtime signer.
+    pub signer_revision: Option<u64>,
+    /// Exact non-zero digest of the runtime signer's public policy.
+    pub signer_policy_digest: Option<[u8; 32]>,
+    /// Deployment-owned quota, sealed-sequence, and callback-outbox provider handle.
+    pub admission_provider_handle: Option<String>,
+    /// Exact non-zero external admission-provider contract revision.
+    pub admission_provider_revision: Option<u64>,
+    /// Exact non-zero digest of the external admission provider's public policy.
+    pub admission_provider_policy_digest: Option<[u8; 32]>,
+    /// Maximum durable callback rows admitted by the external provider.
+    pub admission_max_pending: u32,
+    /// Maximum active token quota windows admitted by the external provider.
+    pub admission_max_tracked_tokens: u32,
+    /// Maximum ordered callbacks replayed by one reconciliation tick.
+    pub admission_reconcile_max_items: u32,
+    /// Maximum lifetime of one cross-replica concurrency lease.
+    pub admission_lease_ttl_ms: u64,
     /// Public-key version advertised in issued tokens.
     pub key_version: u32,
     /// Default TTL applied to tokens (seconds).
@@ -11132,6 +11468,17 @@ impl Default for SorafsTokenConfig {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
             signer_handle: None,
             signer_public_key: None,
+            signer_revision: None,
+            signer_policy_digest: None,
+            admission_provider_handle: None,
+            admission_provider_revision: None,
+            admission_provider_policy_digest: None,
+            admission_max_pending: defaults::sorafs::storage::tokens::ADMISSION_MAX_PENDING,
+            admission_max_tracked_tokens:
+                defaults::sorafs::storage::tokens::ADMISSION_MAX_TRACKED_TOKENS,
+            admission_reconcile_max_items:
+                defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_MAX_ITEMS,
+            admission_lease_ttl_ms: defaults::sorafs::storage::tokens::ADMISSION_LEASE_TTL_MS,
             key_version: defaults::sorafs::storage::tokens::KEY_VERSION,
             default_ttl_secs: defaults::sorafs::storage::tokens::DEFAULT_TTL_SECS,
             default_max_streams: defaults::sorafs::storage::tokens::DEFAULT_MAX_STREAMS,
@@ -11334,8 +11681,6 @@ pub struct SorafsGateway {
     pub salt_schedule_dir: Option<PathBuf>,
     /// Named static-site bindings loaded and cached when Torii starts.
     pub site_bindings: SorafsGatewaySiteBindings,
-    /// Optional CDN policy payload (GarCdnPolicyV1) loaded from disk.
-    pub cdn_policy_path: Option<PathBuf>,
     /// Client-facing rate limit configuration.
     pub rate_limit: SorafsGatewayRateLimit,
     /// High-level rollout phase controlling default anonymity policy.
@@ -11360,7 +11705,6 @@ impl Default for SorafsGateway {
             enforce_capabilities: defaults::sorafs::gateway::ENFORCE_CAPABILITIES,
             salt_schedule_dir: None,
             site_bindings: SorafsGatewaySiteBindings::default(),
-            cdn_policy_path: None,
             rate_limit: SorafsGatewayRateLimit::default(),
             rollout_phase: SorafsRolloutPhase::default(),
             anonymity_policy: Some(
@@ -11937,14 +12281,8 @@ pub struct Zk {
     pub stark: Stark,
     /// SCCP proof-admission and deterministic verifier-work limits.
     pub sccp: Sccp,
-    /// Cap on the number of recent shielded Merkle roots kept per asset.
-    pub root_history_cap: usize,
     /// Cap on the number of recent ballot ciphertexts kept per election.
     pub ballot_history_cap: usize,
-    /// When an asset has no commitments, include an explicit empty-tree root in read APIs.
-    pub empty_root_on_empty: bool,
-    /// Depth to use when computing the explicit empty-tree root.
-    pub merkle_depth: u8,
     /// Maximum accepted proof size for stateless pre-verification (bytes).
     pub preverify_max_bytes: usize,
     /// Soft byte-budget for stateless pre-verification (0 = unlimited).
@@ -11997,8 +12335,8 @@ pub struct Zk {
     pub policy_transition_delay_blocks: u64,
     /// Grace window (in blocks) around policy activation for conversions.
     pub policy_transition_window_blocks: u64,
-    /// Commitment tree root history length to retain.
-    pub tree_roots_history_len: u64,
+    /// Non-zero commitment tree root history length to retain.
+    pub tree_roots_history_len: NonZeroUsize,
     /// Interval (in blocks) between frontier checkpoints.
     pub tree_frontier_checkpoint_interval: u64,
     /// Maximum active verifier entries allowed in registry.
@@ -12876,20 +13214,6 @@ mod tests_npos_timeouts {
     }
 
     #[test]
-    fn concurrency_validate_rejects_zero_gas_stack_multiplier() {
-        let mut cfg = Concurrency::from_defaults();
-        cfg.gas_to_stack_multiplier = 0;
-
-        let err = cfg
-            .validate()
-            .expect_err("zero multiplier should be invalid");
-        assert!(matches!(
-            err.current_context(),
-            ParseError::InvalidConcurrencyConfig
-        ));
-    }
-
-    #[test]
     fn concurrency_validate_rejects_too_small_sumeragi_stack() {
         let mut cfg = Concurrency::from_defaults();
         cfg.sumeragi_stack_bytes = defaults::concurrency::SUMERAGI_STACK_BYTES_MIN - 1;
@@ -12925,20 +13249,6 @@ mod tests_npos_timeouts {
         let err = cfg
             .validate()
             .expect_err("Sumeragi stack above maximum must fail");
-        assert!(matches!(
-            err.current_context(),
-            ParseError::InvalidConcurrencyConfig
-        ));
-    }
-
-    #[test]
-    fn concurrency_validate_rejects_excessive_guest_stack() {
-        let mut cfg = Concurrency::from_defaults();
-        cfg.guest_stack_bytes = defaults::concurrency::GUEST_STACK_BYTES_MAX + 1;
-
-        let err = cfg
-            .validate()
-            .expect_err("guest stack beyond max must fail");
         assert!(matches!(
             err.current_context(),
             ParseError::InvalidConcurrencyConfig
@@ -13116,264 +13426,12 @@ mod tests_npos_timeouts {
         );
     }
 
-    #[test]
-    fn sorafs_site_binding_defaults_are_disabled_and_bounded() {
-        let config = SorafsGatewaySiteBindings::default();
-        assert_eq!(config.path, None);
-        assert_eq!(config.max_bytes.get(), 1024 * 1024);
-        assert_eq!(config.max_sites.get(), 1024);
-    }
-
-    #[test]
-    fn streaming_codec_default_entropy_mode_matches_build_flag() {
-        assert!(
-            norito::streaming::BUNDLED_RANS_BUILD_AVAILABLE,
-            "Bundled rANS must be compiled in for the first release; rebuild with ENABLE_RANS_BUNDLES=1"
-        );
-        let codec = StreamingCodec::from_defaults();
-        assert_eq!(codec.entropy_mode, EntropyMode::RansBundled);
-    }
-
-    #[test]
-    fn streaming_default_entropy_string_tracks_build_flag() {
-        assert!(
-            norito::streaming::BUNDLED_RANS_BUILD_AVAILABLE,
-            "Bundled rANS must be compiled in for the first release; rebuild with ENABLE_RANS_BUNDLES=1"
-        );
-        let default = defaults::streaming::codec::entropy_mode();
-        assert_eq!(
-            default,
-            defaults::streaming::codec::BUNDLED_ENTROPY_MODE,
-            "string helper should mirror bundled availability"
-        );
-    }
-
-    #[test]
-    fn soranet_pow_defaults_are_const_initializable() {
-        const CONST_POW: SoranetPow = SoranetPow::default_const();
-        const CONST_PUZZLE: SoranetPuzzle = SoranetPuzzle::default_const();
-
-        let runtime = SoranetPow::default();
-        assert!(runtime.required, "first-release PoW must be mandatory");
-        assert_eq!(
-            runtime.difficulty,
-            iroha_crypto::soranet::puzzle::DEFAULT_DIFFICULTY
-        );
-        assert_ne!(runtime.difficulty, 0);
-        assert_eq!(CONST_POW.required, runtime.required);
-        assert_eq!(CONST_POW.difficulty, runtime.difficulty);
-        assert_eq!(CONST_POW.max_future_skew, runtime.max_future_skew);
-        assert_eq!(CONST_POW.min_ticket_ttl, runtime.min_ticket_ttl);
-        assert_eq!(CONST_POW.ticket_ttl, runtime.ticket_ttl);
-        assert_eq!(
-            CONST_POW.revocation_store_capacity,
-            runtime.revocation_store_capacity
-        );
-        assert_eq!(CONST_POW.revocation_max_ttl, runtime.revocation_max_ttl);
-        assert_eq!(
-            CONST_POW.revocation_store_path,
-            runtime.revocation_store_path
-        );
-        assert_eq!(CONST_POW.puzzle.is_some(), runtime.puzzle.is_some());
-
-        let runtime_puzzle = runtime.puzzle.expect("puzzle present by default");
-        assert_eq!(CONST_PUZZLE.memory_kib, runtime_puzzle.memory_kib);
-        assert_eq!(CONST_PUZZLE.time_cost, runtime_puzzle.time_cost);
-        assert_eq!(CONST_PUZZLE.lanes, runtime_puzzle.lanes);
-    }
-
-    #[test]
-    fn no_trusted_peers() {
-        let value = TrustedPeers {
-            myself: dummy_peer(80),
-            others: unique_vec![],
-            pops: std::collections::BTreeMap::default(),
-        };
-        assert!(!value.contains_other_trusted_peers());
-    }
-
-    #[test]
-    fn one_trusted_peer() {
-        let value = TrustedPeers {
-            myself: dummy_peer(80),
-            others: unique_vec![dummy_peer(81)],
-            pops: std::collections::BTreeMap::default(),
-        };
-        assert!(value.contains_other_trusted_peers());
-    }
-
-    #[test]
-    fn many_trusted_peers() {
-        let value = TrustedPeers {
-            myself: dummy_peer(80),
-            others: unique_vec![dummy_peer(1), dummy_peer(2), dummy_peer(3), dummy_peer(4),],
-            pops: std::collections::BTreeMap::default(),
-        };
-        assert!(value.contains_other_trusted_peers());
-    }
-
-    #[test]
-    fn telemetry_profile_capabilities_match_expectations() {
-        let disabled = TelemetryProfile::Disabled.capabilities();
-        assert!(!disabled.metrics_enabled());
-        assert!(!disabled.expensive_metrics_enabled());
-        assert!(!disabled.developer_outputs_enabled());
-
-        let operator = TelemetryProfile::Operator.capabilities();
-        assert!(operator.metrics_enabled());
-        assert!(!operator.expensive_metrics_enabled());
-        assert!(!operator.developer_outputs_enabled());
-
-        let full = TelemetryProfile::Full.capabilities();
-        assert!(full.metrics_enabled());
-        assert!(full.expensive_metrics_enabled());
-        assert!(full.developer_outputs_enabled());
-
-        let combined = TelemetryCapabilities::from(TelemetryProfile::Developer)
-            .union(TelemetryCapabilities::from(TelemetryProfile::Extended));
-        assert!(combined.metrics_enabled());
-        assert!(combined.expensive_metrics_enabled());
-        assert!(combined.developer_outputs_enabled());
-    }
-
-    #[test]
-    fn telemetry_profile_from_user_enum_round_trips() {
-        use super::user;
-
-        assert_eq!(
-            TelemetryProfile::from(user::TelemetryProfile::Operator),
-            TelemetryProfile::Operator
-        );
-        assert_eq!(
-            TelemetryProfile::from(user::TelemetryProfile::Extended),
-            TelemetryProfile::Extended
-        );
-        assert_eq!(
-            TelemetryProfile::from(user::TelemetryProfile::Developer),
-            TelemetryProfile::Developer
-        );
-        assert_eq!(
-            TelemetryProfile::from(user::TelemetryProfile::Full),
-            TelemetryProfile::Full
-        );
-    }
-
-    #[test]
-    fn fraud_monitoring_new_dedup_and_defaults() {
-        use url::Url;
-        let url = Url::parse("https://risk.example/api").expect("url");
-        let cfg = FraudMonitoring::new(
-            true,
-            vec![url.clone(), url.clone()],
-            Duration::from_millis(0),
-            Duration::from_millis(0),
-            5,
-            Some(FraudRiskBand::High),
-            Vec::new(),
-        );
-        assert_eq!(cfg.service_endpoints.len(), 1);
-        assert_eq!(cfg.service_endpoints[0], url);
-        assert_eq!(
-            cfg.connect_timeout,
-            defaults::fraud_monitoring::CONNECT_TIMEOUT
-        );
-        assert_eq!(
-            cfg.request_timeout,
-            defaults::fraud_monitoring::REQUEST_TIMEOUT
-        );
-        assert_eq!(cfg.missing_assessment_grace, Duration::from_secs(5));
-        assert_eq!(cfg.required_minimum_band, Some(FraudRiskBand::High));
-    }
-
-    #[test]
-    fn fraud_monitoring_default_matches_defaults() {
-        let cfg = FraudMonitoring::default();
-        assert!(!cfg.enabled);
-        assert!(cfg.service_endpoints.is_empty());
-        assert_eq!(
-            cfg.connect_timeout,
-            defaults::fraud_monitoring::CONNECT_TIMEOUT
-        );
-        assert_eq!(
-            cfg.request_timeout,
-            defaults::fraud_monitoring::REQUEST_TIMEOUT
-        );
-        assert_eq!(
-            cfg.missing_assessment_grace,
-            Duration::from_secs(defaults::fraud_monitoring::MISSING_ASSESSMENT_GRACE_SECS,)
-        );
-        assert!(cfg.required_minimum_band.is_none());
-        assert!(cfg.attesters.is_empty());
-    }
-
-    #[test]
-    fn lane_config_derives_storage_geometry() {
-        let catalog = LaneCatalog::new(
-            NonZeroU32::new(2).expect("nonzero lane count"),
-            vec![
-                LaneConfigMetadata::default(),
-                LaneConfigMetadata {
-                    id: LaneId::new(1),
-                    alias: "Public Lane ①".to_string(),
-                    lane_type: Some("default_public".to_string()),
-                    governance: Some("parliament".to_string()),
-                    ..LaneConfigMetadata::default()
-                },
-            ],
-        )
-        .expect("catalog");
-
-        let config = LaneConfig::from_catalog(&catalog);
-        let entries = config.entries();
-        assert_eq!(entries.len(), 2);
-
-        let default_entry = config.entry(LaneId::SINGLE).expect("default lane exists");
-        assert_eq!(default_entry.alias, "default");
-        assert_eq!(default_entry.slug, "default");
-        assert_eq!(default_entry.kura_segment, "lane_000_default");
-        assert_eq!(default_entry.merge_segment, "lane_000_default_merge");
-        assert_eq!(
-            default_entry.merge_log_path("/tmp/iroha"),
-            PathBuf::from("/tmp/iroha/merge_ledger/lane_000_default_merge.log")
-        );
-        assert_eq!(
-            default_entry.key_prefix,
-            LaneId::SINGLE.as_u32().to_be_bytes()
-        );
-        assert_eq!(default_entry.dataspace_id, DataSpaceId::UNIVERSAL);
-        assert_eq!(default_entry.visibility, LaneVisibility::Public);
-        assert_eq!(
-            default_entry.storage_profile,
-            LaneStorageProfile::FullReplica
-        );
-
-        let public_entry = config.entry(LaneId::new(1)).expect("lane 1 exists");
-        assert_eq!(public_entry.alias, "Public Lane ①");
-        assert_eq!(public_entry.slug, "public_lane");
-        assert_eq!(public_entry.kura_segment, "lane_001_public_lane");
-        assert_eq!(public_entry.merge_segment, "lane_001_public_lane_merge");
-        assert_eq!(
-            public_entry.merge_log_path("/tmp/iroha"),
-            PathBuf::from("/tmp/iroha/merge_ledger/lane_001_public_lane_merge.log")
-        );
-        assert_eq!(
-            public_entry.key_prefix,
-            LaneId::new(1).as_u32().to_be_bytes()
-        );
-        assert_eq!(public_entry.dataspace_id, DataSpaceId::UNIVERSAL);
-        assert_eq!(public_entry.visibility, LaneVisibility::Public);
-        assert_eq!(
-            public_entry.storage_profile,
-            LaneStorageProfile::FullReplica
-        );
-    }
+    include!("actual/runtime_tail_tests.rs");
 }
 
-/// IVM/runtime presentation toggles.
-#[derive(Debug, Clone)]
+/// IVM runtime presentation toggles.
+#[derive(Debug, Clone, Copy)]
 pub struct Ivm {
-    /// Compute resource profile name used to cap IVM guest stack budgets.
-    pub memory_budget_profile: Name,
     /// Banner/presentation toggles surfaced during startup.
     pub banner: Banner,
 }
@@ -13383,7 +13441,6 @@ impl Ivm {
     #[must_use]
     pub fn from_defaults() -> Self {
         Self {
-            memory_budget_profile: defaults::ivm::memory_budget_profile(),
             banner: Banner::from_defaults(),
         }
     }
@@ -13633,1424 +13690,4 @@ impl Default for FraudMonitoring {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use iroha_data_model::{
-        metadata::Metadata,
-        nexus::{PublicLaneValidatorRecord, PublicLaneValidatorStatus},
-    };
-
-    use super::*;
-
-    #[test]
-    fn nexus_consensus_policy_digest_is_stable_across_replayed_topology_progress() {
-        let baseline = Nexus::default();
-        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
-
-        let mut progressed = baseline.clone();
-        progressed.autoscale.last_transition_height = 42;
-        progressed.lane_catalog = LaneCatalog::new(
-            NonZeroU32::new(2).expect("nonzero lane bound"),
-            vec![
-                LaneConfigMetadata::default(),
-                LaneConfigMetadata {
-                    id: LaneId::new(1),
-                    alias: "elastic-lane-1".to_owned(),
-                    ..LaneConfigMetadata::default()
-                },
-            ],
-        )
-        .expect("valid progressed lane catalog");
-        progressed.lane_config = LaneConfig::from_catalog(&progressed.lane_catalog);
-
-        assert_eq!(
-            nexus_consensus_policy_digest(&progressed).expect("valid progressed policy"),
-            expected,
-            "height-local topology progress must not lock a lagging peer out of block sync"
-        );
-    }
-
-    #[test]
-    fn nexus_consensus_policy_digest_binds_configured_lane_catalog() {
-        let baseline = Nexus::default();
-        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
-
-        let mut different_genesis = baseline;
-        different_genesis.configured_lane_catalog = LaneCatalog::new(
-            NonZeroU32::new(2).expect("nonzero lane bound"),
-            vec![
-                LaneConfigMetadata::default(),
-                LaneConfigMetadata {
-                    id: LaneId::new(1),
-                    alias: "configured-lane-1".to_owned(),
-                    ..LaneConfigMetadata::default()
-                },
-            ],
-        )
-        .expect("valid configured lane catalog");
-
-        assert_ne!(
-            nexus_consensus_policy_digest(&different_genesis)
-                .expect("valid different configured policy"),
-            expected,
-            "validators configured with different genesis lane catalogs must not share a policy digest"
-        );
-    }
-
-    #[test]
-    fn nexus_consensus_policy_digest_excludes_operational_paths_and_worker_timing() {
-        let baseline = Nexus::default();
-        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
-        let mut operational_drift = baseline;
-        operational_drift.registry.manifest_directory = Some(PathBuf::from("/srv/lane-manifests"));
-        operational_drift.registry.cache_directory = Some(PathBuf::from("/var/cache/lanes"));
-        operational_drift.registry.poll_interval = Duration::from_secs(17);
-        operational_drift.relay_worker.retry_backoff = Duration::from_secs(9);
-        operational_drift.compliance.policy_dir = Some(PathBuf::from("/srv/lane-policies"));
-
-        assert_eq!(
-            nexus_consensus_policy_digest(&operational_drift).expect("valid operational drift"),
-            expected,
-            "filesystem placement and local worker cadence must not partition validators"
-        );
-    }
-
-    #[test]
-    fn nexus_consensus_policy_digest_changes_for_each_decision_policy_family() {
-        let baseline = Nexus::default();
-        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
-
-        let mut threshold_drift = baseline.clone();
-        threshold_drift.autoscale.scale_out_latency_ratio = f64::from_bits(
-            threshold_drift
-                .autoscale
-                .scale_out_latency_ratio
-                .to_bits()
-                .saturating_add(1),
-        );
-        assert_ne!(
-            nexus_consensus_policy_digest(&threshold_drift).expect("valid threshold drift"),
-            expected,
-            "exact f64 policy bits must be committed"
-        );
-
-        let mut routing_drift = baseline.clone();
-        routing_drift.routing_policy.rules.push(LaneRoutingRule {
-            lane: LaneId::SINGLE,
-            dataspace: Some(DataSpaceId::UNIVERSAL),
-            matcher: LaneRoutingMatcher {
-                instruction: Some("transfer".to_owned()),
-                ..LaneRoutingMatcher::default()
-            },
-        });
-        assert_ne!(
-            nexus_consensus_policy_digest(&routing_drift).expect("valid routing drift"),
-            expected
-        );
-
-        let mut staking_drift = baseline.clone();
-        staking_drift.staking.min_validator_stake = staking_drift
-            .staking
-            .min_validator_stake
-            .try_add(&Quantity::one())
-            .expect("test stake remains representable");
-        assert_ne!(
-            nexus_consensus_policy_digest(&staking_drift).expect("valid staking drift"),
-            expected
-        );
-
-        let mut committee_drift = baseline;
-        committee_drift.endorsement.quorum = committee_drift.endorsement.quorum.saturating_add(1);
-        assert_ne!(
-            nexus_consensus_policy_digest(&committee_drift).expect("valid committee drift"),
-            expected
-        );
-    }
-
-    #[test]
-    fn nexus_consensus_policy_digest_changes_for_execution_and_da_policy_drift() {
-        let baseline = Nexus::default();
-        let expected = nexus_consensus_policy_digest(&baseline).expect("valid default policy");
-
-        let mut dataspace_drift = baseline.clone();
-        dataspace_drift.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            fault_tolerance: 2,
-            ..DataSpaceMetadata::default()
-        }])
-        .expect("valid dataspace committee drift");
-        assert_ne!(
-            nexus_consensus_policy_digest(&dataspace_drift).expect("valid dataspace drift"),
-            expected,
-            "dataspace fault tolerance changes the 3f+1 lane committee"
-        );
-
-        let mut dataspace_id_drift = baseline.clone();
-        dataspace_id_drift.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::new(7),
-            ..DataSpaceMetadata::default()
-        }])
-        .expect("valid dataspace identifier catalog");
-        assert_ne!(
-            nexus_consensus_policy_digest(&dataspace_id_drift)
-                .expect("digest does not perform cross-catalog validation"),
-            expected,
-            "dataspace identities used for committee lookup must be committed"
-        );
-
-        let mut fee_drift = baseline.clone();
-        fee_drift.fees.per_byte_fee = Quantity::from(123_456_u32);
-        assert_ne!(
-            nexus_consensus_policy_digest(&fee_drift).expect("valid fee drift"),
-            expected
-        );
-
-        let mut axt_drift = baseline.clone();
-        axt_drift.axt.max_clock_skew_ms = axt_drift.axt.max_clock_skew_ms.saturating_add(1);
-        assert_ne!(
-            nexus_consensus_policy_digest(&axt_drift).expect("valid AXT drift"),
-            expected
-        );
-
-        let mut commit_drift = baseline.clone();
-        commit_drift.commit.window_slots =
-            NonZeroU16::new(commit_drift.commit.window_slots.get().saturating_add(1))
-                .expect("nonzero commit window");
-        assert_ne!(
-            nexus_consensus_policy_digest(&commit_drift).expect("valid commit drift"),
-            expected
-        );
-
-        let mut da_drift = baseline;
-        da_drift.da.sample_size_max =
-            NonZeroU16::new(da_drift.da.sample_size_max.get().saturating_add(1))
-                .expect("nonzero DA sample size");
-        assert_ne!(
-            nexus_consensus_policy_digest(&da_drift).expect("valid DA drift"),
-            expected
-        );
-    }
-
-    #[test]
-    fn nexus_consensus_policy_digest_canonicalizes_dataspace_catalog_order() {
-        let universal = DataSpaceMetadata::default();
-        let settlement = DataSpaceMetadata {
-            id: DataSpaceId::new(7),
-            alias: "settlement".to_owned(),
-            description: None,
-            fault_tolerance: 2,
-        };
-        let left = Nexus {
-            dataspace_catalog: DataSpaceCatalog::new(vec![universal.clone(), settlement.clone()])
-                .expect("valid dataspace catalog"),
-            ..Nexus::default()
-        };
-        let mut right = left.clone();
-        right.dataspace_catalog = DataSpaceCatalog::new(vec![settlement, universal])
-            .expect("valid reordered dataspace catalog");
-
-        assert_eq!(
-            nexus_consensus_policy_digest(&left).expect("valid left policy"),
-            nexus_consensus_policy_digest(&right).expect("valid right policy"),
-            "catalog iteration order is not a committee policy input"
-        );
-    }
-
-    #[test]
-    fn nexus_consensus_policy_digest_rejects_non_finite_autoscale_ratio() {
-        let mut nexus = Nexus::default();
-        nexus.autoscale.scale_in_utilization_ratio = f64::NAN;
-
-        assert!(matches!(
-            nexus_consensus_policy_digest(&nexus),
-            Err(NexusConsensusPolicyDigestError::InvalidRatio {
-                field: "nexus.autoscale.scale_in_utilization_ratio",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn nexus_consensus_policy_digest_requires_and_binds_loaded_compliance_policy_set() {
-        let mut nexus = Nexus::default();
-        nexus.compliance.enabled = true;
-
-        assert_eq!(
-            nexus_consensus_policy_digest(&nexus),
-            Err(NexusConsensusPolicyDigestError::MissingCompliancePolicyDigest)
-        );
-        let left = nexus_consensus_policy_digest_with_compliance(&nexus, Some([0x11; 32]))
-            .expect("bound compliance policy set");
-        let right = nexus_consensus_policy_digest_with_compliance(&nexus, Some([0x12; 32]))
-            .expect("bound compliance policy set");
-        assert_ne!(left, right);
-    }
-
-    #[test]
-    fn nexus_consensus_policy_digest_binds_loaded_lane_manifest_policy_set() {
-        let nexus = Nexus::default();
-        let left =
-            nexus_consensus_policy_digest_with_runtime_policies(&nexus, None, Some([0x21; 32]))
-                .expect("bound lane manifest policy set");
-        let right =
-            nexus_consensus_policy_digest_with_runtime_policies(&nexus, None, Some([0x22; 32]))
-                .expect("bound lane manifest policy set");
-        assert_ne!(left, right);
-    }
-
-    fn execution_policy_hash(config: &Root) -> [u8; 32] {
-        execution_policy_digest_v1(
-            &config.pipeline,
-            &config.oracle,
-            &config.crypto,
-            &config.fraud_monitoring,
-            &config.gov,
-            &config.content,
-            &config.settlement,
-            [0x11; 32],
-            [0x22; 32],
-            Some([0x44; 32]),
-        )
-    }
-
-    #[test]
-    fn execution_policy_digest_binds_every_process_local_decision_family() {
-        let baseline = super::sora_profile_tests::minimal_root();
-        let expected = execution_policy_hash(&baseline);
-        let assert_changed = |label: &str, changed: Root| {
-            assert_ne!(
-                execution_policy_hash(&changed),
-                expected,
-                "{label} must change the execution-policy identity"
-            );
-        };
-
-        let mut changed = baseline.clone();
-        changed.pipeline.overlay_max_bytes = changed.pipeline.overlay_max_bytes.saturating_add(1);
-        assert_changed("pipeline validity policy", changed);
-
-        let mut changed = baseline.clone();
-        changed.crypto.default_hash.push_str("-different");
-        assert_changed("cryptographic admission policy", changed);
-
-        let mut changed = baseline.clone();
-        changed.oracle.history_depth =
-            NonZeroUsize::new(changed.oracle.history_depth.get().saturating_add(1))
-                .expect("nonzero history depth");
-        assert_changed("oracle execution policy", changed);
-
-        let mut changed = baseline.clone();
-        changed.fraud_monitoring.enabled = !changed.fraud_monitoring.enabled;
-        assert_changed("fraud admission policy", changed);
-
-        let mut changed = baseline.clone();
-        changed.gov.plain_voting_enabled = !changed.gov.plain_voting_enabled;
-        assert_changed("governance execution policy", changed);
-
-        let mut changed = baseline.clone();
-        changed.content.max_files = changed.content.max_files.saturating_add(1);
-        assert_changed("content admission policy", changed);
-
-        let mut changed = baseline;
-        changed.settlement.router.epsilon_bps =
-            changed.settlement.router.epsilon_bps.saturating_add(1);
-        assert_changed("settlement execution policy", changed);
-
-        let fixed = super::sora_profile_tests::minimal_root();
-        for (label, nexus, zk, kagemusha) in [
-            (
-                "Nexus runtime policy",
-                [0x12; 32],
-                [0x22; 32],
-                Some([0x44; 32]),
-            ),
-            (
-                "ZK runtime policy",
-                [0x11; 32],
-                [0x23; 32],
-                Some([0x44; 32]),
-            ),
-            (
-                "Kagemusha release policy",
-                [0x11; 32],
-                [0x22; 32],
-                Some([0x45; 32]),
-            ),
-        ] {
-            assert_ne!(
-                execution_policy_digest_v1(
-                    &fixed.pipeline,
-                    &fixed.oracle,
-                    &fixed.crypto,
-                    &fixed.fraud_monitoring,
-                    &fixed.gov,
-                    &fixed.content,
-                    &fixed.settlement,
-                    nexus,
-                    zk,
-                    kagemusha,
-                ),
-                execution_policy_hash(&fixed),
-                "{label} must change the execution-policy identity"
-            );
-        }
-    }
-
-    #[test]
-    fn execution_policy_digest_excludes_only_result_preserving_operational_drift() {
-        let mut baseline = super::sora_profile_tests::minimal_root();
-        baseline.fraud_monitoring.missing_assessment_grace = Duration::from_secs(1);
-        let expected = execution_policy_hash(&baseline);
-        let mut operational = baseline;
-
-        operational.pipeline.workers = operational.pipeline.workers.saturating_add(1);
-        operational.pipeline.parallel_overlay = !operational.pipeline.parallel_overlay;
-        operational.pipeline.parallel_apply = !operational.pipeline.parallel_apply;
-        operational.pipeline.gpu_key_bucket = !operational.pipeline.gpu_key_bucket;
-        operational.pipeline.cache_size = operational.pipeline.cache_size.saturating_add(1);
-        operational.pipeline.ivm_prover_threads =
-            operational.pipeline.ivm_prover_threads.saturating_add(1);
-        operational.pipeline.signature_batch_max =
-            operational.pipeline.signature_batch_max.saturating_add(1);
-        operational.pipeline.debug_trace_tx_eval = !operational.pipeline.debug_trace_tx_eval;
-        operational.crypto.enable_sm_openssl_preview =
-            !operational.crypto.enable_sm_openssl_preview;
-        operational.fraud_monitoring.request_timeout += Duration::from_millis(1);
-        operational.fraud_monitoring.missing_assessment_grace += Duration::from_secs(1);
-        operational.gov.alias_frontier_telemetry = !operational.gov.alias_frontier_telemetry;
-        operational.gov.debug_trace_pipeline = !operational.gov.debug_trace_pipeline;
-        operational.content.limits.max_requests_per_second = NonZeroU32::new(
-            operational
-                .content
-                .limits
-                .max_requests_per_second
-                .get()
-                .saturating_add(1),
-        )
-        .expect("nonzero gateway limit");
-        operational.content.pow.difficulty_bits =
-            operational.content.pow.difficulty_bits.saturating_add(1);
-        operational.settlement.offline.kagemusha_release_policy_path =
-            Some(PathBuf::from("/srv/iroha/policy.norito"));
-        operational.settlement.offline.kagemusha_artifact_dir =
-            Some(PathBuf::from("/srv/iroha/artifacts"));
-
-        assert_eq!(
-            execution_policy_hash(&operational),
-            expected,
-            "worker, cache, accelerator, tracing, transport, gateway, offline service switch, and path drift must not partition validators"
-        );
-    }
-
-    #[test]
-    fn offline_defaults_need_no_operator_enablement_or_catalog() {
-        let offline = Offline::default();
-        assert!(offline.escrow_accounts.is_empty());
-        assert!(offline.kagemusha_release_policy_path.is_none());
-        assert!(offline.kagemusha_artifact_dir.is_none());
-        assert!(offline.kagemusha_catalog_qualification_seal_path.is_none());
-        assert_eq!(
-            offline.kagemusha_max_decoded_bytes,
-            defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
-        );
-    }
-
-    fn default_v2_sumeragi() -> Sumeragi {
-        super::sora_profile_tests::minimal_root().sumeragi
-    }
-
-    fn v2_fingerprint(config: &Sumeragi, mode: consensus_v2::ConsensusMode) -> Hash {
-        config
-            .v2_config(Duration::from_secs(1), mode)
-            .expect("test v2 config must validate")
-            .fingerprint()
-    }
-
-    #[test]
-    fn sumeragi_v2_exact_output_geometry_checks_every_arithmetic_boundary() {
-        assert_eq!(
-            sumeragi_v2_exact_output_shared_ownership_capacity(256, 130),
-            Ok(394),
-        );
-        assert_eq!(validate_sumeragi_v2_exact_output_geometry(394, 131), Ok(()));
-        assert_eq!(
-            validate_sumeragi_v2_exact_output_geometry(394, 132),
-            Err(SumeragiV2ExactOutputGeometryError::CapacityTooSmall {
-                actual: 394,
-                minimum: 396,
-            }),
-        );
-        assert_eq!(
-            sumeragi_v2_exact_output_shared_ownership_capacity(usize::MAX, 1),
-            Err(SumeragiV2ExactOutputGeometryError::SharedCapacityOverflow),
-        );
-        assert_eq!(
-            validate_sumeragi_v2_exact_output_geometry(1, 0),
-            Err(SumeragiV2ExactOutputGeometryError::ZeroSourceCapacity),
-        );
-        assert_eq!(
-            validate_sumeragi_v2_exact_output_geometry(usize::MAX, usize::MAX),
-            Err(SumeragiV2ExactOutputGeometryError::MaximumFanoutOverflow),
-        );
-    }
-
-    #[test]
-    fn sumeragi_v2_shared_config_defaults_are_finite_and_deterministic() {
-        let config = default_v2_sumeragi();
-        let shared = config
-            .v2_config(
-                Duration::from_secs(1),
-                consensus_v2::ConsensusMode::Permissioned,
-            )
-            .expect("default v2 config");
-
-        assert_eq!(shared.protocol_version, consensus_v2::PROTOCOL_VERSION);
-        assert_eq!(shared.format_version, SUMERAGI_V2_CONFIG_FORMAT_VERSION);
-        assert_eq!(shared.block_cadence_ms, 1_000);
-        assert_eq!(
-            sumeragi_v2_timing_ms(shared.block_cadence_ms),
-            Ok((10_000, 2_000))
-        );
-        assert_eq!(shared.limits.max_transactions, 512);
-        assert_eq!(shared.limits.max_payload_bytes, 16 * 1024 * 1024);
-        assert_eq!(shared.limits.max_queue_scan, 2_048);
-        assert_eq!(shared.limits.authenticated_non_validator_source_capacity, 2);
-        assert_eq!(shared.limits.body_bytes, 231 * 1024 * 1024);
-        assert_eq!(shared.limits.body_source_bytes, 33 * 1024 * 1024);
-        assert_eq!(shared.limits.merge_sidecar_inbound_session_capacity, 32);
-        assert_eq!(shared.limits.merge_sidecar_inbound_sessions_per_peer, 4);
-        assert_eq!(
-            shared.limits.merge_sidecar_inbound_assembly_bytes,
-            64 * 1024 * 1024
-        );
-        assert_eq!(
-            shared.limits.merge_sidecar_inbound_assembly_bytes_per_peer,
-            32 * 1024 * 1024
-        );
-        assert_eq!(shared.limits.merge_sidecar_deferred_block_capacity, 128);
-        assert_eq!(shared.limits.merge_sidecar_future_block_distance, 64);
-        assert_eq!(shared.limits.merge_sidecar_request_timeout_ms, 10_000);
-        assert_eq!(shared.limits.merge_sidecar_outbound_sessions_per_source, 2);
-        assert_eq!(
-            shared.limits.merge_sidecar_outbound_bytes_per_source,
-            16 * 1024 * 1024
-        );
-        assert_eq!(
-            shared.limits.merge_sidecar_server_request_gates_per_source,
-            4
-        );
-        assert_eq!(shared.limits.pending_certified_merge_entry_capacity, 1_024);
-        assert_eq!(shared.limits.pending_queue_plan_admission_capacity, 1_024);
-        assert_eq!(
-            shared.limits.pending_control_sidecar_bytes,
-            256 * 1024 * 1024
-        );
-        assert_eq!(shared.limits.merge_signing_guard_record_capacity, 1_024);
-        assert_eq!(
-            shared.limits.merge_signing_guard_record_bytes,
-            16 * 1024 * 1024 + 64 * 1024
-        );
-        assert_eq!(
-            shared.limits.merge_signing_guard_total_bytes,
-            256 * 1024 * 1024
-        );
-        assert_eq!(
-            shared.limits.effect_work_capacity, shared.limits.runtime_completion_reserve,
-            "outstanding effect work must fit the trusted completion reserve",
-        );
-        assert!(
-            shared.limits.effect_work_capacity < shared.limits.runtime_command_capacity,
-            "normal/progress traffic must retain a disjoint bounded allocation",
-        );
-        assert_eq!(
-            shared,
-            config
-                .v2_config(
-                    Duration::from_secs(1),
-                    consensus_v2::ConsensusMode::Permissioned,
-                )
-                .expect("same input")
-        );
-    }
-
-    #[test]
-    fn sumeragi_v2_config_format_changes_the_handshake_fingerprint() {
-        let config = default_v2_sumeragi();
-        let current = config
-            .v2_config(
-                Duration::from_secs(1),
-                consensus_v2::ConsensusMode::Permissioned,
-            )
-            .expect("current v2 config");
-        let mut retired_fixed_timeout = current.clone();
-        retired_fixed_timeout.format_version = 1;
-
-        assert_eq!(current.format_version, SUMERAGI_V2_CONFIG_FORMAT_VERSION);
-        assert_ne!(
-            current.fingerprint(),
-            retired_fixed_timeout.fingerprint(),
-            "incompatible config projections must not share a handshake fingerprint",
-        );
-    }
-
-    #[test]
-    fn sumeragi_v2_shared_fingerprint_binds_every_runtime_category() {
-        let base = default_v2_sumeragi();
-        let permissioned = consensus_v2::ConsensusMode::Permissioned;
-        let baseline = v2_fingerprint(&base, permissioned);
-
-        macro_rules! assert_config_change {
-            ($label:literal, $change:expr) => {{
-                let mut changed = base.clone();
-                ($change)(&mut changed);
-                assert_ne!(
-                    baseline,
-                    v2_fingerprint(&changed, permissioned),
-                    "{} must change the shared v2 fingerprint",
-                    $label,
-                );
-            }};
-        }
-
-        assert_config_change!("transaction bound", |config: &mut Sumeragi| {
-            config.block.max_transactions = NonZeroUsize::new(511).expect("non-zero");
-        });
-        assert_config_change!("payload bound", |config: &mut Sumeragi| {
-            config.block.max_payload_bytes = NonZeroUsize::new(8 * 1024 * 1024).expect("non-zero");
-        });
-        assert_config_change!("queue scan bound", |config: &mut Sumeragi| {
-            config.block.proposal_queue_scan_multiplier = NonZeroUsize::new(3).expect("non-zero");
-        });
-        assert_config_change!("command queue", |config: &mut Sumeragi| {
-            config.queues.commands =
-                NonZeroUsize::new(config.queues.commands.get() + 8).expect("non-zero");
-        });
-        assert_config_change!("body queue", |config: &mut Sumeragi| {
-            config.queues.bodies =
-                NonZeroUsize::new(config.queues.bodies.get() + 1).expect("non-zero");
-        });
-        assert_config_change!(
-            "authenticated non-validator sources",
-            |config: &mut Sumeragi| {
-                config.queues.authenticated_non_validator_sources =
-                    NonZeroUsize::new(1).expect("non-zero");
-            }
-        );
-        assert_config_change!("aggregate body bytes", |config: &mut Sumeragi| {
-            config.queues.body_bytes =
-                NonZeroUsize::new(config.queues.body_bytes.get() + 1).expect("non-zero");
-        });
-        assert_config_change!("per-source body bytes", |config: &mut Sumeragi| {
-            config.queues.body_source_bytes =
-                NonZeroUsize::new(config.queues.body_source_bytes.get() + 1).expect("non-zero");
-        });
-        assert_config_change!("chunk queue", |config: &mut Sumeragi| {
-            config.queues.chunks =
-                NonZeroUsize::new(config.queues.chunks.get() + 1).expect("non-zero");
-        });
-        assert_config_change!("ready-body queue", |config: &mut Sumeragi| {
-            config.queues.ready_bodies =
-                NonZeroUsize::new(config.queues.ready_bodies.get() + 1).expect("non-zero");
-        });
-        assert_config_change!("authenticated merge-QC cache", |config: &mut Sumeragi| {
-            config.limits.authenticated_merge_qc_capacity =
-                NonZeroUsize::new(config.limits.authenticated_merge_qc_capacity.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("merge-leader headroom", |config: &mut Sumeragi| {
-            config.limits.merge_leader_body_frame_headroom_bytes =
-                NonZeroUsize::new(config.limits.merge_leader_body_frame_headroom_bytes.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("autonomous carrier headroom", |config: &mut Sumeragi| {
-            config.limits.autonomous_carrier_headroom_bytes =
-                NonZeroUsize::new(config.limits.autonomous_carrier_headroom_bytes.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("autonomous producer cadence", |config: &mut Sumeragi| {
-            config.limits.autonomous_producer_recheck += Duration::from_millis(1);
-        });
-        assert_config_change!("recovery stuck threshold", |config: &mut Sumeragi| {
-            config.limits.historical_recovery_stuck_attempts =
-                NonZeroU32::new(config.limits.historical_recovery_stuck_attempts.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("recovery retry tier attempts", |config: &mut Sumeragi| {
-            config.limits.historical_recovery_retry_tier_attempts =
-                NonZeroU32::new(config.limits.historical_recovery_retry_tier_attempts.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("recovery maximum retry tier", |config: &mut Sumeragi| {
-            config.limits.historical_recovery_max_retry_tier =
-                NonZeroU32::new(config.limits.historical_recovery_max_retry_tier.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("sidecar service burst", |config: &mut Sumeragi| {
-            config.limits.sidecar_service_burst =
-                NonZeroUsize::new(config.limits.sidecar_service_burst.get() + 1).expect("non-zero");
-        });
-        assert_config_change!("merge-sidecar inbound sessions", |config: &mut Sumeragi| {
-            config.limits.merge_sidecar_inbound_session_capacity =
-                NonZeroUsize::new(config.limits.merge_sidecar_inbound_session_capacity.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!(
-            "merge-sidecar per-peer inbound sessions",
-            |config: &mut Sumeragi| {
-                config.limits.merge_sidecar_inbound_sessions_per_peer = NonZeroUsize::new(
-                    config.limits.merge_sidecar_inbound_sessions_per_peer.get() + 1,
-                )
-                .expect("non-zero");
-            }
-        );
-        assert_config_change!("merge-sidecar inbound bytes", |config: &mut Sumeragi| {
-            config.limits.merge_sidecar_inbound_assembly_bytes =
-                NonZeroUsize::new(config.limits.merge_sidecar_inbound_assembly_bytes.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!(
-            "merge-sidecar per-peer inbound bytes",
-            |config: &mut Sumeragi| {
-                config.limits.merge_sidecar_inbound_assembly_bytes_per_peer = NonZeroUsize::new(
-                    config
-                        .limits
-                        .merge_sidecar_inbound_assembly_bytes_per_peer
-                        .get()
-                        + 1,
-                )
-                .expect("non-zero");
-            }
-        );
-        assert_config_change!("merge-sidecar deferred blocks", |config: &mut Sumeragi| {
-            config.limits.merge_sidecar_deferred_block_capacity =
-                NonZeroUsize::new(config.limits.merge_sidecar_deferred_block_capacity.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("merge-sidecar future distance", |config: &mut Sumeragi| {
-            config.limits.merge_sidecar_future_block_distance =
-                NonZeroU64::new(config.limits.merge_sidecar_future_block_distance.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("merge-sidecar request timeout", |config: &mut Sumeragi| {
-            config.limits.merge_sidecar_request_timeout -= Duration::from_millis(1);
-        });
-        assert_config_change!(
-            "merge-sidecar outbound sessions",
-            |config: &mut Sumeragi| {
-                config.limits.merge_sidecar_outbound_sessions_per_source = NonZeroUsize::new(
-                    config
-                        .limits
-                        .merge_sidecar_outbound_sessions_per_source
-                        .get()
-                        + 1,
-                )
-                .expect("non-zero");
-            }
-        );
-        assert_config_change!("merge-sidecar outbound bytes", |config: &mut Sumeragi| {
-            config.limits.merge_sidecar_outbound_bytes_per_source =
-                NonZeroUsize::new(config.limits.merge_sidecar_outbound_bytes_per_source.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("merge-sidecar request gates", |config: &mut Sumeragi| {
-            config.limits.merge_sidecar_server_request_gates_per_source = NonZeroUsize::new(
-                config
-                    .limits
-                    .merge_sidecar_server_request_gates_per_source
-                    .get()
-                    + 1,
-            )
-            .expect("non-zero");
-        });
-        assert_config_change!(
-            "pending certified merge entries",
-            |config: &mut Sumeragi| {
-                config.limits.pending_certified_merge_entry_capacity = NonZeroUsize::new(
-                    config.limits.pending_certified_merge_entry_capacity.get() + 1,
-                )
-                .expect("non-zero");
-            }
-        );
-        assert_config_change!("pending QueuePlan admissions", |config: &mut Sumeragi| {
-            config.limits.pending_queue_plan_admission_capacity =
-                NonZeroUsize::new(config.limits.pending_queue_plan_admission_capacity.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("pending control-sidecar bytes", |config: &mut Sumeragi| {
-            config.limits.pending_control_sidecar_bytes =
-                NonZeroUsize::new(config.limits.pending_control_sidecar_bytes.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("merge-signing record capacity", |config: &mut Sumeragi| {
-            config.limits.merge_signing_guard_record_capacity =
-                NonZeroUsize::new(config.limits.merge_signing_guard_record_capacity.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("merge-signing record bytes", |config: &mut Sumeragi| {
-            config.limits.merge_signing_guard_record_bytes =
-                NonZeroUsize::new(config.limits.merge_signing_guard_record_bytes.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("merge-signing aggregate bytes", |config: &mut Sumeragi| {
-            config.limits.merge_signing_guard_total_bytes =
-                NonZeroUsize::new(config.limits.merge_signing_guard_total_bytes.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("Native AMX record capacity", |config: &mut Sumeragi| {
-            config.limits.native_amx_signing_guard_record_capacity =
-                NonZeroUsize::new(config.limits.native_amx_signing_guard_record_capacity.get() + 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("Native AMX record bytes", |config: &mut Sumeragi| {
-            config.limits.native_amx_signing_guard_record_bytes =
-                NonZeroUsize::new(config.limits.native_amx_signing_guard_record_bytes.get() - 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("Native AMX anchor bytes", |config: &mut Sumeragi| {
-            config.limits.native_amx_signing_guard_anchor_bytes =
-                NonZeroUsize::new(config.limits.native_amx_signing_guard_anchor_bytes.get() - 1)
-                    .expect("non-zero");
-        });
-        assert_config_change!("key activation", |config: &mut Sumeragi| {
-            config.keys.activation_lead_blocks += 1;
-        });
-        assert_config_change!("key overlap", |config: &mut Sumeragi| {
-            config.keys.overlap_grace_blocks += 1;
-        });
-        assert_config_change!("key expiry", |config: &mut Sumeragi| {
-            config.keys.expiry_grace_blocks += 1;
-        });
-        assert_config_change!("HSM requirement", |config: &mut Sumeragi| {
-            config.keys.require_hsm = true;
-        });
-        assert_config_change!("key algorithms", |config: &mut Sumeragi| {
-            config.keys.allowed_algorithms.insert(Algorithm::Ed25519);
-        });
-        assert_config_change!("HSM providers", |config: &mut Sumeragi| {
-            config
-                .keys
-                .allowed_hsm_providers
-                .insert("test-hsm".to_owned());
-        });
-
-        assert_ne!(
-            baseline,
-            base.v2_config(Duration::from_millis(1_005), permissioned)
-                .expect("changed cadence")
-                .fingerprint(),
-            "signed genesis cadence must change the shared fingerprint",
-        );
-
-        let npos_baseline = base
-            .v2_config(Duration::from_secs(1), consensus_v2::ConsensusMode::Npos)
-            .expect("NPoS config")
-            .fingerprint();
-        assert_ne!(baseline, npos_baseline, "signed genesis mode must bind");
-    }
-
-    #[test]
-    fn sumeragi_v2_validator_and_observer_share_one_config_fingerprint() {
-        let mut validator = default_v2_sumeragi();
-        validator.role = NodeRole::Validator;
-        let mut observer = validator.clone();
-        observer.role = NodeRole::Observer;
-
-        assert_eq!(
-            v2_fingerprint(&validator, consensus_v2::ConsensusMode::Permissioned),
-            v2_fingerprint(&observer, consensus_v2::ConsensusMode::Permissioned),
-            "node-local participation role must not partition a v2 network",
-        );
-    }
-
-    #[test]
-    fn sumeragi_v2_config_rejects_invalid_queues_and_keys() {
-        let mode = consensus_v2::ConsensusMode::Permissioned;
-        let assert_error = |config: &Sumeragi, expected: SumeragiV2ConfigError| {
-            assert_eq!(
-                config
-                    .v2_config(Duration::from_secs(1), mode)
-                    .expect_err("invalid v2 config must fail closed"),
-                expected,
-            );
-        };
-
-        let mut config = default_v2_sumeragi();
-        config.queues.commands = NonZeroUsize::new(4).expect("non-zero");
-        assert_error(
-            &config,
-            SumeragiV2ConfigError::CommandQueueTooSmall {
-                actual: 4,
-                minimum: 8,
-            },
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.queues.body_source_bytes = NonZeroUsize::new(16 * 1024 * 1024).expect("non-zero");
-        assert_error(
-            &config,
-            SumeragiV2ConfigError::BodySourceBytesTooSmall {
-                actual: 16 * 1024 * 1024,
-                minimum: 2 * 16 * 1024 * 1024 + 230_408,
-                max_payload_bytes: 16 * 1024 * 1024,
-                envelope_headroom: 64 * 1024,
-                manifest_wire_bytes: 33_800,
-                timeout_vote_reserve: 64 * 1024,
-                lane_progress_bytes: 1024 * 1024,
-                lane_completion_bytes: 4 * 1024 * 1024,
-            },
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.block.max_payload_bytes = NonZeroUsize::new(1).expect("non-zero");
-        let lane_minimum: usize = 5 * 1024 * 1024 + 64 * 1024;
-        config.queues.body_source_bytes = NonZeroUsize::new(lane_minimum - 1).expect("non-zero");
-        assert_error(
-            &config,
-            SumeragiV2ConfigError::BodySourceBytesTooSmall {
-                actual: u64::try_from(lane_minimum - 1).expect("fixture fits u64"),
-                minimum: u64::try_from(lane_minimum).expect("fixture fits u64"),
-                max_payload_bytes: 1,
-                envelope_headroom: 64 * 1024,
-                manifest_wire_bytes: 33_800,
-                timeout_vote_reserve: 64 * 1024,
-                lane_progress_bytes: 1024 * 1024,
-                lane_completion_bytes: 4 * 1024 * 1024,
-            },
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.queues.bodies = NonZeroUsize::new(9).expect("non-zero");
-        assert_error(
-            &config,
-            SumeragiV2ConfigError::BodyQueueTooSmall {
-                actual: 9,
-                minimum: 10,
-                authenticated_non_validator_sources: 2,
-            },
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.queues.authenticated_non_validator_sources = NonZeroUsize::MAX;
-        assert_error(
-            &config,
-            SumeragiV2ConfigError::LimitOverflow(
-                "Sumeragi v2 authenticated non-validator outer-ingress message minimum",
-            ),
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.queues.body_bytes = NonZeroUsize::new(132 * 1024 * 1024 - 1).expect("non-zero");
-        assert_error(
-            &config,
-            SumeragiV2ConfigError::BodyBytesTooSmall {
-                actual: 132 * 1024 * 1024 - 1,
-                minimum: 132 * 1024 * 1024,
-                body_source_bytes: 33 * 1024 * 1024,
-                minimum_sources: 4,
-            },
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.keys.allowed_algorithms.clear();
-        assert_error(&config, SumeragiV2ConfigError::MissingBlsNormal);
-
-        let mut config = default_v2_sumeragi();
-        config.keys.require_hsm = true;
-        config.keys.allowed_hsm_providers.clear();
-        assert_error(&config, SumeragiV2ConfigError::MissingHsmProvider);
-
-        let mut config = default_v2_sumeragi();
-        config.keys.allowed_hsm_providers.insert("   ".to_owned());
-        assert_error(&config, SumeragiV2ConfigError::EmptyHsmProvider);
-    }
-
-    #[test]
-    fn sumeragi_v2_config_rejects_merge_runtime_limit_boundaries() {
-        let mode = consensus_v2::ConsensusMode::Permissioned;
-        macro_rules! assert_invalid {
-            ($config:expr, $pattern:pat $(if $guard:expr)? $(,)?) => {
-                assert!(matches!(
-                    $config
-                        .v2_config(Duration::from_secs(1), mode)
-                        .expect_err("invalid merge runtime geometry must fail closed"),
-                    $pattern $(if $guard)?
-                ));
-            };
-        }
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_sidecar_inbound_session_capacity = NonZeroUsize::new(
-            defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY_MAX + 1,
-        )
-        .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitAboveMaximum {
-                field: "sumeragi.limits.merge_sidecar_inbound_session_capacity",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_sidecar_inbound_sessions_per_peer =
-            config.limits.merge_sidecar_inbound_session_capacity;
-        config.limits.merge_sidecar_inbound_session_capacity =
-            NonZeroUsize::new(config.limits.merge_sidecar_inbound_session_capacity.get() - 1)
-                .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitAboveMaximum {
-                field: "sumeragi.limits.merge_sidecar_inbound_sessions_per_peer",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_sidecar_inbound_assembly_bytes =
-            NonZeroUsize::new(defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MIN - 1)
-                .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitBelowMinimum {
-                field: "sumeragi.limits.merge_sidecar_inbound_assembly_bytes",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_sidecar_inbound_assembly_bytes_per_peer =
-            config.limits.merge_sidecar_inbound_assembly_bytes;
-        config.limits.merge_sidecar_inbound_assembly_bytes =
-            NonZeroUsize::new(config.limits.merge_sidecar_inbound_assembly_bytes.get() - 1)
-                .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitAboveMaximum {
-                field: "sumeragi.limits.merge_sidecar_inbound_assembly_bytes_per_peer",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_sidecar_deferred_block_capacity =
-            NonZeroUsize::new(1).expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitBelowMinimum {
-                field: "sumeragi.limits.merge_sidecar_deferred_block_capacity",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_sidecar_future_block_distance =
-            NonZeroU64::new(defaults::sumeragi::V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE_MAX + 1)
-                .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitAboveMaximum {
-                field: "sumeragi.limits.merge_sidecar_future_block_distance",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_sidecar_request_timeout =
-            Duration::from_millis(defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT_MAX_MS + 1);
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitAboveMaximum {
-                field: "sumeragi.limits.merge_sidecar_request_timeout_ms",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_sidecar_outbound_bytes_per_source = NonZeroUsize::new(
-            defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE_MIN - 1,
-        )
-        .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitBelowMinimum {
-                field: "sumeragi.limits.merge_sidecar_outbound_bytes_per_source",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_sidecar_server_request_gates_per_source =
-            NonZeroUsize::new(1).expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitBelowMinimum {
-                field: "sumeragi.limits.merge_sidecar_server_request_gates_per_source",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.pending_certified_merge_entry_capacity = NonZeroUsize::new(
-            defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX + 1,
-        )
-        .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitAboveMaximum {
-                field: "sumeragi.limits.pending_certified_merge_entry_capacity",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.pending_queue_plan_admission_capacity =
-            NonZeroUsize::new(defaults::sumeragi::V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX + 1)
-                .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitAboveMaximum {
-                field: "sumeragi.limits.pending_queue_plan_admission_capacity",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.pending_control_sidecar_bytes =
-            NonZeroUsize::new(defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES_MIN - 1)
-                .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitBelowMinimum {
-                field: "sumeragi.limits.pending_control_sidecar_bytes",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.pending_control_sidecar_bytes =
-            NonZeroUsize::new(defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES_MAX + 1)
-                .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitAboveMaximum {
-                field: "sumeragi.limits.pending_control_sidecar_bytes",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_signing_guard_record_capacity =
-            NonZeroUsize::new(defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY_MAX + 1)
-                .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitAboveMaximum {
-                field: "sumeragi.limits.merge_signing_guard_record_capacity",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_signing_guard_record_bytes =
-            NonZeroUsize::new(defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MIN - 1)
-                .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitBelowMinimum {
-                field: "sumeragi.limits.merge_signing_guard_record_bytes",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_signing_guard_total_bytes = NonZeroUsize::new(
-            config.limits.merge_signing_guard_record_bytes.get()
-                + defaults::sumeragi::V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES
-                - 1,
-        )
-        .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitBelowMinimum {
-                field: "sumeragi.limits.merge_signing_guard_total_bytes",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_signing_guard_total_bytes =
-            NonZeroUsize::new(defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES_MAX + 1)
-                .expect("non-zero");
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitAboveMaximum {
-                field: "sumeragi.limits.merge_signing_guard_total_bytes",
-                ..
-            }
-        );
-    }
-
-    #[test]
-    fn sumeragi_v2_config_rejects_noncanonical_timing() {
-        let config = default_v2_sumeragi();
-        assert_eq!(
-            config
-                .v2_config(
-                    Duration::from_millis(1) + Duration::from_nanos(1),
-                    consensus_v2::ConsensusMode::Permissioned,
-                )
-                .expect_err("sub-millisecond cadence must fail"),
-            SumeragiV2ConfigError::NonCanonicalDuration("block cadence"),
-        );
-
-        assert_eq!(
-            sumeragi_v2_timing_ms(u64::MAX),
-            Err(SumeragiV2ConfigError::LimitOverflow(
-                "derived Sumeragi v2 round timeout",
-            )),
-        );
-        assert_eq!(
-            sumeragi_v2_timing_ms(0),
-            Err(SumeragiV2ConfigError::NonPositive("block cadence")),
-        );
-    }
-    #[test]
-    fn viral_incentives_default_survives_chain_override() {
-        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
-
-        let defaults = ViralIncentives::default();
-
-        assert_eq!(
-            defaults.incentive_pool_account,
-            crate::parameters::defaults::governance::slash_receiver_account_id()
-        );
-        assert_eq!(
-            defaults.escrow_account,
-            crate::parameters::defaults::governance::slash_receiver_account_id()
-        );
-    }
-
-    #[test]
-    fn sorafs_telemetry_policy_default_survives_chain_override() {
-        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
-
-        let defaults = SorafsTelemetryPolicy::default();
-        let expected: Vec<_> =
-            crate::parameters::defaults::governance::sorafs_telemetry::submitters()
-                .iter()
-                .map(|id| {
-                    let _fallback =
-                        iroha_data_model::account::address::ChainDiscriminantGuard::enter(
-                            crate::parameters::defaults::common::chain_discriminant(),
-                        );
-                    AccountId::parse_encoded(id)
-                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                        .expect("default SoraFS telemetry submitter account id")
-                })
-                .collect();
-
-        assert_eq!(defaults.submitters, expected);
-    }
-
-    #[test]
-    fn sumeragi_v2_default_nexus_amx_hash_is_stable() {
-        let hash =
-            sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
-        assert_eq!(
-            hex::encode(hash.as_ref()),
-            "ea6a4cf07d275f1efd034fc82449967713410c6c13dff7cd1babb51f38c8705b",
-        );
-        assert_eq!(
-            <[u8; 32]>::from(hash),
-            iroha_data_model::block::consensus_v2::RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
-            "data-model genesis defaults must track the canonical config projection",
-        );
-    }
-
-    fn test_active_validator(seed: u8, lane: LaneId) -> GenesisActiveNexusLaneRecord {
-        let peer = PeerId::new(
-            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                .expect("deterministic BLS test key")
-                .public_key()
-                .clone(),
-        );
-        let validator = AccountId::new(peer.public_key().clone());
-        let record = PublicLaneValidatorRecord {
-            lane_id: lane,
-            validator: validator.clone(),
-            peer_id: peer,
-            stake_account: validator.clone(),
-            total_stake: iroha_primitives::numeric::Quantity::from(10_u64),
-            self_stake: iroha_primitives::numeric::Quantity::from(10_u64),
-            metadata: Metadata::default(),
-            status: PublicLaneValidatorStatus::Active,
-            activation_epoch: Some(0),
-            activation_height: Some(1),
-            last_reward_epoch: None,
-        };
-        ((lane, validator), record)
-    }
-
-    #[test]
-    fn sumeragi_v2_nexus_amx_hash_binds_every_projection_category() {
-        let nexus = Nexus::default();
-        let pipeline = Pipeline::default();
-        let baseline = sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &[]);
-        let assert_nexus_change = |label: &str, changed: Nexus| {
-            assert_ne!(
-                baseline,
-                sumeragi_v2_nexus_amx_context_hash(&changed, &pipeline, &[], &[]),
-                "{label} must change the signed Nexus/AMX commitment"
-            );
-        };
-
-        let mut changed = nexus.clone();
-        changed.enabled = !changed.enabled;
-        assert_nexus_change("Nexus enabled state", changed);
-
-        let mut changed = nexus.clone();
-        changed.lane_catalog = sora_lane_catalog();
-        assert_nexus_change("lane catalog", changed);
-
-        let mut changed = nexus.clone();
-        changed.dataspace_catalog = sora_dataspace_catalog();
-        assert_nexus_change("dataspace catalog", changed);
-
-        let mut changed = nexus.clone();
-        changed.routing_policy.default_lane = LaneId::new(1);
-        assert_nexus_change("routing policy", changed);
-
-        let mut changed = nexus.clone();
-        changed.staking.min_validator_stake = changed
-            .staking
-            .min_validator_stake
-            .try_add(&Quantity::one())
-            .expect("test stake remains representable");
-        assert_nexus_change("staking policy", changed);
-
-        let mut changed = nexus.clone();
-        changed.fees.sponsor_vault_custody_account_id = AccountId::new(
-            KeyPair::try_from_seed(vec![0xF5; 32], Algorithm::Ed25519)
-                .expect("deterministic sponsor vault test key")
-                .public_key()
-                .clone(),
-        );
-        assert_nexus_change("fee sponsor vault custody", changed);
-
-        let mut changed = nexus.clone();
-        changed.dataspace_fee_sponsor_program_ids.insert(
-            DataSpaceId::UNIVERSAL,
-            FeeSponsorProgramId::new(
-                changed.fees.sponsor_vault_custody_account_id.clone(),
-                "default".parse().expect("valid sponsor program name"),
-            ),
-        );
-        assert_nexus_change("dataspace sponsor program", changed);
-
-        let mut changed = nexus.clone();
-        changed.axt.max_clock_skew_ms += 1;
-        assert_nexus_change("AXT policy", changed);
-
-        let mut changed = nexus.clone();
-        changed.fusion.floor_teu += 1;
-        assert_nexus_change("lane fusion policy", changed);
-
-        let mut changed = nexus.clone();
-        changed.autoscale.enabled = !changed.autoscale.enabled;
-        assert_nexus_change("lane autoscale policy", changed);
-
-        let mut changed = nexus.clone();
-        changed.commit.window_slots = NonZeroU16::new(changed.commit.window_slots.get() + 1)
-            .expect("incremented window stays non-zero");
-        assert_nexus_change("commit policy", changed);
-
-        let mut changed = nexus.clone();
-        changed.da.q_in_slot_total = NonZeroU32::new(changed.da.q_in_slot_total.get() + 1)
-            .expect("incremented DA budget stays non-zero");
-        assert_nexus_change("DA sampling policy", changed);
-
-        let mut changed = nexus.clone();
-        changed.da.audit.interval += Duration::from_nanos(1);
-        assert_nexus_change("DA audit policy", changed);
-
-        let mut changed = nexus.clone();
-        changed.da.recovery.request_timeout += Duration::from_nanos(1);
-        assert_nexus_change("DA recovery policy", changed);
-
-        let mut changed = nexus.clone();
-        changed.da.rotation.seed_tag.push('x');
-        assert_nexus_change("DA rotation policy", changed);
-
-        let mut changed_pipeline = pipeline.clone();
-        changed_pipeline.amx_per_instruction_ns += 1;
-        assert_ne!(
-            baseline,
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &changed_pipeline, &[], &[]),
-            "deterministic AMX budgets must change the signed commitment"
-        );
-
-        let active = [test_active_validator(0xA1, LaneId::SINGLE)];
-        assert_ne!(
-            baseline,
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &active, &[]),
-            "staged active validators must change the signed commitment"
-        );
-
-        let lifecycle = [SumeragiV2LaneLifecycleEntry {
-            lane_id: LaneId::SINGLE,
-            incarnation: Hash::new(b"sumeragi-v2-test-incarnation"),
-            activation_height: 7,
-        }];
-        assert_ne!(
-            baseline,
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
-            "lane lifecycle history must change the signed commitment"
-        );
-        let mut changed_lifecycle = lifecycle;
-        changed_lifecycle[0].activation_height += 1;
-        assert_ne!(
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &lifecycle),
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &[], &changed_lifecycle),
-            "activation height must be committed independently of the current catalog"
-        );
-    }
-
-    #[test]
-    fn sumeragi_v2_nexus_amx_hash_canonicalizes_active_validator_order() {
-        let nexus = Nexus::default();
-        let pipeline = Pipeline::default();
-        let first = test_active_validator(0xA2, LaneId::new(1));
-        let second = test_active_validator(0xA3, LaneId::SINGLE);
-        let forward = [first.clone(), second.clone()];
-        let reverse = [second, first];
-        assert_eq!(
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &forward, &[]),
-            sumeragi_v2_nexus_amx_context_hash(&nexus, &pipeline, &reverse, &[]),
-        );
-
-        let first_lifecycle = SumeragiV2LaneLifecycleEntry {
-            lane_id: LaneId::new(1),
-            incarnation: Hash::new(b"first-lifecycle"),
-            activation_height: 3,
-        };
-        let second_lifecycle = SumeragiV2LaneLifecycleEntry {
-            lane_id: LaneId::SINGLE,
-            incarnation: Hash::new(b"second-lifecycle"),
-            activation_height: 0,
-        };
-        assert_eq!(
-            sumeragi_v2_nexus_amx_context_hash(
-                &nexus,
-                &pipeline,
-                &[],
-                &[first_lifecycle, second_lifecycle],
-            ),
-            sumeragi_v2_nexus_amx_context_hash(
-                &nexus,
-                &pipeline,
-                &[],
-                &[second_lifecycle, first_lifecycle],
-            ),
-            "lane lifecycle input order must not affect the context commitment"
-        );
-    }
-}
+include!("actual/tests.rs");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay security corpora and assert fingerprints stay stable."""
+"""Verify security-corpus integrity fingerprints without executing validators."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import binascii
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -20,6 +21,8 @@ except ImportError:  # pragma: no cover - resource unavailable on Windows
 
 DEFAULT_CPU_SECS = int(os.environ.get("REPLAY_CPU_SECS", "120"))
 DEFAULT_MEM_MB = int(os.environ.get("REPLAY_MEM_MB", "1024"))
+
+FINGERPRINT_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 def clamp_resources(cpu_secs: int, mem_mb: int) -> None:
@@ -44,40 +47,84 @@ def canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def compute_fingerprint(entry: dict[str, object], fuzz_root: Path) -> str:
+def corpus_path(entry: dict[str, object], fuzz_root: Path) -> Path:
+    """Resolve one regular, repository-contained corpus file without following links."""
+
     rel_path = entry["path"]
     if not isinstance(rel_path, str):
         raise TypeError("metadata path must be a string")
-    corpus_path = fuzz_root / rel_path
-    if not corpus_path.exists():
-        raise FileNotFoundError(f"corpus not found: {corpus_path}")
+    relative = Path(rel_path)
+    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+        raise ValueError(f"corpus path must be repository-relative: {rel_path}")
+    path = fuzz_root / relative
+    if path.is_symlink():
+        raise ValueError(f"corpus must not be a symlink: {path}")
+    if not path.is_file():
+        raise FileNotFoundError(f"corpus not found or not a regular file: {path}")
+    if path.stat().st_nlink != 1:
+        raise ValueError(f"corpus must not be hard-linked: {path}")
+    try:
+        path.resolve(strict=True).relative_to(fuzz_root.resolve(strict=True))
+    except ValueError as error:
+        raise ValueError(f"corpus escapes metadata root: {path}") from error
+    return path
 
-    suffix = corpus_path.suffix.lower()
+
+def compute_fingerprint(entry: dict[str, object], fuzz_root: Path) -> str:
+    path = corpus_path(entry, fuzz_root)
+
+    suffix = path.suffix.lower()
     if suffix == ".json":
-        data = json.loads(corpus_path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         payload = canonical_json(data).encode("utf-8")
     elif suffix == ".b64":
-        raw = corpus_path.read_bytes()
+        raw = path.read_bytes()
         try:
             payload = base64.b64decode(raw, validate=True)
         except binascii.Error:
             payload = base64.b64decode(raw, validate=False)
     else:
-        payload = corpus_path.read_bytes()
+        payload = path.read_bytes()
 
     return hashlib.blake2b(payload, digest_size=32).hexdigest()
 
 
-def load_metadata(path: Path) -> list[dict[str, object]]:
+def load_metadata(
+    path: Path, *, require_fingerprints: bool = True
+) -> list[dict[str, object]]:
     with path.open("r", encoding="utf-8") as fh:
         metadata = json.load(fh)
     if not isinstance(metadata, list):
         raise ValueError("metadata must be a JSON array")
+    seen_paths: set[str] = set()
     for entry in metadata:
         if not isinstance(entry, dict):
             raise ValueError("metadata entries must be objects")
-        if "expected_validation_fail" not in entry:
-            raise ValueError(f"missing expected_validation_fail for {entry.get('path')}")
+        for field in ("path", "kind", "provenance", "expected_validation_fail"):
+            if field not in entry:
+                raise ValueError(f"missing {field} for {entry.get('path')}")
+        if require_fingerprints and "fingerprint" not in entry:
+            raise ValueError(f"missing fingerprint for {entry.get('path')}")
+        rel_path = entry["path"]
+        if not isinstance(rel_path, str) or not rel_path:
+            raise ValueError("metadata path must be a non-empty string")
+        if rel_path in seen_paths:
+            raise ValueError(f"duplicate corpus path: {rel_path}")
+        seen_paths.add(rel_path)
+        for field in ("kind", "provenance"):
+            if not isinstance(entry[field], str) or not entry[field]:
+                raise ValueError(f"{field} for {rel_path} must be a non-empty string")
+        expected = entry["expected_validation_fail"]
+        if expected is not None and (not isinstance(expected, str) or not expected):
+            raise ValueError(
+                f"expected_validation_fail for {rel_path} must be null or a non-empty string"
+            )
+        fingerprint = entry.get("fingerprint")
+        if fingerprint is not None and (
+            not isinstance(fingerprint, str)
+            or FINGERPRINT_PATTERN.fullmatch(fingerprint) is None
+        ):
+            raise ValueError(f"fingerprint for {rel_path} must be lowercase Blake2b-256 hex")
     return metadata  # type: ignore[return-value]
 
 
@@ -97,7 +144,7 @@ def main(argv: list[str]) -> int:
 
     clamp_resources(DEFAULT_CPU_SECS, DEFAULT_MEM_MB)
 
-    entries = load_metadata(metadata_path)
+    entries = load_metadata(metadata_path, require_fingerprints=not args.update)
     mismatches: list[str] = []
 
     for entry in entries:
@@ -125,7 +172,10 @@ def main(argv: list[str]) -> int:
             print(f"[security-replay] {line}", file=sys.stderr)
         return 1
 
-    print(f"Verified {len(entries)} corpora fingerprints from {metadata_path}")
+    print(
+        f"Verified integrity fingerprints for {len(entries)} corpora from {metadata_path}; "
+        "no validation outcomes were executed"
+    )
     return 0
 
 

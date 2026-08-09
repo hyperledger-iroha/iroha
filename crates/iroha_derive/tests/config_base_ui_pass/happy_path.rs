@@ -16,6 +16,10 @@ struct Test {
     nested: Nested,
     #[config(env = "TEST", default = "true")]
     with_default_expr_and_env: bool,
+    #[config(key = "canonical_parameter")]
+    renamed_parameter: u64,
+    #[config(nested, key = "canonical_nested")]
+    renamed_nested: Nested,
 }
 
 #[derive(ReadConfig)]

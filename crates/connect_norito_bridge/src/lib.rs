@@ -41,7 +41,7 @@ use iroha_data_model::{
     confidential::{CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1, ConfidentialEncryptedPayload},
     da::manifest::DaManifestV1,
     domain::DomainId,
-    governance::types::AtWindow,
+    governance::{is_valid_governance_selector_v1, types::AtWindow},
     identifier::{IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload},
     isi::{
         InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
@@ -120,35 +120,13 @@ mod kagemusha_candidate_apple;
 mod kagemusha_candidate_scenario;
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 pub use kagemusha_candidate_scenario::validate_kagemusha_candidate_scenario_directory_v1;
-mod proof_attachment_json;
-
-#[cfg(test)]
-use iroha_data_model::{
-    nexus::LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
-    proof::{PROOF_BOX_MAX_ENCODED_BYTES_V1, VERIFYING_KEY_ID_MAX_FIELD_BYTES},
-};
-use proof_attachment_json::parse_proof_attachment_from_json_bytes;
-#[cfg(test)]
-use proof_attachment_json::{
-    PROOF_ATTACHMENT_JSON_MAX_BASE64_BYTES_V1, decode_canonical_bounded_base64,
-    proof_attachment_json_length_is_valid,
-};
-#[cfg(any(
-    test,
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-use proof_attachment_json::{
-    PROOF_ATTACHMENT_JSON_MAX_BYTES_V1, parse_proof_attachment_from_json_slice,
-};
 
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
 // Increment whenever any NativeSignerBridge JNI method descriptor changes.
 // The bridge-wide ABI number alone cannot distinguish two ABI-21 artifacts
 // whose JVM calling conventions differ.
-const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 1;
+// Revision 3 retires the generic Unshield signing method entirely.
+const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 3;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
 const KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE: usize = 64 * 1024;
@@ -234,7 +212,6 @@ const ERR_INVALID_NOTE_COMMITMENT: c_int = -14;
 const ERR_CONFIDENTIAL_PAYLOAD: c_int = -15;
 const ERR_SM2_VERIFY: c_int = -16;
 const ERR_SM2_PARSE: c_int = -17;
-const ERR_PROOF_ATTACHMENT: c_int = -18;
 const ERR_INVALID_NULLIFIERS: c_int = -19;
 const ERR_INVALID_ROOT_HINT: c_int = -20;
 const ERR_UNSUPPORTED_ALGORITHM: c_int = -21;
@@ -304,7 +281,6 @@ enum BridgeError {
     HashOutBuffer,
     InvalidNoteCommitment,
     ConfidentialPayload,
-    ProofAttachment,
     InvalidNullifiers,
     InvalidRootHint,
     AssetId,
@@ -355,7 +331,6 @@ impl BridgeError {
             BridgeError::HashOutBuffer => ERR_HASH_OUT_LEN,
             BridgeError::InvalidNoteCommitment => ERR_INVALID_NOTE_COMMITMENT,
             BridgeError::ConfidentialPayload => ERR_CONFIDENTIAL_PAYLOAD,
-            BridgeError::ProofAttachment => ERR_PROOF_ATTACHMENT,
             BridgeError::InvalidNullifiers => ERR_INVALID_NULLIFIERS,
             BridgeError::InvalidRootHint => ERR_INVALID_ROOT_HINT,
             BridgeError::AssetId => ERR_ASSET_ID_PARSE,
@@ -546,6 +521,45 @@ unsafe fn read_string_bridge(ptr: *const c_char, len: c_ulong) -> BridgeResult<S
     Ok(s.to_owned())
 }
 
+unsafe fn read_governance_selector_bridge(
+    ptr: *const c_char,
+    len: c_ulong,
+) -> BridgeResult<String> {
+    let selector = unsafe { read_string_bridge(ptr, len) }.map_err(|error| {
+        if matches!(error, BridgeError::Utf8) {
+            BridgeError::Governance
+        } else {
+            error
+        }
+    })?;
+    if !is_valid_governance_selector_v1(&selector) {
+        return Err(BridgeError::Governance);
+    }
+    Ok(selector)
+}
+
+unsafe fn read_exact_lower_hex32_bridge(
+    ptr: *const c_char,
+    len: c_ulong,
+    invalid: BridgeError,
+) -> BridgeResult<String> {
+    let value = unsafe { read_string_bridge(ptr, len) }.map_err(|error| {
+        if matches!(error, BridgeError::Utf8) {
+            invalid
+        } else {
+            error
+        }
+    })?;
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(invalid);
+    }
+    Ok(value)
+}
+
 unsafe fn write_bytes(
     out_ptr: *mut *mut c_uchar,
     out_len: *mut c_ulong,
@@ -665,14 +679,6 @@ fn kagemusha_canonical_decode_limits_with_profile(
             )
             .saturating_add(fixed_allocation_allowance),
         KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH,
-    )
-}
-
-fn kagemusha_canonical_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
-    kagemusha_canonical_decode_limits_with_profile(
-        encoded_len,
-        0,
-        KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE,
     )
 }
 
@@ -1263,8 +1269,7 @@ fn parse_nonce(nonce: u32, present: bool) -> BridgeResult<Option<NonZeroU32>> {
 
 fn parse_zk_asset_mode(code: u8) -> BridgeResult<zk::ZkAssetMode> {
     match code {
-        0 => Ok(zk::ZkAssetMode::ZkNative),
-        1 => Ok(zk::ZkAssetMode::Hybrid),
+        0 => Ok(zk::ZkAssetMode::Hybrid),
         _ => Err(BridgeError::ZkAssetMode),
     }
 }
@@ -1532,6 +1537,21 @@ fn clear_bridge_output_or_null(
     Ok(())
 }
 
+fn clear_signed_transaction_outputs(
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) {
+    clear_bridge_output(out_signed_ptr, out_signed_len);
+    if !out_hash_ptr.is_null() {
+        let clear_len = usize::try_from(out_hash_len)
+            .unwrap_or(usize::MAX)
+            .min(Hash::LENGTH);
+        unsafe { ptr::write_bytes(out_hash_ptr, 0, clear_len) };
+    }
+}
+
 fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
     match result {
         Ok(()) => 0,
@@ -1541,6 +1561,7 @@ fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
 
 const PRIVACY_BUFFER_HEADER_MAGIC: u64 = 0x4952_5041_484f_5249;
 const PRIVACY_BUFFER_HEADER_BYTES: usize = std::mem::size_of::<PrivacyBufferHeader>();
+const PRIVACY_COMPILED_PROFILE_CATALOG_WORKER_STACK_BYTES_V1: usize = 8 * 1024 * 1024;
 const PRIVACY_NATIVE_OUTPUT_MAX_BYTES_V1: usize =
     if PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
         > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
@@ -1556,6 +1577,11 @@ struct PrivacyBufferHeader {
     len: usize,
 }
 
+static PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1: OnceLock<Result<Vec<u8>, c_int>> =
+    OnceLock::new();
+#[cfg(test)]
+static PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_INITIALIZATIONS_V1: AtomicU64 = AtomicU64::new(0);
+
 fn privacy_compiled_profile_catalog() -> Result<PrivacyCompiledProfileCatalogV1, c_int> {
     let catalog = compiled_privacy_profile_catalog_v1().map_err(|_| ERR_CONNECT_ENCODE)?;
     debug_assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::ALL.len());
@@ -1567,6 +1593,38 @@ fn privacy_compiled_profile_catalog() -> Result<PrivacyCompiledProfileCatalogV1,
             .eq(PrivacyProtocolIdV1::ALL)
     );
     Ok(catalog)
+}
+
+fn build_privacy_compiled_profile_catalog_archive_v1() -> Result<Vec<u8>, c_int> {
+    let catalog = privacy_compiled_profile_catalog()?;
+    let bytes = norito::encode_canonical(&catalog).map_err(|_| ERR_CONNECT_ENCODE)?;
+    if bytes.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
+        || !validate_local_privacy_compiled_profile_catalog_archive_v1(&bytes).is_valid()
+    {
+        return Err(ERR_CONNECT_ENCODE);
+    }
+    Ok(bytes)
+}
+
+fn privacy_compiled_profile_catalog_archive_v1() -> Result<&'static [u8], c_int> {
+    // The catalog is immutable build metadata, but its first derivation
+    // initializes several native cryptographic profiles. Own that one-time
+    // stack budget at the FFI boundary instead of inheriting an arbitrary
+    // mobile/runtime caller stack. Initialization, including deterministic
+    // failure, is serialized and cached so concurrent cold callers cannot
+    // amplify the owned worker-stack allocation.
+    let archive = PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1.get_or_init(|| {
+        #[cfg(test)]
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_INITIALIZATIONS_V1.fetch_add(1, Ordering::Relaxed);
+
+        let worker = std::thread::Builder::new()
+            .name("iroha-privacy-profile-catalog-v1".to_owned())
+            .stack_size(PRIVACY_COMPILED_PROFILE_CATALOG_WORKER_STACK_BYTES_V1)
+            .spawn(build_privacy_compiled_profile_catalog_archive_v1)
+            .map_err(|_| ERR_CONNECT_ENCODE)?;
+        worker.join().map_err(|_| ERR_CONNECT_ENCODE)?
+    });
+    archive.as_ref().map(Vec::as_slice).map_err(|code| *code)
 }
 
 fn clear_privacy_output(out_ptr: *mut *mut c_uchar, out_len: *mut c_ulong) {
@@ -1661,26 +1719,13 @@ fn write_privacy_compiled_profile_catalog(
     if out_ptr.is_null() || out_len.is_null() {
         return ERR_NULL_PTR;
     }
-    let Ok(catalog) = privacy_compiled_profile_catalog() else {
+    let Ok(bytes) = privacy_compiled_profile_catalog_archive_v1() else {
         return ERR_CONNECT_ENCODE;
     };
-    let bytes = match norito::encode_canonical(&catalog) {
-        Ok(bytes) => bytes,
-        Err(_) => return ERR_CONNECT_ENCODE,
-    };
-    let mut bytes = bytes;
-    let result = if bytes.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1
-        || !validate_local_privacy_compiled_profile_catalog_archive_v1(&bytes).is_valid()
-    {
-        ERR_CONNECT_ENCODE
-    } else {
-        match unsafe { write_privacy_bytes(out_ptr, out_len, &bytes) } {
-            Ok(()) => 0,
-            Err(code) => code,
-        }
-    };
-    bytes.fill(0);
-    result
+    match unsafe { write_privacy_bytes(out_ptr, out_len, bytes) } {
+        Ok(()) => 0,
+        Err(code) => code,
+    }
 }
 
 /// Return this binary's canonical local compiled-profile catalog.
@@ -2668,102 +2713,6 @@ where
     })
 }
 
-struct ShieldTxInputs {
-    chain_id: ChainId,
-    authority: AccountId,
-    asset_definition: AssetDefinitionId,
-    from_account: AccountId,
-    amount: Quantity,
-    ttl: Option<NonZeroU64>,
-    private_key: PrivateKey,
-}
-
-struct ShieldInputPointers {
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    from_ptr: *const c_char,
-    from_len: c_ulong,
-    amount_ptr: *const c_char,
-    amount_len: c_ulong,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-}
-
-struct UnshieldTxInputs {
-    chain_id: ChainId,
-    authority: AccountId,
-    asset_definition: AssetDefinitionId,
-    destination: AccountId,
-    amount: Quantity,
-    inputs: Vec<[u8; 32]>,
-    proof: ProofAttachment,
-    root_hint: Option<[u8; 32]>,
-    ttl: Option<NonZeroU64>,
-    private_key: PrivateKey,
-}
-
-struct UnshieldInputPointers {
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    destination_ptr: *const c_char,
-    destination_len: c_ulong,
-    amount_ptr: *const c_char,
-    amount_len: c_ulong,
-    inputs_ptr: *const c_uchar,
-    inputs_len: c_ulong,
-    proof_json_ptr: *const c_char,
-    proof_json_len: c_ulong,
-    root_hint_ptr: *const c_uchar,
-    root_hint_len: c_ulong,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-}
-
-struct ZkTransferTxInputs {
-    chain_id: ChainId,
-    authority: AccountId,
-    asset_definition: AssetDefinitionId,
-    inputs: Vec<[u8; 32]>,
-    outputs: Vec<[u8; 32]>,
-    proof: ProofAttachment,
-    root_hint: Option<[u8; 32]>,
-    ttl: Option<NonZeroU64>,
-    private_key: PrivateKey,
-}
-
-struct ZkTransferInputPointers {
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    inputs_ptr: *const c_uchar,
-    inputs_len: c_ulong,
-    outputs_ptr: *const c_uchar,
-    outputs_len: c_ulong,
-    proof_json_ptr: *const c_char,
-    proof_json_len: c_ulong,
-    root_hint_ptr: *const c_uchar,
-    root_hint_len: c_ulong,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-}
-
 unsafe fn read_fixed_array<const N: usize>(
     ptr: *const c_uchar,
     len: c_ulong,
@@ -2802,240 +2751,6 @@ fn build_confidential_encrypted_payload(
         .validate()
         .map_err(|_| BridgeError::ConfidentialPayload)?;
     Ok(payload)
-}
-
-fn parse_fixed_32_chunks(
-    ptr: *const c_uchar,
-    len: c_ulong,
-    err: BridgeError,
-) -> BridgeResult<Vec<[u8; 32]>> {
-    if ptr.is_null() || len == 0 {
-        return Err(err);
-    }
-    if !(len as usize).is_multiple_of(32_usize) {
-        return Err(err);
-    }
-    let slice = unsafe { slice::from_raw_parts(ptr, len as usize) };
-    Ok(slice
-        .chunks_exact(32)
-        .map(|chunk| {
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(chunk);
-            arr
-        })
-        .collect())
-}
-
-fn parse_unshield_nullifiers(ptr: *const c_uchar, len: c_ulong) -> BridgeResult<Vec<[u8; 32]>> {
-    parse_fixed_32_chunks(ptr, len, BridgeError::InvalidNullifiers)
-}
-
-unsafe fn gather_shield_tx_inputs(ptrs: ShieldInputPointers) -> BridgeResult<ShieldTxInputs> {
-    unsafe { gather_shield_tx_inputs_with_parser(ptrs, parse_private_key) }
-}
-
-unsafe fn gather_shield_tx_inputs_with_parser<F>(
-    ptrs: ShieldInputPointers,
-    parse_key: F,
-) -> BridgeResult<ShieldTxInputs>
-where
-    F: Fn(&[u8]) -> BridgeResult<PrivateKey>,
-{
-    let ShieldInputPointers {
-        chain_ptr,
-        chain_len,
-        authority_ptr,
-        authority_len,
-        asset_definition_ptr,
-        asset_definition_len,
-        from_ptr,
-        from_len,
-        amount_ptr,
-        amount_len,
-        ttl_ms,
-        ttl_present,
-        private_key_ptr,
-        private_key_len,
-    } = ptrs;
-
-    let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
-    let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-    let asset_definition_str =
-        unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
-    let from_str = unsafe { read_string_bridge(from_ptr, from_len) }?;
-    let amount_str = unsafe { read_string_bridge(amount_ptr, amount_len) }?;
-
-    if private_key_ptr.is_null() {
-        return Err(BridgeError::NullPtr);
-    }
-    let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-
-    Ok(ShieldTxInputs {
-        chain_id: chain.parse().map_err(|_| BridgeError::ChainId)?,
-        authority: parse_account_id(authority_str)?,
-        asset_definition: parse_asset_definition(asset_definition_str)?,
-        from_account: parse_account_id(from_str)?,
-        amount: parse_public_quantity(amount_str)?,
-        ttl: parse_ttl(ttl_ms, ttl_present != 0)?,
-        private_key: parse_key(key_slice)?,
-    })
-}
-
-unsafe fn gather_unshield_tx_inputs(ptrs: UnshieldInputPointers) -> BridgeResult<UnshieldTxInputs> {
-    unsafe { gather_unshield_tx_inputs_with_parser(ptrs, parse_private_key) }
-}
-
-unsafe fn gather_unshield_tx_inputs_with_parser<F>(
-    ptrs: UnshieldInputPointers,
-    parse_key: F,
-) -> BridgeResult<UnshieldTxInputs>
-where
-    F: Fn(&[u8]) -> BridgeResult<PrivateKey>,
-{
-    let UnshieldInputPointers {
-        chain_ptr,
-        chain_len,
-        authority_ptr,
-        authority_len,
-        asset_definition_ptr,
-        asset_definition_len,
-        destination_ptr,
-        destination_len,
-        amount_ptr,
-        amount_len,
-        inputs_ptr,
-        inputs_len,
-        proof_json_ptr,
-        proof_json_len,
-        root_hint_ptr,
-        root_hint_len,
-        ttl_ms,
-        ttl_present,
-        private_key_ptr,
-        private_key_len,
-    } = ptrs;
-
-    let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
-    let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-    let asset_definition_str =
-        unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
-    let destination_str = unsafe { read_string_bridge(destination_ptr, destination_len) }?;
-    let amount_str = unsafe { read_string_bridge(amount_ptr, amount_len) }?;
-
-    if private_key_ptr.is_null() {
-        return Err(BridgeError::NullPtr);
-    }
-    let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-
-    let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
-    let authority = parse_account_id(authority_str)?;
-    let asset_definition = parse_asset_definition(asset_definition_str)?;
-    let destination = parse_account_id(destination_str)?;
-    let amount = parse_public_quantity(amount_str)?;
-    let inputs = parse_unshield_nullifiers(inputs_ptr, inputs_len)?;
-    let proof = parse_proof_attachment_from_json_bytes(proof_json_ptr, proof_json_len)?;
-
-    let root_hint = if root_hint_len == 0 {
-        None
-    } else {
-        if root_hint_ptr.is_null() || root_hint_len != 32 {
-            return Err(BridgeError::InvalidRootHint);
-        }
-        let bytes = unsafe { slice::from_raw_parts(root_hint_ptr, 32) };
-        let mut hint = [0u8; 32];
-        hint.copy_from_slice(bytes);
-        Some(hint)
-    };
-
-    Ok(UnshieldTxInputs {
-        chain_id,
-        authority,
-        asset_definition,
-        destination,
-        amount,
-        inputs,
-        proof,
-        root_hint,
-        ttl: parse_ttl(ttl_ms, ttl_present != 0)?,
-        private_key: parse_key(key_slice)?,
-    })
-}
-
-unsafe fn gather_zk_transfer_tx_inputs(
-    ptrs: ZkTransferInputPointers,
-) -> BridgeResult<ZkTransferTxInputs> {
-    unsafe { gather_zk_transfer_tx_inputs_with_parser(ptrs, parse_private_key) }
-}
-
-unsafe fn gather_zk_transfer_tx_inputs_with_parser<F>(
-    ptrs: ZkTransferInputPointers,
-    parse_key: F,
-) -> BridgeResult<ZkTransferTxInputs>
-where
-    F: Fn(&[u8]) -> BridgeResult<PrivateKey>,
-{
-    let ZkTransferInputPointers {
-        chain_ptr,
-        chain_len,
-        authority_ptr,
-        authority_len,
-        asset_definition_ptr,
-        asset_definition_len,
-        inputs_ptr,
-        inputs_len,
-        outputs_ptr,
-        outputs_len,
-        proof_json_ptr,
-        proof_json_len,
-        root_hint_ptr,
-        root_hint_len,
-        ttl_ms,
-        ttl_present,
-        private_key_ptr,
-        private_key_len,
-    } = ptrs;
-
-    let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
-    let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-    let asset_definition_str =
-        unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
-
-    if private_key_ptr.is_null() {
-        return Err(BridgeError::NullPtr);
-    }
-    let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-
-    let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
-    let authority = parse_account_id(authority_str)?;
-    let asset_definition = parse_asset_definition(asset_definition_str)?;
-    let inputs = parse_fixed_32_chunks(inputs_ptr, inputs_len, BridgeError::InvalidNullifiers)?;
-    let outputs =
-        parse_fixed_32_chunks(outputs_ptr, outputs_len, BridgeError::InvalidNoteCommitment)?;
-    let proof = parse_proof_attachment_from_json_bytes(proof_json_ptr, proof_json_len)?;
-
-    let root_hint = if root_hint_len == 0 {
-        None
-    } else {
-        if root_hint_ptr.is_null() || root_hint_len != 32 {
-            return Err(BridgeError::InvalidRootHint);
-        }
-        let bytes = unsafe { slice::from_raw_parts(root_hint_ptr, 32) };
-        let mut hint = [0u8; 32];
-        hint.copy_from_slice(bytes);
-        Some(hint)
-    };
-
-    Ok(ZkTransferTxInputs {
-        chain_id,
-        authority,
-        asset_definition,
-        inputs,
-        outputs,
-        proof,
-        root_hint,
-        ttl: parse_ttl(ttl_ms, ttl_present != 0)?,
-        private_key: parse_key(key_slice)?,
-    })
 }
 
 #[unsafe(no_mangle)]
@@ -6107,7 +5822,7 @@ impl KagemushaCandidateEvidenceLabInstalledArtifactSetV4 {
             || self.accepted_identity.candidate_record_sha256 != self.candidate_sha256
             || self.accepted_identity.candidate_manifest_sha256 != self.manifest_sha256
             || self.accepted_identity.production_capability_observed
-            || !self.accepted_identity.source_repo_dirty
+            || self.accepted_identity.source_repo_dirty
             || iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE
         {
             return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
@@ -9135,70 +8850,13 @@ fn kagemusha_recursive_spend_append_statement_v4(
     final_root: [u8; 32],
     next_zero_leaf_index: u32,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendPublicStatementV4> {
-    use iroha_data_model::offline::{
-        KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendPeerSplitTransitionV4,
-        KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendTransitionV4,
-    };
-
-    split
-        .validate_public_binding()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    let current_note = match branch {
-        KagemushaRecursiveSpendBranchV2::Recipient => split.recipient_output.clone(),
-        KagemushaRecursiveSpendBranchV2::Change => split
-            .change_output
-            .clone()
-            .ok_or(BridgeError::KagemushaProve)?,
-    };
-    let parent_max_proof_step_count = split
-        .inputs
-        .iter()
-        .map(|input| input.proof_step_count)
-        .max()
-        .ok_or(BridgeError::KagemushaProve)?;
-    let parent_max_peer_hop_count = split
-        .inputs
-        .iter()
-        .map(|input| input.peer_hop_count)
-        .max()
-        .ok_or(BridgeError::KagemushaProve)?;
-    let transition = KagemushaRecursiveSpendPeerSplitTransitionV4 {
-        binding_digest: split
-            .binding_digest()
-            .map_err(|_| BridgeError::KagemushaProve)?,
+    iroha_core::zk::kagemusha_v2::kagemusha_recursive_spend_append_statement_v4(
+        split,
         branch,
-        recipient_request_digest: split.recipient_request_digest,
-        operation_id: split.operation_id,
-        parent_max_proof_step_count,
-        parent_max_peer_hop_count,
-    };
-    let statement = KagemushaRecursiveSpendPublicStatementV4 {
-        chain_id: split.chain_id.clone(),
-        asset: split.asset.clone(),
-        asset_scale: split.asset_scale,
         final_root,
         next_zero_leaf_index,
-        topup_anchor_refs: split.topup_anchor_refs.clone(),
-        proof_step_count: parent_max_proof_step_count
-            .checked_add(1)
-            .ok_or(BridgeError::KagemushaProve)?,
-        peer_hop_count: parent_max_peer_hop_count
-            .checked_add(1)
-            .ok_or(BridgeError::KagemushaProve)?,
-        current_note,
-        branch_claims: split
-            .output_branch_claims(branch)
-            .map_err(|_| BridgeError::KagemushaProve)?,
-        transition: Some(KagemushaRecursiveSpendTransitionV4::PeerSplit(transition)),
-        artifact_binding: split.output_artifact_binding.clone(),
-        verifier_key_id: kagemusha_recursive_spend_step_eq_verifier_id_v4(
-            split.output_artifact_binding.manifest_sha256,
-        ),
-    };
-    statement
-        .validate_public_binding()
-        .map_err(|_| BridgeError::KagemushaProve)?;
-    Ok(statement)
+    )
+    .map_err(|_| BridgeError::KagemushaProve)
 }
 
 fn kagemusha_recursive_spend_redemption_change_statement_v4(
@@ -9276,13 +8934,13 @@ fn build_kagemusha_recursive_spend_bundle_v4(
     operation: &iroha_core::zk::kagemusha_v2::KagemushaStepOperationVectorV4,
     pair_bytes: Vec<u8>,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendBundleV4> {
-    use iroha_core::zk::kagemusha_v2::KagemushaRecursiveSpendStateVectorV2;
+    use iroha_core::zk::kagemusha_v2::KagemushaRecursiveSpendStateVectorV5;
     use iroha_data_model::offline::{
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2, KagemushaPastaCycleArtifactKindV4,
+        KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5, KagemushaPastaCycleArtifactKindV4,
         KagemushaPastaCycleParityV1, KagemushaPastaCycleProofEnvelopeV4,
         KagemushaRecursiveSpendBundleV4, KagemushaRecursiveSpendProofV4,
-        KagemushaRecursiveSpendStateBoundaryV2,
+        KagemushaRecursiveSpendStateBoundaryV5,
     };
 
     installed.validate_live_inventory()?;
@@ -9309,7 +8967,7 @@ fn build_kagemusha_recursive_spend_bundle_v4(
                 .map(|artifact| artifact.payload_sha256)
                 .ok_or(BridgeError::KagemushaRecursiveSpendV4Artifact)
         };
-    let state = KagemushaRecursiveSpendStateVectorV2::from_statement_v4(&statement)
+    let state = KagemushaRecursiveSpendStateVectorV5::from_statement_v4(&statement)
         .map_err(|_| BridgeError::KagemushaProve)?;
     let proof_backend = manifest
         .proof_backend
@@ -9333,8 +8991,8 @@ fn build_kagemusha_recursive_spend_bundle_v4(
             .map_err(|_| BridgeError::KagemushaRecursiveSpendV4Artifact)?,
         step_eq_verifier_key_sha256: verifier_key_sha256(step_eq)?,
         step_ep_verifier_key_sha256: verifier_key_sha256(step_ep)?,
-        state_boundary: KagemushaRecursiveSpendStateBoundaryV2 {
-            layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2,
+        state_boundary: KagemushaRecursiveSpendStateBoundaryV5 {
+            layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V5,
             state_limbs: state.limbs.to_vec(),
         },
         proof: ProofBox::new(proof_backend, pair_bytes),
@@ -14739,9 +14397,13 @@ mod detached_transaction_scaffold_tests {
 
     fn contract_scaffold(authority_keypair: &KeyPair) -> SignedTransaction {
         let authority = AccountId::new(authority_keypair.public_key().clone());
-        let contract_address =
-            ContractAddress::derive(0x1234, &authority, 7, DataSpaceId::UNIVERSAL)
-                .expect("contract address");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
         let invocation = ContractInvocation {
             contract_address,
             expected_code_hash: iroha_crypto::Hash::new(b"detached-contract-code"),
@@ -14761,7 +14423,7 @@ mod detached_transaction_scaffold_tests {
     fn transfer_scaffold(authority_keypair: &KeyPair, scoped: bool) -> SignedTransaction {
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let destination = AccountId::new(fixture_keypair(0xB2).public_key().clone());
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wallet", "universal").expect("domain"),
             "coin".parse().expect("asset name"),
         );
@@ -15533,7 +15195,7 @@ mod kagemusha_bridge_tests {
         source_tree_sha256: [u8; 32],
         seed: u8,
     ) -> (KagemushaReviewedSourceClosureV1, [u8; 32]) {
-        let tracked_binary_diff_sha256 = Sha256::digest([seed; 32]).into();
+        let tracked_binary_diff_sha256 = Sha256::digest([]).into();
         let untracked_path_mode_blob_oid_manifest_sha256 = Sha256::digest([]).into();
         let mut combined = Sha256::new();
         combined.update(b"iroha-source-diff-v1\0");
@@ -15545,7 +15207,7 @@ mod kagemusha_bridge_tests {
             schema: KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1.to_owned(),
             base_commit: source_commit.to_owned(),
             source_commit: source_commit.to_owned(),
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             source_tree_sha256,
             tracked_binary_diff_sha256,
             untracked_file_count: 0,
@@ -15677,7 +15339,7 @@ mod kagemusha_bridge_tests {
         let (step_ep, step_ep_frames) = profile_and_frames(generation, Parity::StepEp, 0x61);
         framed_artifacts.extend(step_ep_frames);
         let benchmark_evidence = b"SBD streaming installer benchmark evidence".to_vec();
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("offline domain"),
             "sbd".parse().expect("SBD asset name"),
         );
@@ -15694,7 +15356,7 @@ mod kagemusha_bridge_tests {
             generation: generation.to_owned(),
             source_commit: source_commit.to_owned(),
             source_tree_sha256,
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
             chain_id: ChainId::from("sbd-streaming-install-test"),
@@ -15703,6 +15365,10 @@ mod kagemusha_bridge_tests {
             activation_height: 1,
             withdrawal_height: 100,
             max_proof_bytes: 512,
+            generation_memory_limit_bytes: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+            generation_memory_enforcement_profile: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4.to_owned(),
+            qualification_receipt_sha256: digest(b"SBD streaming installer qualification receipt"),
+            qualified_candidate_sha256: [0; 32],
             profiles: vec![step_eq, step_ep],
             topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
                 file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
@@ -15718,9 +15384,23 @@ mod kagemusha_bridge_tests {
             cryptographic_review_sha256: digest(b"SBD review placeholder"),
             release_attestation_sha256: digest(b"SBD attestation placeholder"),
         };
-        let candidate = manifest
-            .immutable_candidate()
-            .expect("derive lightweight immutable candidate");
+        let mut candidate_manifest = manifest.clone();
+        candidate_manifest.qualification_receipt_sha256 = [0; 32];
+        candidate_manifest.qualified_candidate_sha256 = [0; 32];
+        candidate_manifest.benchmark_evidence_sha256 = [0; 32];
+        candidate_manifest.cryptographic_review_sha256 = [0; 32];
+        candidate_manifest.release_attestation_sha256 = [0; 32];
+        let candidate = iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4 {
+            schema: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4
+                .to_owned(),
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest: candidate_manifest,
+        };
+        manifest.qualified_candidate_sha256 =
+            iroha_data_model::offline::kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                candidate.sha256().expect("lightweight candidate identity"),
+                manifest.qualification_receipt_sha256,
+            );
         let roles = [
             KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
             KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
@@ -15749,6 +15429,8 @@ mod kagemusha_bridge_tests {
         };
         let review_payload = KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
             &candidate,
+            manifest.qualification_receipt_sha256,
+            manifest.qualified_candidate_sha256,
             digest(b"SBD streaming installer review report"),
             [
                 digest(b"SBD streaming constraint review"),
@@ -16001,7 +15683,7 @@ mod kagemusha_bridge_tests {
             version: KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V2,
             authority: AccountId::new(fixture_key_pair(0x41).public_key().clone()),
             device_id: "pk3-hardware-device".to_owned(),
-            asset_definition_id: AssetDefinitionId::new(
+            asset_definition_id: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("pk3", "universal").expect("domain"),
                 "cash".parse().expect("asset name"),
             ),
@@ -16118,7 +15800,7 @@ mod kagemusha_bridge_tests {
                 ExecutionCommitment, GlobalPhase, HeightContext, PayloadEncoding,
                 QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
             },
-            bridge::{BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeFinalityProof},
+            bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof},
             peer::PeerId,
         };
 
@@ -16136,7 +15818,7 @@ mod kagemusha_bridge_tests {
         });
         let roster = keys
             .iter()
-            .zip([40_u64, 30, 20, 10])
+            .zip([1_u64; 4])
             .map(|(key, power)| ValidatorPower {
                 validator: PeerId::new(key.public_key().clone()),
                 power,
@@ -16179,12 +15861,12 @@ mod kagemusha_bridge_tests {
                 nexus_amx_context_hash: Hash::new(b"receiver-offer size fixture nexus context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: DataAvailabilityLayout {
-                    encoding: PayloadEncoding::Plain,
+                    encoding: PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 1_024,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 4_096,
-                    max_chunk_count: 4,
+                    max_chunk_count: 8,
                 },
                 leader_seed: [0xD5; 32],
             };
@@ -16198,10 +15880,11 @@ mod kagemusha_bridge_tests {
                 height,
                 view: 0,
             };
-            let execution_commitment = ExecutionCommitment::without_topups(
+            let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"receiver-offer size fixture parent state"),
                 Hash::new(b"receiver-offer size fixture post state"),
                 ordinary_writes_root,
+                1,
                 Hash::new(b"receiver-offer size fixture executed wire"),
             );
             let mut commit_qc = QuorumCertificate {
@@ -16238,7 +15921,7 @@ mod kagemusha_bridge_tests {
                 .verify()
                 .expect("realistic finality artifact verifies");
             proofs.push(BridgeFinalityProof {
-                version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+                version: BRIDGE_FINALITY_PROOF_VERSION_V2,
                 block_header: header,
                 finality_artifact: artifact,
             });
@@ -16768,7 +16451,7 @@ mod kagemusha_bridge_tests {
             .push_str("-wrong");
         assert!(selector_mismatch.validate_structure().is_err());
         let mut asset_mismatch = offer.clone();
-        asset_mismatch.lineage.selector.asset = AssetDefinitionId::new(
+        asset_mismatch.lineage.selector.asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("alternate domain"),
             "other".parse().expect("alternate asset name"),
         );
@@ -18625,34 +18308,8 @@ mod kagemusha_bridge_tests {
     #[cfg(feature = "privacy-production-enabled")]
     fn production_release_circuit_params_v4()
     -> iroha_data_model::offline::KagemushaStepCircuitParamsV4 {
-        use iroha_data_model::offline::{
-            KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-            KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
-            KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4,
-            KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4, KagemushaPastaPublicLayoutV4,
-            KagemushaStepCircuitParamsV4,
-        };
-
-        let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
-        let layout = KagemushaPastaPublicLayoutV4::for_ipa_round_count(k)
-            .expect("compact degree-17 production public layout");
-        let params = KagemushaStepCircuitParamsV4 {
-            version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
-            k,
-            num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
-            num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
-            num_fixed: 1,
-            lookup_bits: k - 1,
-            num_instance_columns: 1,
-            public_input_limbs: layout.instance_column_limbs,
-            minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_RELEASE_BYTES_V4,
-        };
-        params
-            .validate_release_generation_profile()
-            .expect("reviewed compact degree-17 production generation profile");
-        params
+        iroha_data_model::offline::KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
+            .expect("reviewed compact degree-17 production generation profile")
     }
 
     #[cfg(feature = "privacy-production-enabled")]
@@ -18840,7 +18497,7 @@ mod kagemusha_bridge_tests {
             generation: generation.to_owned(),
             source_commit: source_commit.to_owned(),
             source_tree_sha256,
-            source_repo_dirty: true,
+            source_repo_dirty: false,
             reviewed_source_closure,
             reviewed_source_closure_descriptor_sha256,
             chain_id,
@@ -18849,6 +18506,12 @@ mod kagemusha_bridge_tests {
             activation_height,
             withdrawal_height,
             max_proof_bytes: max_recursive_pair_bytes,
+            generation_memory_limit_bytes: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
+            generation_memory_enforcement_profile: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4.to_owned(),
+            qualification_receipt_sha256: digest(
+                b"production gate actual recursion qualification receipt",
+            ),
+            qualified_candidate_sha256: [0; 32],
             profiles: vec![step_eq, step_ep],
             topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
                 file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
@@ -18865,9 +18528,23 @@ mod kagemusha_bridge_tests {
             cryptographic_review_sha256: digest(b"initial cryptographic review digest slot"),
             release_attestation_sha256: digest(b"initial release attestation digest slot"),
         };
-        let candidate = manifest
-            .immutable_candidate()
-            .expect("derive exact immutable release candidate");
+        let mut candidate_manifest = manifest.clone();
+        candidate_manifest.qualification_receipt_sha256 = [0; 32];
+        candidate_manifest.qualified_candidate_sha256 = [0; 32];
+        candidate_manifest.benchmark_evidence_sha256 = [0; 32];
+        candidate_manifest.cryptographic_review_sha256 = [0; 32];
+        candidate_manifest.release_attestation_sha256 = [0; 32];
+        let candidate = iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4 {
+            schema: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4
+                .to_owned(),
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest: candidate_manifest,
+        };
+        manifest.qualified_candidate_sha256 =
+            iroha_data_model::offline::kagemusha_recursive_spend_qualified_candidate_sha256_v4(
+                candidate.sha256().expect("production candidate identity"),
+                manifest.qualification_receipt_sha256,
+            );
 
         let roles = [
             KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
@@ -18897,6 +18574,8 @@ mod kagemusha_bridge_tests {
         };
         let review_payload = KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
             &candidate,
+            manifest.qualification_receipt_sha256,
+            manifest.qualified_candidate_sha256,
             digest(b"complete production gate cryptographic review report"),
             [
                 digest(b"production gate constraint coverage evidence"),
@@ -18960,6 +18639,8 @@ mod kagemusha_bridge_tests {
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: generation.to_owned(),
             candidate_sha256: candidate.sha256().expect("candidate digest"),
+            qualification_receipt_sha256: manifest.qualification_receipt_sha256,
+            qualified_candidate_sha256: manifest.qualified_candidate_sha256,
             manifest_sha256: authenticated.manifest_sha256(),
             release_attestation_sha256: authenticated.release_attestation_sha256(),
             release_policy_sha256: authenticated.release_policy_sha256(),
@@ -19055,10 +18736,11 @@ mod kagemusha_bridge_tests {
                     )),
                     payload_hash: Hash::new(b"production SBD acceptance parent payload"),
                 },
-                execution_commitment: ExecutionCommitment::without_topups(
+                execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
                     Hash::new(b"production SBD acceptance parent parent state"),
                     Hash::new(b"production SBD acceptance parent post state"),
                     Hash::new(b"production SBD acceptance parent ordinary writes"),
+                    1,
                     Hash::new(b"production SBD acceptance parent executed wire"),
                 ),
                 signers: vec![0, 1, 2],
@@ -19070,12 +18752,12 @@ mod kagemusha_bridge_tests {
             nexus_amx_context_hash: Hash::new(b"production SBD acceptance nexus"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::Plain,
+                encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1_024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4_096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x86; 32],
         };
@@ -19099,11 +18781,12 @@ mod kagemusha_bridge_tests {
             )),
             payload_hash: Hash::new(b"production SBD acceptance finalized payload"),
         };
-        let execution_commitment = ExecutionCommitment::new(
+        let execution_commitment = ExecutionCommitment::new_without_merge_carrier(
             Hash::new(b"production SBD acceptance parent state"),
             commitment.post_state_root,
             commitment.ordinary_writes_root,
             Some(commitment.topup_anchor_root),
+            1,
             1,
             Hash::new(b"production SBD acceptance finalized executed wire"),
         )
@@ -22626,7 +22309,7 @@ mod kagemusha_bridge_tests {
     }
 
     fn sample_asset(account: AccountId) -> AssetId {
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("offline", "universal").expect("domain id"),
             "xor".parse().expect("asset definition name"),
         );
@@ -22640,15 +22323,15 @@ mod kagemusha_bridge_tests {
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
-            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
             KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KagemushaPastaCycleParityV1,
             KagemushaPastaCycleProofEnvelopeV4, KagemushaRecursiveSpendArtifactBindingV4,
             KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBundleV4,
             KagemushaRecursiveSpendOperationVectorV4, KagemushaRecursiveSpendProofV4,
-            KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendStateBoundaryV2,
+            KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendStateBoundaryV5,
             KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaScaledAmountV2,
             kagemusha_recursive_spend_lineage_root_v2,
             kagemusha_recursive_spend_verifier_key_id_v4,
@@ -22708,8 +22391,8 @@ mod kagemusha_bridge_tests {
         let operation = KagemushaRecursiveSpendOperationVectorV4 {
             limbs: operation_limbs,
         };
-        let mut state_limbs = vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
-        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+        let mut state_limbs = vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
+        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
         let proof_envelope = KagemushaPastaCycleProofEnvelopeV4 {
             version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
@@ -22724,7 +22407,7 @@ mod kagemusha_bridge_tests {
             step_ep_circuit_params_sha256: [0x98; 32],
             step_eq_verifier_key_sha256: [0x99; 32],
             step_ep_verifier_key_sha256: [0x9a; 32],
-            state_boundary: KagemushaRecursiveSpendStateBoundaryV2::new(state_limbs)
+            state_boundary: KagemushaRecursiveSpendStateBoundaryV5::new(state_limbs)
                 .expect("state boundary"),
             proof: ProofBox::new(
                 KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.into(),
@@ -25278,647 +24961,6 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_box(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    from_ptr: *const c_char,
-    from_len: c_ulong,
-    amount_ptr: *const c_char,
-    amount_len: c_ulong,
-    note_commitment_ptr: *const c_uchar,
-    note_commitment_len: c_ulong,
-    payload_ephemeral_ptr: *const c_uchar,
-    payload_ephemeral_len: c_ulong,
-    payload_nonce_ptr: *const c_uchar,
-    payload_nonce_len: c_ulong,
-    payload_ciphertext_ptr: *const c_uchar,
-    payload_ciphertext_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let inputs = unsafe {
-            gather_shield_tx_inputs(ShieldInputPointers {
-                chain_ptr,
-                chain_len,
-                authority_ptr,
-                authority_len,
-                asset_definition_ptr,
-                asset_definition_len,
-                from_ptr,
-                from_len,
-                amount_ptr,
-                amount_len,
-                ttl_ms,
-                ttl_present,
-                private_key_ptr,
-                private_key_len,
-            })?
-        };
-
-        if payload_ciphertext_len > u32::MAX as c_ulong {
-            return Err(BridgeError::ConfidentialPayload);
-        }
-
-        let note_commitment = unsafe {
-            read_fixed_array::<32>(
-                note_commitment_ptr,
-                note_commitment_len,
-                BridgeError::InvalidNoteCommitment,
-            )?
-        };
-        let ephemeral = unsafe {
-            read_fixed_array::<32>(
-                payload_ephemeral_ptr,
-                payload_ephemeral_len,
-                BridgeError::ConfidentialPayload,
-            )?
-        };
-        let nonce = unsafe {
-            read_fixed_array::<24>(
-                payload_nonce_ptr,
-                payload_nonce_len,
-                BridgeError::ConfidentialPayload,
-            )?
-        };
-        let ciphertext = unsafe { read_vec_bytes(payload_ciphertext_ptr, payload_ciphertext_len)? };
-
-        let payload = build_confidential_encrypted_payload(ephemeral, nonce, ciphertext)?;
-        let asset = inputs.asset_definition.clone();
-        let from_account = inputs.from_account.clone();
-        let ttl = inputs.ttl;
-        let amount = inputs.amount;
-        let chain_id = inputs.chain_id;
-        let authority = inputs.authority;
-        let private_key = inputs.private_key;
-
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            || {
-                let instruction = zk::Shield::new(
-                    asset.clone(),
-                    from_account.clone(),
-                    amount,
-                    note_commitment,
-                    payload.clone(),
-                );
-                Executable::from([InstructionBox::from(instruction)])
-            },
-        )?;
-
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    from_ptr: *const c_char,
-    from_len: c_ulong,
-    amount_ptr: *const c_char,
-    amount_len: c_ulong,
-    note_commitment_ptr: *const c_uchar,
-    note_commitment_len: c_ulong,
-    payload_ephemeral_ptr: *const c_uchar,
-    payload_ephemeral_len: c_ulong,
-    payload_nonce_ptr: *const c_uchar,
-    payload_nonce_len: c_ulong,
-    payload_ciphertext_ptr: *const c_uchar,
-    payload_ciphertext_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let algorithm = parse_algorithm_code(algorithm_code)?;
-        let inputs = unsafe {
-            gather_shield_tx_inputs_with_parser(
-                ShieldInputPointers {
-                    chain_ptr,
-                    chain_len,
-                    authority_ptr,
-                    authority_len,
-                    asset_definition_ptr,
-                    asset_definition_len,
-                    from_ptr,
-                    from_len,
-                    amount_ptr,
-                    amount_len,
-                    ttl_ms,
-                    ttl_present,
-                    private_key_ptr,
-                    private_key_len,
-                },
-                |bytes| parse_private_key_with_algorithm(bytes, algorithm),
-            )?
-        };
-
-        if payload_ciphertext_len > u32::MAX as c_ulong {
-            return Err(BridgeError::ConfidentialPayload);
-        }
-
-        let note_commitment = unsafe {
-            read_fixed_array::<32>(
-                note_commitment_ptr,
-                note_commitment_len,
-                BridgeError::InvalidNoteCommitment,
-            )?
-        };
-        let ephemeral = unsafe {
-            read_fixed_array::<32>(
-                payload_ephemeral_ptr,
-                payload_ephemeral_len,
-                BridgeError::ConfidentialPayload,
-            )?
-        };
-        let nonce = unsafe {
-            read_fixed_array::<24>(
-                payload_nonce_ptr,
-                payload_nonce_len,
-                BridgeError::ConfidentialPayload,
-            )?
-        };
-        let ciphertext = unsafe { read_vec_bytes(payload_ciphertext_ptr, payload_ciphertext_len)? };
-        let payload = build_confidential_encrypted_payload(ephemeral, nonce, ciphertext)?;
-
-        let ShieldTxInputs {
-            chain_id,
-            authority,
-            asset_definition,
-            from_account,
-            amount,
-            ttl,
-            private_key,
-        } = inputs;
-
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            || {
-                let instruction = zk::Shield::new(
-                    asset_definition,
-                    from_account,
-                    amount,
-                    note_commitment,
-                    payload,
-                );
-                Executable::from([InstructionBox::from(instruction)])
-            },
-        )?;
-
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_unshield_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    destination_ptr: *const c_char,
-    destination_len: c_ulong,
-    amount_ptr: *const c_char,
-    amount_len: c_ulong,
-    inputs_ptr: *const c_uchar,
-    inputs_len: c_ulong,
-    proof_json_ptr: *const c_char,
-    proof_json_len: c_ulong,
-    root_hint_ptr: *const c_uchar,
-    root_hint_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let inputs = unsafe {
-            gather_unshield_tx_inputs(UnshieldInputPointers {
-                chain_ptr,
-                chain_len,
-                authority_ptr,
-                authority_len,
-                asset_definition_ptr,
-                asset_definition_len,
-                destination_ptr,
-                destination_len,
-                amount_ptr,
-                amount_len,
-                inputs_ptr,
-                inputs_len,
-                proof_json_ptr,
-                proof_json_len,
-                root_hint_ptr,
-                root_hint_len,
-                ttl_ms,
-                ttl_present,
-                private_key_ptr,
-                private_key_len,
-            })?
-        };
-
-        let asset = inputs.asset_definition.clone();
-        let destination = inputs.destination.clone();
-        let amount = inputs.amount;
-        let nullifiers = inputs.inputs.clone();
-        let proof = inputs.proof.clone();
-        let root_hint = inputs.root_hint;
-        let chain_id = inputs.chain_id;
-        let authority = inputs.authority;
-        let ttl = inputs.ttl;
-        let private_key = inputs.private_key;
-
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            || {
-                let instruction = zk::Unshield::new(
-                    asset.clone(),
-                    destination.clone(),
-                    amount,
-                    nullifiers.clone(),
-                    proof.clone(),
-                    root_hint,
-                );
-                Executable::from([InstructionBox::from(instruction)])
-            },
-        )?;
-
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_unshield_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    destination_ptr: *const c_char,
-    destination_len: c_ulong,
-    public_amount_ptr: *const c_char,
-    public_amount_len: c_ulong,
-    inputs_ptr: *const c_uchar,
-    inputs_len: c_ulong,
-    proof_json_ptr: *const c_char,
-    proof_json_len: c_ulong,
-    root_hint_ptr: *const c_uchar,
-    root_hint_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let algorithm = parse_algorithm_code(algorithm_code)?;
-        let inputs = unsafe {
-            gather_unshield_tx_inputs_with_parser(
-                UnshieldInputPointers {
-                    chain_ptr,
-                    chain_len,
-                    authority_ptr,
-                    authority_len,
-                    asset_definition_ptr,
-                    asset_definition_len,
-                    destination_ptr,
-                    destination_len,
-                    amount_ptr: public_amount_ptr,
-                    amount_len: public_amount_len,
-                    inputs_ptr,
-                    inputs_len,
-                    proof_json_ptr,
-                    proof_json_len,
-                    root_hint_ptr,
-                    root_hint_len,
-                    ttl_ms,
-                    ttl_present,
-                    private_key_ptr,
-                    private_key_len,
-                },
-                |bytes| parse_private_key_with_algorithm(bytes, algorithm),
-            )?
-        };
-
-        let UnshieldTxInputs {
-            chain_id,
-            authority,
-            asset_definition,
-            destination,
-            amount,
-            inputs,
-            proof,
-            root_hint,
-            ttl,
-            private_key,
-        } = inputs;
-
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            || {
-                let instruction = zk::Unshield::new(
-                    asset_definition,
-                    destination,
-                    amount,
-                    inputs,
-                    proof,
-                    root_hint,
-                );
-                Executable::from([InstructionBox::from(instruction)])
-            },
-        )?;
-
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_zk_transfer_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    inputs_ptr: *const c_uchar,
-    inputs_len: c_ulong,
-    outputs_ptr: *const c_uchar,
-    outputs_len: c_ulong,
-    proof_json_ptr: *const c_char,
-    proof_json_len: c_ulong,
-    root_hint_ptr: *const c_uchar,
-    root_hint_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let inputs = unsafe {
-            gather_zk_transfer_tx_inputs(ZkTransferInputPointers {
-                chain_ptr,
-                chain_len,
-                authority_ptr,
-                authority_len,
-                asset_definition_ptr,
-                asset_definition_len,
-                inputs_ptr,
-                inputs_len,
-                outputs_ptr,
-                outputs_len,
-                proof_json_ptr,
-                proof_json_len,
-                root_hint_ptr,
-                root_hint_len,
-                ttl_ms,
-                ttl_present,
-                private_key_ptr,
-                private_key_len,
-            })?
-        };
-
-        let ZkTransferTxInputs {
-            chain_id,
-            authority,
-            asset_definition,
-            inputs: nullifiers,
-            outputs,
-            proof,
-            root_hint,
-            ttl,
-            private_key,
-        } = inputs;
-
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            || {
-                let instruction =
-                    zk::ZkTransfer::new(asset_definition, nullifiers, outputs, proof, root_hint);
-                Executable::from([InstructionBox::from(instruction)])
-            },
-        )?;
-
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_zk_transfer_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    authority_ptr: *const c_char,
-    authority_len: c_ulong,
-    creation_time_ms: u64,
-    ttl_ms: u64,
-    ttl_present: c_uchar,
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    inputs_ptr: *const c_uchar,
-    inputs_len: c_ulong,
-    outputs_ptr: *const c_uchar,
-    outputs_len: c_ulong,
-    proof_json_ptr: *const c_char,
-    proof_json_len: c_ulong,
-    root_hint_ptr: *const c_uchar,
-    root_hint_len: c_ulong,
-    fee_payment_json_ptr: *const c_uchar,
-    fee_payment_json_len: c_ulong,
-    private_key_ptr: *const c_uchar,
-    private_key_len: c_ulong,
-    algorithm_code: u8,
-    out_signed_ptr: *mut *mut c_uchar,
-    out_signed_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let algorithm = parse_algorithm_code(algorithm_code)?;
-        let inputs = unsafe {
-            gather_zk_transfer_tx_inputs_with_parser(
-                ZkTransferInputPointers {
-                    chain_ptr,
-                    chain_len,
-                    authority_ptr,
-                    authority_len,
-                    asset_definition_ptr,
-                    asset_definition_len,
-                    inputs_ptr,
-                    inputs_len,
-                    outputs_ptr,
-                    outputs_len,
-                    proof_json_ptr,
-                    proof_json_len,
-                    root_hint_ptr,
-                    root_hint_len,
-                    ttl_ms,
-                    ttl_present,
-                    private_key_ptr,
-                    private_key_len,
-                },
-                |bytes| parse_private_key_with_algorithm(bytes, algorithm),
-            )?
-        };
-
-        let ZkTransferTxInputs {
-            chain_id,
-            authority,
-            asset_definition,
-            inputs: nullifiers,
-            outputs,
-            proof,
-            root_hint,
-            ttl,
-            private_key,
-        } = inputs;
-
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            chain_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            || {
-                let instruction =
-                    zk::ZkTransfer::new(asset_definition, nullifiers, outputs, proof, root_hint);
-                Executable::from([InstructionBox::from(instruction)])
-            },
-        )?;
-
-        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
-        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transaction(
     chain_ptr: *const c_char,
     chain_len: c_ulong,
@@ -25932,9 +24974,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
     mode_code: u8,
     allow_shield: c_uchar,
     allow_unshield: c_uchar,
-    vk_transfer_ptr: *const c_char,
-    vk_transfer_len: c_ulong,
-    vk_transfer_present: c_uchar,
     vk_unshield_ptr: *const c_char,
     vk_unshield_len: c_ulong,
     vk_unshield_present: c_uchar,
@@ -25967,9 +25006,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
         let asset_definition = parse_asset_definition(asset_definition_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let mode = parse_zk_asset_mode(mode_code)?;
-        let vk_transfer = unsafe {
-            parse_optional_verifying_key_id(vk_transfer_ptr, vk_transfer_len, vk_transfer_present)
-        }?;
         let vk_unshield = unsafe {
             parse_optional_verifying_key_id(vk_unshield_ptr, vk_unshield_len, vk_unshield_present)
         }?;
@@ -25986,7 +25022,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
             mode,
             allow_shield,
             allow_unshield,
-            vk_transfer,
             vk_unshield,
             vk_shield,
         );
@@ -26028,9 +25063,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
     mode_code: u8,
     allow_shield: c_uchar,
     allow_unshield: c_uchar,
-    vk_transfer_ptr: *const c_char,
-    vk_transfer_len: c_ulong,
-    vk_transfer_present: c_uchar,
     vk_unshield_ptr: *const c_char,
     vk_unshield_len: c_ulong,
     vk_unshield_present: c_uchar,
@@ -26065,9 +25097,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
         let asset_definition = parse_asset_definition(asset_definition_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let mode = parse_zk_asset_mode(mode_code)?;
-        let vk_transfer = unsafe {
-            parse_optional_verifying_key_id(vk_transfer_ptr, vk_transfer_len, vk_transfer_present)
-        }?;
         let vk_unshield = unsafe {
             parse_optional_verifying_key_id(vk_unshield_ptr, vk_unshield_len, vk_unshield_present)
         }?;
@@ -26084,7 +25113,6 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
             mode,
             allow_shield,
             allow_unshield,
-            vk_transfer,
             vk_unshield,
             vk_shield,
         );
@@ -26654,6 +25682,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
+    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
     let result = (|| {
         if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
             return Err(BridgeError::NullPtr);
@@ -26665,9 +25694,10 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
             return Err(BridgeError::Governance);
         }
 
+        let referendum_id =
+            unsafe { read_governance_selector_bridge(referendum_id_ptr, referendum_id_len) }?;
         let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let referendum_id = unsafe { read_string_bridge(referendum_id_ptr, referendum_id_len) }?;
         let owner_str = unsafe { read_string_bridge(owner_ptr, owner_len) }?;
         let amount_str = unsafe { read_string_bridge(amount_ptr, amount_len) }?;
 
@@ -26735,6 +25765,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
+    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
     let result = (|| {
         if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
             return Err(BridgeError::NullPtr);
@@ -26746,10 +25777,11 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
             return Err(BridgeError::Governance);
         }
 
+        let referendum_id =
+            unsafe { read_governance_selector_bridge(referendum_id_ptr, referendum_id_len) }?;
         let algorithm = parse_algorithm_code(algorithm_code)?;
         let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let referendum_id = unsafe { read_string_bridge(referendum_id_ptr, referendum_id_len) }?;
         let owner_str = unsafe { read_string_bridge(owner_ptr, owner_len) }?;
         let amount_str = unsafe { read_string_bridge(amount_ptr, amount_len) }?;
 
@@ -26814,6 +25846,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
+    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
     let result = (|| {
         if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
             return Err(BridgeError::NullPtr);
@@ -26822,9 +25855,10 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
             return Err(BridgeError::NullPtr);
         }
 
+        let election_id =
+            unsafe { read_governance_selector_bridge(election_id_ptr, election_id_len) }?;
         let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let election_id = unsafe { read_string_bridge(election_id_ptr, election_id_len) }?;
         let proof_raw = unsafe { read_string_bridge(proof_b64_ptr, proof_b64_len) }?;
         let inputs_slice =
             unsafe { slice::from_raw_parts(public_inputs_ptr, public_inputs_len as usize) };
@@ -26897,6 +25931,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
+    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
     let result = (|| {
         if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
             return Err(BridgeError::NullPtr);
@@ -26905,10 +25940,11 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
             return Err(BridgeError::NullPtr);
         }
 
+        let election_id =
+            unsafe { read_governance_selector_bridge(election_id_ptr, election_id_len) }?;
         let algorithm = parse_algorithm_code(algorithm_code)?;
         let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let election_id = unsafe { read_string_bridge(election_id_ptr, election_id_len) }?;
         let proof_raw = unsafe { read_string_bridge(proof_b64_ptr, proof_b64_len) }?;
         let inputs_slice =
             unsafe { slice::from_raw_parts(public_inputs_ptr, public_inputs_len as usize) };
@@ -27132,6 +26168,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
+    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
     let result = (|| {
         if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
             return Err(BridgeError::NullPtr);
@@ -27140,10 +26177,21 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
             return Err(BridgeError::NullPtr);
         }
 
+        let referendum_id = unsafe {
+            read_exact_lower_hex32_bridge(
+                referendum_id_ptr,
+                referendum_id_len,
+                BridgeError::Governance,
+            )
+        }?;
+        let proposal_hex = unsafe {
+            read_exact_lower_hex32_bridge(proposal_id_ptr, proposal_id_len, BridgeError::Hex)
+        }?;
+        if referendum_id != proposal_hex {
+            return Err(BridgeError::Governance);
+        }
         let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let referendum_id = unsafe { read_string_bridge(referendum_id_ptr, referendum_id_len) }?;
-        let proposal_hex = unsafe { read_string_bridge(proposal_id_ptr, proposal_id_len) }?;
 
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
@@ -27201,6 +26249,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
     out_hash_ptr: *mut c_uchar,
     out_hash_len: c_ulong,
 ) -> c_int {
+    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
     let result = (|| {
         if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
             return Err(BridgeError::NullPtr);
@@ -27209,11 +26258,22 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
             return Err(BridgeError::NullPtr);
         }
 
+        let referendum_id = unsafe {
+            read_exact_lower_hex32_bridge(
+                referendum_id_ptr,
+                referendum_id_len,
+                BridgeError::Governance,
+            )
+        }?;
+        let proposal_hex = unsafe {
+            read_exact_lower_hex32_bridge(proposal_id_ptr, proposal_id_len, BridgeError::Hex)
+        }?;
+        if referendum_id != proposal_hex {
+            return Err(BridgeError::Governance);
+        }
         let algorithm = parse_algorithm_code(algorithm_code)?;
         let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let referendum_id = unsafe { read_string_bridge(referendum_id_ptr, referendum_id_len) }?;
-        let proposal_hex = unsafe { read_string_bridge(proposal_id_ptr, proposal_id_len) }?;
 
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
@@ -27831,55 +26891,6 @@ mod accel_tests {
         CString::new(s).expect("valid cstring")
     }
 
-    fn proof_bytes_hash_hex(bytes: &[u8]) -> String {
-        let hash: [u8; Hash::LENGTH] = Hash::new(bytes).into();
-        hex::encode(hash)
-    }
-
-    fn proof_attachment_json(backend: &str, proof_b64: &str, envelope_hash_hex: &str) -> String {
-        format!(
-            r#"{{"backend":"{backend}","proof_b64":"{proof_b64}","vk_ref":{{"backend":"{backend}","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-        )
-    }
-
-    fn parse_proof_attachment_test_json(json: &str) -> BridgeResult<ProofAttachment> {
-        parse_proof_attachment_from_json_slice(json.as_bytes())
-    }
-
-    fn proof_attachment_json_with_lane(lane: &str) -> String {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        json.insert_str(json.len() - 1, &format!(r#", "lane_privacy":{lane}"#));
-        json
-    }
-
-    fn json_byte_array(bytes: &[u8]) -> String {
-        format!(
-            "[{}]",
-            bytes
-                .iter()
-                .map(u8::to_string)
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    }
-
-    fn lane_privacy_json(leaf_index: u64, audit_path: &[Option<Vec<u8>>]) -> String {
-        let leaf = json_byte_array(&[0xAA; 32]);
-        let path = audit_path
-            .iter()
-            .map(|sibling| {
-                sibling
-                    .as_deref()
-                    .map_or_else(|| "null".to_owned(), json_byte_array)
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        format!(
-            r#"{{"commitment_id":7,"witness":{{"kind":"merkle","payload":{{"leaf":{leaf},"proof":{{"leaf_index":{leaf_index},"audit_path":[{path}]}}}}}}}}"#
-        )
-    }
-
     fn chain_guard() -> std::sync::MutexGuard<'static, ()> {
         super::test_support::chain_discriminant_guard()
     }
@@ -27890,7 +26901,7 @@ mod accel_tests {
     }
 
     fn asset_definition_literal(domain: &str, name: &str) -> String {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new(domain, "universal").expect("domain"),
             Name::from_str(name).expect("name"),
         )
@@ -27901,103 +26912,25 @@ mod accel_tests {
         cstring(&asset_definition_literal(domain, name))
     }
 
-    fn call_shield_encoder(
-        ephemeral: &[u8; 32],
-        ciphertext: &[u8],
-        algorithm: Option<Algorithm>,
-    ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
-        let chain = cstring("test-chain");
-        let (authority, private) = sample_account("bank", 1);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let amount = cstring("7");
-        let note_commitment = [0x33_u8; 32];
-        let nonce = [0x44_u8; 24];
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0_u8; 32];
-        let result = unsafe {
-            if let Some(algorithm) = algorithm {
-                connect_norito_encode_shield_signed_transaction_alg(
-                    chain.as_ptr(),
-                    chain.as_bytes().len() as c_ulong,
-                    authority.as_ptr(),
-                    authority.as_bytes().len() as c_ulong,
-                    1,
-                    0,
-                    0,
-                    asset_definition.as_ptr(),
-                    asset_definition.as_bytes().len() as c_ulong,
-                    authority.as_ptr(),
-                    authority.as_bytes().len() as c_ulong,
-                    amount.as_ptr(),
-                    amount.as_bytes().len() as c_ulong,
-                    note_commitment.as_ptr(),
-                    note_commitment.len() as c_ulong,
-                    ephemeral.as_ptr(),
-                    ephemeral.len() as c_ulong,
-                    nonce.as_ptr(),
-                    nonce.len() as c_ulong,
-                    ciphertext.as_ptr(),
-                    ciphertext.len() as c_ulong,
-                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                    private.as_ptr(),
-                    private.len() as c_ulong,
-                    algorithm as u8,
-                    &mut out_signed_ptr,
-                    &mut out_signed_len,
-                    out_hash.as_mut_ptr(),
-                    out_hash.len() as c_ulong,
-                )
-            } else {
-                connect_norito_encode_shield_signed_transaction(
-                    chain.as_ptr(),
-                    chain.as_bytes().len() as c_ulong,
-                    authority.as_ptr(),
-                    authority.as_bytes().len() as c_ulong,
-                    1,
-                    0,
-                    0,
-                    asset_definition.as_ptr(),
-                    asset_definition.as_bytes().len() as c_ulong,
-                    authority.as_ptr(),
-                    authority.as_bytes().len() as c_ulong,
-                    amount.as_ptr(),
-                    amount.as_bytes().len() as c_ulong,
-                    note_commitment.as_ptr(),
-                    note_commitment.len() as c_ulong,
-                    ephemeral.as_ptr(),
-                    ephemeral.len() as c_ulong,
-                    nonce.as_ptr(),
-                    nonce.len() as c_ulong,
-                    ciphertext.as_ptr(),
-                    ciphertext.len() as c_ulong,
-                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                    private.as_ptr(),
-                    private.len() as c_ulong,
-                    &mut out_signed_ptr,
-                    &mut out_signed_len,
-                    out_hash.as_mut_ptr(),
-                    out_hash.len() as c_ulong,
-                )
-            }
-        };
-        (result, out_signed_ptr, out_signed_len, out_hash)
-    }
-
     fn call_plain_ballot_encoder(
+        referendum_id: &str,
         amount: &str,
         algorithm: Option<Algorithm>,
+        valid_private_key: bool,
     ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("governance", 30);
         let owner = sample_destination("governance", 31);
-        let referendum_id = cstring("ref-plain");
         let amount = cstring(amount);
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0_u8; 32];
+        let invalid_private = [0xFF_u8];
+        let private = if valid_private_key {
+            private.as_slice()
+        } else {
+            invalid_private.as_slice()
+        };
+        let mut out_signed_ptr: *mut u8 = ptr::dangling_mut();
+        let mut out_signed_len: c_ulong = c_ulong::MAX;
+        let mut out_hash = [0xA5_u8; 32];
         let result = unsafe {
             if let Some(algorithm) = algorithm {
                 connect_norito_encode_governance_cast_plain_ballot_signed_transaction_alg(
@@ -28008,8 +26941,8 @@ mod accel_tests {
                     1,
                     0,
                     0,
-                    referendum_id.as_ptr(),
-                    referendum_id.as_bytes().len() as c_ulong,
+                    referendum_id.as_ptr().cast::<c_char>(),
+                    referendum_id.len() as c_ulong,
                     owner.as_ptr(),
                     owner.as_bytes().len() as c_ulong,
                     amount.as_ptr(),
@@ -28035,8 +26968,8 @@ mod accel_tests {
                     1,
                     0,
                     0,
-                    referendum_id.as_ptr(),
-                    referendum_id.as_bytes().len() as c_ulong,
+                    referendum_id.as_ptr().cast::<c_char>(),
+                    referendum_id.len() as c_ulong,
                     owner.as_ptr(),
                     owner.as_bytes().len() as c_ulong,
                     amount.as_ptr(),
@@ -28057,6 +26990,296 @@ mod accel_tests {
         (result, out_signed_ptr, out_signed_len, out_hash)
     }
 
+    fn call_zk_ballot_encoder(
+        election_id: &str,
+        algorithm: Option<Algorithm>,
+        valid_private_key: bool,
+    ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
+        let chain = cstring("test-chain");
+        let (authority, private) = sample_account("governance", 32);
+        let proof = b"AQ==";
+        let public_inputs = b"{}";
+        let invalid_private = [0xFF_u8];
+        let private = if valid_private_key {
+            private.as_slice()
+        } else {
+            invalid_private.as_slice()
+        };
+        let mut out_signed_ptr: *mut u8 = ptr::dangling_mut();
+        let mut out_signed_len: c_ulong = c_ulong::MAX;
+        let mut out_hash = [0xA5_u8; 32];
+        let result = unsafe {
+            if let Some(algorithm) = algorithm {
+                connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg(
+                    chain.as_ptr(),
+                    chain.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    1,
+                    0,
+                    0,
+                    election_id.as_ptr().cast::<c_char>(),
+                    election_id.len() as c_ulong,
+                    proof.as_ptr().cast::<c_char>(),
+                    proof.len() as c_ulong,
+                    public_inputs.as_ptr(),
+                    public_inputs.len() as c_ulong,
+                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
+                    private.as_ptr(),
+                    private.len() as c_ulong,
+                    algorithm as u8,
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            } else {
+                connect_norito_encode_governance_cast_zk_ballot_signed_transaction(
+                    chain.as_ptr(),
+                    chain.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    1,
+                    0,
+                    0,
+                    election_id.as_ptr().cast::<c_char>(),
+                    election_id.len() as c_ulong,
+                    proof.as_ptr().cast::<c_char>(),
+                    proof.len() as c_ulong,
+                    public_inputs.as_ptr(),
+                    public_inputs.len() as c_ulong,
+                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
+                    private.as_ptr(),
+                    private.len() as c_ulong,
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            }
+        };
+        (result, out_signed_ptr, out_signed_len, out_hash)
+    }
+
+    fn call_finalize_referendum_encoder(
+        referendum_id: &str,
+        algorithm: Option<Algorithm>,
+        valid_private_key: bool,
+    ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
+        call_finalize_referendum_encoder_with_proposal(
+            referendum_id,
+            &"33".repeat(32),
+            algorithm,
+            valid_private_key,
+        )
+    }
+
+    fn call_finalize_referendum_encoder_with_proposal(
+        referendum_id: &str,
+        proposal_id: &str,
+        algorithm: Option<Algorithm>,
+        valid_private_key: bool,
+    ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
+        let chain = cstring("test-chain");
+        let (authority, private) = sample_account("governance", 33);
+        let proposal_id = cstring(proposal_id);
+        let invalid_private = [0xFF_u8];
+        let private = if valid_private_key {
+            private.as_slice()
+        } else {
+            invalid_private.as_slice()
+        };
+        let mut out_signed_ptr: *mut u8 = ptr::dangling_mut();
+        let mut out_signed_len: c_ulong = c_ulong::MAX;
+        let mut out_hash = [0xA5_u8; 32];
+        let result = unsafe {
+            if let Some(algorithm) = algorithm {
+                connect_norito_encode_governance_finalize_referendum_signed_transaction_alg(
+                    chain.as_ptr(),
+                    chain.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    1,
+                    0,
+                    0,
+                    referendum_id.as_ptr().cast::<c_char>(),
+                    referendum_id.len() as c_ulong,
+                    proposal_id.as_ptr(),
+                    proposal_id.as_bytes().len() as c_ulong,
+                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
+                    private.as_ptr(),
+                    private.len() as c_ulong,
+                    algorithm as u8,
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            } else {
+                connect_norito_encode_governance_finalize_referendum_signed_transaction(
+                    chain.as_ptr(),
+                    chain.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    1,
+                    0,
+                    0,
+                    referendum_id.as_ptr().cast::<c_char>(),
+                    referendum_id.len() as c_ulong,
+                    proposal_id.as_ptr(),
+                    proposal_id.as_bytes().len() as c_ulong,
+                    AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                    AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
+                    private.as_ptr(),
+                    private.len() as c_ulong,
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            }
+        };
+        (result, out_signed_ptr, out_signed_len, out_hash)
+    }
+
+    type GovernanceSelectorEncoder =
+        fn(&str, Option<Algorithm>, bool) -> (c_int, *mut u8, c_ulong, [u8; 32]);
+
+    fn call_plain_ballot_selector_encoder(
+        selector: &str,
+        algorithm: Option<Algorithm>,
+        valid_private_key: bool,
+    ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
+        call_plain_ballot_encoder(selector, "1", algorithm, valid_private_key)
+    }
+
+    fn governance_selector_encoders() -> [(&'static str, GovernanceSelectorEncoder); 3] {
+        [
+            ("CastPlainBallot", call_plain_ballot_selector_encoder),
+            ("CastZkBallot", call_zk_ballot_encoder),
+            ("FinalizeReferendum", call_finalize_referendum_encoder),
+        ]
+    }
+
+    #[test]
+    fn governance_selector_encoders_accept_exact_length_boundaries() {
+        let _guard = chain_guard();
+        let maximum = "a".repeat(128);
+        for selector in ["a", maximum.as_str()] {
+            for algorithm in [None, Some(Algorithm::Ed25519)] {
+                for (instruction, encode) in governance_selector_encoders() {
+                    if instruction == "FinalizeReferendum" {
+                        continue;
+                    }
+                    let (result, out_signed_ptr, out_signed_len, out_hash) =
+                        encode(selector, algorithm, true);
+                    assert_eq!(
+                        result,
+                        0,
+                        "{instruction} selector length {} must encode",
+                        selector.len()
+                    );
+                    assert!(!out_signed_ptr.is_null());
+                    assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
+                    unsafe { free(out_signed_ptr.cast()) };
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn governance_finalize_encoder_requires_one_exact_proposal_fingerprint_before_crypto() {
+        let _guard = chain_guard();
+        let proposal_id = "33".repeat(32);
+        let uppercase_referendum = proposal_id.to_uppercase();
+        for algorithm in [None, Some(Algorithm::Ed25519)] {
+            let (result, out_signed_ptr, out_signed_len, out_hash) =
+                call_finalize_referendum_encoder_with_proposal(
+                    &proposal_id,
+                    &proposal_id,
+                    algorithm,
+                    true,
+                );
+            assert_eq!(result, 0);
+            assert!(!out_signed_ptr.is_null());
+            assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
+            unsafe { free(out_signed_ptr.cast()) };
+
+            for (case, referendum_id, candidate, expected) in [
+                (
+                    "mismatched referendum",
+                    proposal_id.as_str(),
+                    "44".repeat(32),
+                    ERR_GOVERNANCE,
+                ),
+                (
+                    "uppercase referendum",
+                    uppercase_referendum.as_str(),
+                    proposal_id.clone(),
+                    ERR_GOVERNANCE,
+                ),
+                (
+                    "uppercase proposal",
+                    proposal_id.as_str(),
+                    proposal_id.to_uppercase(),
+                    ERR_HEX,
+                ),
+                (
+                    "prefixed proposal",
+                    proposal_id.as_str(),
+                    format!("0x{proposal_id}"),
+                    ERR_HEX,
+                ),
+            ] {
+                let (result, out_signed_ptr, out_signed_len, out_hash) =
+                    call_finalize_referendum_encoder_with_proposal(
+                        referendum_id,
+                        &candidate,
+                        algorithm,
+                        false,
+                    );
+                assert_eq!(result, expected, "{case}");
+                assert!(out_signed_ptr.is_null(), "{case}");
+                assert_eq!(out_signed_len, 0, "{case}");
+                assert_eq!(out_hash, [0_u8; 32], "{case}");
+            }
+        }
+    }
+
+    #[test]
+    fn governance_selector_encoders_reject_aliases_before_crypto_without_outputs() {
+        let _guard = chain_guard();
+        let overlong = "a".repeat(129);
+        for (case, selector) in [
+            ("empty", ""),
+            ("dot", "."),
+            ("leading dot", ".hidden"),
+            ("slash", "a/b"),
+            ("percent", "a%2Fb"),
+            ("whitespace", "a b"),
+            ("control", "a\0b"),
+            ("Unicode", "投票"),
+            ("129 bytes", overlong.as_str()),
+        ] {
+            for algorithm in [None, Some(Algorithm::Ed25519)] {
+                for (instruction, encode) in governance_selector_encoders() {
+                    let (result, out_signed_ptr, out_signed_len, out_hash) =
+                        encode(selector, algorithm, false);
+                    assert_eq!(
+                        result, ERR_GOVERNANCE,
+                        "{instruction} must reject {case} before parsing the poisoned private key"
+                    );
+                    assert!(out_signed_ptr.is_null(), "{instruction} {case}");
+                    assert_eq!(out_signed_len, 0, "{instruction} {case}");
+                    assert_eq!(out_hash, [0_u8; 32], "{instruction} {case}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn governance_plain_ballot_encoders_preserve_canonical_quantity_amounts() {
         let _guard = chain_guard();
@@ -28064,7 +27287,7 @@ mod accel_tests {
         for algorithm in [None, Some(Algorithm::Ed25519)] {
             for amount in ["1.25", wide] {
                 let (result, out_signed_ptr, out_signed_len, out_hash) =
-                    call_plain_ballot_encoder(amount, algorithm);
+                    call_plain_ballot_encoder("ref-plain", amount, algorithm, true);
                 assert_eq!(result, 0, "canonical Quantity {amount:?} must encode");
                 assert!(!out_signed_ptr.is_null());
                 assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
@@ -28092,7 +27315,7 @@ mod accel_tests {
         for algorithm in [None, Some(Algorithm::Ed25519)] {
             for amount in ["", "-1", "01", "1.0", "+1", " 1", "1 ", "1e3"] {
                 let (result, out_signed_ptr, out_signed_len, out_hash) =
-                    call_plain_ballot_encoder(amount, algorithm);
+                    call_plain_ballot_encoder("ref-plain", amount, algorithm, true);
                 assert_eq!(
                     result, ERR_QUANTITY_PARSE,
                     "invalid public Quantity {amount:?} must be rejected"
@@ -28134,7 +27357,7 @@ mod accel_tests {
         let account_id = AccountId::parse_encoded(account_literal)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("parse account");
-        let definition = AssetDefinitionId::new(
+        let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("bank", "universal").expect("domain"),
             "usd".parse().expect("asset name"),
         );
@@ -29264,48 +28487,6 @@ mod accel_tests {
     }
 
     #[test]
-    fn shield_encoder_accepts_valid_confidential_payload() {
-        let _guard = chain_guard();
-        for algorithm in [None, Some(Algorithm::Ed25519)] {
-            let (result, out_signed_ptr, out_signed_len, out_hash) =
-                call_shield_encoder(&[0x07; 32], &[0x09, 0x0A], algorithm);
-            assert_eq!(result, 0, "expected shield encoder success");
-            assert!(!out_signed_ptr.is_null());
-            assert!(out_signed_len > 0);
-            assert_ne!(out_hash, [0u8; 32]);
-            unsafe {
-                free(out_signed_ptr as *mut _);
-            }
-        }
-    }
-
-    #[test]
-    fn shield_encoder_rejects_low_order_confidential_payload_key() {
-        let _guard = chain_guard();
-        for algorithm in [None, Some(Algorithm::Ed25519)] {
-            let (result, out_signed_ptr, out_signed_len, out_hash) =
-                call_shield_encoder(&[0x00; 32], &[0x09, 0x0A], algorithm);
-            assert_eq!(result, ERR_CONFIDENTIAL_PAYLOAD);
-            assert!(out_signed_ptr.is_null());
-            assert_eq!(out_signed_len, 0);
-            assert_eq!(out_hash, [0u8; 32]);
-        }
-    }
-
-    #[test]
-    fn shield_encoder_rejects_empty_confidential_ciphertext() {
-        let _guard = chain_guard();
-        for algorithm in [None, Some(Algorithm::Ed25519)] {
-            let (result, out_signed_ptr, out_signed_len, out_hash) =
-                call_shield_encoder(&[0x07; 32], &[], algorithm);
-            assert_eq!(result, ERR_CONFIDENTIAL_PAYLOAD);
-            assert!(out_signed_ptr.is_null());
-            assert_eq!(out_signed_len, 0);
-            assert_eq!(out_hash, [0u8; 32]);
-        }
-    }
-
-    #[test]
     fn confidential_payload_encoder_accepts_valid_payload() {
         let (result, out_ptr, out_len) =
             call_confidential_payload_encoder(&[0x07; 32], &[0x09, 0x0A]);
@@ -29391,734 +28572,61 @@ mod accel_tests {
     }
 
     #[test]
-    fn zk_transfer_encoder_success() {
-        let _guard = chain_guard();
-        let chain = cstring("test-chain");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let inputs = [0x11_u8; 32];
-        let outputs = [0x22_u8; 32];
-        let proof_json = proof_attachment_json("groth16", "AA==", &proof_bytes_hash_hex(&[0_u8]));
-        let proof = cstring(&proof_json);
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_zk_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                inputs.as_ptr(),
-                inputs.len() as c_ulong,
-                outputs.as_ptr(),
-                outputs.len() as c_ulong,
-                proof.as_ptr(),
-                proof.as_bytes().len() as c_ulong,
-                ptr::null(),
-                0,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, 0, "expected success");
-        assert!(!out_signed_ptr.is_null());
-        assert!(out_signed_len > 0);
-        assert_ne!(out_hash, [0u8; 32], "hash should be populated");
-        unsafe {
-            free(out_signed_ptr as *mut _);
-        }
-    }
-
-    #[test]
-    fn unshield_encoder_path_preserves_private_change_outputs() {
-        let _guard = chain_guard();
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
-        let (authority, private) = sample_account("bank", 1);
-        let authority = parse_account_id(authority.to_str().expect("account").to_owned())
-            .expect("parse authority");
-        let private_key = parse_private_key(&private).expect("parse private key");
-        let asset_definition =
-            parse_asset_definition(asset_definition_literal("bank", "usd")).expect("asset");
-        let destination = authority.clone();
-        let input = [0x11_u8; 32];
-        let output = [0x22_u8; 32];
-        let proof_json = proof_attachment_json("groth16", "AA==", &proof_bytes_hash_hex(&[0_u8]));
-        let proof = parse_proof_attachment_from_json_slice(proof_json.as_bytes()).expect("proof");
-
-        let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            chain_id,
-            authority,
-            1,
-            None,
-            FeePaymentIntent::authority(Vec::new(), None),
-            private_key,
-            || {
-                let instruction = zk::Unshield::new_with_outputs(
-                    asset_definition,
-                    destination,
-                    7_u128,
-                    vec![input],
-                    vec![output],
-                    proof,
-                    Some([0x33_u8; 32]),
-                );
-                Executable::from([InstructionBox::from(instruction)])
-            },
-        )
-        .expect("encode unshield signed transaction");
-        let signed = decode_signed_transaction(&signed_bytes).expect("decode signed transaction");
-        assert_eq!(hash_bytes, *signed.hash().as_ref());
-        match signed.instructions() {
-            Executable::Instructions(instructions) => {
-                assert_eq!(instructions.len(), 1);
-                let unshield = instructions[0]
-                    .as_any()
-                    .downcast_ref::<zk::Unshield>()
-                    .expect("unshield instruction");
-                assert_eq!(unshield.inputs, vec![input]);
-                assert_eq!(unshield.outputs, vec![output]);
-                assert_eq!(unshield.root_hint, Some([0x33_u8; 32]));
-            }
-            other => panic!("unexpected executable: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn zk_transfer_encoder_rejects_legacy_inline_vk_field() {
-        let _guard = chain_guard();
-        let chain = cstring("test-chain");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let inputs = [0x11_u8; 32];
-        let outputs = [0x22_u8; 32];
-        let proof = cstring(
-            r#"{"backend":"groth16","proof_b64":"AA==","vk_ref":{"backend":"groth16","name":"vk1"},"verifyingKeyInline":{"backend":"groth16","bytes_b64":"AQID"}}"#,
-        );
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_zk_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                inputs.as_ptr(),
-                inputs.len() as c_ulong,
-                outputs.as_ptr(),
-                outputs.len() as c_ulong,
-                proof.as_ptr(),
-                proof.as_bytes().len() as c_ulong,
-                ptr::null(),
-                0,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, ERR_PROOF_ATTACHMENT);
-        assert!(out_signed_ptr.is_null());
-        assert_eq!(out_signed_len, 0);
-        assert_eq!(out_hash, [0u8; 32]);
-    }
-
-    #[test]
-    fn zk_transfer_encoder_rejects_proof_backend_mismatch() {
-        let _guard = chain_guard();
-        let chain = cstring("test-chain");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let inputs = [0x11_u8; 32];
-        let outputs = [0x22_u8; 32];
-        let proof = cstring(
-            r#"{"backend":"halo2/ipa","proof_backend":"stark/fri","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
-        );
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_zk_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                inputs.as_ptr(),
-                inputs.len() as c_ulong,
-                outputs.as_ptr(),
-                outputs.len() as c_ulong,
-                proof.as_ptr(),
-                proof.as_bytes().len() as c_ulong,
-                ptr::null(),
-                0,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, ERR_PROOF_ATTACHMENT);
-        assert!(out_signed_ptr.is_null());
-        assert_eq!(out_signed_len, 0);
-        assert_eq!(out_hash, [0u8; 32]);
-    }
-
-    #[test]
-    fn zk_transfer_encoder_rejects_vk_ref_backend_mismatch() {
-        let _guard = chain_guard();
-        let chain = cstring("test-chain");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let inputs = [0x11_u8; 32];
-        let outputs = [0x22_u8; 32];
-        let proof = cstring(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"stark/fri","name":"vk1"}}"#,
-        );
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_zk_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                inputs.as_ptr(),
-                inputs.len() as c_ulong,
-                outputs.as_ptr(),
-                outputs.len() as c_ulong,
-                proof.as_ptr(),
-                proof.as_bytes().len() as c_ulong,
-                ptr::null(),
-                0,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, ERR_PROOF_ATTACHMENT);
-        assert!(out_signed_ptr.is_null());
-        assert_eq!(out_signed_len, 0);
-        assert_eq!(out_hash, [0u8; 32]);
-    }
-
-    #[test]
-    fn zk_transfer_encoder_rejects_vk_reference_shadow_field() {
-        let _guard = chain_guard();
-        let chain = cstring("test-chain");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let inputs = [0x11_u8; 32];
-        let outputs = [0x22_u8; 32];
-        let proof = cstring(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"},"vk_reference":{"backend":"halo2/ipa","name":"shadow"}}"#,
-        );
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_zk_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                inputs.as_ptr(),
-                inputs.len() as c_ulong,
-                outputs.as_ptr(),
-                outputs.len() as c_ulong,
-                proof.as_ptr(),
-                proof.as_bytes().len() as c_ulong,
-                ptr::null(),
-                0,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, ERR_PROOF_ATTACHMENT);
-        assert!(out_signed_ptr.is_null());
-        assert_eq!(out_signed_len, 0);
-        assert_eq!(out_hash, [0u8; 32]);
-    }
-
-    #[test]
-    fn zk_transfer_encoder_rejects_nested_vk_ref_shadow_field() {
-        let _guard = chain_guard();
-        let chain = cstring("test-chain");
-        let (authority, private) = sample_account("bank", 0);
-        let asset_definition = asset_definition_cstring("bank", "usd");
-        let inputs = [0x11_u8; 32];
-        let outputs = [0x22_u8; 32];
-        let proof = cstring(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1","vk_reference":"shadow"}}"#,
-        );
-        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
-        let mut out_signed_len: c_ulong = 0;
-        let mut out_hash = [0u8; 32];
-        let result = unsafe {
-            connect_norito_encode_zk_transfer_signed_transaction(
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                inputs.as_ptr(),
-                inputs.len() as c_ulong,
-                outputs.as_ptr(),
-                outputs.len() as c_ulong,
-                proof.as_ptr(),
-                proof.as_bytes().len() as c_ulong,
-                ptr::null(),
-                0,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-                &mut out_signed_ptr,
-                &mut out_signed_len,
-                out_hash.as_mut_ptr(),
-                out_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(result, ERR_PROOF_ATTACHMENT);
-        assert!(out_signed_ptr.is_null());
-        assert_eq!(out_signed_len, 0);
-        assert_eq!(out_hash, [0u8; 32]);
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_legacy_inline_vk_field() {
-        for field in [
-            "vk_inline",
-            "vkInline",
-            "verifyingKeyInline",
-            "verifying_key_inline",
-        ] {
-            let json = format!(
-                r#"{{"backend":"groth16","proof_b64":"AA==","vk_ref":{{"backend":"groth16","name":"vk1"}},"{field}":{{"backend":"groth16","bytes_b64":"AQID"}}}}"#
-            );
-            let err = parse_proof_attachment_test_json(&json)
-                .expect_err("legacy inline verifying-key field rejected");
-            assert!(matches!(err, BridgeError::ProofAttachment));
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_accepts_matching_envelope_hash() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        let attachment =
-            parse_proof_attachment_test_json(&json).expect("matching envelope hash should parse");
-        assert_eq!(attachment.envelope_hash, Some(Hash::new([0_u8]).into()));
-    }
-
-    #[test]
-    fn proof_attachment_json_accepts_typed_lane_privacy_and_marks_raw_siblings() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let lane = lane_privacy_json(1, &[Some(vec![0x22; 32]), Some(vec![0x44; 32])]);
-        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        json.insert_str(json.len() - 1, &format!(r#", "lane_privacy":{lane}"#));
-        let attachment = parse_proof_attachment_test_json(&json).expect("typed lane privacy");
-        let lane = attachment.lane_privacy.expect("lane privacy attachment");
-        let iroha_data_model::nexus::LanePrivacyWitness::Merkle(witness) = lane.witness;
-        assert_eq!(witness.proof.leaf_index(), 1);
-        assert_eq!(witness.proof.audit_path().len(), 2);
-        for sibling in witness.proof.audit_path() {
-            let sibling = sibling.as_ref().expect("complete lane path");
-            assert_eq!(sibling.as_ref()[31] & 1, 1);
-        }
-    }
-
-    #[test]
-    fn lane_privacy_json_rejects_incomplete_impossible_and_oversized_paths() {
-        let sibling = Some(vec![0x22; 32]);
-        let too_deep = vec![sibling.clone(); LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1];
-        let cases = [
-            lane_privacy_json(0, &[]),
-            lane_privacy_json(0, &[None]),
-            lane_privacy_json(2, std::slice::from_ref(&sibling)),
-            lane_privacy_json(0, &[Some(vec![0x22; 31])]),
-            lane_privacy_json(0, &too_deep),
-            lane_privacy_json(0, std::slice::from_ref(&sibling)).replacen(
-                r#""proof":{"#,
-                r#""shadow":0,"proof":{"#,
-                1,
-            ),
-            lane_privacy_json(0, std::slice::from_ref(&sibling)).replacen(
-                r#""merkle""#,
-                r#""snark""#,
-                1,
-            ),
-        ];
-        for lane in cases {
-            let json = proof_attachment_json_with_lane(&lane);
-            let error = parse_proof_attachment_test_json(&json)
-                .expect_err("malformed lane privacy path must reject");
-            assert!(matches!(error, BridgeError::ProofAttachment));
-        }
-    }
-
-    #[test]
-    fn proof_attachment_base64_is_canonical_and_bounded_before_use() {
-        assert_eq!(
-            decode_canonical_bounded_base64("AA==", 1).expect("canonical one byte"),
-            vec![0]
-        );
-        assert_eq!(
-            decode_canonical_bounded_base64("AAA=", 2).expect("canonical two bytes"),
-            vec![0, 0]
-        );
-        for (value, maximum) in [
-            ("AAAA", 2),
-            ("AB==", 1),
-            ("AAB=", 2),
-            ("AA==\n", 1),
-            ("AA=A", 3),
-            ("AA_-", 3),
-        ] {
-            assert!(
-                decode_canonical_bounded_base64(value, maximum).is_err(),
-                "base64 {value:?} with maximum {maximum} must reject"
-            );
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_input_is_bounded_before_parsing() {
-        assert_eq!(
-            PROOF_ATTACHMENT_JSON_MAX_BASE64_BYTES_V1,
-            PROOF_BOX_MAX_ENCODED_BYTES_V1.div_ceil(3) * 4
-        );
-        assert!(!proof_attachment_json_length_is_valid(0));
-        assert!(proof_attachment_json_length_is_valid(
-            PROOF_ATTACHMENT_JSON_MAX_BYTES_V1
-        ));
-        assert!(!proof_attachment_json_length_is_valid(
-            PROOF_ATTACHMENT_JSON_MAX_BYTES_V1
-                .checked_add(1)
-                .expect("JSON limit has a successor")
-        ));
-
-        let byte = b'{';
-        let oversized = c_ulong::try_from(PROOF_ATTACHMENT_JSON_MAX_BYTES_V1 + 1)
-            .expect("proof attachment JSON limit fits the C ABI length");
-        assert!(matches!(
-            parse_proof_attachment_from_json_bytes((&byte as *const u8).cast(), oversized),
-            Err(BridgeError::ProofAttachment)
-        ));
-    }
-
-    #[test]
-    fn proof_attachment_json_small_schema_strings_are_prebounded() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let oversized_identifier = "a".repeat(VERIFYING_KEY_ID_MAX_FIELD_BYTES + 1);
-        let oversized_kind = "m".repeat(17);
-        let lane = lane_privacy_json(0, &[Some(vec![0x22; 32])]);
-
-        let cases = [
-            proof_attachment_json(&oversized_identifier, "AA==", &envelope_hash_hex),
-            format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"{oversized_identifier}"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            ),
-            proof_attachment_json("halo2/ipa", "AA==", &format!("{envelope_hash_hex}0")),
-            proof_attachment_json_with_lane(&lane.replacen("merkle", &oversized_kind, 1)),
-        ];
-
-        for json in cases {
-            assert!(
-                parse_proof_attachment_test_json(&json).is_err(),
-                "oversized semantic string must reject before retention"
-            );
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_streaming_parser_rejects_types_duplicates_and_nulls() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let numeric_payload = "0,".repeat(16_384);
-        let cases = [
-            format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":[{numeric_payload}0],"vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            ),
-            format!(
-                r#"{{"backend":"halo2/ipa","backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            ),
-            format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            ),
-            format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}","lane_privacy":null}}"#
-            ),
-        ];
-        for json in cases {
-            assert!(
-                parse_proof_attachment_test_json(&json).is_err(),
-                "adversarial JSON must reject"
-            );
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_streaming_parser_rejects_trailing_commas_at_every_object_depth() {
-        fn insert_before_closing_brace(value: &str, closing_from_end: usize) -> String {
-            let position = value
-                .char_indices()
-                .rev()
-                .filter_map(|(index, character)| (character == '}').then_some(index))
-                .nth(closing_from_end - 1)
-                .expect("requested object depth exists");
-            let mut mutated = value.to_owned();
-            mutated.insert(position, ',');
-            mutated
-        }
-
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let plain = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        let sibling = Some(vec![0x22; 32]);
-        let lane = lane_privacy_json(0, std::slice::from_ref(&sibling));
-
-        let mut cases = vec![
-            insert_before_closing_brace(&plain, 1),
-            plain.replacen(r#""name":"vk1"}"#, r#""name":"vk1",}"#, 1),
-        ];
-        // From the end of the isolated lane object these are respectively the
-        // lane, witness, payload, and Merkle-proof object boundaries.
-        for closing_from_end in 1..=4 {
-            let malformed_lane = insert_before_closing_brace(&lane, closing_from_end);
-            cases.push(proof_attachment_json_with_lane(&malformed_lane));
-        }
-
-        for json in cases {
-            assert!(
-                parse_proof_attachment_test_json(&json).is_err(),
-                "trailing object comma must reject: {json}"
-            );
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_streaming_parser_is_order_independent_and_path_bounded() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let reordered = format!(
-            r#"{{"envelope_hash_hex":"{envelope_hash_hex}","vk_ref":{{"name":"vk1","backend":"halo2/ipa"}},"proof_b64":"AA==","backend":"halo2/ipa"}}"#
-        );
-        parse_proof_attachment_test_json(&reordered).expect("field order is not semantic");
-
-        let sibling = Some(vec![0x22; 32]);
-        let maximum_path = vec![sibling.clone(); LANE_PRIVACY_MAX_MERKLE_DEPTH_V1];
-        let maximum_lane = lane_privacy_json(0, &maximum_path);
-        parse_proof_attachment_test_json(&proof_attachment_json_with_lane(&maximum_lane))
-            .expect("maximum-depth complete path must parse");
-
-        let oversized_path = vec![sibling; LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1];
-        let oversized_lane = lane_privacy_json(0, &oversized_path);
-        assert!(
-            parse_proof_attachment_test_json(&proof_attachment_json_with_lane(&oversized_lane))
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn proof_attachment_jni_proof_json_is_bounded_before_copy() {
+    fn generic_privacy_transaction_encoders_are_absent_from_the_c_abi() {
         let source = include_str!("lib.rs");
-        let implementation = source
-            .split_once("fn java_native_encode_unshield_signed_transaction(")
-            .expect("unshield JNI helper remains present")
-            .1
-            .split_once("\n}\n\n#[cfg(")
-            .expect("unshield JNI helper remains discrete")
-            .0;
-        assert!(implementation.contains("read_java_byte_array_bounded("));
-        assert!(implementation.contains("PROOF_ATTACHMENT_JSON_MAX_BYTES_V1"));
-        assert!(!implementation.contains("read_java_byte_array(env, &proof_json"));
-    }
+        let header = include_str!("../include/connect_norito_bridge.h");
+        let retired_c_symbols = [
+            ["connect_norito_encode_", "shield", "_signed_transaction"].concat(),
+            [
+                "connect_norito_encode_",
+                "shield",
+                "_signed_transaction_alg",
+            ]
+            .concat(),
+            ["connect_norito_encode_", "unshield", "_signed_transaction"].concat(),
+            [
+                "connect_norito_encode_",
+                "unshield",
+                "_signed_transaction_alg",
+            ]
+            .concat(),
+            [
+                "connect_norito_encode_",
+                "zk_transfer",
+                "_signed_transaction",
+            ]
+            .concat(),
+            [
+                "connect_norito_encode_",
+                "zk_transfer",
+                "_signed_transaction_alg",
+            ]
+            .concat(),
+        ];
 
-    #[test]
-    fn proof_attachment_json_rejects_missing_envelope_hash() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
-        )
-        .expect_err("envelope_hash_hex must be present");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_forged_envelope_hash() {
-        let forged_hash = hex::encode([0x11_u8; 32]);
-        let json = proof_attachment_json("halo2/ipa", "AA==", &forged_hash);
-        let err = parse_proof_attachment_test_json(&json)
-            .expect_err("envelope_hash_hex must match proof bytes");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_noncanonical_envelope_hash_hex() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        for noncanonical in [
-            envelope_hash_hex.to_uppercase(),
-            format!("0x{envelope_hash_hex}"),
-            format!(" {envelope_hash_hex}"),
-        ] {
-            let json = proof_attachment_json("halo2/ipa", "AA==", &noncanonical);
-            let err = parse_proof_attachment_test_json(&json)
-                .expect_err("envelope_hash_hex must be exact lowercase hex");
-            assert!(matches!(err, BridgeError::ProofAttachment));
+        for (label, contents) in [("Rust source", source), ("C header", header)] {
+            for symbol in &retired_c_symbols {
+                assert!(
+                    !contents.contains(symbol),
+                    "{label} must not expose retired generic encoder {symbol}"
+                );
+            }
         }
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_zero_vk_commitment() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        json.insert_str(
-            json.len() - 1,
-            r#","vk_commitment_hex":"0000000000000000000000000000000000000000000000000000000000000000""#,
-        );
-        let err =
-            parse_proof_attachment_test_json(&json).expect_err("zero vk commitment must reject");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_empty_proof_bytes() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[]);
-        let json = proof_attachment_json("halo2/ipa", "", &envelope_hash_hex);
-        let err =
-            parse_proof_attachment_test_json(&json).expect_err("empty proof bytes must reject");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_retired_proof_backend_field() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_backend":"stark/fri","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
-        )
-        .expect_err("retired proof_backend field should be rejected by bridge parser");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_bad_fixed_hash_lengths() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"},"vk_commitment_hex":"abcd"}"#,
-        )
-        .expect_err("short vk_commitment_hex should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_non_string_vk_commitment() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        for non_string in ["null", "false", "0", "[]", "{}"] {
-            let json = format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"vk_commitment_hex":{non_string},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
+        for retired_constructor in [
+            ["zk::", "Sh", "ield::new"].concat(),
+            ["zk::", "Zk", "Transfer::new"].concat(),
+            ["zk::", "Un", "shield::new"].concat(),
+        ] {
+            assert!(
+                !source.contains(&retired_constructor),
+                "bridge must not compile retired constructor {retired_constructor}"
             );
-            let err = parse_proof_attachment_test_json(&json)
-                .expect_err("a present vk commitment must be canonical lowercase hex");
-            assert!(matches!(err, BridgeError::ProofAttachment));
         }
-    }
 
-    #[test]
-    fn proof_attachment_json_rejects_vk_ref_backend_mismatch() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"stark/fri","name":"vk1"}}"#,
-        )
-        .expect_err("vk_ref backend mismatch should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_vk_reference_shadow_field() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"},"vk_reference":{"backend":"halo2/ipa","name":"shadow"}}"#,
-        )
-        .expect_err("vk_reference shadow field should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_nested_vk_ref_shadow_field() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1","vk_reference":"shadow"}}"#,
-        )
-        .expect_err("nested vk_ref shadow field should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_blank_vk_ref_name() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"   "}}"#,
-        )
-        .expect_err("blank vk_ref name should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_blank_backend_fields() {
-        for json in [
-            r#"{"backend":"   ","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"   ","name":"vk1"}}"#,
-        ] {
-            let err = parse_proof_attachment_test_json(json)
-                .expect_err("blank backend field should be rejected");
-            assert!(matches!(err, BridgeError::ProofAttachment));
-        }
+        assert!(header.contains("connect_norito_encode_register_zk_asset_signed_transaction"));
+        assert!(header.contains("allow_unshield"));
+        assert!(header.contains("vk_unshield"));
+        assert!(source.contains("build_confidential_unshield_proof_v3_with_paths"));
     }
 
     #[test]
@@ -33209,75 +31717,6 @@ fn java_fee_payment_intent_from_json(bytes: &[u8]) -> Result<FeePaymentIntent, S
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_fixed_array<const N: usize>(
-    env: &mut jni::JNIEnv<'_>,
-    array: &jni::objects::JByteArray<'_>,
-    context: &str,
-) -> Result<[u8; N], String> {
-    let bytes =
-        read_java_byte_array(env, array, context).ok_or_else(|| format!("invalid {context}"))?;
-    if bytes.len() != N {
-        return Err(format!("{context} must be exactly {N} bytes"));
-    }
-    let mut out = [0u8; N];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-fn java_fixed_32_chunks(
-    bytes: &[u8],
-    require_non_empty: bool,
-    context: &str,
-) -> Result<Vec<[u8; 32]>, String> {
-    if bytes.is_empty() {
-        if require_non_empty {
-            return Err(format!("{context} must contain at least one 32-byte entry"));
-        }
-        return Ok(Vec::new());
-    }
-    if !bytes.len().is_multiple_of(32) {
-        return Err(format!("{context} length must be a multiple of 32 bytes"));
-    }
-    Ok(bytes
-        .chunks_exact(32)
-        .map(|chunk| {
-            let mut out = [0u8; 32];
-            out.copy_from_slice(chunk);
-            out
-        })
-        .collect())
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-fn java_optional_root_hint(bytes: &[u8]) -> Result<Option<[u8; 32]>, String> {
-    if bytes.is_empty() {
-        return Ok(None);
-    }
-    if bytes.len() != 32 {
-        return Err("rootHint must be exactly 32 bytes when provided".to_owned());
-    }
-    let mut root = [0u8; 32];
-    root.copy_from_slice(bytes);
-    Ok(Some(root))
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
 fn java_verifying_key_id(
     value: Option<String>,
     context: &str,
@@ -33359,207 +31798,6 @@ fn java_byte_array_pair(
     target_os = "windows"
 ))]
 #[allow(clippy::too_many_arguments)]
-fn java_native_encode_shield_signed_transaction(
-    env: &mut jni::JNIEnv<'_>,
-    algorithm_code: jni::sys::jint,
-    chain_id: jni::objects::JByteArray<'_>,
-    chain_discriminant: jni::sys::jint,
-    authority: jni::objects::JByteArray<'_>,
-    creation_time_ms: jni::sys::jlong,
-    ttl_ms: jni::sys::jlong,
-    ttl_present: jni::sys::jboolean,
-    asset: jni::objects::JByteArray<'_>,
-    from_account: jni::objects::JByteArray<'_>,
-    amount: jni::objects::JByteArray<'_>,
-    note_commitment: jni::objects::JByteArray<'_>,
-    payload_ephemeral: jni::objects::JByteArray<'_>,
-    payload_nonce: jni::objects::JByteArray<'_>,
-    payload_ciphertext: jni::objects::JByteArray<'_>,
-    private_key: jni::objects::JByteArray<'_>,
-    fee_payment_json: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    let result = (|| -> Result<jni::sys::jobjectArray, String> {
-        if creation_time_ms < 0 || ttl_ms < 0 {
-            return Err("creationTimeMs and ttlMs must be non-negative".to_owned());
-        }
-        let chain_id: ChainId = java_text_array(env, &chain_id, "chainId")?
-            .parse()
-            .map_err(|_| "invalid chainId".to_owned())?;
-        let chain_discriminant = u16::try_from(chain_discriminant)
-            .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
-        let authority = parse_account_id_for_chain(
-            java_text_array(env, &authority, "authority")?,
-            chain_discriminant,
-        )
-        .map_err(|_| "invalid authority".to_owned())?;
-        let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
-            .map_err(|_| "invalid asset".to_owned())?;
-        let from_account = parse_account_id_for_chain(
-            java_text_array(env, &from_account, "from")?,
-            chain_discriminant,
-        )
-        .map_err(|_| "invalid from".to_owned())?;
-        let amount = parse_public_quantity(java_text_array(env, &amount, "amount")?)
-            .map_err(|_| "invalid amount".to_owned())?;
-        let note_commitment = java_fixed_array::<32>(env, &note_commitment, "noteCommitment")?;
-        let ephemeral =
-            java_fixed_array::<32>(env, &payload_ephemeral, "payloadEphemeralPublicKey")?;
-        let nonce = java_fixed_array::<24>(env, &payload_nonce, "payloadNonce")?;
-        let ciphertext = read_java_byte_array(env, &payload_ciphertext, "payloadCiphertext")
-            .ok_or_else(|| "invalid payload ciphertext".to_owned())?;
-        let payload = build_confidential_encrypted_payload(ephemeral, nonce, ciphertext)
-            .map_err(|_| "invalid confidential encrypted payload".to_owned())?;
-        let private_key = java_private_key(algorithm_code, &private_key, env)?;
-        let ttl =
-            parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
-        let fee_payment = java_fee_payment_intent(env, &fee_payment_json)?;
-        let (signed_bytes, hash_bytes) =
-            encode_asset_transaction_with_nonce_fee_payment_and_metadata(
-                chain_id,
-                authority,
-                creation_time_ms as u64,
-                ttl,
-                None,
-                fee_payment,
-                Metadata::default(),
-                private_key,
-                || {
-                    let instruction = zk::Shield::new(
-                        asset_definition,
-                        from_account,
-                        amount,
-                        note_commitment,
-                        payload,
-                    );
-                    Executable::from([InstructionBox::from(instruction)])
-                },
-            )
-            .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
-        java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
-    })();
-    match result {
-        Ok(array) => array,
-        Err(message) => {
-            throw_java_illegal_argument(env, message);
-            std::ptr::null_mut()
-        }
-    }
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::too_many_arguments)]
-fn java_native_encode_unshield_signed_transaction(
-    env: &mut jni::JNIEnv<'_>,
-    algorithm_code: jni::sys::jint,
-    chain_id: jni::objects::JByteArray<'_>,
-    chain_discriminant: jni::sys::jint,
-    authority: jni::objects::JByteArray<'_>,
-    creation_time_ms: jni::sys::jlong,
-    ttl_ms: jni::sys::jlong,
-    ttl_present: jni::sys::jboolean,
-    asset: jni::objects::JByteArray<'_>,
-    destination: jni::objects::JByteArray<'_>,
-    public_amount: jni::objects::JByteArray<'_>,
-    inputs: jni::objects::JByteArray<'_>,
-    outputs: jni::objects::JByteArray<'_>,
-    proof_json: jni::objects::JByteArray<'_>,
-    root_hint: jni::objects::JByteArray<'_>,
-    private_key: jni::objects::JByteArray<'_>,
-    fee_payment_json: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    let result = (|| -> Result<jni::sys::jobjectArray, String> {
-        if creation_time_ms < 0 || ttl_ms < 0 {
-            return Err("creationTimeMs and ttlMs must be non-negative".to_owned());
-        }
-        let chain_id: ChainId = java_text_array(env, &chain_id, "chainId")?
-            .parse()
-            .map_err(|_| "invalid chainId".to_owned())?;
-        let chain_discriminant = u16::try_from(chain_discriminant)
-            .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
-        let authority = parse_account_id_for_chain(
-            java_text_array(env, &authority, "authority")?,
-            chain_discriminant,
-        )
-        .map_err(|_| "invalid authority".to_owned())?;
-        let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
-            .map_err(|_| "invalid asset".to_owned())?;
-        let destination = parse_account_id_for_chain(
-            java_text_array(env, &destination, "to")?,
-            chain_discriminant,
-        )
-        .map_err(|_| "invalid to".to_owned())?;
-        let public_amount =
-            parse_public_quantity(java_text_array(env, &public_amount, "publicAmount")?)
-                .map_err(|_| "invalid publicAmount".to_owned())?;
-        let inputs_bytes = read_java_byte_array(env, &inputs, "inputs")
-            .ok_or_else(|| "invalid inputs".to_owned())?;
-        let outputs_bytes = read_java_byte_array(env, &outputs, "outputs")
-            .ok_or_else(|| "invalid outputs".to_owned())?;
-        let inputs = java_fixed_32_chunks(&inputs_bytes, true, "inputs")?;
-        let outputs = java_fixed_32_chunks(&outputs_bytes, false, "outputs")?;
-        let proof_bytes = read_java_byte_array_bounded(
-            env,
-            &proof_json,
-            "proofJson",
-            PROOF_ATTACHMENT_JSON_MAX_BYTES_V1,
-        )
-        .ok_or_else(|| "invalid proofJson".to_owned())?;
-        let proof = parse_proof_attachment_from_json_slice(&proof_bytes)
-            .map_err(|_| "invalid proof attachment".to_owned())?;
-        let root_hint_bytes = read_java_byte_array(env, &root_hint, "rootHint")
-            .ok_or_else(|| "invalid rootHint".to_owned())?;
-        let root_hint = java_optional_root_hint(&root_hint_bytes)?;
-        let private_key = java_private_key(algorithm_code, &private_key, env)?;
-        let ttl =
-            parse_ttl(ttl_ms as u64, ttl_present != 0).map_err(|_| "invalid ttlMs".to_owned())?;
-        let fee_payment = java_fee_payment_intent(env, &fee_payment_json)?;
-        let (signed_bytes, hash_bytes) =
-            encode_asset_transaction_with_nonce_fee_payment_and_metadata(
-                chain_id,
-                authority,
-                creation_time_ms as u64,
-                ttl,
-                None,
-                fee_payment,
-                Metadata::default(),
-                private_key,
-                || {
-                    let instruction = zk::Unshield::new_with_outputs(
-                        asset_definition,
-                        destination,
-                        public_amount,
-                        inputs,
-                        outputs,
-                        proof,
-                        root_hint,
-                    );
-                    Executable::from([InstructionBox::from(instruction)])
-                },
-            )
-            .map_err(|err| format!("failed to encode signed transaction ({})", err.code()))?;
-        java_signed_transaction_pair(env, &signed_bytes, &hash_bytes)
-    })();
-    match result {
-        Ok(array) => array,
-        Err(message) => {
-            throw_java_illegal_argument(env, message);
-            std::ptr::null_mut()
-        }
-    }
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::too_many_arguments)]
 fn java_native_encode_register_zk_asset_signed_transaction(
     env: &mut jni::JNIEnv<'_>,
     algorithm_code: jni::sys::jint,
@@ -33573,8 +31811,6 @@ fn java_native_encode_register_zk_asset_signed_transaction(
     mode_code: jni::sys::jint,
     allow_shield: jni::sys::jboolean,
     allow_unshield: jni::sys::jboolean,
-    vk_transfer: jni::objects::JByteArray<'_>,
-    vk_transfer_present: jni::sys::jboolean,
     vk_unshield: jni::objects::JByteArray<'_>,
     vk_unshield_present: jni::sys::jboolean,
     vk_shield: jni::objects::JByteArray<'_>,
@@ -33599,15 +31835,6 @@ fn java_native_encode_register_zk_asset_signed_transaction(
         let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
             .map_err(|_| "invalid asset".to_owned())?;
         let mode = java_zk_asset_mode_from_code(mode_code)?;
-        let vk_transfer = java_verifying_key_id(
-            java_optional_text_array(
-                env,
-                &vk_transfer,
-                vk_transfer_present,
-                "transferVerifyingKey",
-            )?,
-            "transferVerifyingKey",
-        )?;
         let vk_unshield = java_verifying_key_id(
             java_optional_text_array(
                 env,
@@ -33629,7 +31856,6 @@ fn java_native_encode_register_zk_asset_signed_transaction(
             mode,
             allow_shield != 0,
             allow_unshield != 0,
-            vk_transfer,
             vk_unshield,
             vk_shield,
         );
@@ -34487,7 +32713,7 @@ fn java_native_kagemusha_candidate_lab_accepted_identity_v4(
         .map_err(|_| "candidate-lab identity failed revalidation".to_owned())?;
         if expected != installed.accepted_identity
             || expected.production_capability_observed
-            || !expected.source_repo_dirty
+            || expected.source_repo_dirty
             || expected.artifacts.len() != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4
         {
             return Err("candidate-lab identity changed after installation".to_owned());
@@ -39161,37 +37387,10 @@ fn java_native_kagemusha_project_operation_status_v4(
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_privacy_public_archive(
-    payload: &PrivacyCompiledProfileCatalogV1,
-    context: &str,
-) -> Result<Vec<u8>, String> {
-    let mut archive = norito::encode_canonical(payload)
-        .map_err(|err| format!("failed to encode {context}: {err}"))?;
-    if archive.len() > PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1 {
-        archive.fill(0);
-        return Err(format!("{context} archive exceeds maximum length"));
-    }
-    let status = validate_local_privacy_compiled_profile_catalog_archive_v1(&archive);
-    if !status.is_valid() {
-        archive.fill(0);
-        return Err(format!(
-            "{context} archive validation failed with status {}",
-            status.code()
-        ));
-    }
-    Ok(archive)
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
 fn java_privacy_compiled_profile_catalog_archive() -> Result<Vec<u8>, String> {
-    let catalog = privacy_compiled_profile_catalog()
-        .map_err(|_| "failed to derive local compiled-profile catalog".to_owned())?;
-    java_privacy_public_archive(&catalog, "privacy compiled-profile catalog")
+    privacy_compiled_profile_catalog_archive_v1()
+        .map(<[u8]>::to_vec)
+        .map_err(|_| "failed to derive local compiled-profile catalog archive".to_owned())
 }
 
 #[cfg(any(
@@ -39458,104 +37657,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
 ))]
 #[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeShieldSignedTransaction(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    algorithm_code: jni::sys::jint,
-    chain_id: jni::objects::JByteArray<'_>,
-    chain_discriminant: jni::sys::jint,
-    authority: jni::objects::JByteArray<'_>,
-    creation_time_ms: jni::sys::jlong,
-    ttl_ms: jni::sys::jlong,
-    ttl_present: jni::sys::jboolean,
-    asset: jni::objects::JByteArray<'_>,
-    from_account: jni::objects::JByteArray<'_>,
-    amount: jni::objects::JByteArray<'_>,
-    note_commitment: jni::objects::JByteArray<'_>,
-    payload_ephemeral: jni::objects::JByteArray<'_>,
-    payload_nonce: jni::objects::JByteArray<'_>,
-    payload_ciphertext: jni::objects::JByteArray<'_>,
-    private_key: jni::objects::JByteArray<'_>,
-    fee_payment_json: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_encode_shield_signed_transaction(
-        &mut env,
-        algorithm_code,
-        chain_id,
-        chain_discriminant,
-        authority,
-        creation_time_ms,
-        ttl_ms,
-        ttl_present,
-        asset,
-        from_account,
-        amount,
-        note_commitment,
-        payload_ephemeral,
-        payload_nonce,
-        payload_ciphertext,
-        private_key,
-        fee_payment_json,
-    )
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeUnshieldSignedTransaction(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    algorithm_code: jni::sys::jint,
-    chain_id: jni::objects::JByteArray<'_>,
-    chain_discriminant: jni::sys::jint,
-    authority: jni::objects::JByteArray<'_>,
-    creation_time_ms: jni::sys::jlong,
-    ttl_ms: jni::sys::jlong,
-    ttl_present: jni::sys::jboolean,
-    asset: jni::objects::JByteArray<'_>,
-    destination: jni::objects::JByteArray<'_>,
-    public_amount: jni::objects::JByteArray<'_>,
-    inputs: jni::objects::JByteArray<'_>,
-    outputs: jni::objects::JByteArray<'_>,
-    proof_json: jni::objects::JByteArray<'_>,
-    root_hint: jni::objects::JByteArray<'_>,
-    private_key: jni::objects::JByteArray<'_>,
-    fee_payment_json: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_encode_unshield_signed_transaction(
-        &mut env,
-        algorithm_code,
-        chain_id,
-        chain_discriminant,
-        authority,
-        creation_time_ms,
-        ttl_ms,
-        ttl_present,
-        asset,
-        destination,
-        public_amount,
-        inputs,
-        outputs,
-        proof_json,
-        root_hint,
-        private_key,
-        fee_payment_json,
-    )
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeEncodeRegisterZkAssetSignedTransaction(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -39570,8 +37671,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     mode_code: jni::sys::jint,
     allow_shield: jni::sys::jboolean,
     allow_unshield: jni::sys::jboolean,
-    vk_transfer: jni::objects::JByteArray<'_>,
-    vk_transfer_present: jni::sys::jboolean,
     vk_unshield: jni::objects::JByteArray<'_>,
     vk_unshield_present: jni::sys::jboolean,
     vk_shield: jni::objects::JByteArray<'_>,
@@ -39592,8 +37691,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         mode_code,
         allow_shield,
         allow_unshield,
-        vk_transfer,
-        vk_transfer_present,
         vk_unshield,
         vk_unshield_present,
         vk_shield,
@@ -39712,104 +37809,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
 ))]
 #[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeShieldSignedTransaction(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    algorithm_code: jni::sys::jint,
-    chain_id: jni::objects::JByteArray<'_>,
-    chain_discriminant: jni::sys::jint,
-    authority: jni::objects::JByteArray<'_>,
-    creation_time_ms: jni::sys::jlong,
-    ttl_ms: jni::sys::jlong,
-    ttl_present: jni::sys::jboolean,
-    asset: jni::objects::JByteArray<'_>,
-    from_account: jni::objects::JByteArray<'_>,
-    amount: jni::objects::JByteArray<'_>,
-    note_commitment: jni::objects::JByteArray<'_>,
-    payload_ephemeral: jni::objects::JByteArray<'_>,
-    payload_nonce: jni::objects::JByteArray<'_>,
-    payload_ciphertext: jni::objects::JByteArray<'_>,
-    private_key: jni::objects::JByteArray<'_>,
-    fee_payment_json: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_encode_shield_signed_transaction(
-        &mut env,
-        algorithm_code,
-        chain_id,
-        chain_discriminant,
-        authority,
-        creation_time_ms,
-        ttl_ms,
-        ttl_present,
-        asset,
-        from_account,
-        amount,
-        note_commitment,
-        payload_ephemeral,
-        payload_nonce,
-        payload_ciphertext,
-        private_key,
-        fee_payment_json,
-    )
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeUnshieldSignedTransaction(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    algorithm_code: jni::sys::jint,
-    chain_id: jni::objects::JByteArray<'_>,
-    chain_discriminant: jni::sys::jint,
-    authority: jni::objects::JByteArray<'_>,
-    creation_time_ms: jni::sys::jlong,
-    ttl_ms: jni::sys::jlong,
-    ttl_present: jni::sys::jboolean,
-    asset: jni::objects::JByteArray<'_>,
-    destination: jni::objects::JByteArray<'_>,
-    public_amount: jni::objects::JByteArray<'_>,
-    inputs: jni::objects::JByteArray<'_>,
-    outputs: jni::objects::JByteArray<'_>,
-    proof_json: jni::objects::JByteArray<'_>,
-    root_hint: jni::objects::JByteArray<'_>,
-    private_key: jni::objects::JByteArray<'_>,
-    fee_payment_json: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    java_native_encode_unshield_signed_transaction(
-        &mut env,
-        algorithm_code,
-        chain_id,
-        chain_discriminant,
-        authority,
-        creation_time_ms,
-        ttl_ms,
-        ttl_present,
-        asset,
-        destination,
-        public_amount,
-        inputs,
-        outputs,
-        proof_json,
-        root_hint,
-        private_key,
-        fee_payment_json,
-    )
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeEncodeRegisterZkAssetSignedTransaction(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -39824,8 +37823,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     mode_code: jni::sys::jint,
     allow_shield: jni::sys::jboolean,
     allow_unshield: jni::sys::jboolean,
-    vk_transfer: jni::objects::JByteArray<'_>,
-    vk_transfer_present: jni::sys::jboolean,
     vk_unshield: jni::objects::JByteArray<'_>,
     vk_unshield_present: jni::sys::jboolean,
     vk_shield: jni::objects::JByteArray<'_>,
@@ -39846,8 +37843,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         mode_code,
         allow_shield,
         allow_unshield,
-        vk_transfer,
-        vk_transfer_present,
         vk_unshield,
         vk_unshield_present,
         vk_shield,
@@ -46707,8 +44702,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_signer_jni_contract_revision_is_the_v1_hard_cut() {
-        assert_eq!(native_signer_jni_contract_revision(), 1);
+    fn native_signer_jni_contract_revision_is_the_v3_hard_cut() {
+        assert_eq!(native_signer_jni_contract_revision(), 3);
+    }
+
+    #[test]
+    fn retired_generic_privacy_jni_entrypoints_are_absent() {
+        let source = include_str!("lib.rs");
+        for helper_stem in ["shield", "zk_transfer", "unshield"] {
+            let retired_helper =
+                ["java_native_encode_", helper_stem, "_signed_transaction"].concat();
+            assert!(
+                !source.contains(&retired_helper),
+                "retired JNI helper must not remain: {retired_helper}"
+            );
+        }
+        for method_name in [
+            ["nativeEncode", "Sh", "ieldSignedTransaction"].concat(),
+            ["nativeEncode", "Zk", "TransferSignedTransaction"].concat(),
+            ["nativeEncode", "Un", "shieldSignedTransaction"].concat(),
+        ] {
+            for namespace in [
+                "Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_",
+                "Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_",
+            ] {
+                let export = format!("{namespace}{method_name}");
+                assert!(
+                    !source.contains(&export),
+                    "retired JNI export must not remain: {export}"
+                );
+            }
+        }
+        assert!(source.contains("nativeEncodeRegisterZkAssetSignedTransaction"));
+        assert!(source.contains("java_native_kagemusha_build_redeem_request_v4"));
     }
 
     #[test]
@@ -46880,8 +44906,6 @@ mod tests {
         );
 
         for symbol in [
-            "java_native_encode_shield_signed_transaction",
-            "java_native_encode_unshield_signed_transaction",
             "java_native_encode_register_zk_asset_signed_transaction",
             "java_native_kagemusha_prepare_recipient_request_v2",
             "java_native_kagemusha_create_recipient_lineage_query_v2",
@@ -47191,6 +45215,165 @@ mod tests {
                 )
             },
             PrivacyCompiledProfileCatalogArchiveValidationStatusV1::InvalidCatalog.code()
+        );
+    }
+
+    #[test]
+    fn privacy_compiled_profile_catalog_ffi_initializes_from_small_stack_in_fresh_process() {
+        const CHILD_ENV: &str = "IROHA_TEST_PRIVACY_CATALOG_SMALL_STACK_CHILD_V1";
+        const CALLER_STACK_BYTES: usize = 512 * 1024;
+        const CONCURRENT_CALLERS: usize = 8;
+        const TEST_NAME: &str = "tests::privacy_compiled_profile_catalog_ffi_initializes_from_small_stack_in_fresh_process";
+
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("resolve the current Rust test executable"),
+            )
+            .args(["--exact", TEST_NAME, "--nocapture", "--test-threads=1"])
+            .env(CHILD_ENV, "1")
+            .output()
+            .expect("launch a fresh catalog-export test process");
+            assert!(
+                output.status.success(),
+                "fresh small-stack catalog export failed with {status}; stdout:\n{stdout}\nstderr:\n{stderr}",
+                status = output.status,
+                stdout = String::from_utf8_lossy(&output.stdout),
+                stderr = String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+
+        assert!(
+            PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1.get().is_none(),
+            "the child process must exercise first initialization, not a warmed archive cache"
+        );
+        std::thread::Builder::new()
+            .name("privacy-catalog-ffi-null-small-stack-caller".to_owned())
+            .stack_size(CALLER_STACK_BYTES)
+            .spawn(|| {
+                let mut cleared_ptr = 1_usize as *mut c_uchar;
+                let mut cleared_len = c_ulong::MAX;
+                assert_eq!(
+                    unsafe {
+                        iroha_privacy_compiled_profile_catalog_v1(ptr::null_mut(), &mut cleared_len)
+                    },
+                    ERR_NULL_PTR
+                );
+                assert_eq!(cleared_len, 0);
+                assert_eq!(
+                    unsafe {
+                        iroha_privacy_compiled_profile_catalog_v1(&mut cleared_ptr, ptr::null_mut())
+                    },
+                    ERR_NULL_PTR
+                );
+                assert!(cleared_ptr.is_null());
+                assert!(
+                    PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1.get().is_none(),
+                    "null outputs must reject before initializing the catalog"
+                );
+            })
+            .expect("spawn the 512 KiB null-output caller thread")
+            .join()
+            .expect("null-output rejection must not exhaust the 512 KiB caller stack");
+
+        let start = Arc::new(std::sync::Barrier::new(CONCURRENT_CALLERS));
+        let callers = (0..CONCURRENT_CALLERS)
+            .map(|index| {
+                let start = Arc::clone(&start);
+                std::thread::Builder::new()
+                    .name(format!("privacy-catalog-ffi-small-stack-caller-{index}"))
+                    .stack_size(CALLER_STACK_BYTES)
+                    .spawn(move || {
+                        start.wait();
+                        let mut out_ptr = ptr::null_mut();
+                        let mut out_len = 0;
+                        assert_eq!(
+                            unsafe {
+                                iroha_privacy_compiled_profile_catalog_v1(
+                                    &mut out_ptr,
+                                    &mut out_len,
+                                )
+                            },
+                            0
+                        );
+                        assert!(!out_ptr.is_null());
+                        assert!(out_len > 0);
+                        let out_len = usize::try_from(out_len).expect("catalog length fits usize");
+                        assert!(out_len <= PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1);
+                        assert_eq!(
+                            unsafe {
+                                iroha_privacy_validate_compiled_profile_catalog_v1(
+                                    out_ptr,
+                                    c_ulong::try_from(out_len)
+                                        .expect("catalog length fits c_ulong"),
+                                )
+                            },
+                            PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid.code()
+                        );
+                        let archive = unsafe { slice::from_raw_parts(out_ptr, out_len).to_vec() };
+                        (out_ptr as usize, archive)
+                    })
+                    .expect("spawn a 512 KiB concurrent catalog caller")
+            })
+            .collect::<Vec<_>>();
+        let outputs = callers
+            .into_iter()
+            .map(|caller| {
+                caller
+                    .join()
+                    .expect("catalog export must not exhaust a 512 KiB caller stack")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_INITIALIZATIONS_V1.load(Ordering::Relaxed),
+            1,
+            "concurrent cold callers must serialize one owned-stack initialization"
+        );
+        let cached = PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1
+            .get()
+            .expect("successful first export initializes the bounded archive cache")
+            .as_ref()
+            .expect("the catalog archive must initialize successfully");
+        assert!(outputs.iter().all(|(_, archive)| archive == cached));
+        assert_eq!(
+            outputs
+                .iter()
+                .map(|(address, _)| *address)
+                .collect::<HashSet<_>>()
+                .len(),
+            CONCURRENT_CALLERS,
+            "each simultaneous FFI caller must own an independent output allocation"
+        );
+        for (address, _) in outputs {
+            iroha_privacy_free_buffer(address as *mut c_uchar);
+        }
+    }
+
+    #[test]
+    fn privacy_compiled_profile_catalog_c_and_java_archives_are_byte_identical() {
+        let mut out_ptr = ptr::null_mut();
+        let mut out_len = 0;
+        assert_eq!(
+            unsafe { iroha_privacy_compiled_profile_catalog_v1(&mut out_ptr, &mut out_len) },
+            0
+        );
+        assert!(!out_ptr.is_null());
+        let c_archive = unsafe {
+            slice::from_raw_parts(
+                out_ptr,
+                usize::try_from(out_len).expect("C catalog length fits usize"),
+            )
+            .to_vec()
+        };
+        iroha_privacy_free_buffer(out_ptr);
+
+        let java_archive = java_privacy_compiled_profile_catalog_archive()
+            .expect("Java catalog helper must clone the shared archive");
+        assert_eq!(java_archive, c_archive);
+        assert_eq!(
+            validate_local_privacy_compiled_profile_catalog_archive_v1(&java_archive),
+            PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid
         );
     }
 
@@ -48487,13 +46670,9 @@ mod tests {
 
         assert!(matches!(
             java_zk_asset_mode_from_code(0),
-            Ok(zk::ZkAssetMode::ZkNative)
-        ));
-        assert!(matches!(
-            java_zk_asset_mode_from_code(1),
             Ok(zk::ZkAssetMode::Hybrid)
         ));
-        for invalid in [-1, 256, 257] {
+        for invalid in [-1, 1, 256, 257] {
             assert!(
                 java_zk_asset_mode_from_code(invalid).is_err(),
                 "mode code {invalid} must not alias through u8"
@@ -49271,7 +47450,11 @@ mod tests {
             KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1
         ));
 
-        let limits = kagemusha_canonical_decode_limits(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES);
+        let limits = kagemusha_canonical_decode_limits_with_profile(
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+            0,
+            KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE,
+        );
         assert_eq!(
             limits.max_sequence_elements(),
             KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
@@ -49637,1508 +47820,5 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod signed_transaction_fixture_tests {
-    use std::time::Duration;
-
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{ChainId, account::AccountId, transaction::TransactionBuilder};
-    use iroha_version::codec::EncodeVersioned as _;
-
-    use super::decode_signed_transaction;
-
-    // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (i105 discriminant).
-    const FIXTURE_CHAIN_DISCRIMINANT: u16 = 0x02F1;
-
-    fn fixture_key_pair() -> KeyPair {
-        KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
-            .expect("fixture seed must derive a valid keypair")
-    }
-
-    #[test]
-    fn fixture_key_pair_uses_checked_seed_derivation() {
-        assert_eq!(fixture_key_pair().algorithm(), Algorithm::Ed25519);
-        assert!(
-            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
-            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
-        );
-    }
-
-    #[test]
-    fn signed_transaction_decoder_accepts_only_versioned_bytes() {
-        let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
-        let keypair = fixture_key_pair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "00000004".parse().expect("valid chain id");
-        let mut builder = TransactionBuilder::new(
-            chain_id,
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
-        builder.set_creation_time(Duration::from_millis(1));
-        let tx = builder.sign(keypair.private_key());
-        let versioned = tx.encode_versioned();
-        decode_signed_transaction(&versioned).expect("decode versioned signed tx");
-        let bytes = norito::codec::encode_adaptive(&tx);
-        assert!(decode_signed_transaction(&bytes).is_err());
-        let framed = norito::to_bytes(&tx).expect("encode framed signed tx");
-        assert!(decode_signed_transaction(&framed).is_err());
-    }
-
-    #[test]
-    fn signed_transaction_versioned_reencode_match() {
-        let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
-        let keypair = fixture_key_pair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "00000004".parse().expect("valid chain id");
-        let mut builder = TransactionBuilder::new(
-            chain_id,
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
-        builder.set_creation_time(Duration::from_millis(1));
-        let tx = builder.sign(keypair.private_key());
-        let bytes = tx.encode_versioned();
-        let signed = decode_signed_transaction(&bytes).expect("decode versioned signed tx");
-        assert_eq!(signed.encode_versioned(), bytes);
-    }
-
-    #[test]
-    fn generated_signed_transaction_versioned_bytes_prefix_bare_payload() {
-        let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
-        let keypair = fixture_key_pair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "00000004".parse().expect("valid chain id");
-        let mut builder = TransactionBuilder::new(
-            chain_id,
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
-        builder.set_creation_time(Duration::from_millis(1));
-        let tx = builder.sign(keypair.private_key());
-        let versioned = tx.encode_versioned();
-        let bare = norito::codec::encode_adaptive(&tx);
-
-        assert_eq!(versioned.first().copied(), Some(1));
-        assert_eq!(&versioned[1..], bare.as_slice());
-    }
-}
-
-#[cfg(test)]
-mod da_proof_summary_tests {
-    use iroha_data_model::{
-        da::{
-            manifest::{ChunkCommitment, ChunkRole},
-            types::{
-                BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
-                ExtraMetadata, GovernanceTag, MetadataEntry, MetadataVisibility, RetentionPolicy,
-                StorageTicketId,
-            },
-        },
-        nexus::LaneId,
-        sorafs::pin_registry::StorageClass,
-    };
-    use sorafs_car::ChunkStore;
-
-    use super::*;
-
-    #[test]
-    fn da_proof_summary_via_ffi() {
-        let (manifest_bytes, payload) = sample_manifest_bytes();
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-        let status = unsafe {
-            connect_norito_da_proof_summary(
-                manifest_bytes.as_ptr(),
-                manifest_bytes.len() as c_ulong,
-                payload.as_ptr(),
-                payload.len() as c_ulong,
-                2,
-                0,
-                ptr::null(),
-                0,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(status, 0, "da proof summary call failed");
-        assert!(!out_ptr.is_null());
-        let summary_bytes = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
-        connect_norito_free(out_ptr);
-        let value: JsonValue = norito::json::from_slice(&summary_bytes).expect("json summary");
-        assert!(value.get("proofs").is_some(), "missing proofs array");
-        assert!(
-            value.get("blob_hash_hex").is_some(),
-            "missing blob hash field"
-        );
-    }
-
-    fn sample_manifest_bytes() -> (Vec<u8>, Vec<u8>) {
-        let payload: Vec<u8> = (0..64).map(|idx| idx as u8).collect();
-        let mut store = ChunkStore::new();
-        store.ingest_bytes(&payload).expect("ingest sample payload");
-        let data_shards = 2usize;
-        let chunk_commitments = store
-            .chunks()
-            .iter()
-            .enumerate()
-            .map(|(idx, chunk)| {
-                let stripe_id = u32::try_from(idx / data_shards).unwrap_or(u32::MAX);
-                ChunkCommitment::new_with_role(
-                    idx as u32,
-                    chunk.offset,
-                    chunk.length,
-                    ChunkDigest::new(chunk.blake3),
-                    ChunkRole::Data,
-                    stripe_id,
-                )
-            })
-            .collect::<Vec<_>>();
-        let chunk_size = chunk_commitments
-            .first()
-            .map(|commitment| commitment.length)
-            .unwrap_or(payload.len() as u32);
-        let metadata = ExtraMetadata {
-            items: vec![
-                MetadataEntry::new(
-                    "taikai.event_id",
-                    b"demo-event".to_vec(),
-                    MetadataVisibility::Public,
-                ),
-                MetadataEntry::new(
-                    "taikai.stream_id",
-                    b"primary-stream".to_vec(),
-                    MetadataVisibility::Public,
-                ),
-                MetadataEntry::new(
-                    "taikai.rendition_id",
-                    b"main-1080p".to_vec(),
-                    MetadataVisibility::Public,
-                ),
-                MetadataEntry::new(
-                    "taikai.segment.sequence",
-                    b"42".to_vec(),
-                    MetadataVisibility::Public,
-                ),
-            ],
-        };
-        let chunk_root = BlobDigest::new(*store.por_tree().root());
-        let manifest = DaManifestV1 {
-            version: DaManifestV1::VERSION,
-            client_blob_id: BlobDigest::new([0x11; 32]),
-            lane_id: LaneId::new(7),
-            epoch: 1,
-            blob_class: BlobClass::TaikaiSegment,
-            codec: BlobCodec::new(String::from("custom.binary")),
-            blob_hash: BlobDigest::new(*store.payload_digest().as_bytes()),
-            chunk_root,
-            storage_ticket: StorageTicketId::new([0x44; 32]),
-            total_size: payload.len() as u64,
-            chunk_size,
-            total_stripes: chunk_commitments.len().div_ceil(2).try_into().unwrap_or(0),
-            shards_per_stripe: 3,
-            erasure_profile: ErasureProfile {
-                data_shards: 2,
-                parity_shards: 1,
-                row_parity_stripes: 0,
-                chunk_alignment: 1,
-                fec_scheme: iroha_data_model::da::types::FecScheme::Rs12_10,
-            },
-            retention_policy: RetentionPolicy {
-                hot_retention_secs: 10,
-                cold_retention_secs: 20,
-                required_replicas: 3,
-                storage_class: StorageClass::Warm,
-                governance_tag: GovernanceTag::new(String::from("da.test")),
-            },
-            rent_quote: DaRentQuote::default(),
-            chunks: chunk_commitments,
-            ipa_commitment: chunk_root,
-            metadata,
-            issued_at_unix: 123,
-        };
-        let manifest_bytes = norito::to_bytes(&manifest).expect("manifest encode");
-        (manifest_bytes, payload)
-    }
-}
-
-#[cfg(test)]
-mod sorafs_tests {
-    use std::{ffi::CString, fs, ptr, slice};
-
-    use sorafs_car::{CarBuildPlan, fetch_plan::chunk_fetch_plan_to_string};
-    use sorafs_chunker::ChunkProfile;
-    use tempfile::tempdir;
-
-    use super::*;
-
-    fn transport_hint_json(priority: JsonValue) -> JsonValue {
-        let mut hint = JsonMap::new();
-        hint.insert("protocol".into(), JsonValue::from("quic"));
-        hint.insert("protocol_id".into(), JsonValue::from(1u64));
-        hint.insert("priority".into(), priority);
-        JsonValue::Array(vec![JsonValue::Object(hint)])
-    }
-
-    #[test]
-    fn transport_hint_priority_rejects_u8_wrapping() {
-        for (priority, expected) in [(0_u64, 0), (u64::from(u8::MAX), u8::MAX)] {
-            let hints = transport_hints_from_json(&transport_hint_json(JsonValue::from(priority)))
-                .expect("u8 priority boundary must parse");
-            assert_eq!(hints.len(), 1);
-            assert_eq!(hints[0].priority, expected);
-        }
-
-        for (label, priority) in [
-            ("negative", JsonValue::from(-1_i64)),
-            ("overflow", JsonValue::from(u64::from(u8::MAX) + 1)),
-        ] {
-            assert!(
-                matches!(
-                    transport_hints_from_json(&transport_hint_json(priority)),
-                    Err(ERR_FETCH_PROVIDERS_JSON)
-                ),
-                "{label} priority must not alias through u8"
-            );
-        }
-    }
-
-    #[test]
-    fn sorafs_local_fetch_via_ffi() {
-        let tempdir = tempdir().expect("tempdir");
-        let payload: Vec<u8> = (0..(4 * 1024_usize))
-            .map(|idx| u8::try_from(idx % 251).expect("within u8"))
-            .collect();
-        let plan =
-            CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json render");
-
-        let alpha_path = tempdir.path().join("alpha.bin");
-        fs::write(&alpha_path, &payload).expect("write payload");
-
-        let mut provider = JsonMap::new();
-        provider.insert("name".into(), JsonValue::from("alpha"));
-        provider.insert(
-            "path".into(),
-            JsonValue::from(alpha_path.display().to_string()),
-        );
-        provider.insert("max_concurrent".into(), JsonValue::from(2u64));
-        provider.insert("weight".into(), JsonValue::from(1u64));
-
-        let providers_json =
-            norito::json::to_string(&JsonValue::Array(vec![JsonValue::Object(provider)]))
-                .expect("providers json render");
-
-        let plan_c = CString::new(plan_json).expect("plan cstring");
-        let providers_c = CString::new(providers_json).expect("providers cstring");
-        let options_c = CString::new("{}").expect("options cstring");
-
-        let mut out_payload_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_payload_len: c_ulong = 0;
-        let mut out_report_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_report_len: c_ulong = 0;
-
-        let rc = unsafe {
-            connect_norito_sorafs_local_fetch(
-                plan_c.as_ptr(),
-                plan_c.as_bytes().len() as c_ulong,
-                providers_c.as_ptr(),
-                providers_c.as_bytes().len() as c_ulong,
-                options_c.as_ptr(),
-                options_c.as_bytes().len() as c_ulong,
-                &mut out_payload_ptr,
-                &mut out_payload_len,
-                &mut out_report_ptr,
-                &mut out_report_len,
-            )
-        };
-        assert_eq!(rc, 0, "ffi call should succeed");
-
-        let assembled = unsafe {
-            let bytes = slice::from_raw_parts(out_payload_ptr, out_payload_len as usize);
-            bytes.to_vec()
-        };
-        assert_eq!(assembled, payload, "payload must match input bytes");
-
-        let report_value: JsonValue = unsafe {
-            let bytes = slice::from_raw_parts(out_report_ptr, out_report_len as usize);
-            norito::json::from_slice(bytes).expect("report json")
-        };
-
-        let chunk_count = report_value
-            .get("chunk_count")
-            .and_then(JsonValue::as_u64)
-            .expect("chunk_count present");
-        assert_eq!(
-            chunk_count as usize,
-            plan.try_chunk_fetch_specs().expect("valid CAR plan").len(),
-            "chunk count matches plan"
-        );
-
-        let reports = report_value
-            .get("provider_reports")
-            .and_then(JsonValue::as_array)
-            .expect("provider reports");
-        assert_eq!(reports.len(), 1);
-        let report = reports[0].as_object().expect("report object");
-        assert_eq!(
-            report
-                .get("provider")
-                .and_then(JsonValue::as_str)
-                .expect("provider name"),
-            "alpha"
-        );
-        assert_eq!(
-            report
-                .get("failures")
-                .and_then(JsonValue::as_u64)
-                .expect("failures"),
-            0
-        );
-
-        let receipts = report_value
-            .get("chunk_receipts")
-            .and_then(JsonValue::as_array)
-            .expect("chunk receipts");
-        assert_eq!(
-            receipts.len(),
-            plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
-        );
-        assert!(receipts.iter().all(|entry| {
-            entry
-                .get("provider")
-                .and_then(JsonValue::as_str)
-                .map(|name| name == "alpha")
-                .unwrap_or(false)
-        }));
-
-        assert!(
-            report_value
-                .get("scoreboard")
-                .map(JsonValue::is_null)
-                .unwrap_or(false),
-            "scoreboard should be null when not requested"
-        );
-
-        if !out_payload_ptr.is_null() {
-            connect_norito_free(out_payload_ptr);
-        }
-        if !out_report_ptr.is_null() {
-            connect_norito_free(out_report_ptr);
-        }
-    }
-
-    fn repo_fixture(path: &str) -> Vec<u8> {
-        fs::read(format!("{}/../../{}", env!("CARGO_MANIFEST_DIR"), path))
-            .expect("read repository fixture")
-    }
-
-    unsafe fn take_bridge_json(ptr_: *mut c_uchar, len: c_ulong) -> JsonValue {
-        let value: JsonValue = unsafe {
-            let bytes = slice::from_raw_parts(ptr_, len as usize);
-            norito::json::from_slice(bytes).expect("parse outcome JSON")
-        };
-        if !ptr_.is_null() {
-            connect_norito_free(ptr_);
-        }
-        value
-    }
-
-    unsafe fn take_bridge_json_usize(ptr_: *mut c_uchar, len: usize) -> JsonValue {
-        let value: JsonValue = unsafe {
-            let bytes = slice::from_raw_parts(ptr_, len);
-            norito::json::from_slice(bytes).expect("parse outcome JSON")
-        };
-        if !ptr_.is_null() {
-            connect_norito_free(ptr_);
-        }
-        value
-    }
-
-    #[test]
-    fn sorafs_reference_orderbook_validator_via_bridge_ffi() {
-        let payload = repo_fixture("fixtures/sorafs_manifest/orderbook/order_request_v1.to");
-        let label = b"order-request.to";
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_validate_orderbook_json(
-                sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
-                payload.as_ptr(),
-                payload.len() as c_ulong,
-                label.as_ptr(),
-                label.len() as c_ulong,
-                123,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(rc, 0, "bridge validator call should succeed");
-        let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
-        assert_eq!(
-            outcome.get("status").and_then(JsonValue::as_str),
-            Some("Ok")
-        );
-        assert_eq!(
-            outcome.get("code").and_then(JsonValue::as_str),
-            Some("SFS-OK-000")
-        );
-    }
-
-    #[test]
-    fn sorafs_reference_orderbook_validator_rejects_bad_signature_via_bridge_ffi() {
-        let payload = repo_fixture(
-            "fixtures/sorafs_manifest/orderbook/negative/order_request_bad_signature_v1.to",
-        );
-        let label = b"order_request_bad_signature_v1.to";
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_validate_orderbook_json(
-                sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
-                payload.as_ptr(),
-                payload.len() as c_ulong,
-                label.as_ptr(),
-                label.len() as c_ulong,
-                123,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(rc, 0, "bridge validator call should succeed");
-        let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
-        assert_eq!(
-            outcome.get("status").and_then(JsonValue::as_str),
-            Some("Error")
-        );
-        assert_eq!(
-            outcome.get("code").and_then(JsonValue::as_str),
-            Some("SFS-SIG-007")
-        );
-        assert_eq!(
-            outcome.get("category").and_then(JsonValue::as_str),
-            Some("signature")
-        );
-        assert_eq!(
-            outcome.get("generated_at").and_then(JsonValue::as_u64),
-            Some(123)
-        );
-        assert_eq!(
-            outcome
-                .get("inputs")
-                .and_then(JsonValue::as_array)
-                .and_then(|inputs| inputs.first())
-                .and_then(|input| input.get("path"))
-                .and_then(JsonValue::as_str),
-            Some("order_request_bad_signature_v1.to")
-        );
-    }
-
-    #[test]
-    fn sorafs_reference_appeal_finance_cancel_asset_lock_profiles_via_bridge_ffi() {
-        for (relative_path, status, code, category) in [
-            (
-                "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to",
-                "Ok",
-                "SFS-OK-000",
-                "validation",
-            ),
-            (
-                "fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.to",
-                "Error",
-                "SFS-NORITO-001",
-                "norito",
-            ),
-            (
-                "fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
-                "Error",
-                "SFS-VAL-001",
-                "validation",
-            ),
-        ] {
-            let payload = repo_fixture(relative_path);
-            let label = relative_path
-                .rsplit('/')
-                .next()
-                .expect("fixture path contains a file name")
-                .as_bytes();
-            let mut out_ptr: *mut c_uchar = ptr::null_mut();
-            let mut out_len: c_ulong = 0;
-
-            let rc = unsafe {
-                connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json(
-                    payload.as_ptr(),
-                    payload.len() as c_ulong,
-                    label.as_ptr(),
-                    label.len() as c_ulong,
-                    123,
-                    &mut out_ptr,
-                    &mut out_len,
-                )
-            };
-            assert_eq!(rc, 0, "{relative_path}: bridge validator call");
-            let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
-            assert_eq!(
-                outcome.get("status").and_then(JsonValue::as_str),
-                Some(status),
-                "{relative_path}"
-            );
-            assert_eq!(
-                outcome.get("code").and_then(JsonValue::as_str),
-                Some(code),
-                "{relative_path}"
-            );
-            assert_eq!(
-                outcome.get("category").and_then(JsonValue::as_str),
-                Some(category),
-                "{relative_path}"
-            );
-            assert_eq!(
-                outcome.get("generated_at").and_then(JsonValue::as_u64),
-                Some(123),
-                "{relative_path}"
-            );
-        }
-    }
-
-    #[test]
-    fn sorafs_reference_pop_validator_via_bridge_ffi() {
-        let payload = norito::to_bytes(&sorafs_manifest::PopEnrollmentRequestV1 {
-            version: sorafs_manifest::POP_ENROLLMENT_REQUEST_VERSION_V1,
-            request_id: [0x21; 32],
-            applicant_id: "alice@sora".to_owned(),
-            requested_class: sorafs_manifest::PopEligibilityClassV1::General,
-            requested_attributes: vec!["residency".to_owned()],
-            attestation_digest: [0x22; 32],
-            submitted_at_epoch: 100,
-            expires_at_epoch: 200,
-        })
-        .expect("encode PoP enrollment request");
-        let label = b"pop-enrollment-request.to";
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_validate_pop_json(
-                sorafs_reference_ffi::SORAFS_REFERENCE_POP_KIND_ENROLLMENT_REQUEST,
-                payload.as_ptr(),
-                payload.len() as c_ulong,
-                label.as_ptr(),
-                label.len() as c_ulong,
-                123,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(rc, 0, "bridge PoP validator call should succeed");
-        let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
-        assert_eq!(
-            outcome.get("status").and_then(JsonValue::as_str),
-            Some("Ok")
-        );
-        assert_eq!(
-            outcome.get("code").and_then(JsonValue::as_str),
-            Some("SFS-OK-000")
-        );
-    }
-
-    #[test]
-    fn sorafs_reference_hedging_validator_via_bridge_ffi() {
-        let payload = norito::to_bytes(&sorafs_manifest::HedgingPriceFeedV1 {
-            version: sorafs_manifest::HEDGING_PRICE_FEED_VERSION_V1,
-            feed_id: "primary".to_owned(),
-            source: "primary-oracle".to_owned(),
-            observed_at_unix: 1_800,
-            xor_usd_price: "2".parse().expect("canonical exact XOR/USD price"),
-            weight_bps: 5_000,
-            evidence_digest: [0x32; 32],
-            status: sorafs_manifest::HedgingFeedStatusV1::Ok,
-        })
-        .expect("encode hedging price feed");
-        let label = b"hedging-price-feed.to";
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_validate_hedging_json(
-                sorafs_reference_ffi::SORAFS_REFERENCE_HEDGING_KIND_PRICE_FEED,
-                payload.as_ptr(),
-                payload.len() as c_ulong,
-                label.as_ptr(),
-                label.len() as c_ulong,
-                123,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(rc, 0, "bridge hedging validator call should succeed");
-        let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
-        assert_eq!(
-            outcome.get("status").and_then(JsonValue::as_str),
-            Some("Ok")
-        );
-        assert_eq!(
-            outcome.get("code").and_then(JsonValue::as_str),
-            Some("SFS-OK-000")
-        );
-    }
-
-    #[test]
-    fn sorafs_reference_bundle_validator_via_bridge_ffi() {
-        let order = repo_fixture("fixtures/sorafs_manifest/replication_order/order_v1.to");
-        let proof = repo_fixture("fixtures/sorafs_manifest/por/proof_v1.to");
-        let order_label = b"replication-order.to";
-        let proof_label = b"por-proof.to";
-        let payloads = [
-            ConnectNoritoSorafsReferenceBundlePayload {
-                kind: sorafs_reference_ffi::SORAFS_REFERENCE_BUNDLE_KIND_REPLICATION_ORDER,
-                bytes_ptr: order.as_ptr(),
-                bytes_len: order.len(),
-                label_ptr: order_label.as_ptr(),
-                label_len: order_label.len(),
-            },
-            ConnectNoritoSorafsReferenceBundlePayload {
-                kind: sorafs_reference_ffi::SORAFS_REFERENCE_BUNDLE_KIND_POR_PROOF,
-                bytes_ptr: proof.as_ptr(),
-                bytes_len: proof.len(),
-                label_ptr: proof_label.as_ptr(),
-                label_len: proof_label.len(),
-            },
-        ];
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len = 0usize;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_validate_bundle_json(
-                payloads.as_ptr(),
-                payloads.len(),
-                1_700_000_001,
-                126,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(rc, 0, "bridge fixture-bundle validator call");
-        let outcome = unsafe { take_bridge_json_usize(out_ptr, out_len) };
-        assert_eq!(
-            outcome.get("status").and_then(JsonValue::as_str),
-            Some("Ok")
-        );
-        assert_eq!(
-            outcome.get("code").and_then(JsonValue::as_str),
-            Some("SFS-OK-000")
-        );
-        assert_eq!(
-            outcome.get("generated_at").and_then(JsonValue::as_u64),
-            Some(126)
-        );
-    }
-
-    #[test]
-    fn sorafs_reference_governance_dag_block_validator_via_bridge_ffi() {
-        let payload = [0xA5];
-        let label = b"governance-block.to";
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len = 0usize;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_validate_governance_dag_block_json(
-                payload.as_ptr(),
-                payload.len(),
-                label.as_ptr(),
-                label.len(),
-                ptr::null(),
-                0,
-                124,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(rc, 0, "bridge governance block validator call");
-        let outcome = unsafe { take_bridge_json_usize(out_ptr, out_len) };
-        assert_eq!(
-            outcome.get("status").and_then(JsonValue::as_str),
-            Some("Error")
-        );
-        assert_eq!(
-            outcome.get("code").and_then(JsonValue::as_str),
-            Some("SFS-NORITO-001")
-        );
-        assert_eq!(
-            outcome.get("generated_at").and_then(JsonValue::as_u64),
-            Some(124)
-        );
-    }
-
-    #[test]
-    fn sorafs_reference_governance_log_node_validator_via_bridge_ffi() {
-        let payload = repo_fixture("fixtures/sorafs_manifest/moderation/governance_node_v1.to");
-        let expected_node_cid =
-            hex::decode("9a2dc9a930494cbc70f0e4cab25df893fb607e83f1fa52520ed62dabca918d5a")
-                .expect("fixture node CID");
-        let label = b"moderation/governance_node_v1.to";
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len = 0usize;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_validate_governance_json(
-                payload.as_ptr(),
-                payload.len(),
-                label.as_ptr(),
-                label.len(),
-                expected_node_cid.as_ptr(),
-                expected_node_cid.len(),
-                1_700_001_234,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(rc, 0, "bridge governance log-node validator call");
-        let outcome = unsafe { take_bridge_json_usize(out_ptr, out_len) };
-        assert_eq!(
-            outcome.get("status").and_then(JsonValue::as_str),
-            Some("Ok")
-        );
-        assert_eq!(
-            outcome.get("code").and_then(JsonValue::as_str),
-            Some("SFS-OK-000")
-        );
-        assert_eq!(
-            outcome.get("generated_at").and_then(JsonValue::as_u64),
-            Some(1_700_001_234)
-        );
-    }
-
-    #[test]
-    fn sorafs_reference_governance_dag_head_chain_validator_via_bridge_ffi() {
-        let head = [0xA5];
-        let head_label = b"governance-head.to";
-        let block = [0x5A];
-        let block_label = b"governance-block-0.to";
-        let blocks = [ConnectNoritoSorafsReferenceInput {
-            bytes_ptr: block.as_ptr(),
-            bytes_len: block.len(),
-            label_ptr: block_label.as_ptr(),
-            label_len: block_label.len(),
-        }];
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len = 0usize;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_validate_governance_dag_head_chain_json(
-                head.as_ptr(),
-                head.len(),
-                head_label.as_ptr(),
-                head_label.len(),
-                blocks.as_ptr(),
-                blocks.len(),
-                125,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(rc, 0, "bridge governance head-chain validator call");
-        let outcome = unsafe { take_bridge_json_usize(out_ptr, out_len) };
-        assert_eq!(
-            outcome.get("status").and_then(JsonValue::as_str),
-            Some("Error")
-        );
-        let inputs = outcome
-            .get("inputs")
-            .and_then(JsonValue::as_array)
-            .expect("validation inputs");
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(
-            inputs[1].get("path").and_then(JsonValue::as_str),
-            Some("governance-block-0.to")
-        );
-    }
-
-    #[test]
-    fn sorafs_reference_orderbook_signing_via_bridge_ffi() {
-        let payload = repo_fixture("fixtures/sorafs_manifest/orderbook/order_request_v1.to");
-        let private_key = [0xB7; 32];
-        let mut signed_ptr: *mut c_uchar = ptr::null_mut();
-        let mut signed_len: c_ulong = 0;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_sign_orderbook_payload(
-                sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
-                payload.as_ptr(),
-                payload.len() as c_ulong,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut signed_ptr,
-                &mut signed_len,
-            )
-        };
-        assert_eq!(rc, 0, "bridge signer call should succeed");
-        let signed = unsafe { slice::from_raw_parts(signed_ptr, signed_len as usize).to_vec() };
-        assert!(!signed.is_empty(), "signed payload should be returned");
-        assert_eq!(
-            signed, payload,
-            "signing the canonical fixture with its deterministic key must be byte-identical"
-        );
-        if !signed_ptr.is_null() {
-            connect_norito_free(signed_ptr);
-        }
-
-        let label = b"signed-order-request.to";
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-        let validate_rc = unsafe {
-            connect_norito_sorafs_reference_validate_orderbook_json(
-                sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
-                signed.as_ptr(),
-                signed.len() as c_ulong,
-                label.as_ptr(),
-                label.len() as c_ulong,
-                123,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(validate_rc, 0, "signed payload should validate");
-        let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
-        assert_eq!(
-            outcome.get("status").and_then(JsonValue::as_str),
-            Some("Ok")
-        );
-    }
-
-    #[test]
-    fn sorafs_reference_orderbook_signing_rejects_retired_snapshot_selector_via_bridge_ffi() {
-        let payload = b"retired runtime snapshot";
-        let private_key = [0xB7; 32];
-        let mut signed_ptr: *mut c_uchar = ptr::null_mut();
-        let mut signed_len: c_ulong = 0;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_sign_orderbook_payload(
-                6,
-                payload.as_ptr(),
-                payload.len() as c_ulong,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut signed_ptr,
-                &mut signed_len,
-            )
-        };
-        assert_eq!(rc, ERR_SORAFS_REFERENCE);
-        assert!(signed_ptr.is_null());
-        assert_eq!(signed_len, 0);
-    }
-
-    fn validate_signed_orderbook_payload(kind: u32, payload: &[u8], label: &[u8]) -> JsonValue {
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-        let validate_rc = unsafe {
-            connect_norito_sorafs_reference_validate_orderbook_json(
-                kind,
-                payload.as_ptr(),
-                payload.len() as c_ulong,
-                label.as_ptr(),
-                label.len() as c_ulong,
-                123,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(validate_rc, 0, "signed payload should validate");
-        unsafe { take_bridge_json(out_ptr, out_len) }
-    }
-
-    #[test]
-    fn sorafs_reference_orderbook_field_builders_via_bridge_ffi() {
-        let private_key = [0xB7; 32];
-        let owner = b"merchant@paynet";
-        let price = b"340282366920938463463374607431768211456.000000001";
-        let order_id = derive_orderbook_order_id_v1(owner, 7);
-        let mut derived_order_id = [0_u8; 32];
-        assert_eq!(
-            unsafe {
-                connect_norito_sorafs_reference_derive_orderbook_order_id(
-                    owner.as_ptr(),
-                    owner.len() as c_ulong,
-                    7,
-                    derived_order_id.as_mut_ptr(),
-                    derived_order_id.len() as c_ulong,
-                )
-            },
-            0
-        );
-        assert_eq!(derived_order_id, order_id);
-        let mut order_ptr: *mut c_uchar = ptr::null_mut();
-        let mut order_len: c_ulong = 0;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_build_signed_orderbook_order_request(
-                order_id.as_ptr(),
-                32,
-                SORAFS_ORDERBOOK_SIDE_BID,
-                SORAFS_ORDERBOOK_TIER_HOT,
-                price.as_ptr(),
-                price.len() as c_ulong,
-                12,
-                12,
-                owner.as_ptr(),
-                owner.len() as c_ulong,
-                ptr::null(),
-                0,
-                1_700_010_000,
-                7,
-                25,
-                30,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut order_ptr,
-                &mut order_len,
-            )
-        };
-        assert_eq!(rc, 0, "order request builder should succeed");
-        let order_bytes = unsafe { slice::from_raw_parts(order_ptr, order_len as usize).to_vec() };
-        assert!(!order_bytes.is_empty());
-        if !order_ptr.is_null() {
-            connect_norito_free(order_ptr);
-        }
-        let order_outcome = validate_signed_orderbook_payload(
-            sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
-            &order_bytes,
-            b"built-order-request.to",
-        );
-        assert_eq!(
-            order_outcome.get("status").and_then(JsonValue::as_str),
-            Some("Ok")
-        );
-
-        let provider_id = [0x72; 32];
-        let ask_order_id = derive_orderbook_order_id_v1(owner, 8);
-        order_ptr = ptr::null_mut();
-        order_len = 0;
-        let ask_rc = unsafe {
-            connect_norito_sorafs_reference_build_signed_orderbook_order_request(
-                ask_order_id.as_ptr(),
-                ask_order_id.len() as c_ulong,
-                SORAFS_ORDERBOOK_SIDE_ASK,
-                SORAFS_ORDERBOOK_TIER_HOT,
-                price.as_ptr(),
-                price.len() as c_ulong,
-                4,
-                4,
-                owner.as_ptr(),
-                owner.len() as c_ulong,
-                provider_id.as_ptr(),
-                provider_id.len() as c_ulong,
-                1_700_010_000,
-                8,
-                25,
-                30,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut order_ptr,
-                &mut order_len,
-            )
-        };
-        assert_eq!(ask_rc, 0, "provider-bound ask builder should succeed");
-        let ask_bytes = unsafe { slice::from_raw_parts(order_ptr, order_len as usize).to_vec() };
-        connect_norito_free(order_ptr);
-        let ask_outcome = validate_signed_orderbook_payload(
-            sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
-            &ask_bytes,
-            b"built-provider-bound-ask.to",
-        );
-        assert_eq!(
-            ask_outcome.get("status").and_then(JsonValue::as_str),
-            Some("Ok")
-        );
-
-        let mut cancel_ptr: *mut c_uchar = ptr::null_mut();
-        let mut cancel_len: c_ulong = 0;
-        let cancel_rc = unsafe {
-            connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
-                order_id.as_ptr(),
-                32,
-                owner.as_ptr(),
-                owner.len() as c_ulong,
-                SORAFS_ORDERBOOK_CANCEL_REASON_OWNER_REQUESTED,
-                8,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut cancel_ptr,
-                &mut cancel_len,
-            )
-        };
-        assert_eq!(cancel_rc, 0, "order cancel builder should succeed");
-        let cancel_bytes =
-            unsafe { slice::from_raw_parts(cancel_ptr, cancel_len as usize).to_vec() };
-        if !cancel_ptr.is_null() {
-            connect_norito_free(cancel_ptr);
-        }
-        let cancel_outcome = validate_signed_orderbook_payload(
-            sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_CANCEL,
-            &cancel_bytes,
-            b"built-order-cancel.to",
-        );
-        assert_eq!(
-            cancel_outcome.get("status").and_then(JsonValue::as_str),
-            Some("Ok")
-        );
-
-        let debit = b"340282366920938463463374607431768211456.000000001";
-        let credit = b"340282366920938463463374607431768211456";
-        let fee = b"0.000000001";
-        let mut receipt_ptr: *mut c_uchar = ptr::null_mut();
-        let mut receipt_len: c_ulong = 0;
-        let receipt_rc = unsafe {
-            connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt(
-                [0x21; 32].as_ptr(),
-                32,
-                [0x22; 32].as_ptr(),
-                32,
-                [0x23; 32].as_ptr(),
-                32,
-                0,
-                4096,
-                [0x24; 32].as_ptr(),
-                32,
-                4096,
-                debit.as_ptr(),
-                debit.len() as c_ulong,
-                credit.as_ptr(),
-                credit.len() as c_ulong,
-                fee.as_ptr(),
-                fee.len() as c_ulong,
-                1_700_000_999,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut receipt_ptr,
-                &mut receipt_len,
-            )
-        };
-        assert_eq!(receipt_rc, 0, "settlement receipt builder should succeed");
-        let receipt_bytes =
-            unsafe { slice::from_raw_parts(receipt_ptr, receipt_len as usize).to_vec() };
-        if !receipt_ptr.is_null() {
-            connect_norito_free(receipt_ptr);
-        }
-        let receipt_outcome = validate_signed_orderbook_payload(
-            sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT,
-            &receipt_bytes,
-            b"built-settlement-receipt.to",
-        );
-        assert_eq!(
-            receipt_outcome.get("status").and_then(JsonValue::as_str),
-            Some("Ok")
-        );
-    }
-
-    #[test]
-    fn sorafs_reference_order_id_bridge_rejects_noncanonical_inputs() {
-        let owner = b"merchant@paynet";
-        let mut output = [0_u8; 32];
-        assert_eq!(
-            unsafe {
-                connect_norito_sorafs_reference_derive_orderbook_order_id(
-                    owner.as_ptr(),
-                    0,
-                    1,
-                    output.as_mut_ptr(),
-                    output.len() as c_ulong,
-                )
-            },
-            ERR_SORAFS_REFERENCE
-        );
-        assert_eq!(
-            unsafe {
-                connect_norito_sorafs_reference_derive_orderbook_order_id(
-                    owner.as_ptr(),
-                    owner.len() as c_ulong,
-                    1,
-                    ptr::null_mut(),
-                    output.len() as c_ulong,
-                )
-            },
-            ERR_SORAFS_REFERENCE
-        );
-        assert_eq!(
-            unsafe {
-                connect_norito_sorafs_reference_derive_orderbook_order_id(
-                    owner.as_ptr(),
-                    owner.len() as c_ulong,
-                    0,
-                    output.as_mut_ptr(),
-                    output.len() as c_ulong,
-                )
-            },
-            ERR_SORAFS_REFERENCE
-        );
-        assert_eq!(
-            unsafe {
-                connect_norito_sorafs_reference_derive_orderbook_order_id(
-                    owner.as_ptr(),
-                    owner.len() as c_ulong,
-                    1,
-                    output.as_mut_ptr(),
-                    31,
-                )
-            },
-            ERR_SORAFS_REFERENCE
-        );
-
-        let price = b"1000000";
-        let private_key = [0xB7; 32];
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-        let rc = unsafe {
-            connect_norito_sorafs_reference_build_signed_orderbook_order_request(
-                [0x11; 32].as_ptr(),
-                32,
-                SORAFS_ORDERBOOK_SIDE_BID,
-                SORAFS_ORDERBOOK_TIER_HOT,
-                price.as_ptr(),
-                price.len() as c_ulong,
-                12,
-                12,
-                owner.as_ptr(),
-                owner.len() as c_ulong,
-                ptr::null(),
-                0,
-                1_700_010_000,
-                7,
-                25,
-                30,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(rc, ERR_SORAFS_REFERENCE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-
-    #[test]
-    fn sorafs_reference_orderbook_bridge_enforces_provider_side_binding() {
-        let owner = b"merchant@paynet";
-        let price = b"1";
-        let private_key = [0xB7; 32];
-        let provider_id = [0x72; 32];
-        let order_id = derive_orderbook_order_id_v1(owner, 17);
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let bid_with_provider = unsafe {
-            connect_norito_sorafs_reference_build_signed_orderbook_order_request(
-                order_id.as_ptr(),
-                order_id.len() as c_ulong,
-                SORAFS_ORDERBOOK_SIDE_BID,
-                SORAFS_ORDERBOOK_TIER_HOT,
-                price.as_ptr(),
-                price.len() as c_ulong,
-                1,
-                1,
-                owner.as_ptr(),
-                owner.len() as c_ulong,
-                provider_id.as_ptr(),
-                provider_id.len() as c_ulong,
-                1_700_010_000,
-                17,
-                0,
-                0,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(bid_with_provider, ERR_SORAFS_REFERENCE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-
-        let ask_without_provider = unsafe {
-            connect_norito_sorafs_reference_build_signed_orderbook_order_request(
-                order_id.as_ptr(),
-                order_id.len() as c_ulong,
-                SORAFS_ORDERBOOK_SIDE_ASK,
-                SORAFS_ORDERBOOK_TIER_HOT,
-                price.as_ptr(),
-                price.len() as c_ulong,
-                1,
-                1,
-                owner.as_ptr(),
-                owner.len() as c_ulong,
-                ptr::null(),
-                0,
-                1_700_010_000,
-                17,
-                0,
-                0,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(ask_without_provider, ERR_SORAFS_REFERENCE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-
-    #[test]
-    fn sorafs_reference_xor_quantity_bridge_requires_canonical_exact_text() {
-        const MAX_SCALED: &[u8] = b"6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
-        assert_eq!(MAX_SCALED.len(), 155);
-        assert!(sorafs_xor_quantity_from_bytes(MAX_SCALED).is_ok());
-        assert!(sorafs_xor_quantity_from_bytes(b"0.000000001").is_ok());
-        assert!(
-            sorafs_xor_quantity_from_bytes(b"340282366920938463463374607431768211456.000000001")
-                .is_ok()
-        );
-        assert_eq!(
-            sorafs_xor_quantity_from_bytes(b"1.0"),
-            Err(ERR_SORAFS_REFERENCE)
-        );
-        assert_eq!(
-            sorafs_xor_quantity_from_bytes(b" 1"),
-            Err(ERR_SORAFS_REFERENCE)
-        );
-        assert_eq!(
-            sorafs_xor_quantity_from_bytes(b"0.0000000001"),
-            Err(ERR_SORAFS_REFERENCE)
-        );
-        assert_eq!(
-            sorafs_xor_quantity_from_bytes(&[b'1'; 156]),
-            Err(ERR_SORAFS_REFERENCE)
-        );
-    }
-
-    #[test]
-    fn sorafs_reference_orderbook_bridge_enforces_owner_account_v1_byte_ceiling() {
-        let owner = vec![0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
-        let private_key = [0xB7; 32];
-        let price = b"1";
-        let order_id = derive_orderbook_order_id_v1(&owner, 1);
-        let mut derived_order_id = [0_u8; 32];
-        assert_eq!(
-            unsafe {
-                connect_norito_sorafs_reference_derive_orderbook_order_id(
-                    owner.as_ptr(),
-                    owner.len() as c_ulong,
-                    1,
-                    derived_order_id.as_mut_ptr(),
-                    derived_order_id.len() as c_ulong,
-                )
-            },
-            0
-        );
-        assert_eq!(derived_order_id, order_id);
-
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-        assert_eq!(
-            unsafe {
-                connect_norito_sorafs_reference_build_signed_orderbook_order_request(
-                    order_id.as_ptr(),
-                    order_id.len() as c_ulong,
-                    SORAFS_ORDERBOOK_SIDE_BID,
-                    SORAFS_ORDERBOOK_TIER_HOT,
-                    price.as_ptr(),
-                    price.len() as c_ulong,
-                    1,
-                    1,
-                    owner.as_ptr(),
-                    owner.len() as c_ulong,
-                    ptr::null(),
-                    0,
-                    1,
-                    1,
-                    0,
-                    0,
-                    private_key.as_ptr(),
-                    private_key.len() as c_ulong,
-                    &mut out_ptr,
-                    &mut out_len,
-                )
-            },
-            0
-        );
-        assert!(!out_ptr.is_null());
-        assert!(out_len > 0);
-        connect_norito_free(out_ptr);
-        out_ptr = ptr::null_mut();
-        out_len = 0;
-
-        assert_eq!(
-            unsafe {
-                connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
-                    order_id.as_ptr(),
-                    order_id.len() as c_ulong,
-                    owner.as_ptr(),
-                    owner.len() as c_ulong,
-                    SORAFS_ORDERBOOK_CANCEL_REASON_OWNER_REQUESTED,
-                    2,
-                    private_key.as_ptr(),
-                    private_key.len() as c_ulong,
-                    &mut out_ptr,
-                    &mut out_len,
-                )
-            },
-            0
-        );
-        assert!(!out_ptr.is_null());
-        assert!(out_len > 0);
-        connect_norito_free(out_ptr);
-
-        let oversized = vec![0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
-        let oversized_order_id = derive_orderbook_order_id_v1(&oversized, 1);
-        assert_eq!(
-            unsafe {
-                connect_norito_sorafs_reference_derive_orderbook_order_id(
-                    oversized.as_ptr(),
-                    oversized.len() as c_ulong,
-                    1,
-                    derived_order_id.as_mut_ptr(),
-                    derived_order_id.len() as c_ulong,
-                )
-            },
-            ERR_SORAFS_REFERENCE
-        );
-
-        out_ptr = ptr::null_mut();
-        out_len = 0;
-        assert_eq!(
-            unsafe {
-                connect_norito_sorafs_reference_build_signed_orderbook_order_request(
-                    oversized_order_id.as_ptr(),
-                    oversized_order_id.len() as c_ulong,
-                    SORAFS_ORDERBOOK_SIDE_BID,
-                    SORAFS_ORDERBOOK_TIER_HOT,
-                    price.as_ptr(),
-                    price.len() as c_ulong,
-                    1,
-                    1,
-                    oversized.as_ptr(),
-                    oversized.len() as c_ulong,
-                    ptr::null(),
-                    0,
-                    1,
-                    1,
-                    0,
-                    0,
-                    private_key.as_ptr(),
-                    private_key.len() as c_ulong,
-                    &mut out_ptr,
-                    &mut out_len,
-                )
-            },
-            ERR_SORAFS_REFERENCE
-        );
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-
-        assert_eq!(
-            unsafe {
-                connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
-                    oversized_order_id.as_ptr(),
-                    oversized_order_id.len() as c_ulong,
-                    oversized.as_ptr(),
-                    oversized.len() as c_ulong,
-                    SORAFS_ORDERBOOK_CANCEL_REASON_OWNER_REQUESTED,
-                    2,
-                    private_key.as_ptr(),
-                    private_key.len() as c_ulong,
-                    &mut out_ptr,
-                    &mut out_len,
-                )
-            },
-            ERR_SORAFS_REFERENCE
-        );
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-
-    #[test]
-    fn sorafs_reference_orderbook_field_builder_rejects_imbalanced_receipt_via_bridge_ffi() {
-        let private_key = [0xB7; 32];
-        let debit = b"100";
-        let credit = b"91";
-        let fee = b"10";
-        let mut receipt_ptr: *mut c_uchar = ptr::null_mut();
-        let mut receipt_len: c_ulong = 0;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt(
-                [0x31; 32].as_ptr(),
-                32,
-                [0x32; 32].as_ptr(),
-                32,
-                [0x33; 32].as_ptr(),
-                32,
-                0,
-                4096,
-                [0x34; 32].as_ptr(),
-                32,
-                4096,
-                debit.as_ptr(),
-                debit.len() as c_ulong,
-                credit.as_ptr(),
-                credit.len() as c_ulong,
-                fee.as_ptr(),
-                fee.len() as c_ulong,
-                1_700_000_999,
-                private_key.as_ptr(),
-                private_key.len() as c_ulong,
-                &mut receipt_ptr,
-                &mut receipt_len,
-            )
-        };
-        assert_eq!(rc, ERR_SORAFS_REFERENCE);
-        assert!(receipt_ptr.is_null());
-        assert_eq!(receipt_len, 0);
-    }
-
-    #[test]
-    fn sorafs_reference_pdp_bundle_validator_via_bridge_ffi() {
-        let commitment = repo_fixture("fixtures/sorafs_manifest/pdp/commitment_v1.to");
-        let challenge = repo_fixture("fixtures/sorafs_manifest/pdp/challenge_v1.to");
-        let proof = repo_fixture("fixtures/sorafs_manifest/pdp/proof_v1.to");
-        let commitment_label = b"commitment.to";
-        let challenge_label = b"challenge.to";
-        let proof_label = b"proof.to";
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let rc = unsafe {
-            connect_norito_sorafs_reference_validate_pdp_bundle_json(
-                commitment.as_ptr(),
-                commitment.len() as c_ulong,
-                commitment_label.as_ptr(),
-                commitment_label.len() as c_ulong,
-                challenge.as_ptr(),
-                challenge.len() as c_ulong,
-                challenge_label.as_ptr(),
-                challenge_label.len() as c_ulong,
-                proof.as_ptr(),
-                proof.len() as c_ulong,
-                proof_label.as_ptr(),
-                proof_label.len() as c_ulong,
-                123,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(rc, 0, "bridge PDP bundle validator call should succeed");
-        let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
-        assert_eq!(
-            outcome.get("status").and_then(JsonValue::as_str),
-            Some("Ok")
-        );
-        assert_eq!(
-            outcome.get("code").and_then(JsonValue::as_str),
-            Some("SFS-OK-000")
-        );
-    }
-}
+include!("bridge_tail_tests.rs");
+include!("sorafs_tests.rs");

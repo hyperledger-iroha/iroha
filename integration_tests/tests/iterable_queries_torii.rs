@@ -68,12 +68,16 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
     for name in ["blkcheck_a", "blkcheck_b"] {
         client.submit_blocking(
             Register::asset_definition({
-                let __asset_definition_id = AssetDefinitionId::new(
+                let __asset_definition_id = AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal")?,
                     name.parse()?,
                 );
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    name.to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
@@ -177,23 +181,31 @@ fn find_block_headers_descending() -> Result<()> {
     // even if the block builder batches them together.
     client.submit_blocking(
         Register::asset_definition({
-            let __asset_definition_id = AssetDefinitionId::new(
+            let __asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "blkcheck2".parse()?,
             );
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "blkcheck2".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         }),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     client.submit_blocking(
         Register::asset_definition({
-            let __asset_definition_id = AssetDefinitionId::new(
+            let __asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "blkcheck3".parse()?,
             );
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+            AssetDefinition::numeric(
+                __asset_definition_id.clone(),
+                "blkcheck3".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
         }),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -250,7 +262,8 @@ fn find_triggers_includes_registered() -> Result<()> {
             Repeats::Exactly(1),
             ALICE_ID.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     client.submit_blocking(
         Register::trigger(trig),
@@ -317,7 +330,8 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
             Repeats::Indefinitely,
             ALICE_ID.clone(),
             ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     client.submit_blocking(
         Register::trigger(trig),
@@ -366,7 +380,8 @@ fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
             Repeats::Exactly(1),
             ALICE_ID.clone(),
             ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     client.submit_blocking(
         Register::trigger(trig),
@@ -427,7 +442,8 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
             Repeats::Exactly(1),
             ALICE_ID.clone(),
             ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     );
     client
         .submit_blocking(

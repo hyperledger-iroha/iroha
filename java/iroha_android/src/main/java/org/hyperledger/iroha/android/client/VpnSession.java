@@ -22,7 +22,12 @@ public final class VpnSession {
   private final String leaseFee;
   private final int flowLabelBits;
   private final int paddingBudgetMs;
+  private final String relayIdHex;
+  private final String descriptorCommitHex;
+  private final String tlsServerName;
   private final String relayTlsSpkiSha256Hex;
+  private final String relayCertificateSha256Hex;
+  private final String directorySnapshotDigestHex;
   private final List<String> routePushes;
   private final List<String> excludedRoutes;
   private final List<String> dnsServers;
@@ -51,7 +56,12 @@ public final class VpnSession {
       final String leaseFee,
       final int flowLabelBits,
       final int paddingBudgetMs,
+      final String relayIdHex,
+      final String descriptorCommitHex,
+      final String tlsServerName,
       final String relayTlsSpkiSha256Hex,
+      final String relayCertificateSha256Hex,
+      final String directorySnapshotDigestHex,
       final List<String> routePushes,
       final List<String> excludedRoutes,
       final List<String> dnsServers,
@@ -78,7 +88,15 @@ public final class VpnSession {
     this.leaseFee = Objects.requireNonNull(leaseFee, "leaseFee");
     this.flowLabelBits = flowLabelBits;
     this.paddingBudgetMs = paddingBudgetMs;
-    this.relayTlsSpkiSha256Hex = relayTlsSpkiSha256Hex;
+    this.relayIdHex = Objects.requireNonNull(relayIdHex, "relayIdHex");
+    this.descriptorCommitHex = Objects.requireNonNull(descriptorCommitHex, "descriptorCommitHex");
+    this.tlsServerName = Objects.requireNonNull(tlsServerName, "tlsServerName");
+    this.relayTlsSpkiSha256Hex =
+        Objects.requireNonNull(relayTlsSpkiSha256Hex, "relayTlsSpkiSha256Hex");
+    this.relayCertificateSha256Hex =
+        Objects.requireNonNull(relayCertificateSha256Hex, "relayCertificateSha256Hex");
+    this.directorySnapshotDigestHex =
+        Objects.requireNonNull(directorySnapshotDigestHex, "directorySnapshotDigestHex");
     this.routePushes = VpnProfile.immutableList(routePushes);
     this.excludedRoutes = VpnProfile.immutableList(excludedRoutes);
     this.dnsServers = VpnProfile.immutableList(dnsServers);
@@ -107,7 +125,12 @@ public final class VpnSession {
   public String leaseFee() { return leaseFee; }
   public int flowLabelBits() { return flowLabelBits; }
   public int paddingBudgetMs() { return paddingBudgetMs; }
+  public String relayIdHex() { return relayIdHex; }
+  public String descriptorCommitHex() { return descriptorCommitHex; }
+  public String tlsServerName() { return tlsServerName; }
   public String relayTlsSpkiSha256Hex() { return relayTlsSpkiSha256Hex; }
+  public String relayCertificateSha256Hex() { return relayCertificateSha256Hex; }
+  public String directorySnapshotDigestHex() { return directorySnapshotDigestHex; }
   public List<String> routePushes() { return routePushes; }
   public List<String> excludedRoutes() { return excludedRoutes; }
   public List<String> dnsServers() { return dnsServers; }

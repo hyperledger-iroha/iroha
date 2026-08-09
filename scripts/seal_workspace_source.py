@@ -184,14 +184,20 @@ def main() -> int:
     action.add_argument("--verify", action="store_true")
     action.add_argument("--unseal", action="store_true")
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument(
+    writable_policy = parser.add_mutually_exclusive_group()
+    writable_policy.add_argument(
         "--writable",
         action="append",
         default=[],
         help="relative writable subtree (defaults to target)",
     )
+    writable_policy.add_argument(
+        "--no-writable-paths",
+        action="store_true",
+        help="seal every path below the source root, including target",
+    )
     args = parser.parse_args()
-    writable = args.writable or ["target"]
+    writable = [] if args.no_writable_paths else (args.writable or ["target"])
     try:
         if args.seal:
             seal_source_tree(args.root, writable)

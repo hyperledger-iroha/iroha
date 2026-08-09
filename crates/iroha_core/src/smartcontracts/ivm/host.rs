@@ -59,11 +59,8 @@ use iroha_data_model::{
         RemoveSignatory, SetAccountQuorum, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
         TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister, UnregisterBox,
         escrow::{
-            AcceptAnonymousAssetEscrow, AcceptAssetEscrow, CancelAnonymousAssetEscrow,
-            CancelAssetEscrow, MarkAnonymousEscrowPaymentSent, MarkEscrowPaymentSent,
-            OpenAnonymousAssetEscrow, OpenAnonymousEscrowDispute, OpenAssetEscrow,
-            OpenEscrowDispute, ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow,
-            ResolveAnonymousEscrowDispute, ResolveEscrowDispute,
+            AcceptAssetEscrow, CancelAssetEscrow, MarkEscrowPaymentSent, OpenAssetEscrow,
+            OpenEscrowDispute, ReleaseAssetEscrow, ResolveEscrowDispute,
         },
         register::RegisterPeerWithPop,
         smart_contract_code as scode, zk as DMZk,
@@ -167,6 +164,8 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "merge_execution_lane_applied_",
     "merge_lane_frontier_v1_",
     "queue_plan_admission_v2_",
+    "queue_plan_pending_obligation_v1_",
+    "queue_plan_pending_route_member_v1_",
     "nexus_fee_receipt_settled_",
     "nexus_fee_settlement_settled_",
     "sealed_tx_commitment_",
@@ -377,22 +376,10 @@ fn legacy_transfer_v1_source_scope_for_world<W: WorldReadOnly>(
         return Ok(AssetBalanceScope::Global);
     }
 
-    let dataspace_alias = world
-        .asset_definition_alias_bindings()
-        .get(definition.id())
-        .map(|binding| binding.alias.dataspace_segment().to_owned())
-        .or_else(|| {
-            definition
-                .alias()
-                .as_ref()
-                .map(|alias| alias.dataspace_segment().to_owned())
-        })
-        .or_else(|| {
-            definition
-                .id()
-                .try_domain()
-                .map(|domain| domain.dataspace().as_ref().to_owned())
-        });
+    let dataspace_alias = definition
+        .owning_domain()
+        .as_ref()
+        .map(|domain| domain.dataspace().as_ref().to_owned());
 
     let Some(dataspace_alias) = dataspace_alias else {
         return Err(ivm::VMError::PermissionDenied);
@@ -421,7 +408,7 @@ fn apply_sm_openssl_preview(enabled: bool) {
 #[cfg(not(feature = "sm-ffi-openssl"))]
 fn apply_sm_openssl_preview(_: bool) {}
 
-/// Optional observations for one V1 typed page-query execution.
+/// Optional observations for one V1 typed query execution.
 ///
 /// The host leaves collection disabled unless a benchmark explicitly enables
 /// it, so normal consensus execution does not maintain diagnostic state.
@@ -589,6 +576,13 @@ struct PreparedVerifyingKey {
     ipa_k: Option<u32>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ZkRootsSnapshot {
+    tree_profile: crate::state::ConfidentialTreeProfile,
+    root_history: Vec<[u8; 32]>,
+    commitment_count: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HostExecutionClass {
     Generic,
@@ -697,12 +691,10 @@ pub struct CoreHostImpl<QS> {
     transport_caps_snapshot: Option<TransportCapabilityResolutionSnapshot>,
     negotiated_caps_snapshot: Option<CapabilityFlags>,
     // ZK-proof verification state (gates ISI mutations)
-    zk_verified_transfer: Arc<VecDeque<[u8; 32]>>,
-    zk_verified_unshield: Arc<VecDeque<[u8; 32]>>,
     zk_verified_ballot: Arc<VecDeque<[u8; 32]>>,
     zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
     // Snapshots for state-read syscalls
-    zk_roots: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>>,
+    zk_roots: BTreeMap<AssetDefinitionId, ZkRootsSnapshot>,
     zk_elections: BTreeMap<String, (u32, bool, Vec<u64>)>,
     vrf_epoch_seeds: BTreeMap<u64, [u8; 32]>,
     // Registry snapshot of verifying keys.
@@ -718,15 +710,9 @@ pub struct CoreHostImpl<QS> {
     axt_timing: iroha_config::parameters::actual::NexusAxt,
     // Current manifest id for namespace binding (None -> core/built-in).
     current_manifest_id: Option<String>,
-    // Cap for ZK roots read responses
-    zk_root_history_cap: usize,
-    // Optional: include explicit empty-tree root for assets with no commitments
-    zk_include_empty_root_when_empty: bool,
-    // Depth used to compute the explicit empty-tree root when the above is enabled
-    zk_empty_root_depth: u8,
+    // Non-zero retained-root bound for ZK root reads.
+    zk_tree_roots_history_len: NonZeroUsize,
     // Last seen verify envelope hashes per ZK op type (from pointer‑ABI TLVs)
-    zk_last_env_hash_transfer: Arc<VecDeque<[u8; 32]>>,
-    zk_last_env_hash_unshield: Arc<VecDeque<[u8; 32]>>,
     zk_last_env_hash_ballot: Arc<VecDeque<[u8; 32]>>,
     zk_last_env_hash_tally: Arc<VecDeque<[u8; 32]>>,
     // Cached AXT policy snapshot (if available) for telemetry and richer errors.
@@ -1725,7 +1711,7 @@ mod durable_state_merge_tests {
     #[test]
     fn scoped_path_and_scan_reject_physical_length_overflow_before_state_access() {
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &ALICE_ID,
             703,
             DataSpaceId::UNIVERSAL,
@@ -2350,12 +2336,8 @@ struct NestedContractCallHostSnapshot {
     durable_read_paths_complete: bool,
     axt_state: Option<Arc<axt::HostAxtState>>,
     completed_axt_len: usize,
-    zk_verified_transfer: Arc<VecDeque<[u8; 32]>>,
-    zk_verified_unshield: Arc<VecDeque<[u8; 32]>>,
     zk_verified_ballot: Arc<VecDeque<[u8; 32]>>,
     zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
-    zk_last_env_hash_transfer: Arc<VecDeque<[u8; 32]>>,
-    zk_last_env_hash_unshield: Arc<VecDeque<[u8; 32]>>,
     zk_last_env_hash_ballot: Arc<VecDeque<[u8; 32]>>,
     zk_last_env_hash_tally: Arc<VecDeque<[u8; 32]>>,
     axt_replay_ledger: Arc<BTreeMap<AxtHandleReplayKey, AxtReplayRecord>>,
@@ -2853,8 +2835,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             completed_axt: Vec::new(),
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
-            zk_verified_transfer: Arc::new(VecDeque::new()),
-            zk_verified_unshield: Arc::new(VecDeque::new()),
             zk_verified_ballot: Arc::new(VecDeque::new()),
             zk_verified_tally: Arc::new(VecDeque::new()),
             zk_roots: BTreeMap::new(),
@@ -2867,11 +2847,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
-            zk_root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
-            zk_include_empty_root_when_empty: false,
-            zk_empty_root_depth: 0,
-            zk_last_env_hash_transfer: Arc::new(VecDeque::new()),
-            zk_last_env_hash_unshield: Arc::new(VecDeque::new()),
+            zk_tree_roots_history_len:
+                iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_policy_snapshot: None,
@@ -2887,21 +2864,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    /// Enable and reset typed page-query performance counters.
+    /// Enable and reset typed-query performance counters.
     ///
     /// Counters are disabled by default and do not affect consensus execution.
     pub fn enable_core_query_page_metrics(&mut self) {
         self.core_query_page_metrics = Some(CoreQueryPageMetrics::default());
     }
 
-    /// Reset enabled typed page-query performance counters.
+    /// Reset enabled typed-query performance counters.
     pub fn reset_core_query_page_metrics(&mut self) {
         if let Some(metrics) = &mut self.core_query_page_metrics {
             *metrics = CoreQueryPageMetrics::default();
         }
     }
 
-    /// Return enabled typed page-query performance counters.
+    /// Return enabled typed-query performance counters.
     #[must_use]
     pub const fn core_query_page_metrics(&self) -> Option<CoreQueryPageMetrics> {
         self.core_query_page_metrics
@@ -2986,8 +2963,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             completed_axt: Vec::new(),
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
-            zk_verified_transfer: Arc::new(VecDeque::new()),
-            zk_verified_unshield: Arc::new(VecDeque::new()),
             zk_verified_ballot: Arc::new(VecDeque::new()),
             zk_verified_tally: Arc::new(VecDeque::new()),
             zk_roots: BTreeMap::new(),
@@ -3000,11 +2975,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
-            zk_root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
-            zk_include_empty_root_when_empty: false,
-            zk_empty_root_depth: 0,
-            zk_last_env_hash_transfer: Arc::new(VecDeque::new()),
-            zk_last_env_hash_unshield: Arc::new(VecDeque::new()),
+            zk_tree_roots_history_len:
+                iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_policy_snapshot: None,
@@ -3072,8 +3044,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             completed_axt: Vec::new(),
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
-            zk_verified_transfer: Arc::new(VecDeque::new()),
-            zk_verified_unshield: Arc::new(VecDeque::new()),
             zk_verified_ballot: Arc::new(VecDeque::new()),
             zk_verified_tally: Arc::new(VecDeque::new()),
             zk_roots: BTreeMap::new(),
@@ -3086,11 +3056,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_policy: Arc::new(ivm::axt::AllowAllAxtPolicy),
             axt_timing: iroha_config::parameters::actual::NexusAxt::default(),
             current_manifest_id: None,
-            zk_root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
-            zk_include_empty_root_when_empty: false,
-            zk_empty_root_depth: 0,
-            zk_last_env_hash_transfer: Arc::new(VecDeque::new()),
-            zk_last_env_hash_unshield: Arc::new(VecDeque::new()),
+            zk_tree_roots_history_len:
+                iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_replay_ledger: Arc::new(BTreeMap::new()),
@@ -4222,9 +4189,38 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Some(map)
     }
 
-    /// Install a read-only snapshot of ZK roots per asset for state-read syscalls.
-    pub fn set_zk_roots_snapshot(&mut self, map: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>>) {
-        self.zk_roots = map;
+    /// Install validated confidential-tree snapshots for state-read syscalls.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ivm::VMError::NoritoInvalid`] without replacing the current
+    /// snapshots when any tree state is inconsistent with its persisted profile.
+    pub fn set_zk_roots_snapshot(
+        &mut self,
+        map: BTreeMap<AssetDefinitionId, crate::state::ZkAssetState>,
+    ) -> Result<(), ivm::VMError> {
+        self.zk_roots = Self::validated_zk_roots_snapshot(map)?;
+        Ok(())
+    }
+
+    fn validated_zk_roots_snapshot(
+        map: BTreeMap<AssetDefinitionId, crate::state::ZkAssetState>,
+    ) -> Result<BTreeMap<AssetDefinitionId, ZkRootsSnapshot>, ivm::VMError> {
+        let mut roots = BTreeMap::new();
+        for (asset_id, state) in map {
+            state
+                .validate_tree_metadata()
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            roots.insert(
+                asset_id,
+                ZkRootsSnapshot {
+                    tree_profile: state.tree_profile,
+                    root_history: state.root_history,
+                    commitment_count: state.commitments.len(),
+                },
+            );
+        }
+        Ok(roots)
     }
 
     /// Hydrate VRF epoch seed snapshots from world storage.
@@ -4239,7 +4235,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Hydrate ZK snapshots (roots, elections, verifying keys) from a world view.
     ///
     /// # Errors
-    /// Returns an error if an election shape or verifying key registry entry is inconsistent.
+    /// Returns an error if an election shape, confidential tree, or verifying key
+    /// registry entry is inconsistent.
     pub(crate) fn set_zk_snapshots_from_world(
         &mut self,
         world: &impl WorldReadOnly,
@@ -4252,19 +4249,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             elections.insert(id.clone(), (st.options, st.finalized, st.tally.clone()));
         }
 
-        let mut roots = BTreeMap::new();
-        for (ad, st) in world.zk_assets().iter() {
-            roots.insert(ad.clone(), st.root_history.clone());
-        }
+        let roots = Self::validated_zk_roots_snapshot(
+            world
+                .zk_assets()
+                .iter()
+                .map(|(asset_id, state)| (asset_id.clone(), state.clone()))
+                .collect(),
+        )?;
 
         let mut vks = BTreeMap::new();
         for (id, rec) in world.verifying_keys().iter() {
             vks.insert(id.clone(), rec.clone());
         }
         self.set_verifying_keys(vks)?;
-        self.set_zk_root_history_cap(zk_cfg.root_history_cap);
-        self.set_zk_empty_root_policy(zk_cfg.empty_root_on_empty, zk_cfg.merkle_depth);
-        self.set_zk_roots_snapshot(roots);
+        self.set_zk_tree_roots_history_len(zk_cfg.tree_roots_history_len);
+        self.zk_roots = roots;
         self.set_zk_elections_snapshot(elections)?;
         Ok(())
     }
@@ -4839,26 +4838,19 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn validate_zk_elections_snapshot(
         map: &BTreeMap<String, (u32, bool, Vec<u64>)>,
     ) -> Result<(), ivm::VMError> {
-        for (options, _, tally) in map.values() {
+        for (election_id, (options, _, tally)) in map {
+            if !iroha_data_model::governance::is_valid_governance_selector_v1(election_id) {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
             iroha_data_model::isi::zk::validate_election_tally_v1(*options, tally.len())
                 .map_err(|_| ivm::VMError::NoritoInvalid)?;
         }
         Ok(())
     }
 
-    /// Configure the cap for recent shielded Merkle roots returned by `ZK_ROOTS_GET`.
-    pub fn set_zk_root_history_cap(&mut self, cap: usize) {
-        self.zk_root_history_cap = cap.max(1);
-    }
-
-    /// Optionally include an explicit empty‑tree root for assets with no commitments.
-    /// Disabled by default. When enabled and an asset has zero recorded roots, the
-    /// `ZK_ROOTS_GET` response will contain `latest = R_depth` and `roots = [R_depth]`
-    /// where `R_depth` is computed as repeated `Hash(r||r)` starting from the
-    /// domain‑tagged zero leaf at depth 0.
-    pub fn set_zk_empty_root_policy(&mut self, include: bool, depth: u8) {
-        self.zk_include_empty_root_when_empty = include;
-        self.zk_empty_root_depth = depth;
+    /// Configure the non-zero retained-root bound returned by `ZK_ROOTS_GET`.
+    pub fn set_zk_tree_roots_history_len(&mut self, len: NonZeroUsize) {
+        self.zk_tree_roots_history_len = len;
     }
 
     /// Drain queued ISIs collected during the last VM run.
@@ -5073,20 +5065,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         mem::take(&mut self.completed_axt)
     }
 
-    /// Test helper: seed the transfer verification latch with a known envelope hash.
-    #[cfg(test)]
-    pub fn __test_seed_transfer_latch(&mut self, hash: [u8; 32]) {
-        Arc::make_mut(&mut self.zk_verified_transfer).push_back(hash);
-        Arc::make_mut(&mut self.zk_last_env_hash_transfer).push_back(hash);
-    }
-
-    /// Test helper: seed the unshield verification latch with a known envelope hash.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn __test_seed_unshield_latch(&mut self, hash: [u8; 32]) {
-        Arc::make_mut(&mut self.zk_verified_unshield).push_back(hash);
-        Arc::make_mut(&mut self.zk_last_env_hash_unshield).push_back(hash);
-    }
-
     /// Test helper: seed the ballot verification latch with a known envelope hash.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn __test_seed_ballot_latch(&mut self, hash: [u8; 32]) {
@@ -5101,16 +5079,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Arc::make_mut(&mut self.zk_last_env_hash_tally).push_back(hash);
     }
 
-    /// Test-only: replace the pending transfer envelope hash queue with a single entry.
-    #[cfg(test)]
-    pub fn __test_set_last_env_hash_transfer(&mut self, h: [u8; 32]) {
-        *Arc::make_mut(&mut self.zk_last_env_hash_transfer) = VecDeque::from([h]);
-    }
-    /// Test helper: replace the pending unshield envelope hash queue with a single entry.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn __test_set_last_env_hash_unshield(&mut self, h: [u8; 32]) {
-        *Arc::make_mut(&mut self.zk_last_env_hash_unshield) = VecDeque::from([h]);
-    }
     /// Test-only: replace the pending ballot envelope hash queue with a single entry.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn __test_set_last_env_hash_ballot(&mut self, h: [u8; 32]) {
@@ -5126,42 +5094,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         for instr in queued {
             let any: &dyn iroha_data_model::isi::Instruction = &**instr;
             let any_ref = any.as_any();
-            if let Some(z) = any_ref.downcast_ref::<DMZk::ZkTransfer>() {
-                let Some(expected_hash) = Arc::make_mut(&mut self.zk_verified_transfer).pop_front()
-                else {
-                    return Err(ValidationFail::NotPermitted(
-                        "missing ZK_VERIFY_TRANSFER prior to ZkTransfer".to_owned(),
-                    ));
-                };
-                let actual_hash = z.proof.envelope_hash.ok_or_else(|| {
-                    ValidationFail::NotPermitted(
-                        "ZkTransfer missing envelope_hash after verification".to_owned(),
-                    )
-                })?;
-                if actual_hash != expected_hash {
-                    return Err(ValidationFail::NotPermitted(
-                        "ZkTransfer envelope hash mismatch; requires fresh verification".to_owned(),
-                    ));
-                }
-            }
-            if let Some(u) = any_ref.downcast_ref::<DMZk::Unshield>() {
-                let Some(expected_hash) = Arc::make_mut(&mut self.zk_verified_unshield).pop_front()
-                else {
-                    return Err(ValidationFail::NotPermitted(
-                        "missing ZK_VERIFY_UNSHIELD prior to Unshield".to_owned(),
-                    ));
-                };
-                let actual_hash = u.proof.envelope_hash.ok_or_else(|| {
-                    ValidationFail::NotPermitted(
-                        "Unshield missing envelope_hash after verification".to_owned(),
-                    )
-                })?;
-                if actual_hash != expected_hash {
-                    return Err(ValidationFail::NotPermitted(
-                        "Unshield envelope hash mismatch; requires fresh verification".to_owned(),
-                    ));
-                }
-            }
             if let Some(sb) = any_ref.downcast_ref::<DMZk::SubmitBallot>() {
                 let Some(expected_hash) = Arc::make_mut(&mut self.zk_verified_ballot).pop_front()
                 else {
@@ -5663,28 +5595,31 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .asset_id
             .parse()
             .map_err(|_| ivm::VMError::NoritoInvalid)?;
-        let roots = self.zk_roots.get(&asset).cloned().unwrap_or_default();
-        let height = Self::len_to_u32(roots.len())?;
-        let latest = if roots.is_empty() && self.zk_include_empty_root_when_empty {
-            iroha_crypto::MerkleTree::<[u8; 32]>::shielded_empty_root(self.zk_empty_root_depth)
-        } else {
-            roots.last().copied().unwrap_or([0; 32])
+        let Some(snapshot) = self.zk_roots.get(&asset) else {
+            return Ok(ivm::zk_verify::RootsGetResponse {
+                latest: [0; 32],
+                roots: Vec::new(),
+                height: 0,
+            });
         };
+        let height = Self::len_to_u32(snapshot.commitment_count)?;
+        let all_roots = if snapshot.commitment_count == 0 {
+            vec![snapshot.tree_profile.empty_root()]
+        } else {
+            snapshot.root_history.clone()
+        };
+        let latest = all_roots.last().copied().unwrap_or([0; 32]);
         let wanted = if request.max == 0 {
-            self.zk_root_history_cap
+            self.zk_tree_roots_history_len.get()
         } else {
-            self.zk_root_history_cap.min(request.max as usize)
+            self.zk_tree_roots_history_len
+                .get()
+                .min(request.max as usize)
         };
-        let roots = if roots.is_empty() && self.zk_include_empty_root_when_empty {
-            if wanted == 0 {
-                Vec::new()
-            } else {
-                vec![latest]
-            }
-        } else if roots.len() <= wanted {
-            roots
+        let roots = if all_roots.len() <= wanted {
+            all_roots
         } else {
-            roots[roots.len() - wanted..].to_vec()
+            all_roots[all_roots.len() - wanted..].to_vec()
         };
         Ok(ivm::zk_verify::RootsGetResponse {
             latest,
@@ -5697,6 +5632,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &self,
         request: &ivm::zk_verify::VoteGetTallyRequest,
     ) -> Result<ivm::zk_verify::VoteGetTallyResponse, ivm::VMError> {
+        if !request.is_valid_v1() {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
         let Some((options, finalized, tally)) = self.zk_elections.get(&request.election_id) else {
             return Ok(ivm::zk_verify::VoteGetTallyResponse {
                 finalized: false,
@@ -6795,12 +6733,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             durable_read_paths_complete: self.state_access_log.durable_read_paths_complete,
             axt_state: self.axt_state.clone(),
             completed_axt_len: self.completed_axt.len(),
-            zk_verified_transfer: self.zk_verified_transfer.clone(),
-            zk_verified_unshield: self.zk_verified_unshield.clone(),
             zk_verified_ballot: self.zk_verified_ballot.clone(),
             zk_verified_tally: self.zk_verified_tally.clone(),
-            zk_last_env_hash_transfer: self.zk_last_env_hash_transfer.clone(),
-            zk_last_env_hash_unshield: self.zk_last_env_hash_unshield.clone(),
             zk_last_env_hash_ballot: self.zk_last_env_hash_ballot.clone(),
             zk_last_env_hash_tally: self.zk_last_env_hash_tally.clone(),
             axt_replay_ledger: self.axt_replay_ledger.clone(),
@@ -6836,12 +6770,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             durable_read_paths_complete,
             axt_state,
             completed_axt_len,
-            zk_verified_transfer,
-            zk_verified_unshield,
             zk_verified_ballot,
             zk_verified_tally,
-            zk_last_env_hash_transfer,
-            zk_last_env_hash_unshield,
             zk_last_env_hash_ballot,
             zk_last_env_hash_tally,
             axt_replay_ledger,
@@ -6952,12 +6882,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         self.axt_state = axt_state;
         self.completed_axt.truncate(completed_axt_len);
-        self.zk_verified_transfer = zk_verified_transfer;
-        self.zk_verified_unshield = zk_verified_unshield;
         self.zk_verified_ballot = zk_verified_ballot;
         self.zk_verified_tally = zk_verified_tally;
-        self.zk_last_env_hash_transfer = zk_last_env_hash_transfer;
-        self.zk_last_env_hash_unshield = zk_last_env_hash_unshield;
         self.zk_last_env_hash_ballot = zk_last_env_hash_ballot;
         self.zk_last_env_hash_tally = zk_last_env_hash_tally;
         self.axt_replay_ledger = axt_replay_ledger;
@@ -7992,6 +7918,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             context.authority.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
         )
+        .map_err(|_| ivm::VMError::NoritoInvalid)?
         .with_metadata(next_trigger_metadata);
         let trigger = Trigger::new(trigger_id.clone(), action);
         let unregister =
@@ -8535,6 +8462,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn finish_and_materialize_core_query_option<T>(
+        &mut self,
         vm: &mut IVM,
         gas_remaining: u64,
         gas_ctx: &QueryGasContext,
@@ -8547,6 +8475,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     where
         T: NoritoSerialize + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
     {
+        if let Some(metrics) = &mut self.core_query_page_metrics {
+            metrics.projection_decodes = metrics.projection_decodes.saturating_add(1);
+            metrics.projection_payload_bytes = u64::try_from(payload.len()).unwrap_or(u64::MAX);
+        }
         let decoded: Option<T> =
             decode_canonical_norito(payload).map_err(|_| ivm::VMError::DecodeError)?;
         let prepared = decoded.map(prepare).transpose()?;
@@ -8559,6 +8491,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let leaf_tlv_bytes = prepared.as_ref().map_or(0, |words| {
             Self::prepared_query_leaf_bytes(std::slice::from_ref(words))
         });
+        if let Some(metrics) = &mut self.core_query_page_metrics {
+            metrics.leaf_tlv_bytes = leaf_tlv_bytes;
+        }
         let encoded_bytes = u64::try_from(payload.len())
             .unwrap_or(u64::MAX)
             .saturating_add(leaf_tlv_bytes);
@@ -8750,11 +8685,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let Some(state_ref) = self.query_state.get() else {
             return Err(ivm::VMError::NotImplemented { syscall });
         };
+        if let Some(metrics) = &mut self.core_query_page_metrics {
+            metrics.host_queries = metrics.host_queries.saturating_add(1);
+        }
         let (output, stats) =
             state_ref.execute_optional_singular_query(&self.authority, request, Some(budget))?;
         let projected = output.map(project).transpose()?;
         let payload = Self::encode_norito_payload(&projected)?;
-        Self::finish_and_materialize_core_query_option(
+        self.finish_and_materialize_core_query_option(
             vm,
             gas_remaining,
             &gas_ctx,
@@ -9205,9 +9143,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn asset_definition_name_for_syscall(id: &AssetDefinitionId) -> String {
-        id.try_name()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| id.canonical_address())
+        id.canonical_address()
     }
 
     #[cfg(test)]
@@ -10350,7 +10286,7 @@ impl<QS> CoreHostImpl<QS> {
         };
 
         let filter = Self::decode_trigger_filter(filter_value)?;
-        Action::try_new(executable, repeats, authority, filter)
+        Action::new(executable, repeats, authority, filter)
             .map(|action| action.with_metadata(metadata))
             .map_err(|_| ivm::VMError::DecodeError)
     }
@@ -10366,7 +10302,6 @@ impl<QS> CoreHostImpl<QS> {
         matches!(
             number,
             ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
-                | ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
                 | ivm::syscalls::SYSCALL_STATE_PATH_FROM_NAME
                 | ivm::syscalls::SYSCALL_STATE_MAP_KEY_AT
                 | ivm::syscalls::SYSCALL_STATE_VALUE_ENCODE
@@ -10379,38 +10314,24 @@ impl<QS> CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_JSON_OBJECT
                 | ivm::syscalls::SYSCALL_JSON_BUILD
                 | ivm::syscalls::SYSCALL_JSON_SET_I64
-                | ivm::syscalls::SYSCALL_JSON_SET_I64_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
-                | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT
                 | ivm::syscalls::SYSCALL_TLV_LEN
                 | ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
                 | ivm::syscalls::SYSCALL_JSON_GET_JSON
-                | ivm::syscalls::SYSCALL_JSON_GET_JSON_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_NAME
-                | ivm::syscalls::SYSCALL_JSON_GET_NAME_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
-                | ivm::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_NFT_ID
-                | ivm::syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_BLOB_HEX
-                | ivm::syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
-                | ivm::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_INT
-                | ivm::syscalls::SYSCALL_JSON_GET_INT_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_DECIMAL
-                | ivm::syscalls::SYSCALL_JSON_GET_DECIMAL_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_QUANTITY
-                | ivm::syscalls::SYSCALL_JSON_GET_QUANTITY_DIRECT
                 | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
-                | ivm::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT
                 | ivm::syscalls::SYSCALL_SCHEMA_DECODE
-                | ivm::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT
                 | ivm::syscalls::SYSCALL_POINTER_TO_NORITO
                 | ivm::syscalls::SYSCALL_POINTER_FROM_NORITO
                 | ivm::syscalls::SYSCALL_TLV_EQ
                 | ivm::syscalls::SYSCALL_SCHEMA_INFO
-                | ivm::syscalls::SYSCALL_SCHEMA_INFO_DIRECT
                 | ivm::syscalls::SYSCALL_NAME_DECODE
         )
     }
@@ -10616,9 +10537,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
-            ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
-            | ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
-            | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
+            ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY
             | ivm::syscalls::SYSCALL_VERIFY_PROOF => {
                 Some(ivm::host::quote_zk_single_at(vm, vm.register(10), self.zk_gas_schedule)?.1)
@@ -10639,14 +10558,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
-            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE => {
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => {
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
             ivm::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => {
@@ -10850,7 +10762,12 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let name = Self::asset_definition_name_for_syscall(&id);
                     let isi = Register::asset_definition({
                         let __asset_definition_id = id;
-                        AssetDefinition::numeric(__asset_definition_id.clone()).with_name(name)
+                        AssetDefinition::numeric(
+                            __asset_definition_id.clone(),
+                            name,
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        )
                     });
                     let instr = InstructionBox::from(RegisterBox::from(isi));
                     Ok(self.queue_instruction(instr))
@@ -11053,53 +10970,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
                 ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY => {
                     self.apply_fastpq_batch_from_tlv(vm)
-                }
-                // ----------------- Native anonymous asset escrow ISIs via pointer-ABI -----------------
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER => {
-                    let request: OpenAnonymousAssetEscrow =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                    self.queue_instruction_after_preflight(
-                        vm,
-                        InstructionBox::from(AcceptAnonymousAssetEscrow { escrow_id }),
-                    )
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                    self.queue_instruction_after_preflight(
-                        vm,
-                        InstructionBox::from(MarkAnonymousEscrowPaymentSent { escrow_id }),
-                    )
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE => {
-                    let request: ReleaseAnonymousAssetEscrow =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL => {
-                    let request: CancelAnonymousAssetEscrow =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                    let evidence_hashes =
-                        Self::decode_optional_evidence_hashes(vm, vm.register(11))?;
-                    self.queue_instruction_after_preflight(
-                        vm,
-                        InstructionBox::from(OpenAnonymousEscrowDispute {
-                            escrow_id,
-                            evidence_hashes,
-                        }),
-                    )
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE => {
-                    let request: ResolveAnonymousEscrowDispute =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
                 }
                 // ----------------- Native asset escrow ISIs via pointer-ABI -----------------
                 ivm::syscalls::SYSCALL_ESCROW_OPEN_OFFER => {
@@ -11378,14 +11248,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         Self::decode_tlv_typed(vm, owner_ptr, PointerType::AccountId)?;
                     let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
                     let nft = Nft::new(nft_id.clone(), Metadata::default());
+                    let issuer = self.effect_authority();
                     let mut gas = self.queue_instruction(InstructionBox::from(RegisterBox::from(
                         Register::nft(nft),
                     )));
-                    if owner != self.authority {
+                    if owner != issuer {
                         let transfer = InstructionBox::from(TransferBox::from(Transfer::nft(
-                            self.authority.clone(),
-                            nft_id,
-                            owner,
+                            issuer, nft_id, owner,
                         )));
                         gas = gas.saturating_add(self.queue_instruction(transfer));
                     }
@@ -11495,40 +11364,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                             if pending_hash.is_some() {
                                 debug_assert_eq!(
                                     Arc::make_mut(&mut self.zk_last_env_hash_ballot).pop_front(),
-                                    pending_hash
-                                );
-                            }
-                            let queued_gas = self.queue_instruction(instruction);
-                            debug_assert_eq!(queued_gas, gas);
-                            Ok(gas)
-                        }
-                        ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD => {
-                            let unshield = any_ref
-                                .downcast_ref::<DMZk::Unshield>()
-                                .ok_or(ivm::VMError::PermissionDenied)?;
-                            let mut proof = unshield.proof.clone();
-                            let pending_hash = if proof.envelope_hash.is_none() {
-                                self.zk_last_env_hash_unshield.front().copied()
-                            } else {
-                                None
-                            };
-                            if let Some(hash) = pending_hash {
-                                proof.envelope_hash = Some(hash);
-                            }
-                            let instruction = InstructionBox::from(DMZk::Unshield {
-                                asset: unshield.asset.clone(),
-                                to: unshield.to.clone(),
-                                public_amount: unshield.public_amount().clone(),
-                                inputs: unshield.inputs.clone(),
-                                outputs: unshield.outputs.clone(),
-                                proof,
-                                root_hint: unshield.root_hint,
-                            });
-                            let gas = crate::gas::meter_instruction(&instruction);
-                            ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                            if pending_hash.is_some() {
-                                debug_assert_eq!(
-                                    Arc::make_mut(&mut self.zk_last_env_hash_unshield).pop_front(),
                                     pending_hash
                                 );
                             }
@@ -11729,71 +11564,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
                 // ZK verify syscalls are handled here so CoreHost can enforce VK binding
                 // and run full backend verification before arming ISI latches.
-                ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
-                    // Capture TLV payload hash (envelope hash) and verify the bound proof.
-                    let ptr = vm.register(10);
-                    let tlv = vm.validate_tlv(ptr)?;
-                    if tlv.type_id != PointerType::NoritoBytes {
-                        return Err(ivm::VMError::NoritoInvalid);
-                    }
-                    let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
-                    let envelope = match envelope {
-                        Ok(envelope) => envelope,
-                        Err(code) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
-                            return Ok(gas);
-                        }
-                    };
-                    let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
-                    let ok = match self.verify_bound_envelope(envelope, tlv.payload, "transfer") {
-                        Ok(ok) => ok,
-                        Err(code) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
-                            return Ok(gas);
-                        }
-                    };
-                    vm.set_register(10, u64::from(ok));
-                    vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
-                    if ok {
-                        Arc::make_mut(&mut self.zk_verified_transfer).push_back(env_hash);
-                        Arc::make_mut(&mut self.zk_last_env_hash_transfer).push_back(env_hash);
-                    }
-                    Ok(gas)
-                }
-                ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => {
-                    let ptr = vm.register(10);
-                    let tlv = vm.validate_tlv(ptr)?;
-                    if tlv.type_id != PointerType::NoritoBytes {
-                        return Err(ivm::VMError::NoritoInvalid);
-                    }
-                    let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
-                    let envelope = match envelope {
-                        Ok(envelope) => envelope,
-                        Err(code) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
-                            return Ok(gas);
-                        }
-                    };
-                    let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
-                    let ok = match self.verify_bound_envelope(envelope, tlv.payload, "unshield") {
-                        Ok(ok) => ok,
-                        Err(code) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
-                            return Ok(gas);
-                        }
-                    };
-                    vm.set_register(10, u64::from(ok));
-                    vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
-                    if ok {
-                        Arc::make_mut(&mut self.zk_verified_unshield).push_back(env_hash);
-                        Arc::make_mut(&mut self.zk_last_env_hash_unshield).push_back(env_hash);
-                    }
-                    Ok(gas)
-                }
                 ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => {
                     let ptr = vm.register(10);
                     let tlv = vm.validate_tlv(ptr)?;
@@ -12545,7 +12315,7 @@ mod pointer_abi_tests {
     };
     use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
     use iroha_data_model::{
-        events::execute_trigger::ExecuteTriggerEventFilter, proof::ProofAttachment,
+        events::execute_trigger::ExecuteTriggerEventFilter,
         smart_contract::manifest::ContractManifest,
     };
     use iroha_primitives::json::Json;
@@ -12603,7 +12373,7 @@ mod pointer_abi_tests {
     fn call_contract_rejects_at_deterministic_nesting_depth_before_frame_growth() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             42,
             DataSpaceId::UNIVERSAL,
@@ -12842,7 +12612,7 @@ seiyaku ReadOnlyBinding {
     fn reused_host_resets_view_and_contract_provenance_before_generic_execution() {
         let authority = ALICE_ID.clone();
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             47,
             DataSpaceId::UNIVERSAL,
@@ -13015,7 +12785,7 @@ seiyaku ReadOnlyBinding {
         host.queue_instruction(attempted.clone());
 
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             49,
             DataSpaceId::UNIVERSAL,
@@ -13074,7 +12844,7 @@ seiyaku ReadOnlyBinding {
     fn view_effect_artifacts_fail_closed_before_application_or_extraction() {
         let authority = ALICE_ID.clone();
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             48,
             DataSpaceId::UNIVERSAL,
@@ -13140,7 +12910,7 @@ seiyaku ReadOnlyBinding {
     fn prevalidated_runtime_binding_captures_exact_root_authorization() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             43,
             DataSpaceId::UNIVERSAL,
@@ -13351,7 +13121,7 @@ seiyaku PrivilegedBinding {
     fn contract_runtime_state_rejects_manifest_free_vm_image() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             44,
             DataSpaceId::UNIVERSAL,
@@ -15440,7 +15210,7 @@ seiyaku PrivilegedBinding {
         let mut host = local_contract_host(authority);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &host.authority,
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -15471,7 +15241,7 @@ seiyaku PrivilegedBinding {
         let mut host = local_contract_host(authority);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &host.authority,
             1,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -15497,7 +15267,7 @@ seiyaku PrivilegedBinding {
     fn lifecycle_hooks_reject_direct_binding_syscalls_before_metering() {
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             211,
             DataSpaceId::UNIVERSAL,
@@ -15557,7 +15327,7 @@ seiyaku PrivilegedBinding {
     fn lifecycle_hooks_cannot_smuggle_binding_mutations_through_opaque_syscall() {
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             212,
             DataSpaceId::UNIVERSAL,
@@ -15688,10 +15458,11 @@ seiyaku PrivilegedBinding {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let payload = norito_blob(&asset_def);
         let expected_asset_def: AssetDefinitionId =
             norito::decode_from_bytes(&payload).expect("decode canonical asset definition id");
@@ -15700,9 +15471,12 @@ seiyaku PrivilegedBinding {
 
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ASSET, &mut vm);
         let expected_name = CoreHost::asset_definition_name_for_syscall(&expected_asset_def);
-        let expected = InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(expected_asset_def.clone()).with_name(expected_name),
-        ));
+        let expected = InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+            expected_asset_def.clone(),
+            expected_name,
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )));
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
@@ -15714,10 +15488,11 @@ seiyaku PrivilegedBinding {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
 
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let ptr = store_tlv(
             &mut vm,
             PointerType::AssetDefinitionId,
@@ -15740,7 +15515,7 @@ seiyaku PrivilegedBinding {
 
         let escrow_name = Name::from_str("aitai_offer").expect("fixture escrow name");
         let escrow_id = CoreHost::escrow_id_from_name(&escrow_name);
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
@@ -15890,138 +15665,6 @@ seiyaku PrivilegedBinding {
         ));
         assert_eq!(vm.register(11), retired_blob_evidence_ptr);
         assert!(host.queued.is_empty());
-    }
-
-    #[test]
-    fn native_anonymous_escrow_syscalls_queue_expected_instructions() {
-        fn proof_attachment(tag: &str) -> ProofAttachment {
-            let backend: iroha_schema::Ident = "halo2/ipa/poly-open".into();
-            ProofAttachment::new_ref(
-                backend.clone(),
-                ProofBox::new(backend.clone(), tag.as_bytes().to_vec()),
-                VerifyingKeyId::new(backend.as_str(), tag),
-            )
-        }
-
-        let mut vm = ivm::IVM::new(2_000);
-        let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority);
-
-        let escrow_name = Name::from_str("anonymous_aitai_offer").expect("fixture escrow name");
-        let escrow_id = CoreHost::escrow_id_from_name(&escrow_name);
-        let asset_definition = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
-        let evidence_hashes = vec![Hash::new("receipt"), Hash::new("judgement")];
-        let escrow_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&escrow_name));
-        let evidence_ptr = store_tlv(
-            &mut vm,
-            PointerType::NoritoBytes,
-            &norito_blob(&evidence_hashes),
-        );
-
-        let open = OpenAnonymousAssetEscrow::with_evidence_hashes(
-            escrow_id.clone(),
-            asset_definition,
-            vec![[0x11; 32]],
-            [0x22; 32],
-            proof_attachment("open"),
-            Some([0x33; 32]),
-            evidence_hashes.clone(),
-        );
-        let release = ReleaseAnonymousAssetEscrow::new(
-            escrow_id.clone(),
-            vec![[0x44; 32]],
-            vec![[0x55; 32]],
-            proof_attachment("release"),
-            Some([0x66; 32]),
-        );
-        let cancel = CancelAnonymousAssetEscrow::new(
-            escrow_id.clone(),
-            vec![[0x77; 32]],
-            vec![[0x88; 32]],
-            proof_attachment("cancel"),
-            None,
-        );
-        let resolve = ResolveAnonymousEscrowDispute::with_evidence_hashes(
-            escrow_id.clone(),
-            vec![[0x99; 32]],
-            vec![[0xAA; 32]],
-            vec![[0xBB; 32]],
-            proof_attachment("resolve"),
-            Some([0xCC; 32]),
-            evidence_hashes.clone(),
-        );
-
-        let open_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&open));
-        let release_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&release));
-        let cancel_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&cancel));
-        let resolve_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&resolve));
-
-        let assert_queued = |host: &mut CoreHost, res, expected: InstructionBox| {
-            let expected_gas = crate::gas::meter_instruction(&expected);
-            assert_eq!(res, Ok(expected_gas));
-            assert_eq!(host.queued, vec![expected]);
-            host.queued.clear();
-        };
-
-        vm.set_register(10, open_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER, &mut vm);
-        assert_queued(&mut host, res, InstructionBox::from(open));
-
-        vm.set_register(10, escrow_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT, &mut vm);
-        assert_queued(
-            &mut host,
-            res,
-            InstructionBox::from(AcceptAnonymousAssetEscrow {
-                escrow_id: escrow_id.clone(),
-            }),
-        );
-
-        vm.set_register(10, escrow_ptr);
-        let res = host.syscall(
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT,
-            &mut vm,
-        );
-        assert_queued(
-            &mut host,
-            res,
-            InstructionBox::from(MarkAnonymousEscrowPaymentSent {
-                escrow_id: escrow_id.clone(),
-            }),
-        );
-
-        vm.set_register(10, release_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE, &mut vm);
-        assert_queued(&mut host, res, InstructionBox::from(release));
-
-        vm.set_register(10, cancel_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL, &mut vm);
-        assert_queued(&mut host, res, InstructionBox::from(cancel));
-
-        vm.set_register(10, escrow_ptr);
-        vm.set_register(11, evidence_ptr);
-        let res = host.syscall(
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
-            &mut vm,
-        );
-        assert_queued(
-            &mut host,
-            res,
-            InstructionBox::from(OpenAnonymousEscrowDispute {
-                escrow_id: escrow_id.clone(),
-                evidence_hashes,
-            }),
-        );
-
-        vm.set_register(10, resolve_ptr);
-        let res = host.syscall(
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
-            &mut vm,
-        );
-        assert_queued(&mut host, res, InstructionBox::from(resolve));
     }
 
     #[test]
@@ -16451,7 +16094,8 @@ seiyaku PrivilegedBinding {
                 Repeats::Exactly(1),
                 authority.clone(),
                 DataEventFilter::Any,
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         let json = Json::new(trigger.clone());
         let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
@@ -16480,7 +16124,8 @@ seiyaku PrivilegedBinding {
             Repeats::Exactly(1),
             authority.clone(),
             EventFilterBox::Data(DataEventFilter::Any),
-        );
+        )
+        .expect("test data-trigger action satisfies its authority invariant");
         let action_value = norito::json::to_value(&action).expect("serialize specialized action");
         let mut map = BTreeMap::new();
         map.insert(
@@ -16500,6 +16145,7 @@ seiyaku PrivilegedBinding {
             action.authority.clone(),
             action.filter.clone(),
         )
+        .expect("test action reconstructed from a validated specialized action")
         .with_metadata(action.metadata.clone());
         let expected =
             InstructionBox::from(Register::trigger(Trigger::new(trigger_id, expected_action)));
@@ -16524,7 +16170,8 @@ seiyaku PrivilegedBinding {
             Repeats::Exactly(1),
             authority.clone(),
             EventFilterBox::Data(DataEventFilter::Any),
-        );
+        )
+        .expect("test data-trigger action satisfies its authority invariant");
         let mut action_value =
             norito::json::to_value(&action).expect("serialize specialized action");
         let filter_value =
@@ -16554,6 +16201,7 @@ seiyaku PrivilegedBinding {
             action.authority.clone(),
             action.filter.clone(),
         )
+        .expect("test action reconstructed from a validated specialized action")
         .with_metadata(action.metadata.clone());
         let expected =
             InstructionBox::from(Register::trigger(Trigger::new(trigger_id, expected_action)));
@@ -16580,7 +16228,8 @@ seiyaku PrivilegedBinding {
             EventFilterBox::ExecuteTrigger(
                 ExecuteTriggerEventFilter::new().under_authority(filter_authority),
             ),
-        );
+        )
+        .expect("test by-call action initially has matching filter and action authorities");
         let mut action_value =
             norito::json::to_value(&action).expect("serialize specialized action");
         match &mut action_value {
@@ -16718,10 +16367,11 @@ seiyaku PrivilegedBinding {
 
         let account_payload = norito::to_bytes(&authority).expect("encode account");
         let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
         let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
         let amount = Quantity::from(5u64);
@@ -16750,6 +16400,60 @@ seiyaku PrivilegedBinding {
     }
 
     #[test]
+    fn nft_mint_uses_contract_effect_authority_as_issuer_and_transfer_source() {
+        let caller = fixture_account("alice");
+        let owner = fixture_account("bob");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &caller,
+            91,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let contract_subject = contract_address.subject_id();
+        assert_ne!(caller, contract_subject);
+
+        let mut host = CoreHost::new(caller.clone());
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_address,
+            contract_subject: contract_subject.clone(),
+            contract_alias: None,
+            entrypoint: "mint_for_owner".to_owned(),
+        }));
+        let mut vm = IVM::new(10_000);
+        let nft_id = NftId::of(
+            DomainId::try_new("wonderland", "universal").expect("NFT domain"),
+            "contract_issued".parse().expect("NFT name"),
+        );
+        let nft_ptr = store_tlv(&mut vm, PointerType::NftId, &norito_blob(&nft_id));
+        let owner_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&owner));
+        vm.set_register(10, nft_ptr);
+        vm.set_register(11, owner_ptr);
+
+        host.syscall(ivm::syscalls::SYSCALL_NFT_MINT_ASSET, &mut vm)
+            .expect("queue contract NFT mint");
+
+        assert_eq!(host.queued.len(), 2);
+        let expected_register = InstructionBox::from(RegisterBox::from(Register::nft(Nft::new(
+            nft_id.clone(),
+            Metadata::default(),
+        ))));
+        let expected_transfer = InstructionBox::from(TransferBox::from(Transfer::nft(
+            contract_subject.clone(),
+            nft_id,
+            owner,
+        )));
+        assert_eq!(host.queued[0].instruction, expected_register);
+        assert_eq!(host.queued[0].authority, contract_subject);
+        assert_eq!(host.queued[1].instruction, expected_transfer);
+        assert_eq!(host.queued[1].authority, host.queued[0].authority);
+        assert_ne!(
+            host.queued[1].authority, caller,
+            "the transaction caller must not become the contract NFT issuer",
+        );
+    }
+
+    #[test]
     fn mint_asset_syscall_accepts_allocated_heap_quantity_tlv() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
@@ -16760,7 +16464,7 @@ seiyaku PrivilegedBinding {
             PointerType::AccountId,
             &norito::to_bytes(&authority).expect("encode account"),
         );
-        let asset_def = AssetDefinitionId::new(
+        let asset_def = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("asset name"),
         );
@@ -16803,10 +16507,11 @@ seiyaku PrivilegedBinding {
 
         let account_payload = norito::to_bytes(&authority).expect("encode account");
         let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
         let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
 
@@ -17048,710 +16753,7 @@ mod tests {
         ivm::host::state_value_gas(norito_blob(&state_path_for_test(path)).len(), value_len)
     }
 
-    #[test]
-    fn host_codec_bytes_hash_gas_and_lengths_ignore_ambient_layout() {
-        let value = vec!["first".to_owned(), "second".to_owned()];
-        let canonical =
-            CoreHost::encode_norito_payload(&value).expect("encode canonical host payload");
-        let canonical_hash = Hash::new(&canonical);
-        let canonical_gas = CoreHost::state_query_gas(canonical.len());
-        assert_eq!(
-            CoreHost::norito_encoded_len_exact(&value),
-            Some(u64::try_from(canonical.len()).expect("fixture length fits u64"))
-        );
-        let canonical_retained_bytes = {
-            let mut host = CoreHost::new(ALICE_ID.clone());
-            host.restrict_output_limits(HostOutputLimits::new(1, u64::MAX));
-            assert!(host.try_reserve_serialized_output(&value, 1));
-            host.retained_output_bytes()
-        };
-
-        let name: Name = "state_input".parse().expect("valid public-input name");
-        let canonical_name = CoreHost::encode_norito_payload(&name).expect("encode canonical Name");
-        let path: StatePath = "state/first".parse().expect("valid state path");
-        let canonical_path =
-            CoreHost::encode_norito_payload(&path).expect("encode canonical StatePath");
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-        let ambient_before = norito::to_bytes(&value).expect("encode payload under ambient layout");
-        assert_ne!(ambient_before, canonical);
-        let alternate_name = norito::to_bytes(&name).expect("encode Name under alternate layout");
-        assert_ne!(alternate_name, canonical_name);
-        let alternate_path =
-            norito::to_bytes(&path).expect("encode StatePath under alternate layout");
-        assert_ne!(alternate_path, canonical_path);
-
-        let encoded_under_ambient =
-            CoreHost::encode_norito_payload(&value).expect("encode host payload canonically");
-        assert_eq!(encoded_under_ambient, canonical);
-        assert_eq!(Hash::new(&encoded_under_ambient), canonical_hash);
-        assert_eq!(
-            CoreHost::state_query_gas(encoded_under_ambient.len()),
-            canonical_gas
-        );
-        assert_eq!(
-            CoreHost::norito_encoded_len_exact(&value),
-            Some(u64::try_from(canonical.len()).expect("fixture length fits u64"))
-        );
-        let retained_under_ambient = {
-            let mut host = CoreHost::new(ALICE_ID.clone());
-            host.restrict_output_limits(HostOutputLimits::new(1, u64::MAX));
-            assert!(host.try_reserve_serialized_output(&value, 1));
-            host.retained_output_bytes()
-        };
-        assert_eq!(retained_under_ambient, canonical_retained_bytes);
-        assert_eq!(
-            CoreHost::decode_name_payload(&canonical_name)
-                .expect("decode canonical Name under ambient layout"),
-            name
-        );
-        assert_eq!(
-            CoreHost::decode_name_payload(&alternate_name),
-            Err(ivm::VMError::DecodeError)
-        );
-        assert_eq!(
-            decode_canonical_norito::<StatePath>(&canonical_path)
-                .expect("decode canonical StatePath under ambient layout"),
-            path
-        );
-        assert!(
-            decode_canonical_norito::<StatePath>(&alternate_path).is_err(),
-            "ambient StatePath framing must not pass canonical decoding"
-        );
-        assert_eq!(
-            norito::to_bytes(&value).expect("re-encode payload under ambient layout"),
-            ambient_before,
-            "canonical helpers must restore the caller's ambient layout"
-        );
-
-        drop(ambient);
-        assert_eq!(
-            norito::to_bytes(&value).expect("encode payload after ambient guard"),
-            canonical
-        );
-    }
-
-    fn exact_return_type(
-        kind: iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1,
-    ) -> iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
-        iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
-            nodes: vec![
-                iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(kind),
-            ],
-        }
-    }
-
-    fn decode_nested_return(
-        payload: &[u8],
-        kind: iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1,
-    ) -> norito::json::Value {
-        let schema = exact_return_type(kind);
-        let record = crate::smartcontracts::ivm::return_value::decode_entrypoint_return_record(
-            &schema, payload,
-        )
-        .expect("decode canonical schema-bound nested return record");
-        crate::smartcontracts::ivm::return_value::render_entrypoint_return_record(&schema, &record)
-            .expect("render typed nested return record")
-    }
-
-    fn decode_nested_int(payload: &[u8]) -> i64 {
-        decode_nested_return(
-            payload,
-            iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
-        )
-        .as_str()
-        .expect("nested int renders as a canonical string")
-        .parse()
-        .expect("fixture nested int fits i64")
-    }
-
-    pub(super) fn store_tlv(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
-        let tlv = make_tlv(ty as u16, payload);
-        vm.alloc_input_tlv(&tlv).expect("allocate TLV input")
-    }
-
-    pub(super) fn quantity_frame(value: &Quantity) -> Vec<u8> {
-        QuantityValueV1::new(value.clone())
-            .encode_frame()
-            .expect("encode quantity frame")
-    }
-
-    pub(super) fn store_quantity(vm: &mut IVM, value: &Quantity) -> u64 {
-        store_tlv(vm, PointerType::Quantity, &quantity_frame(value))
-    }
-
-    fn read_option_words(vm: &IVM, handle: u64, some_words: u64) -> (bool, Vec<u64>) {
-        let layout = ivm::sum::SumLayoutV1::option(some_words).expect("option layout");
-        ivm::sum::read_words(vm, handle, layout).expect("read option handle")
-    }
-
-    fn read_option_int(vm: &IVM, handle: u64) -> Option<i64> {
-        let (present, words) = read_option_words(vm, handle, 1);
-        if !present {
-            assert!(words.is_empty(), "Option::none cannot carry inactive words");
-            return None;
-        }
-        let [pointer] = words.as_slice() else {
-            panic!("Option<int>::some must carry exactly one pointer")
-        };
-        let tlv = vm
-            .memory
-            .validate_tlv(*pointer)
-            .expect("next-offset int TLV");
-        assert_eq!(tlv.type_id, PointerType::Int);
-        Some(
-            IntValueV1::decode_frame(tlv.payload)
-                .expect("decode next-offset int")
-                .into_int()
-                .try_to_i64()
-                .expect("query next offset fits i64"),
-        )
-    }
-
-    fn decode_typed_leaf<T>(vm: &IVM, pointer: u64, expected: PointerType) -> T
-    where
-        for<'de> T: NoritoDeserialize<'de>,
-    {
-        let tlv = vm.memory.validate_tlv(pointer).expect("typed leaf TLV");
-        assert_eq!(tlv.type_id, expected);
-        norito::decode_from_bytes(tlv.payload).expect("decode typed leaf")
-    }
-
-    fn decode_quantity_leaf(vm: &IVM, pointer: u64) -> Quantity {
-        let tlv = vm.memory.validate_tlv(pointer).expect("quantity leaf TLV");
-        assert_eq!(tlv.type_id, PointerType::Quantity);
-        QuantityValueV1::decode_frame(tlv.payload)
-            .expect("decode quantity leaf")
-            .into_quantity()
-    }
-
-    fn seed_test_call_hash(tx: &mut StateTransaction<'_, '_>, byte: u8) {
-        tx.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
-    }
-
-    fn fixture_domain_id() -> DomainId {
-        DomainId::try_new("wonderland", "universal").expect("fixture domain id")
-    }
-
-    fn fixture_account(label: &str) -> AccountId {
-        match label {
-            "alice" => ALICE_ID.clone(),
-            "bob" => BOB_ID.clone(),
-            "carol" | "charlie" => {
-                let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
-                AccountId::new(fixture_public_key_from_seed(seed))
-            }
-            other => panic!("unsupported fixture account label: {other}"),
-        }
-    }
-
-    fn local_contract_host(authority: AccountId) -> CoreHost {
-        let mut host = CoreHost::new(authority);
-        host.set_local_contract_debug_execution();
-        host
-    }
-
-    fn build_authenticated_test_contract_program(
-        code: &[u8],
-        vector_length: u8,
-        zk_mode: bool,
-    ) -> Vec<u8> {
-        build_authenticated_test_contract_program_with_states(
-            code,
-            vector_length,
-            zk_mode,
-            Vec::new(),
-        )
-    }
-
-    fn build_authenticated_test_contract_program_with_states(
-        code: &[u8],
-        vector_length: u8,
-        zk_mode: bool,
-        states: Vec<ivm::EmbeddedStateDescriptor>,
-    ) -> Vec<u8> {
-        let contract_interface = ivm::EmbeddedContractInterfaceV1 {
-            seiyaku_name: "CoreHostHarness".to_owned(),
-            compiler_fingerprint: "iroha-core-host-tests".to_owned(),
-            abi_hash: ivm_sys::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-            features_bitmap: if zk_mode {
-                ivm::CONTRACT_FEATURE_BIT_ZK
-            } else {
-                0
-            },
-            access_set_hints: None,
-            kotoba: Vec::new(),
-            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
-                name: "main".to_owned(),
-                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
-                params: Vec::new(),
-                argument_schema: None,
-                return_type: None,
-                return_schema: None,
-                permission: Some("CanRunCoreHostHarness".to_owned()),
-                read_keys: Vec::new(),
-                write_keys: Vec::new(),
-                access_hints_complete: None,
-                access_hints_skipped: Vec::new(),
-                triggers: Vec::new(),
-                entry_pc: 0,
-            }],
-            states,
-            error_codes: Vec::new(),
-        };
-        let mut program = ivm::ProgramMetadata {
-            version_major: 1,
-            version_minor: 1,
-            mode: if zk_mode { ivm::ivm_mode::ZK } else { 0 },
-            vector_length,
-            max_cycles: 1_000_000,
-            abi_version: 1,
-        }
-        .encode();
-        program.extend_from_slice(&contract_interface.encode_section());
-        program.extend_from_slice(code);
-        program
-    }
-
-    fn fixture_account_in_domain(label: &str, domain_label: &str) -> AccountId {
-        let seed: Vec<u8> = format!("{label}@{domain_label}")
-            .as_bytes()
-            .iter()
-            .copied()
-            .cycle()
-            .take(32)
-            .collect();
-        AccountId::new(fixture_public_key_from_seed(seed))
-    }
-
-    pub(super) fn fixture_public_key_from_seed(seed: Vec<u8>) -> iroha_crypto::PublicKey {
-        let (public_key, _) = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
-            .expect("fixture seed must derive a valid keypair")
-            .into_parts();
-        public_key
-    }
-
-    #[test]
-    fn fixture_public_key_from_seed_uses_checked_seed_derivation() {
-        assert_eq!(
-            fixture_public_key_from_seed(vec![0x61; 32])
-                .try_algorithm()
-                .expect("fixture public key algorithm"),
-            Algorithm::Ed25519
-        );
-        assert!(
-            KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
-            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
-        );
-    }
-
-    #[test]
-    fn contract_subject_sysvar_returns_bound_subject_and_fails_outside_contract_scope() {
-        let authority = fixture_account("alice");
-        let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
-            &authority,
-            7,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive contract address");
-        let subject = contract_address.subject_id();
-        let mut host = CoreHost::new(authority.clone());
-        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
-            contract_address,
-            contract_subject: subject.clone(),
-            contract_alias: None,
-            entrypoint: "main".to_owned(),
-        }));
-        let mut vm = IVM::new(100_000);
-
-        host.syscall(ivm_sys::SYSCALL_SYSVAR_CONTRACT_SUBJECT, &mut vm)
-            .expect("read contract subject");
-        let observed: AccountId =
-            CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
-                .expect("decode contract subject");
-        assert_eq!(observed, subject);
-
-        let mut host = local_contract_host(authority);
-        assert_eq!(
-            host.syscall(ivm_sys::SYSCALL_SYSVAR_CONTRACT_SUBJECT, &mut vm),
-            Err(ivm::VMError::PermissionDenied)
-        );
-    }
-
-    fn build_fixture_account(id: &AccountId, authority: &AccountId) -> Account {
-        Account::new(id.clone()).build(authority)
-    }
-
-    fn retail_dataspace_catalog() -> (
-        iroha_data_model::nexus::DataSpaceId,
-        iroha_data_model::nexus::DataSpaceCatalog,
-    ) {
-        let paynet = iroha_data_model::nexus::DataSpaceId::new(12);
-        let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
-            iroha_data_model::nexus::DataSpaceMetadata::default(),
-            iroha_data_model::nexus::DataSpaceMetadata {
-                id: paynet,
-                alias: "paynet".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("retail dataspace catalog");
-        (paynet, catalog)
-    }
-
-    fn resolved_test_account_alias(
-        tx: &StateTransaction<'_, '_>,
-        alias: &AccountAlias,
-    ) -> iroha_data_model::alias_setup::ResolvedAccountAliasV1 {
-        iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
-            alias
-                .to_literal(&tx.nexus.dataspace_catalog)
-                .expect("fixture alias must resolve through the live catalog")
-                .parse()
-                .expect("fixture alias literal must be canonical"),
-            alias.dataspace,
-        )
-    }
-
-    fn seed_test_account_alias_lease_record(
-        tx: &mut StateTransaction<'_, '_>,
-        alias: &AccountAlias,
-        owner: &AccountId,
-    ) {
-        let dataspace_name = tx
-            .nexus
-            .dataspace_catalog
-            .by_id(alias.dataspace)
-            .expect("fixture alias dataspace must be catalogued")
-            .alias
-            .clone();
-        let dataspace_selector =
-            crate::sns::selector_for_dataspace_alias(&dataspace_name).expect("dataspace selector");
-        let dataspace_key = crate::sns::record_storage_key(&dataspace_selector);
-        if tx.world.smart_contract_state.get(&dataspace_key).is_none() {
-            let address = AccountAddress::from_account_id(owner).expect("fixture owner address");
-            let mut metadata = Metadata::default();
-            metadata.insert(
-                crate::sns::SNS_DATASPACE_ID_METADATA_KEY
-                    .parse()
-                    .expect("dataspace metadata key"),
-                iroha_primitives::json::Json::new(alias.dataspace.as_u64()),
-            );
-            let record = iroha_data_model::sns::NameRecordV1::new(
-                dataspace_selector,
-                owner.clone(),
-                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-                0,
-                0,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                metadata,
-            );
-            tx.world
-                .smart_contract_state
-                .insert(dataspace_key, norito::codec::Encode::encode(&record));
-        }
-
-        if let Some(domain_id) = alias
-            .domain_id(&tx.nexus.dataspace_catalog)
-            .expect("fixture alias domain")
-        {
-            let domain_owner = tx
-                .world
-                .domains
-                .get(&domain_id)
-                .map(|domain| domain.owned_by().clone())
-                .unwrap_or_else(|| owner.clone());
-            if tx.world.domains.get(&domain_id).is_none() {
-                let domain = Domain::new(domain_id.clone()).build(&domain_owner);
-                tx.world.insert_domain_entry(domain_id.clone(), domain);
-                tx.world.track_domain_owner(&domain_id, &domain_owner);
-            }
-            let domain_selector =
-                AccountDomainSelector::from_domain(&domain_id).expect("fixture domain selector");
-            tx.world
-                .domain_selectors
-                .insert(domain_selector, domain_id.clone());
-            let selector =
-                crate::sns::selector_for_domain(&domain_id).expect("SNS domain selector");
-            let storage_key = crate::sns::record_storage_key(&selector);
-            if tx.world.smart_contract_state.get(&storage_key).is_none() {
-                let address =
-                    AccountAddress::from_account_id(&domain_owner).expect("domain owner address");
-                let record = iroha_data_model::sns::NameRecordV1::new(
-                    selector,
-                    domain_owner,
-                    vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-                    0,
-                    0,
-                    u64::MAX,
-                    u64::MAX,
-                    u64::MAX,
-                    Metadata::default(),
-                );
-                tx.world
-                    .smart_contract_state
-                    .insert(storage_key, norito::codec::Encode::encode(&record));
-            }
-        }
-
-        let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
-            .expect("fixture alias selector");
-        let storage_key = crate::sns::record_storage_key(&selector);
-        if tx.world.smart_contract_state.get(&storage_key).is_some() {
-            return;
-        }
-        let address = AccountAddress::from_account_id(owner).expect("fixture owner address");
-        let record = iroha_data_model::sns::NameRecordV1::new(
-            selector,
-            owner.clone(),
-            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-            0,
-            0,
-            u64::MAX,
-            u64::MAX,
-            u64::MAX,
-            Metadata::default(),
-        );
-        tx.world
-            .smart_contract_state
-            .insert(storage_key, norito::codec::Encode::encode(&record));
-    }
-
-    /// Lease-only state fixture for alias-resolution tests.
-    struct SeedTestAccountAliasLease {
-        alias: AccountAlias,
-        owner: AccountId,
-    }
-
-    impl SeedTestAccountAliasLease {
-        fn new(
-            alias: AccountAlias,
-            owner: AccountId,
-            _payer: AccountId,
-            _term_years: u8,
-            _pricing_class_hint: Option<u8>,
-        ) -> Self {
-            Self { alias, owner }
-        }
-    }
-
-    impl Execute for SeedTestAccountAliasLease {
-        fn execute(
-            self,
-            _authority: &AccountId,
-            tx: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), iroha_data_model::isi::error::InstructionExecutionError> {
-            seed_test_account_alias_lease_record(tx, &self.alias, &self.owner);
-            Ok(())
-        }
-    }
-
-    /// Declarative repair/CAS adapter used to build alias-resolution fixtures.
-    struct EnsureTestAccountAliasBinding {
-        account: AccountId,
-        alias: AccountAlias,
-    }
-
-    impl EnsureTestAccountAliasBinding {
-        fn bind(account: AccountId, alias: AccountAlias, _lease_expiry_ms: Option<u64>) -> Self {
-            Self { account, alias }
-        }
-    }
-
-    impl Execute for EnsureTestAccountAliasBinding {
-        fn execute(
-            self,
-            authority: &AccountId,
-            tx: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), iroha_data_model::isi::error::InstructionExecutionError> {
-            let resolved = resolved_test_account_alias(tx, &self.alias);
-            if let Some(expected_target) = tx.world.account_aliases.get(&self.alias).cloned()
-                && expected_target != self.account
-            {
-                // Alias resolution deliberately fails closed unless the SNS lease,
-                // forward binding, and rekey record agree. Model the lease transfer
-                // that accompanies this test-only cross-account rebind before
-                // applying the binding CAS.
-                let selector = crate::sns::selector_for_account_alias(
-                    &self.alias,
-                    &tx.nexus.dataspace_catalog,
-                )
-                .expect("fixture alias selector");
-                tx.world
-                    .smart_contract_state
-                    .remove(crate::sns::record_storage_key(&selector));
-                seed_test_account_alias_lease_record(tx, &self.alias, &self.account);
-                return iroha_data_model::isi::alias_setup::RebindAccountAlias::new(
-                    resolved,
-                    expected_target,
-                    self.account,
-                )
-                .execute(authority, tx);
-            }
-            seed_test_account_alias_lease_record(tx, &self.alias, &self.account);
-            iroha_data_model::isi::alias_setup::EnsureAlias::new(
-                iroha_data_model::alias_setup::AliasIntentV1::AccountAlias(
-                    iroha_data_model::alias_setup::AliasAccountIntentV1 {
-                        alias: resolved,
-                        target_account: self.account,
-                        provision: iroha_data_model::alias_setup::AccountProvisionV1::Existing,
-                        role: iroha_data_model::alias_setup::AccountAliasRoleV1::Additional,
-                    },
-                ),
-                iroha_data_model::alias_setup::AliasLeaseAcquisitionV1::new(1, None),
-                iroha_data_model::alias_setup::AliasQuoteGuardV1 {
-                    expected_policy_version: 0,
-                    expected_payment_asset: AssetDefinitionId::new(
-                        DomainId::try_new("assets", "universal").expect("fixture asset domain"),
-                        "xor".parse().expect("fixture asset name"),
-                    ),
-                    max_amount: Quantity::zero(),
-                    valid_until_ms: 0,
-                },
-            )
-            .execute(authority, tx)
-        }
-    }
-
-    fn fixture_signing_keypair(authority: &AccountId) -> KeyPair {
-        if authority == &*ALICE_ID {
-            return (*ALICE_KEYPAIR).clone();
-        }
-        if authority == &*BOB_ID {
-            return (*BOB_KEYPAIR).clone();
-        }
-        panic!("unsupported fixture signing authority: {authority}");
-    }
-
-    pub(super) fn contract_test_state(authority: &AccountId) -> State {
-        let domain = Domain::new(fixture_domain_id()).build(authority);
-        let account = build_fixture_account(authority, authority);
-        let world = World::with([domain], [account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query);
-        grant_named_permission_to_account(
-            &state,
-            authority,
-            authority.clone(),
-            "CanRegisterSmartContractCode",
-        );
-        grant_named_permission_to_account(
-            &state,
-            authority,
-            authority.clone(),
-            iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME,
-        );
-        state
-    }
-
-    pub(super) fn install_contract(
-        state: &State,
-        authority: &AccountId,
-        source: &str,
-        nonce: u64,
-    ) -> ContractAddress {
-        install_contract_with_interface_and_lifecycle(
-            state,
-            authority,
-            source,
-            nonce,
-            false,
-            |_| {},
-        )
-    }
-
-    fn install_contract_with_pending_lifecycle(
-        state: &State,
-        authority: &AccountId,
-        source: &str,
-        nonce: u64,
-    ) -> ContractAddress {
-        install_contract_with_interface_and_lifecycle(state, authority, source, nonce, true, |_| {})
-    }
-
-    fn install_contract_with_interface(
-        state: &State,
-        authority: &AccountId,
-        source: &str,
-        nonce: u64,
-        customize_interface: impl FnOnce(&mut ivm::EmbeddedContractInterfaceV1),
-    ) -> ContractAddress {
-        install_contract_with_interface_and_lifecycle(
-            state,
-            authority,
-            source,
-            nonce,
-            false,
-            customize_interface,
-        )
-    }
-
-    fn install_contract_with_interface_and_lifecycle(
-        state: &State,
-        authority: &AccountId,
-        source: &str,
-        nonce: u64,
-        leave_lifecycle_pending: bool,
-        customize_interface: impl FnOnce(&mut ivm::EmbeddedContractInterfaceV1),
-    ) -> ContractAddress {
-        let compiler =
-            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-                mode: ivm::kotodama::compiler::CompilerMode::Production,
-                ..ivm::kotodama::compiler::CompilerOptions::default()
-            });
-        let (mut code, _manifest) = compiler
-            .compile_source_with_manifest(source)
-            .expect("compile contract with manifest");
-        sanitize_test_contract_artifact_wildcards(&mut code);
-        rewrite_test_contract_interface(&mut code, customize_interface);
-        let mut manifest = ivm::verify_contract_artifact(&code)
-            .expect("test contract artifact must verify after wildcard sanitization")
-            .manifest;
-        let next_height = u64::try_from(state.view().height() + 1)
-            .ok()
-            .and_then(core::num::NonZeroU64::new)
-            .expect("next block height must fit in u64 and be non-zero");
-        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
-        let mut tx = block.transaction();
-        tx.world.add_account_permission(
-            authority,
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
-                .into(),
-        );
-        let code_hash =
-            register_code_bytes(authority, code, &mut tx).expect("register contract bytecode");
-        manifest.code_hash = Some(code_hash);
-        manifest = manifest.signed(&fixture_signing_keypair(authority));
-        register_manifest(authority, manifest, &mut tx).expect("register contract manifest");
-        let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
-            authority,
-            nonce,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive contract address");
-        activate_instance(authority, contract_address.clone(), code_hash, &mut tx)
-            .expect("activate contract");
-        // Most host tests exercise an isolated syscall and use a fixture that represents a
-        // contract after its lifecycle transition. Lifecycle-specific tests opt into retaining
-        // the real pending marker through `install_contract_with_pending_lifecycle`.
-        if !leave_lifecycle_pending {
-            crate::smartcontracts::code::set_pending_contract_lifecycle(
-                &mut tx,
-                &contract_address,
-                None,
-            );
-        }
-        tx.apply();
-        block.commit().expect("commit contract registration block");
-        contract_address
-    }
+    include!("host/core_codec_and_contract_tests.rs");
 
     #[test]
     fn deployed_contract_runtime_binding_uses_live_identity_and_exact_artifact() {
@@ -18682,11 +17684,18 @@ seiyaku OuterCaller {
         let domain =
             Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_fixture_account(&authority, &authority);
-        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let asset = Asset::new(asset_id.clone(), Quantity::from(42_u32));
         let world = World::with_assets([domain], [account], [asset_def], [asset], []);
@@ -18755,9 +17764,17 @@ seiyaku OuterCaller {
         let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = build_fixture_account(&authority, &authority);
-        let asset_def_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "rose".parse().expect("asset name"),
+        );
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let full_asset_definition_bytes =
             norito::to_bytes(&asset_def).expect("encode full asset definition");
         let projected_asset_definition_bytes = norito::to_bytes(&Some(
@@ -18817,13 +17834,30 @@ seiyaku DedicatedQueryContract {
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
+        host.enable_core_query_page_metrics();
         let mut vm = IVM::new(1_000_000);
+        macro_rules! assert_single_projection {
+            ($tag:expr) => {{
+                let metrics = host
+                    .core_query_page_metrics()
+                    .expect("typed query metrics enabled");
+                assert_eq!(metrics.host_queries, 1, "{:?}", $tag);
+                assert_eq!(metrics.projection_decodes, 1, "{:?}", $tag);
+                assert!(
+                    metrics.projection_payload_bytes > 0 && metrics.leaf_tlv_bytes > 0,
+                    "{:?} must execute one host query and decode one non-empty typed projection",
+                    $tag
+                );
+            }};
+        }
 
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&authority));
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::Account.as_u64());
         vm.set_register(11, account_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
             .expect("get account");
+        assert_single_projection!(CoreQueryEntityTagV1::Account);
         let (is_some, account_words) =
             read_option_words(&vm, vm.register(10), CoreHost::ACCOUNT_VIEW_WORDS);
         assert!(is_some);
@@ -18834,10 +17868,12 @@ seiyaku DedicatedQueryContract {
         let _: Json = decode_typed_leaf(&vm, account_words[1], PointerType::Json);
 
         let asset_ptr = store_tlv(&mut vm, PointerType::AssetId, &norito_blob(&asset_id));
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::Asset.as_u64());
         vm.set_register(11, asset_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
             .expect("get asset");
+        assert_single_projection!(CoreQueryEntityTagV1::Asset);
         let (is_some, asset_words) =
             read_option_words(&vm, vm.register(10), CoreHost::ASSET_VIEW_WORDS);
         assert!(is_some);
@@ -18851,10 +17887,12 @@ seiyaku DedicatedQueryContract {
             PointerType::AssetDefinitionId,
             &norito_blob(&asset_def_id),
         );
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::AssetDefinition.as_u64());
         vm.set_register(11, asset_def_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
             .expect("get asset definition");
+        assert_single_projection!(CoreQueryEntityTagV1::AssetDefinition);
         let (is_some, definition_words) =
             read_option_words(&vm, vm.register(10), CoreHost::ASSET_DEFINITION_VIEW_WORDS);
         assert!(is_some);
@@ -18878,10 +17916,12 @@ seiyaku DedicatedQueryContract {
         let _: Json = decode_typed_leaf(&vm, definition_words[5], PointerType::Json);
 
         let domain_ptr = store_tlv(&mut vm, PointerType::DomainId, &norito_blob(&domain_id));
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::Domain.as_u64());
         vm.set_register(11, domain_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
             .expect("get domain");
+        assert_single_projection!(CoreQueryEntityTagV1::Domain);
         let (is_some, domain_words) =
             read_option_words(&vm, vm.register(10), CoreHost::DOMAIN_VIEW_WORDS);
         assert!(is_some);
@@ -18891,10 +17931,12 @@ seiyaku DedicatedQueryContract {
         let _: Json = decode_typed_leaf(&vm, domain_words[2], PointerType::Json);
 
         let nft_ptr = store_tlv(&mut vm, PointerType::NftId, &norito_blob(&nft_id));
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::Nft.as_u64());
         vm.set_register(11, nft_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
             .expect("get nft");
+        assert_single_projection!(CoreQueryEntityTagV1::Nft);
         let (is_some, nft_words) =
             read_option_words(&vm, vm.register(10), CoreHost::NFT_VIEW_WORDS);
         assert!(is_some);
@@ -19034,18 +18076,27 @@ seiyaku DedicatedQueryContract {
         let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = build_fixture_account(&authority, &authority);
-        let asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
-        let asset_definition =
-            AssetDefinition::numeric(asset_definition_id.clone()).build(&authority);
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "rose".parse().expect("asset name"),
+        );
+        let asset_definition = AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let asset_id = AssetId::of(asset_definition_id.clone(), authority.clone());
         let asset = Asset::new(asset_id.clone(), Quantity::from(7_u32));
         let nft_id: NftId = "ticket$wonderland.universal".parse().expect("NFT id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&authority);
         let missing_account = fixture_account("bob");
         let missing_asset_id = AssetId::of(asset_definition_id.clone(), missing_account.clone());
-        let missing_asset_definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "missing".parse().expect("asset name"));
+        let missing_asset_definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "missing".parse().expect("asset name"),
+        );
         let missing_domain_id =
             DomainId::try_new("missing", "universal").expect("missing domain id");
         let missing_nft_id: NftId = "missing$wonderland.universal".parse().expect("NFT id");
@@ -19324,14 +18375,28 @@ seiyaku DedicatedQueryContract {
             .map(|id| Domain::new(id).build(&authority))
             .collect::<Vec<_>>();
         let asset_definition_ids = [
-            AssetDefinitionId::new(domain_ids[0].clone(), "coin".parse().expect("asset name")),
-            AssetDefinitionId::new(domain_ids[1].clone(), "coin".parse().expect("asset name")),
+            AssetDefinitionId::derive_from_components(
+                domain_ids[0].clone(),
+                "coin".parse().expect("asset name"),
+            ),
+            AssetDefinitionId::derive_from_components(
+                domain_ids[1].clone(),
+                "coin".parse().expect("asset name"),
+            ),
         ];
         let asset_definitions = asset_definition_ids
             .iter()
             .rev()
             .cloned()
-            .map(|id| AssetDefinition::numeric(id).build(&authority))
+            .map(|id| {
+                AssetDefinition::numeric(
+                    id,
+                    "coin".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&authority)
+            })
             .collect::<Vec<_>>();
         let asset_ids = asset_definition_ids
             .iter()
@@ -19437,7 +18502,8 @@ seiyaku DedicatedQueryContract {
                 vm.set_register(10, tag.as_u64());
                 vm.set_register(11, u64::try_from(offset).expect("offset"));
                 vm.set_register(12, 1);
-                host.syscall(ivm_sys::SYSCALL_CORE_QUERY_PAGE, &mut vm)
+                let gas = host
+                    .syscall(ivm_sys::SYSCALL_CORE_QUERY_PAGE, &mut vm)
                     .unwrap_or_else(|error| panic!("{tag:?} page {offset}: {error:?}"));
                 let page =
                     ivm::list::read_words(&vm, vm.register(10), layout).expect("read typed page");
@@ -19461,6 +18527,26 @@ seiyaku DedicatedQueryContract {
                     read_option_int(&vm, vm.register(11)),
                     if offset == 0 { Some(1) } else { None },
                     "{tag:?} next_offset at page {offset}"
+                );
+
+                host.reset_core_query_page_metrics();
+                let mut repeated_vm = IVM::new(2_000_000);
+                repeated_vm.set_register(10, tag.as_u64());
+                repeated_vm.set_register(11, u64::try_from(offset).expect("offset"));
+                repeated_vm.set_register(12, 1);
+                let repeated_gas = host
+                    .syscall(ivm_sys::SYSCALL_CORE_QUERY_PAGE, &mut repeated_vm)
+                    .unwrap_or_else(|error| panic!("repeated {tag:?} page {offset}: {error:?}"));
+                let repeated_metrics = host
+                    .core_query_page_metrics()
+                    .expect("typed page metrics enabled");
+                assert_eq!(
+                    repeated_gas, gas,
+                    "{tag:?} page {offset} gas must be deterministic"
+                );
+                assert_eq!(
+                    repeated_metrics, metrics,
+                    "{tag:?} page {offset} must repeat exactly one query, one projection decode, and the same projected byte counts"
                 );
             }
         }
@@ -19815,14 +18901,16 @@ seiyaku DedicatedQueryContract {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
-        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("commerce", "universal").unwrap(),
-            "fixed_plan".parse().unwrap(),
-        );
-        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("pay", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let plan_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("commerce", "universal").unwrap(),
+                "fixed_plan".parse().unwrap(),
+            );
+        let charge_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("pay", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
         let period_ms = 1_000_u64;
         let scheduled_at_ms = 10_000_u64;
         let trigger_id: TriggerId = "sub-bill".parse().unwrap();
@@ -19845,12 +18933,24 @@ seiyaku DedicatedQueryContract {
             }),
         };
 
-        let mut plan_def =
-            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let mut plan_def = AssetDefinition::new(
+            plan_id.clone(),
+            "fixed_plan".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
-        let charge_def =
-            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
+        let charge_def = AssetDefinition::new(
+            charge_asset_id.clone(),
+            "usd".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
         let asset = Asset::new(asset_id.clone(), Quantity::from(500_u32));
 
@@ -19917,7 +19017,8 @@ seiyaku DedicatedQueryContract {
             Repeats::Exactly(1),
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
-        );
+        )
+        .expect("test scheduled trigger action satisfies its authority invariant");
         action.metadata = trigger_metadata.clone();
         let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
         {
@@ -19990,6 +19091,7 @@ seiyaku DedicatedQueryContract {
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
         )
+        .expect("trigger action fixture satisfies validation invariants")
         .with_metadata({
             let mut metadata = trigger_metadata;
             let registered_height_key: Name = "__registered_block_height".parse().unwrap();
@@ -20043,14 +19145,16 @@ seiyaku DedicatedQueryContract {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
-        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("commerce", "universal").unwrap(),
-            "usage_plan".parse().unwrap(),
-        );
-        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("pay", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let plan_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("commerce", "universal").unwrap(),
+                "usage_plan".parse().unwrap(),
+            );
+        let charge_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("pay", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
         let unit_key: Name = "compute_ms".parse().unwrap();
         let trigger_id: TriggerId = "sub-usage".parse().unwrap();
 
@@ -20072,12 +19176,24 @@ seiyaku DedicatedQueryContract {
             }),
         };
 
-        let mut plan_def =
-            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let mut plan_def = AssetDefinition::new(
+            plan_id.clone(),
+            "usage_plan".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
-        let charge_def =
-            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
+        let charge_def = AssetDefinition::new(
+            charge_asset_id.clone(),
+            "usd".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let subscriber_asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
         let subscriber_asset = Asset::new(subscriber_asset_id.clone(), Quantity::from(100_u32));
 
@@ -20141,7 +19257,8 @@ seiyaku DedicatedQueryContract {
                 start_ms: 1_000,
                 period_ms: None,
             })),
-        );
+        )
+        .expect("test scheduled trigger action satisfies its authority invariant");
         action.metadata = trigger_metadata;
         let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
         {
@@ -20261,14 +19378,16 @@ seiyaku DedicatedQueryContract {
     fn subscription_plan_metadata_rejects_negative_usage_unit_price() {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
-        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("commerce", "universal").unwrap(),
-            "usage_plan".parse().unwrap(),
-        );
-        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("pay", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let plan_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("commerce", "universal").unwrap(),
+                "usage_plan".parse().unwrap(),
+            );
+        let charge_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("pay", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
         let plan = SubscriptionPlan {
             provider: provider.clone(),
             billing: SubscriptionBilling {
@@ -20297,8 +19416,14 @@ seiyaku DedicatedQueryContract {
             "fixture must replace the encoded nominal unit price"
         );
 
-        let mut plan_definition =
-            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let mut plan_definition = AssetDefinition::new(
+            plan_id.clone(),
+            "usage_plan".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_definition.metadata.insert(
             plan_key,
@@ -20330,14 +19455,16 @@ seiyaku DedicatedQueryContract {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
-        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("commerce", "universal").unwrap(),
-            "fixed_plan".parse().unwrap(),
-        );
-        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("pay", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let plan_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("commerce", "universal").unwrap(),
+                "fixed_plan".parse().unwrap(),
+            );
+        let charge_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("pay", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
         let period_ms = 1_000_u64;
         let scheduled_at_ms = 10_000_u64;
         let trigger_id: TriggerId = "sub-bill-fail".parse().unwrap();
@@ -20361,12 +19488,24 @@ seiyaku DedicatedQueryContract {
             }),
         };
 
-        let mut plan_def =
-            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let mut plan_def = AssetDefinition::new(
+            plan_id.clone(),
+            "fixed_plan".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
-        let charge_def =
-            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
+        let charge_def = AssetDefinition::new(
+            charge_asset_id.clone(),
+            "usd".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
         let asset = Asset::new(asset_id.clone(), Quantity::from(50_u32));
 
@@ -20423,7 +19562,8 @@ seiyaku DedicatedQueryContract {
             Repeats::Exactly(1),
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
-        );
+        )
+        .expect("test scheduled trigger action satisfies its authority invariant");
         action.metadata = trigger_metadata.clone();
         let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
         {
@@ -20485,6 +19625,7 @@ seiyaku DedicatedQueryContract {
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(expected_schedule)),
         )
+        .expect("trigger action fixture satisfies validation invariants")
         .with_metadata(trigger_metadata);
         let expected_trigger = Trigger::new(trigger_id.clone(), expected_action);
         let expected_register = InstructionBox::from(Register::trigger(expected_trigger));
@@ -20511,14 +19652,16 @@ seiyaku DedicatedQueryContract {
         crate::test_alias::ensure();
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
-        let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("commerce", "universal").unwrap(),
-            "fixed_plan".parse().unwrap(),
-        );
-        let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("pay", "universal").unwrap(),
-            "usd".parse().unwrap(),
-        );
+        let plan_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("commerce", "universal").unwrap(),
+                "fixed_plan".parse().unwrap(),
+            );
+        let charge_asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("pay", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
         let period_ms = 1_000_u64;
         let scheduled_at_ms = 10_000_u64;
         let trigger_id: TriggerId = "sub-bill-suspend".parse().unwrap();
@@ -20541,12 +19684,24 @@ seiyaku DedicatedQueryContract {
             }),
         };
 
-        let mut plan_def =
-            AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
+        let mut plan_def = AssetDefinition::new(
+            plan_id.clone(),
+            "fixed_plan".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
         plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
-        let charge_def =
-            AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
+        let charge_def = AssetDefinition::new(
+            charge_asset_id.clone(),
+            "usd".to_owned(),
+            NumericSpec::integer(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&provider);
 
         let subscription_state = SubscriptionState {
             plan_id: plan_id.clone(),
@@ -20607,7 +19762,8 @@ seiyaku DedicatedQueryContract {
             Repeats::Exactly(1),
             subscriber.clone(),
             TimeEventFilter(ExecutionTime::Schedule(schedule)),
-        );
+        )
+        .expect("test scheduled trigger action satisfies its authority invariant");
         action.metadata = trigger_metadata.clone();
         let trigger = SpecializedTrigger::new(trigger_id.clone(), action);
         {
@@ -20757,7 +19913,7 @@ seiyaku DedicatedQueryContract {
     fn bind_sccp_test_contract(host: &mut CoreHost, nonce: u64) {
         let authority = host.authority.clone();
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             nonce,
             DataSpaceId::UNIVERSAL,
@@ -20892,7 +20048,6 @@ seiyaku DedicatedQueryContract {
         for operation_tag in [
             0,
             ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
-            ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD,
             u64::MAX,
         ] {
             let mut host = local_contract_host(authority.clone());
@@ -21007,61 +20162,6 @@ seiyaku DedicatedQueryContract {
             "failed affordability must not consume the proof latch"
         );
         assert_eq!(vm.register(10), instruction_ptr);
-
-        let escrow_name = Name::from_str("extreme_gas_escrow").expect("escrow name");
-        let escrow = OpenAnonymousAssetEscrow::with_evidence_hashes(
-            CoreHost::escrow_id_from_name(&escrow_name),
-            AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").expect("domain"),
-                "xor".parse().expect("asset name"),
-            ),
-            vec![[0x51; 32]],
-            [0x52; 32],
-            ProofAttachment::new_ref(
-                backend.clone(),
-                ProofBox::new(backend.clone(), vec![0x53]),
-                VerifyingKeyId::new(backend.as_str(), "extreme-gas-escrow"),
-            ),
-            Some([0x54; 32]),
-            Vec::new(),
-        );
-        let escrow_payload = norito::to_bytes(&escrow).expect("encode anonymous escrow");
-        let escrow_code = [
-            ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER).expect("syscall fits"),
-            )
-            .to_le_bytes(),
-            ivm::encoding::wide::encode_halt().to_le_bytes(),
-        ]
-        .concat();
-        let mut escrow_vm = IVM::new(10_000);
-        escrow_vm
-            .load_program(&build_authenticated_test_contract_program(
-                &escrow_code,
-                0,
-                true,
-            ))
-            .expect("load anonymous escrow program");
-        let escrow_ptr = store_tlv(&mut escrow_vm, PointerType::NoritoBytes, &escrow_payload);
-        escrow_vm.set_register(10, escrow_ptr);
-        let mut escrow_host = local_contract_host((*ALICE_ID).clone());
-
-        let error = escrow_vm
-            .run_with_host(&mut escrow_host)
-            .expect_err("extreme proof gas exceeds the escrow reserve");
-
-        assert_eq!(error, ivm::VMError::OutOfGas);
-        assert_eq!(
-            escrow_vm.remaining_gas(),
-            0,
-            "a state-dependent escrow failure consumes its fail-closed reserve"
-        );
-        assert!(
-            escrow_host.queued.is_empty(),
-            "unaffordable native proof instruction must not be queued"
-        );
-        assert_eq!(escrow_vm.register(10), escrow_ptr);
     }
 
     #[test]
@@ -21104,7 +20204,7 @@ seiyaku BurnWithMemo {
             .expect("burn_with_memo argument schema");
         let entry_pc = parsed.prefix_len() as u64 + descriptor.entry_pc;
 
-        let settlement_asset_def = AssetDefinitionId::new(
+        let settlement_asset_def = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -21517,10 +20617,11 @@ seiyaku OpaqueInstructionSubmission {
 
         let from = authority.clone();
         let to: AccountId = fixture_account("bob");
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
         let amount = 7_u64;
 
         let from_payload = norito::to_bytes(&from).expect("encode from account");
@@ -21573,18 +20674,21 @@ seiyaku OpaqueInstructionSubmission {
         authority: &AccountId,
         destination: &AccountId,
         asset_def: AssetDefinitionId,
+        asset_name: &str,
         balance_policy: AssetBalancePolicy,
+        owning_domain: Option<DomainId>,
     ) -> State {
-        let domain_id = asset_def
-            .try_domain()
-            .cloned()
-            .unwrap_or_else(fixture_domain_id);
-        let domain = Domain::new(domain_id).build(authority);
+        let domain_id = owning_domain.clone().unwrap_or_else(fixture_domain_id);
+        let domain = Domain::new(domain_id.clone()).build(authority);
         let source_account = build_fixture_account(authority, authority);
         let destination_account = build_fixture_account(destination, authority);
-        let asset_def = AssetDefinition::numeric(asset_def)
-            .with_balance_scope_policy(balance_policy)
-            .build(authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def,
+            asset_name.to_owned(),
+            balance_policy,
+            owning_domain,
+        )
+        .build(authority);
         let world = World::with([domain], [source_account, destination_account], [asset_def]);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -21619,12 +20723,15 @@ seiyaku OpaqueInstructionSubmission {
     fn transfer_asset_scoped_syscall_queues_global_source_for_global_definition() {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
-        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "xor".parse().unwrap());
+        let asset_def =
+            AssetDefinitionId::derive_from_components(fixture_domain_id(), "xor".parse().unwrap());
         let state = scoped_transfer_state(
             &authority,
             &destination,
             asset_def.clone(),
+            "xor",
             AssetBalancePolicy::Global,
+            None,
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
@@ -21655,12 +20762,15 @@ seiyaku OpaqueInstructionSubmission {
     fn legacy_transfer_v1_syscall_queues_global_source_for_global_definition() {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
-        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "xor".parse().unwrap());
+        let asset_def =
+            AssetDefinitionId::derive_from_components(fixture_domain_id(), "xor".parse().unwrap());
         let state = scoped_transfer_state(
             &authority,
             &destination,
             asset_def.clone(),
+            "xor",
             AssetBalancePolicy::Global,
+            None,
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
@@ -21692,15 +20802,18 @@ seiyaku OpaqueInstructionSubmission {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
         let (paynet, catalog) = retail_dataspace_catalog();
-        let asset_def = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "paynet").unwrap(),
+        let owning_domain = DomainId::try_new("wonderland", "paynet").unwrap();
+        let asset_def = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
             "rose".parse().unwrap(),
         );
         let state = scoped_transfer_state(
             &authority,
             &destination,
             asset_def.clone(),
+            "rose",
             AssetBalancePolicy::DataspaceRestricted,
+            Some(owning_domain),
         );
         state.nexus.write().dataspace_catalog = catalog;
         let view = state.view();
@@ -21732,13 +20845,19 @@ seiyaku OpaqueInstructionSubmission {
     fn transfer_asset_scoped_syscall_queues_dataspace_source_for_restricted_definition() {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
-        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "rose".parse().unwrap());
+        let owning_domain = fixture_domain_id();
+        let asset_def = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
+            "rose".parse().unwrap(),
+        );
         let dataspace = DataSpaceId::new(7);
         let state = scoped_transfer_state(
             &authority,
             &destination,
             asset_def.clone(),
+            "rose",
             AssetBalancePolicy::DataspaceRestricted,
+            Some(owning_domain),
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
@@ -21773,12 +20892,18 @@ seiyaku OpaqueInstructionSubmission {
     fn transfer_asset_scoped_syscall_rejects_non_dataspace_r14() {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
-        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "rose".parse().unwrap());
+        let owning_domain = fixture_domain_id();
+        let asset_def = AssetDefinitionId::derive_from_components(
+            owning_domain.clone(),
+            "rose".parse().unwrap(),
+        );
         let state = scoped_transfer_state(
             &authority,
             &destination,
             asset_def.clone(),
+            "rose",
             AssetBalancePolicy::DataspaceRestricted,
+            Some(owning_domain),
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
@@ -21815,10 +20940,11 @@ seiyaku OpaqueInstructionSubmission {
 
         let from = authority;
         let to: AccountId = fixture_account("bob");
-        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
         let entries = vec![
             TransferAssetBatchEntry::new(from.clone(), to.clone(), asset_def.clone(), 1_u64),
             TransferAssetBatchEntry::new(from.clone(), to.clone(), asset_def.clone(), 2_u64),
@@ -21868,7 +20994,7 @@ seiyaku OpaqueInstructionSubmission {
             entries: vec![ForgedTransferAssetBatchEntry {
                 from: authority,
                 to: fixture_account("bob"),
-                asset_definition: AssetDefinitionId::new(
+                asset_definition: AssetDefinitionId::derive_from_components(
                     fixture_domain_id(),
                     "xor".parse().unwrap(),
                 ),
@@ -22329,9 +21455,13 @@ seiyaku OpaqueInstructionSubmission {
         let authority_account = Account::new(authority.clone()).build(&authority);
         let merchant_account = Account::new(merchant_account_id.clone()).build(&authority);
         let replacement_account = Account::new(replacement_account_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
             Quantity::from(1_000_u32),
@@ -22457,9 +21587,13 @@ seiyaku OpaqueInstructionSubmission {
                 .build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
         let merchant_account = Account::new(merchant_account_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             Quantity::from(1_000_u32),
@@ -22563,9 +21697,13 @@ seiyaku OpaqueInstructionSubmission {
                 .build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
         let merchant_account = Account::new(merchant_account_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             Quantity::from(1_000_u32),
@@ -23397,29 +22535,26 @@ seiyaku Callee {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
-        let verified_transfer = Arc::clone(&host.zk_verified_transfer);
+        let verified_ballot = Arc::clone(&host.zk_verified_ballot);
         let replay_ledger = Arc::clone(&host.axt_replay_ledger);
         let proof_cache = Arc::clone(&host.axt_proof_cache);
         host.fastpq_batch_entries = Some(Vec::new());
 
         let snapshot = host.snapshot_nested_contract_call();
-        assert!(Arc::ptr_eq(
-            &snapshot.zk_verified_transfer,
-            &verified_transfer
-        ));
+        assert!(Arc::ptr_eq(&snapshot.zk_verified_ballot, &verified_ballot));
         assert!(Arc::ptr_eq(&snapshot.axt_replay_ledger, &replay_ledger));
         assert!(Arc::ptr_eq(&snapshot.axt_proof_cache, &proof_cache));
         assert!(
             host.fastpq_batch_entries.is_none(),
             "frame-local batch storage must be moved, not cloned"
         );
-        Arc::make_mut(&mut host.zk_verified_transfer).push_back([7; 32]);
-        assert!(!Arc::ptr_eq(&host.zk_verified_transfer, &verified_transfer));
+        Arc::make_mut(&mut host.zk_verified_ballot).push_back([7; 32]);
+        assert!(!Arc::ptr_eq(&host.zk_verified_ballot, &verified_ballot));
 
         host.finish_nested_contract_call(snapshot, NestedContractCallOutcome::Rollback)
             .expect("restore shared rollback state");
-        assert!(Arc::ptr_eq(&host.zk_verified_transfer, &verified_transfer));
-        assert!(host.zk_verified_transfer.is_empty());
+        assert!(Arc::ptr_eq(&host.zk_verified_ballot, &verified_ballot));
+        assert!(host.zk_verified_ballot.is_empty());
         assert!(host.fastpq_batch_entries.is_some());
     }
 
@@ -23850,8 +22985,10 @@ seiyaku Callee {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
-        let asset_definition =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let (outer_caller, pool_contract) =
             install_typed_view_fixture(&state, &authority, &asset_definition, &authority);
 
@@ -23911,8 +23048,10 @@ seiyaku Callee {
         let authority: AccountId = fixture_account("alice");
         let mismatched_account: AccountId = fixture_account("bob");
         let state = contract_test_state(&authority);
-        let asset_definition =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_definition = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let (outer_caller, pool_contract) =
             install_typed_view_fixture(&state, &authority, &asset_definition, &authority);
 
@@ -24130,27 +23269,8 @@ seiyaku StoredAccountView {
     }
 
     #[test]
-    fn call_contract_syscall_unit_return_survives_unaligned_requested_stack_limit() {
-        struct StackLimitGuard {
-            guest_limit: u64,
-            budget_limit: u64,
-        }
-
-        impl Drop for StackLimitGuard {
-            fn drop(&mut self) {
-                ivm::set_guest_stack_limit(self.guest_limit);
-                ivm::Memory::set_stack_budget_limit(self.budget_limit);
-            }
-        }
-
+    fn call_contract_syscall_unit_return_uses_canonical_stack_policy() {
         crate::test_alias::ensure();
-        let _stack_guard = StackLimitGuard {
-            guest_limit: ivm::guest_stack_limit(),
-            budget_limit: ivm::Memory::stack_budget_limit(),
-        };
-        ivm::set_guest_stack_limit(0x60a04);
-        ivm::Memory::set_stack_budget_limit(0x60a04);
-
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let caller_contract = install_contract(
@@ -24200,6 +23320,11 @@ seiyaku Callee {
         );
 
         result.expect("unit nested contract call should succeed");
+        assert_eq!(
+            vm.memory.stack_limit(),
+            ivm::IvmStackPolicy::V1.stack_limit_for_gas(1_000_000),
+            "nested execution must use the canonical V1 guest-stack policy",
+        );
         assert_eq!(vm.register(10), 0, "unit return should clear r10");
         assert!(
             durable_state_overlay
@@ -24581,7 +23706,7 @@ seiyaku Callee {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             404,
             DataSpaceId::UNIVERSAL,
@@ -24640,11 +23765,19 @@ seiyaku Callee {
     fn call_contract_syscall_preserves_root_and_nested_transfer_authorities_in_artifacts() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let account = build_fixture_account(&authority, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -24815,13 +23948,21 @@ seiyaku Callee {
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
         let replacement_account = fixture_account("carol");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -24973,13 +24114,21 @@ seiyaku AliasPayout {
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
         let replacement_account = fixture_account("carol");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -25133,8 +24282,10 @@ seiyaku AliasPayout {
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
         let replacement_account = fixture_account("carol");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
@@ -25147,10 +24298,20 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -25316,12 +24477,20 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -25429,12 +24598,20 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -25515,11 +24692,19 @@ seiyaku AliasPayout {
     fn contract_call_transaction_resolve_account_alias_builtin_invalid_literal_is_rejected() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -25591,8 +24776,10 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
@@ -25604,10 +24791,20 @@ seiyaku AliasPayout {
                 .build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -25754,12 +24951,20 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -25840,11 +25045,19 @@ seiyaku AliasPayout {
     fn contract_call_transaction_account_id_alias_shorthand_invalid_literal_is_rejected() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -25916,8 +25129,10 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
@@ -25929,10 +25144,20 @@ seiyaku AliasPayout {
                 .build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -26080,8 +25305,10 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
@@ -26093,10 +25320,20 @@ seiyaku AliasPayout {
                 .build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -26241,8 +25478,10 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
@@ -26254,10 +25493,20 @@ seiyaku AliasPayout {
                 .build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -26363,8 +25612,10 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
@@ -26376,10 +25627,20 @@ seiyaku AliasPayout {
                 .build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -26485,8 +25746,10 @@ seiyaku AliasPayout {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
             .expect("payment asset definition id");
@@ -26498,10 +25761,20 @@ seiyaku AliasPayout {
                 .build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -26645,11 +25918,19 @@ seiyaku AliasPayout {
      {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -26720,11 +26001,19 @@ seiyaku AliasPayout {
      {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let domain = Domain::new(fixture_domain_id()).build(&authority);
         let authority_account = build_fixture_account(&authority, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
@@ -26797,8 +26086,10 @@ seiyaku AliasPayout {
         let authority: AccountId = fixture_account("alice");
         let merchant_account = fixture_account("bob");
         let replacement_account = fixture_account("carol");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
         let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
@@ -26811,10 +26102,20 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
-            .with_name("xor".to_owned())
-            .build(&authority);
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
+        let payment_definition = AssetDefinition::numeric(
+            payment_asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
@@ -27003,9 +26304,17 @@ seiyaku AliasPayout {
         let outer_account = build_fixture_account(&outer_authority, &outer_authority);
         let nested_account = build_fixture_account(&nested_authority, &outer_authority);
         let recipient_account = build_fixture_account(&recipient, &outer_authority);
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&outer_authority);
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            fixture_domain_id(),
+            "rose".parse().expect("asset name"),
+        );
+        let asset_def = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&outer_authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), nested_authority.clone());
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let world = World::with_assets(
@@ -28006,6 +27315,8 @@ seiyaku DurableOwner {
             "merge_lane_frontier_v1",
             "merge_lane_frontier_v1_1_2_deadbeef",
             "queue_plan_admission_v2_deadbeef_cafebabe",
+            "queue_plan_pending_obligation_v1_deadbeef_cafebabe",
+            "queue_plan_pending_route_member_v1_0_0_deadbeef_cafebabe",
             "nexus_fee_receipt_settled_deadbeef",
             "nexus_fee_settlement_settled_1_2_3_deadbeef",
             "sealed_tx_commitment_deadbeef",
@@ -28043,6 +27354,8 @@ seiyaku DurableOwner {
             "scatter/counter",
             "merge_lane_frontier_v1x",
             "queue_plan_admission_v2x",
+            "queue_plan_pending_obligation_v1x",
+            "queue_plan_pending_route_member_v1x",
             "offline_device_attestation_policyx",
             "kagemusha_online_registration_v1x",
             "kagemusha_online_registration_v2x",
@@ -28072,7 +27385,7 @@ seiyaku DurableOwner {
         .expect("QueuePlan admission marker key");
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             178,
             DataSpaceId::UNIVERSAL,
@@ -28087,9 +27400,20 @@ seiyaku DurableOwner {
                     .parse()
                     .expect("contract alias"),
             ),
-            entrypoint: "attack".to_owned(),
+            entrypoint: "main".to_owned(),
         }));
         let mut vm = IVM::new(10_000);
+        let code = ivm::encoding::wide::encode_halt().to_le_bytes();
+        vm.load_program(&build_authenticated_test_contract_program_with_states(
+            &code,
+            0,
+            false,
+            vec![ivm::EmbeddedStateDescriptor {
+                name: marker.to_string(),
+                ty: ivm::EmbeddedStateType::Bytes,
+            }],
+        ))
+        .expect("load self-describing adversarial QueuePlan contract");
         let path_ptr = store_state_path_tlv(&mut vm, &marker);
         let forged = norito::to_bytes(&999_u64).expect("encode forged marker fixture");
         let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &forged);
@@ -28133,7 +27457,7 @@ seiyaku DurableOwner {
             .expect("frontier marker key");
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             177,
             DataSpaceId::UNIVERSAL,
@@ -28449,7 +27773,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             701,
             DataSpaceId::UNIVERSAL,
@@ -28553,7 +27877,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             702,
             DataSpaceId::UNIVERSAL,
@@ -28681,7 +28005,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,
@@ -28877,7 +28201,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             43,
             DataSpaceId::UNIVERSAL,
@@ -29015,7 +28339,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0x51a7e,
             DataSpaceId::UNIVERSAL,
@@ -29466,7 +28790,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             203,
             DataSpaceId::UNIVERSAL,
@@ -29522,7 +28846,7 @@ seiyaku DurableOwner {
             &norito::to_bytes(&expected).expect("encode state value"),
         );
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             44,
             DataSpaceId::UNIVERSAL,
@@ -29578,7 +28902,7 @@ seiyaku DurableOwner {
         let authority: AccountId = fixture_account("alice");
         let path: StatePath = "counter".parse().unwrap();
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             46,
             DataSpaceId::UNIVERSAL,
@@ -29646,7 +28970,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             146,
             DataSpaceId::UNIVERSAL,
@@ -29757,7 +29081,7 @@ seiyaku DurableOwner {
         let authority: AccountId = fixture_account("alice");
         let path: StatePath = "counter".parse().unwrap();
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             47,
             DataSpaceId::UNIVERSAL,
@@ -29852,7 +29176,7 @@ seiyaku DurableOwner {
         let path: StatePath = "counter".parse().unwrap();
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             45,
             DataSpaceId::UNIVERSAL,
@@ -29924,7 +29248,7 @@ seiyaku DurableOwner {
         let path_ptr = store_state_path_tlv(&mut vm, &path);
 
         let contract_a = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             41,
             DataSpaceId::UNIVERSAL,
@@ -29954,7 +29278,7 @@ seiyaku DurableOwner {
         );
 
         let contract_b = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             42,
             DataSpaceId::UNIVERSAL,
@@ -30049,7 +29373,7 @@ seiyaku DurableOwner {
             CoreHost::from_state(authority.clone(), &state).expect("canonical state snapshots");
         host.set_local_contract_debug_execution();
         let contract = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             43,
             DataSpaceId::UNIVERSAL,
@@ -30320,6 +29644,29 @@ seiyaku DurableOwner {
     }
 
     #[test]
+    fn zk_vote_tally_syscall_rejects_noncanonical_selector_without_publishing_response() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let mut vm = IVM::new(10_000);
+        let request = ivm::zk_verify::VoteGetTallyRequest {
+            election_id: "election/alias".to_owned(),
+        };
+        let payload = norito::to_bytes(&request).expect("encode request");
+        let request_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, request_ptr);
+
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        assert_eq!(
+            vm.register(10),
+            request_ptr,
+            "failed tally queries must not publish a response pointer"
+        );
+    }
+
+    #[test]
     fn zk_election_snapshot_rejects_invalid_shapes_without_replacement() {
         crate::test_alias::ensure();
         let mut host = CoreHost::new(fixture_account("alice"));
@@ -30327,6 +29674,17 @@ seiyaku DurableOwner {
         valid.insert("valid".to_string(), (1, false, vec![0]));
         host.set_zk_elections_snapshot(valid)
             .expect("one-option election is valid");
+
+        let mut invalid_selector = BTreeMap::new();
+        invalid_selector.insert("invalid/election".to_owned(), (1, false, vec![0]));
+        assert_eq!(
+            host.set_zk_elections_snapshot(invalid_selector),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        assert!(
+            host.zk_elections.contains_key("valid"),
+            "a noncanonical snapshot key must not replace the prior snapshot"
+        );
 
         for (id, options, tally) in [
             ("zero-options", 0, Vec::new()),
@@ -30357,6 +29715,14 @@ seiyaku DurableOwner {
             .expect("bounded response");
         assert!(response.finalized);
         assert_eq!(response.tally.len(), 64);
+
+        assert_eq!(
+            host.vote_get_tally_response(&ivm::zk_verify::VoteGetTallyRequest {
+                election_id: ".maximum".to_owned(),
+            }),
+            Err(ivm::VMError::NoritoInvalid),
+            "noncanonical requests must fail before lookup or response construction"
+        );
 
         for (id, options, tally) in [
             ("response-zero-options", 0, Vec::new()),
@@ -30430,6 +29796,37 @@ seiyaku DurableOwner {
                 assert!(!host.zk_elections.contains_key("candidate"));
             }
         }
+
+        let mut world = World::new();
+        world.elections.insert(
+            "candidate/alias".to_owned(),
+            ElectionState {
+                options: 1,
+                tally: vec![0],
+                ..ElectionState::default()
+            },
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let mut prior = BTreeMap::new();
+        prior.insert("prior".to_owned(), (1, true, vec![9]));
+        host.set_zk_elections_snapshot(prior)
+            .expect("seed prior snapshot");
+        assert_eq!(
+            host.set_zk_snapshots_from_world(view.world(), &view.zk),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        assert_eq!(
+            host.zk_elections.get("prior").cloned(),
+            Some((1, true, vec![9])),
+            "failed hydration must preserve the prior snapshot"
+        );
+        assert!(!host.zk_elections.contains_key("candidate/alias"));
     }
 
     #[test]
@@ -30443,12 +29840,19 @@ seiyaku DurableOwner {
             NonZeroU64::new(65_536).expect("non-zero byte limit");
         parameters.commit();
 
-        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("zkd", "universal").unwrap(),
-            "zcoin".parse().unwrap(),
-        );
+        let asset_def_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("zkd", "universal").unwrap(),
+                "zcoin".parse().unwrap(),
+            );
         let mut zk_state = ZkAssetState::default();
-        zk_state.root_history = vec![[1u8; 32], [2u8; 32]];
+        zk_state
+            .push_commitments(
+                &[[1u8; 32], [2u8; 32]],
+                NonZeroUsize::new(64).expect("non-zero root history cap"),
+            )
+            .expect("canonical confidential tree roots");
+        let expected_roots = zk_state.root_history.clone();
         world.zk_assets.insert(asset_def_id.clone(), zk_state);
 
         let mut election = ElectionState::default();
@@ -30501,9 +29905,9 @@ seiyaku DurableOwner {
         assert_eq!(
             host.zk_roots
                 .get(&asset_def_id)
-                .cloned()
+                .map(|snapshot| snapshot.root_history.clone())
                 .unwrap_or_default(),
-            vec![[1u8; 32], [2u8; 32]]
+            expected_roots
         );
         let (options, finalized, tally) =
             host.zk_elections
@@ -30540,30 +29944,91 @@ seiyaku DurableOwner {
         assert!(gas <= quote);
         let resp: ivm::zk_verify::RootsGetResponse =
             norito::decode_from_bytes(tlv.payload).expect("decode roots response");
-        assert_eq!(resp.latest, [2u8; 32]);
-        assert_eq!(resp.roots, vec![[1u8; 32], [2u8; 32]]);
+        assert_eq!(resp.latest, *expected_roots.last().expect("latest root"));
+        assert_eq!(resp.roots, expected_roots);
         assert_eq!(resp.height, 2);
+    }
+
+    #[test]
+    fn zk_roots_snapshot_uses_profile_empty_root_and_rejects_drift_atomically() {
+        crate::test_alias::ensure();
+        let asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("zkprofile", "universal").expect("domain"),
+            "asset".parse().expect("asset name"),
+        );
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let empty_state = ZkAssetState::default();
+        host.set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), empty_state.clone())]))
+            .expect("canonical empty tree snapshot");
+
+        let response = host
+            .roots_get_response(&ivm::zk_verify::RootsGetRequest {
+                asset_id: asset.to_string(),
+                max: 0,
+            })
+            .expect("read canonical empty root");
+        let empty_root = empty_state.tree_profile.empty_root();
+        assert_eq!(response.latest, empty_root);
+        assert_eq!(response.roots, vec![empty_root]);
+        assert_eq!(response.height, 0);
+
+        let mut drifted = ZkAssetState::default();
+        drifted.commitments.push([0x25; 32]);
+        drifted.root_history.push([0x66; 32]);
+        assert_eq!(
+            host.set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), drifted)])),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        let mut missing_current_root = ZkAssetState::default();
+        missing_current_root.commitments.push([0x25; 32]);
+        assert_eq!(
+            host.set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), missing_current_root)])),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        let mut drifted_checkpoint = ZkAssetState::default();
+        drifted_checkpoint
+            .frontier_checkpoints
+            .push(crate::state::FrontierCheckpoint {
+                height: 1,
+                commitment_count: 0,
+                root: [0x66; 32],
+            });
+        assert_eq!(
+            host.set_zk_roots_snapshot(BTreeMap::from([(asset.clone(), drifted_checkpoint)])),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        let retained = host
+            .roots_get_response(&ivm::zk_verify::RootsGetRequest {
+                asset_id: asset.to_string(),
+                max: 0,
+            })
+            .expect("prior snapshot remains readable");
+        assert_eq!(retained, response);
     }
 
     #[test]
     fn zk_roots_prepare_reserves_gas_at_history_cap_and_maximal_request() {
         crate::test_alias::ensure();
         let authority = fixture_account("alice");
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("zkquote", "universal").expect("domain"),
             "asset".parse().expect("asset name"),
         );
         let mut host = CoreHost::new(authority);
-        host.zk_root_history_cap = 256;
+        host.zk_tree_roots_history_len = NonZeroUsize::new(256).expect("non-zero root history");
         host.zk_roots.insert(
             asset.clone(),
-            (0..384_u16)
-                .map(|index| {
-                    let mut root = [0_u8; 32];
-                    root[..2].copy_from_slice(&index.to_le_bytes());
-                    root
-                })
-                .collect(),
+            ZkRootsSnapshot {
+                tree_profile: crate::state::ConfidentialTreeProfile::PoseidonPastaV1,
+                root_history: (0..384_u16)
+                    .map(|index| {
+                        let mut root = [0_u8; 32];
+                        root[..2].copy_from_slice(&index.to_le_bytes());
+                        root
+                    })
+                    .collect(),
+                commitment_count: 384,
+            },
         );
         let request = ivm::zk_verify::RootsGetRequest {
             asset_id: asset.to_string(),
@@ -30592,7 +30057,10 @@ seiyaku DurableOwner {
         assert_eq!(response.roots.len(), 256);
         assert_eq!(
             response.latest,
-            *host.zk_roots[&asset].last().expect("latest root")
+            *host.zk_roots[&asset]
+                .root_history
+                .last()
+                .expect("latest root")
         );
     }
 
@@ -31097,7 +30565,7 @@ seiyaku DurableOwner {
         let code = [
             ivm::encoding::wide::encode_sys(
                 ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_ZK_VERIFY_TRANSFER).expect("syscall fits"),
+                u8::try_from(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT).expect("syscall fits"),
             )
             .to_le_bytes(),
             ivm::encoding::wide::encode_halt().to_le_bytes(),
@@ -31126,8 +30594,8 @@ seiyaku DurableOwner {
         );
         assert_eq!(vm.register(10), payload_ptr);
         assert_eq!(vm.register(11), 0xfeed);
-        assert!(host.zk_verified_transfer.is_empty());
-        assert!(host.zk_last_env_hash_transfer.is_empty());
+        assert!(host.zk_verified_ballot.is_empty());
+        assert!(host.zk_last_env_hash_ballot.is_empty());
     }
 
     #[test]
@@ -32069,268 +31537,7 @@ seiyaku PreparedBoundaryArguments {
         assert!(matches!(err, VMError::PermissionDenied));
     }
 
-    #[test]
-    fn set_account_detail_rejects_tlv_with_bad_hash() {
-        crate::test_alias::ensure();
-        let authority: AccountId = fixture_account("alice");
-        let key: Name = "cursor".parse().unwrap();
-
-        let account_tlv = make_tlv(PointerType::AccountId as u16, &norito_blob(&authority));
-        let key_tlv = make_tlv(PointerType::Name as u16, &norito_blob(&key));
-        // Tamper with the trailing hash so TLV validation fails before decoding JSON.
-        let mut value_tlv = make_tlv(PointerType::Json as u16, br#"{"note":"tampered"}"#);
-        let last = value_tlv
-            .last_mut()
-            .expect("TLV must include a trailing hash");
-        *last ^= 0xFF;
-
-        let mut vm = IVM::new(u64::MAX);
-        vm.memory
-            .preload_input(0, &account_tlv)
-            .expect("preload account TLV");
-        vm.memory
-            .preload_input(256, &key_tlv)
-            .expect("preload key TLV");
-        vm.memory
-            .preload_input(512, &value_tlv)
-            .expect("preload value TLV");
-
-        // SCALL SET_ACCOUNT_DETAIL; HALT
-        let mut code = Vec::new();
-        code.extend_from_slice(
-            &encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL).expect("syscall id fits in u8"),
-            )
-            .to_le_bytes(),
-        );
-        code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-        let program = build_program(&code, 4);
-
-        vm.set_host(CoreHost::with_accounts(
-            authority.clone(),
-            Arc::new(vec![authority]),
-        ));
-        vm.load_program(&program).expect("load program");
-        vm.set_register(10, ivm::Memory::INPUT_START);
-        vm.set_register(11, ivm::Memory::INPUT_START + 256);
-        vm.set_register(12, ivm::Memory::INPUT_START + 512);
-
-        let err = vm
-            .run()
-            .expect_err("invalid TLV hash should reject the syscall");
-        assert!(
-            matches!(err, ivm::VMError::NoritoInvalid),
-            "expected NoritoInvalid when TLV hash is tampered, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn decode_tlv_typed_respects_pointer_policy_guard() {
-        crate::test_alias::ensure();
-        // Install a non-v1 ABI annotation so pointer validation fails closed.
-        let _guard = ivm::pointer_abi::PointerPolicyGuard::install(ivm::SyscallPolicy::AbiV1, 9);
-
-        let mut vm = ivm::IVM::new(1_000_000);
-        let did: DomainId = DomainId::try_new("wonder", "universal").unwrap();
-        let payload = norito::to_bytes(&did).expect("encode domain id");
-        let tlv = make_tlv(PointerType::DomainId as u16, &payload);
-        vm.memory.preload_input(0, &tlv).expect("preload input");
-
-        let err = CoreHost::decode_tlv_typed::<DomainId>(
-            &vm,
-            ivm::Memory::INPUT_START,
-            PointerType::DomainId,
-        )
-        .expect_err("pointer policy guard should forbid DomainId");
-        assert!(
-            matches!(
-                err,
-                ivm::VMError::AbiTypeNotAllowed { abi, type_id }
-                    if abi == 9 && type_id == PointerType::DomainId as u16
-            ),
-            "expected AbiTypeNotAllowed with annotated abi/type, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn decode_tlv_blob_accepts_code_region_literal() {
-        crate::test_alias::ensure();
-
-        let payload = b"risk".to_vec();
-        let tlv = make_tlv(PointerType::Blob as u16, &payload);
-        let literal_data_offset = 16 + core::mem::size_of::<u64>();
-        let post_pad = (4 - ((literal_data_offset + tlv.len()) % 4)) % 4;
-        let mut program = ivm::ProgramMetadata::default().encode();
-        program.extend_from_slice(b"LTLB");
-        program.extend_from_slice(&1_u32.to_le_bytes());
-        program.extend_from_slice(
-            &u32::try_from(post_pad)
-                .expect("literal padding fits u32")
-                .to_le_bytes(),
-        );
-        program.extend_from_slice(
-            &u32::try_from(tlv.len())
-                .expect("literal length fits u32")
-                .to_le_bytes(),
-        );
-        let descriptor = ivm::encode_literal_descriptor(
-            ivm::LiteralKindV1::PointerTlv,
-            u64::try_from(literal_data_offset).expect("literal offset fits u64"),
-        )
-        .expect("encode pointer literal descriptor");
-        program.extend_from_slice(&descriptor.to_le_bytes());
-        program.extend_from_slice(&tlv);
-        program.extend(std::iter::repeat_n(0_u8, post_pad));
-        program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
-        let mut vm = ivm::IVM::new(1_000_000);
-        vm.load_program(&program).expect("load abi v1 program");
-
-        let decoded = CoreHost::decode_tlv_blob(
-            &vm,
-            u64::try_from(literal_data_offset).expect("literal pointer fits u64"),
-        )
-        .expect("decode code literal");
-        assert_eq!(decoded, payload);
-    }
-
-    #[test]
-    fn pointer_abi_transfer_availability_packs_flags_and_preserves_reason() {
-        use iroha_data_model::asset::AssetTransferAvailability::{Disabled, Enabled};
-
-        let account = fixture_account("alice");
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonder", "universal").unwrap(),
-            "coin".parse().unwrap(),
-        );
-
-        for (flags, incoming, outgoing, reason) in [
-            (0b00, Disabled, Disabled, None),
-            (0b01, Enabled, Disabled, Some("incoming only".to_owned())),
-            (0b10, Disabled, Enabled, Some("outgoing only".to_owned())),
-            (0b11, Enabled, Enabled, None),
-        ] {
-            let mut vm = IVM::new(10_000);
-            let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
-            let asset_ptr = store_tlv(
-                &mut vm,
-                PointerType::AssetDefinitionId,
-                &norito_blob(&asset_definition),
-            );
-            let layout = ivm::sum::SumLayoutV1::option(1).expect("reason option layout");
-            let reason_ptr = match &reason {
-                Some(reason) => {
-                    let string_ptr = store_tlv(&mut vm, PointerType::Blob, reason.as_bytes());
-                    ivm::sum::allocate_words(&mut vm, layout, 1, &[string_ptr])
-                        .expect("Option::some reason")
-                }
-                None => {
-                    ivm::sum::allocate_words(&mut vm, layout, 0, &[]).expect("Option::none reason")
-                }
-            };
-            vm.set_register(10, account_ptr);
-            vm.set_register(11, asset_ptr);
-            vm.set_register(12, 7);
-            vm.set_register(13, flags);
-            vm.set_register(14, reason_ptr);
-
-            let mut host = CoreHost::new(account.clone());
-            host.syscall(ivm_sys::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY, &mut vm)
-                .expect("queue transfer-availability instruction");
-            let queued = host.drain_instructions();
-            assert_eq!(queued.len(), 1);
-            let instruction = queued[0]
-                .as_any()
-                .downcast_ref::<iroha_data_model::isi::SetAssetTransferAvailability>()
-                .expect("typed transfer-availability instruction");
-            assert_eq!(instruction.account_id, account);
-            assert_eq!(instruction.asset_definition_id, asset_definition);
-            assert_eq!(instruction.expected_revision, 7);
-            assert_eq!(instruction.incoming, incoming);
-            assert_eq!(instruction.outgoing, outgoing);
-            assert_eq!(instruction.reason, reason);
-        }
-
-        let mut invalid_vm = IVM::new(10_000);
-        let account_ptr = store_tlv(
-            &mut invalid_vm,
-            PointerType::AccountId,
-            &norito_blob(&account),
-        );
-        let asset_ptr = store_tlv(
-            &mut invalid_vm,
-            PointerType::AssetDefinitionId,
-            &norito_blob(&asset_definition),
-        );
-        let layout = ivm::sum::SumLayoutV1::option(1).expect("reason option layout");
-        let reason_ptr =
-            ivm::sum::allocate_words(&mut invalid_vm, layout, 0, &[]).expect("absent reason");
-        invalid_vm.set_register(10, account_ptr);
-        invalid_vm.set_register(11, asset_ptr);
-        invalid_vm.set_register(12, 0);
-        invalid_vm.set_register(13, 0b100);
-        invalid_vm.set_register(14, reason_ptr);
-        let mut host = CoreHost::new(account);
-        assert_eq!(
-            host.syscall(
-                ivm_sys::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY,
-                &mut invalid_vm,
-            ),
-            Err(ivm::VMError::DecodeError)
-        );
-    }
-
-    #[test]
-    fn pointer_abi_daily_limit_preserves_some_and_none() {
-        let account = fixture_account("alice");
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonder", "universal").unwrap(),
-            "coin".parse().unwrap(),
-        );
-
-        for expected in [Some(Quantity::from(125_u64)), None] {
-            let mut vm = IVM::new(10_000);
-            let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
-            let asset_ptr = store_tlv(
-                &mut vm,
-                PointerType::AssetDefinitionId,
-                &norito_blob(&asset_definition),
-            );
-            let layout = ivm::sum::SumLayoutV1::option(1).expect("quantity option layout");
-            let cap_ptr = match &expected {
-                Some(amount) => {
-                    let amount_ptr =
-                        store_tlv(&mut vm, PointerType::Quantity, &quantity_frame(amount));
-                    ivm::sum::allocate_words(&mut vm, layout, 1, &[amount_ptr])
-                        .expect("Option::some quantity")
-                }
-                None => ivm::sum::allocate_words(&mut vm, layout, 0, &[])
-                    .expect("Option::none quantity"),
-            };
-            vm.set_register(10, account_ptr);
-            vm.set_register(11, asset_ptr);
-            vm.set_register(12, cap_ptr);
-
-            let mut host = CoreHost::new(account.clone());
-            host.syscall(ivm_sys::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT, &mut vm)
-                .expect("queue daily-limit instruction");
-            let queued = host.drain_instructions();
-            assert_eq!(queued.len(), 1);
-            let instruction = queued[0]
-                .as_any()
-                .downcast_ref::<iroha_data_model::isi::SetAssetTransferControl>()
-                .expect("typed transfer-control instruction");
-            assert_eq!(instruction.account_id, account);
-            assert_eq!(instruction.asset_definition_id, asset_definition);
-            assert_eq!(instruction.limits.len(), 1);
-            assert_eq!(
-                instruction.limits[0].window,
-                iroha_data_model::asset::AssetTransferControlWindow::Day
-            );
-            assert_eq!(instruction.limits[0].cap_amount, expected);
-        }
-    }
-
+    // Keep pointer-ABI boundary checks together so host runtime code remains auditable.
+    include!("host/pointer_abi_validation_tests.rs");
     include!("host/pointer_abi_and_sm_tests.rs");
 }

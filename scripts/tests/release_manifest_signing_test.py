@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -918,6 +920,58 @@ def test_external_signer_receives_private_manifest_snapshot(
     assert manifest.read_bytes() == TEST_MANIFEST
 
 
+def test_external_signer_receives_only_fixed_secret_free_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest(tmp_path)
+    raw_key = _raw_public_key(tmp_path)
+    verifier, verifier_digest, _ = _native_verifier(tmp_path)
+    observation = tmp_path / "signer-environment.json"
+    signer = tmp_path / "environment-observing-signer"
+    _write_executable(
+        signer,
+        "import json\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "if 'TAIRA_RELEASE_SIGNER_BYPASS' in os.environ:\n"
+        "    raise SystemExit(95)\n"
+        f"Path({str(observation)!r}).write_text(\n"
+        "    json.dumps(dict(os.environ), sort_keys=True), encoding='utf-8'\n"
+        ")\n"
+        f"Path(sys.argv[2]).write_bytes(bytes.fromhex({TEST_SIGNATURE.hex()!r}))\n",
+    )
+    monkeypatch.setenv("TAIRA_RELEASE_SIGNER_BYPASS", "1")
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-reach-signer")
+
+    result = _sign(
+        tmp_path,
+        manifest,
+        tmp_path / "environment.sig",
+        tmp_path / "environment.pub",
+        signer=signer,
+        raw_public_key=raw_key,
+        verifier=verifier,
+        verifier_digest=verifier_digest,
+    )
+
+    assert result["signature_verified"] is True
+    observed = json.loads(observation.read_text(encoding="utf-8"))
+    assert {"HOME", "LANG", "LC_ALL", "PATH", "TMPDIR"} <= set(observed)
+    assert "TAIRA_RELEASE_SIGNER_BYPASS" not in observed
+    assert "GITHUB_TOKEN" not in observed
+    parent_environment = signing._external_signer_environment(Path(observed["HOME"]))
+    fixed_names = {"HOME", "LANG", "LC_ALL", "PATH", "TMPDIR"}
+    assert fixed_names <= set(parent_environment)
+    assert set(parent_environment) <= fixed_names | {"SYSTEMROOT", "WINDIR"}
+    assert observed["LANG"] == "C"
+    assert observed["LC_ALL"] == "C"
+    assert observed["PATH"] == os.defpath
+    assert observed["HOME"] == observed["TMPDIR"]
+    assert Path(observed["HOME"]).name.startswith("iroha-release-manifest-sign-")
+
+
 @pytest.mark.parametrize("mutated_input", ["manifest", "public_key", "signature"])
 def test_native_verifier_cannot_mutate_original_verification_inputs(
     tmp_path: Path,
@@ -1063,3 +1117,310 @@ def test_rejects_wrong_verifier_digest_malformed_signature_and_clobber(
         )
     assert existing_signature.read_bytes() == b"do-not-overwrite"
     assert not (tmp_path / "new.pub").exists()
+
+
+@pytest.mark.parametrize("entrypoint", ["sign", "verify"])
+def test_root_without_sealed_identity_fails_before_snapshot_or_invocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+) -> None:
+    monkeypatch.setattr(signing.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(signing.os, "getegid", lambda: 0)
+    monkeypatch.delenv(signing.EXTERNAL_TOOL_UID_ENV, raising=False)
+    monkeypatch.delenv(signing.EXTERNAL_TOOL_GID_ENV, raising=False)
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("root inspected or invoked an external-tool input before refusal")
+
+    monkeypatch.setattr(signing, "_stable_read", forbidden)
+    monkeypatch.setattr(signing, "_stable_digest", forbidden)
+    monkeypatch.setattr(signing.subprocess, "run", forbidden)
+
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match="root may not snapshot or invoke",
+    ):
+        if entrypoint == "verify":
+            signing.verify_release_manifest(
+                tmp_path / "manifest",
+                tmp_path / "signature",
+                tmp_path / "public-key",
+                "0" * 64,
+                tmp_path / "verifier",
+                "1" * 64,
+            )
+        else:
+            signing.sign_release_manifest(
+                tmp_path / "manifest",
+                tmp_path / "signer",
+                tmp_path / "raw-public-key",
+                "0" * 64,
+                tmp_path / "signature-output",
+                tmp_path / "public-key-output",
+                tmp_path / "verifier",
+                "1" * 64,
+            )
+
+
+@pytest.mark.parametrize(
+    ("raw_uid", "raw_gid", "message"),
+    [
+        (None, "41", "incomplete"),
+        ("41", None, "incomplete"),
+        ("0", "41", "positive canonical"),
+        ("41", "0", "positive canonical"),
+        ("041", "42", "positive canonical"),
+        ("+41", "42", "noncanonical"),
+        ("41 ", "42", "noncanonical"),
+        ("４１", "42", "noncanonical"),
+    ],
+)
+def test_external_tool_identity_rejects_incomplete_zero_and_noncanonical_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    raw_uid: str | None,
+    raw_gid: str | None,
+    message: str,
+) -> None:
+    monkeypatch.setattr(signing.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(signing.os, "getegid", lambda: 0)
+    for name, value in (
+        (signing.EXTERNAL_TOOL_UID_ENV, raw_uid),
+        (signing.EXTERNAL_TOOL_GID_ENV, raw_gid),
+    ):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+    with pytest.raises(signing.ReleaseManifestSignatureError, match=message):
+        signing._external_tool_execution_identity()
+
+
+def test_external_tool_identity_is_exact_for_root_and_matching_non_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(signing.EXTERNAL_TOOL_UID_ENV, "41")
+    monkeypatch.setenv(signing.EXTERNAL_TOOL_GID_ENV, "42")
+    monkeypatch.setattr(signing.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(signing.os, "getegid", lambda: 0)
+    assert signing._external_tool_execution_identity() == (41, 42)
+
+    monkeypatch.setattr(signing.os, "geteuid", lambda: 41)
+    monkeypatch.setattr(signing.os, "getegid", lambda: 42)
+    assert signing._external_tool_execution_identity() is None
+
+    monkeypatch.setenv(signing.EXTERNAL_TOOL_UID_ENV, "43")
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match="differs from the current non-root identity",
+    ):
+        signing._external_tool_execution_identity()
+
+
+def test_external_tool_privilege_drop_clears_groups_and_reaches_exact_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state: dict[str, object] = {"uid": 0, "gid": 0, "groups": [7, 8]}
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(signing.os, "geteuid", lambda: state["uid"])
+    monkeypatch.setattr(signing.os, "getegid", lambda: state["gid"])
+    monkeypatch.setattr(signing.os, "getgroups", lambda: list(state["groups"]))
+
+    def setgroups(groups: list[int]) -> None:
+        calls.append(("setgroups", groups))
+        state["groups"] = list(groups)
+
+    def setgid(gid: int) -> None:
+        calls.append(("setgid", gid))
+        state["gid"] = gid
+
+    def setuid(uid: int) -> None:
+        calls.append(("setuid", uid))
+        state["uid"] = uid
+
+    monkeypatch.setattr(signing.os, "setgroups", setgroups)
+    monkeypatch.setattr(signing.os, "setgid", setgid)
+    monkeypatch.setattr(signing.os, "setuid", setuid)
+    monkeypatch.setattr(
+        signing.os,
+        "umask",
+        lambda mask: calls.append(("umask", mask)) or 0o022,
+    )
+
+    signing._drop_external_tool_identity(41, 42)
+
+    assert calls == [
+        ("setgroups", []),
+        ("setgid", 42),
+        ("setuid", 41),
+        ("umask", 0o077),
+    ]
+    assert state == {"uid": 41, "gid": 42, "groups": []}
+
+
+def test_external_tool_invocations_have_exact_argv_environment_and_fd_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    preexec = lambda: None
+    monkeypatch.setenv("TAIRA_EXTERNAL_TOOL_INJECTION", "must-not-propagate")
+    monkeypatch.setattr(
+        signing,
+        "_external_tool_preexec",
+        lambda identity: preexec if identity == (41, 42) else pytest.fail(
+            "wrong child identity"
+        ),
+    )
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(signing.subprocess, "run", run)
+    verifier = tmp_path / "verifier"
+    manifest = tmp_path / "manifest"
+    public_key = tmp_path / "public-key"
+    signature = tmp_path / "signature"
+    signing._invoke_native_verifier(
+        verifier,
+        manifest,
+        public_key,
+        "a" * 64,
+        signature,
+        (41, 42),
+    )
+    signer = tmp_path / "signer"
+    private_home = tmp_path / "private-home"
+    signing._invoke_external_signer(
+        signer,
+        manifest,
+        signature,
+        private_home,
+        (41, 42),
+    )
+
+    verifier_argv, verifier_kwargs = calls[0]
+    assert verifier_argv == [
+        str(verifier),
+        "release-manifest",
+        "--manifest",
+        str(manifest),
+        "--public-key",
+        str(public_key),
+        "--public-key-fingerprint",
+        "a" * 64,
+        "--signature",
+        str(signature),
+    ]
+    assert verifier_kwargs["env"] == signing._native_verifier_environment()
+    assert verifier_kwargs["cwd"] == str(verifier.parent)
+
+    signer_argv, signer_kwargs = calls[1]
+    assert signer_argv == [str(signer), str(manifest), str(signature)]
+    assert signer_kwargs["env"] == signing._external_signer_environment(private_home)
+    assert signer_kwargs["cwd"] == str(private_home)
+
+    for kwargs in (verifier_kwargs, signer_kwargs):
+        assert kwargs["stdin"] is subprocess.DEVNULL
+        assert kwargs["stdout"] is subprocess.DEVNULL
+        assert kwargs["stderr"] is subprocess.DEVNULL
+        assert kwargs["check"] is False
+        assert kwargs["timeout"] == 120
+        assert kwargs["close_fds"] is True
+        assert kwargs["pass_fds"] == ()
+        assert kwargs["restore_signals"] is True
+        assert kwargs["preexec_fn"] is preexec
+        assert "TAIRA_EXTERNAL_TOOL_INJECTION" not in kwargs["env"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="preexec_fn is POSIX-only")
+def test_external_tool_preexec_failure_is_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_before_exec() -> None:
+        raise RuntimeError("injected privilege-drop failure")
+
+    monkeypatch.setattr(
+        signing,
+        "_external_tool_preexec",
+        lambda _identity: fail_before_exec,
+    )
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match="cannot execute native release-manifest verifier",
+    ):
+        signing._invoke_native_verifier(
+            Path(sys.executable),
+            tmp_path / "manifest",
+            tmp_path / "public-key",
+            "a" * 64,
+            tmp_path / "signature",
+            (41, 42),
+        )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX identity observation")
+def test_signer_and_verifier_children_observe_the_requested_identity() -> None:
+    execution_identity: tuple[int, int] | None = None
+    expected_uid = os.geteuid()
+    expected_gid = os.getegid()
+    if expected_uid == 0:
+        expected_uid = 65_534
+        expected_gid = 65_534
+        execution_identity = (expected_uid, expected_gid)
+
+    with tempfile.TemporaryDirectory(
+        prefix="iroha-external-tool-identity-test-"
+    ) as temp_raw:
+        temp_dir = Path(temp_raw)
+        if execution_identity is not None:
+            os.chown(temp_dir, expected_uid, expected_gid)
+            temp_dir.chmod(0o700)
+
+        observations: list[Path] = []
+        probes: list[Path] = []
+        for name in ("verifier", "signer"):
+            observation = temp_dir / f"{name}-identity.json"
+            probe = temp_dir / name
+            _write_executable(
+                probe,
+                "import json\n"
+                "import os\n"
+                "from pathlib import Path\n"
+                f"Path({str(observation)!r}).write_text(json.dumps({{"
+                "'uid': os.geteuid(), 'gid': os.getegid(), "
+                "'groups': os.getgroups()}), encoding='utf-8')\n",
+            )
+            if execution_identity is not None:
+                os.chown(probe, expected_uid, expected_gid)
+                probe.chmod(0o500)
+            observations.append(observation)
+            probes.append(probe)
+
+        signing._invoke_native_verifier(
+            probes[0],
+            temp_dir / "manifest",
+            temp_dir / "public-key",
+            "a" * 64,
+            temp_dir / "signature",
+            execution_identity,
+        )
+        signing._invoke_external_signer(
+            probes[1],
+            temp_dir / "manifest",
+            temp_dir / "signature",
+            temp_dir,
+            execution_identity,
+        )
+
+        for observation in observations:
+            observed = json.loads(observation.read_text(encoding="utf-8"))
+            assert (observed["uid"], observed["gid"]) == (
+                expected_uid,
+                expected_gid,
+            )
+            if execution_identity is not None:
+                assert observed["groups"] == []

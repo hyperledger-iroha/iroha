@@ -1,6 +1,8 @@
 //! Governance deployment CLI helpers.
 
-use super::shared::{print_with_summary, resolve_contract_address_target};
+use super::shared::{
+    parse_governance_proposal_id_v1, print_with_summary, resolve_contract_address_target,
+};
 use crate::{
     Run, RunContext,
     json_utils::{json_array, json_object, json_value},
@@ -115,18 +117,33 @@ impl Run for ProposeDeployArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct FinalizeArgs {
-    /// Referendum id
-    #[arg(long)]
+    /// Referendum id (the exact lowercase proposal fingerprint)
+    #[arg(
+        long,
+        value_name = "ID_HEX",
+        value_parser = parse_governance_proposal_id_v1
+    )]
     pub referendum_id: String,
     /// Proposal id (hex 64)
-    #[arg(long, value_name = "ID_HEX")]
+    #[arg(
+        long,
+        value_name = "ID_HEX",
+        value_parser = parse_governance_proposal_id_v1
+    )]
     pub proposal_id: String,
 }
 
 fn build_finalize_body(args: &FinalizeArgs) -> Result<norito::json::Value> {
+    let referendum_id = parse_governance_proposal_id_v1(&args.referendum_id)
+        .map_err(|message| eyre!("invalid referendum_id: {message}"))?;
+    let proposal_id = parse_governance_proposal_id_v1(&args.proposal_id)
+        .map_err(|message| eyre!("invalid proposal_id: {message}"))?;
+    if referendum_id != proposal_id {
+        return Err(eyre!("referendum_id must equal proposal_id"));
+    }
     json_object(vec![
-        ("referendum_id", json_value(&args.referendum_id)?),
-        ("proposal_id", json_value(&args.proposal_id)?),
+        ("referendum_id", json_value(&referendum_id)?),
+        ("proposal_id", json_value(&proposal_id)?),
     ])
 }
 
@@ -154,7 +171,11 @@ impl Run for FinalizeArgs {
 #[derive(clap::Args, Debug)]
 pub struct EnactArgs {
     /// Proposal id (hex 64)
-    #[arg(long, value_name = "ID_HEX")]
+    #[arg(
+        long,
+        value_name = "ID_HEX",
+        value_parser = parse_governance_proposal_id_v1
+    )]
     pub proposal_id: String,
     /// Sign, submit, and wait for this exact server-drafted enactment instruction.
     #[arg(long)]
@@ -513,7 +534,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let args = DeployMetaArgs {
             contract_address: Some(
-                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7".into(),
+                "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw".into(),
             ),
             contract_alias: None,
             approvers: Vec::new(),
@@ -523,7 +544,7 @@ mod tests {
         let value = &ctx.printed[0];
         assert_eq!(
             value.get("gov_contract_address").and_then(|v| v.as_str()),
-            Some("tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7")
+            Some("irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw")
         );
         assert!(value.get("gov_manifest_approvers").is_none());
     }
@@ -535,7 +556,7 @@ mod tests {
         let bob = sample_account_string("bob");
         let args = DeployMetaArgs {
             contract_address: Some(
-                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7".into(),
+                "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw".into(),
             ),
             contract_alias: None,
             approvers: vec![validator.clone(), format!("   {bob}   ")],
@@ -558,7 +579,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let args = DeployMetaArgs {
             contract_address: Some(
-                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7".into(),
+                "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw".into(),
             ),
             contract_alias: None,
             approvers: vec!["not-an-id".into()],
@@ -577,7 +598,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let args = DeployMetaArgs {
             contract_address: Some(
-                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7".into(),
+                "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw".into(),
             ),
             contract_alias: None,
             approvers: vec!["alice@invalid-domain".into()],
@@ -593,15 +614,33 @@ mod tests {
 
     #[test]
     fn finalize_body_shape() {
+        let proposal_id = "aa".repeat(32);
         let args = FinalizeArgs {
-            referendum_id: "ref-123".to_string(),
-            proposal_id: "0x".to_string() + &"aa".repeat(32),
+            referendum_id: proposal_id.clone(),
+            proposal_id: proposal_id.clone(),
         };
         let body = build_finalize_body(&args).expect("build finalize body");
         let s = norito::json::to_json(&body).expect("serialize body");
         let v: norito::json::Value = norito::json::from_str(&s).expect("roundtrip");
-        assert_eq!(v["referendum_id"].as_str(), Some("ref-123"));
-        assert_eq!(v["proposal_id"].as_str().unwrap().len(), 66);
+        assert_eq!(v["referendum_id"].as_str(), Some(proposal_id.as_str()));
+        assert_eq!(v["proposal_id"].as_str(), Some(proposal_id.as_str()));
+    }
+
+    #[test]
+    fn finalize_body_rejects_noncanonical_or_mismatched_ids() {
+        for args in [
+            FinalizeArgs {
+                referendum_id: "ref-123".to_owned(),
+                proposal_id: "aa".repeat(32),
+            },
+            FinalizeArgs {
+                referendum_id: "aa".repeat(32),
+                proposal_id: "bb".repeat(32),
+            },
+        ] {
+            let _error =
+                build_finalize_body(&args).expect_err("invalid finalization ids must fail locally");
+        }
     }
 
     #[test]

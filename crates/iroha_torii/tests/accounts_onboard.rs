@@ -146,9 +146,13 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
             .expect("default fee asset id");
     let domain = Domain::new(fee_domain).build(&authority_id);
     let authority = Account::new(authority_id.clone()).build(&authority_id);
-    let fee_definition = AssetDefinition::numeric(fee_asset_id.clone())
-        .with_name("XOR".to_owned())
-        .build(&authority_id);
+    let fee_definition = AssetDefinition::numeric(
+        fee_asset_id.clone(),
+        "XOR".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority_id);
     let fee_asset = Asset::new(
         AssetId::of(fee_asset_id.clone(), authority_id.clone()),
         Quantity::from(100_u32),

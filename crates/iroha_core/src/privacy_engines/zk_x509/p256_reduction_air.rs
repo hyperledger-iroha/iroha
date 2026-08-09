@@ -18,6 +18,7 @@ use super::p256_air::P256_SCALAR_MODULUS_BE_V1;
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 
 /// Stable descriptor for 256-bit-to-scalar canonical reduction.
+#[cfg(test)]
 pub(crate) const ZK_X509_P256_REDUCTION_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-reduction-air-v2-incompatible:input-u256:output-canonical-scalar:16xu16-little-endian:word=reduced+boolean-q-times-order:2pow256-less-than-2n:carry-and-borrow-boolean:all-word-result-difference-limbs-bit-ranged:wallet-low-s-strict-less-than-floor-order-half-plus1:fixed-16-row-topologies:reduction-numeric-fixed36-aux1-constraints122-degree4:low-s-numeric-fixed36-aux1-constraints77-degree3:verifier-preprocessed-one-hot-limb-selectors-and-all-limb-constants:fixed-schedule-derived-only-from-protocol-limb-count-and-native-domain:no-witness-fixed-input:first-last-boundaries:canonical-zero-padding:no-native-row-branch-on-lde:io-and-value-bus-binding=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
 
 /// Exact row count for one reduction.
@@ -26,6 +27,7 @@ pub(crate) const P256_REDUCTION_ROWS_V1: usize = 16;
 pub(crate) const P256_REDUCTION_BASE_WIDTH_V1: usize = 56;
 
 /// Inclusive low-s ceiling `floor(n/2)`.
+#[cfg(test)]
 pub(crate) const P256_LOW_S_MAXIMUM_BE_V1: [u8; 32] = [
     0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xde, 0x73, 0x7d, 0x56, 0xd3, 0x8b, 0xcf, 0x42, 0x79, 0xdc, 0xe5, 0x61, 0x7e, 0x31, 0x92, 0xa8,
@@ -101,6 +103,7 @@ const _: () = assert!(P256_REDUCTION_STARK_CONSTRAINT_DEGREE_V1 <= 4);
 const _: () = assert!(P256_LOW_S_STARK_CONSTRAINT_DEGREE_V1 <= 4);
 
 /// Verifier-fixed limb row.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ReductionFixedRowV1 {
     /// Little-endian 16-bit limb index.
@@ -108,6 +111,7 @@ pub(crate) struct P256ReductionFixedRowV1 {
 }
 
 /// Complete exact reduction trace.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct P256ReductionTraceV1 {
     /// Verifier-regenerated row topology.
@@ -116,6 +120,7 @@ pub(crate) struct P256ReductionTraceV1 {
     pub(crate) base: [[F; P256_REDUCTION_BASE_WIDTH_V1]; P256_REDUCTION_ROWS_V1],
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256ReductionTraceV1 {
     /// Overwrite every committed reduction row.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -151,6 +156,7 @@ impl P256ReductionTraceV1 {
 ///
 /// This is the narrow pointwise surface used by the aggregate value/byte
 /// bindings; it does not expose or reinterpret the internal carry witness.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_reduction_limb_cells_v1(
     trace: &P256ReductionTraceV1,
     limb: usize,
@@ -178,17 +184,20 @@ pub(crate) enum P256ReductionAirErrorV1 {
     #[error("zk-X509 P-256 reduction topology is invalid")]
     Topology,
     /// A claimed reduction or canonical comparison is false.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 reduction witness is invalid")]
     InvalidWitness,
     /// A local or transition polynomial identity is nonzero.
     #[error("zk-X509 P-256 reduction constraint failed")]
     Constraint,
     /// A bounded aggregate-column allocation failed.
+    #[cfg(test)]
     #[error("zk-X509 P-256 reduction aggregate allocation failed")]
     Allocation,
 }
 
 /// Exact fixed trace proving `s <= floor(n/2)`.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct P256LowSTraceV1 {
     /// Verifier-regenerated limb rows.
@@ -197,6 +206,7 @@ pub(crate) struct P256LowSTraceV1 {
     pub(crate) base: [[F; P256_LOW_S_BASE_WIDTH_V1]; P256_REDUCTION_ROWS_V1],
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256LowSTraceV1 {
     /// Overwrite every committed low-s comparison row.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -223,6 +233,7 @@ impl P256LowSTraceV1 {
 }
 
 /// Read the scalar cell constrained by one low-s comparison limb.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_low_s_limb_cell_v1(
     trace: &P256LowSTraceV1,
     limb: usize,
@@ -241,6 +252,7 @@ pub(crate) fn p256_low_s_opened_binding_cell_v1(base: &[F; P256_LOW_S_BASE_WIDTH
 }
 
 /// Build the exact wallet low-s comparison trace.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_p256_low_s_trace_v1(
     scalar_be: [u8; 32],
 ) -> Result<P256LowSTraceV1, P256ReductionAirErrorV1> {
@@ -272,6 +284,7 @@ pub(crate) fn build_p256_low_s_trace_v1(
 }
 
 /// Evaluate one exact low-s comparison row.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_p256_low_s_row_constraints_v1(
     fixed: P256ReductionFixedRowV1,
     base: &[F; P256_LOW_S_BASE_WIDTH_V1],
@@ -319,6 +332,7 @@ pub(crate) fn evaluate_p256_low_s_row_constraints_v1(
 }
 
 /// Build the canonical fixed trace for one arbitrary 256-bit word.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_p256_reduction_trace_v1(
     word_be: [u8; 32],
 ) -> Result<P256ReductionTraceV1, P256ReductionAirErrorV1> {
@@ -387,6 +401,7 @@ pub(crate) fn build_p256_reduction_trace_v1(
 }
 
 /// Evaluate one exact reduction row.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_p256_reduction_row_constraints_v1(
     fixed: P256ReductionFixedRowV1,
     base: &[F; P256_REDUCTION_BASE_WIDTH_V1],
@@ -465,6 +480,7 @@ pub(crate) fn evaluate_p256_reduction_row_constraints_v1(
 /// limb selectors, all scalar-modulus limbs, boundary selectors, and the sole
 /// canonical padding suffix. No witness row or value from a proof can select
 /// this topology.
+#[cfg(test)]
 pub(crate) fn compile_p256_reduction_stark_fixed_rows_v1(
     trace_size: usize,
 ) -> Result<Vec<[F; P256_REDUCTION_STARK_FIXED_WIDTH_V1]>, P256ReductionAirErrorV1> {
@@ -478,6 +494,7 @@ pub(crate) fn compile_p256_reduction_stark_fixed_rows_v1(
 ///
 /// This uses the same exact 16-row topology as reduction, but preprocesses the
 /// exclusive low-S bound instead of the scalar modulus.
+#[cfg(test)]
 pub(crate) fn compile_p256_low_s_stark_fixed_rows_v1(
     trace_size: usize,
 ) -> Result<Vec<[F; P256_LOW_S_STARK_FIXED_WIDTH_V1]>, P256ReductionAirErrorV1> {
@@ -554,13 +571,9 @@ impl P256ComparisonStarkFixedProviderV1 {
         row[STARK_ACTIVE] = F::ONE;
         Ok(row)
     }
-
-    /// Native row count.
-    pub(crate) const fn trace_size_v1(self) -> usize {
-        self.trace_size
-    }
 }
 
+#[cfg(test)]
 fn compile_p256_comparison_stark_fixed_rows_v1(
     limb_constants: [u16; LIMBS],
     trace_size: usize,
@@ -763,6 +776,7 @@ fn boolean_residue_v1(value: F) -> F {
     value.mul(value.sub(F::ONE))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn less_than_witness_v1(
     value: [u16; LIMBS],
     modulus: [u16; LIMBS],
@@ -784,6 +798,7 @@ fn less_than_witness_v1(
     Ok((difference, borrow))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn subtract_be_v1(mut left: [u8; 32], right: [u8; 32]) -> Option<[u8; 32]> {
     let mut borrow = 0_i16;
     for index in (0..32).rev() {
@@ -806,6 +821,7 @@ fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; LIMBS] {
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn limbs_le_to_bytes_be_v1(limbs: [u16; LIMBS]) -> [u8; 32] {
     let mut bytes = [0_u8; 32];
     for (limb, value) in limbs.into_iter().enumerate() {
@@ -816,6 +832,7 @@ fn limbs_le_to_bytes_be_v1(limbs: [u16; LIMBS]) -> [u8; 32] {
     bytes
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_bits_v1(target: &mut [F], value: u16) {
     for (bit, cell) in target.iter_mut().enumerate() {
         *cell = F(u64::from((value >> bit) & 1));

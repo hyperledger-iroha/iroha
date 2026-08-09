@@ -172,33 +172,30 @@ fn schema_encode_decode_roundtrip() {
 }
 
 #[test]
-fn production_schema_host_rejects_unknown_and_malformed_inputs_for_regular_and_direct_syscalls() {
+fn production_schema_host_rejects_unknown_and_malformed_inputs_for_canonical_syscalls() {
     let unknown_name: Name = "UnknownSchema".parse().expect("unknown schema name");
     let unknown_name_body = norito::to_bytes(&unknown_name).expect("encode unknown schema name");
     let unknown_json =
         Json::from_str_norito(r#"{"value":1}"#).expect("parse adversarial generic JSON");
     let unknown_json_body = norito::to_bytes(&unknown_json).expect("encode generic JSON");
 
-    for syscall in [
-        syscalls::SYSCALL_SCHEMA_ENCODE,
-        syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT,
-    ] {
-        let mut host = CoreHost::new(ALICE_ID.clone());
-        let mut vm = IVM::new(0);
-        load_metadata(&mut vm);
-        let schema_ptr =
-            preload_input(&mut vm, 0, &make_tlv(PointerType::Name, &unknown_name_body));
-        let json_ptr = preload_input(
-            &mut vm,
-            256,
-            &make_tlv(PointerType::Json, &unknown_json_body),
-        );
-        vm.set_register(10, schema_ptr);
-        vm.set_register(11, json_ptr);
-        assert_eq!(host.syscall(syscall, &mut vm), Err(VMError::NoritoInvalid));
-        assert_eq!(vm.register(10), schema_ptr);
-        assert_eq!(vm.register(11), json_ptr);
-    }
+    let mut host = CoreHost::new(ALICE_ID.clone());
+    let mut vm = IVM::new(0);
+    load_metadata(&mut vm);
+    let schema_ptr = preload_input(&mut vm, 0, &make_tlv(PointerType::Name, &unknown_name_body));
+    let json_ptr = preload_input(
+        &mut vm,
+        256,
+        &make_tlv(PointerType::Json, &unknown_json_body),
+    );
+    vm.set_register(10, schema_ptr);
+    vm.set_register(11, json_ptr);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_SCHEMA_ENCODE, &mut vm),
+        Err(VMError::NoritoInvalid)
+    );
+    assert_eq!(vm.register(10), schema_ptr);
+    assert_eq!(vm.register(11), json_ptr);
 
     let order_name: Name = "Order".parse().expect("known schema name");
     let order_name_body = norito::to_bytes(&order_name).expect("encode known schema name");
@@ -206,22 +203,19 @@ fn production_schema_host_rejects_unknown_and_malformed_inputs_for_regular_and_d
         (unknown_name_body.as_slice(), unknown_json_body.as_slice()),
         (order_name_body.as_slice(), unknown_json_body.as_slice()),
     ] {
-        for syscall in [
-            syscalls::SYSCALL_SCHEMA_DECODE,
-            syscalls::SYSCALL_SCHEMA_DECODE_DIRECT,
-        ] {
-            let mut host = CoreHost::new(ALICE_ID.clone());
-            let mut vm = IVM::new(0);
-            load_metadata(&mut vm);
-            let schema_ptr = preload_input(&mut vm, 0, &make_tlv(PointerType::Name, schema_body));
-            let bytes_ptr =
-                preload_input(&mut vm, 256, &make_tlv(PointerType::NoritoBytes, payload));
-            vm.set_register(10, schema_ptr);
-            vm.set_register(11, bytes_ptr);
-            assert_eq!(host.syscall(syscall, &mut vm), Err(VMError::NoritoInvalid));
-            assert_eq!(vm.register(10), schema_ptr);
-            assert_eq!(vm.register(11), bytes_ptr);
-        }
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        let mut vm = IVM::new(0);
+        load_metadata(&mut vm);
+        let schema_ptr = preload_input(&mut vm, 0, &make_tlv(PointerType::Name, schema_body));
+        let bytes_ptr = preload_input(&mut vm, 256, &make_tlv(PointerType::NoritoBytes, payload));
+        vm.set_register(10, schema_ptr);
+        vm.set_register(11, bytes_ptr);
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_SCHEMA_DECODE, &mut vm),
+            Err(VMError::NoritoInvalid)
+        );
+        assert_eq!(vm.register(10), schema_ptr);
+        assert_eq!(vm.register(11), bytes_ptr);
     }
 }
 

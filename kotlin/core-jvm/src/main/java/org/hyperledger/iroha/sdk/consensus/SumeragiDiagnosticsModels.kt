@@ -21,6 +21,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.decodeFromString
+import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 
 /** Maximum number of Native AMX participant-application rows in diagnostics. */
@@ -215,10 +216,11 @@ data class SumeragiNativeAmxParticipantApplication(
             requireU64(it, "applicationBlockHeight")
             require(it.signum() > 0) { "application block height must be positive" }
         }
-        if (state == SumeragiNativeAmxParticipantApplicationState.DURABLY_APPLIED) {
-            require(applicationBlockHeight != null) {
-                "durably applied Native AMX evidence requires an application block"
-            }
+        val requiresApplicationBlock =
+            state == SumeragiNativeAmxParticipantApplicationState.COMMITTED_EVIDENCE_PENDING ||
+                state == SumeragiNativeAmxParticipantApplicationState.DURABLY_APPLIED
+        require((applicationBlockHeight != null) == requiresApplicationBlock) {
+            "Native AMX participant state and application block identity disagree"
         }
 
         requireCanonicalNonzeroHash(laneIncarnation, "laneIncarnation")
@@ -285,6 +287,7 @@ enum class SumeragiAutonomousLaneExecutionStage {
 
 @Serializable
 enum class SumeragiAutonomousLaneExecutionStuckReason {
+    @SerialName("awaiting_executable_payload") AWAITING_EXECUTABLE_PAYLOAD,
     @SerialName("awaiting_payload_availability") AWAITING_PAYLOAD_AVAILABILITY,
     @SerialName("awaiting_lane_certification") AWAITING_LANE_CERTIFICATION,
     @SerialName("certified_bundle_unavailable") CERTIFIED_BUNDLE_UNAVAILABLE,
@@ -308,9 +311,12 @@ class SumeragiAutonomousLaneExecution(
     @Serializable(with = SumeragiU64Serializer::class)
     @SerialName("proposal_height") val proposalHeight: BigInteger,
     @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("proposal_view") val proposalView: BigInteger,
-    @SerialName("proposal_hash") val proposalHash: String,
-    @SerialName("descriptor_hash") val descriptorHash: String,
+    @SerialName("proposal_view") val proposalView: BigInteger? = null,
+    @SerialName("reservation_owner_hash") val reservationOwnerHash: String,
+    @SerialName("proposal_identity_hash") val proposalIdentityHash: String,
+    @SerialName("reservation_group_hash") val reservationGroupHash: String,
+    @SerialName("proposal_hash") val proposalHash: String? = null,
+    @SerialName("descriptor_hash") val descriptorHash: String? = null,
     @SerialName("executable_payload_hash") val executablePayloadHash: String? = null,
     @SerialName("source_bundle_hash") val sourceBundleHash: String? = null,
     @SerialName("merge_entry_hash") val mergeEntryHash: String? = null,
@@ -325,8 +331,9 @@ class SumeragiAutonomousLaneExecution(
 ) {
     init {
         require(laneId in 0..0xffff_ffffL)
-        listOf(dataspaceId, laneBlockHeight, laneBlockView, proposalHeight, proposalView)
+        listOf(dataspaceId, laneBlockHeight, laneBlockView, proposalHeight)
             .forEach { requireU64(it, "autonomous execution coordinate") }
+        proposalView?.let { requireU64(it, "autonomous proposal view") }
         require(laneBlockHeight.signum() > 0 && proposalHeight.signum() > 0)
         require(transactionCount in 1..4_096 && reservationCount in 0..4_096)
         require((applicationBlockHeight == null) == (applicationBlockHash == null))
@@ -334,16 +341,20 @@ class SumeragiAutonomousLaneExecution(
             requireU64(it, "applicationBlockHeight")
             require(it.signum() > 0)
         }
-        listOf(laneIncarnation, proposalHash, descriptorHash).forEach {
+        listOf(
+            laneIncarnation, reservationOwnerHash, proposalIdentityHash, reservationGroupHash,
+        ).forEach {
             requireCanonicalNonzeroHash(it, "autonomous execution hash")
         }
         listOfNotNull(
-            executablePayloadHash, sourceBundleHash, mergeEntryHash, applicationBlockHash,
+            proposalHash, descriptorHash, executablePayloadHash, sourceBundleHash,
+            mergeEntryHash, applicationBlockHash,
         ).forEach { requireCanonicalNonzeroHash(it, "autonomous execution optional hash") }
         val expectedReason = when (highestDurableStage) {
-            SumeragiAutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
-            SumeragiAutonomousLaneExecutionStage.EXECUTABLE_PAYLOAD_DURABLE,
-            -> SumeragiAutonomousLaneExecutionStuckReason.AWAITING_PAYLOAD_AVAILABILITY
+            SumeragiAutonomousLaneExecutionStage.RESERVATIONS_DURABLE ->
+                SumeragiAutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD
+            SumeragiAutonomousLaneExecutionStage.EXECUTABLE_PAYLOAD_DURABLE ->
+                SumeragiAutonomousLaneExecutionStuckReason.AWAITING_PAYLOAD_AVAILABILITY
             SumeragiAutonomousLaneExecutionStage.PAYLOAD_AVAILABILITY_CERTIFIED ->
                 SumeragiAutonomousLaneExecutionStuckReason.AWAITING_LANE_CERTIFICATION
             SumeragiAutonomousLaneExecutionStage.LANE_CERTIFIED ->
@@ -361,8 +372,19 @@ class SumeragiAutonomousLaneExecution(
                 SumeragiAutonomousLaneExecutionStuckReason.EVIDENCE_CONFLICT
         }
         require(stuckReason == expectedReason)
+        require((proposalHash == null) == (descriptorHash == null)) {
+            "Autonomous proposal and descriptor hashes must appear together"
+        }
         if (highestDurableStage != SumeragiAutonomousLaneExecutionStage.CONFLICT) {
             require(reservationCount == transactionCount)
+            require(
+                (highestDurableStage == SumeragiAutonomousLaneExecutionStage.RESERVATIONS_DURABLE) ==
+                    (proposalHash == null)
+            ) { "Autonomous finalized identity disagrees with durable stage" }
+            require(
+                highestDurableStage != SumeragiAutonomousLaneExecutionStage.RESERVATIONS_DURABLE ||
+                    proposalView == null
+            ) { "Autonomous proposal view disagrees with durable stage" }
             val hasPayload = executablePayloadHash != null
             val hasBundle = sourceBundleHash != null
             val hasMerge = mergeEntryHash != null
@@ -394,6 +416,9 @@ class SumeragiAutonomousLaneExecution(
             laneIncarnation == other.laneIncarnation &&
             laneBlockHeight == other.laneBlockHeight && laneBlockView == other.laneBlockView &&
             proposalHeight == other.proposalHeight && proposalView == other.proposalView &&
+            reservationOwnerHash == other.reservationOwnerHash &&
+            proposalIdentityHash == other.proposalIdentityHash &&
+            reservationGroupHash == other.reservationGroupHash &&
             proposalHash == other.proposalHash && descriptorHash == other.descriptorHash &&
             executablePayloadHash == other.executablePayloadHash &&
             sourceBundleHash == other.sourceBundleHash && mergeEntryHash == other.mergeEntryHash &&
@@ -404,7 +429,8 @@ class SumeragiAutonomousLaneExecution(
 
     override fun hashCode(): Int = listOf(
         laneId, dataspaceId, laneIncarnation, laneBlockHeight, laneBlockView,
-        proposalHeight, proposalView, proposalHash, descriptorHash, executablePayloadHash,
+        proposalHeight, proposalView, reservationOwnerHash, proposalIdentityHash,
+        reservationGroupHash, proposalHash, descriptorHash, executablePayloadHash,
         sourceBundleHash, mergeEntryHash, applicationBlockHeight, applicationBlockHash,
         reservationCount, transactionCount, highestDurableStage, stuckReason,
     ).hashCode()
@@ -419,14 +445,14 @@ class SumeragiAutonomousLaneExecutions(rows: List<SumeragiAutonomousLaneExecutio
             val leftKey = listOf(
                 BigInteger.valueOf(left.laneId), left.dataspaceId,
                 BigInteger(1, HashLiteral.decode(left.laneIncarnation)),
-                left.laneBlockHeight, left.laneBlockView, left.proposalHeight, left.proposalView,
-                BigInteger(1, HashLiteral.decode(left.proposalHash)),
+                left.laneBlockHeight, left.laneBlockView, left.proposalHeight,
+                BigInteger(1, HashLiteral.decode(left.proposalIdentityHash)),
             )
             val rightKey = listOf(
                 BigInteger.valueOf(right.laneId), right.dataspaceId,
                 BigInteger(1, HashLiteral.decode(right.laneIncarnation)),
-                right.laneBlockHeight, right.laneBlockView, right.proposalHeight, right.proposalView,
-                BigInteger(1, HashLiteral.decode(right.proposalHash)),
+                right.laneBlockHeight, right.laneBlockView, right.proposalHeight,
+                BigInteger(1, HashLiteral.decode(right.proposalIdentityHash)),
             )
             require(leftKey.zip(rightKey).firstOrNull { it.first != it.second }
                 ?.let { it.first < it.second } == true)
@@ -539,13 +565,20 @@ data class SumeragiDiagnosticsStatus(
     companion object {
         /** Parse one strict UTF-8 JSON diagnostics response. */
         @JvmStatic
-        fun parseJson(payload: ByteArray): SumeragiDiagnosticsStatus =
-            parseJson(payload.toString(Charsets.UTF_8))
+        fun parseJson(payload: ByteArray): SumeragiDiagnosticsStatus {
+            require(payload.isNotEmpty()) { "Sumeragi diagnostics response must not be empty" }
+            require(payload.size.toLong() <= SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES) {
+                "Sumeragi diagnostics response exceeds $SUMERAGI_DIAGNOSTICS_JSON_MAX_BYTES bytes"
+            }
+            return parseJson(SumeragiJsonPrimitives.decodeUtf8(payload, "Sumeragi diagnostics"))
+        }
 
         /** Parse one strict JSON diagnostics response. */
         @JvmStatic
-        fun parseJson(payload: String): SumeragiDiagnosticsStatus =
-            STRICT_SUMERAGI_DIAGNOSTICS_JSON.decodeFromString(payload)
+        fun parseJson(payload: String): SumeragiDiagnosticsStatus {
+            JsonParser.parse(payload)
+            return STRICT_SUMERAGI_DIAGNOSTICS_JSON.decodeFromString(payload)
+        }
     }
 }
 
@@ -590,7 +623,6 @@ internal object SumeragiU64Serializer : KSerializer<BigInteger> {
 
 private val CANONICAL_U64_TOKEN = Regex("0|[1-9][0-9]*")
 private val U64_MAX: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
-private val CANONICAL_HASH = Regex("^hash:[0-9A-F]{64}#[0-9A-F]{4}$")
 
 private fun validateNativeAmxDiagnosticsEvidence(
     settlements: List<JsonObject>,
@@ -635,17 +667,9 @@ private fun validateNativeAmxSettlementEvidence(
 }
 
 private fun requireU64(value: BigInteger, field: String): BigInteger {
-    require(value.signum() >= 0 && value <= U64_MAX) {
-        "$field must fit in an unsigned 64-bit integer"
-    }
-    return value
+    return SumeragiJsonPrimitives.requireU64(value, field)
 }
 
 private fun requireCanonicalNonzeroHash(value: String, field: String) {
-    require(CANONICAL_HASH.matches(value)) { "$field must be a canonical Iroha hash literal" }
-    val bytes = HashLiteral.decode(value)
-    require(bytes.any { it.toInt() != 0 }) { "$field must not be the zero hash" }
-    require((bytes[bytes.lastIndex].toInt() and 1) == 1) {
-        "$field has an invalid Iroha hash marker bit"
-    }
+    SumeragiJsonPrimitives.requireCanonicalNonzeroHash(value, field)
 }

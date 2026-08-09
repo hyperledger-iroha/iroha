@@ -22,6 +22,17 @@ from typing import Any, Iterable
 import unicodedata
 import zipfile
 
+try:
+    from scripts.android_device_lab_candidate_stage import (
+        CandidateStageContract,
+        validate_candidate_stage_manifest_v2 as _validate_candidate_stage_manifest_v2,
+    )
+except ModuleNotFoundError:  # Direct execution places scripts/ on sys.path.
+    from android_device_lab_candidate_stage import (
+        CandidateStageContract,
+        validate_candidate_stage_manifest_v2 as _validate_candidate_stage_manifest_v2,
+    )
+
 
 EXPECTED_DIRS: tuple[str, ...] = ("telemetry", "attestation", "queue", "logs")
 OPTIONAL_EVIDENCE_DIRS: tuple[str, ...] = ("evidence", "handoff", "wallet", "scenario")
@@ -84,11 +95,11 @@ KAGEMUSHA_STRONGBOX_CHALLENGE_FIELDS_V1: tuple[str, ...] = (
     "candidate_source_commit",
     "candidate_source_tree_sha256",
 )
-KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1 = "candidate-stage-manifest-v1.json"
-KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_SCHEMA_V1 = (
-    "iroha.kagemusha.android_candidate_stage_manifest.v1"
+KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V2 = "candidate-stage-manifest-v2.json"
+KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_SCHEMA_V2 = (
+    "iroha.kagemusha.android_candidate_stage_manifest.v2"
 )
-KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_FIELDS_V1: frozenset[str] = frozenset(
+KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_FIELDS_V2: frozenset[str] = frozenset(
     {
         "schema",
         "version",
@@ -98,6 +109,8 @@ KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_FIELDS_V1: frozenset[str] = frozenset(
         "candidate_record_sha256",
         "candidate_manifest_sha256",
         "candidate_validation_report_sha256",
+        "qualification_receipt_sha256",
+        "qualified_candidate_sha256",
         "scenario_inventory_sha256",
         "source_commit",
         "source_tree_sha256",
@@ -106,6 +119,42 @@ KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_FIELDS_V1: frozenset[str] = frozenset(
         "entry_count",
         "scenario_entry_count",
         "entries",
+    }
+)
+KAGEMUSHA_CANDIDATE_VALIDATION_REPORT_PATH_V2 = (
+    "evidence/candidate/candidate-validation-v2.json"
+)
+KAGEMUSHA_CANDIDATE_VALIDATION_REPORT_SCHEMA_V2 = (
+    "iroha.kagemusha.recursive_spend.candidate_validation.v2"
+)
+KAGEMUSHA_QUALIFICATION_RECEIPT_FILE_NAME_V4 = (
+    "recursive-step-two-qualification-v4.norito"
+)
+KAGEMUSHA_QUALIFIED_CANDIDATE_DOMAIN_V4 = (
+    b"iroha:kagemusha:recursive-spend-qualified-candidate:v4"
+)
+KAGEMUSHA_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V1 = "self-physical-footprint-v1"
+KAGEMUSHA_GENERATION_MEMORY_LIMIT_MAX_BYTES = 64 * 1024 * 1024 * 1024
+KAGEMUSHA_CANDIDATE_VALIDATION_FIELDS_V2: frozenset[str] = frozenset(
+    {
+        "schema",
+        "candidate_record_sha256",
+        "candidate_manifest_sha256",
+        "qualification_receipt_file_name",
+        "qualification_receipt_sha256",
+        "qualified_candidate_sha256",
+        "source_commit",
+        "source_tree_sha256",
+        "source_repo_dirty",
+        "generation",
+        "generation_memory_limit_bytes",
+        "generation_memory_enforcement_profile",
+        "bridge_abi_version",
+        "artifact_count",
+        "artifacts",
+        "topup_finality_roster_file_name",
+        "topup_finality_roster_size_bytes",
+        "topup_finality_roster_sha256",
     }
 )
 KAGEMUSHA_CANDIDATE_STAGE_ENTRY_FIELDS_V1: frozenset[str] = frozenset(
@@ -202,6 +251,26 @@ KAGEMUSHA_STATUS_FAILURE_VALUES = {
 }
 
 
+def derive_kagemusha_qualified_candidate_sha256_v4(
+    candidate_record_sha256: str,
+    qualification_receipt_sha256: str,
+) -> str:
+    """Derive the exact domain-separated qualified-candidate identity."""
+
+    for label, value in (
+        ("candidate record", candidate_record_sha256),
+        ("qualification receipt", qualification_receipt_sha256),
+    ):
+        if not isinstance(value, str) or not SHA256_HEX_RE.fullmatch(value) or value == "0" * 64:
+            raise ValueError(f"{label} digest must be non-zero lowercase SHA-256")
+    digest = hashlib.sha256()
+    digest.update(KAGEMUSHA_QUALIFIED_CANDIDATE_DOMAIN_V4)
+    digest.update(b"\0")
+    digest.update(bytes.fromhex(candidate_record_sha256))
+    digest.update(bytes.fromhex(qualification_receipt_sha256))
+    return digest.hexdigest()
+
+
 def derive_kagemusha_strongbox_challenge_v1(metadata: Mapping[str, Any]) -> bytes:
     """Derive the exact 32-byte candidate-stage StrongBox challenge."""
 
@@ -224,7 +293,7 @@ def derive_kagemusha_strongbox_challenge_v1(metadata: Mapping[str, Any]) -> byte
     return digest.digest()
 
 
-def validate_kagemusha_candidate_stage_manifest_v1(
+def validate_kagemusha_candidate_stage_manifest_v2(
     stage_root: Path,
     *,
     candidate_sha256: str,
@@ -233,295 +302,53 @@ def validate_kagemusha_candidate_stage_manifest_v1(
     source_tree_sha256: str,
     verify_entry_digests: bool = True,
 ) -> dict[str, Any]:
-    """Verify the canonical stage manifest and every one of its 44 files.
+    """Verify the canonical candidate-stage manifest and its exact inventory."""
 
-    ``verify_entry_digests=False`` is reserved for streaming consumers which
-    authenticate every byte against the returned catalog while copying it. The
-    default remains the full promotion-grade validation path.
-    """
-
-    def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"stage manifest repeats JSON key {key!r}")
-            result[key] = value
-        return result
-
-    def file_digest(path: Path, expected: os.stat_result, relative: str) -> str:
-        digest = hashlib.sha256()
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        try:
-            descriptor = os.open(path, flags)
-        except OSError as error:
-            raise ValueError(
-                f"candidate stage entry could not be securely opened: {relative}"
-            ) from error
-        try:
-            opened = os.fstat(descriptor)
-            identity = (expected.st_dev, expected.st_ino)
-            if (
-                not stat.S_ISREG(opened.st_mode)
-                or opened.st_nlink != 1
-                or (opened.st_dev, opened.st_ino) != identity
-                or opened.st_size != expected.st_size
-            ):
-                raise ValueError(
-                    f"candidate stage entry changed while opening: {relative}"
-                )
-            size = 0
-            while chunk := os.read(descriptor, 1024 * 1024):
-                size += len(chunk)
-                if size > expected.st_size:
-                    raise ValueError(
-                        f"candidate stage entry grew while hashing: {relative}"
-                    )
-                digest.update(chunk)
-            final_opened = os.fstat(descriptor)
-            final_path = path.lstat()
-            if (
-                (final_opened.st_dev, final_opened.st_ino) != identity
-                or (final_path.st_dev, final_path.st_ino) != identity
-                or not stat.S_ISREG(final_opened.st_mode)
-                or not stat.S_ISREG(final_path.st_mode)
-                or final_opened.st_nlink != 1
-                or final_path.st_nlink != 1
-                or stat.S_IMODE(final_opened.st_mode) != 0o600
-                or stat.S_IMODE(final_path.st_mode) != 0o600
-                or final_opened.st_uid != expected.st_uid
-                or final_path.st_uid != expected.st_uid
-                or size != expected.st_size
-                or final_opened.st_size != expected.st_size
-                or final_path.st_size != expected.st_size
-                or final_path.st_mtime_ns != expected.st_mtime_ns
-                or final_path.st_ctime_ns != expected.st_ctime_ns
-            ):
-                raise ValueError(
-                    f"candidate stage entry changed while hashing: {relative}"
-                )
-        finally:
-            os.close(descriptor)
-        return digest.hexdigest()
-
-    if not SHA256_HEX_RE.fullmatch(candidate_sha256) or candidate_sha256 == "0" * 64:
-        raise ValueError("candidate_sha256 must be non-zero lowercase SHA-256")
-    if not SHA256_HEX_RE.fullmatch(stage_sha256) or stage_sha256 == "0" * 64:
-        raise ValueError("stage_sha256 must be non-zero lowercase SHA-256")
-    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
-        raise ValueError("source_commit must be lowercase git hex")
-    if not SHA256_HEX_RE.fullmatch(source_tree_sha256) or source_tree_sha256 == "0" * 64:
-        raise ValueError("source_tree_sha256 must be non-zero lowercase SHA-256")
-
-    root = stage_root.resolve()
-    manifest_path = root / KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
-    manifest_stat = manifest_path.lstat()
-    if not stat.S_ISREG(manifest_stat.st_mode) or manifest_stat.st_nlink != 1:
-        raise ValueError("candidate stage manifest must be one singly-linked regular file")
-    if stat.S_IMODE(manifest_stat.st_mode) != 0o600:
-        raise ValueError("candidate stage manifest mode must be 0600")
-    maximum_manifest_bytes = 1024 * 1024
-    if manifest_stat.st_size <= 0 or manifest_stat.st_size > maximum_manifest_bytes:
-        raise ValueError("candidate stage manifest is empty or oversized")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(manifest_path, flags)
-    chunks: list[bytes] = []
-    try:
-        open_stat = os.fstat(descriptor)
-        expected_identity = (manifest_stat.st_dev, manifest_stat.st_ino)
-        if (
-            not stat.S_ISREG(open_stat.st_mode)
-            or open_stat.st_nlink != 1
-            or (open_stat.st_dev, open_stat.st_ino) != expected_identity
-            or open_stat.st_size != manifest_stat.st_size
-        ):
-            raise ValueError("candidate stage manifest changed while being opened")
-        size = 0
-        while True:
-            chunk = os.read(
-                descriptor,
-                min(1024 * 1024, maximum_manifest_bytes + 1 - size),
-            )
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > maximum_manifest_bytes:
-                raise ValueError("candidate stage manifest is empty or oversized")
-            chunks.append(chunk)
-        final_open_stat = os.fstat(descriptor)
-        final_path_stat = manifest_path.lstat()
-        if (
-            (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity
-            or (final_open_stat.st_dev, final_open_stat.st_ino) != expected_identity
-            or final_path_stat.st_size != size
-            or final_path_stat.st_mtime_ns != manifest_stat.st_mtime_ns
-            or final_path_stat.st_ctime_ns != manifest_stat.st_ctime_ns
-        ):
-            raise ValueError("candidate stage manifest changed while being read")
-    finally:
-        os.close(descriptor)
-    payload_bytes = b"".join(chunks)
-    if hashlib.sha256(payload_bytes).hexdigest() != stage_sha256:
-        raise ValueError("candidate stage manifest digest is not the stage identity")
-    try:
-        manifest = json.loads(
-            payload_bytes.decode("utf-8"),
-            object_pairs_hook=reject_duplicate_pairs,
-            parse_constant=lambda value: (_ for _ in ()).throw(
-                ValueError(f"non-finite JSON value {value}")
-            ),
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
-        raise ValueError(f"candidate stage manifest is not strict JSON: {error}") from error
-    if not isinstance(manifest, dict) or set(manifest) != KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_FIELDS_V1:
-        raise ValueError("candidate stage manifest must have the exact V1 fields")
-    canonical = (
-        json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        + "\n"
-    ).encode("utf-8")
-    if canonical != payload_bytes:
-        raise ValueError("candidate stage manifest bytes are not canonical JSON")
-    exact_top = {
-        "schema": KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_SCHEMA_V1,
-        "version": 1,
-        "stage_manifest_path": KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1,
-        "stage_manifest_mode": "0600",
-        "stage_manifest_size_bytes": len(payload_bytes),
-        "candidate_record_sha256": candidate_sha256,
-        "source_commit": source_commit,
-        "source_tree_sha256": source_tree_sha256,
-        "source_repo_dirty": False,
-        "entry_count": 44,
-        "scenario_entry_count": 33,
-    }
-    for key, expected in exact_top.items():
-        if manifest.get(key) != expected or isinstance(manifest.get(key), bool) != isinstance(expected, bool):
-            raise ValueError(f"candidate stage manifest {key} is not exact")
-
-    validator = manifest.get("validator")
-    if not isinstance(validator, dict) or set(validator) != KAGEMUSHA_CANDIDATE_STAGE_VALIDATOR_FIELDS_V1:
-        raise ValueError("candidate stage manifest validator must have the exact V1 fields")
-    validator_exact = {
-        "schema": KAGEMUSHA_CANDIDATE_STAGE_VALIDATOR_SCHEMA_V1,
-        "candidate_binary_name": "kagemusha_recursive_spend_v4_bundle",
-        "scenario_binary_name": "kagemusha_candidate_scenario_validator",
-        "locked": True,
-        "offline": True,
-        "isolated_target": True,
-        "build_jobs": 2,
-        "candidate_package": "iroha_core",
-        "scenario_package": "connect_norito_bridge",
-        "features": ["kagemusha-candidate-evidence-lab"],
-        "profile": "debug",
-    }
-    for key, expected in validator_exact.items():
-        if validator.get(key) != expected or isinstance(validator.get(key), bool) != isinstance(expected, bool):
-            raise ValueError(f"candidate stage manifest validator.{key} is not exact")
-    for key in (
-        "candidate_binary_sha256",
-        "scenario_binary_sha256",
-        "cargo_binary_sha256",
-        "rustc_binary_sha256",
-    ):
-        value = validator.get(key)
-        if not isinstance(value, str) or not SHA256_HEX_RE.fullmatch(value) or value == "0" * 64:
-            raise ValueError(f"candidate stage manifest validator.{key} is invalid")
-    for key in ("cargo_version_verbose", "rustc_version_verbose"):
-        value = validator.get(key)
-        if (
-            not isinstance(value, str)
-            or not value
-            or len(value.encode("utf-8")) > 64 * 1024
-            or not value.endswith("\n")
-            or "\x00" in value
-            or "\r" in value
-        ):
-            raise ValueError(f"candidate stage manifest validator.{key} is invalid")
-
-    expected_paths = {
-        "evidence/candidate/candidate-v4.norito",
-        "evidence/candidate/manifest-v4.norito",
-        "evidence/candidate/candidate-validation-v1.json",
-        *(
-            f"evidence/candidate/artifacts/{name}"
-            for name in KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4
+    contract = CandidateStageContract(
+        stage_manifest_path=KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V2,
+        stage_manifest_schema=KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_SCHEMA_V2,
+        stage_manifest_fields=KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_FIELDS_V2,
+        validation_report_path=KAGEMUSHA_CANDIDATE_VALIDATION_REPORT_PATH_V2,
+        validation_report_schema=KAGEMUSHA_CANDIDATE_VALIDATION_REPORT_SCHEMA_V2,
+        validation_report_fields=KAGEMUSHA_CANDIDATE_VALIDATION_FIELDS_V2,
+        qualification_receipt_file_name=KAGEMUSHA_QUALIFICATION_RECEIPT_FILE_NAME_V4,
+        generation_memory_enforcement_profile=(
+            KAGEMUSHA_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V1
         ),
-        *(f"scenario/{name}" for name in KAGEMUSHA_CANDIDATE_SCENARIO_FILES_V1),
-    }
-    parent_paths = sorted(
-        {PurePosixPath(relative).parent.as_posix() for relative in expected_paths},
-        key=lambda path: path.encode("utf-8"),
-    )
-    for relative_parent in parent_paths:
-        parent = root / relative_parent
-        parent_stat = parent.lstat()
-        if not stat.S_ISDIR(parent_stat.st_mode) or parent.resolve(strict=True) != parent:
-            raise ValueError(
-                f"candidate stage entry parent is not a real directory: {relative_parent}"
-            )
-    entries = manifest.get("entries")
-    if not isinstance(entries, list) or len(entries) != 44:
-        raise ValueError("candidate stage manifest entries must contain exactly 44 objects")
-    paths: list[str] = []
-    measured: dict[str, tuple[int, str]] = {}
-    for index, entry in enumerate(entries):
-        if not isinstance(entry, dict) or set(entry) != KAGEMUSHA_CANDIDATE_STAGE_ENTRY_FIELDS_V1:
-            raise ValueError(f"candidate stage manifest entries[{index}] has wrong fields")
-        relative = entry.get("path")
-        if not isinstance(relative, str) or relative not in expected_paths:
-            raise ValueError(f"candidate stage manifest entries[{index}] path is not canonical")
-        paths.append(relative)
-        if entry.get("mode") != "0600":
-            raise ValueError(f"candidate stage manifest entry {relative} mode must be 0600")
-        path = root / relative
-        current = path.lstat()
-        if not stat.S_ISREG(current.st_mode) or current.st_nlink != 1:
-            raise ValueError(f"candidate stage entry is not singly-linked regular: {relative}")
-        if stat.S_IMODE(current.st_mode) != 0o600:
-            raise ValueError(f"candidate stage entry mode is not 0600: {relative}")
-        size = entry.get("size_bytes")
-        digest = entry.get("sha256")
-        if not isinstance(size, int) or isinstance(size, bool) or size <= 0 or size != current.st_size:
-            raise ValueError(f"candidate stage entry size is not exact: {relative}")
-        if not isinstance(digest, str) or not SHA256_HEX_RE.fullmatch(digest):
-            raise ValueError(f"candidate stage entry digest is invalid: {relative}")
-        if verify_entry_digests and file_digest(path, current, relative) != digest:
-            raise ValueError(f"candidate stage entry digest is not exact: {relative}")
-        measured[relative] = (size, digest)
-    expected_order = sorted(expected_paths, key=lambda path: path.encode("utf-8"))
-    if paths != expected_order or set(paths) != expected_paths:
-        raise ValueError("candidate stage entries are not the exact byte-lexicographic inventory")
-
-    digest_bindings = {
-        "candidate_record_sha256": "evidence/candidate/candidate-v4.norito",
-        "candidate_manifest_sha256": "evidence/candidate/manifest-v4.norito",
-        "candidate_validation_report_sha256": (
-            "evidence/candidate/candidate-validation-v1.json"
+        generation_memory_limit_max_bytes=(
+            KAGEMUSHA_GENERATION_MEMORY_LIMIT_MAX_BYTES
         ),
-    }
-    for key, path in digest_bindings.items():
-        if manifest.get(key) != measured[path][1]:
-            raise ValueError(f"candidate stage manifest {key} does not bind {path}")
-    scenario_paths = sorted(
-        (f"scenario/{name}" for name in KAGEMUSHA_CANDIDATE_SCENARIO_FILES_V1),
-        key=lambda path: path.encode("utf-8"),
+        stage_entry_fields=KAGEMUSHA_CANDIDATE_STAGE_ENTRY_FIELDS_V1,
+        stage_validator_fields=KAGEMUSHA_CANDIDATE_STAGE_VALIDATOR_FIELDS_V1,
+        stage_validator_schema=KAGEMUSHA_CANDIDATE_STAGE_VALIDATOR_SCHEMA_V1,
+        scenario_inventory_domain=KAGEMUSHA_CANDIDATE_SCENARIO_INVENTORY_DOMAIN_V1,
+        scenario_files=KAGEMUSHA_CANDIDATE_SCENARIO_FILES_V1,
+        artifact_roles=KAGEMUSHA_CANDIDATE_ARTIFACT_ROLES_V4,
+        artifact_file_names=KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4,
+        max_json_bytes=MAX_ANDROID_DEVICE_LAB_JSON_BYTES,
+        derive_qualified_candidate_sha256=(
+            derive_kagemusha_qualified_candidate_sha256_v4
+        ),
     )
-    scenario_digest = hashlib.sha256()
-    scenario_digest.update(KAGEMUSHA_CANDIDATE_SCENARIO_INVENTORY_DOMAIN_V1)
-    scenario_digest.update(len(scenario_paths).to_bytes(4, "big"))
-    for relative in scenario_paths:
-        path_bytes = relative.encode("utf-8")
-        size, digest = measured[relative]
-        scenario_digest.update(len(path_bytes).to_bytes(4, "big"))
-        scenario_digest.update(path_bytes)
-        scenario_digest.update(size.to_bytes(8, "big"))
-        scenario_digest.update(bytes.fromhex(digest))
-    if manifest.get("scenario_inventory_sha256") != scenario_digest.hexdigest():
-        raise ValueError("candidate stage manifest scenario_inventory_sha256 is not exact")
-    return manifest
+    return _validate_candidate_stage_manifest_v2(
+        stage_root,
+        contract=contract,
+        candidate_sha256=candidate_sha256,
+        stage_sha256=stage_sha256,
+        source_commit=source_commit,
+        source_tree_sha256=source_tree_sha256,
+        verify_entry_digests=verify_entry_digests,
+    )
 
 
 def extract_apk_signing_certificate_sha256(apk_path: Path) -> str:
-    """Verify APK v2/v3 signatures and return the sole signer DER digest."""
+    """Verify APK v2/v3 signatures and return the sole signer DER digest.
+
+    The Android SDK ``apksigner`` launcher is a mutable shell wrapper around an
+    ambient Java runtime and a sibling jar. Neither dependency is identified by
+    the launcher's digest. The authority contract therefore admits the Java
+    executable and ``apksigner.jar`` themselves and invokes that exact pair.
+    """
 
     signing_scheme_ids = {0x7109871A, 0xF05368C0, 0x1B93AD61}
 
@@ -559,16 +386,27 @@ def extract_apk_signing_certificate_sha256(apk_path: Path) -> str:
     file_stat = path.stat()
     if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size < 64:
         raise ValueError("APK must be one non-empty regular file")
-    apksigner, apksigner_sha256 = _configured_authority_tool("apksigner")
-    checked_path, _, tool_errors = _read_pinned_authority_file(
-        apksigner,
-        apksigner_sha256,
-        label="configured apksigner",
+    java, java_sha256 = _configured_authority_tool("java")
+    apksigner_jar, apksigner_jar_sha256 = _configured_authority_tool(
+        "apksigner_jar"
+    )
+    checked_java, _, java_errors = _read_pinned_authority_file(
+        java,
+        java_sha256,
+        label="configured Java executable",
         maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
         executable=True,
     )
-    if checked_path is None or tool_errors:
-        raise ValueError("configured apksigner no longer matches its authority pin")
+    checked_jar, _, jar_errors = _read_pinned_authority_file(
+        apksigner_jar,
+        apksigner_jar_sha256,
+        label="configured apksigner.jar",
+        maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
+    )
+    if checked_java is None or checked_jar is None or java_errors or jar_errors:
+        raise ValueError(
+            "configured Java/apksigner.jar no longer matches its authority pin"
+        )
     verifier_env = {
         "HOME": "/var/empty",
         "LANG": "C",
@@ -576,21 +414,35 @@ def extract_apk_signing_certificate_sha256(apk_path: Path) -> str:
         "PATH": "/usr/bin:/bin",
     }
     verified = subprocess.run(
-        [os.fspath(apksigner), "verify", "--verbose", "--print-certs", str(path)],
+        [
+            os.fspath(java),
+            "-jar",
+            os.fspath(apksigner_jar),
+            "verify",
+            "--verbose",
+            "--print-certs",
+            str(path),
+        ],
         capture_output=True,
         text=True,
         env=verifier_env,
         check=False,
     )
-    checked_path, _, tool_errors = _read_pinned_authority_file(
-        apksigner,
-        apksigner_sha256,
-        label="configured apksigner",
+    checked_java, _, java_errors = _read_pinned_authority_file(
+        java,
+        java_sha256,
+        label="configured Java executable",
         maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
         executable=True,
     )
-    if checked_path is None or tool_errors:
-        raise ValueError("configured apksigner changed during verification")
+    checked_jar, _, jar_errors = _read_pinned_authority_file(
+        apksigner_jar,
+        apksigner_jar_sha256,
+        label="configured apksigner.jar",
+        maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
+    )
+    if checked_java is None or checked_jar is None or java_errors or jar_errors:
+        raise ValueError("configured Java/apksigner.jar changed during verification")
     if verified.returncode != 0:
         raise ValueError("apksigner cryptographic verification failed")
     verifier_digests = re.findall(
@@ -867,8 +719,10 @@ def _strict_json_object_bytes(payload: bytes, label: str) -> dict[str, Any]:
 
 def configure_android_evidence_authority(
     *,
-    apksigner: str | os.PathLike[str],
-    apksigner_sha256: str,
+    java: str | os.PathLike[str],
+    java_sha256: str,
+    apksigner_jar: str | os.PathLike[str],
+    apksigner_jar_sha256: str,
     openssl: str | os.PathLike[str],
     openssl_sha256: str,
     attestation_trust_roots: Iterable[str | os.PathLike[str]],
@@ -881,14 +735,21 @@ def configure_android_evidence_authority(
     global _ANDROID_EVIDENCE_AUTHORITY
     _ANDROID_EVIDENCE_AUTHORITY = None
     errors: list[str] = []
-    apk_path, _, apk_errors = _read_pinned_authority_file(
-        apksigner,
-        apksigner_sha256,
-        label="--apksigner",
+    java_path, _, java_errors = _read_pinned_authority_file(
+        java,
+        java_sha256,
+        label="--java",
         maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
         executable=True,
     )
-    errors.extend(apk_errors)
+    errors.extend(java_errors)
+    apksigner_jar_path, _, apksigner_jar_errors = _read_pinned_authority_file(
+        apksigner_jar,
+        apksigner_jar_sha256,
+        label="--apksigner-jar",
+        maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
+    )
+    errors.extend(apksigner_jar_errors)
     openssl_path, _, openssl_errors = _read_pinned_authority_file(
         openssl,
         openssl_sha256,
@@ -956,12 +817,17 @@ def configure_android_evidence_authority(
 
     if errors:
         return errors
-    assert apk_path is not None
+    assert java_path is not None
+    assert apksigner_jar_path is not None
     assert openssl_path is not None
     assert status_path is not None
     assert revocation_status is not None
     _ANDROID_EVIDENCE_AUTHORITY = {
-        "apksigner": {"path": apk_path, "sha256": apksigner_sha256},
+        "java": {"path": java_path, "sha256": java_sha256},
+        "apksigner_jar": {
+            "path": apksigner_jar_path,
+            "sha256": apksigner_jar_sha256,
+        },
         "openssl": {"path": openssl_path, "sha256": openssl_sha256},
         "attestation_trust_roots": tuple(root_records),
         "attestation_revocation_status": {
@@ -979,8 +845,10 @@ def _configure_android_evidence_authority_from_args(
     """Forward one complete CLI authority request to the public configurator."""
 
     return configure_android_evidence_authority(
-        apksigner=args.apksigner,
-        apksigner_sha256=args.apksigner_sha256,
+        java=args.java,
+        java_sha256=args.java_sha256,
+        apksigner_jar=args.apksigner_jar,
+        apksigner_jar_sha256=args.apksigner_jar_sha256,
         openssl=args.openssl,
         openssl_sha256=args.openssl_sha256,
         attestation_trust_roots=args.android_attestation_trust_root or [],
@@ -1001,7 +869,8 @@ def android_evidence_authority_projection() -> dict[str, Any] | None:
     if authority is None:
         return None
     return {
-        "apksigner_sha256": authority["apksigner"]["sha256"],
+        "java_sha256": authority["java"]["sha256"],
+        "apksigner_jar_sha256": authority["apksigner_jar"]["sha256"],
         "openssl_sha256": authority["openssl"]["sha256"],
         "attestation_trust_root_sha256": sorted(
             root["sha256"] for root in authority["attestation_trust_roots"]
@@ -2360,7 +2229,7 @@ def _summary_release_kagemusha(
     for path_field, _ in KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS:
         root = KAGEMUSHA_SUMMARY_RELEASE_ARTIFACT_ROOTS[path_field]
         if path_field == "candidate_stage_manifest_path":
-            if kagemusha.get(path_field) != KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1:
+            if kagemusha.get(path_field) != KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V2:
                 return None
         elif not _summary_release_artifact_path_under(kagemusha.get(path_field), root):
             return None
@@ -6940,14 +6809,14 @@ def validate_candidate_binding_v2(
                 )
 
     stage_path = binding.get("candidate_stage_manifest_path")
-    if stage_path != KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1:
+    if stage_path != KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V2:
         errors.append(
             "candidate binding candidate_stage_manifest_path must be "
-            f"{KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1}"
+            f"{KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V2}"
         )
     else:
         try:
-            validate_kagemusha_candidate_stage_manifest_v1(
+            validate_kagemusha_candidate_stage_manifest_v2(
                 slot_path,
                 candidate_sha256=str(binding.get("candidate_record_sha256")),
                 stage_sha256=str(binding.get("candidate_stage_manifest_sha256")),
@@ -8827,14 +8696,24 @@ def main(argv: list[str] | None = None) -> int:
         help="PEM public key for a trusted Android lab evidence signer.",
     )
     parser.add_argument(
-        "--apksigner",
+        "--java",
         default=None,
-        help="Canonical absolute Android apksigner executable path.",
+        help="Canonical absolute Java executable used for APK verification.",
     )
     parser.add_argument(
-        "--apksigner-sha256",
+        "--java-sha256",
         default=None,
-        help="Pinned lowercase SHA-256 of --apksigner.",
+        help="Pinned lowercase SHA-256 of --java.",
+    )
+    parser.add_argument(
+        "--apksigner-jar",
+        default=None,
+        help="Canonical absolute Android build-tools apksigner.jar path.",
+    )
+    parser.add_argument(
+        "--apksigner-jar-sha256",
+        default=None,
+        help="Pinned lowercase SHA-256 of --apksigner-jar.",
     )
     parser.add_argument(
         "--openssl",
@@ -8928,8 +8807,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
         authority_values = (
-            args.apksigner,
-            args.apksigner_sha256,
+            args.java,
+            args.java_sha256,
+            args.apksigner_jar,
+            args.apksigner_jar_sha256,
             args.openssl,
             args.openssl_sha256,
             args.android_attestation_revocation_status,
@@ -9013,8 +8894,10 @@ def main(argv: list[str] | None = None) -> int:
         or args.require_kagemusha_standard_matrix
     )
     authority_values = (
-        args.apksigner,
-        args.apksigner_sha256,
+        args.java,
+        args.java_sha256,
+        args.apksigner_jar,
+        args.apksigner_jar_sha256,
         args.openssl,
         args.openssl_sha256,
         args.android_attestation_revocation_status,
@@ -9027,7 +8910,7 @@ def main(argv: list[str] | None = None) -> int:
     if any(value is not None for value in authority_values) or any(authority_lists):
         if any(value is None for value in authority_values):
             print(
-                "[device-lab] all apksigner, openssl, and attestation revocation path/digest pairs are required",
+                "[device-lab] all Java, apksigner.jar, openssl, and attestation revocation path/digest pairs are required",
                 file=sys.stderr,
             )
             return 1

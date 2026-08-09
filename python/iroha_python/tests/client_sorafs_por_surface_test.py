@@ -4,7 +4,9 @@ import ast
 from pathlib import Path
 
 import iroha_python
+import pytest
 from iroha_python import ToriiClient
+from iroha_python.client import _build_sorafs_por_export_params
 
 
 CLIENT_SOURCE = Path(__file__).resolve().parents[1] / "src" / "iroha_python" / "client.py"
@@ -53,3 +55,21 @@ def test_live_por_methods_remain_available() -> None:
     ):
         assert method_name in methods
         assert hasattr(ToriiClient, method_name)
+
+
+def test_por_export_epoch_bounds_are_an_exact_pair() -> None:
+    """A client must reject a half-specified range before sending it."""
+
+    with pytest.raises(ValueError, match="must be supplied together"):
+        _build_sorafs_por_export_params(41, None, None, None, None)
+    with pytest.raises(ValueError, match="must be supplied together"):
+        _build_sorafs_por_export_params(None, 43, None, None, None)
+
+    params = _build_sorafs_por_export_params(41, 43, 9, 16_384, "AA")
+    assert params == {
+        "start_epoch": 41,
+        "end_epoch": 43,
+        "limit": 9,
+        "max_bytes": 16_384,
+        "cursor": "AA",
+    }

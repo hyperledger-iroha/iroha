@@ -370,8 +370,10 @@ mod tests {
             opaque_ids: Vec::new(),
         };
 
-        let definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("valid asset name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "rose".parse().expect("valid asset name"),
+        );
         let asset_definition = AssetDefinition {
             id: definition_id.clone(),
             name: "Rose".to_owned(),
@@ -382,6 +384,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
+            owning_domain: Some(domain_id.clone()),
             owned_by: account_id.clone(),
             total_quantity: Quantity::from(10_u32),
             confidential_policy: AssetConfidentialPolicy::default(),
@@ -435,8 +438,10 @@ mod tests {
             opaque_ids: Vec::new(),
         };
 
-        let definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("valid asset name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "rose".parse().expect("valid asset name"),
+        );
         let asset_definition = AssetDefinition {
             id: definition_id.clone(),
             name: "Rose".to_owned(),
@@ -447,6 +452,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
+            owning_domain: Some(domain_id.clone()),
             owned_by: missing_owner,
             total_quantity: Quantity::from(5_u32),
             confidential_policy: AssetConfidentialPolicy::default(),
@@ -523,8 +529,10 @@ mod tests {
             opaque_ids: Vec::new(),
         };
 
-        let definition_id =
-            AssetDefinitionId::new(business_domain.clone(), "equity".parse().expect("name"));
+        let definition_id = AssetDefinitionId::derive_from_components(
+            business_domain.clone(),
+            "equity".parse().expect("name"),
+        );
         let definition = AssetDefinition {
             id: definition_id,
             name: "Equity".to_owned(),
@@ -535,6 +543,7 @@ mod tests {
             logo: None,
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
+            owning_domain: Some(business_domain.clone()),
             owned_by: owner_account_id,
             total_quantity: Quantity::zero(),
             confidential_policy: AssetConfidentialPolicy::default(),

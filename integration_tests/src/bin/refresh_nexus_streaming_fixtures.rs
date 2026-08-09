@@ -524,7 +524,7 @@ fn instruction_fixtures() -> Result<Vec<InstructionFixture<'static>>, Box<dyn Er
 fn fixture_asset_id() -> Result<AssetId, Box<dyn Error>> {
     let public_key = FIXTURE_PUBLIC_KEY.parse()?;
     let account = AccountId::new(public_key);
-    let definition = AssetDefinitionId::new(
+    let definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "rose".parse()?,
     );

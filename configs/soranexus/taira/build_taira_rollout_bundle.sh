@@ -12,6 +12,20 @@ IROHAD_RELEASE_FEATURES="embedded-soracloud-runtime,zk-stark"
 PRIVACY_RELEASE_EVIDENCE_FEATURE="privacy-release-evidence"
 PRIVACY_RELEASE_RUNNER_PACKAGE="iroha_test_network"
 PRIVACY_RELEASE_RUNNER_BIN="taira_privacy_release_runner"
+BOOTLE_LANTERN_BROKER_BIN="taira_bootle_lantern_broker"
+KAGAMI_BIN="kagami"
+PRIVACY_BOOTSTRAP_PLAN_TEMPLATE="${SCRIPT_DIR}/privacy_bootstrap_plan.json"
+PRIVACY_BOOTSTRAP_CONFIG_TEMPLATE="${SCRIPT_DIR}/config.toml"
+PRIVACY_BOOTSTRAP_GENESIS_TEMPLATE="${SCRIPT_DIR}/genesis.json"
+PRIVACY_BOOTSTRAP_VALIDATOR="${SCRIPT_DIR}/validate_privacy_bootstrap.py"
+TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR="${TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR:-}"
+PRIVACY_BOOTSTRAP_PLAN="$PRIVACY_BOOTSTRAP_PLAN_TEMPLATE"
+PRIVACY_BOOTSTRAP_CONFIG="$PRIVACY_BOOTSTRAP_CONFIG_TEMPLATE"
+PRIVACY_BOOTSTRAP_GENESIS="$PRIVACY_BOOTSTRAP_GENESIS_TEMPLATE"
+PRIVACY_BOOTSTRAP_BROKER_PUBLIC=""
+privacy_release_input_snapshot_dir=""
+privacy_composer_tmp_dir=""
+privacy_evidence_tmp_dir=""
 PRIVACY_EXACT12_MATRIX="${REPO_ROOT}/fixtures/privacy/exact12_v1.tsv"
 PRIVACY_EXPECTATIONS_NORITO="${REPO_ROOT}/fixtures/privacy/native_release_expectations_v1.norito"
 PRIVACY_EXPECTATIONS_JSON="${REPO_ROOT}/fixtures/privacy/native_release_expectations_v1.json"
@@ -20,14 +34,6 @@ PRIVACY_X509_RESOURCE_JSON="${REPO_ROOT}/fixtures/privacy/zk_x509_native_resourc
 WORKSPACE_SOURCE_MANIFEST_SCRIPT="${REPO_ROOT}/scripts/compute_workspace_source_manifest.py"
 TAIRA_RELEASE_AUTHORITY_SCRIPT="${REPO_ROOT}/scripts/taira_release_authority.py"
 RELEASE_ARTIFACT_CONTRACT_SCRIPT="${REPO_ROOT}/scripts/release_artifact_contract.py"
-RELEASE_MANIFEST_GENERATOR="${REPO_ROOT}/scripts/generate_release_manifest.py"
-RELEASE_MANIFEST_SIGNING_HELPER="${REPO_ROOT}/scripts/release_manifest_signing.py"
-RELEASE_CHECKSUM_WRITER="${REPO_ROOT}/scripts/write_release_sha256sums.py"
-TAIRA_RELEASE_EXTERNAL_SIGNER_PATH="${TAIRA_RELEASE_EXTERNAL_SIGNER_PATH:-}"
-TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH="${TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH:-}"
-TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT="${TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT:-}"
-TAIRA_RELEASE_MANIFEST_VERIFIER_PATH="${TAIRA_RELEASE_MANIFEST_VERIFIER_PATH:-}"
-TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256="${TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256:-}"
 
 usage() {
   cat <<'EOF'
@@ -36,7 +42,7 @@ Usage: build_taira_rollout_bundle.sh [--output-dir PATH] [--profile debug|releas
                                      [--skip-local-regressions]
                                      [--skip-router-regression]
 
-Build a deterministic public-Taira rollout bundle from the current `../iroha`
+Build a deterministic unsigned public-Taira rollout bundle from the current `../iroha`
 checkout. By default the script refuses to package a dirty worktree so the
 result can be tied to one exact git revision. It also runs the focused
 `iroha_core` SoraSwap deploy-route router regression and three-hop nested
@@ -49,6 +55,7 @@ dirty source tree, and supplies reviewed build provenance to this script.
 
 The bundle contains:
   - `irohad` and `iroha` from `target/<profile>/`
+  - the peer-1-only native `taira_bootle_lantern_broker`
   - `sorafs_manifest_builder` and `sorafs_tx_stdin_builder` from `target/<profile>/`
   - the feature-separated `taira_privacy_release_runner`
   - authoritative native-privacy receipt, command-manifest, stage-artifact,
@@ -72,16 +79,23 @@ runner alone is built with `privacy-release-evidence`. The canonical workspace
 source manifest is checked before build, after build/evidence, and immediately
 before archiving so a pre-build report cannot masquerade as release evidence.
 
-Release builds also require these externally provisioned authority inputs:
-  TAIRA_RELEASE_EXTERNAL_SIGNER_PATH
-  TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH
-  TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT
-  TAIRA_RELEASE_MANIFEST_VERIFIER_PATH
-  TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256
+This builder never receives a release signer, signing public key, trusted
+fingerprint, or native manifest verifier. Use
+`scripts/finalize_taira_rollout_authority.py` after this command completes to
+authenticate and sign the immutable archive in a separate process which never
+invokes Cargo or a source-built executable.
 
-The signer, public key, and independently reviewed native verifier must be
-absolute non-symlink regular files outside this checkout. The private signing
-key is never accepted by this script.
+`TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR` must be an absolute canonical
+owner-private staging directory containing exactly the four secret-free files
+copied from the protected release input before this builder starts by
+`kagami privacy-bootstrap render-taira-release-v1`:
+  privacy_bootstrap_plan.json
+  config.toml
+  genesis.json
+  bootle_lantern_broker_public.json
+The staging directory is snapshotted again and the files are independently
+recomposed with the freshly built native Kagami binary before they can enter
+the bundle. Never pass the protected source input path to this process.
 EOF
 }
 
@@ -145,61 +159,6 @@ if [[ "$PROFILE" == "release" && $SKIP_LOCAL_REGRESSIONS -eq 1 ]]; then
   exit 1
 fi
 
-require_external_release_authority_file() {
-  local label="$1"
-  local path="$2"
-  if [[ -z "$path" || "$path" != /* ]]; then
-    echo "$label must be an explicit absolute path" >&2
-    exit 1
-  fi
-  if [[ ! -f "$path" || -L "$path" ]]; then
-    echo "$label must be a non-symlink regular file" >&2
-    exit 1
-  fi
-  local canonical_path
-  local canonical_repo_root
-  canonical_path="$(
-    python3 -S -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$path"
-  )"
-  canonical_repo_root="$(
-    python3 -S -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$REPO_ROOT"
-  )"
-  if [[ "$canonical_path" != "$path" ]]; then
-    echo "$label must use its canonical physical path without symlink or parent aliases" >&2
-    exit 1
-  fi
-  if [[ "$canonical_path" == "$canonical_repo_root" || "$canonical_path" == "$canonical_repo_root/"* ]]; then
-    echo "$label must be provisioned outside the Iroha checkout" >&2
-    exit 1
-  fi
-}
-
-if [[ "$PROFILE" == "release" ]]; then
-  require_external_release_authority_file \
-    "Taira release external signer" \
-    "$TAIRA_RELEASE_EXTERNAL_SIGNER_PATH"
-  require_external_release_authority_file \
-    "Taira release raw Ed25519 public key" \
-    "$TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH"
-  require_external_release_authority_file \
-    "Taira pinned native release-manifest verifier" \
-    "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH"
-  require_canonical_release_digest() {
-    local label="$1"
-    local digest="$2"
-    if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
-      echo "$label must be exactly 64 lowercase hexadecimal characters" >&2
-      exit 1
-    fi
-  }
-  require_canonical_release_digest \
-    "Taira trusted release signing fingerprint" \
-    "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT"
-  require_canonical_release_digest \
-    "Taira trusted native release-manifest verifier SHA-256" \
-    "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
-fi
-
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "Taira privacy release evidence must be built natively on Linux" >&2
   exit 1
@@ -208,7 +167,7 @@ case "$(uname -m)" in
   aarch64)
     ;;
   *)
-    echo "Taira first-release authority requires native Linux aarch64" >&2
+    echo "Taira first-release archive requires native Linux aarch64" >&2
     exit 1
     ;;
 esac
@@ -217,7 +176,242 @@ if ! command -v readelf >/dev/null 2>&1; then
   exit 1
 fi
 
-python3 - "${SCRIPT_DIR}/config.toml" <<'PY'
+cleanup_taira_privacy_temp_dirs() {
+  local path
+  for path in \
+    "${privacy_release_input_snapshot_dir:-}" \
+    "${privacy_composer_tmp_dir:-}" \
+    "${privacy_evidence_tmp_dir:-}"; do
+    if [[ -n "$path" && -d "$path" \
+      && "$path" == "${TMPDIR:-/tmp}/taira-privacy-"* ]]; then
+      rm -rf -- "$path"
+    fi
+  done
+}
+trap cleanup_taira_privacy_temp_dirs EXIT
+
+if [[ "$PROFILE" == "release" ]]; then
+  if [[ -z "$TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR" \
+    || "$TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR" != /* \
+    || ! -d "$TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR" \
+    || -L "$TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR" ]]; then
+    echo "TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR must be an absolute non-symlink directory" >&2
+    exit 1
+  fi
+  canonical_privacy_release_input_dir="$(
+    cd "$TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR" && pwd -P
+  )"
+  canonical_repo_root="$(cd "$REPO_ROOT" && pwd -P)"
+  if [[ "$canonical_privacy_release_input_dir" != "$TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR" ]]; then
+    echo "TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR must use its canonical physical path" >&2
+    exit 1
+  fi
+  if [[ "$canonical_privacy_release_input_dir" == "$canonical_repo_root" \
+    || "$canonical_privacy_release_input_dir" == "$canonical_repo_root/"* ]]; then
+    echo "TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR must be staged outside the Iroha checkout" >&2
+    exit 1
+  fi
+  python3 -I -S - "$canonical_privacy_release_input_dir" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+
+info = os.lstat(sys.argv[1])
+if (
+    not stat.S_ISDIR(info.st_mode)
+    or stat.S_ISLNK(info.st_mode)
+    or info.st_uid != os.getuid()
+    or info.st_gid != os.getgid()
+    or stat.S_IMODE(info.st_mode) != 0o700
+):
+    raise SystemExit(
+        "privacy release input snapshot must be owner-held at exact mode 0700"
+    )
+PY
+
+  privacy_release_input_snapshot_dir="$(
+    mktemp -d "${TMPDIR:-/tmp}/taira-privacy-release-input.XXXXXX"
+  )"
+  chmod 0700 "$privacy_release_input_snapshot_dir"
+  python3 -I -S - \
+    "$canonical_privacy_release_input_dir" \
+    "$privacy_release_input_snapshot_dir" <<'PY'
+import os
+import stat
+import sys
+
+source_path, destination_path = sys.argv[1:]
+expected = {
+    "bootle_lantern_broker_public.json": 4 * 1024 * 1024,
+    "config.toml": 8 * 1024 * 1024,
+    "genesis.json": 16 * 1024 * 1024,
+    "privacy_bootstrap_plan.json": 8 * 1024 * 1024,
+}
+flags = os.O_RDONLY | os.O_CLOEXEC
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+directory_flags = flags | os.O_DIRECTORY
+source_before = os.stat(source_path, follow_symlinks=False)
+source_fd = os.open(source_path, directory_flags)
+destination_fd = os.open(destination_path, directory_flags)
+
+
+def directory_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_nlink,
+        info.st_uid,
+        info.st_gid,
+    )
+
+
+def file_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_nlink,
+        info.st_uid,
+        info.st_gid,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+try:
+    if directory_identity(source_before) != directory_identity(os.fstat(source_fd)):
+        raise SystemExit("privacy release input directory changed while it was opened")
+    actual = sorted(os.listdir(source_fd))
+    if actual != sorted(expected):
+        raise SystemExit(
+            "privacy release input directory must contain exactly "
+            f"{sorted(expected)}, got {actual}"
+        )
+    if os.listdir(destination_fd):
+        raise SystemExit("privacy release snapshot directory was not created empty")
+    captured = {}
+    captured_destination = {}
+    for name, limit in expected.items():
+        before = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_uid != os.getuid()
+            or before.st_gid != os.getgid()
+            or stat.S_IMODE(before.st_mode) != 0o600
+        ):
+            raise SystemExit(
+                f"privacy release input snapshot must be owner-held, single-link, and exact mode 0600: {name}"
+            )
+        if before.st_size <= 0 or before.st_size > limit:
+            raise SystemExit(
+                f"privacy release input {name} must contain 1..{limit} bytes"
+            )
+        input_fd = os.open(name, flags, dir_fd=source_fd)
+        try:
+            opened = os.fstat(input_fd)
+            if file_identity(before) != file_identity(opened):
+                raise SystemExit(f"privacy release input changed while opening: {name}")
+            chunks: list[bytes] = []
+            remaining = limit + 1
+            while remaining:
+                chunk = os.read(input_fd, min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            payload = b"".join(chunks)
+            after = os.fstat(input_fd)
+            if file_identity(opened) != file_identity(after):
+                raise SystemExit(f"privacy release input changed while reading: {name}")
+            if len(payload) != opened.st_size or not payload or len(payload) > limit:
+                raise SystemExit(f"privacy release input has an invalid bounded snapshot: {name}")
+        finally:
+            os.close(input_fd)
+        path_after = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+        if file_identity(before) != file_identity(path_after):
+            raise SystemExit(f"privacy release input path changed while reading: {name}")
+        captured[name] = file_identity(before)
+        output_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            output_flags |= os.O_NOFOLLOW
+        output_fd = os.open(name, output_flags, 0o600, dir_fd=destination_fd)
+        try:
+            offset = 0
+            while offset < len(payload):
+                offset += os.write(output_fd, payload[offset:])
+            os.fsync(output_fd)
+            output_info = os.fstat(output_fd)
+            if (
+                not stat.S_ISREG(output_info.st_mode)
+                or output_info.st_nlink != 1
+                or output_info.st_uid != os.getuid()
+                or output_info.st_gid != os.getgid()
+                or stat.S_IMODE(output_info.st_mode) != 0o600
+                or output_info.st_size != len(payload)
+            ):
+                raise SystemExit(f"privacy release resnapshot output is unsafe: {name}")
+            captured_destination[name] = (
+                file_identity(output_info),
+                hashlib.sha256(payload).hexdigest(),
+            )
+        finally:
+            os.close(output_fd)
+    os.fsync(destination_fd)
+    if sorted(os.listdir(source_fd)) != sorted(expected):
+        raise SystemExit("privacy release input inventory changed during snapshot")
+    for name, expected_identity in captured.items():
+        if file_identity(os.stat(name, dir_fd=source_fd, follow_symlinks=False)) != expected_identity:
+            raise SystemExit(f"privacy release input changed after snapshot: {name}")
+    if sorted(os.listdir(destination_fd)) != sorted(expected):
+        raise SystemExit("privacy release resnapshot inventory changed during copy")
+    for name, (expected_identity, expected_digest) in captured_destination.items():
+        before = os.stat(name, dir_fd=destination_fd, follow_symlinks=False)
+        if file_identity(before) != expected_identity:
+            raise SystemExit(f"privacy release resnapshot path changed: {name}")
+        output_fd = os.open(name, flags, dir_fd=destination_fd)
+        try:
+            opened = os.fstat(output_fd)
+            if file_identity(opened) != expected_identity:
+                raise SystemExit(f"privacy release resnapshot changed while opening: {name}")
+            digest = hashlib.sha256()
+            remaining = opened.st_size
+            while remaining:
+                chunk = os.read(output_fd, min(64 * 1024, remaining))
+                if not chunk:
+                    raise SystemExit(f"privacy release resnapshot was truncated: {name}")
+                digest.update(chunk)
+                remaining -= len(chunk)
+            if os.read(output_fd, 1):
+                raise SystemExit(f"privacy release resnapshot grew while reading: {name}")
+            if file_identity(os.fstat(output_fd)) != expected_identity:
+                raise SystemExit(f"privacy release resnapshot changed while reading: {name}")
+        finally:
+            os.close(output_fd)
+        if digest.hexdigest() != expected_digest:
+            raise SystemExit(f"privacy release resnapshot content changed: {name}")
+        if file_identity(os.stat(name, dir_fd=destination_fd, follow_symlinks=False)) != expected_identity:
+            raise SystemExit(f"privacy release resnapshot path changed after reading: {name}")
+    if directory_identity(source_before) != directory_identity(os.fstat(source_fd)):
+        raise SystemExit("privacy release input directory changed during snapshot")
+    source_after = os.stat(source_path, follow_symlinks=False)
+    if directory_identity(source_before) != directory_identity(source_after):
+        raise SystemExit("privacy release input directory path changed during snapshot")
+finally:
+    os.close(destination_fd)
+    os.close(source_fd)
+PY
+  PRIVACY_BOOTSTRAP_PLAN="${privacy_release_input_snapshot_dir}/privacy_bootstrap_plan.json"
+  PRIVACY_BOOTSTRAP_CONFIG="${privacy_release_input_snapshot_dir}/config.toml"
+  PRIVACY_BOOTSTRAP_GENESIS="${privacy_release_input_snapshot_dir}/genesis.json"
+  PRIVACY_BOOTSTRAP_BROKER_PUBLIC="${privacy_release_input_snapshot_dir}/bootle_lantern_broker_public.json"
+fi
+
+python3 - "$PRIVACY_BOOTSTRAP_CONFIG" <<'PY'
 import sys
 
 try:
@@ -305,6 +499,7 @@ assert_workspace_source_manifest_unchanged() {
 validator_lock_path="${REPO_ROOT}/Cargo.lock"
 validator_lock_expected_sha="${IROHA_VALIDATOR_LOCK_SHA256:-}"
 validator_build_provenance="${IROHA_VALIDATOR_BUILD_PROVENANCE:-}"
+dpn_validator_release_commit="${IROHA_DPN_VALIDATOR_RELEASE_COMMIT:-}"
 if [[ ! "$validator_lock_expected_sha" =~ ^[0-9a-f]{64}$ ]]; then
   echo "IROHA_VALIDATOR_LOCK_SHA256 must contain the reviewed 64-character checksum" >&2
   echo "Use dpn-api-rust/ops/taira/build-validator-bundle.sh instead of invoking this builder directly." >&2
@@ -325,6 +520,11 @@ if [[ -z "$validator_build_provenance" || ! -f "$validator_build_provenance" || 
   echo "IROHA_VALIDATOR_BUILD_PROVENANCE must name the verified DPN build provenance file" >&2
   exit 1
 fi
+if [[ ! "$dpn_validator_release_commit" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "IROHA_DPN_VALIDATOR_RELEASE_COMMIT must contain the exact lowercase 40-hex DPN release commit" >&2
+  exit 1
+fi
+export IROHA_DPN_VALIDATOR_RELEASE_COMMIT="$dpn_validator_release_commit"
 
 case "$OUTPUT_DIR" in
   /*)
@@ -343,12 +543,12 @@ if ! git -C "$REPO_ROOT" verify-commit "$git_head" >/dev/null 2>&1; then
   exit 1
 fi
 
-source_validation="$(python3 - "$validator_build_provenance" "$validator_lock_actual_sha" "$git_head" "$git_status" "$ALLOW_DIRTY" <<'PY'
+source_validation="$(python3 - "$validator_build_provenance" "$validator_lock_actual_sha" "$git_head" "$git_status" "$ALLOW_DIRTY" "$dpn_validator_release_commit" <<'PY'
 import json
 import re
 import sys
 
-path, expected_lock_sha, expected_head, status, allow_dirty = sys.argv[1:]
+path, expected_lock_sha, expected_head, status, allow_dirty, expected_dpn_commit = sys.argv[1:]
 with open(path, encoding="utf-8") as stream:
     payload = json.load(stream)
 if payload.get("schema_version") != 1:
@@ -357,6 +557,8 @@ if payload.get("validator_lock_sha256") != expected_lock_sha:
     raise SystemExit("validator build provenance lock checksum does not match Cargo.lock")
 if payload.get("iroha_git_head") != expected_head:
     raise SystemExit("validator build provenance Git HEAD does not match the source checkout")
+if payload.get("dpn_validator_release_commit") != expected_dpn_commit:
+    raise SystemExit("validator build provenance DPN release commit does not match the pinned release input")
 worktree_clean = not bool(status)
 if payload.get("iroha_worktree_clean") is not worktree_clean:
     raise SystemExit("validator build provenance cleanliness does not match the source checkout")
@@ -398,18 +600,27 @@ if [[ "$reference_validator_source_mode" == "attested" ]]; then
   python3 "$validator_source_verifier" verify --repo "$REPO_ROOT" --bundle-dir "$validator_source_bundle"
 fi
 
-for release_input in \
-  "$WORKSPACE_SOURCE_MANIFEST_SCRIPT" \
-  "$TAIRA_RELEASE_AUTHORITY_SCRIPT" \
-  "$RELEASE_ARTIFACT_CONTRACT_SCRIPT" \
-  "$RELEASE_MANIFEST_GENERATOR" \
-  "$RELEASE_MANIFEST_SIGNING_HELPER" \
-  "$RELEASE_CHECKSUM_WRITER" \
-  "$PRIVACY_EXACT12_MATRIX" \
-  "$PRIVACY_EXPECTATIONS_NORITO" \
-  "$PRIVACY_EXPECTATIONS_JSON" \
-  "$PRIVACY_X509_RESOURCE_NORITO" \
-  "$PRIVACY_X509_RESOURCE_JSON"; do
+release_inputs=(
+  "$WORKSPACE_SOURCE_MANIFEST_SCRIPT"
+  "$TAIRA_RELEASE_AUTHORITY_SCRIPT"
+  "$RELEASE_ARTIFACT_CONTRACT_SCRIPT"
+  "$PRIVACY_BOOTSTRAP_PLAN_TEMPLATE"
+  "$PRIVACY_BOOTSTRAP_CONFIG_TEMPLATE"
+  "$PRIVACY_BOOTSTRAP_GENESIS_TEMPLATE"
+  "$PRIVACY_BOOTSTRAP_PLAN"
+  "$PRIVACY_BOOTSTRAP_CONFIG"
+  "$PRIVACY_BOOTSTRAP_GENESIS"
+  "$PRIVACY_BOOTSTRAP_VALIDATOR"
+  "$PRIVACY_EXACT12_MATRIX"
+  "$PRIVACY_EXPECTATIONS_NORITO"
+  "$PRIVACY_EXPECTATIONS_JSON"
+  "$PRIVACY_X509_RESOURCE_NORITO"
+  "$PRIVACY_X509_RESOURCE_JSON"
+)
+if [[ "$PROFILE" == "release" ]]; then
+  release_inputs+=("$PRIVACY_BOOTSTRAP_BROKER_PUBLIC")
+fi
+for release_input in "${release_inputs[@]}"; do
   if [[ ! -s "$release_input" || -L "$release_input" ]] \
     || [[ "$(stat -c '%h' "$release_input")" != "1" ]]; then
     echo "native privacy release input is missing or not a regular file: $release_input" >&2
@@ -417,20 +628,38 @@ for release_input in \
   fi
 done
 
+privacy_bootstrap_mode="auto"
 if [[ "$PROFILE" == "release" ]]; then
-  release_verifier_actual_sha256="$(
-    sha256_file "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH"
-  )"
-  if [[ "$release_verifier_actual_sha256" != "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" ]]; then
-    echo "Taira native release-manifest verifier does not match its reviewed SHA-256" >&2
-    echo "expected: $TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" >&2
-    echo "actual:   $release_verifier_actual_sha256" >&2
-    exit 1
-  fi
+  privacy_bootstrap_mode="release"
 fi
+privacy_bootstrap_validator_args=(
+  --mode "$privacy_bootstrap_mode"
+  --plan "$PRIVACY_BOOTSTRAP_PLAN"
+  --config "$PRIVACY_BOOTSTRAP_CONFIG"
+  --genesis "$PRIVACY_BOOTSTRAP_GENESIS"
+  --matrix "$PRIVACY_EXACT12_MATRIX"
+)
+if [[ "$PROFILE" == "release" ]]; then
+  privacy_bootstrap_validator_args+=(
+    --broker-public "$PRIVACY_BOOTSTRAP_BROKER_PUBLIC"
+  )
+fi
+python3 "$PRIVACY_BOOTSTRAP_VALIDATOR" \
+  "${privacy_bootstrap_validator_args[@]}"
 
 workspace_source_manifest_sha256="$(compute_workspace_source_manifest)"
 require_canonical_sha256 "pre-build workspace source manifest" "$workspace_source_manifest_sha256"
+python3 -I -S - "$validator_build_provenance" "$workspace_source_manifest_sha256" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    payload = json.load(stream)
+if payload.get("workspace_source_manifest_sha256") != sys.argv[2]:
+    raise SystemExit(
+        "validator build provenance workspace manifest does not match the reconstructed source"
+    )
+PY
 if [[ "$(sha256_file "$validator_lock_path")" != "$validator_lock_actual_sha" ]]; then
   echo "validator Cargo.lock changed after its release checksum was verified" >&2
   exit 1
@@ -484,7 +713,7 @@ if [[ $SKIP_LOCAL_REGRESSIONS -ne 1 ]]; then
 fi
 
 timestamp="$(env TZ=UTC date '+%Y%m%dT%H%M%SZ')"
-bundle_name="taira-rollout-${timestamp}-${git_head:0:12}-${PROFILE}"
+bundle_name="taira-rollout-${timestamp}-${git_head:0:12}-${PROFILE}-linux-aarch64"
 bundle_dir="${OUTPUT_DIR}/${bundle_name}"
 archive_path="${OUTPUT_DIR}/${bundle_name}.tar.gz"
 binary_dir="${REPO_ROOT}/target/${PROFILE}"
@@ -499,17 +728,23 @@ if [[ $SKIP_BUILD -ne 1 ]]; then
     -p iroha_cli
     --bin irohad
     --bin iroha
+    --bin "$BOOTLE_LANTERN_BROKER_BIN"
     --features "$IROHAD_RELEASE_FEATURES"
   )
   sorafs_build_args=(build --locked -p sorafs_car --features cli --bin sorafs_manifest_builder --bin sorafs_tx_stdin_builder)
+  kagami_build_args=(build --locked -p iroha_kagami --bin "$KAGAMI_BIN")
   if [[ "$PROFILE" == "release" ]]; then
     core_build_args+=(--release)
     sorafs_build_args+=(--release)
+    kagami_build_args+=(--release)
   fi
   (
     cd "$REPO_ROOT"
     cargo "${core_build_args[@]}"
     cargo "${sorafs_build_args[@]}"
+    if [[ "$PROFILE" == "release" ]]; then
+      cargo "${kagami_build_args[@]}"
+    fi
   )
 
   privacy_runner_build_args=(
@@ -539,13 +774,77 @@ if [[ "$(sha256_file "$validator_lock_path")" != "$validator_lock_actual_sha" ]]
   exit 1
 fi
 
-for binary in irohad iroha sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
+for binary in irohad iroha "$BOOTLE_LANTERN_BROKER_BIN" sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
   if [[ ! -x "${binary_dir}/${binary}" ]]; then
     echo "missing built binary: ${binary_dir}/${binary}" >&2
     echo "run without --skip-build or build the ${PROFILE} profile first" >&2
     exit 1
   fi
 done
+
+if [[ "$PROFILE" == "release" ]]; then
+  kagami_path="${binary_dir}/${KAGAMI_BIN}"
+  if [[ ! -x "$kagami_path" ]]; then
+    echo "missing freshly built native privacy release composer: $kagami_path" >&2
+    exit 1
+  fi
+  privacy_composer_tmp_dir="$(
+    mktemp -d "${TMPDIR:-/tmp}/taira-privacy-composer.XXXXXX"
+  )"
+  chmod 0700 "$privacy_composer_tmp_dir"
+  activation_instructions="${privacy_composer_tmp_dir}/activation-instructions.json"
+  activation_report="${privacy_composer_tmp_dir}/activation-report.json"
+  composed_plan="${privacy_composer_tmp_dir}/privacy_bootstrap_plan.json"
+  composed_config="${privacy_composer_tmp_dir}/config.toml"
+  composed_genesis="${privacy_composer_tmp_dir}/genesis.json"
+  composed_broker_public="${privacy_composer_tmp_dir}/bootle_lantern_broker_public.json"
+
+  "$kagami_path" privacy-bootstrap emit-taira-v1 \
+    --instructions-output "$activation_instructions" \
+    --report-output "$activation_report"
+  "$kagami_path" privacy-bootstrap render-taira-release-v1 \
+    --activation-instructions "$activation_instructions" \
+    --activation-report "$activation_report" \
+    --broker-public-export "$PRIVACY_BOOTSTRAP_BROKER_PUBLIC" \
+    --plan-template "$PRIVACY_BOOTSTRAP_PLAN_TEMPLATE" \
+    --config-template "$PRIVACY_BOOTSTRAP_CONFIG_TEMPLATE" \
+    --genesis-template "$PRIVACY_BOOTSTRAP_GENESIS_TEMPLATE" \
+    --plan-output "$composed_plan" \
+    --config-output "$composed_config" \
+    --genesis-output "$composed_genesis" \
+    --broker-public-output "$composed_broker_public"
+
+  compare_composed_privacy_input() {
+    local label="$1"
+    local reviewed="$2"
+    local recomposed="$3"
+    if ! cmp -s "$reviewed" "$recomposed"; then
+      echo "reviewed Taira privacy ${label} differs from native recomposition" >&2
+      exit 1
+    fi
+  }
+  compare_composed_privacy_input \
+    "plan" "$PRIVACY_BOOTSTRAP_PLAN" "$composed_plan"
+  compare_composed_privacy_input \
+    "config" "$PRIVACY_BOOTSTRAP_CONFIG" "$composed_config"
+  compare_composed_privacy_input \
+    "genesis" "$PRIVACY_BOOTSTRAP_GENESIS" "$composed_genesis"
+  compare_composed_privacy_input \
+    "broker public export" "$PRIVACY_BOOTSTRAP_BROKER_PUBLIC" "$composed_broker_public"
+
+  PRIVACY_BOOTSTRAP_PLAN="$composed_plan"
+  PRIVACY_BOOTSTRAP_CONFIG="$composed_config"
+  PRIVACY_BOOTSTRAP_GENESIS="$composed_genesis"
+  PRIVACY_BOOTSTRAP_BROKER_PUBLIC="$composed_broker_public"
+  python3 "$PRIVACY_BOOTSTRAP_VALIDATOR" \
+    --mode release \
+    --plan "$PRIVACY_BOOTSTRAP_PLAN" \
+    --config "$PRIVACY_BOOTSTRAP_CONFIG" \
+    --genesis "$PRIVACY_BOOTSTRAP_GENESIS" \
+    --matrix "$PRIVACY_EXACT12_MATRIX" \
+    --broker-public "$PRIVACY_BOOTSTRAP_BROKER_PUBLIC"
+  assert_workspace_source_manifest_unchanged "post-native-privacy-composition"
+fi
 
 privacy_runner_path="${binary_dir}/${PRIVACY_RELEASE_RUNNER_BIN}"
 if readelf --program-headers --wide "$privacy_runner_path" \
@@ -560,7 +859,6 @@ if readelf --dynamic --wide "$privacy_runner_path" \
 fi
 
 privacy_evidence_tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/taira-privacy-native-release.XXXXXX")"
-trap 'rm -rf -- "$privacy_evidence_tmp_dir"' EXIT
 privacy_command_manifest_norito_tmp="${privacy_evidence_tmp_dir}/command-manifest-v1.norito"
 privacy_command_manifest_json_tmp="${privacy_evidence_tmp_dir}/command-manifest-v1.json"
 privacy_stage_artifacts_norito_tmp="${privacy_evidence_tmp_dir}/stage-artifacts-v1.norito"
@@ -615,7 +913,7 @@ if [[ "$(sha256_file "$validator_lock_path")" != "$validator_lock_actual_sha" ]]
   exit 1
 fi
 
-for binary in irohad iroha sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
+for binary in irohad iroha "$BOOTLE_LANTERN_BROKER_BIN" sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
   cp "${binary_dir}/${binary}" "${bundle_dir}/bin/${binary}"
 done
 
@@ -627,6 +925,55 @@ cp "$TAIRA_RELEASE_AUTHORITY_SCRIPT" "${bundle_dir}/scripts/"
 cp "$RELEASE_ARTIFACT_CONTRACT_SCRIPT" "${bundle_dir}/scripts/"
 cp "$validator_lock_path" "${bundle_dir}/provenance/Cargo.lock"
 cp "$validator_build_provenance" "${bundle_dir}/provenance/dpn-validator-build.provenance.json"
+privacy_bootstrap_relative_dir=""
+privacy_bootstrap_plan_relative_path=""
+privacy_bootstrap_config_relative_path=""
+privacy_bootstrap_genesis_relative_path=""
+privacy_bootstrap_broker_public_relative_path=""
+privacy_bootstrap_plan_sha256="-"
+privacy_bootstrap_config_sha256="-"
+privacy_bootstrap_genesis_sha256="-"
+privacy_bootstrap_broker_public_sha256="-"
+if [[ "$PROFILE" == "release" ]]; then
+  bundled_taira_dir="${bundle_dir}/configs/soranexus/taira"
+  cp "$PRIVACY_BOOTSTRAP_PLAN" "${bundled_taira_dir}/privacy_bootstrap_plan.json"
+  cp "$PRIVACY_BOOTSTRAP_CONFIG" "${bundled_taira_dir}/config.toml"
+  cp "$PRIVACY_BOOTSTRAP_GENESIS" "${bundled_taira_dir}/genesis.json"
+
+  privacy_bootstrap_relative_dir="provenance/privacy-bootstrap"
+  privacy_bootstrap_dir="${bundle_dir}/${privacy_bootstrap_relative_dir}"
+  mkdir -m 0755 "$privacy_bootstrap_dir"
+  privacy_bootstrap_plan_relative_path="${privacy_bootstrap_relative_dir}/privacy_bootstrap_plan.json"
+  privacy_bootstrap_config_relative_path="${privacy_bootstrap_relative_dir}/config.toml"
+  privacy_bootstrap_genesis_relative_path="${privacy_bootstrap_relative_dir}/genesis.json"
+  privacy_bootstrap_broker_public_relative_path="${privacy_bootstrap_relative_dir}/bootle_lantern_broker_public.json"
+  cp "$PRIVACY_BOOTSTRAP_PLAN" "${bundle_dir}/${privacy_bootstrap_plan_relative_path}"
+  cp "$PRIVACY_BOOTSTRAP_CONFIG" "${bundle_dir}/${privacy_bootstrap_config_relative_path}"
+  cp "$PRIVACY_BOOTSTRAP_GENESIS" "${bundle_dir}/${privacy_bootstrap_genesis_relative_path}"
+  cp "$PRIVACY_BOOTSTRAP_BROKER_PUBLIC" \
+    "${bundle_dir}/${privacy_bootstrap_broker_public_relative_path}"
+
+  python3 "${bundled_taira_dir}/validate_privacy_bootstrap.py" \
+    --mode release \
+    --plan "${bundled_taira_dir}/privacy_bootstrap_plan.json" \
+    --config "${bundled_taira_dir}/config.toml" \
+    --genesis "${bundled_taira_dir}/genesis.json" \
+    --matrix "$PRIVACY_EXACT12_MATRIX" \
+    --broker-public "${bundle_dir}/${privacy_bootstrap_broker_public_relative_path}"
+
+  privacy_bootstrap_plan_sha256="$(
+    sha256_file "${bundle_dir}/${privacy_bootstrap_plan_relative_path}"
+  )"
+  privacy_bootstrap_config_sha256="$(
+    sha256_file "${bundle_dir}/${privacy_bootstrap_config_relative_path}"
+  )"
+  privacy_bootstrap_genesis_sha256="$(
+    sha256_file "${bundle_dir}/${privacy_bootstrap_genesis_relative_path}"
+  )"
+  privacy_bootstrap_broker_public_sha256="$(
+    sha256_file "${bundle_dir}/${privacy_bootstrap_broker_public_relative_path}"
+  )"
+fi
 privacy_native_relative_dir="provenance/privacy-native"
 privacy_native_dir="${bundle_dir}/${privacy_native_relative_dir}"
 mkdir -p "$privacy_native_dir"
@@ -669,6 +1016,7 @@ privacy_x509_resource_json_sha256="$(sha256_file "${bundle_dir}/${privacy_x509_r
 privacy_exact12_matrix_sha256="$(sha256_file "${bundle_dir}/${privacy_exact12_matrix_relative_path}")"
 privacy_workspace_source_manifest_file_sha256="$(sha256_file "${bundle_dir}/${privacy_workspace_source_manifest_relative_path}")"
 validator_binary_sha256="$(sha256_file "${bundle_dir}/bin/irohad")"
+bootle_lantern_broker_binary_sha256="$(sha256_file "${bundle_dir}/bin/${BOOTLE_LANTERN_BROKER_BIN}")"
 privacy_runner_binary_sha256="$(sha256_file "${bundle_dir}/bin/${PRIVACY_RELEASE_RUNNER_BIN}")"
 
 bundled_privacy_runner_common_args=(
@@ -714,6 +1062,7 @@ else
 fi
 
 GIT_HEAD="$git_head" \
+DPN_VALIDATOR_RELEASE_COMMIT="$dpn_validator_release_commit" \
 GIT_STATUS="$git_status" \
 GIT_TREE_CLEAN="$git_tree_clean" \
 GENERATED_AT="$timestamp" \
@@ -728,6 +1077,7 @@ VALIDATOR_SOURCE_BUNDLE_PROVENANCE_SHA256="$reference_source_bundle_provenance_s
 IROHAD_RELEASE_FEATURES="$IROHAD_RELEASE_FEATURES" \
 PRIVACY_RELEASE_EVIDENCE_FEATURE="$PRIVACY_RELEASE_EVIDENCE_FEATURE" \
 PRIVACY_RELEASE_RUNNER_BIN="$PRIVACY_RELEASE_RUNNER_BIN" \
+BOOTLE_LANTERN_BROKER_BIN="$BOOTLE_LANTERN_BROKER_BIN" \
 WORKSPACE_SOURCE_MANIFEST_SHA256="$workspace_source_manifest_sha256" \
 PRIVACY_RELEASE_NORITO_PATH="$privacy_release_norito_relative_path" \
 PRIVACY_RELEASE_NORITO_SHA256="$privacy_release_norito_sha256" \
@@ -754,7 +1104,17 @@ PRIVACY_EXACT12_MATRIX_SHA256="$privacy_exact12_matrix_sha256" \
 PRIVACY_WORKSPACE_SOURCE_MANIFEST_PATH="$privacy_workspace_source_manifest_relative_path" \
 PRIVACY_WORKSPACE_SOURCE_MANIFEST_FILE_SHA256="$privacy_workspace_source_manifest_file_sha256" \
 PRIVACY_NATIVE_RELATIVE_DIR="$privacy_native_relative_dir" \
+PRIVACY_BOOTSTRAP_RELATIVE_DIR="$privacy_bootstrap_relative_dir" \
+PRIVACY_BOOTSTRAP_PLAN_PATH="$privacy_bootstrap_plan_relative_path" \
+PRIVACY_BOOTSTRAP_PLAN_SHA256="$privacy_bootstrap_plan_sha256" \
+PRIVACY_BOOTSTRAP_CONFIG_PATH="$privacy_bootstrap_config_relative_path" \
+PRIVACY_BOOTSTRAP_CONFIG_SHA256="$privacy_bootstrap_config_sha256" \
+PRIVACY_BOOTSTRAP_GENESIS_PATH="$privacy_bootstrap_genesis_relative_path" \
+PRIVACY_BOOTSTRAP_GENESIS_SHA256="$privacy_bootstrap_genesis_sha256" \
+PRIVACY_BOOTSTRAP_BROKER_PUBLIC_PATH="$privacy_bootstrap_broker_public_relative_path" \
+PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256="$privacy_bootstrap_broker_public_sha256" \
 VALIDATOR_BINARY_SHA256="$validator_binary_sha256" \
+BOOTLE_LANTERN_BROKER_BINARY_SHA256="$bootle_lantern_broker_binary_sha256" \
 PRIVACY_RUNNER_BINARY_SHA256="$privacy_runner_binary_sha256" \
 python3 - <<'PY' >"$manifest_path"
 import json
@@ -778,8 +1138,25 @@ digest_names = (
     "PRIVACY_EXACT12_MATRIX_SHA256",
     "PRIVACY_WORKSPACE_SOURCE_MANIFEST_FILE_SHA256",
     "VALIDATOR_BINARY_SHA256",
+    "BOOTLE_LANTERN_BROKER_BINARY_SHA256",
     "PRIVACY_RUNNER_BINARY_SHA256",
 )
+if os.environ["PROFILE_NAME"] == "release":
+    digest_names += (
+        "PRIVACY_BOOTSTRAP_PLAN_SHA256",
+        "PRIVACY_BOOTSTRAP_CONFIG_SHA256",
+        "PRIVACY_BOOTSTRAP_GENESIS_SHA256",
+        "PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256",
+    )
+else:
+    for name in (
+        "PRIVACY_BOOTSTRAP_PLAN_SHA256",
+        "PRIVACY_BOOTSTRAP_CONFIG_SHA256",
+        "PRIVACY_BOOTSTRAP_GENESIS_SHA256",
+        "PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256",
+    ):
+        if os.environ[name] != "-":
+            raise SystemExit(f"debug bundle unexpectedly carries {name}")
 for name in digest_names:
     if re.fullmatch(r"[0-9a-f]{64}", os.environ[name]) is None:
         raise SystemExit(f"{name} is not a canonical SHA-256 digest")
@@ -801,7 +1178,39 @@ def evidence_pair(prefix: str) -> dict[str, object]:
     }
 
 
+privacy_bootstrap_release = None
+if os.environ["PROFILE_NAME"] == "release":
+    privacy_bootstrap_release = {
+        "schema": "iroha.taira.privacy-bootstrap-release-bundle.v1",
+        "native_recomposition_passed": True,
+        "bundled_release_validation_passed": True,
+        "secret_free": True,
+        "plan": {
+            "path": os.environ["PRIVACY_BOOTSTRAP_PLAN_PATH"],
+            "sha256": os.environ["PRIVACY_BOOTSTRAP_PLAN_SHA256"],
+            "operator_copy": "configs/soranexus/taira/privacy_bootstrap_plan.json",
+        },
+        "peer_1_config": {
+            "path": os.environ["PRIVACY_BOOTSTRAP_CONFIG_PATH"],
+            "sha256": os.environ["PRIVACY_BOOTSTRAP_CONFIG_SHA256"],
+            "operator_copy": "configs/soranexus/taira/config.toml",
+            "designated_validator": "taira-validator-1",
+        },
+        "genesis": {
+            "path": os.environ["PRIVACY_BOOTSTRAP_GENESIS_PATH"],
+            "sha256": os.environ["PRIVACY_BOOTSTRAP_GENESIS_SHA256"],
+            "operator_copy": "configs/soranexus/taira/genesis.json",
+        },
+        "broker_public_export": {
+            "path": os.environ["PRIVACY_BOOTSTRAP_BROKER_PUBLIC_PATH"],
+            "sha256": os.environ["PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256"],
+            "bound_by_plan_sha256": True,
+        },
+    }
+
+
 payload = {
+    "dpn_validator_release_commit": os.environ["DPN_VALIDATOR_RELEASE_COMMIT"],
     "generated_at": os.environ["GENERATED_AT"],
     "git_head": os.environ["GIT_HEAD"],
     "git_tree_clean": os.environ["GIT_TREE_CLEAN"] == "true",
@@ -832,6 +1241,7 @@ payload = {
         "raw_public_key": "release_manifest.json.pub",
         "archive_without_authority_is_admissible": False,
     },
+    "privacy_bootstrap_release": privacy_bootstrap_release,
     "privacy_native_release_evidence": {
         "phase": "post_build",
         "authoritative_encoding": "norito",
@@ -851,11 +1261,27 @@ payload = {
                 "path": "bin/irohad",
                 "sha256": os.environ["VALIDATOR_BINARY_SHA256"],
             },
+            "bootle_lantern_broker": {
+                "path": f'bin/{os.environ["BOOTLE_LANTERN_BROKER_BIN"]}',
+                "sha256": os.environ["BOOTLE_LANTERN_BROKER_BINARY_SHA256"],
+                "designated_validator": "taira-validator-1",
+                "public_export_path": os.environ[
+                    "PRIVACY_BOOTSTRAP_BROKER_PUBLIC_PATH"
+                ],
+                "public_export_sha256": os.environ[
+                    "PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256"
+                ],
+                "native_composition_bound": os.environ["PROFILE_NAME"] == "release",
+            },
             "evidence_runner": {
                 "path": f'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]}',
                 "sha256": os.environ["PRIVACY_RUNNER_BINARY_SHA256"],
             },
-            "also_bound_by_typed_receipt": True,
+            "validator_and_evidence_runner_bound_by_typed_receipt": True,
+            "broker_binary_bound_by_release_manifest": True,
+            "broker_public_export_bound_by_plan_and_release_manifest": (
+                os.environ["PROFILE_NAME"] == "release"
+            ),
         },
         "runner": {
             "path": f'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]}',
@@ -888,11 +1314,20 @@ payload = {
     "binaries": [
         "bin/irohad",
         "bin/iroha",
+        f'bin/{os.environ["BOOTLE_LANTERN_BROKER_BIN"]}',
         "bin/sorafs_manifest_builder",
         "bin/sorafs_tx_stdin_builder",
         f'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]}',
     ],
     "release_checks": [
+        {
+            "name": "taira_native_privacy_release_composition",
+            "command": "freshly built kagami privacy-bootstrap render-taira-release-v1 <reviewed public inputs>",
+            "fresh_native_recomposition": os.environ["PROFILE_NAME"] == "release",
+            "byte_identical_to_reviewed_inputs": os.environ["PROFILE_NAME"] == "release",
+            "bundled_release_validation": os.environ["PROFILE_NAME"] == "release",
+            "skipped": os.environ["PROFILE_NAME"] != "release",
+        },
         {
             "name": "taira_validator_privacy_feature_isolation",
             "commands": [
@@ -949,6 +1384,11 @@ payload = {
         f'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]}',
         os.environ["PRIVACY_NATIVE_RELATIVE_DIR"] + "/",
         *(
+            [os.environ["PRIVACY_BOOTSTRAP_RELATIVE_DIR"] + "/"]
+            if os.environ["PROFILE_NAME"] == "release"
+            else []
+        ),
+        *(
             ["provenance/source-bundle/"]
             if os.environ["VALIDATOR_SOURCE_MODE"] == "attested"
             else []
@@ -995,112 +1435,9 @@ tar -C "$OUTPUT_DIR" -czf "$archive_path" "$bundle_name"
 printf '%s  %s\n' "$(sha256_file "$archive_path")" "$(basename "$archive_path")" >"${archive_path}.sha256"
 assert_workspace_source_manifest_unchanged "post-archive"
 
-release_authority_dir="${OUTPUT_DIR}/${bundle_name}.authority"
-release_authority_artifacts_dir="${release_authority_dir}/artifacts"
-release_authority_payload_name="taira-exact12-release-authority-v1.json"
-release_authority_manifest="${release_authority_dir}/release_manifest.json"
-release_authority_signature="${release_authority_dir}/release_manifest.json.sig"
-release_authority_public_key="${release_authority_dir}/release_manifest.json.pub"
-
-if [[ "$PROFILE" == "release" ]]; then
-  if [[ -e "$release_authority_dir" || -L "$release_authority_dir" ]]; then
-    echo "refusing to replace existing Taira release authority: $release_authority_dir" >&2
-    exit 1
-  fi
-  mkdir -m 0700 "$release_authority_dir"
-  mkdir -m 0755 "$release_authority_artifacts_dir"
-  install -m 0555 \
-    "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
-    "${release_authority_artifacts_dir}/sorafs-validate"
-  install -m 0555 \
-    "$TAIRA_RELEASE_AUTHORITY_SCRIPT" \
-    "${release_authority_artifacts_dir}/taira_release_authority.py"
-  install -m 0444 \
-    "$RELEASE_ARTIFACT_CONTRACT_SCRIPT" \
-    "${release_authority_artifacts_dir}/release_artifact_contract.py"
-
-  python3 -S "$TAIRA_RELEASE_AUTHORITY_SCRIPT" create \
-    --evidence-root "$bundle_dir" \
-    --commit "$git_head" \
-    --signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
-    --native-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
-    --archive "$archive_path" \
-    --output "${release_authority_artifacts_dir}/${release_authority_payload_name}"
-
-  python3 -S "$RELEASE_CHECKSUM_WRITER" \
-    --artifacts-dir "$release_authority_artifacts_dir" \
-    --output "${release_authority_artifacts_dir}/SHA256SUMS" \
-    --file "$release_authority_payload_name" \
-    --file release_artifact_contract.py \
-    --file sorafs-validate \
-    --file taira_release_authority.py
-
-  release_source_date_epoch="$(git -C "$REPO_ROOT" show -s --format=%ct "$git_head")"
-  release_os_tag="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  release_arch_tag="$(uname -m | tr '[:upper:]' '[:lower:]')"
-  release_manifest_args=(
-    --artifacts-dir "$release_authority_artifacts_dir"
-    --version "taira-${workspace_source_manifest_sha256:0:16}"
-    --commit "$git_head"
-    --source-date-epoch "$release_source_date_epoch"
-    --os-tag "$release_os_tag"
-    --arch "$release_arch_tag"
-    --artifact "iroha3:taira-exact12:release-evidence:json:${release_authority_payload_name}"
-    --artifact "iroha3:taira-authority:release-evidence:binary:release_artifact_contract.py"
-    --artifact "iroha3:taira-authority:reference-validator:binary:sorafs-validate"
-    --artifact "iroha3:taira-authority:release-evidence:binary:taira_release_authority.py"
-  )
-  python3 -S "$RELEASE_MANIFEST_GENERATOR" \
-    "${release_manifest_args[@]}" \
-    --output "$release_authority_manifest"
-
-  python3 -S "$RELEASE_MANIFEST_SIGNING_HELPER" sign \
-    --manifest "$release_authority_manifest" \
-    --external-signer "$TAIRA_RELEASE_EXTERNAL_SIGNER_PATH" \
-    --signing-public-key "$TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH" \
-    --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
-    --signature-output "$release_authority_signature" \
-    --public-key-output "$release_authority_public_key" \
-    --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
-    --trusted-release-manifest-verifier-sha256 \
-      "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
-
-  python3 -S "$RELEASE_MANIFEST_SIGNING_HELPER" verify \
-    --manifest "$release_authority_manifest" \
-    --signature "$release_authority_signature" \
-    --public-key "$release_authority_public_key" \
-    --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
-    --release-manifest-verifier \
-      "${release_authority_artifacts_dir}/sorafs-validate" \
-    --trusted-release-manifest-verifier-sha256 \
-      "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
-
-  release_authority_manifest_replay="${release_authority_dir}/release_manifest.replay.json"
-  python3 -S "$RELEASE_MANIFEST_GENERATOR" \
-    "${release_manifest_args[@]}" \
-    --output "$release_authority_manifest_replay"
-  cmp "$release_authority_manifest" "$release_authority_manifest_replay"
-  rm -f -- "$release_authority_manifest_replay"
-
-  python3 -S \
-    "${release_authority_artifacts_dir}/taira_release_authority.py" verify \
-    --evidence-root "$bundle_dir" \
-    --commit "$git_head" \
-    --signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
-    --native-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
-    --archive "$archive_path" \
-    --authority \
-      "${release_authority_artifacts_dir}/${release_authority_payload_name}"
-
-  assert_workspace_source_manifest_unchanged "post-signed-release-authority"
-fi
-
-echo "Taira rollout bundle ready:"
+echo "Unsigned Taira rollout bundle ready:"
 echo "  manifest: $manifest_path"
 echo "  checksums: $checksums_path"
 echo "  archive: $archive_path"
 echo "  archive checksum: ${archive_path}.sha256"
-if [[ "$PROFILE" == "release" ]]; then
-  echo "  signed authority: $release_authority_dir"
-  echo "  signed authority manifest SHA-256: $(sha256_file "$release_authority_manifest")"
-fi
+echo "  next: authenticate with scripts/finalize_taira_rollout_authority.py"

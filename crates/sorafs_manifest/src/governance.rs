@@ -48,6 +48,128 @@ pub const GOVERNANCE_DAG_CID_BYTES_V1: usize = blake3::OUT_LEN;
 /// Maximum byte length of a first-release Governance DAG publisher peer ID.
 pub const GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1: usize = 128;
 
+/// Maximum number of scalar labels attached to one filesystem publication.
+pub const GOVERNANCE_PUBLICATION_LABEL_MAX_ENTRIES_V1: usize = 64;
+
+/// Maximum UTF-8 byte length of one filesystem publication label key.
+pub const GOVERNANCE_PUBLICATION_LABEL_KEY_MAX_BYTES_V1: usize = 128;
+
+/// Maximum UTF-8 byte length of one string-valued filesystem publication label.
+pub const GOVERNANCE_PUBLICATION_LABEL_STRING_MAX_BYTES_V1: usize = 4 * 1024;
+
+/// Maximum compact-JSON bytes occupied by one filesystem publication label map.
+pub const GOVERNANCE_PUBLICATION_LABEL_TOTAL_MAX_BYTES_V1: usize = 64 * 1024;
+
+/// Maximum byte length of one retained filesystem CAR-segment manifest.
+pub const GOVERNANCE_CAR_SEGMENT_MANIFEST_MAX_BYTES_V1: usize = 128 * 1024;
+
+/// Exact byte length of the authenticated account digest committed by a
+/// first-release Governance DAG node.
+pub const GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1: usize = blake3::OUT_LEN;
+
+/// Authenticated ingress that admitted a caller-supplied Governance DAG payload.
+#[derive(
+    Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, PartialOrd, Ord,
+)]
+#[repr(u8)]
+pub enum GovernanceDagSubmissionOriginV1 {
+    /// Canonical Torii proof-token issuance ingress.
+    TransparencyTokenIssuance = 0,
+    /// Canonical Torii privacy-aggregate source-event ingress.
+    PrivacyAggregateSourceEvent = 1,
+    /// Canonical Torii due-cycle publication ingress.
+    PrivacyAggregatePublishDue = 2,
+    /// Canonical Torii appeal-finance report ingress.
+    AppealFinanceReport = 3,
+    /// Canonical Torii appeal-finance weekly-rollup ingress.
+    AppealFinanceWeeklyRollup = 4,
+}
+
+impl GovernanceDagSubmissionOriginV1 {
+    /// Return the stable public label for this authenticated ingress.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::TransparencyTokenIssuance => "transparency_token_issuance",
+            Self::PrivacyAggregateSourceEvent => "privacy_aggregate_source_event",
+            Self::PrivacyAggregatePublishDue => "privacy_aggregate_publish_due",
+            Self::AppealFinanceReport => "appeal_finance_report",
+            Self::AppealFinanceWeeklyRollup => "appeal_finance_weekly_rollup",
+        }
+    }
+}
+
+const GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.governance_dag.submission_account.digest.v1";
+const GOVERNANCE_PUBLICATION_SOURCE_PAIR_ID_DOMAIN_V1: &[u8] =
+    b"sorafs.governance.publication_source_pair.id.v1";
+
+/// Derive the authenticated-account commitment stored in signed DAG provenance.
+///
+/// `canonical_account_bytes` must be the canonical Norito encoding of the
+/// authenticated `AccountId`. Keeping
+/// that dependency at the producer boundary lets this wire-format crate commit
+/// the identity without embedding an unbounded or presentation-dependent
+/// account string.
+#[must_use]
+pub fn governance_dag_submission_account_digest_v1(
+    canonical_account_bytes: &[u8],
+) -> [u8; GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1] {
+    let mut hasher = Hasher::new();
+    hasher.update(GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_DOMAIN_V1);
+    hasher.update(
+        &u64::try_from(canonical_account_bytes.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(canonical_account_bytes);
+    *hasher.finalize().as_bytes()
+}
+
+/// Derive the content identity for one filesystem publication source pair.
+///
+/// The identity binds the internal payload kind plus the exact encoded and JSON
+/// byte lengths and BLAKE3 digests. Filesystem publishers use it as the only
+/// variable path component, so presentation labels and model identifiers never
+/// become path authority.
+#[must_use]
+pub fn governance_publication_source_pair_id_v1(
+    payload_kind: &str,
+    encoded_len: u64,
+    encoded_blake3: [u8; blake3::OUT_LEN],
+    json_len: u64,
+    json_blake3: [u8; blake3::OUT_LEN],
+) -> [u8; blake3::OUT_LEN] {
+    let mut hasher = Hasher::new();
+    hasher.update(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ID_DOMAIN_V1);
+    hasher.update(
+        &u64::try_from(payload_kind.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(payload_kind.as_bytes());
+    hasher.update(&encoded_len.to_le_bytes());
+    hasher.update(&encoded_blake3);
+    hasher.update(&json_len.to_le_bytes());
+    hasher.update(&json_blake3);
+    *hasher.finalize().as_bytes()
+}
+
+/// Server-derived caller identity commitment in a signed Governance DAG node.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct GovernanceDagSubmissionProvenanceV1 {
+    /// Domain-separated digest of the authenticated account's canonical Norito bytes.
+    pub publisher_account_digest: [u8; GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1],
+    /// Exact authenticated ingress that admitted the payload.
+    pub origin: GovernanceDagSubmissionOriginV1,
+}
+
+impl GovernanceDagSubmissionProvenanceV1 {
+    fn validate(&self) -> Result<(), GovernanceLogValidationError> {
+        Ok(())
+    }
+}
+
 /// Maximum canonical bytes for one source payload admitted by the V1
 /// filesystem Governance DAG producer.
 ///
@@ -2544,6 +2666,78 @@ pub enum GovernanceLogPayloadV1 {
 }
 
 impl GovernanceLogPayloadV1 {
+    fn required_submission_origin(&self) -> Option<GovernanceDagSubmissionOriginV1> {
+        match self {
+            Self::AppealFinanceReport(_) => {
+                Some(GovernanceDagSubmissionOriginV1::AppealFinanceReport)
+            }
+            Self::AppealFinanceWeeklyRollup(_) => {
+                Some(GovernanceDagSubmissionOriginV1::AppealFinanceWeeklyRollup)
+            }
+            _ => None,
+        }
+    }
+
+    fn optional_submission_origin(&self) -> Option<GovernanceDagSubmissionOriginV1> {
+        match self {
+            Self::ExternalPayload(payload)
+                if payload.payload_kind == GOVERNANCE_EXTERNAL_KIND_PROOF_TOKEN_ISSUANCE_V1 =>
+            {
+                Some(GovernanceDagSubmissionOriginV1::TransparencyTokenIssuance)
+            }
+            Self::ExternalPayload(payload)
+                if payload.payload_kind
+                    == GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1 =>
+            {
+                Some(GovernanceDagSubmissionOriginV1::PrivacyAggregatePublishDue)
+            }
+            _ => None,
+        }
+    }
+
+    /// Validate the server-derived provenance required by this payload kind.
+    ///
+    /// Caller-supplied finance payloads must retain their authenticated ingress
+    /// identity. Proof-token and transparency-ledger payloads may be produced
+    /// by a trusted in-process producer; when they instead enter through an
+    /// authenticated route, the signed node must retain the matching identity.
+    /// All other internally produced payloads reject provenance so a node
+    /// cannot misleadingly label them as caller submissions.
+    pub fn validate_submission_provenance(
+        &self,
+        provenance: Option<&GovernanceDagSubmissionProvenanceV1>,
+    ) -> Result<(), GovernanceLogValidationError> {
+        if let Some(expected) = self.required_submission_origin() {
+            let provenance = provenance
+                .ok_or(GovernanceLogValidationError::MissingSubmissionProvenance { expected })?;
+            if provenance.origin != expected {
+                return Err(GovernanceLogValidationError::SubmissionOriginMismatch {
+                    expected,
+                    found: provenance.origin,
+                });
+            }
+            return provenance.validate();
+        }
+
+        let Some(provenance) = provenance else {
+            return Ok(());
+        };
+        let Some(expected) = self.optional_submission_origin() else {
+            return Err(
+                GovernanceLogValidationError::UnexpectedSubmissionProvenance {
+                    found: provenance.origin,
+                },
+            );
+        };
+        if provenance.origin != expected {
+            return Err(GovernanceLogValidationError::SubmissionOriginMismatch {
+                expected,
+                found: provenance.origin,
+            });
+        }
+        provenance.validate()
+    }
+
     fn validate(&self, timestamp: u64) -> Result<(), GovernanceLogValidationError> {
         preflight_governance_source_payload_len(
             self,
@@ -2898,6 +3092,47 @@ mod borrowed_norito {
         }
     }
 
+    /// Borrowed optional value with the exact owned `Option<T>` wire representation.
+    pub(super) struct ValueOption<'a, T>(pub(super) std::option::Option<&'a T>);
+
+    impl<T: NoritoSerialize> NoritoSerialize for ValueOption<'_, T> {
+        fn schema_hash() -> [u8; 16] {
+            <std::option::Option<T>>::schema_hash()
+        }
+
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
+            match self.0 {
+                Some(value) => {
+                    writer.write_all(&[1])?;
+                    let value = Value(value);
+                    let mut temporary = norito::core::DeriveSmallBuf::new();
+                    norito::core::write_len_prefixed_exact(writer, &value, &mut temporary)?;
+                }
+                None => writer.write_all(&[0])?,
+            }
+            Ok(())
+        }
+
+        fn encoded_len_hint(&self) -> std::option::Option<usize> {
+            self.encoded_len_exact()
+        }
+
+        fn encoded_len_exact(&self) -> std::option::Option<usize> {
+            match self.0 {
+                Some(value) => {
+                    let payload = value.encoded_len_exact()?;
+                    1_usize
+                        .checked_add(norito::core::len_prefix_len(payload))?
+                        .checked_add(payload)
+                }
+                None => Some(1),
+            }
+        }
+    }
+
     /// Borrowed byte slice with the exact owned `Vec<u8>` wire representation.
     pub(super) struct Vec<'a>(pub(super) &'a [u8]);
 
@@ -2977,6 +3212,7 @@ struct GovernanceLogNodeCidPayloadV1 {
     prev_cid: Option<Vec<u8>>,
     timestamp: u64,
     publisher_peer_id: Vec<u8>,
+    submission_provenance: Option<GovernanceDagSubmissionProvenanceV1>,
     payload: GovernanceLogPayloadV1,
 }
 
@@ -2986,6 +3222,7 @@ struct GovernanceLogNodeCidPayloadViewWireV1<'a> {
     prev_cid: borrowed_norito::Option<'a>,
     timestamp: u64,
     publisher_peer_id: borrowed_norito::Vec<'a>,
+    submission_provenance: borrowed_norito::ValueOption<'a, GovernanceDagSubmissionProvenanceV1>,
     payload: borrowed_norito::Value<'a, GovernanceLogPayloadV1>,
 }
 
@@ -3555,6 +3792,7 @@ struct GovernanceLogSignaturePayloadV1 {
     prev_cid: Option<Vec<u8>>,
     timestamp: u64,
     publisher_peer_id: Vec<u8>,
+    submission_provenance: Option<GovernanceDagSubmissionProvenanceV1>,
     payload: GovernanceLogPayloadV1,
 }
 
@@ -3565,6 +3803,7 @@ struct GovernanceLogSignaturePayloadViewWireV1<'a> {
     prev_cid: borrowed_norito::Option<'a>,
     timestamp: u64,
     publisher_peer_id: borrowed_norito::Vec<'a>,
+    submission_provenance: borrowed_norito::Value<'a, Option<GovernanceDagSubmissionProvenanceV1>>,
     payload: borrowed_norito::Value<'a, GovernanceLogPayloadV1>,
 }
 
@@ -3578,6 +3817,7 @@ impl<'a> From<&'a GovernanceLogNodeV1> for GovernanceLogSignaturePayloadViewV1<'
             prev_cid: borrowed_norito::Option(node.prev_cid.as_deref()),
             timestamp: node.timestamp,
             publisher_peer_id: borrowed_norito::Vec(&node.publisher_peer_id),
+            submission_provenance: borrowed_norito::Value(&node.submission_provenance),
             payload: borrowed_norito::Value(&node.payload),
         })
     }
@@ -3610,6 +3850,7 @@ impl From<&GovernanceLogNodeV1> for GovernanceLogSignaturePayloadV1 {
             prev_cid: node.prev_cid.clone(),
             timestamp: node.timestamp,
             publisher_peer_id: node.publisher_peer_id.clone(),
+            submission_provenance: node.submission_provenance.clone(),
             payload: node.payload.clone(),
         }
     }
@@ -3639,6 +3880,8 @@ pub struct GovernanceLogNodeV1 {
     pub timestamp: u64,
     /// Publisher peer identifier (e.g., libp2p peer ID), bounded to 128 bytes.
     pub publisher_peer_id: Vec<u8>,
+    /// Authenticated caller identity for payloads admitted through Torii.
+    pub submission_provenance: Option<GovernanceDagSubmissionProvenanceV1>,
     /// Payload carried by this node.
     pub payload: GovernanceLogPayloadV1,
     /// Publisher signature covering the canonical node signing payload.
@@ -3675,6 +3918,8 @@ impl GovernanceLogNodeV1 {
         }
         self.publisher_signature.validate()?;
         self.payload.validate(self.timestamp)?;
+        self.payload
+            .validate_submission_provenance(self.submission_provenance.as_ref())?;
         let expected_cid =
             self.recompute_node_cid()
                 .map_err(|err| GovernanceLogValidationError::CidEncoding {
@@ -3700,6 +3945,7 @@ impl GovernanceLogNodeV1 {
             self.prev_cid.as_deref(),
             self.timestamp,
             &self.publisher_peer_id,
+            self.submission_provenance.as_ref(),
             &self.payload,
         )
     }
@@ -3736,6 +3982,7 @@ pub fn governance_log_node_cid_v1(
     prev_cid: Option<&[u8]>,
     timestamp: u64,
     publisher_peer_id: &[u8],
+    submission_provenance: Option<&GovernanceDagSubmissionProvenanceV1>,
     payload: &GovernanceLogPayloadV1,
 ) -> Result<Vec<u8>, norito::core::Error> {
     let payload = GovernanceLogNodeCidPayloadViewV1(GovernanceLogNodeCidPayloadViewWireV1 {
@@ -3743,6 +3990,7 @@ pub fn governance_log_node_cid_v1(
         prev_cid: borrowed_norito::Option(prev_cid),
         timestamp,
         publisher_peer_id: borrowed_norito::Vec(publisher_peer_id),
+        submission_provenance: borrowed_norito::ValueOption(submission_provenance),
         payload: borrowed_norito::Value(payload),
     });
     let payload_bytes = encode_governance_dag_signing_payload(&payload)?;
@@ -3864,6 +4112,23 @@ pub enum GovernanceLogValidationError {
     MissingPublisherPeerId,
     #[error("publisher peer ID is {length} bytes, maximum is {maximum}")]
     PublisherPeerIdTooLong { length: usize, maximum: usize },
+    #[error("governance payload requires authenticated submission provenance from {expected:?}")]
+    MissingSubmissionProvenance {
+        expected: GovernanceDagSubmissionOriginV1,
+    },
+    #[error(
+        "internally produced governance payload must not carry {found:?} submission provenance"
+    )]
+    UnexpectedSubmissionProvenance {
+        found: GovernanceDagSubmissionOriginV1,
+    },
+    #[error(
+        "governance submission provenance origin mismatch: expected {expected:?}, found {found:?}"
+    )]
+    SubmissionOriginMismatch {
+        expected: GovernanceDagSubmissionOriginV1,
+        found: GovernanceDagSubmissionOriginV1,
+    },
     #[error("publisher signature missing key or signature bytes")]
     InvalidSignature,
     #[error("governance {algorithm:?} public key has {found} bytes; expected {expected}")]
@@ -5168,6 +5433,27 @@ mod tests {
         0xff, 0x7f,
     ];
 
+    #[test]
+    fn governance_publication_source_pair_identity_binds_every_field() {
+        let baseline =
+            governance_publication_source_pair_id_v1("repair_audit", 7, [0x11; 32], 9, [0x22; 32]);
+        for changed in [
+            governance_publication_source_pair_id_v1(
+                "reputation_snapshot",
+                7,
+                [0x11; 32],
+                9,
+                [0x22; 32],
+            ),
+            governance_publication_source_pair_id_v1("repair_audit", 8, [0x11; 32], 9, [0x22; 32]),
+            governance_publication_source_pair_id_v1("repair_audit", 7, [0x12; 32], 9, [0x22; 32]),
+            governance_publication_source_pair_id_v1("repair_audit", 7, [0x11; 32], 10, [0x22; 32]),
+            governance_publication_source_pair_id_v1("repair_audit", 7, [0x11; 32], 9, [0x23; 32]),
+        ] {
+            assert_ne!(changed, baseline);
+        }
+    }
+
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         let mut bytes = Vec::new();
@@ -5287,6 +5573,7 @@ mod tests {
             prev_cid: Some([0x31; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
             timestamp: 1_700_000_300,
             publisher_peer_id: b"12D3KooWGovernancePeer".to_vec(),
+            submission_provenance: None,
             payload: signed_por_proof_payload(),
             publisher_signature: GovernanceLogSignatureV1 {
                 algorithm: GovernanceSignatureAlgorithm::Dilithium3,
@@ -5309,6 +5596,7 @@ mod tests {
             Some(prev_cid.as_slice()),
             1_700_000_300,
             publisher_peer_id,
+            None,
             &payload,
         )
         .expect("derive governance log node CID");
@@ -5316,6 +5604,7 @@ mod tests {
             Some(prev_cid.as_slice()),
             1_700_000_300,
             publisher_peer_id,
+            None,
             &payload,
         )
         .expect("derive governance log node CID again");
@@ -5323,6 +5612,7 @@ mod tests {
             Some(prev_cid.as_slice()),
             1_700_000_301,
             publisher_peer_id,
+            None,
             &payload,
         )
         .expect("derive changed governance log node CID");
@@ -5596,14 +5886,42 @@ mod tests {
             1,
             1_700_000_500,
         );
+        let mut attributed = signed_governance_block(
+            Some(child.block_cid.clone()),
+            Some(child.node.node_cid.clone()),
+            2,
+            1_700_000_600,
+        );
+        attributed.node.payload =
+            GovernanceLogPayloadV1::AppealFinanceReport(sample_appeal_finance_report());
+        attributed.node.submission_provenance = Some(GovernanceDagSubmissionProvenanceV1 {
+            publisher_account_digest: governance_dag_submission_account_digest_v1(
+                b"canonical-norito-account",
+            ),
+            origin: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+        });
+        attributed.node.node_cid = attributed
+            .node
+            .recompute_node_cid()
+            .expect("derive provenance-bearing node CID");
+        sign_governance_node(&mut attributed.node, &[0xC7; 32]);
+        attributed.block_cid = attributed
+            .recompute_block_cid()
+            .expect("derive provenance-bearing block CID");
+        sign_governance_block(&mut attributed, &[0xC7; 32]);
 
-        for (label, block) in [("root", &root), ("child", &child)] {
+        for (label, block) in [
+            ("root", &root),
+            ("child", &child),
+            ("attributed", &attributed),
+        ] {
             let node = &block.node;
             let owned_node_cid = GovernanceLogNodeCidPayloadV1 {
                 version: GOVERNANCE_LOG_VERSION_V1,
                 prev_cid: node.prev_cid.clone(),
                 timestamp: node.timestamp,
                 publisher_peer_id: node.publisher_peer_id.clone(),
+                submission_provenance: node.submission_provenance.clone(),
                 payload: node.payload.clone(),
             };
             let borrowed_node_cid =
@@ -5612,6 +5930,9 @@ mod tests {
                     prev_cid: borrowed_norito::Option(node.prev_cid.as_deref()),
                     timestamp: node.timestamp,
                     publisher_peer_id: borrowed_norito::Vec(&node.publisher_peer_id),
+                    submission_provenance: borrowed_norito::ValueOption(
+                        node.submission_provenance.as_ref(),
+                    ),
                     payload: borrowed_norito::Value(&node.payload),
                 });
             assert_borrowed_wire_exact(
@@ -5908,6 +6229,7 @@ mod tests {
             prev_cid: Some([0x32; GOVERNANCE_DAG_CID_BYTES_V1].to_vec()),
             timestamp: 1_700_000_100,
             publisher_peer_id: b"12D3KooWGovernancePeer".to_vec(),
+            submission_provenance: None,
             payload: GovernanceLogPayloadV1::ProviderAdvert(advert),
             publisher_signature: GovernanceLogSignatureV1 {
                 algorithm: GovernanceSignatureAlgorithm::Dilithium3,
@@ -7062,6 +7384,109 @@ mod tests {
     }
 
     #[test]
+    fn governance_submission_provenance_is_required_origin_checked_and_cid_bound() {
+        let payload = GovernanceLogPayloadV1::AppealFinanceReport(sample_appeal_finance_report());
+        assert!(matches!(
+            payload.validate_submission_provenance(None),
+            Err(GovernanceLogValidationError::MissingSubmissionProvenance {
+                expected: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+            })
+        ));
+
+        let provenance = GovernanceDagSubmissionProvenanceV1 {
+            publisher_account_digest: governance_dag_submission_account_digest_v1(
+                b"canonical-norito-publisher-account",
+            ),
+            origin: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+        };
+        payload
+            .validate_submission_provenance(Some(&provenance))
+            .expect("matching authenticated provenance");
+
+        let mut wrong_origin = provenance.clone();
+        wrong_origin.origin = GovernanceDagSubmissionOriginV1::AppealFinanceWeeklyRollup;
+        assert!(matches!(
+            payload.validate_submission_provenance(Some(&wrong_origin)),
+            Err(GovernanceLogValidationError::SubmissionOriginMismatch {
+                expected: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+                found: GovernanceDagSubmissionOriginV1::AppealFinanceWeeklyRollup,
+            })
+        ));
+
+        let cid = governance_log_node_cid_v1(
+            None,
+            1_800_000_031,
+            b"12D3KooWGovernancePeer",
+            Some(&provenance),
+            &payload,
+        )
+        .expect("derive provenance-bound node CID");
+        let mut other_publisher = provenance.clone();
+        other_publisher.publisher_account_digest = governance_dag_submission_account_digest_v1(
+            b"canonical-norito-other-publisher-account",
+        );
+        let other_cid = governance_log_node_cid_v1(
+            None,
+            1_800_000_031,
+            b"12D3KooWGovernancePeer",
+            Some(&other_publisher),
+            &payload,
+        )
+        .expect("derive changed provenance-bound node CID");
+        assert_ne!(cid, other_cid);
+
+        let internal_payload = signed_por_proof_payload();
+        internal_payload
+            .validate_submission_provenance(None)
+            .expect("internal payload needs only its node signer attestation");
+        assert!(matches!(
+            internal_payload.validate_submission_provenance(Some(&provenance)),
+            Err(
+                GovernanceLogValidationError::UnexpectedSubmissionProvenance {
+                    found: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+                }
+            )
+        ));
+
+        let external_payload = GovernanceLogPayloadV1::ExternalPayload(sample_external_payload());
+        external_payload
+            .validate_submission_provenance(None)
+            .expect("trusted in-process transparency producer may omit caller provenance");
+        let external_provenance = GovernanceDagSubmissionProvenanceV1 {
+            publisher_account_digest: provenance.publisher_account_digest,
+            origin: GovernanceDagSubmissionOriginV1::PrivacyAggregatePublishDue,
+        };
+        external_payload
+            .validate_submission_provenance(Some(&external_provenance))
+            .expect("authenticated transparency ingress retains matching provenance");
+        assert!(matches!(
+            external_payload.validate_submission_provenance(Some(&provenance)),
+            Err(GovernanceLogValidationError::SubmissionOriginMismatch {
+                expected: GovernanceDagSubmissionOriginV1::PrivacyAggregatePublishDue,
+                found: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
+            })
+        ));
+    }
+
+    #[test]
+    fn governance_submission_account_digest_is_fixed_and_identity_bound() {
+        let publisher =
+            governance_dag_submission_account_digest_v1(b"canonical-norito-publisher-account");
+        let same_publisher =
+            governance_dag_submission_account_digest_v1(b"canonical-norito-publisher-account");
+        let other_publisher = governance_dag_submission_account_digest_v1(
+            b"canonical-norito-other-publisher-account",
+        );
+
+        assert_eq!(
+            publisher.len(),
+            GOVERNANCE_DAG_SUBMISSION_ACCOUNT_DIGEST_BYTES_V1
+        );
+        assert_eq!(publisher, same_publisher);
+        assert_ne!(publisher, other_publisher);
+    }
+
+    #[test]
     fn appeal_finance_report_enforces_exact_size_text_and_panel_boundaries() {
         let mut report = sample_appeal_finance_report();
         report.case_id = "c".repeat(SORAFS_APPEAL_FINANCE_IDENTIFIER_MAX_BYTES_V1);
@@ -7409,413 +7834,8 @@ mod tests {
         );
     }
 
-    fn sample_appeal_finance_settlement_receipt() -> SoraFsAppealFinanceSettlementReceiptV1 {
-        SoraFsAppealFinanceSettlementReceiptV1 {
-            version: SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
-            receipt_id: [0x52; 16],
-            case_id: "case-42".to_string(),
-            round_id: Some("round-1".to_string()),
-            generated_at_unix_ms: 1_800_000_032_000,
-            finalized_block_height: 42,
-            finalized_block_hash: [0x43; 32],
-            appeal_finance_config_version: "baseline-v1".to_string(),
-            appeal_finance_policy_digest: [0x44; 32],
-            outcome: SoraFsAppealFinanceOutcomeV1::Frivolous,
-            escrow_id_hex: "11".repeat(32),
-            payer_account: "payer-account".to_string(),
-            destination_account: "escrow-account".to_string(),
-            release_authority_account: Some("release-authority".to_string()),
-            submitted_step: "drawdown_non_refund".to_string(),
-            required_authority: "release-authority".to_string(),
-            amount_xor: "420".parse().expect("canonical XOR quantity"),
-            tx_hash_hex: "22".repeat(32),
-            reconciliation_digest_hex: "33".repeat(32),
-            reconciliation_status: "settled".to_string(),
-            observed_lifecycle_status: "drawn_down".to_string(),
-            observed_remaining_xor: "0".parse().expect("canonical XOR quantity"),
-            deposit_xor: "420".parse().expect("canonical XOR quantity"),
-            refund_xor: "0".parse().expect("canonical XOR quantity"),
-            treasury_xor: "210".parse().expect("canonical XOR quantity"),
-            held_xor: "210".parse().expect("canonical XOR quantity"),
-            panel_size: 7,
-            configured_signer_count: 1,
-        }
-    }
-
-    #[test]
-    fn governance_payload_accepts_appeal_finance_settlement_receipt() {
-        let receipt = sample_appeal_finance_settlement_receipt();
-        let payload = GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(receipt);
-
-        payload
-            .validate(1_800_000_032)
-            .expect("settlement receipt payload validates");
-    }
-
-    #[test]
-    fn appeal_finance_settlement_receipt_accepts_canonical_bounds_and_applied_states() {
-        let mut bounded = sample_appeal_finance_settlement_receipt();
-        bounded.case_id = "c".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1);
-        bounded.round_id =
-            Some("r".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1));
-        bounded.payer_account = "p".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1);
-        bounded.destination_account =
-            "d".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1);
-        bounded.release_authority_account =
-            Some("a".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1));
-        bounded.required_authority =
-            "s".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1);
-        bounded.appeal_finance_config_version = format!(
-            "{}-v1",
-            "a".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1 - 3)
-        );
-        bounded.validate().expect("maximum canonical bounds");
-
-        for (step, reconciliation, lifecycle) in [
-            ("drawdown_non_refund", "awaiting_refund_cancel", "locked"),
-            ("drawdown_non_refund", "settled", "drawn_down"),
-            ("cancel_refund", "settled", "cancelled"),
-        ] {
-            let mut receipt = sample_appeal_finance_settlement_receipt();
-            receipt.submitted_step = step.to_string();
-            receipt.reconciliation_status = reconciliation.to_string();
-            receipt.observed_lifecycle_status = lifecycle.to_string();
-            receipt
-                .validate()
-                .unwrap_or_else(|error| panic!("{step}/{reconciliation}/{lifecycle}: {error}"));
-        }
-    }
-
-    #[test]
-    fn appeal_finance_settlement_receipt_rejects_noncanonical_visible_identifiers() {
-        fn assert_invalid_label(
-            receipt: SoraFsAppealFinanceSettlementReceiptV1,
-            field: &'static str,
-            max_bytes: usize,
-        ) {
-            assert_eq!(
-                receipt.validate(),
-                Err(
-                    SoraFsAppealFinanceSettlementReceiptValidationError::InvalidLabel {
-                        field,
-                        max_bytes,
-                    }
-                )
-            );
-        }
-
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.case_id = "case 42".to_string();
-        assert_invalid_label(
-            receipt,
-            "case_id",
-            APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1,
-        );
-
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.round_id = Some("round-é".to_string());
-        assert_invalid_label(
-            receipt,
-            "round_id",
-            APPEAL_FINANCE_SETTLEMENT_RECEIPT_IDENTIFIER_MAX_BYTES_V1,
-        );
-
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.payer_account = "payer#account".to_string();
-        assert_invalid_label(
-            receipt,
-            "payer_account",
-            APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
-        );
-
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.destination_account =
-            "d".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1 + 1);
-        assert_invalid_label(
-            receipt,
-            "destination_account",
-            APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
-        );
-
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.release_authority_account = Some("release\nauthority".to_string());
-        assert_invalid_label(
-            receipt,
-            "release_authority_account",
-            APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
-        );
-
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.required_authority = " authority".to_string();
-        assert_invalid_label(
-            receipt,
-            "required_authority",
-            APPEAL_FINANCE_SETTLEMENT_RECEIPT_ACCOUNT_MAX_BYTES_V1,
-        );
-    }
-
-    #[test]
-    fn appeal_finance_settlement_receipt_requires_canonical_config_version() {
-        for version in [
-            "baseline-v1",
-            "baseline-revision-v2",
-            "baseline-rotated-v2",
-            "appeal-finance-v10",
-        ] {
-            let mut receipt = sample_appeal_finance_settlement_receipt();
-            receipt.appeal_finance_config_version = version.to_string();
-            receipt
-                .validate()
-                .unwrap_or_else(|error| panic!("{version}: {error}"));
-        }
-
-        for version in [
-            "baseline-v0",
-            "baseline-v01",
-            "Baseline-v1",
-            "baseline_v1",
-            "baseline-v1-revision-2",
-            "baseline--revision-v2",
-            "baseline-v2 ",
-        ] {
-            let mut receipt = sample_appeal_finance_settlement_receipt();
-            receipt.appeal_finance_config_version = version.to_string();
-            assert_eq!(
-                receipt.validate(),
-                Err(
-                    SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinanceConfigVersion {
-                        max_bytes:
-                            APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1,
-                    }
-                ),
-                "{version}"
-            );
-        }
-
-        let mut oversized = sample_appeal_finance_settlement_receipt();
-        oversized.appeal_finance_config_version = format!(
-            "{}-v1",
-            "a".repeat(APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1 - 2)
-        );
-        assert_eq!(
-            oversized.validate(),
-            Err(
-                SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinanceConfigVersion {
-                    max_bytes: APPEAL_FINANCE_SETTLEMENT_RECEIPT_CONFIG_VERSION_MAX_BYTES_V1,
-                }
-            )
-        );
-    }
-
-    #[test]
-    fn appeal_finance_settlement_receipt_rejects_unfinalized_or_unknown_states() {
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.submitted_step = "treasury_release".to_string();
-        assert_eq!(
-            receipt.validate(),
-            Err(SoraFsAppealFinanceSettlementReceiptValidationError::UnsupportedSubmittedStep)
-        );
-
-        for status in ["pending_forwarder_submission", "mismatch", "unknown"] {
-            let mut receipt = sample_appeal_finance_settlement_receipt();
-            receipt.reconciliation_status = status.to_string();
-            assert_eq!(
-                receipt.validate(),
-                Err(
-                    SoraFsAppealFinanceSettlementReceiptValidationError::UnsupportedReconciliationStatus
-                ),
-                "{status}"
-            );
-        }
-
-        for status in ["funded", "expired", "unknown"] {
-            let mut receipt = sample_appeal_finance_settlement_receipt();
-            receipt.observed_lifecycle_status = status.to_string();
-            assert_eq!(
-                receipt.validate(),
-                Err(
-                    SoraFsAppealFinanceSettlementReceiptValidationError::UnsupportedLifecycleStatus
-                ),
-                "{status}"
-            );
-        }
-
-        for (step, reconciliation, lifecycle) in [
-            ("drawdown_non_refund", "settled", "locked"),
-            (
-                "drawdown_non_refund",
-                "awaiting_refund_cancel",
-                "drawn_down",
-            ),
-            ("cancel_refund", "awaiting_refund_cancel", "locked"),
-            ("cancel_refund", "settled", "drawn_down"),
-        ] {
-            let mut receipt = sample_appeal_finance_settlement_receipt();
-            receipt.submitted_step = step.to_string();
-            receipt.reconciliation_status = reconciliation.to_string();
-            receipt.observed_lifecycle_status = lifecycle.to_string();
-            assert_eq!(
-                receipt.validate(),
-                Err(
-                    SoraFsAppealFinanceSettlementReceiptValidationError::InconsistentFinalizedState
-                ),
-                "{step}/{reconciliation}/{lifecycle}"
-            );
-        }
-    }
-
-    #[test]
-    fn appeal_finance_settlement_receipt_rejects_zero_timestamp_and_panel() {
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.generated_at_unix_ms = 0;
-        assert_eq!(
-            receipt.validate(),
-            Err(SoraFsAppealFinanceSettlementReceiptValidationError::MissingGeneratedAt)
-        );
-
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.panel_size = 0;
-        assert_eq!(
-            receipt.validate(),
-            Err(SoraFsAppealFinanceSettlementReceiptValidationError::InvalidPanelSize)
-        );
-    }
-
-    #[test]
-    fn appeal_finance_settlement_receipt_requires_finalized_block_cursor() {
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.finalized_block_height = 0;
-        assert_eq!(
-            receipt.validate(),
-            Err(SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinalizedBlockHeight)
-        );
-
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.finalized_block_hash = [0; 32];
-        assert_eq!(
-            receipt.validate(),
-            Err(SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinalizedBlockHash)
-        );
-    }
-
-    #[test]
-    fn appeal_finance_settlement_receipt_canonical_digest_binds_finalized_cursor() {
-        let receipt = sample_appeal_finance_settlement_receipt();
-        let encoded = norito::to_bytes(&receipt).expect("encode receipt");
-        let digest = blake3::hash(&encoded);
-
-        let mut changed_height = receipt.clone();
-        changed_height.finalized_block_height += 1;
-        let changed_height_encoded =
-            norito::to_bytes(&changed_height).expect("encode changed-height receipt");
-        assert_ne!(changed_height_encoded, encoded);
-        assert_ne!(blake3::hash(&changed_height_encoded), digest);
-
-        let mut changed_hash = receipt;
-        changed_hash.finalized_block_hash[0] ^= 0x01;
-        let changed_hash_encoded =
-            norito::to_bytes(&changed_hash).expect("encode changed-hash receipt");
-        assert_ne!(changed_hash_encoded, encoded);
-        assert_ne!(blake3::hash(&changed_hash_encoded), digest);
-    }
-
-    fn sample_orderbook_settlement_receipt() -> SettlementReceiptV1 {
-        SettlementReceiptV1 {
-            version: crate::SETTLEMENT_RECEIPT_VERSION_V1,
-            receipt_id: [0x72; 32],
-            channel_id: [0x73; 32],
-            trade_id: [0x74; 32],
-            range: crate::ByteRangeV1 {
-                start: 0,
-                end: crate::BYTES_PER_GIB,
-            },
-            chunk_hash: [0x75; 32],
-            bytes_delivered: crate::BYTES_PER_GIB,
-            xor_debited: crate::XorQuantity::try_from_micro(500)
-                .expect("legacy micro-XOR value is representable"),
-            provider_credit: crate::XorQuantity::try_from_micro(450)
-                .expect("legacy micro-XOR value is representable"),
-            fee_amount: crate::XorQuantity::try_from_micro(50)
-                .expect("legacy micro-XOR value is representable"),
-            issued_at_unix: 1_800_000_033,
-            settlement_signature: crate::OrderbookSignatureV1 {
-                algorithm: crate::provider_advert::SignatureAlgorithm::Ed25519,
-                public_key: vec![0x76; 32],
-                signature: vec![0x77; 64],
-            },
-        }
-    }
-
-    #[test]
-    fn governance_payload_accepts_orderbook_settlement_receipt() {
-        let receipt = sample_orderbook_settlement_receipt();
-        let payload = GovernanceLogPayloadV1::OrderbookSettlementReceipt(receipt);
-
-        payload
-            .validate(1_800_000_033)
-            .expect("orderbook settlement receipt payload validates");
-    }
-
-    #[test]
-    fn appeal_finance_settlement_receipt_rejects_invalid_reconciliation_digest() {
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.reconciliation_digest_hex = "AA".repeat(32);
-
-        let err = receipt
-            .validate()
-            .expect_err("uppercase digest rejected as non-canonical");
-        assert_eq!(
-            err,
-            SoraFsAppealFinanceSettlementReceiptValidationError::InvalidHex {
-                field: "reconciliation_digest_hex",
-                expected_bytes: 32,
-            }
-        );
-    }
-
-    #[test]
-    fn appeal_finance_settlement_receipt_requires_exact_lowercase_hex_fields() {
-        fn assert_invalid_hex(
-            receipt: SoraFsAppealFinanceSettlementReceiptV1,
-            field: &'static str,
-        ) {
-            assert_eq!(
-                receipt.validate(),
-                Err(
-                    SoraFsAppealFinanceSettlementReceiptValidationError::InvalidHex {
-                        field,
-                        expected_bytes: 32,
-                    }
-                )
-            );
-        }
-
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.escrow_id_hex = "AA".repeat(32);
-        assert_invalid_hex(receipt, "escrow_id_hex");
-
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.tx_hash_hex = "2".repeat(63);
-        assert_invalid_hex(receipt, "tx_hash_hex");
-
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.reconciliation_digest_hex = format!("{}g", "3".repeat(63));
-        assert_invalid_hex(receipt, "reconciliation_digest_hex");
-    }
-
-    #[test]
-    fn appeal_finance_settlement_receipt_rejects_zero_policy_digest() {
-        let mut receipt = sample_appeal_finance_settlement_receipt();
-        receipt.appeal_finance_policy_digest = [0; 32];
-
-        let err = receipt
-            .validate()
-            .expect_err("zero governed policy digest rejected");
-        assert_eq!(
-            err,
-            SoraFsAppealFinanceSettlementReceiptValidationError::InvalidFinancePolicyDigest
-        );
-    }
+    // Textual inclusion preserves the original governance test-module paths.
+    include!("governance/tests/appeal_finance_settlement.rs");
 
     fn second_appeal_finance_report() -> SoraFsAppealFinanceReportV1 {
         SoraFsAppealFinanceReportV1 {
@@ -7952,439 +7972,5 @@ mod tests {
             .expect("weekly rollup payload validates");
     }
 
-    #[test]
-    fn appeal_finance_weekly_rollup_enforces_exact_size_and_source_boundaries() {
-        let rollup = max_source_appeal_finance_weekly_rollup();
-        rollup
-            .validate()
-            .expect("exact source-report boundary validates");
-
-        let exact = rollup
-            .encoded_len_exact()
-            .expect("appeal finance weekly rollup exact length");
-        assert_eq!(
-            preflight_appeal_finance_weekly_rollup_len(&rollup, exact)
-                .expect("exact weekly rollup boundary"),
-            exact
-        );
-        assert!(matches!(
-            preflight_appeal_finance_weekly_rollup_len(&rollup, exact - 1),
-            Err(
-                SoraFsAppealFinanceWeeklyRollupValidationError::PayloadTooLarge {
-                    found,
-                    maximum,
-                }
-            ) if found == exact && maximum == exact - 1
-        ));
-
-        let mut too_many_declared = rollup.clone();
-        too_many_declared.report_count += 1;
-        assert!(matches!(
-            too_many_declared.validate(),
-            Err(
-                SoraFsAppealFinanceWeeklyRollupValidationError::TooManySourceReports {
-                    found,
-                    maximum: SORAFS_APPEAL_FINANCE_WEEKLY_SOURCE_REPORTS_MAX_V1,
-                }
-            ) if found
-                == u64::try_from(SORAFS_APPEAL_FINANCE_WEEKLY_SOURCE_REPORTS_MAX_V1)
-                    .expect("source-report ceiling fits u64")
-                    + 1
-        ));
-
-        let mut too_many_ids = rollup;
-        too_many_ids.source_report_ids.push(
-            (u128::try_from(SORAFS_APPEAL_FINANCE_WEEKLY_SOURCE_REPORTS_MAX_V1)
-                .expect("source-report ceiling fits u128")
-                + 1)
-            .to_be_bytes(),
-        );
-        assert!(matches!(
-            too_many_ids.validate(),
-            Err(
-                SoraFsAppealFinanceWeeklyRollupValidationError::TooManySourceReportIds {
-                    found,
-                    maximum: SORAFS_APPEAL_FINANCE_WEEKLY_SOURCE_REPORTS_MAX_V1,
-                }
-            ) if found == SORAFS_APPEAL_FINANCE_WEEKLY_SOURCE_REPORTS_MAX_V1 + 1
-        ));
-    }
-
-    #[test]
-    fn appeal_finance_weekly_rollup_enforces_config_and_outcome_boundaries() {
-        let first = sample_appeal_finance_report();
-        let second = second_appeal_finance_report();
-        let cycle = PorReportIsoWeek {
-            year: 2026,
-            week: 26,
-        };
-        let mut config_rollup = SoraFsAppealFinanceWeeklyRollupV1::from_reports(
-            cycle,
-            1_800_000_100_000,
-            &[first, second],
-        )
-        .expect("baseline weekly rollup");
-        config_rollup.appeal_finance_config_versions = (0
-            ..SORAFS_APPEAL_FINANCE_WEEKLY_CONFIG_VERSIONS_MAX_V1)
-            .map(|index| format!("config-{index:03}"))
-            .collect();
-        config_rollup
-            .validate()
-            .expect("exact config-version boundary validates");
-
-        let mut too_many_configs = config_rollup;
-        too_many_configs
-            .appeal_finance_config_versions
-            .push(format!(
-                "config-{:03}",
-                SORAFS_APPEAL_FINANCE_WEEKLY_CONFIG_VERSIONS_MAX_V1
-            ));
-        assert!(matches!(
-            too_many_configs.validate(),
-            Err(
-                SoraFsAppealFinanceWeeklyRollupValidationError::TooManyConfigVersions {
-                    found,
-                    maximum: SORAFS_APPEAL_FINANCE_WEEKLY_CONFIG_VERSIONS_MAX_V1,
-                }
-            ) if found == SORAFS_APPEAL_FINANCE_WEEKLY_CONFIG_VERSIONS_MAX_V1 + 1
-        ));
-
-        let outcomes = [
-            SoraFsAppealFinanceOutcomeV1::Uphold,
-            SoraFsAppealFinanceOutcomeV1::Overturn,
-            SoraFsAppealFinanceOutcomeV1::Modify,
-            SoraFsAppealFinanceOutcomeV1::WithdrawnBeforePanel,
-            SoraFsAppealFinanceOutcomeV1::WithdrawnAfterPanel,
-            SoraFsAppealFinanceOutcomeV1::Frivolous,
-            SoraFsAppealFinanceOutcomeV1::Escalated,
-        ];
-        let reports: Vec<_> = outcomes
-            .into_iter()
-            .enumerate()
-            .map(|(index, outcome)| {
-                let mut report = sample_appeal_finance_report();
-                report.report_id = u128::try_from(index + 1)
-                    .expect("fixture index fits u128")
-                    .to_be_bytes();
-                report.case_id = format!("case-{index}");
-                report.outcome = outcome;
-                report
-            })
-            .collect();
-        let mut outcome_rollup =
-            SoraFsAppealFinanceWeeklyRollupV1::from_reports(cycle, 1_800_000_100_000, &reports)
-                .expect("seven-outcome rollup");
-        assert_eq!(
-            outcome_rollup.outcomes.len(),
-            SORAFS_APPEAL_FINANCE_WEEKLY_OUTCOMES_MAX_V1
-        );
-        outcome_rollup
-            .validate()
-            .expect("exact outcome boundary validates");
-
-        outcome_rollup
-            .outcomes
-            .push(outcome_rollup.outcomes.last().expect("outcome").clone());
-        assert!(matches!(
-            outcome_rollup.validate(),
-            Err(
-                SoraFsAppealFinanceWeeklyRollupValidationError::TooManyOutcomes {
-                    found,
-                    maximum: SORAFS_APPEAL_FINANCE_WEEKLY_OUTCOMES_MAX_V1,
-                }
-            ) if found == SORAFS_APPEAL_FINANCE_WEEKLY_OUTCOMES_MAX_V1 + 1
-        ));
-    }
-
-    #[test]
-    fn appeal_finance_weekly_rollup_rejects_duplicate_report_ids() {
-        let report = sample_appeal_finance_report();
-        let cycle = PorReportIsoWeek {
-            year: 2026,
-            week: 26,
-        };
-
-        let err = SoraFsAppealFinanceWeeklyRollupV1::from_reports(
-            cycle,
-            1_800_000_100_000,
-            &[report.clone(), report.clone()],
-        )
-        .expect_err("duplicate report rejected");
-
-        assert_eq!(
-            err,
-            SoraFsAppealFinanceWeeklyRollupBuildError::DuplicateReportId {
-                report_id: report.report_id,
-            }
-        );
-    }
-
-    #[test]
-    fn appeal_finance_weekly_rollup_build_rejects_quantity_overflow() {
-        let mut first = sample_appeal_finance_report();
-        first.deposit_xor =
-            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
-                .parse()
-                .expect("maximum positive quantity");
-        let mut second = second_appeal_finance_report();
-        second.deposit_xor = "1".parse().expect("canonical quantity");
-
-        let err = SoraFsAppealFinanceWeeklyRollupV1::from_reports(
-            PorReportIsoWeek {
-                year: 2026,
-                week: 26,
-            },
-            1_800_000_100_000,
-            &[first, second.clone()],
-        )
-        .expect_err("overflowing report totals must fail closed");
-
-        assert!(matches!(
-            err,
-            SoraFsAppealFinanceWeeklyRollupBuildError::AmountOverflow {
-                report_id,
-                field: "deposit_xor",
-                ..
-            } if report_id == second.report_id
-        ));
-    }
-
-    #[test]
-    fn appeal_finance_weekly_rollup_validation_rejects_outcome_overflow() {
-        let first = sample_appeal_finance_report();
-        let second = second_appeal_finance_report();
-        let mut rollup = SoraFsAppealFinanceWeeklyRollupV1::from_reports(
-            PorReportIsoWeek {
-                year: 2026,
-                week: 26,
-            },
-            1_800_000_100_000,
-            &[first, second],
-        )
-        .expect("baseline rollup");
-        rollup.outcomes[0].total_deposit_xor =
-            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
-                .parse()
-                .expect("maximum positive quantity");
-        rollup.outcomes[1].total_deposit_xor = "1".parse().expect("canonical quantity");
-
-        assert!(matches!(
-            rollup.validate(),
-            Err(
-                SoraFsAppealFinanceWeeklyRollupValidationError::AmountOverflow {
-                    field: "outcomes.total_deposit_xor",
-                    ..
-                }
-            )
-        ));
-    }
-
-    #[test]
-    fn moderation_ballot_event_rejects_inconsistent_tally() {
-        let event = SoraFsModerationBallotGovernanceEventV1 {
-            version: SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
-            sequence: 6,
-            kind: SoraFsModerationBallotGovernanceEventKindV1::BallotTallied,
-            generated_at_unix_ms: 1_800_000_030_000,
-            case_id: "case-42".to_string(),
-            round_id: "round-1".to_string(),
-            juror_id: None,
-            committed_count: 2,
-            revealed_count: 2,
-            challenge_count: 0,
-            tally: Some(SoraFsModerationBallotGovernanceTallyV1 {
-                case_id: "case-42".to_string(),
-                round_id: "round-2".to_string(),
-                counts: SoraFsModerationVoteCountsV1 {
-                    uphold: 1,
-                    overturn: 1,
-                    modify: 0,
-                    escalate: 0,
-                },
-                votes_total: 2,
-                quorum: 2,
-                winning_choice: Some(SoraFsModerationVoteChoiceV1::Uphold),
-                contested: false,
-                tallied_at_unix_ms: 1_800_000_030_000,
-            }),
-            challenge: None,
-        };
-
-        assert!(matches!(
-            event.validate(),
-            Err(SoraFsModerationBallotGovernanceEventValidationError::TallyRoundMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn moderation_ballot_event_accepts_challenge_lifecycle_events() {
-        let submitted_challenge = SoraFsModerationBallotGovernanceChallengeV1 {
-            challenge_id: "challenge-1".to_owned(),
-            case_id: "case-42".to_owned(),
-            round_id: "round-1".to_owned(),
-            challenger_id: "moderation-provider".to_owned(),
-            kind: SoraFsModerationBallotGovernanceChallengeKindV1::EvidenceMismatch,
-            target_juror_id: None,
-            evidence_digest: [0x42; 32],
-            reason: "payload-free-evidence-digest".to_owned(),
-            raised_at_unix_ms: 1_800_000_011_000,
-            decision: None,
-            resolved_by: None,
-            resolved_at_unix_ms: None,
-            resolution_note: None,
-        };
-        let submitted = SoraFsModerationBallotGovernanceEventV1 {
-            version: SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
-            sequence: 3,
-            kind: SoraFsModerationBallotGovernanceEventKindV1::ChallengeSubmitted,
-            generated_at_unix_ms: 1_800_000_011_000,
-            case_id: "case-42".to_owned(),
-            round_id: "round-1".to_owned(),
-            juror_id: None,
-            committed_count: 2,
-            revealed_count: 0,
-            challenge_count: 1,
-            tally: None,
-            challenge: Some(submitted_challenge.clone()),
-        };
-        submitted
-            .validate()
-            .expect("submitted challenge event validates");
-
-        let resolved_challenge = SoraFsModerationBallotGovernanceChallengeV1 {
-            decision: Some(SoraFsModerationBallotGovernanceChallengeDecisionV1::Rejected),
-            resolved_by: Some("moderation-operator".to_owned()),
-            resolved_at_unix_ms: Some(1_800_000_012_000),
-            resolution_note: Some("packet matches ballot".to_owned()),
-            ..submitted_challenge
-        };
-        let resolved = SoraFsModerationBallotGovernanceEventV1 {
-            kind: SoraFsModerationBallotGovernanceEventKindV1::ChallengeResolved,
-            generated_at_unix_ms: 1_800_000_012_000,
-            challenge: Some(resolved_challenge),
-            ..submitted
-        };
-        resolved
-            .validate()
-            .expect("resolved challenge event validates");
-    }
-
-    #[test]
-    fn moderation_challenge_enforces_account_and_public_text_boundaries() {
-        let case_id = "c".repeat(SORAFS_MODERATION_IDENTIFIER_MAX_BYTES_V1);
-        let round_id = "r".repeat(SORAFS_MODERATION_IDENTIFIER_MAX_BYTES_V1);
-        let challenge = SoraFsModerationBallotGovernanceChallengeV1 {
-            challenge_id: "h".repeat(SORAFS_MODERATION_IDENTIFIER_MAX_BYTES_V1),
-            case_id: case_id.clone(),
-            round_id: round_id.clone(),
-            challenger_id: "a".repeat(SORAFS_MODERATION_ACCOUNT_MAX_BYTES_V1),
-            kind: SoraFsModerationBallotGovernanceChallengeKindV1::EvidenceMismatch,
-            target_juror_id: Some("t".repeat(SORAFS_MODERATION_ACCOUNT_MAX_BYTES_V1)),
-            evidence_digest: [0x42; 32],
-            reason: "x".repeat(SORAFS_MODERATION_PUBLIC_TEXT_MAX_BYTES_V1),
-            raised_at_unix_ms: 1_800_000_011_000,
-            decision: None,
-            resolved_by: None,
-            resolved_at_unix_ms: None,
-            resolution_note: None,
-        };
-        let event = SoraFsModerationBallotGovernanceEventV1 {
-            version: SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
-            sequence: 3,
-            kind: SoraFsModerationBallotGovernanceEventKindV1::ChallengeSubmitted,
-            generated_at_unix_ms: 1_800_000_011_000,
-            case_id,
-            round_id,
-            juror_id: None,
-            committed_count: 2,
-            revealed_count: 0,
-            challenge_count: 1,
-            tally: None,
-            challenge: Some(challenge),
-        };
-        event.validate().expect("bounded challenge validates");
-
-        let mut long_reason = event.clone();
-        long_reason
-            .challenge
-            .as_mut()
-            .expect("challenge")
-            .reason
-            .push('x');
-        assert!(matches!(
-            long_reason.validate(),
-            Err(
-                SoraFsModerationBallotGovernanceEventValidationError::InvalidBoundedText {
-                    field: "challenge.reason",
-                    found,
-                    maximum: SORAFS_MODERATION_PUBLIC_TEXT_MAX_BYTES_V1,
-                }
-            ) if found == SORAFS_MODERATION_PUBLIC_TEXT_MAX_BYTES_V1 + 1
-        ));
-
-        let mut long_account = event;
-        long_account
-            .challenge
-            .as_mut()
-            .expect("challenge")
-            .challenger_id
-            .push('a');
-        assert!(matches!(
-            long_account.validate(),
-            Err(
-                SoraFsModerationBallotGovernanceEventValidationError::InvalidBoundedText {
-                    field: "challenge.challenger_id",
-                    found,
-                    maximum: SORAFS_MODERATION_ACCOUNT_MAX_BYTES_V1,
-                }
-            ) if found == SORAFS_MODERATION_ACCOUNT_MAX_BYTES_V1 + 1
-        ));
-    }
-
-    #[test]
-    fn moderation_ballot_event_rejects_invalid_challenge_payloads() {
-        let base_challenge = SoraFsModerationBallotGovernanceChallengeV1 {
-            challenge_id: "challenge-1".to_owned(),
-            case_id: "case-42".to_owned(),
-            round_id: "round-1".to_owned(),
-            challenger_id: "moderation-provider".to_owned(),
-            kind: SoraFsModerationBallotGovernanceChallengeKindV1::DuplicateCommit,
-            target_juror_id: None,
-            evidence_digest: [0x42; 32],
-            reason: "payload-free-evidence-digest".to_owned(),
-            raised_at_unix_ms: 1_800_000_011_000,
-            decision: None,
-            resolved_by: None,
-            resolved_at_unix_ms: None,
-            resolution_note: None,
-        };
-        let event = SoraFsModerationBallotGovernanceEventV1 {
-            version: SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
-            sequence: 3,
-            kind: SoraFsModerationBallotGovernanceEventKindV1::ChallengeSubmitted,
-            generated_at_unix_ms: 1_800_000_011_000,
-            case_id: "case-42".to_owned(),
-            round_id: "round-1".to_owned(),
-            juror_id: None,
-            committed_count: 2,
-            revealed_count: 0,
-            challenge_count: 1,
-            tally: None,
-            challenge: Some(base_challenge),
-        };
-        assert!(matches!(
-            event.validate(),
-            Err(SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeTarget)
-        ));
-
-        let mut resolved = event;
-        let challenge = resolved.challenge.as_mut().expect("challenge");
-        challenge.kind = SoraFsModerationBallotGovernanceChallengeKindV1::EvidenceMismatch;
-        challenge.decision = Some(SoraFsModerationBallotGovernanceChallengeDecisionV1::Accepted);
-        resolved.kind = SoraFsModerationBallotGovernanceEventKindV1::ChallengeResolved;
-        assert!(matches!(
-            resolved.validate(),
-            Err(SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeResolver)
-        ));
-    }
+    include!("governance/tests/weekly_rollup_and_moderation.rs");
 }

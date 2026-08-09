@@ -12,7 +12,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 
 [lib]
 name = "iroha_python_rs"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 iroha_crypto = { path = "../../../crates/iroha_crypto", features = ["node-crypto", "gost", "sm"], default-features = false }
@@ -32,7 +32,6 @@ sorafs_car = { path = "../../../crates/sorafs_car" }
 sorafs_chunker = { path = "../../../crates/sorafs_chunker" }
 sorafs_orchestrator = { path = "../../../crates/sorafs_orchestrator" }
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py39"] }
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
 rand_core_06 = { workspace = true }
 rustix = { version = "1.1.4", features = ["process"] }
 hex = "0.4.3"

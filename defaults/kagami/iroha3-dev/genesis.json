@@ -28,19 +28,6 @@
         },
         {
           "Register": {
-            "Account": {
-              "id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
-              "label": null,
-              "metadata": {
-                "purpose": "fee_sponsor_vault_custody"
-              },
-              "opaque_ids": [],
-              "uaid": null
-            }
-          }
-        },
-        {
-          "Register": {
             "AssetDefinition": {
               "alias": null,
               "balance_scope_policy": "Global",
@@ -57,6 +44,7 @@
               "metadata": {},
               "mintable": "Infinitely",
               "name": "rose",
+              "owning_domain": null,
               "spec": {
                 "scale": null
               }
@@ -101,6 +89,7 @@
               "metadata": {},
               "mintable": "Infinitely",
               "name": "cabbage",
+              "owning_domain": null,
               "spec": {
                 "scale": null
               }
@@ -169,7 +158,7 @@
               "finality_margin_blocks": 8,
               "max_entity_correlation_pct": 25,
               "max_nominator_concentration_pct": 25,
-              "max_validators": 128,
+              "max_validators": 31,
               "min_nomination_bond": "1",
               "min_self_bond": "1000",
               "seat_band_pct": 5,
@@ -189,7 +178,8 @@
             "Permission": {
               "destination": "sorauﾛ1P8KﾄvNﾚﾛRxNRUXﾉy11ｼut27XWｹkﾑcﾜﾋZﾃ6LbdﾗCSMEYKE",
               "object": {
-                "name": "CanManageVerifyingKeys"
+                "name": "CanManageVerifyingKeys",
+                "payload": null
               }
             }
           }
@@ -230,7 +220,8 @@
             "Permission": {
               "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
-                "name": "CanSetParameters"
+                "name": "CanSetParameters",
+                "payload": null
               }
             }
           }
@@ -240,7 +231,8 @@
             "Permission": {
               "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
-                "name": "CanManageSoracloud"
+                "name": "CanReadAllLedgerData",
+                "payload": null
               }
             }
           }
@@ -250,7 +242,21 @@
             "Permission": {
               "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
-                "name": "CanRegisterAccount"
+                "name": "CanManageSoracloud",
+                "payload": null
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
+                "name": "CanRegisterAccount",
+                "payload": {
+                  "domain": "wonderland.universal"
+                }
               }
             }
           }
@@ -261,13 +267,205 @@
         {
           "peer": "ea0130A1DB3124CEBD4A5A9BBC968D3988FFC0DF0B8E50F9650554FD8599E7D7F07A7C8F7F1CFE1B2CBC397661A48363188EED",
           "pop_hex": "88f92a579492d254ebdeb00b9a320a0e30aabebfcef1c15314ac93cc34f34c3cff9331815a00b31f6f311fd4852bbbcd0307c0ff355bc5495f2fcc2e5f161291791af56fcefaf2442942c6170e6529a430ce240eac8183ecf7f300b0ce6479b5"
+        },
+        {
+          "peer": "ea013095F9E716AB9F2F0670D588FBFA5420AC598CFFB58F0AEF969543D7BBCF81CE132A2A20E813A1CC0647B4B179B76B09CD",
+          "pop_hex": "9590b9ef26cc1eb1000cc7c7b7532ee8b166a0d899c5ee7e088f53ded39e0faf57cc7f2d9ed4261ae3b278f094fe443100e5672f2ee4f3d52f89c769a72b4d5feda007835cfd404fde03afc6e2d8258c9a7fee1b8cb64625e001fcbfb0089152"
+        },
+        {
+          "peer": "ea01309753D5AA860989AD67EC4FB2A14558A879AACC538A4C656CCDF2FE8D646CD5B6DF7E32F397A91CD371951645D89ED917",
+          "pop_hex": "992e8cae69b3297999f88b0b9b2c646713f88889b5204ad0ee9c94fe93f485b9e3732724673cc104a57ffa80cad413b703232c18cf57c7f5a4c0281f08cfdc03816db298fef45874ab4fa383037e8d6c991fd61f760b4cb37f87dde7e2b1d747"
+        },
+        {
+          "peer": "ea013089E0110B3F07AB1CEFAC930756E4DBC25E37D606E4D03513BF4C744DA0F6134DE8B7E52749511C823C230672F736C304",
+          "pop_hex": "810957f8c36f3db895f02157573187fb4aadc21256c9cb837369697a2d605942ea8b53880c8f7842d4b7e58ac037cc340afbae35f05adbaad21782e9c80a952318f217e197a8ecbb7ddf4af4633bab3e8256663244aa3fc12c2a08cf93436776"
         }
       ]
+    },
+    {
+      "instructions": [
+        {
+          "Register": {
+            "Domain": {
+              "id": "nexus.universal",
+              "logo": null,
+              "metadata": {}
+            }
+          }
+        },
+        {
+          "Register": {
+            "AssetDefinition": {
+              "alias": null,
+              "balance_scope_policy": "Global",
+              "confidential_policy": {
+                "mode": "TransparentOnly",
+                "pedersen_params_id": null,
+                "pending_transition": null,
+                "poseidon_params_id": null,
+                "vk_set_hash": null
+              },
+              "description": null,
+              "id": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt",
+              "logo": null,
+              "metadata": {},
+              "mintable": "Infinitely",
+              "name": "NPOS Stake",
+              "owning_domain": null,
+              "spec": {
+                "scale": null
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "soraﾜヰ8ｽﾊﾙoｱHﾍtﾘcAGｲfﾓﾆﾍGuxｽVｻｿxgｴnｴZPｹﾈqﾐPnｴo8ヱﾐｴAq9ﾘk3ﾜNﾊﾀ3ﾐﾍnzBLVSK2",
+              "label": null,
+              "metadata": {},
+              "opaque_ids": [],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt#soraﾜヰ8ｽﾊﾙoｱHﾍtﾘcAGｲfﾓﾆﾍGuxｽVｻｿxgｴnｴZPｹﾈqﾐPnｴo8ヱﾐｴAq9ﾘk3ﾜNﾊﾀ3ﾐﾍnzBLVSK2",
+              "object": "10000"
+            }
+          }
+        },
+        {
+          "RegisterPublicLaneValidator": {
+            "initial_stake": "10000",
+            "lane_id": 0,
+            "metadata": {},
+            "peer_id": "ea0130A1DB3124CEBD4A5A9BBC968D3988FFC0DF0B8E50F9650554FD8599E7D7F07A7C8F7F1CFE1B2CBC397661A48363188EED",
+            "stake_account": "soraﾜヰ8ｽﾊﾙoｱHﾍtﾘcAGｲfﾓﾆﾍGuxｽVｻｿxgｴnｴZPｹﾈqﾐPnｴo8ヱﾐｴAq9ﾘk3ﾜNﾊﾀ3ﾐﾍnzBLVSK2",
+            "validator": "soraﾜヰ8ｽﾊﾙoｱHﾍtﾘcAGｲfﾓﾆﾍGuxｽVｻｿxgｴnｴZPｹﾈqﾐPnｴo8ヱﾐｴAq9ﾘk3ﾜNﾊﾀ3ﾐﾍnzBLVSK2"
+          }
+        },
+        {
+          "ActivatePublicLaneValidator": {
+            "lane_id": 0,
+            "validator": "soraﾜヰ8ｽﾊﾙoｱHﾍtﾘcAGｲfﾓﾆﾍGuxｽVｻｿxgｴnｴZPｹﾈqﾐPnｴo8ヱﾐｴAq9ﾘk3ﾜNﾊﾀ3ﾐﾍnzBLVSK2"
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "soraﾜヰ8ｽqﾗAﾋsuXﾊﾇQﾛﾛBDLﾅALHxXYGYﾐｲvWﾀﾆﾓﾎtﾊHVｻWﾂ3ｾtﾛkVZtkﾍｿﾊNt2h45DYX6C7",
+              "label": null,
+              "metadata": {},
+              "opaque_ids": [],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt#soraﾜヰ8ｽqﾗAﾋsuXﾊﾇQﾛﾛBDLﾅALHxXYGYﾐｲvWﾀﾆﾓﾎtﾊHVｻWﾂ3ｾtﾛkVZtkﾍｿﾊNt2h45DYX6C7",
+              "object": "10000"
+            }
+          }
+        },
+        {
+          "RegisterPublicLaneValidator": {
+            "initial_stake": "10000",
+            "lane_id": 0,
+            "metadata": {},
+            "peer_id": "ea013095F9E716AB9F2F0670D588FBFA5420AC598CFFB58F0AEF969543D7BBCF81CE132A2A20E813A1CC0647B4B179B76B09CD",
+            "stake_account": "soraﾜヰ8ｽqﾗAﾋsuXﾊﾇQﾛﾛBDLﾅALHxXYGYﾐｲvWﾀﾆﾓﾎtﾊHVｻWﾂ3ｾtﾛkVZtkﾍｿﾊNt2h45DYX6C7",
+            "validator": "soraﾜヰ8ｽqﾗAﾋsuXﾊﾇQﾛﾛBDLﾅALHxXYGYﾐｲvWﾀﾆﾓﾎtﾊHVｻWﾂ3ｾtﾛkVZtkﾍｿﾊNt2h45DYX6C7"
+          }
+        },
+        {
+          "ActivatePublicLaneValidator": {
+            "lane_id": 0,
+            "validator": "soraﾜヰ8ｽqﾗAﾋsuXﾊﾇQﾛﾛBDLﾅALHxXYGYﾐｲvWﾀﾆﾓﾎtﾊHVｻWﾂ3ｾtﾛkVZtkﾍｿﾊNt2h45DYX6C7"
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "soraﾜヰ8ｽsCNVﾕPcｿKu2ﾁe28Wｲﾘpｼﾎfruotfｺﾆ6wﾘﾏgPｵﾕﾔｵ3nZw8ﾓﾔｽvﾊd6ｷnｦ62gD46TC5",
+              "label": null,
+              "metadata": {},
+              "opaque_ids": [],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt#soraﾜヰ8ｽsCNVﾕPcｿKu2ﾁe28Wｲﾘpｼﾎfruotfｺﾆ6wﾘﾏgPｵﾕﾔｵ3nZw8ﾓﾔｽvﾊd6ｷnｦ62gD46TC5",
+              "object": "10000"
+            }
+          }
+        },
+        {
+          "RegisterPublicLaneValidator": {
+            "initial_stake": "10000",
+            "lane_id": 0,
+            "metadata": {},
+            "peer_id": "ea01309753D5AA860989AD67EC4FB2A14558A879AACC538A4C656CCDF2FE8D646CD5B6DF7E32F397A91CD371951645D89ED917",
+            "stake_account": "soraﾜヰ8ｽsCNVﾕPcｿKu2ﾁe28Wｲﾘpｼﾎfruotfｺﾆ6wﾘﾏgPｵﾕﾔｵ3nZw8ﾓﾔｽvﾊd6ｷnｦ62gD46TC5",
+            "validator": "soraﾜヰ8ｽsCNVﾕPcｿKu2ﾁe28Wｲﾘpｼﾎfruotfｺﾆ6wﾘﾏgPｵﾕﾔｵ3nZw8ﾓﾔｽvﾊd6ｷnｦ62gD46TC5"
+          }
+        },
+        {
+          "ActivatePublicLaneValidator": {
+            "lane_id": 0,
+            "validator": "soraﾜヰ8ｽsCNVﾕPcｿKu2ﾁe28Wｲﾘpｼﾎfruotfｺﾆ6wﾘﾏgPｵﾕﾔｵ3nZw8ﾓﾔｽvﾊd6ｷnｦ62gD46TC5"
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "soraﾜヰ8ｽdﾘvﾓXQｴEuyEｿBC8ﾃｹf49ｦnzPCｦﾖﾎ4ｱﾐFPﾏﾉｾｻﾎﾗﾓﾕﾌe1ﾏk1DﾘM7ﾗﾁB4aﾈDWQN6R",
+              "label": null,
+              "metadata": {},
+              "opaque_ids": [],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "5tTiKE1CkjJoGHhmf5FxQoSg5hMt#soraﾜヰ8ｽdﾘvﾓXQｴEuyEｿBC8ﾃｹf49ｦnzPCｦﾖﾎ4ｱﾐFPﾏﾉｾｻﾎﾗﾓﾕﾌe1ﾏk1DﾘM7ﾗﾁB4aﾈDWQN6R",
+              "object": "10000"
+            }
+          }
+        },
+        {
+          "RegisterPublicLaneValidator": {
+            "initial_stake": "10000",
+            "lane_id": 0,
+            "metadata": {},
+            "peer_id": "ea013089E0110B3F07AB1CEFAC930756E4DBC25E37D606E4D03513BF4C744DA0F6134DE8B7E52749511C823C230672F736C304",
+            "stake_account": "soraﾜヰ8ｽdﾘvﾓXQｴEuyEｿBC8ﾃｹf49ｦnzPCｦﾖﾎ4ｱﾐFPﾏﾉｾｻﾎﾗﾓﾕﾌe1ﾏk1DﾘM7ﾗﾁB4aﾈDWQN6R",
+            "validator": "soraﾜヰ8ｽdﾘvﾓXQｴEuyEｿBC8ﾃｹf49ｦnzPCｦﾖﾎ4ｱﾐFPﾏﾉｾｻﾎﾗﾓﾕﾌe1ﾏk1DﾘM7ﾗﾁB4aﾈDWQN6R"
+          }
+        },
+        {
+          "ActivatePublicLaneValidator": {
+            "lane_id": 0,
+            "validator": "soraﾜヰ8ｽdﾘvﾓXQｴEuyEｿBC8ﾃｹf49ｦnzPCｦﾖﾎ4ｱﾐFPﾏﾉｾｻﾎﾗﾓﾕﾌe1ﾏk1DﾘM7ﾗﾁB4aﾈDWQN6R"
+          }
+        }
+      ],
+      "ivm_triggers": [],
+      "topology": []
     }
   ],
   "consensus_mode": "Npos",
-  "wire_protocol_version": 3,
-  "consensus_fingerprint": "0xb2773e61e419a3b1e04f2ea19c936372aadb013b6ad39b5b3e4dd737d1201527",
+  "wire_protocol_version": 4,
+  "consensus_fingerprint": "0xef42e51c74559e975b2cff3e91fd361e477acf2ab6bbf1f17bfb87d4f8341cc2",
   "sumeragi_v2": {
     "da_layout": {
       "encoding": {
@@ -280,8 +478,8 @@
       "max_payload_size_bytes": 16777216,
       "max_chunk_count": 1024
     },
-    "nexus_amx_context_hash": "1223707611ACC6016193FCBE4D238848FCE5E8E0B77AF9F9BC320A5D47E39F1F",
-    "execution_policy_hash": "0DAF0A3D7FA7E8E2629256AE8D7E748BB5EFB0CFE7B58D1801CDDC9A0B674097"
+    "nexus_amx_context_hash": "A949C368F3AB820EF3538F55C8B3823B620D569ECA177AB23D2AB9B4CD90642D",
+    "execution_policy_hash": "1A400314F87F9E3980DED7410735AA6852144014FBC49D68725C54C92A36C105"
   },
   "crypto": {
     "sm_openssl_preview": false,

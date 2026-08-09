@@ -14,7 +14,7 @@ readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 readonly MODULE="SumeragiV2InFlightFirstRelease.tla"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
@@ -115,6 +115,8 @@ run_mutant inflight_first_release_duplicate_apply_bug.cfg MLExactlyOnceCarrierAp
 run_mutant inflight_first_release_reservation_commit_before_carrier_bug.cfg MLPostCarrierCommitCleanupOrder
 run_mutant inflight_first_release_plan_tombstone_before_reservation_commit_bug.cfg MLPostCarrierCommitCleanupOrder
 run_mutant inflight_first_release_forget_commit_before_plan_tombstone_bug.cfg MLPostCarrierCommitCleanupOrder
+run_mutant inflight_first_release_commit_prefix_skipped_key_bug.cfg MLPostCarrierCommitCleanupOrder
+run_mutant inflight_first_release_commit_prefix_decrease_bug.cfg MLPostCarrierCommitCleanupOrder
 run_mutant inflight_first_release_release_pending_before_retirement_bug.cfg MLReleaseStageOrder
 run_mutant inflight_first_release_release_prepare_before_pending_bug.cfg MLReleaseStageOrder
 run_mutant inflight_first_release_released_claims_before_prepare_bug.cfg MLReleaseStageOrder

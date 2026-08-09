@@ -47,6 +47,8 @@ ED25519_SCALAR_ORDER = (1 << 252) + 27742317777372353535851937790883648493
 MAX_MANIFEST_SIZE = 1024 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 NATIVE_VERIFIER_PROTOCOL = "sorafs-validate-release-manifest-v1"
+EXTERNAL_TOOL_UID_ENV = "IROHA_TAIRA_EXTERNAL_TOOL_UID"
+EXTERNAL_TOOL_GID_ENV = "IROHA_TAIRA_EXTERNAL_TOOL_GID"
 
 
 class ReleaseManifestSignatureError(RuntimeError):
@@ -117,6 +119,20 @@ def _inspect_regular(
             f"{label} must not be group- or world-writable"
         )
     allowed_owners = {os.getuid(), 0} if hasattr(os, "getuid") else {metadata.st_uid}
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        raw_external_uid = os.environ.get(EXTERNAL_TOOL_UID_ENV)
+        raw_external_gid = os.environ.get(EXTERNAL_TOOL_GID_ENV)
+        if (
+            raw_external_uid is not None
+            and raw_external_gid is not None
+            and raw_external_uid.isascii()
+            and raw_external_uid.isdecimal()
+            and raw_external_gid.isascii()
+            and raw_external_gid.isdecimal()
+            and int(raw_external_uid) > 0
+            and int(raw_external_gid) > 0
+        ):
+            allowed_owners.add(int(raw_external_uid))
     if metadata.st_uid not in allowed_owners:
         raise ReleaseManifestSignatureError(
             f"{label} must be owned by the invoking user or root"
@@ -487,12 +503,124 @@ def _native_verifier_environment() -> Dict[str, str]:
     return environment
 
 
+def _external_signer_environment(private_home: Path) -> Dict[str, str]:
+    """Return the fixed, secret-free environment accepted by the signer."""
+
+    environment = {
+        "HOME": str(private_home),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": os.defpath,
+        "TMPDIR": str(private_home),
+    }
+    if os.name == "nt":
+        for key in ("SYSTEMROOT", "WINDIR"):
+            value = os.environ.get(key)
+            if value:
+                environment[key] = value
+    return environment
+
+
+def _external_tool_execution_identity() -> Optional[Tuple[int, int]]:
+    """Return the controller-sealed drop identity required by a root caller."""
+
+    raw_uid = os.environ.get(EXTERNAL_TOOL_UID_ENV)
+    raw_gid = os.environ.get(EXTERNAL_TOOL_GID_ENV)
+    if (raw_uid is None) != (raw_gid is None):
+        raise ReleaseManifestSignatureError(
+            "external tool execution identity is incomplete"
+        )
+    current_uid = os.geteuid() if hasattr(os, "geteuid") else 1
+    current_gid = os.getegid() if hasattr(os, "getegid") else 1
+    if raw_uid is None:
+        if current_uid == 0:
+            raise ReleaseManifestSignatureError(
+                "root may not snapshot or invoke an external signer/verifier "
+                "without the sealed controller identity"
+            )
+        return None
+    assert raw_gid is not None
+    if (
+        not raw_uid.isascii()
+        or not raw_uid.isdecimal()
+        or not raw_gid.isascii()
+        or not raw_gid.isdecimal()
+    ):
+        raise ReleaseManifestSignatureError(
+            "external tool execution identity is noncanonical"
+        )
+    uid = int(raw_uid)
+    gid = int(raw_gid)
+    if raw_uid != str(uid) or raw_gid != str(gid) or uid <= 0 or gid <= 0:
+        raise ReleaseManifestSignatureError(
+            "external tool execution identity must contain positive canonical IDs"
+        )
+    if current_uid != 0:
+        if (uid, gid) != (current_uid, current_gid):
+            raise ReleaseManifestSignatureError(
+                "external tool execution identity differs from the current non-root identity"
+            )
+        return None
+    return (uid, gid)
+
+
+def _drop_external_tool_identity(uid: int, gid: int) -> None:
+    if not hasattr(os, "geteuid") or os.geteuid() != 0 or uid <= 0 or gid <= 0:
+        raise ReleaseManifestSignatureError(
+            "external tool privilege drop requires root and positive IDs"
+        )
+    os.setgroups([])
+    os.setgid(gid)
+    os.setuid(uid)
+    os.umask(0o077)
+    if os.geteuid() != uid or os.getegid() != gid or os.getgroups():
+        raise ReleaseManifestSignatureError(
+            "external tool privilege drop did not reach the sealed identity"
+        )
+
+
+def _external_tool_preexec(
+    identity: Optional[Tuple[int, int]],
+) -> Optional[object]:
+    if identity is None:
+        return None
+    uid, gid = identity
+
+    def drop() -> None:
+        _drop_external_tool_identity(uid, gid)
+
+    return drop
+
+
+def _prepare_external_tool_directory(
+    path: Path, identity: Optional[Tuple[int, int]]
+) -> None:
+    if identity is None:
+        return
+    uid, gid = identity
+    os.chown(path, uid, gid)
+    os.chmod(path, 0o700)
+
+
+def _handoff_external_tool_file(
+    path: Path,
+    identity: Optional[Tuple[int, int]],
+    *,
+    mode: int,
+) -> FileIdentity:
+    if identity is not None:
+        os.chown(path, identity[0], identity[1])
+    os.chmod(path, mode)
+    return _identity(path.lstat())
+
+
 def _invoke_native_verifier(
     verifier: Path,
     manifest: Path,
     public_key: Path,
     fingerprint: str,
     signature: Path,
+    execution_identity: Optional[Tuple[int, int]],
 ) -> None:
     try:
         completed = subprocess.run(
@@ -514,12 +642,17 @@ def _invoke_native_verifier(
             check=False,
             timeout=120,
             env=_native_verifier_environment(),
+            cwd=str(verifier.parent),
+            close_fds=True,
+            pass_fds=(),
+            restore_signals=True,
+            preexec_fn=_external_tool_preexec(execution_identity),
         )
     except subprocess.TimeoutExpired as exc:
         raise ReleaseManifestSignatureError(
             "native release-manifest verifier timed out"
         ) from exc
-    except OSError as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         raise ReleaseManifestSignatureError(
             f"cannot execute native release-manifest verifier: {exc}"
         ) from exc
@@ -527,6 +660,44 @@ def _invoke_native_verifier(
         raise ReleaseManifestSignatureError(
             "native release-manifest Ed25519 verification failed "
             f"with status {completed.returncode}"
+        )
+
+
+def _invoke_external_signer(
+    signer: Path,
+    manifest: Path,
+    signature: Path,
+    private_home: Path,
+    execution_identity: Optional[Tuple[int, int]],
+) -> None:
+    """Invoke only the fixed, sealed external-signing protocol."""
+
+    try:
+        completed = subprocess.run(
+            [str(signer), str(manifest), str(signature)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=120,
+            env=_external_signer_environment(private_home),
+            cwd=str(private_home),
+            close_fds=True,
+            pass_fds=(),
+            restore_signals=True,
+            preexec_fn=_external_tool_preexec(execution_identity),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ReleaseManifestSignatureError(
+            "external Ed25519 signer timed out"
+        ) from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ReleaseManifestSignatureError(
+            f"cannot execute external Ed25519 signer: {exc}"
+        ) from exc
+    if completed.returncode != 0:
+        raise ReleaseManifestSignatureError(
+            f"external Ed25519 signer exited with status {completed.returncode}"
         )
 
 
@@ -588,6 +759,7 @@ def _verify_bytes_with_pinned_native(
     raw_public_key: bytes,
     trusted_fingerprint: str,
     signature: bytes,
+    execution_identity: Optional[Tuple[int, int]],
 ) -> str:
     """Verify immutable snapshots of the already-inspected input bytes."""
 
@@ -596,6 +768,7 @@ def _verify_bytes_with_pinned_native(
         dir=str(temp_parent),
     ) as temp_raw:
         temp_dir = Path(temp_raw)
+        _prepare_external_tool_directory(temp_dir, execution_identity)
         manifest_snapshot = temp_dir / "release_manifest.json"
         public_key_snapshot = temp_dir / "release_manifest.ed25519.pub"
         signature_snapshot = temp_dir / "release_manifest.ed25519.sig"
@@ -617,12 +790,24 @@ def _verify_bytes_with_pinned_native(
             "native signature snapshot",
             mode=0o400,
         )
+        manifest_snapshot_identity = _handoff_external_tool_file(
+            manifest_snapshot, execution_identity, mode=0o400
+        )
+        public_key_snapshot_identity = _handoff_external_tool_file(
+            public_key_snapshot, execution_identity, mode=0o400
+        )
+        signature_snapshot_identity = _handoff_external_tool_file(
+            signature_snapshot, execution_identity, mode=0o400
+        )
 
         verifier_snapshot = _native_snapshot_path(temp_dir, native_verifier)
         verifier_digest, verifier_source_identity = _snapshot_native_verifier(
             native_verifier,
             verifier_snapshot,
             trusted_verifier_sha256,
+        )
+        _handoff_external_tool_file(
+            verifier_snapshot, execution_identity, mode=0o500
         )
         snapshot_digest, verifier_snapshot_identity = _stable_digest(
             verifier_snapshot,
@@ -640,6 +825,7 @@ def _verify_bytes_with_pinned_native(
             public_key_snapshot,
             trusted_fingerprint,
             signature_snapshot,
+            execution_identity,
         )
         _assert_digest_unchanged(
             verifier_snapshot,
@@ -689,6 +875,7 @@ def verify_release_manifest(
 ) -> Dict[str, object]:
     """Verify an aggregate manifest through the pinned native verifier."""
 
+    execution_identity = _external_tool_execution_identity()
     _validate_sha256(trusted_fingerprint, "trusted signing fingerprint")
     _validate_sha256(
         trusted_release_manifest_verifier_sha256,
@@ -725,6 +912,7 @@ def verify_release_manifest(
         raw_public_key=raw_public_key,
         trusted_fingerprint=trusted_fingerprint,
         signature=signature,
+        execution_identity=execution_identity,
     )
 
     _assert_unchanged(
@@ -775,6 +963,7 @@ def sign_release_manifest(
 ) -> Dict[str, object]:
     """Sign via a pinned external signer and verify through ``sorafs-validate``."""
 
+    execution_identity = _external_tool_execution_identity()
     _validate_sha256(trusted_fingerprint, "trusted signing fingerprint")
     _validate_sha256(
         trusted_release_manifest_verifier_sha256,
@@ -849,6 +1038,7 @@ def sign_release_manifest(
         dir=str(manifest.parent),
     ) as signer_temp_raw:
         signer_temp = Path(signer_temp_raw)
+        _prepare_external_tool_directory(signer_temp, execution_identity)
         signature_temp = signer_temp / "release_manifest.json.sig"
         signer_manifest_snapshot = signer_temp / "release_manifest.json"
         signer_manifest_snapshot_identity = _install_exclusive(
@@ -856,6 +1046,11 @@ def sign_release_manifest(
             manifest_payload,
             "external signer manifest snapshot",
             mode=0o600,
+        )
+        signer_manifest_snapshot_identity = _handoff_external_tool_file(
+            signer_manifest_snapshot,
+            execution_identity,
+            mode=0o400 if execution_identity is not None else 0o600,
         )
         signer_snapshot = _signer_snapshot_path(signer_temp, signer)
         snapshot_digest, signer_snapshot_source_identity = _snapshot_executable(
@@ -869,6 +1064,9 @@ def sign_release_manifest(
             raise ReleaseManifestSignatureError(
                 "external signer changed before it could be snapshotted"
             )
+        _handoff_external_tool_file(
+            signer_snapshot, execution_identity, mode=0o500
+        )
         signer_snapshot_digest, signer_snapshot_identity = _stable_digest(
             signer_snapshot,
             "external signer snapshot",
@@ -878,31 +1076,13 @@ def sign_release_manifest(
             raise ReleaseManifestSignatureError(
                 "external signer snapshot does not match the inspected executable"
             )
-        try:
-            completed = subprocess.run(
-                [
-                    str(signer_snapshot),
-                    str(signer_manifest_snapshot),
-                    str(signature_temp),
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=120,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise ReleaseManifestSignatureError(
-                "external Ed25519 signer timed out"
-            ) from exc
-        except OSError as exc:
-            raise ReleaseManifestSignatureError(
-                f"cannot execute external Ed25519 signer: {exc}"
-            ) from exc
-        if completed.returncode != 0:
-            raise ReleaseManifestSignatureError(
-                f"external Ed25519 signer exited with status {completed.returncode}"
-            )
+        _invoke_external_signer(
+            signer_snapshot,
+            signer_manifest_snapshot,
+            signature_temp,
+            signer_temp,
+            execution_identity,
+        )
         signature, signature_temp_identity = _stable_read(
             signature_temp,
             "external aggregate Ed25519 signature",
@@ -957,6 +1137,7 @@ def sign_release_manifest(
             raw_public_key=raw_public_key,
             trusted_fingerprint=trusted_fingerprint,
             signature=signature,
+            execution_identity=execution_identity,
         )
         _assert_unchanged(
             manifest,

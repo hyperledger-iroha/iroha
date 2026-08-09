@@ -15,21 +15,20 @@
 
 use thiserror::Error;
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::der_air::rfc5280_io_witnesses_v1;
 use super::{
     der_air::{
         ZK_X509_DER_AIR_MAX_DOCUMENTS_V1, ZK_X509_DER_AIR_MAX_EMBEDDED_DOCUMENTS_V1,
-        ZK_X509_RFC5280_MAX_TOP_LEVEL_DOCUMENT_BYTES_V1, ZkX509DerAirErrorV1,
-        ZkX509DerDocumentTraceV1, ZkX509DerEkuV1, ZkX509Rfc5280DocumentKindV1,
-        ZkX509Rfc5280DocumentProvenanceV1, ZkX509Rfc5280GrammarRoleV1,
-        ZkX509Rfc5280NodeProvenanceV1, ZkX509Rfc5280StatementV1, ZkX509Rfc5280TraceV1,
-        rfc5280_io_witnesses_v1,
+        ZK_X509_RFC5280_MAX_TOP_LEVEL_DOCUMENT_BYTES_V1, ZkX509DerEkuV1,
+        ZkX509Rfc5280GrammarRoleV1, ZkX509Rfc5280StatementV1,
     },
     der_stark::{
         ZK_X509_DER_STARK_BUS_LANES_V1, ZkX509DerStarkChallengesV1, ZkX509DerStarkErrorV1,
         ZkX509DerStarkNodeEventV1, ZkX509DerStarkTerminalClaimsV1,
         zk_x509_der_stark_input_byte_factor_v1, zk_x509_der_stark_node_factor_v1,
     },
-    io_air::{ZkX509IoEndpointV1, ZkX509IoSegmentRoleV1},
+    io_air::ZkX509IoSegmentRoleV1,
     p256_aggregate_adapter::{
         P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1, P256_X5S1_SIGNATURES_V1,
         P256BusTerminalClaimsV1, P256CrossTraceTerminalClaimV1, P256CrossTraceTerminalRoleV1,
@@ -48,14 +47,25 @@ use super::{
         ZkX509ShaCallTerminalV1, ZkX509ShaSegmentTerminalV1, zk_x509_sha_ca_call_identity_v1,
     },
 };
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::{
+    der_air::{
+        ZkX509DerAirErrorV1, ZkX509DerDocumentTraceV1, ZkX509Rfc5280DocumentKindV1,
+        ZkX509Rfc5280DocumentProvenanceV1, ZkX509Rfc5280NodeProvenanceV1, ZkX509Rfc5280TraceV1,
+    },
+    io_air::ZkX509IoEndpointV1,
+};
+#[cfg(test)]
+use crate::privacy_engines::transparent_stark::sha256_frame_v1;
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1,
-    TransparentTranscriptV1, sha256_frame_v1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 
 /// Stable identity of the native RFC adapter integrated only through MAIN.
+#[cfg(test)]
 pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base113:aux264:fixed81:constraints1227:degree4:max-private-active-rows238481:fixed-public-nonpadding-rows292420:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-terminals-exact-der-v1:canonical-parent-child-tag-ordinal-grammar:closed-four-or-five-certificate-extension-cardinality:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows:decimal-calendar-to-unix-arithmetic:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:pathlen-and-ca-state:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-six-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:twenty-nine-relation-four-lane-union-bound-at-least171-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:eighteen-independent-four-lane-output-role-products:governed-root-spki-and-certificate-slot-active-products-air-bound:x5r1-exact1420-byte-eighty-eight-record-terminal-claims:typed-family-role-endpoint-lane-addresses:reserved-terminal-slots-reconstructed-identity:der-rfc-terminal-equality-validator:verifier-final-row-claim-replay:x5q1-exact4876-byte-four-segment-plus-thirteen-compact-ca-call-boundaries-304-record-sha-terminal-claims:sha-terminal-segment-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:x5v1-exact5580-byte-five-signature-348-record-p256-terminal-claims:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-committed-p256-terminal-replay:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-envelope1310-108-fixed-records:ca-single-log7-trace128-base695-aux128-fixed80-constraints1379-degree3-13chunks:ca-local-lde-log14-mask306-deep52768-fri58-rounds5-terminal512-degree15-grinding20:shared-x5b1-main-six-base-roots-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
 /// SHA-256 of [`ZK_X509_RFC5280_STARK_DESCRIPTOR_V1`].
+#[cfg(test)]
 pub(crate) const ZK_X509_RFC5280_STARK_DESCRIPTOR_SHA256_V1: [u8; 32] = [
     0x5f, 0x4d, 0x91, 0x4e, 0xd5, 0x93, 0x7c, 0x44, 0xf1, 0xfa, 0xde, 0xb4, 0x6a, 0x53, 0x1d, 0x57,
     0x1a, 0x9b, 0x78, 0xfd, 0xd9, 0x4e, 0xca, 0xa6, 0x84, 0x95, 0x10, 0xd5, 0x43, 0x9a, 0x24, 0x70,
@@ -218,6 +228,7 @@ const _: () = {
     assert!(total == ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1);
 };
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn serial_comparison_count_v1(crl_entries: usize) -> usize {
     if crl_entries == 0 {
         0
@@ -226,6 +237,7 @@ const fn serial_comparison_count_v1(crl_entries: usize) -> usize {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn serial_comparison_rows_v1(crl_entries: usize) -> usize {
     serial_comparison_count_v1(crl_entries) * SERIAL_COMPARISON_WIDTH_V1
 }
@@ -337,11 +349,13 @@ const OUTPUT_ROLES_V1: [ZkX509Rfc5280OutputRoleV1; OUTPUT_ROLE_COUNT_V1] = [
     ZkX509Rfc5280OutputRoleV1::CertificateSlotActive,
 ];
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn output_role_from_index_v1(index: usize) -> Option<ZkX509Rfc5280OutputRoleV1> {
     OUTPUT_ROLES_V1.get(index).copied()
 }
 
 /// Private witness geometry.  None of these values is transcript material.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280StarkPrivateShapeV1 {
     pub(crate) chain_depth: u8,
@@ -373,6 +387,7 @@ pub(crate) struct ZkX509Rfc5280StarkPrivateShapeV1 {
     pub(crate) io_channels: u16,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509Rfc5280StarkPrivateShapeV1 {
     fn checked_sum(
         values: impl IntoIterator<Item = usize>,
@@ -682,10 +697,6 @@ impl ZkX509Rfc5280StarkShapeV1 {
         ]
     }
 
-    pub(crate) const fn active_rows(&self) -> usize {
-        FIXED_NON_PADDING_ROWS_V1
-    }
-
     pub(crate) fn validate(&self) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
         let eku_count = usize::from(self.leaf_extended_key_usage_count);
         let disclosed_count = usize::from(self.disclosed_attribute_count);
@@ -734,6 +745,7 @@ impl ZkX509Rfc5280StarkShapeV1 {
     }
 
     /// Canonical public transcript frame; it contains no private geometry.
+    #[cfg(test)]
     pub(crate) fn transcript_bytes(&self) -> Result<Vec<u8>, ZkX509Rfc5280StarkErrorV1> {
         self.validate()?;
         let mut bytes = Vec::with_capacity(8 + 8 + 2 + 1 + 3 + 8 + 1 + 4);
@@ -748,6 +760,7 @@ impl ZkX509Rfc5280StarkShapeV1 {
         Ok(bytes)
     }
 
+    #[cfg(test)]
     pub(crate) fn schedule_digest(&self) -> Result<[u8; 32], ZkX509Rfc5280StarkErrorV1> {
         sha256_frame_v1(
             b"iroha:privacy:zk-x509:rfc5280-stark-schedule:v1",
@@ -807,6 +820,7 @@ pub(crate) enum ZkX509Rfc5280StarkErrorV1 {
     #[error("zk-X509 RFC 5280 STARK public shape is invalid")]
     Shape,
     #[error("zk-X509 RFC 5280 STARK fixed grammar is invalid")]
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     Grammar,
     #[error("zk-X509 RFC 5280 STARK semantic relation is invalid")]
     Semantic,
@@ -822,6 +836,7 @@ pub(crate) enum ZkX509Rfc5280StarkErrorV1 {
     Resource,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl From<ZkX509DerAirErrorV1> for ZkX509Rfc5280StarkErrorV1 {
     fn from(_: ZkX509DerAirErrorV1) -> Self {
         Self::Semantic
@@ -832,18 +847,21 @@ impl From<ZkX509DerStarkErrorV1> for ZkX509Rfc5280StarkErrorV1 {
     fn from(error: ZkX509DerStarkErrorV1) -> Self {
         match error {
             ZkX509DerStarkErrorV1::Challenge => Self::Challenge,
+            #[cfg(any(test, feature = "privacy-release-evidence"))]
             ZkX509DerStarkErrorV1::Resource => Self::Resource,
             _ => Self::Source,
         }
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn source_documents_v1(
     trace: &ZkX509Rfc5280TraceV1,
 ) -> impl Iterator<Item = &ZkX509DerDocumentTraceV1> {
     trace.documents.iter().chain(&trace.embedded_documents)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn role_tag_is_admitted_v1(row: ZkX509Rfc5280NodeProvenanceV1) -> bool {
     use ZkX509Rfc5280GrammarRoleV1 as R;
     let tag = (row.tag_class, row.constructed, row.tag_number);
@@ -911,6 +929,7 @@ fn role_tag_is_admitted_v1(row: ZkX509Rfc5280NodeProvenanceV1) -> bool {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn root_role_v1(kind: ZkX509Rfc5280DocumentKindV1) -> ZkX509Rfc5280GrammarRoleV1 {
     use ZkX509Rfc5280DocumentKindV1 as D;
     use ZkX509Rfc5280GrammarRoleV1 as R;
@@ -926,6 +945,7 @@ fn root_role_v1(kind: ZkX509Rfc5280DocumentKindV1) -> ZkX509Rfc5280GrammarRoleV1
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expected_child_role_v1(
     document: &ZkX509Rfc5280DocumentProvenanceV1,
     parent: ZkX509Rfc5280NodeProvenanceV1,
@@ -2221,6 +2241,7 @@ const fn profile_role_required_v1(role: u16) -> bool {
         || role == ZkX509Rfc5280GrammarRoleV1::EmbeddedCrlNumber as u16
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn grammar_rule_matches_node_v1(
     rule: ZkX509Rfc5280GrammarRuleV1,
     node: ZkX509Rfc5280NodeProvenanceV1,
@@ -2256,6 +2277,7 @@ fn grammar_rule_matches_node_v1(
         == Some(u32::from(node.role_instance))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn grammar_rule_index_for_node_v1(
     node: ZkX509Rfc5280NodeProvenanceV1,
     parent_role: u16,
@@ -2276,6 +2298,7 @@ fn grammar_rule_index_for_node_v1(
     Ok(index)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn direct_parent_from_spans_v1(
     rows: &[ZkX509Rfc5280NodeProvenanceV1],
     index: usize,
@@ -2301,6 +2324,7 @@ fn direct_parent_from_spans_v1(
 /// This deliberately does not trust a role merely because it was copied from
 /// the DER builder. Parent links and child ordinals are recomputed from spans,
 /// and the role/instance pair is then derived by the closed transition table.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn validate_zk_x509_rfc5280_provenance_v1(
     trace: &ZkX509Rfc5280TraceV1,
 ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
@@ -2423,12 +2447,14 @@ fn compress_tuple_v1(values: [F; 12], challenge: [F; 12]) -> F {
 }
 
 /// Exact strict-DER source terminals consumed by this adapter.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280DerSourceTerminalsV1 {
     pub(crate) input_byte: [F; ZK_X509_RFC5280_STARK_BUS_LANES_V1],
     pub(crate) node: [F; ZK_X509_RFC5280_STARK_BUS_LANES_V1],
 }
 
+#[cfg(test)]
 pub(crate) fn zk_x509_rfc5280_der_source_terminals_v1(
     trace: &ZkX509Rfc5280TraceV1,
     challenges: ZkX509DerStarkChallengesV1,
@@ -2485,21 +2511,7 @@ pub(crate) fn zk_x509_rfc5280_der_source_terminals_v1(
     Ok(ZkX509Rfc5280DerSourceTerminalsV1 { input_byte, node })
 }
 
-/// Exactly three certificate-TBS slots, one TBSCertList, and one complete
-/// signed CRL are document-derived SHA calls.
-pub(crate) const ZK_X509_RFC5280_DOCUMENT_SHA_CALLS_V1: usize = 5;
-
-/// Exact source slice for one document-derived SHA call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509Rfc5280ShaSourceV1 {
-    pub(crate) call: u8,
-    pub(crate) role: ZkX509Rfc5280OutputRoleV1,
-    pub(crate) active: bool,
-    pub(crate) document: u8,
-    pub(crate) start: u16,
-    pub(crate) length: u16,
-}
-
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn find_role_node_v1(
     trace: &ZkX509Rfc5280TraceV1,
     document: usize,
@@ -2520,6 +2532,7 @@ fn find_role_node_v1(
     Ok(row)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn find_role_instance_node_v1(
     trace: &ZkX509Rfc5280TraceV1,
     document: usize,
@@ -2541,71 +2554,6 @@ fn find_role_instance_node_v1(
     Ok(row)
 }
 
-/// Enumerate the fixed five document SHA sources.
-///
-/// Slot two is always present. For a depth-two chain it is the unique
-/// canonical inactive source `(document=0xff,start=0,length=0)`.
-pub(crate) fn zk_x509_rfc5280_document_sha_sources_v1(
-    trace: &ZkX509Rfc5280TraceV1,
-) -> Result<
-    [ZkX509Rfc5280ShaSourceV1; ZK_X509_RFC5280_DOCUMENT_SHA_CALLS_V1],
-    ZkX509Rfc5280StarkErrorV1,
-> {
-    validate_zk_x509_rfc5280_provenance_v1(trace)?;
-    let mut sources = [ZkX509Rfc5280ShaSourceV1 {
-        call: 0,
-        role: ZkX509Rfc5280OutputRoleV1::CertificateTbsSha,
-        active: false,
-        document: u8::MAX,
-        start: 0,
-        length: 0,
-    }; ZK_X509_RFC5280_DOCUMENT_SHA_CALLS_V1];
-    for certificate_slot in 0..3 {
-        sources[certificate_slot].call =
-            u8::try_from(certificate_slot).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
-        if certificate_slot < trace.certificates.len() {
-            let row = find_role_node_v1(
-                trace,
-                certificate_slot,
-                ZkX509Rfc5280GrammarRoleV1::CertificateTbs,
-            )?;
-            sources[certificate_slot].active = true;
-            sources[certificate_slot].document = row.document;
-            sources[certificate_slot].start = row.start;
-            sources[certificate_slot].length = row
-                .content_end
-                .checked_sub(row.start)
-                .ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?;
-        }
-    }
-    let crl_document = trace.certificates.len();
-    let crl_tbs = find_role_node_v1(trace, crl_document, ZkX509Rfc5280GrammarRoleV1::CrlTbs)?;
-    sources[3] = ZkX509Rfc5280ShaSourceV1 {
-        call: 3,
-        role: ZkX509Rfc5280OutputRoleV1::CrlTbsP256Message,
-        active: true,
-        document: crl_tbs.document,
-        start: crl_tbs.start,
-        length: crl_tbs
-            .content_end
-            .checked_sub(crl_tbs.start)
-            .ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?,
-    };
-    let complete_crl = find_role_node_v1(trace, crl_document, ZkX509Rfc5280GrammarRoleV1::Crl)?;
-    sources[4] = ZkX509Rfc5280ShaSourceV1 {
-        call: 4,
-        role: ZkX509Rfc5280OutputRoleV1::CrlCommitment,
-        active: true,
-        document: complete_crl.document,
-        start: complete_crl.start,
-        length: complete_crl
-            .content_end
-            .checked_sub(complete_crl.start)
-            .ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)?,
-    };
-    Ok(sources)
-}
-
 fn endpoint_role_code_v1(role: ZkX509IoSegmentRoleV1) -> Result<u64, ZkX509Rfc5280StarkErrorV1> {
     match role {
         ZkX509IoSegmentRoleV1::StrictDer => Ok(1),
@@ -2614,7 +2562,8 @@ fn endpoint_role_code_v1(role: ZkX509IoSegmentRoleV1) -> Result<u64, ZkX509Rfc52
         ZkX509IoSegmentRoleV1::CaAccumulator => Ok(4),
         ZkX509IoSegmentRoleV1::Projection => Ok(6),
         ZkX509IoSegmentRoleV1::PublicInput => Ok(7),
-        _ => Err(ZkX509Rfc5280StarkErrorV1::Output),
+        #[cfg(test)]
+        ZkX509IoSegmentRoleV1::CrlCommitment => Err(ZkX509Rfc5280StarkErrorV1::Output),
     }
 }
 
@@ -2622,6 +2571,7 @@ fn output_role_index_v1(role: ZkX509Rfc5280OutputRoleV1) -> usize {
     role as usize - 1
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn output_roles_v1(
     trace: &ZkX509Rfc5280TraceV1,
 ) -> Result<Vec<ZkX509Rfc5280OutputRoleV1>, ZkX509Rfc5280StarkErrorV1> {
@@ -2658,6 +2608,7 @@ fn output_roles_v1(
     Ok(roles)
 }
 
+#[cfg(test)]
 fn output_factor_v1(
     role: ZkX509Rfc5280OutputRoleV1,
     channel: u32,
@@ -2687,6 +2638,7 @@ fn output_factor_v1(
 /// calling adapter; this helper solely guarantees an identical typed tuple and
 /// challenge domain on both sides of the RFC relation.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn zk_x509_rfc5280_opened_output_factor_v1(
     role: ZkX509Rfc5280OutputRoleV1,
     channel: F,
@@ -2716,6 +2668,7 @@ pub(crate) fn zk_x509_rfc5280_opened_output_factor_v1(
 /// are polynomial openings rather than host enums.  Native-row callers should
 /// prefer [`zk_x509_rfc5280_opened_output_factor_v1`].
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn zk_x509_rfc5280_opened_output_factor_fields_v1(
     role: F,
     channel: F,
@@ -2783,6 +2736,7 @@ pub(crate) fn zk_x509_rfc5280_opened_output_factor_fields_after_challenge_valida
 }
 
 /// Exact per-purpose producer and fixed-consumer terminal products.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280OutputTerminalsV1 {
     pub(crate) producer: [[F; ZK_X509_RFC5280_STARK_BUS_LANES_V1]; OUTPUT_ROLE_COUNT_V1],
@@ -2796,6 +2750,7 @@ pub(crate) struct ZkX509Rfc5280OutputTerminalsV1 {
 /// Producer and consumer factors intentionally include endpoint and write
 /// direction, so they are not equated to one another inside this adapter.
 /// Each downstream numeric adapter must expose the matching role terminal.
+#[cfg(test)]
 pub(crate) fn zk_x509_rfc5280_output_terminals_v1(
     trace: &ZkX509Rfc5280TraceV1,
     challenges: ZkX509Rfc5280StarkChallengesV1,
@@ -2912,6 +2867,7 @@ const KEY_USAGE_KEY_CERT_SIGN_V1: u16 = 1 << 5;
 const KEY_USAGE_CRL_SIGN_V1: u16 = 1 << 6;
 
 /// One exact byte address read by a semantic predicate.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ZkX509Rfc5280SourceCellV1 {
     pub(crate) document: u8,
@@ -2920,6 +2876,7 @@ pub(crate) struct ZkX509Rfc5280SourceCellV1 {
 }
 
 /// One fixed-profile byte equality.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280FixedByteV1 {
     pub(crate) source: ZkX509Rfc5280SourceCellV1,
@@ -2933,6 +2890,7 @@ pub(crate) struct ZkX509Rfc5280FixedByteV1 {
 }
 
 /// One two-source equality byte.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280EqualByteV1 {
     pub(crate) left: ZkX509Rfc5280SourceCellV1,
@@ -2943,6 +2901,7 @@ pub(crate) struct ZkX509Rfc5280EqualByteV1 {
 }
 
 /// Explicit numeric operands for one admitted scalar predicate.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280NumericRelationV1 {
     /// Stable relation code fixed by schedule order.
@@ -2967,6 +2926,7 @@ pub(crate) enum ZkX509Rfc5280SerialComparisonKindV1 {
 }
 
 /// One fixed-width serial comparison, including length and padded octets.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280SerialComparisonV1 {
     pub(crate) kind: ZkX509Rfc5280SerialComparisonKindV1,
@@ -2977,6 +2937,7 @@ pub(crate) struct ZkX509Rfc5280SerialComparisonV1 {
 }
 
 /// One canonical DER-backed producer frame for a comparator endpoint.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280SerialSourceV1 {
     pub(crate) logical_id: u16,
@@ -2988,6 +2949,7 @@ pub(crate) struct ZkX509Rfc5280SerialSourceV1 {
 
 /// Complete prover-side semantic operands. Each vector is committed as a
 /// fixed-family range; none is reduced to a host Boolean digest.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280SemanticWitnessV1 {
     pub(crate) fixed_bytes: Vec<ZkX509Rfc5280FixedByteV1>,
@@ -3000,6 +2962,7 @@ pub(crate) struct ZkX509Rfc5280SemanticWitnessV1 {
     pub(crate) serial_comparisons: Vec<ZkX509Rfc5280SerialComparisonV1>,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn document_bytes_v1(
     trace: &ZkX509Rfc5280TraceV1,
     document: usize,
@@ -3013,6 +2976,7 @@ fn document_bytes_v1(
         .collect()
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn source_slice_v1(
     trace: &ZkX509Rfc5280TraceV1,
     row: ZkX509Rfc5280NodeProvenanceV1,
@@ -3039,6 +3003,7 @@ fn source_slice_v1(
         .collect()
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn push_fixed_slice_v1(
     output: &mut Vec<ZkX509Rfc5280FixedByteV1>,
     source_node: ZkX509Rfc5280NodeProvenanceV1,
@@ -3075,6 +3040,7 @@ fn push_fixed_slice_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn push_equal_slices_v1(
     output: &mut Vec<ZkX509Rfc5280EqualByteV1>,
     left: &[ZkX509Rfc5280SourceCellV1],
@@ -3100,6 +3066,7 @@ fn push_equal_slices_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn role_nodes_v1(
     trace: &ZkX509Rfc5280TraceV1,
     role: ZkX509Rfc5280GrammarRoleV1,
@@ -3112,6 +3079,7 @@ fn role_nodes_v1(
         .filter(move |row| row.role == role)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn embedded_role_node_v1(
     trace: &ZkX509Rfc5280TraceV1,
     parent_document: usize,
@@ -3131,6 +3099,7 @@ fn embedded_role_node_v1(
         .ok_or(ZkX509Rfc5280StarkErrorV1::Grammar)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn serial_frame_v1(
     serial: &[u8],
 ) -> Result<[u8; SERIAL_COMPARISON_WIDTH_V1], ZkX509Rfc5280StarkErrorV1> {
@@ -3144,6 +3113,7 @@ fn serial_frame_v1(
     Ok(frame)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_serial_frame_v1(
     frame: &[u8; SERIAL_COMPARISON_WIDTH_V1],
 ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
@@ -3157,6 +3127,7 @@ fn validate_serial_frame_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_serial_comparison_v1(
     comparison: &ZkX509Rfc5280SerialComparisonV1,
 ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
@@ -3177,6 +3148,7 @@ fn validate_serial_comparison_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn canonical_serial_comparisons_v1(
     leaf: &[u8],
     revoked_serials: &[Vec<u8>],
@@ -3224,6 +3196,7 @@ fn canonical_serial_comparisons_v1(
     Ok(comparisons)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_serial_comparison_manifest_v1(
     leaf: &[u8],
     revoked_serials: &[Vec<u8>],
@@ -3236,6 +3209,7 @@ fn validate_serial_comparison_manifest_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn canonical_serial_source_v1(
     trace: &ZkX509Rfc5280TraceV1,
     logical_id: u16,
@@ -3288,6 +3262,7 @@ fn canonical_serial_source_v1(
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn canonical_serial_sources_v1(
     trace: &ZkX509Rfc5280TraceV1,
     comparisons: &[ZkX509Rfc5280SerialComparisonV1],
@@ -3309,6 +3284,7 @@ fn canonical_serial_sources_v1(
     Ok(sources)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_serial_source_manifest_v1(
     trace: &ZkX509Rfc5280TraceV1,
     comparisons: &[ZkX509Rfc5280SerialComparisonV1],
@@ -3322,6 +3298,7 @@ fn validate_serial_source_manifest_v1(
 }
 
 /// Exact DER-table multiplicity for one serial-source node lookup key.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ZkX509Rfc5280SerialNodeMultiplicityV1 {
     pub(crate) document: u8,
@@ -3331,6 +3308,7 @@ pub(crate) struct ZkX509Rfc5280SerialNodeMultiplicityV1 {
 
 /// Compile the pre-challenge byte/node table multiplicities consumed by the
 /// serial-source lookup arguments.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn zk_x509_rfc5280_serial_lookup_multiplicities_v1(
     sources: &[ZkX509Rfc5280SerialSourceV1],
 ) -> Result<
@@ -3390,6 +3368,7 @@ pub(crate) fn zk_x509_rfc5280_serial_lookup_multiplicities_v1(
     Ok((byte_multiplicities, node_multiplicities))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn push_relation_v1(
     output: &mut Vec<ZkX509Rfc5280NumericRelationV1>,
     relation: u16,
@@ -3413,6 +3392,7 @@ fn push_relation_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn parse_decimal_v1(bytes: &[u8]) -> Result<u16, ZkX509Rfc5280StarkErrorV1> {
     bytes.iter().try_fold(0_u16, |value, byte| {
         if !byte.is_ascii_digit() {
@@ -3425,6 +3405,7 @@ fn parse_decimal_v1(bytes: &[u8]) -> Result<u16, ZkX509Rfc5280StarkErrorV1> {
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn parse_time_cells_v1(
     cells: &[ZkX509Rfc5280SourceCellV1],
     tag: u32,
@@ -3597,6 +3578,7 @@ fn encode_eku_v1(usages: &[ZkX509DerEkuV1]) -> Result<Vec<u8>, ZkX509Rfc5280Star
     Ok(encoded)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn find_embedded_inner_role_v1(
     trace: &ZkX509Rfc5280TraceV1,
     parent_document: usize,
@@ -3623,6 +3605,7 @@ fn find_embedded_inner_role_v1(
 }
 
 /// Build every semantic operand and reject malformed or inconsistent paths.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_rfc5280_semantic_witness_v1(
     trace: &ZkX509Rfc5280TraceV1,
 ) -> Result<ZkX509Rfc5280SemanticWitnessV1, ZkX509Rfc5280StarkErrorV1> {
@@ -4092,12 +4075,14 @@ pub(crate) fn build_zk_x509_rfc5280_semantic_witness_v1(
 }
 
 /// Unique source address and the exact number of semantic consumers.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280SourceMultiplicityV1 {
     pub(crate) source: ZkX509Rfc5280SourceCellV1,
     pub(crate) required_multiplicity: u16,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn zk_x509_rfc5280_semantic_source_multiplicities_v1(
     witness: &ZkX509Rfc5280SemanticWitnessV1,
 ) -> Result<Vec<ZkX509Rfc5280SourceMultiplicityV1>, ZkX509Rfc5280StarkErrorV1> {
@@ -4147,6 +4132,7 @@ pub(crate) fn zk_x509_rfc5280_semantic_source_multiplicities_v1(
 }
 
 /// Compile and validate all private geometry from an owner trace.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_rfc5280_stark_private_shape_v1(
     trace: &ZkX509Rfc5280TraceV1,
 ) -> Result<ZkX509Rfc5280StarkPrivateShapeV1, ZkX509Rfc5280StarkErrorV1> {
@@ -4278,6 +4264,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_private_shape_v1(
 
 /// Return the constant public registration shape after validating the private
 /// witness geometry.  No private count is copied into the transcript.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_rfc5280_stark_shape_v1(
     trace: &ZkX509Rfc5280TraceV1,
 ) -> Result<ZkX509Rfc5280StarkShapeV1, ZkX509Rfc5280StarkErrorV1> {
@@ -4986,27 +4973,13 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
             active_family(ZkX509Rfc5280StarkFamilyV1::RangeByte).mul(fixed[FIX_LOCAL_LAST]);
         Ok(fixed)
     }
-
-    /// Build one verifier-preprocessed column at a time.
-    pub(crate) fn fixed_column(&self, column: usize) -> Result<Vec<F>, ZkX509Rfc5280StarkErrorV1> {
-        if column >= ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1 {
-            return Err(ZkX509Rfc5280StarkErrorV1::Shape);
-        }
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(ZK_X509_RFC5280_STARK_TRACE_SIZE_V1)
-            .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
-        for row in 0..ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 {
-            values.push(self.fixed_row(row)?[column]);
-        }
-        Ok(values)
-    }
 }
 
 /// Generic one-column replay helper for base and auxiliary providers.
 ///
 /// At log19 this allocates about 4 MiB per field column and never constructs
 /// the full base+aux+fixed matrix.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_rfc5280_stark_column_v1(
     width: usize,
     column: usize,
@@ -5082,20 +5055,6 @@ const BASE_COPY_VALUE: usize = 112;
 const _: () = assert!(GRAMMAR_CHILD_COUNT_BITS + 16 == BASE_GRAMMAR_ORDINAL);
 const _: () = assert!(BASE_COPY_VALUE + 1 == ZK_X509_RFC5280_STARK_BASE_WIDTH_V1);
 
-/// Stamp the private depth selector into materialized rows. Row activity is
-/// supplied by each family builder; the selector is carried across the whole
-/// aggregate and constrained constant by the AIR.
-pub(crate) fn bind_zk_x509_rfc5280_private_selectors_v1(
-    rows: &mut [ZkX509Rfc5280StarkBaseRowV1],
-    private_shape: &ZkX509Rfc5280StarkPrivateShapeV1,
-) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
-    private_shape.validate()?;
-    for row in rows {
-        row[BASE_CERT2_ACTIVE] = private_shape.certificate_slot_2_active;
-    }
-    Ok(())
-}
-
 const SERIAL_LESS: usize = BASE_D;
 const SERIAL_ORDER_BEFORE: usize = BASE_E;
 const SERIAL_ORDER_AFTER: usize = BASE_F;
@@ -5122,18 +5081,21 @@ const SERIAL_SOURCE_FIRST_INVERSE: usize = BASE_F;
 const SERIAL_BYTE_TABLE_MULTIPLICITY: usize = BASE_C;
 const SERIAL_NODE_TABLE_MULTIPLICITY: usize = BASE_F;
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_u8_bits_v1(row: &mut ZkX509Rfc5280StarkBaseRowV1, start: usize, value: u8) {
     for bit in 0..8 {
         row[start + bit] = F(u64::from((value >> bit) & 1));
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_u16_bits_v1(row: &mut ZkX509Rfc5280StarkBaseRowV1, start: usize, value: u16) {
     for bit in 0..16 {
         row[start + bit] = F(u64::from((value >> bit) & 1));
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_rfc5280_serial_comparison_rows_v1(
     comparison: &ZkX509Rfc5280SerialComparisonV1,
 ) -> Result<Vec<ZkX509Rfc5280StarkBaseRowV1>, ZkX509Rfc5280StarkErrorV1> {
@@ -5225,6 +5187,7 @@ pub(crate) fn build_zk_x509_rfc5280_serial_comparison_rows_v1(
     Ok(rows)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_rfc5280_serial_source_rows_v1(
     source: &ZkX509Rfc5280SerialSourceV1,
 ) -> Result<Vec<ZkX509Rfc5280StarkBaseRowV1>, ZkX509Rfc5280StarkErrorV1> {
@@ -5505,11 +5468,6 @@ impl ZkX509Rfc5280StarkTerminalClaimsV1 {
     }
 
     #[cfg(test)]
-    pub(crate) fn canonical_zero_for_test_v1() -> Self {
-        Self::canonical_identity_v1()
-    }
-
-    #[cfg(test)]
     pub(crate) fn canonical_for_der_test_v1(
         der: ZkX509DerStarkTerminalClaimsV1,
     ) -> Result<Self, ZkX509Rfc5280StarkErrorV1> {
@@ -5543,6 +5501,7 @@ impl ZkX509Rfc5280StarkTerminalClaimsV1 {
         self.output_role_products_v1(ZkX509Rfc5280OutputRoleV1::GovernedTrustAnchor)
     }
 
+    #[cfg(test)]
     pub(crate) fn certificate_slot_active_products_v1(
         &self,
     ) -> ZkX509Rfc5280OutputRoleTerminalClaimsV1 {
@@ -5900,6 +5859,7 @@ impl ZkX509ShaSegmentTerminalClaimsV1 {
 
     /// Construct claims only from the four terminals returned by the SHA AIR
     /// segment providers.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn from_sha_air_terminals_v1(
         segments: [ZkX509ShaSegmentTerminalV1; ZK_X509_SHA_SEGMENT_COUNT_V1],
         ca_calls: [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
@@ -6208,6 +6168,7 @@ impl ZkX509ShaSegmentTerminalClaimsV1 {
 /// `committed` is verifier output, never witness metadata. The fixed record
 /// order makes every mismatch a distinct residue without a host-selected
 /// segment, family, or lane.
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_sha_segment_terminal_claim_residues_v1(
     committed: [ZkX509ShaSegmentTerminalV1; ZK_X509_SHA_SEGMENT_COUNT_V1],
     committed_ca_calls: [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
@@ -6228,6 +6189,7 @@ pub(crate) fn evaluate_zk_x509_sha_segment_terminal_claim_residues_v1(
 }
 
 /// Decode X5Q1 and replay all 304 verifier-side terminal equalities.
+#[cfg(test)]
 pub(crate) fn replay_zk_x509_sha_segment_terminal_claims_v1(
     committed: [ZkX509ShaSegmentTerminalV1; ZK_X509_SHA_SEGMENT_COUNT_V1],
     committed_ca_calls: [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
@@ -6398,6 +6360,7 @@ impl ZkX509P256TerminalClaimsV1 {
     /// Unlike proof decoding, this constructor also requires every native bus
     /// and cross-source equality to be satisfied. Thus malformed verifier
     /// material cannot be normalized into an apparently valid X5V1 binding.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn from_p256_air_terminals_v1(
         certificate_or_crl: [ZkX509P256CertificateTerminalClaimsV1;
             P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1],
@@ -6611,6 +6574,7 @@ impl ZkX509P256TerminalClaimsV1 {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn validate_air_terminals_v1(&self) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
         self.validate_topology_v1()?;
         for signature in 0..P256_X5S1_SIGNATURES_V1 {
@@ -6767,6 +6731,7 @@ impl ZkX509P256TerminalClaimsV1 {
 /// `committed` is verifier output and must itself satisfy the existing P-256
 /// bus and cross-source terminal equalities. Every proof mismatch then has one
 /// fixed equality residue, independent of all host metadata.
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_p256_terminal_claim_residues_v1(
     committed: ZkX509P256TerminalClaimsV1,
     claims: ZkX509P256TerminalClaimsV1,
@@ -6785,6 +6750,7 @@ pub(crate) fn evaluate_zk_x509_p256_terminal_claim_residues_v1(
 }
 
 /// Decode X5V1 and replay all 348 verifier-side P-256 terminal equalities.
+#[cfg(test)]
 pub(crate) fn replay_zk_x509_p256_terminal_claims_v1(
     committed: ZkX509P256TerminalClaimsV1,
     encoded_claims: &[u8],
@@ -6919,31 +6885,6 @@ fn active_family_gate_v1(
     current[BASE_ACTIVE].mul(family_gate_v1(fixed, family))
 }
 
-fn rfc_row_factor_v1(
-    domain: u64,
-    current: &ZkX509Rfc5280StarkBaseRowV1,
-    lane: usize,
-    challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
-    compress_tuple_v1(
-        [
-            F(domain),
-            current[BASE_DOCUMENT],
-            current[BASE_ADDRESS],
-            current[BASE_VALUE],
-            current[BASE_ROLE],
-            current[BASE_INSTANCE],
-            current[BASE_OFFSET],
-            current[BASE_ENDPOINT_ROLE],
-            current[BASE_ENDPOINT_INSTANCE],
-            current[BASE_IS_WRITE],
-            current[BASE_A],
-            current[BASE_B],
-        ],
-        challenges.tuple[lane],
-    )
-}
-
 fn output_row_factor_v1(
     current: &ZkX509Rfc5280StarkBaseRowV1,
     lane: usize,
@@ -6968,6 +6909,7 @@ fn output_row_factor_v1(
     )
 }
 
+#[cfg(test)]
 fn serial_copy_factor_v1(
     logical_id: F,
     offset: F,
@@ -7005,58 +6947,6 @@ fn normalized_copy_factor_v1(
             current[BASE_COPY_KEY_1],
             current[BASE_COPY_KEY_2],
             current[BASE_COPY_VALUE],
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-        ],
-        challenges.tuple[lane],
-    )
-}
-
-fn decimal_calendar_factor_v1(
-    time_instance: F,
-    component: F,
-    value: F,
-    lane: usize,
-    challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
-    compress_tuple_v1(
-        [
-            F(98),
-            time_instance,
-            component,
-            value,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-        ],
-        challenges.tuple[lane],
-    )
-}
-
-fn relation_range_factor_v1(
-    relation: F,
-    instance: F,
-    slack: F,
-    lane: usize,
-    challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
-    compress_tuple_v1(
-        [
-            F(99),
-            relation,
-            instance,
-            slack,
             F::ZERO,
             F::ZERO,
             F::ZERO,
@@ -7329,6 +7219,7 @@ fn grammar_ordinal_factor_v1(
 /// represented by absent vector entries and replay as the unique inactive
 /// zero row (apart from the carried private-depth selector). This keeps the
 /// prover bounded without allocating a `2^18 × 66` matrix.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ZkX509Rfc5280StarkBaseMaterialV1 {
     pub(crate) private_shape: ZkX509Rfc5280StarkPrivateShapeV1,
@@ -7336,12 +7227,14 @@ pub(crate) struct ZkX509Rfc5280StarkBaseMaterialV1 {
     family_rows: [Vec<ZkX509Rfc5280StarkBaseRowV1>; FAMILY_COUNT_V1],
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509Rfc5280StarkBaseMaterialV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkX509Rfc5280StarkBaseMaterialV1 { <private material redacted> }")
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509Rfc5280StarkBaseMaterialV1 {
     /// Recursively overwrite every private shape cell and committed field row.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -7415,12 +7308,14 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn active_zero_row_v1() -> ZkX509Rfc5280StarkBaseRowV1 {
     let mut row = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
     row[BASE_ACTIVE] = F::ONE;
     row
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn byte_row_v1(document: u64, address: u64, value: u8) -> ZkX509Rfc5280StarkBaseRowV1 {
     let mut row = active_zero_row_v1();
     row[BASE_VALUE] = F(u64::from(value));
@@ -7430,6 +7325,7 @@ fn byte_row_v1(document: u64, address: u64, value: u8) -> ZkX509Rfc5280StarkBase
     row
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn ensure_family_slot_v1(
     rows: &mut Vec<ZkX509Rfc5280StarkBaseRowV1>,
     ordinal: usize,
@@ -7445,6 +7341,7 @@ fn ensure_family_slot_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn push_family_row_v1(
     rows: &mut Vec<ZkX509Rfc5280StarkBaseRowV1>,
     row: ZkX509Rfc5280StarkBaseRowV1,
@@ -7455,6 +7352,7 @@ fn push_family_row_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn canonical_time_nodes_v1(trace: &ZkX509Rfc5280TraceV1) -> Vec<ZkX509Rfc5280NodeProvenanceV1> {
     role_nodes_v1(trace, ZkX509Rfc5280GrammarRoleV1::CertificateNotBefore)
         .chain(role_nodes_v1(
@@ -7476,6 +7374,7 @@ fn canonical_time_nodes_v1(trace: &ZkX509Rfc5280TraceV1) -> Vec<ZkX509Rfc5280Nod
         .collect()
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CalendarOperandsV1 {
     timestamp: u64,
@@ -7487,6 +7386,7 @@ struct CalendarOperandsV1 {
     second: u64,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn calendar_operands_v1(
     cells: &[ZkX509Rfc5280SourceCellV1],
     tag: u32,
@@ -7519,6 +7419,7 @@ fn calendar_operands_v1(
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn calendar_row_v1(
     operands: CalendarOperandsV1,
 ) -> Result<ZkX509Rfc5280StarkBaseRowV1, ZkX509Rfc5280StarkErrorV1> {
@@ -7621,6 +7522,7 @@ fn calendar_row_v1(
     Ok(row)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn output_base_row_v1(
     role: ZkX509Rfc5280OutputRoleV1,
     channel: u32,
@@ -7643,6 +7545,7 @@ fn output_base_row_v1(
 
 /// Compile every canonical base family from the strict-DER owner trace.
 #[allow(clippy::too_many_lines)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
     trace: &ZkX509Rfc5280TraceV1,
 ) -> Result<ZkX509Rfc5280StarkBaseMaterialV1, ZkX509Rfc5280StarkErrorV1> {
@@ -8474,6 +8377,7 @@ fn populate_degree_normalization_helpers_v1(
         .add(range_consumer.mul(row[BASE_STATE_AFTER]));
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509Rfc5280StarkBaseMaterialV1 {
     pub(crate) fn base_row(
         &self,
@@ -8520,6 +8424,7 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn row_family_gate_v1(
     material: &ZkX509Rfc5280StarkBaseMaterialV1,
     row: usize,
@@ -8531,6 +8436,7 @@ fn row_family_gate_v1(
     )))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn product_relation_factor_v1(
     relation: usize,
     row: &ZkX509Rfc5280StarkBaseRowV1,
@@ -8568,6 +8474,7 @@ fn product_relation_factor_v1(
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn product_relation_family_v1(
     relation: usize,
 ) -> Result<ZkX509Rfc5280StarkFamilyV1, ZkX509Rfc5280StarkErrorV1> {
@@ -8581,6 +8488,7 @@ fn product_relation_family_v1(
 }
 
 /// Compile the six exact public terminal products from canonical base rows.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn compile_zk_x509_rfc5280_stark_terminal_claims_v1(
     material: &ZkX509Rfc5280StarkBaseMaterialV1,
     der_challenges: ZkX509DerStarkChallengesV1,
@@ -8677,6 +8585,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(
 
 /// Decode proof bytes and replay their final-row binding without any prover
 /// material or host semantic callback.
+#[cfg(test)]
 pub(crate) fn replay_zk_x509_rfc5280_terminal_claims_v1(
     last_aggregate: F,
     aux: &ZkX509Rfc5280StarkAuxRowV1,
@@ -8689,6 +8598,7 @@ pub(crate) fn replay_zk_x509_rfc5280_terminal_claims_v1(
     )
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zero_safe_inverse_v1(gate: F, denominator: F) -> (F, F) {
     if gate == F::ZERO {
         (F::ZERO, F::ZERO)
@@ -8704,6 +8614,7 @@ fn zero_safe_inverse_v1(gate: F, denominator: F) -> (F, F) {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn product_aux_column_descriptor_v1(column: usize) -> Option<(usize, usize, bool)> {
     let starts = [
         (0, AUX_DER_BYTE_BEFORE, AUX_DER_BYTE_AFTER),
@@ -8722,6 +8633,7 @@ fn product_aux_column_descriptor_v1(column: usize) -> Option<(usize, usize, bool
     None
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn output_role_aux_column_descriptor_v1(column: usize) -> Option<(usize, bool, usize)> {
     let local = column.checked_sub(AUX_OUTPUT_ROLE_PRODUCTS)?;
     if local >= OUTPUT_ROLE_COUNT_V1 * OUTPUT_ENDPOINT_COUNT_V1 * ZK_X509_RFC5280_STARK_BUS_LANES_V1
@@ -8736,6 +8648,7 @@ fn output_role_aux_column_descriptor_v1(column: usize) -> Option<(usize, bool, u
     Some((role_index, consumer, lane))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn serial_product_aux_column_descriptor_v1(column: usize) -> Option<(bool, usize, bool)> {
     for (consumer, before, after) in [
         (false, AUX_SERIAL_SOURCE_BEFORE, AUX_SERIAL_SOURCE_AFTER),
@@ -8751,6 +8664,7 @@ fn serial_product_aux_column_descriptor_v1(column: usize) -> Option<(bool, usize
     None
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn grammar_ordinal_product_aux_column_descriptor_v1(column: usize) -> Option<(bool, usize, bool)> {
     for (table, before, after) in [
         (
@@ -8774,6 +8688,7 @@ fn grammar_ordinal_product_aux_column_descriptor_v1(column: usize) -> Option<(bo
     None
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct LookupAuxDescriptorV1 {
     node: bool,
@@ -8781,6 +8696,7 @@ struct LookupAuxDescriptorV1 {
     kind: u8,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn lookup_aux_column_descriptor_v1(column: usize) -> Option<LookupAuxDescriptorV1> {
     for (node, starts) in [
         (
@@ -8819,6 +8735,7 @@ fn lookup_aux_column_descriptor_v1(column: usize) -> Option<LookupAuxDescriptorV
     None
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn profile_lookup_aux_column_descriptor_v1(column: usize) -> Option<(usize, usize)> {
     for (kind, start) in [
         AUX_PROFILE_LOOKUP_ACCUMULATOR,
@@ -8840,6 +8757,7 @@ fn profile_lookup_aux_column_descriptor_v1(column: usize) -> Option<(usize, usiz
     None
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct GrammarLookupAuxDescriptorV1 {
     parent: bool,
@@ -8847,6 +8765,7 @@ struct GrammarLookupAuxDescriptorV1 {
     kind: u8,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn grammar_lookup_aux_column_descriptor_v1(column: usize) -> Option<GrammarLookupAuxDescriptorV1> {
     for (parent, starts) in [
         (
@@ -8886,6 +8805,7 @@ fn grammar_lookup_aux_column_descriptor_v1(column: usize) -> Option<GrammarLooku
 }
 
 /// Replay one challenge-dependent auxiliary column with bounded memory.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_rfc5280_stark_aux_column_v1(
     material: &ZkX509Rfc5280StarkBaseMaterialV1,
     der_challenges: ZkX509DerStarkChallengesV1,
@@ -9184,6 +9104,7 @@ pub(crate) fn build_zk_x509_rfc5280_stark_aux_column_v1(
 /// Challenge-independent base/fixed rows and challenge-dependent auxiliary
 /// products are replayed from the same canonical material. Terminal claims
 /// are compiled once from those base rows and exposed only through X5R1.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct ZkX509Rfc5280StarkColumnProviderV1<'a> {
     material: &'a ZkX509Rfc5280StarkBaseMaterialV1,
     der_challenges: ZkX509DerStarkChallengesV1,
@@ -9191,12 +9112,14 @@ pub(crate) struct ZkX509Rfc5280StarkColumnProviderV1<'a> {
     terminal_claims: ZkX509Rfc5280StarkTerminalClaimsV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for ZkX509Rfc5280StarkColumnProviderV1<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ZkX509Rfc5280StarkColumnProviderV1 { <private material redacted> }")
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
     pub(crate) fn new_v1(
         material: &'a ZkX509Rfc5280StarkBaseMaterialV1,
@@ -9215,6 +9138,7 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn base_row_v1(
         &self,
         row: usize,
@@ -9222,6 +9146,7 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
         self.material.base_row(row)
     }
 
+    #[cfg(test)]
     pub(crate) fn fixed_row_v1(
         &self,
         row: usize,
@@ -9259,6 +9184,7 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
         self.terminal_claims
     }
 
+    #[cfg(test)]
     pub(crate) fn encoded_terminal_claims_v1(
         &self,
     ) -> Result<[u8; ZK_X509_RFC5280_TERMINAL_CLAIM_BYTES_V1], ZkX509Rfc5280StarkErrorV1> {

@@ -107,7 +107,7 @@ fn mint_asset_rejects_assetid_tlv_instead_of_assetdefinitionid() {
 
     // Build AssetId TLV for r11 where AssetDefinitionId is expected (type mismatch)
     let asset_id: AssetId = AssetId::of(
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ),
@@ -152,7 +152,7 @@ fn mint_asset_rejects_corrupted_accountid_hash() {
     let p_acct = Memory::INPUT_START;
 
     // Valid AssetDefinitionId for r11
-    let asset_def = AssetDefinitionId::new(
+    let asset_def = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
@@ -194,7 +194,7 @@ fn mint_asset_rejects_unknown_typeid() {
     let p_acct = Memory::INPUT_START;
 
     // Unknown type id (e.g., 0x00AA) for r11
-    let payload = norito::to_bytes(&AssetDefinitionId::new(
+    let payload = norito::to_bytes(&AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     ))

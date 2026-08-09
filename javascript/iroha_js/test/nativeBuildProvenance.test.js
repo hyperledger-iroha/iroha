@@ -18,6 +18,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   createNativeBuildProvenance,
@@ -36,9 +37,18 @@ import {
 
 const REVISION = "a".repeat(40);
 const SOURCE_DIGEST = "b".repeat(64);
+const SOURCE_STATE_READER = fileURLToPath(
+  new URL("../scripts/read-native-build-source-state.mjs", import.meta.url),
+);
+const REPOSITORY_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const INHERITED_CARGO_LOCK_PATH = process.env[NATIVE_BUILD_CARGO_LOCK_ENV];
 
 delete process.env[NATIVE_BUILD_CARGO_LOCK_ENV];
+
+// Symlink, hardlink, executable-mode, and FIFO checks exercise POSIX-only
+// primitives. The release workflow runs this file on Linux and macOS and runs
+// the portable provenance contract on Windows without reporting false skips.
+const unixOnlyTest = process.platform === "win32" ? () => undefined : test;
 
 test.after(() => {
   if (INHERITED_CARGO_LOCK_PATH === undefined) {
@@ -111,6 +121,27 @@ function withSourceRepository(run) {
     rmSync(repoRoot, { recursive: true, force: true });
   }
 }
+
+test("repository ignores every native publication artifact", () => {
+  const generatedPaths = [
+    "javascript/iroha_js/native/.build-dist.lock",
+    "javascript/iroha_js/native/iroha_js_host.node",
+    "javascript/iroha_js/native/iroha_js_host.checksums.json",
+    "javascript/iroha_js/native/.iroha-js-host-txn-00000000-0000-4000-8000-000000000000/iroha_js_host.node.next",
+    "javascript/iroha_js/native/.iroha-js-host-init-txn-v1-00000000-0000-4000-8000-000000000000-00000000-0000-4000-8000-000000000001/iroha_js_host.node.next",
+    "javascript/iroha_js/native/.iroha-js-host-cleanup-v1-00000000-0000-4000-8000-000000000000-00000000-0000-4000-8000-000000000001",
+    "javascript/iroha_js/native/.iroha-js-host-cleanup-v1-00000000-0000-4000-8000-000000000000-00000000-0000-4000-8000-000000000001.owner.json",
+  ];
+  for (const generatedPath of generatedPaths) {
+    git(REPOSITORY_ROOT, [
+      "check-ignore",
+      "--quiet",
+      "--no-index",
+      "--",
+      generatedPath,
+    ]);
+  }
+});
 
 test("native build provenance V3 binds the exact binary, source, and execution policy", () => {
   withNativeFixture(({ nativePath }) => {
@@ -242,6 +273,88 @@ test("source seal covers tracked, untracked, lock, mode, symlink, and deletion s
   });
 });
 
+test("source seal binds tracked gitlinks without snapshotting optional submodule contents", () => {
+  withSourceRepository((repoRoot) => {
+    const gitlinkPath = path.join(repoRoot, "iroha-docs");
+    const gitlinkObject = git(repoRoot, ["rev-parse", "HEAD"]);
+    git(repoRoot, [
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      "160000",
+      gitlinkObject,
+      "iroha-docs",
+    ]);
+
+    const absentCheckout = readNativeBuildSourceState(repoRoot);
+    assert.match(absentCheckout.sourceTreeSha256, /^[0-9a-f]{64}$/u);
+
+    mkdirSync(gitlinkPath);
+    writeFileSync(path.join(gitlinkPath, "optional-guide.md"), "not a build input\n");
+    const snapshot = createNativeBuildSourceSnapshot(
+      repoRoot,
+      path.join(repoRoot, "target", "gitlink-snapshot"),
+    );
+    try {
+      assert.equal(
+        existsSync(path.join(snapshot.snapshotRoot, "iroha-docs")),
+        false,
+      );
+      assert.deepEqual(
+        verifyNativeBuildSourceSnapshot(snapshot),
+        snapshot.sourceState,
+      );
+    } finally {
+      cleanupNativeBuildSourceSnapshot(snapshot);
+    }
+
+    rmSync(gitlinkPath, { recursive: true });
+    writeFileSync(gitlinkPath, "unsafe gitlink substitution\n");
+    assert.throws(
+      () => readNativeBuildSourceState(repoRoot),
+      /gitlink worktree entry has an unsafe file type/u,
+    );
+  });
+});
+
+test("synchronous source-state reader accepts only the exact dirty debug provenance", () => {
+  withSourceRepository((repoRoot) => {
+    writeFileSync(path.join(repoRoot, "tracked.txt"), "tracked-v2\n");
+    const state = readNativeBuildSourceState(repoRoot);
+    const verification = {
+      cargoProfile: "debug",
+      ...state,
+    };
+    const runReader = (expected) =>
+      spawnSync(
+        process.execPath,
+        [
+          SOURCE_STATE_READER,
+          "--verify",
+          repoRoot,
+          JSON.stringify(expected),
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, NODE_OPTIONS: "" },
+          maxBuffer: 16 * 1024,
+        },
+      );
+
+    const accepted = runReader(verification);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    assert.equal(accepted.stdout, "");
+
+    const stale = runReader({
+      ...verification,
+      sourceTreeSha256: "f".repeat(64),
+    });
+    assert.notEqual(stale.status, 0);
+    const release = runReader({ ...verification, cargoProfile: "release" });
+    assert.notEqual(release.status, 0);
+  });
+});
+
 test("selected Cargo lock is snapshotted, fingerprinted, and monitored", () => {
   withSourceRepository((repoRoot) => {
     const privateDirectory = path.join(repoRoot, "target", "private-lock");
@@ -293,9 +406,8 @@ test("selected Cargo lock is snapshotted, fingerprinted, and monitored", () => {
   });
 });
 
-test(
+unixOnlyTest(
   "selected Cargo lock rejects relative and symbolic-link paths",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       assert.throws(
@@ -353,9 +465,8 @@ test("source seal binds exact stage-0 index bytes even when the dirty worktree i
   });
 });
 
-test(
+unixOnlyTest(
   "private source snapshot remains sealed across original A-to-B-to-A changes",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       const trackedPath = path.join(repoRoot, "tracked.txt");
@@ -391,9 +502,8 @@ test(
   },
 );
 
-test(
+unixOnlyTest(
   "private source snapshot rejects symlinks that resolve outside its sealed root",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       symlinkSync(os.tmpdir(), path.join(repoRoot, "external-link"));
@@ -409,9 +519,8 @@ test(
   },
 );
 
-test(
+unixOnlyTest(
   "private source snapshot permits a lexically contained dangling symlink",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       symlinkSync(
@@ -437,9 +546,8 @@ test(
   },
 );
 
-test(
+unixOnlyTest(
   "private source snapshot follows an existing symlink before applying later dot-dot components",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       symlinkSync(os.tmpdir(), path.join(repoRoot, "external-hop"));
@@ -488,9 +596,8 @@ test("private source snapshot verification rejects extra transient filesystem en
   });
 });
 
-test(
+unixOnlyTest(
   "private source snapshot rejects a target with symbolic-link components",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       const externalTarget = mkdtempSync(
@@ -590,9 +697,8 @@ test("source seal rejects Git repository, index, and config redirection", () => 
   }
 });
 
-test(
+unixOnlyTest(
   "source seal rejects unsafe source filesystem types",
-  { skip: process.platform === "win32" },
   () => {
     withSourceRepository((repoRoot) => {
       const fifoPath = path.join(repoRoot, "tracked.txt");
@@ -677,9 +783,8 @@ test("invalidating provenance fails closed across a byte-identical rebuild", () 
   });
 });
 
-test(
+unixOnlyTest(
   "provenance publication rejects a hostile hardlink without touching its victim",
-  { skip: process.platform === "win32" },
   () => {
     withNativeFixture(({ directory, nativePath }) => {
       const victimPath = path.join(directory, "victim.txt");
@@ -705,9 +810,8 @@ test(
   },
 );
 
-test(
+unixOnlyTest(
   "provenance invalidation rejects a hostile hardlink without touching its victim",
-  { skip: process.platform === "win32" },
   () => {
     withNativeFixture(({ directory, nativePath }) => {
       const victimPath = path.join(directory, "victim.txt");
@@ -725,9 +829,8 @@ test(
   },
 );
 
-test(
+unixOnlyTest(
   "stable native and provenance reads reject symbolic links and hardlinks",
-  { skip: process.platform === "win32" },
   () => {
     withNativeFixture(({ directory, nativePath }) => {
       const linkedNative = path.join(directory, "linked-native.so");

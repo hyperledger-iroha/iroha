@@ -20,5 +20,5 @@ esac
 
 "${DOTNET_BIN}" test \
   csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
-  --filter "FullyQualifiedName~RegisterSoraFsPinManifestAsync" \
-  --logger "console;verbosity=minimal"
+  -- \
+  --filter-method "*RegisterSoraFsPinManifestAsync*"

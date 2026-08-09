@@ -36,14 +36,18 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
 
     // Given
     let account_id = ALICE_ID.clone();
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "xor".parse()?,
     );
     let create_asset = Register::asset_definition({
         let __asset_definition_id = asset_definition_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
+        AssetDefinition::numeric(
+            __asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     });
     client.submit_blocking(
         create_asset,
@@ -57,7 +61,7 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
     let mint_not_existed_asset = Mint::asset_quantity(
         quantity,
         AssetId::new(
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal")?,
                 "foo".parse()?,
             ),
@@ -101,9 +105,6 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
                     // FindTransactions returns transactions in descending order.
                     assert!(prev_timestamp > curr_timestamp);
                     curr_timestamp
-                }
-                TransactionEntrypoint::PrivateKaigi(_) => {
-                    panic!("unexpected private Kaigi entrypoint");
                 }
                 TransactionEntrypoint::SealedCommitment(_) => {
                     panic!("unexpected sealed commitment entrypoint");
@@ -625,16 +626,18 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
     );
     let http = integration_tests::http::client();
 
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "sealeddupmint".parse()?,
     );
     let asset_id = AssetId::new(asset_definition_id.clone(), client.account.clone());
     client.submit_blocking(
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(asset_definition_id.name().to_string()),
-        ),
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "sealeddupmint".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
 

@@ -1208,7 +1208,7 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             _ => self.generation,
         };""",
             "let next_generation = self.generation;",
-            "InstallTimeout acknowledgement must preflight same-view exhaustion and advancing-view reset before durable mutation",
+            "InstallTimeout acknowledgement must preflight same-round generation exhaustion and advancing-view reset before durable mutation",
         ),
         (
             "timeout_ack_ignores_preflighted_generation",

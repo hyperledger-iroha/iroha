@@ -207,13 +207,13 @@ class ExecutableTest {
 
     companion object {
         private const val CONTRACT_ADDRESS =
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
         private const val BECH32_CHECKSUM_ADDRESS =
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqc3gg99"
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqc3gg99"
         private const val NON_CANONICAL_PADDING_ADDRESS =
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjpsmv3a4"
-        private const val SHORT_PAYLOAD_ADDRESS = "tairac1qyqqqqqqqqqqqqpu6elzr2"
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjpvkdn59"
+        private const val SHORT_PAYLOAD_ADDRESS = "irohac1qyqqqqqqqqqqqqpupm8207"
         private const val VERSION_TWO_ADDRESS =
-            "tairac1qgqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqdjp7qw"
+            "irohac1qgqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3lquf7"
     }
 }

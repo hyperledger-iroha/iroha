@@ -3,13 +3,9 @@
 //! This module defines instructions for submitting proofs for verification
 //! against on-chain verifying keys.
 
-use iroha_crypto::Hash;
-use iroha_primitives::numeric::Quantity;
-
 use super::*;
-use crate::{
-    asset::definition::ConfidentialPolicyMode, confidential::ConfidentialEncryptedPayload,
-};
+use crate::asset::definition::ConfidentialPolicyMode;
+use iroha_crypto::Hash;
 
 isi! {
     /// Verify a zero-knowledge proof against a verifying key.
@@ -73,9 +69,7 @@ impl PruneProofs {
     iroha_schema::IntoSchema,
 )]
 pub enum ZkAssetMode {
-    /// Only shielded ledger (no public account balances).
-    ZkNative,
-    /// Hybrid: public balances plus shielded ledger; allows shield/unshield when policy permits.
+    /// Public balances plus the proof-bound Kagemusha confidential ledger.
     Hybrid,
 }
 
@@ -83,7 +77,6 @@ pub enum ZkAssetMode {
 impl norito::json::JsonSerialize for ZkAssetMode {
     fn json_serialize(&self, out: &mut String) {
         let label = match self {
-            ZkAssetMode::ZkNative => "ZkNative",
             ZkAssetMode::Hybrid => "Hybrid",
         };
         norito::json::write_json_string(label, out);
@@ -97,7 +90,6 @@ impl norito::json::JsonDeserialize for ZkAssetMode {
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
         match value.as_str() {
-            "ZkNative" => Ok(ZkAssetMode::ZkNative),
             "Hybrid" => Ok(ZkAssetMode::Hybrid),
             other => Err(norito::json::Error::unknown_field(other.to_owned())),
         }
@@ -115,15 +107,13 @@ isi! {
         pub asset: AssetDefinitionId,
         /// Asset mode.
         pub mode: ZkAssetMode,
-        /// Allow shielding from public to shielded.
+        /// Allow proof-authenticated Kagemusha public-to-confidential top-ups.
         pub allow_shield: bool,
         /// Allow unshielding from shielded to public.
         pub allow_unshield: bool,
-        /// Verifying key for shielded transfers.
-        pub vk_transfer: Option<crate::proof::VerifyingKeyId>,
         /// Verifying key for unshield proofs.
         pub vk_unshield: Option<crate::proof::VerifyingKeyId>,
-        /// Optional verifying key for shield proofs.
+        /// Canonical Kagemusha top-up shield verifying key.
         pub vk_shield: Option<crate::proof::VerifyingKeyId>,
     }
 }
@@ -136,7 +126,6 @@ impl RegisterZkAsset {
         mode: ZkAssetMode,
         allow_shield: bool,
         allow_unshield: bool,
-        vk_transfer: Option<crate::proof::VerifyingKeyId>,
         vk_unshield: Option<crate::proof::VerifyingKeyId>,
         vk_shield: Option<crate::proof::VerifyingKeyId>,
     ) -> Self {
@@ -145,7 +134,6 @@ impl RegisterZkAsset {
             mode,
             allow_shield,
             allow_unshield,
-            vk_transfer,
             vk_unshield,
             vk_shield,
         }
@@ -217,162 +205,6 @@ impl CancelConfidentialPolicyTransition {
     }
 }
 
-isi! {
-    /// Shield public funds into the asset's shielded ledger by appending a note commitment.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    pub struct Shield {
-        /// Asset definition id.
-        pub asset: AssetDefinitionId,
-        /// Account to debit.
-        pub from: AccountId,
-        /// Public amount to debit.
-        pub amount: Quantity,
-        /// Output note commitment (opaque 32 bytes under the asset's note scheme).
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub note_commitment: [u8; 32],
-        /// Encrypted recipient payload (versioned envelope).
-        pub enc_payload: ConfidentialEncryptedPayload,
-    }
-}
-
-impl crate::seal::Instruction for Shield {}
-impl Shield {
-    /// Construct a new Shield instruction.
-    pub fn new(
-        asset: AssetDefinitionId,
-        from: AccountId,
-        amount: impl Into<Quantity>,
-        note_commitment: [u8; 32],
-        enc_payload: impl Into<ConfidentialEncryptedPayload>,
-    ) -> Self {
-        Self {
-            asset,
-            from,
-            amount: amount.into(),
-            note_commitment,
-            enc_payload: enc_payload.into(),
-        }
-    }
-}
-
-isi! {
-    /// Private-to-private transfer within a shielded ledger.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    pub struct ZkTransfer {
-        /// Asset definition id.
-        pub asset: AssetDefinitionId,
-        /// Spent nullifiers.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub inputs: Vec<[u8; 32]>,
-        /// Output note commitments.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub outputs: Vec<[u8; 32]>,
-        /// Proof attachment for the transfer.
-        pub proof: crate::proof::ProofAttachment,
-        /// Optional recent Merkle root used during proof construction.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::option"))]
-        pub root_hint: Option<[u8; 32]>,
-    }
-}
-
-impl crate::seal::Instruction for ZkTransfer {}
-impl ZkTransfer {
-    /// Construct a new `ZkTransfer` instruction.
-    pub fn new(
-        asset: AssetDefinitionId,
-        inputs: Vec<[u8; 32]>,
-        outputs: Vec<[u8; 32]>,
-        proof: crate::proof::ProofAttachment,
-        root_hint: Option<[u8; 32]>,
-    ) -> Self {
-        Self {
-            asset,
-            inputs,
-            outputs,
-            proof,
-            root_hint,
-        }
-    }
-}
-
-isi! {
-    /// Unshield private funds into a public account balance.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    pub struct Unshield {
-        /// Asset definition id.
-        pub asset: AssetDefinitionId,
-        /// Recipient account to credit.
-        pub to: AccountId,
-        /// Public amount to credit.
-        pub public_amount: Quantity,
-        /// Spent nullifiers.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub inputs: Vec<[u8; 32]>,
-        /// Optional private change note commitments.
-        #[norito(default)]
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub outputs: Vec<[u8; 32]>,
-        /// Proof attachment for the unshield.
-        pub proof: crate::proof::ProofAttachment,
-        /// Optional recent Merkle root used during proof construction.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::option"))]
-        pub root_hint: Option<[u8; 32]>,
-    }
-}
-
-impl crate::seal::Instruction for Unshield {}
-impl Unshield {
-    /// Construct a new Unshield instruction.
-    pub fn new(
-        asset: AssetDefinitionId,
-        to: AccountId,
-        public_amount: impl Into<Quantity>,
-        inputs: Vec<[u8; 32]>,
-        proof: crate::proof::ProofAttachment,
-        root_hint: Option<[u8; 32]>,
-    ) -> Self {
-        Self::new_with_outputs(
-            asset,
-            to,
-            public_amount,
-            inputs,
-            Vec::new(),
-            proof,
-            root_hint,
-        )
-    }
-
-    /// Construct a new Unshield instruction with explicit private change outputs.
-    pub fn new_with_outputs(
-        asset: AssetDefinitionId,
-        to: AccountId,
-        public_amount: impl Into<Quantity>,
-        inputs: Vec<[u8; 32]>,
-        outputs: Vec<[u8; 32]>,
-        proof: crate::proof::ProofAttachment,
-        root_hint: Option<[u8; 32]>,
-    ) -> Self {
-        Self {
-            asset,
-            to,
-            public_amount: public_amount.into(),
-            inputs,
-            outputs,
-            proof,
-            root_hint,
-        }
-    }
-}
-
 // --- ZK Voting ---
 
 /// Maximum number of options admitted by the first-release election ABI.
@@ -410,6 +242,11 @@ pub enum ElectionShapeV1Error {
 }
 
 /// Validate a first-release election option count and return its allocation length.
+///
+/// # Errors
+///
+/// Returns [`ElectionShapeV1Error`] when the option count is zero or exceeds
+/// [`MAX_ELECTION_OPTIONS_V1`].
 pub fn validate_election_options_v1(options: u32) -> Result<usize, ElectionShapeV1Error> {
     let options = options as usize;
     if options == 0 {
@@ -428,6 +265,11 @@ pub fn validate_election_options_v1(options: u32) -> Result<usize, ElectionShape
 }
 
 /// Validate that a tally contains exactly one counter per valid V1 election option.
+///
+/// # Errors
+///
+/// Returns [`ElectionShapeV1Error`] when the option count is invalid or the
+/// tally length differs from the validated option count.
 pub fn validate_election_tally_v1(
     options: u32,
     tally_len: usize,
@@ -449,7 +291,10 @@ isi! {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct CreateElection {
-        /// Unique election id.
+        /// Unique canonical V1 governance selector.
+        ///
+        /// Admission accepts 1-128 RFC 3986 unreserved ASCII bytes and rejects
+        /// a leading dot; see [`crate::governance::is_valid_governance_selector_v1`].
         pub election_id: String,
         /// Number of options (K).
         pub options: u32,
@@ -478,7 +323,7 @@ isi! {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct SubmitBallot {
-        /// Election id.
+        /// Canonical V1 election selector.
         pub election_id: String,
         /// Encrypted ballot payload (opaque bytes).
         pub ciphertext: Vec<u8>,
@@ -499,7 +344,7 @@ isi! {
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct FinalizeElection {
-        /// Election id.
+        /// Canonical V1 election selector.
         pub election_id: String,
         /// Public tally per option.
         pub tally: Vec<u64>,
@@ -569,7 +414,6 @@ impl_zk_decode_from_slice!(RegisterZkAsset {
     mode: ZkAssetMode,
     allow_shield: bool,
     allow_unshield: bool,
-    vk_transfer: Option<crate::proof::VerifyingKeyId>,
     vk_unshield: Option<crate::proof::VerifyingKeyId>,
     vk_shield: Option<crate::proof::VerifyingKeyId>,
 });
@@ -585,32 +429,6 @@ impl_zk_decode_from_slice!(ScheduleConfidentialPolicyTransition {
 impl_zk_decode_from_slice!(CancelConfidentialPolicyTransition {
     asset: AssetDefinitionId,
     transition_id: Hash,
-});
-
-impl_zk_decode_from_slice!(Shield {
-    asset: AssetDefinitionId,
-    from: AccountId,
-    amount: Quantity,
-    note_commitment: [u8; 32],
-    enc_payload: ConfidentialEncryptedPayload,
-});
-
-impl_zk_decode_from_slice!(ZkTransfer {
-    asset: AssetDefinitionId,
-    inputs: Vec<[u8; 32]>,
-    outputs: Vec<[u8; 32]>,
-    proof: crate::proof::ProofAttachment,
-    root_hint: Option<[u8; 32]>,
-});
-
-impl_zk_decode_from_slice!(Unshield {
-    asset: AssetDefinitionId,
-    to: AccountId,
-    public_amount: Quantity,
-    inputs: Vec<[u8; 32]>,
-    outputs: Vec<[u8; 32]>,
-    proof: crate::proof::ProofAttachment,
-    root_hint: Option<[u8; 32]>,
 });
 
 impl_zk_decode_from_slice!(CreateElection {
@@ -643,7 +461,6 @@ mod tests {
 
     use std::str::FromStr as _;
 
-    use iroha_crypto::{Algorithm, KeyPair};
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -696,14 +513,8 @@ mod tests {
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     };
 
-    fn account(seed: u8) -> AccountId {
-        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-            .expect("derive checked zk ISI fixture account keypair");
-        AccountId::new(key_pair.public_key().clone())
-    }
-
     fn asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             Name::from_str("xor").expect("asset name"),
         )
@@ -724,10 +535,6 @@ mod tests {
             ProofBox::new(backend.clone(), vec![1, 2, 3, 4]),
             VerifyingKeyId::new(backend, "vk_test"),
         )
-    }
-
-    fn encrypted_payload() -> ConfidentialEncryptedPayload {
-        ConfidentialEncryptedPayload::new([0xA1; 32], [0xB2; 24], vec![0xC3, 0xC4])
     }
 
     fn assert_slice_roundtrip<T>(value: T)
@@ -774,7 +581,6 @@ mod tests {
             ZkAssetMode::Hybrid,
             true,
             true,
-            Some(verifying_key("transfer")),
             Some(verifying_key("unshield")),
             Some(verifying_key("shield")),
         ));
@@ -788,29 +594,6 @@ mod tests {
         assert_slice_roundtrip(CancelConfidentialPolicyTransition::new(
             asset.clone(),
             Hash::new("policy-transition"),
-        ));
-        assert_slice_roundtrip(Shield::new(
-            asset.clone(),
-            account(1),
-            Quantity::from(1_000_u32),
-            [0x11; 32],
-            encrypted_payload(),
-        ));
-        assert_slice_roundtrip(ZkTransfer::new(
-            asset.clone(),
-            vec![[0x12; 32]],
-            vec![[0x13; 32]],
-            proof.clone(),
-            Some([0x14; 32]),
-        ));
-        assert_slice_roundtrip(Unshield::new_with_outputs(
-            asset,
-            account(2),
-            Quantity::from(500_u32),
-            vec![[0x15; 32]],
-            vec![[0x16; 32]],
-            proof.clone(),
-            Some([0x17; 32]),
         ));
         assert_slice_roundtrip(CreateElection {
             election_id: "election-1".to_owned(),
@@ -835,38 +618,6 @@ mod tests {
         });
     }
 
-    #[cfg(feature = "json")]
-    #[test]
-    fn public_zk_quantities_use_strict_canonical_json_strings() {
-        let amount: Quantity = "18446744073709551616"
-            .parse()
-            .expect("quantity above u64 remains in the V1 numeric domain");
-        let shield = Shield::new(
-            asset_definition_id(),
-            account(1),
-            amount,
-            [0x71; 32],
-            encrypted_payload(),
-        );
-        let canonical = norito::json::to_json(&shield).expect("serialize shield");
-        assert!(canonical.contains("\"amount\":\"18446744073709551616\""));
-        let decoded: Shield = norito::json::from_json(&canonical).expect("canonical quantity");
-        assert_eq!(decoded.amount().to_string(), "18446744073709551616");
-
-        for (label, replacement) in [
-            ("JSON number", "18446744073709551616"),
-            ("noncanonical string", "\"018446744073709551616\""),
-            ("negative string", "\"-18446744073709551616\""),
-        ] {
-            let malformed = canonical.replace("\"18446744073709551616\"", replacement);
-            assert_ne!(malformed, canonical, "test fixture must replace amount");
-            assert!(
-                norito::json::from_json::<Shield>(&malformed).is_err(),
-                "{label} must not cross a public Quantity JSON boundary"
-            );
-        }
-    }
-
     #[test]
     fn zk_default_registry_decodes_type_names_and_stable_ids() {
         let registry = crate::isi::registry::default();
@@ -885,15 +636,7 @@ mod tests {
         assert_registry_decodes(
             &registry,
             std::any::type_name::<RegisterZkAsset>(),
-            RegisterZkAsset::new(
-                asset.clone(),
-                ZkAssetMode::ZkNative,
-                false,
-                false,
-                Some(verifying_key("transfer")),
-                None,
-                None,
-            ),
+            RegisterZkAsset::new(asset.clone(), ZkAssetMode::Hybrid, false, false, None, None),
         );
         assert_registry_decodes(
             &registry,
@@ -913,6 +656,19 @@ mod tests {
                 asset.clone(),
                 Hash::new("policy-transition-stable"),
             ),
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn zk_asset_mode_rejects_retired_native_mode() {
+        assert_eq!(
+            norito::json::from_str::<ZkAssetMode>("\"Hybrid\"").expect("decode first-release mode"),
+            ZkAssetMode::Hybrid
+        );
+        assert!(
+            norito::json::from_str::<ZkAssetMode>("\"ZkNative\"").is_err(),
+            "the first-release wire must reject the unusable native-only mode"
         );
     }
 }

@@ -237,13 +237,8 @@ pub enum SingularQueryJson {
     },
     /// Looks up a native asset escrow by identifier.
     FindAssetEscrowById {
-        /// Hex-encoded escrow hash identifier.
-        escrow_id: String,
-    },
-    /// Looks up a native anonymous asset escrow by identifier.
-    FindAnonymousAssetEscrowById {
-        /// Hex-encoded escrow hash identifier.
-        escrow_id: String,
+        /// Escrow identifier encoded as one canonical checksummed hash literal.
+        escrow_id: crate::escrow::EscrowId,
     },
     /// Looks up a trigger by identifier.
     FindTriggerById {
@@ -366,15 +361,14 @@ impl SingularQueryJson {
     }
 
     fn parse_asset_escrow(payload: &Map) -> Result<Self, QueryJsonError> {
-        Ok(Self::FindAssetEscrowById {
-            escrow_id: payload_required_string(payload, "escrow_id")?.to_owned(),
-        })
-    }
-
-    fn parse_anonymous_asset_escrow(payload: &Map) -> Result<Self, QueryJsonError> {
-        Ok(Self::FindAnonymousAssetEscrowById {
-            escrow_id: payload_required_string(payload, "escrow_id")?.to_owned(),
-        })
+        let escrow_id = payload
+            .get("escrow_id")
+            .ok_or(QueryJsonError::MissingField("payload", "escrow_id"))
+            .and_then(|value| {
+                json::from_value::<crate::escrow::EscrowId>(value.clone())
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "escrow_id"))
+            })?;
+        Ok(Self::FindAssetEscrowById { escrow_id })
     }
 
     fn parse_trigger_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
@@ -458,13 +452,6 @@ impl SingularQueryJson {
         Ok(iroha_crypto::Hash::prehashed(arr))
     }
 
-    fn decode_escrow_id(escrow_id: &str) -> Result<crate::escrow::EscrowId, QueryJsonError> {
-        escrow_id
-            .parse::<iroha_crypto::Hash>()
-            .map(crate::escrow::EscrowId::new)
-            .map_err(|_| QueryJsonError::InvalidField("payload", "escrow_id"))
-    }
-
     fn to_value(&self) -> Value {
         let mut map = Map::new();
         map.insert(
@@ -513,10 +500,12 @@ impl SingularQueryJson {
                 payload.insert("nft_id".to_owned(), Value::String(nft_id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
-            Self::FindAssetEscrowById { escrow_id }
-            | Self::FindAnonymousAssetEscrowById { escrow_id } => {
+            Self::FindAssetEscrowById { escrow_id } => {
                 let mut payload = Map::new();
-                payload.insert("escrow_id".to_owned(), Value::String(escrow_id.clone()));
+                payload.insert(
+                    "escrow_id".to_owned(),
+                    json::to_value(escrow_id).expect("escrow id serializes"),
+                );
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
             Self::FindTriggerById { id } | Self::FindFeeSponsorProgramById { id } => {
@@ -590,9 +579,6 @@ impl SingularQueryJson {
             "FindAssetDefinitionById" => Self::parse_asset_definition(singular_payload(map)?),
             "FindNftById" => Self::parse_nft_by_id(singular_payload(map)?),
             "FindAssetEscrowById" => Self::parse_asset_escrow(singular_payload(map)?),
-            "FindAnonymousAssetEscrowById" => {
-                Self::parse_anonymous_asset_escrow(singular_payload(map)?)
-            }
             "FindTriggerById" => Self::parse_trigger_by_id(singular_payload(map)?),
             "FindTwitterBindingByHash" => Self::parse_twitter_binding(singular_payload(map)?),
             "FindDomainById" => Self::parse_domain_by_id(singular_payload(map)?),
@@ -625,9 +611,6 @@ impl SingularQueryJson {
             SingularQueryJson::FindAssetDefinitionById { .. } => "FindAssetDefinitionById",
             SingularQueryJson::FindNftById { .. } => "FindNftById",
             SingularQueryJson::FindAssetEscrowById { .. } => "FindAssetEscrowById",
-            SingularQueryJson::FindAnonymousAssetEscrowById { .. } => {
-                "FindAnonymousAssetEscrowById"
-            }
             SingularQueryJson::FindTriggerById { .. } => "FindTriggerById",
             SingularQueryJson::FindContractManifestByCodeHash { .. } => {
                 "FindContractManifestByCodeHash"
@@ -714,15 +697,8 @@ impl SingularQueryJson {
                 ))
             }
             SingularQueryJson::FindAssetEscrowById { escrow_id } => {
-                let id = Self::decode_escrow_id(&escrow_id)?;
                 Ok(SingularQueryBox::FindAssetEscrowById(
-                    crate::query::escrow::prelude::FindAssetEscrowById::new(id),
-                ))
-            }
-            SingularQueryJson::FindAnonymousAssetEscrowById { escrow_id } => {
-                let id = Self::decode_escrow_id(&escrow_id)?;
-                Ok(SingularQueryBox::FindAnonymousAssetEscrowById(
-                    crate::query::escrow::prelude::FindAnonymousAssetEscrowById::new(id),
+                    crate::query::escrow::prelude::FindAssetEscrowById::new(escrow_id),
                 ))
             }
             SingularQueryJson::FindTriggerById { id } => {
@@ -946,12 +922,6 @@ impl IterableQueryJson {
                     Box::new(crate::query::escrow::prelude::FindAssetEscrows)
                 })
             }
-            IterableQueryKind::FindAnonymousAssetEscrows => {
-                type Item = crate::escrow::AnonymousAssetEscrowRecord;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::escrow::prelude::FindAnonymousAssetEscrows)
-                })
-            }
             IterableQueryKind::FindRepoAgreements => {
                 type Item = crate::repo::RepoAgreement;
                 self.build_for_kind::<Item, _>(params.clone(), || {
@@ -1013,8 +983,6 @@ pub enum IterableQueryKind {
     FindAssetsDefinitions,
     /// Enumerate native asset escrows.
     FindAssetEscrows,
-    /// Enumerate native anonymous asset escrows.
-    FindAnonymousAssetEscrows,
     /// Enumerate registered NFTs.
     FindNfts,
     /// Enumerate registered RWA lots.
@@ -1040,7 +1008,6 @@ impl IterableQueryKind {
             IterableQueryKind::FindAccountIds => "FindAccountIds",
             IterableQueryKind::FindAssetsDefinitions => "FindAssetsDefinitions",
             IterableQueryKind::FindAssetEscrows => "FindAssetEscrows",
-            IterableQueryKind::FindAnonymousAssetEscrows => "FindAnonymousAssetEscrows",
             IterableQueryKind::FindNfts => "FindNfts",
             IterableQueryKind::FindRwas => "FindRwas",
             IterableQueryKind::FindRoles => "FindRoles",
@@ -1063,7 +1030,6 @@ impl FromStr for IterableQueryKind {
             "FindAccountIds" => Ok(IterableQueryKind::FindAccountIds),
             "FindAssetsDefinitions" => Ok(IterableQueryKind::FindAssetsDefinitions),
             "FindAssetEscrows" => Ok(IterableQueryKind::FindAssetEscrows),
-            "FindAnonymousAssetEscrows" => Ok(IterableQueryKind::FindAnonymousAssetEscrows),
             "FindNfts" => Ok(IterableQueryKind::FindNfts),
             "FindRwas" => Ok(IterableQueryKind::FindRwas),
             "FindRoles" => Ok(IterableQueryKind::FindRoles),
@@ -1580,7 +1546,7 @@ mod tests {
 
     #[test]
     fn find_asset_queries_roundtrip_with_public_selectors() {
-        let definition_id = crate::asset::AssetDefinitionId::new(
+        let definition_id = crate::asset::AssetDefinitionId::derive_from_components(
             crate::domain::DomainId::try_new("wonderland", "universal").expect("valid domain id"),
             "rose".parse::<crate::Name>().expect("valid asset name"),
         );
@@ -1628,11 +1594,15 @@ mod tests {
         }
 
         let escrow_id = crate::escrow::EscrowId::new(iroha_crypto::Hash::new("escrow-json"));
-        let escrow_query = SingularQueryJson::FindAssetEscrowById {
-            escrow_id: escrow_id.as_hash().to_string(),
-        };
+        let escrow_query = SingularQueryJson::FindAssetEscrowById { escrow_id };
         let envelope = QueryEnvelopeJson::Singular(escrow_query.clone());
         let json = norito::json::to_json(&envelope).expect("serialize");
+        let canonical_literal = norito::json::to_value(&escrow_id)
+            .expect("serialize escrow id")
+            .as_str()
+            .expect("escrow id JSON is a string")
+            .to_owned();
+        assert!(json.contains(&format!(r#""escrow_id":"{canonical_literal}""#)));
         let parsed: QueryEnvelopeJson = norito::json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, envelope);
         let query = match parsed {
@@ -1668,6 +1638,50 @@ mod tests {
                 assert_eq!(q.trigger_id().to_string(), "demo_trigger");
             }
             other => panic!("unexpected query variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn escrow_query_json_rejects_noncanonical_id_shapes() {
+        let escrow_id = crate::escrow::EscrowId::new(iroha_crypto::Hash::new("escrow-query-id"));
+        let canonical_literal = norito::json::to_value(&escrow_id)
+            .expect("serialize escrow id")
+            .as_str()
+            .expect("escrow id JSON is a string")
+            .to_owned();
+        let aliases = [
+            Value::String(escrow_id.as_hash().to_string()),
+            Value::String(canonical_literal.to_lowercase()),
+            Value::Array(vec![Value::String(canonical_literal.clone())]),
+            norito::json!({"Hash": (canonical_literal.clone())}),
+            norito::json!({"hash": (canonical_literal.clone())}),
+            norito::json!({"EscrowId": (canonical_literal.clone())}),
+        ];
+
+        for kind in ["FindAssetEscrowById", "FindAnonymousAssetEscrowById"] {
+            let canonical = norito::json!({
+                "singular": {
+                    "type": (kind),
+                    "payload": {"escrow_id": (canonical_literal.clone())}
+                }
+            });
+            assert!(
+                norito::json::from_value::<QueryEnvelopeJson>(canonical).is_ok(),
+                "{kind} must accept one canonical checksummed hash literal"
+            );
+
+            for alias in &aliases {
+                let envelope = norito::json!({
+                    "singular": {
+                        "type": (kind),
+                        "payload": {"escrow_id": (alias.clone())}
+                    }
+                });
+                assert!(
+                    norito::json::from_value::<QueryEnvelopeJson>(envelope).is_err(),
+                    "{kind} accepted noncanonical EscrowId JSON {alias:?}"
+                );
+            }
         }
     }
 

@@ -772,7 +772,8 @@ pub struct ReserveTransactionForwarder {
 
 impl ReserveTransactionForwarder {
     /// Construct a non-persistent forwarder for focused composition tests.
-    pub fn in_memory(
+    #[cfg(test)]
+    fn in_memory(
         policy: ReserveTransactionForwarderPolicyV1,
     ) -> Result<Self, ReserveTransactionForwarderError> {
         policy.validate()?;
@@ -2590,7 +2591,7 @@ mod tests {
             revision,
             predecessor_policy_digest,
             economics: ReservePolicyV1::default(),
-            asset_definition: AssetDefinitionId::new(
+            asset_definition: AssetDefinitionId::derive_from_components(
                 DomainId::try_new("reserve", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),

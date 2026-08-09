@@ -19,6 +19,13 @@ export {
 } from "./address.js";
 export { normalizeIdentifierInput } from "./normalizers.js";
 export {
+  AUTHENTICATED_BLOCK_PROOFS_VERSION_V1,
+  AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+  AUTHENTICATED_BLOCK_PROOFS_MAX_FINALITY_PROOF_BYTES_V1,
+  AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
+  verifyAuthenticatedBlockProofsV1,
+} from "./authenticatedBlockProofs.js";
+export {
   KotodamaDecimal,
   KotodamaInt,
   KotodamaQuantity,
@@ -96,12 +103,10 @@ export {
   KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
   KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
-  normalizeKagemushaAssetSelector,
   normalizeKagemushaOperationId,
   normalizeKagemushaOperationReference,
   normalizeKagemushaOperationStatus,
   normalizeKagemushaRedeemRequestV4,
-  normalizeKagemushaReadinessV4,
   normalizeOfflineStatus,
   normalizeKagemushaTopUpRequestV4,
 } from "./kagemushaOffline.js";
@@ -141,8 +146,8 @@ export {
   verifySm2,
   sm2PublicKeyMultihash,
   buildKaigiRosterJoinProof,
-  PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
+  PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   isPrivacyNativeAvailable,
   privacyCompiledProfileCatalogV1,
@@ -159,6 +164,19 @@ export {
   buildCanonicalRequestHeaders,
   buildCanonicalJsonRequest,
 } from "./canonicalRequest.js";
+export {
+  BOOTLE_LANTERN_ISSUANCE_AUTHORIZE_PATH_V1,
+  BOOTLE_LANTERN_ISSUANCE_ISSUE_PATH_V1,
+  BOOTLE_LANTERN_ISSUANCE_MEDIA_TYPE_V1,
+  BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1,
+  BOOTLE_LANTERN_ISSUE_REQUEST_BYTES_V1,
+  BOOTLE_LANTERN_ISSUE_RESPONSE_BYTES_V1,
+  BOOTLE_LANTERN_ISSUANCE_CREDENTIAL_MAX_BYTES_V1,
+  BOOTLE_LANTERN_ISSUANCE_ERROR_RESPONSE_MAX_BYTES_V1,
+  BootleLanternIssuanceCredentialV1,
+  BootleLanternIssuanceClientErrorV1,
+  BootleLanternIssuanceClientV1,
+} from "./bootleLanternIssuance.js";
 export {
   assembleSoracloudAppInfraRequest,
   assembleSoracloudHfDeployRequest,
@@ -281,16 +299,12 @@ export {
   buildSetRwaKeyValueTransaction,
   buildRemoveRwaKeyValueTransaction,
   buildCreateKaigiTransaction,
-  buildPrivateKaigiFeeSpend,
   buildConfidentialTransferProofV2,
   buildConfidentialUnshieldProofV2,
   buildConfidentialUnshieldProofV3,
-  buildPrivateCreateKaigiTransaction,
   buildJoinKaigiTransaction,
-  buildPrivateJoinKaigiTransaction,
   buildLeaveKaigiTransaction,
   buildEndKaigiTransaction,
-  buildPrivateEndKaigiTransaction,
   buildRecordKaigiUsageTransaction,
   buildSetKaigiRelayManifestTransaction,
   buildRegisterKaigiRelayTransaction,
@@ -307,9 +321,6 @@ export {
   buildRegisterZkAssetTransaction,
   buildScheduleConfidentialPolicyTransitionTransaction,
   buildCancelConfidentialPolicyTransitionTransaction,
-  buildShieldTransaction,
-  buildZkTransferTransaction,
-  buildUnshieldTransaction,
   buildCreateElectionTransaction,
   buildSubmitBallotTransaction,
   buildFinalizeElectionTransaction,
@@ -341,11 +352,6 @@ export {
   deriveContractAddress,
   prepareBrowserContractArtifact,
 } from "./smartContractDeployment.js";
-export {
-  IVM_ARTIFACT_ADMISSION_MAX_INPUT_BYTES,
-  instantiateIvmArtifactAdmissionWasm,
-  verifyIvmContractArtifactAdmission,
-} from "./ivmArtifactAdmissionWasm.js";
 export {
   buildBurnAssetInstruction,
   buildCancelAssetLockInstruction,
@@ -422,9 +428,6 @@ export {
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
   buildCancelConfidentialPolicyTransitionInstruction,
-  buildShieldInstruction,
-  buildZkTransferInstruction,
-  buildUnshieldInstruction,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,
   buildFinalizeElectionInstruction,

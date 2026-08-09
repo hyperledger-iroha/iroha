@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the Sumeragi TLAPS body inside a bounded, globally serialized process group."""
+"""Run the Sumeragi TLAPS body under cooperative resource observation."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 import secrets
 import select
-import signal
+import selectors
 import stat
 import subprocess
 import sys
@@ -44,14 +44,16 @@ MEMORY_ENFORCEMENT_MODES = frozenset(
 CONTROL_RECORD_TIMEOUT_SECONDS = 0.2
 # macOS does not provide a short completion guarantee for ``ps`` under
 # proof-generation memory and APFS write pressure. Keep full-host admission and
-# final probes bounded while using scoped process-group inspection at runtime.
+# final probes bounded. Runtime supervision uses the same observation-only
+# snapshot path so it never needs process-group creation or control.
 PROCESS_INSPECTION_TIMEOUT_SECONDS = 10.0
-TERM_GRACE_SECONDS = 2.0
-WRAPPER_REAP_TIMEOUT_SECONDS = 30.0
+PROCESS_INSPECTION_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024
 SESSION_READY_TIMEOUT_SECONDS = 2.0
+SESSION_OBSERVATION_INTERVAL_SECONDS = 0.05
 MEMORY_LIMIT_EXIT_CODE = 75
 LOCK_UNAVAILABLE_EXIT_CODE = 73
 FOREIGN_JOB_EXIT_CODE = 74
+CANCELLATION_EXIT_CODE = 125
 RESOURCE_GUARD_AUTH_FD_ENV = "IROHA_RESOURCE_GUARD_AUTH_FD"
 RESOURCE_GUARD_AUTH_TOKEN_ENV = "IROHA_RESOURCE_GUARD_AUTH_TOKEN"
 RESOURCE_GUARD_AUTH_MAGIC = "IROHA_RESOURCE_GUARD_AUTH_V1"
@@ -62,8 +64,14 @@ PS = next(
         for candidate in (Path("/bin/ps"), Path("/usr/bin/ps"))
         if candidate.is_file()
     ),
-    "ps",
+    None,
 )
+PROCESS_INSPECTION_ENVIRONMENT = {
+    "HOME": "/var/empty",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin",
+}
 DARWIN_LIBPROC = "/usr/lib/libproc.dylib"
 DARWIN_RUSAGE_INFO_V4 = 4
 DARWIN_PROC_PIDTBSDINFO = 3
@@ -78,6 +86,18 @@ HEAVY_JOB_LOCK_PATH = Path("/tmp") / f"iroha-memory-heavy-{os.getuid()}.lock"
 
 class GuardError(RuntimeError):
     """Raised when the guard cannot safely supervise the requested command."""
+
+
+class GuardViolation(GuardError):
+    """A bounded-observation violation whose verdict is latched by the guard."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+class DarwinProcessUnavailable(GuardError):
+    """A scoped Darwin accounting read raced with natural process exit."""
 
 
 class LockUnavailable(GuardError):
@@ -222,7 +242,7 @@ _darwin_libproc: ctypes.CDLL | None = None
 
 
 class SessionControl:
-    """Bounded control channel from the lifeline wrapper."""
+    """Bounded control channel from the cooperative session wrapper."""
 
     def __init__(self, descriptor: int) -> None:
         self._descriptor = descriptor
@@ -240,19 +260,50 @@ class SessionControl:
                 try:
                     return raw.decode("ascii")
                 except UnicodeDecodeError as error:
-                    raise GuardError(f"{description} is not ASCII") from error
+                    raise GuardViolation(
+                        "control_output_failure", f"{description} is not ASCII"
+                    ) from error
             if len(self._buffer) >= 256:
-                raise GuardError(f"{description} exceeds 255 bytes")
+                raise GuardViolation(
+                    "control_output_limit", f"{description} exceeds 255 bytes"
+                )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise GuardError(f"timed out waiting for {description}")
+                raise GuardViolation(
+                    "control_timeout", f"timed out waiting for {description}"
+                )
             readable, _, _ = select.select([self._descriptor], [], [], remaining)
             if not readable:
-                raise GuardError(f"timed out waiting for {description}")
+                raise GuardViolation(
+                    "control_timeout", f"timed out waiting for {description}"
+                )
             chunk = os.read(self._descriptor, 256 - len(self._buffer))
             if not chunk:
-                raise GuardError(f"lifeline wrapper closed before {description}")
+                raise GuardViolation(
+                    "control_output_failure",
+                    f"session wrapper closed before {description}",
+                )
             self._buffer.extend(chunk)
+
+    def drain_to_eof(self) -> bytes:
+        """Drain the wrapper channel after natural completion, retaining one cap."""
+
+        retained = bytearray(self._buffer)
+        self._buffer.clear()
+        output_limit_exceeded = len(retained) > 256
+        while True:
+            chunk = os.read(self._descriptor, 4096)
+            if not chunk:
+                break
+            capacity = max(256 - len(retained), 0)
+            retained.extend(chunk[:capacity])
+            if len(chunk) > capacity:
+                output_limit_exceeded = True
+        if output_limit_exceeded:
+            raise GuardViolation(
+                "control_output_limit", "session wrapper output exceeds 256 bytes"
+            )
+        return bytes(retained)
 
     def close(self) -> None:
         """Close the control descriptor."""
@@ -264,7 +315,7 @@ class SessionControl:
 
 @dataclass
 class GuardedSession:
-    """The wrapper process plus the separately sessioned heavy body."""
+    """The cooperative wrapper process plus its naturally completing body."""
 
     wrapper: subprocess.Popen[bytes]
     process_group_id: int
@@ -273,22 +324,22 @@ class GuardedSession:
     body_identity: DarwinProcessIdentity | None = None
 
     def close(self) -> None:
-        """Release the supervisor ends of the session control pipes."""
+        """Release control pipes only after the wrapper finishes naturally."""
 
         if self.lifeline_writer >= 0:
             os.close(self.lifeline_writer)
             self.lifeline_writer = -1
+        self.wrapper.wait()
         try:
-            try:
-                self.wrapper.wait(timeout=WRAPPER_REAP_TIMEOUT_SECONDS)
-            except subprocess.TimeoutExpired:
-                _terminate_owned_group(self.wrapper, self.process_group_id)
+            self.control.drain_to_eof()
         finally:
             self.control.close()
 
 
-def _read_guarded_exit(session: GuardedSession) -> tuple[int, bool, int]:
-    """Read and validate the wrapper's child status and kernel RSS evidence."""
+def _read_guarded_exit(
+    session: GuardedSession,
+) -> tuple[int, bool, bool, bool, int]:
+    """Read the wrapper's natural child status and latched observations."""
 
     wrapper_exit = session.control.read_line(
         timeout=CONTROL_RECORD_TIMEOUT_SECONDS,
@@ -296,20 +347,37 @@ def _read_guarded_exit(session: GuardedSession) -> tuple[int, bool, int]:
     )
     fields = wrapper_exit.split()
     if (
-        len(fields) != 4
+        len(fields) != 6
         or fields[0] != "EXIT"
         or fields[2] not in {"0", "1"}
-        or not fields[3].isdigit()
+        or fields[3] not in {"0", "1"}
+        or fields[4] not in {"0", "1"}
+        or not fields[5].isdigit()
     ):
-        raise GuardError("lifeline wrapper emitted invalid exit status")
+        raise GuardViolation(
+            "control_output_failure", "session wrapper emitted invalid exit status"
+        )
     try:
         child_exit_code = int(fields[1])
-        kernel_peak_rss_bytes = int(fields[3])
+        kernel_peak_rss_bytes = int(fields[5])
     except ValueError as error:
-        raise GuardError(
-            "lifeline wrapper emitted a non-integer child status"
+        raise GuardViolation(
+            "control_output_failure",
+            "session wrapper emitted a non-integer child status",
         ) from error
-    return child_exit_code, fields[2] == "1", kernel_peak_rss_bytes
+    trailing = session.control.drain_to_eof()
+    if trailing:
+        raise GuardViolation(
+            "control_output_failure",
+            "session wrapper emitted unexpected trailing output",
+        )
+    return (
+        child_exit_code,
+        fields[2] == "1",
+        fields[3] == "1",
+        fields[4] == "1",
+        kernel_peak_rss_bytes,
+    )
 
 
 def _utc_now() -> str:
@@ -441,32 +509,112 @@ def _host_lock(path: Path = LOCK_PATH, *, description: str = "TLAPS") -> Iterato
             os.close(descriptor)
 
 
+def _run_bounded_observation(
+    argv: Sequence[str],
+    *,
+    timeout_seconds: float,
+    maximum_output_bytes: int,
+    environment: Mapping[str, str],
+) -> subprocess.CompletedProcess[bytes]:
+    """Drain a bounded observation command naturally and latch its verdict."""
+
+    try:
+        process = subprocess.Popen(
+            list(argv),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            close_fds=True,
+            env=dict(environment),
+        )
+    except OSError as error:
+        raise GuardError("could not start process inspection") from error
+    assert process.stdout is not None and process.stderr is not None
+    os.set_blocking(process.stdout.fileno(), False)
+    os.set_blocking(process.stderr.fileno(), False)
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    retained_bytes = 0
+    deadline = time.monotonic() + timeout_seconds
+    latched_reason: str | None = None
+    cancellation_latched = False
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 and latched_reason is None:
+                latched_reason = "process_inspection_timeout"
+            try:
+                events = selector.select(
+                    1.0 if remaining <= 0 else min(remaining, 1.0)
+                )
+            except KeyboardInterrupt:
+                cancellation_latched = True
+                continue
+            for key, _ in events:
+                try:
+                    chunk = os.read(key.fileobj.fileno(), 64 * 1024)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                capacity = max(maximum_output_bytes - retained_bytes, 0)
+                retained = chunk[:capacity]
+                buffers[key.data].extend(retained)
+                retained_bytes += len(retained)
+                if len(retained) != len(chunk) and latched_reason is None:
+                    latched_reason = "process_inspection_output_limit"
+        returncode = process.wait()
+        if time.monotonic() > deadline and latched_reason is None:
+            latched_reason = "process_inspection_timeout"
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+    if cancellation_latched:
+        raise GuardViolation(
+            "cancellation", "process inspection was cooperatively cancelled"
+        )
+    if latched_reason == "process_inspection_timeout":
+        raise GuardViolation(
+            latched_reason,
+            "process inspection exceeded "
+            f"{timeout_seconds:g} s before natural completion",
+        )
+    if latched_reason == "process_inspection_output_limit":
+        raise GuardViolation(
+            latched_reason,
+            "process inspection exceeded its retained-output limit before "
+            "natural completion",
+        )
+    return subprocess.CompletedProcess(
+        list(argv),
+        returncode,
+        stdout=bytes(buffers["stdout"]),
+        stderr=bytes(buffers["stderr"]),
+    )
+
+
 def _process_rows() -> list[ProcessRow]:
     """Snapshot process identity, ownership, grouping, and RSS."""
 
-    try:
-        completed = subprocess.run(
-            [PS, "-axo", "pid=,ppid=,pgid=,uid=,rss=,comm="],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=PROCESS_INSPECTION_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise GuardError(
-            "process inspection exceeded "
-            f"{PROCESS_INSPECTION_TIMEOUT_SECONDS:g} s"
-        ) from error
-    except OSError as error:
-        raise GuardError("could not start process inspection") from error
+    if PS is None:
+        raise GuardError("absolute process-inspection utility is unavailable")
+    completed = _run_bounded_observation(
+        [PS, "-axo", "pid=,ppid=,pgid=,uid=,rss=,comm="],
+        timeout_seconds=PROCESS_INSPECTION_TIMEOUT_SECONDS,
+        maximum_output_bytes=PROCESS_INSPECTION_OUTPUT_LIMIT_BYTES,
+        environment=PROCESS_INSPECTION_ENVIRONMENT,
+    )
     if completed.returncode != 0:
-        detail = completed.stderr.strip() or f"exit status {completed.returncode}"
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        detail = detail or f"exit status {completed.returncode}"
         raise GuardError(f"could not inspect processes with ps: {detail}")
     rows: list[ProcessRow] = []
-    for line in completed.stdout.splitlines():
+    for raw_line in completed.stdout.splitlines():
+        line = raw_line.decode("utf-8", errors="replace")
         fields = line.split(None, 5)
         if len(fields) != 6:
             continue
@@ -643,7 +791,12 @@ def _darwin_process_memory(process_id: int) -> DarwinProcessMemory:
     if result != 0:
         error_number = ctypes.get_errno()
         detail = os.strerror(error_number) if error_number else "unknown error"
-        raise GuardError(
+        error_type = (
+            DarwinProcessUnavailable
+            if error_number == errno.ESRCH
+            else GuardError
+        )
+        raise error_type(
             f"could not inspect Darwin resource usage for pid {process_id}: {detail}"
         )
     return DarwinProcessMemory(
@@ -786,16 +939,19 @@ def _foreign_heavy_jobs(
     rows: Sequence[ProcessRow],
     *,
     owned_process_group_id: int | None = None,
+    owned_process_ids: frozenset[int] | set[int] | None = None,
 ) -> list[ProcessRow]:
-    """Find same-user heavy jobs outside the optionally owned process group."""
+    """Find same-user heavy jobs outside the observed owned process tree."""
 
     uid = os.getuid()
+    excluded_process_ids = frozenset(owned_process_ids or ())
     return sorted(
         (
             row
             for row in rows
             if row.uid == uid
             and _is_formal_heavy_process(row)
+            and row.pid not in excluded_process_ids
             and (
                 owned_process_group_id is None
                 or row.process_group_id != owned_process_group_id
@@ -812,7 +968,7 @@ def _record_foreign_heavy_job(
     phase: str,
     owned_process_group_id: int | None,
 ) -> None:
-    """Persist one foreign-heavy-job conflict without signalling that job."""
+    """Persist one foreign-heavy-job conflict without controlling that job."""
 
     report.write(
         {
@@ -833,20 +989,28 @@ def _group_rows(
     rows: Sequence[ProcessRow] | None = None,
     *,
     expected_body_identity: DarwinProcessIdentity | None = None,
+    known_owned_process_ids: set[int] | None = None,
 ) -> list[ProcessRow]:
-    """Return all current members of the owned process group."""
+    """Return the current same-UID descendants of one guarded root PID.
 
-    if rows is None and sys.platform == "darwin":
-        return _darwin_process_group_rows(
-            process_group_id,
-            expected_body_identity=expected_body_identity,
-        )
+    ``process_group_id`` remains the evidence-field name for schema stability;
+    cooperative supervision treats its value as the guarded root PID and never
+    creates or controls an operating-system process group.
+    """
+
+    del expected_body_identity
     snapshot = _process_rows() if rows is None else rows
-    return [
-        row
-        for row in snapshot
-        if row.process_group_id == process_group_id and row.uid == os.getuid()
-    ]
+    owned = known_owned_process_ids if known_owned_process_ids is not None else set()
+    owned.add(process_group_id)
+    uid = os.getuid()
+    changed = True
+    while changed:
+        changed = False
+        for row in snapshot:
+            if row.uid == uid and row.pid not in owned and row.parent_pid in owned:
+                owned.add(row.pid)
+                changed = True
+    return [row for row in snapshot if row.uid == uid and row.pid in owned]
 
 
 def _darwin_process_physical_footprint_bytes(process_id: int) -> int:
@@ -856,14 +1020,25 @@ def _darwin_process_physical_footprint_bytes(process_id: int) -> int:
 
 
 def _physical_footprint_bytes(process_ids: Sequence[int]) -> int:
-    """Return the summed fail-closed Darwin physical-footprint high water."""
+    """Return Darwin footprint high water, tolerating a confirmed exit race."""
 
     if sys.platform != "darwin" or not process_ids:
         return 0
-    return sum(
-        _darwin_process_physical_footprint_bytes(process_id)
-        for process_id in sorted(set(process_ids))
-    )
+    total = 0
+    for process_id in sorted(set(process_ids)):
+        try:
+            total += _darwin_process_physical_footprint_bytes(process_id)
+        except DarwinProcessUnavailable:
+            # A process can exit after the authenticated tree snapshot and
+            # before proc_pid_rusage. Confirm exact PID absence in a fresh
+            # observation; a still-present or reused same-UID PID remains a
+            # fail-closed accounting error.
+            if any(
+                row.pid == process_id and row.uid == os.getuid()
+                for row in _process_rows()
+            ):
+                raise
+    return total
 
 
 def _sample_group(
@@ -873,6 +1048,7 @@ def _sample_group(
     include_physical_footprint: bool = True,
     memory_enforcement_mode: str = MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT,
     expected_body_identity: DarwinProcessIdentity | None = None,
+    known_owned_process_ids: set[int] | None = None,
 ) -> MemorySample:
     """Measure RSS and footprint, selecting the configured enforcement value."""
 
@@ -880,12 +1056,17 @@ def _sample_group(
         raise GuardError("unknown memory enforcement mode")
 
     if expected_body_identity is None:
-        group_rows = _group_rows(process_group_id, rows)
+        group_rows = _group_rows(
+            process_group_id,
+            rows,
+            known_owned_process_ids=known_owned_process_ids,
+        )
     else:
         group_rows = _group_rows(
             process_group_id,
             rows,
             expected_body_identity=expected_body_identity,
+            known_owned_process_ids=known_owned_process_ids,
         )
     rss_bytes = sum(row.rss_bytes for row in group_rows)
     scoped_footprints_available = all(
@@ -923,131 +1104,12 @@ def _sample_group(
 
 
 def _process_group_exists(process_group_id: int) -> bool:
-    """Return whether the exact known process group still exists."""
+    """Observe whether an exact process group is present in a fresh snapshot."""
 
-    try:
-        os.killpg(process_group_id, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Darwin reports EPERM for a group containing only an unreaped zombie.
-        # The known same-UID group was already signalled; no live member remains
-        # available to receive another signal in that state.
-        return False
-    return True
-
-
-def _signal_process_group(process_group_id: int, signum: int) -> None:
-    """Signal the exact known process group, accepting only its disappearance."""
-
-    try:
-        os.killpg(process_group_id, signum)
-    except ProcessLookupError:
-        return
-    except OSError as error:
-        # The group can exit between the supervisor's last existence check and
-        # this signal. Swallow the signal error only after a fresh probe proves
-        # that the exact group is gone; every other error remains fail-closed.
-        if not _process_group_exists(process_group_id):
-            return
-        raise GuardError(
-            f"could not signal owned process group {process_group_id}"
-        ) from error
-
-
-def _wait_for_process_group_absence(
-    process_group_id: int, timeout_seconds: float
-) -> bool:
-    """Wait a bounded interval for one exact process group to disappear."""
-
-    deadline = time.monotonic() + timeout_seconds
-    while _process_group_exists(process_group_id):
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(0.05)
-    return True
-
-
-def _reap_after_owned_group_absence(
-    process: subprocess.Popen[bytes], process_group_id: int
-) -> None:
-    """Reap the body owner after its group is absent, killing a wedged wrapper."""
-
-    try:
-        process.wait(timeout=WRAPPER_REAP_TIMEOUT_SECONDS)
-        return
-    except subprocess.TimeoutExpired:
-        # The public supervisor passes the lifeline wrapper here while the
-        # wrapper owns a separately sessioned body. Do not repeatedly signal
-        # the already-terminated body PGID when it is the wrapper that wedged.
-        if process.pid != process_group_id:
-            _signal_process_group(process.pid, signal.SIGKILL)
-        else:
-            _signal_process_group(process_group_id, signal.SIGKILL)
-    try:
-        process.wait(timeout=TERM_GRACE_SECONDS)
-    except subprocess.TimeoutExpired as error:
-        raise GuardError(
-            f"owned process wrapper {process.pid} could not be reaped"
-        ) from error
-
-
-def _require_owned_group_absent(process_group_id: int) -> None:
-    """Fail if a KILLed owned group does not disappear within the bound."""
-
-    if not _wait_for_process_group_absence(
-        process_group_id, WRAPPER_REAP_TIMEOUT_SECONDS
-    ):
-        raise GuardError(
-            f"owned TLAPS process group {process_group_id} is still present"
-        )
-
-
-def _terminate_owned_group(
-    process: subprocess.Popen[bytes], process_group_id: int
-) -> None:
-    """Unconditionally TERM, then KILL and reap one exact known process group."""
-
-    if process_group_id <= 1:
-        raise GuardError("refusing to signal an invalid owned process group")
-    _signal_process_group(process_group_id, signal.SIGTERM)
-    if not _wait_for_process_group_absence(
-        process_group_id, TERM_GRACE_SECONDS
-    ):
-        _signal_process_group(process_group_id, signal.SIGKILL)
-    _require_owned_group_absent(process_group_id)
-    _reap_after_owned_group_absence(process, process_group_id)
-
-
-def _kill_owned_group_immediately(
-    process: subprocess.Popen[bytes], process_group_id: int
-) -> None:
-    """KILL and reap an owned group without a runaway-allocation grace period."""
-
-    if process_group_id <= 1:
-        raise GuardError("refusing to signal an invalid owned process group")
-    _signal_process_group(process_group_id, signal.SIGKILL)
-    _require_owned_group_absent(process_group_id)
-    _reap_after_owned_group_absence(process, process_group_id)
-
-
-def _stop_remeasure_then_kill_owned_group(
-    process: subprocess.Popen[bytes],
-    process_group_id: int,
-    remeasure: Callable[[], MemorySample],
-) -> MemorySample:
-    """Freeze allocation, take one bounded kernel sample, then KILL and reap."""
-
-    if process_group_id <= 1:
-        raise GuardError("refusing to signal an invalid owned process group")
-    _signal_process_group(process_group_id, signal.SIGSTOP)
-    try:
-        # One synchronous libproc/process snapshot is the entire bound. There
-        # is no external ps/footprint subprocess that can stall while the body
-        # is stopped, and no retry can let allocation resume.
-        return remeasure()
-    finally:
-        _kill_owned_group_immediately(process, process_group_id)
+    return any(
+        row.process_group_id == process_group_id and row.uid == os.getuid()
+        for row in _process_rows()
+    )
 
 
 def _exit_status(returncode: int) -> int:
@@ -1143,7 +1205,7 @@ def _wait4_nonblocking(
 
 
 def _run_session_wrapper(argv: Sequence[str]) -> int:
-    """Watch the supervisor lifeline while owning the separately sessioned body."""
+    """Observe the supervisor lifeline and let the complete body tree finish."""
 
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--lifeline-fd", required=True, type=int)
@@ -1193,17 +1255,6 @@ def _run_session_wrapper(argv: Sequence[str]) -> int:
     if expected_auth_fd != str(args.auth_fd):
         raise GuardError("authorization descriptor environment is inconsistent")
 
-    received_signal = 0
-
-    def receive_signal(signum: int, _frame: object) -> None:
-        nonlocal received_signal
-        if received_signal == 0:
-            received_signal = signum
-
-    watched_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
-    for signum in watched_signals:
-        signal.signal(signum, receive_signal)
-
     child: subprocess.Popen[bytes] | None = None
     try:
         if _lifeline_closed(args.lifeline_fd, 0):
@@ -1213,44 +1264,81 @@ def _run_session_wrapper(argv: Sequence[str]) -> int:
             stdin=subprocess.DEVNULL,
             close_fds=True,
             pass_fds=(args.auth_fd, *args.child_directory_fd),
-            start_new_session=True,
             env=os.environ.copy(),
         )
         process_group_id = child.pid
         _close_descriptor(args.auth_fd)
         args.auth_fd = -1
-        if process_group_id <= 1 or process_group_id == os.getpgrp():
-            raise GuardError("guarded body did not enter its own process group")
-        _write_wrapper_control(args.control_fd, f"READY {process_group_id}")
-
+        if process_group_id <= 1:
+            raise GuardError("guarded body reported an invalid root process")
         lifeline_lost = False
+        observation_failed = False
+        cancellation_latched = False
+        try:
+            _write_wrapper_control(args.control_fd, f"READY {process_group_id}")
+        except BaseException as error:
+            observation_failed = True
+            print(
+                f"resource session wrapper control output failed: {error}",
+                file=sys.stderr,
+            )
+        known_owned_process_ids = {process_group_id}
         completed: tuple[int, int] | None = None
-        while completed is None:
-            completed = _wait4_nonblocking(child)
-            if completed is not None:
-                break
-            if received_signal or _lifeline_closed(args.lifeline_fd, 0.05):
-                lifeline_lost = True
-                break
-        if lifeline_lost:
-            _terminate_owned_group(child, process_group_id)
-            return 1
+        while True:
+            try:
+                if _lifeline_closed(args.lifeline_fd, 0):
+                    lifeline_lost = True
+                live_owned_rows: list[ProcessRow] | None = None
+                try:
+                    rows = _process_rows()
+                    live_owned_rows = _group_rows(
+                        process_group_id,
+                        rows,
+                        known_owned_process_ids=known_owned_process_ids,
+                    )
+                except GuardViolation as error:
+                    if error.reason == "cancellation":
+                        cancellation_latched = True
+                    else:
+                        observation_failed = True
+                except GuardError:
+                    observation_failed = True
+                if completed is None:
+                    try:
+                        completed = _wait4_nonblocking(child)
+                    except GuardError:
+                        observation_failed = True
+                        fallback_returncode = child.poll()
+                        if fallback_returncode is not None:
+                            completed = (fallback_returncode, 0)
+                if completed is not None and live_owned_rows == []:
+                    break
+                time.sleep(SESSION_OBSERVATION_INTERVAL_SECONDS)
+            except KeyboardInterrupt:
+                cancellation_latched = True
 
-        if completed is None:
-            raise GuardError("session wrapper lost the body return code")
         returncode, kernel_peak_rss_bytes = completed
-        lingering = _process_group_exists(process_group_id)
-        if lingering:
-            _terminate_owned_group(child, process_group_id)
-        _write_wrapper_control(
-            args.control_fd,
-            f"EXIT {returncode} {1 if lingering else 0} {kernel_peak_rss_bytes}",
-        )
-        return 1 if lingering else _exit_status(returncode)
+        try:
+            _write_wrapper_control(
+                args.control_fd,
+                "EXIT "
+                f"{returncode} {1 if lifeline_lost else 0} "
+                f"{1 if observation_failed else 0} "
+                f"{1 if cancellation_latched else 0} {kernel_peak_rss_bytes}",
+            )
+        except BaseException as error:
+            observation_failed = True
+            print(
+                f"resource session wrapper control output failed: {error}",
+                file=sys.stderr,
+            )
+        if lifeline_lost or observation_failed or cancellation_latched:
+            return 1
+        return _exit_status(returncode)
     except BaseException as error:
         if child is not None:
             try:
-                _terminate_owned_group(child, child.pid)
+                child.wait()
             except BaseException:
                 pass
         try:
@@ -1316,7 +1404,6 @@ def _spawn_guarded_session(
                 *held_lock_descriptors,
                 *child_directory_descriptors,
             ),
-            start_new_session=True,
             env=child_environment,
         )
         for descriptor in (auth_reader, lifeline_reader, control_writer):
@@ -1332,33 +1419,22 @@ def _spawn_guarded_session(
         )
         fields = ready.split()
         if len(fields) != 2 or fields[0] != "READY" or not fields[1].isdigit():
-            raise GuardError("lifeline wrapper emitted invalid readiness")
+            raise GuardViolation(
+                "control_output_failure",
+                "session wrapper emitted invalid readiness",
+            )
         process_group_id = int(fields[1])
         if process_group_id <= 1 or process_group_id == wrapper.pid:
-            raise GuardError("lifeline wrapper reported an invalid body process group")
-        body_identity: DarwinProcessIdentity | None = None
-        if sys.platform == "darwin":
-            try:
-                body_identity = _capture_darwin_body_identity(
-                    process_group_id, wrapper.pid
-                )
-            except GuardError:
-                # A very short command may disappear between READY and this
-                # identity read. Accept only a kernel-confirmed absent group;
-                # alternatively, accept an authenticated wrapper which exits
-                # within the existing control-record bound. A live but
-                # unidentifiable body is never supervised.
-                if _process_group_exists(process_group_id):
-                    try:
-                        wrapper.wait(timeout=CONTROL_RECORD_TIMEOUT_SECONDS)
-                    except subprocess.TimeoutExpired:
-                        raise
+            raise GuardViolation(
+                "control_output_failure",
+                "session wrapper reported an invalid body root process",
+            )
         session = GuardedSession(
             wrapper,
             process_group_id,
             lifeline_writer,
             control,
-            body_identity,
+            None,
         )
         lifeline_writer = -1
         control = None
@@ -1367,15 +1443,12 @@ def _spawn_guarded_session(
         _close_descriptor(lifeline_writer)
         lifeline_writer = -1
         if wrapper is not None:
-            try:
-                wrapper.wait(timeout=TERM_GRACE_SECONDS * 2 + 1)
-            except subprocess.TimeoutExpired:
-                try:
-                    _terminate_owned_group(wrapper, wrapper.pid)
-                except BaseException:
-                    pass
+            wrapper.wait()
         if control is not None:
-            control.close()
+            try:
+                control.drain_to_eof()
+            finally:
+                control.close()
         raise
     finally:
         for descriptor in (
@@ -1410,6 +1483,7 @@ def _run_guarded(
     post_success_finalize: Callable[[], int | None] | None = None,
     report_context: Mapping[str, object] | None = None,
     child_environment: Mapping[str, str] | None = None,
+    cancellation_requested: Callable[[], bool] | None = None,
 ) -> int:
     """Run one command under the formal resource and lifecycle policy."""
 
@@ -1456,7 +1530,6 @@ def _run_guarded(
     peak_rss_bytes = 0
     peak_footprint_bytes = 0
     sample_count = 0
-    received_signal = 0
     exit_reason = "guard_error"
     child_exit_code: int | None = None
     final_status = 1
@@ -1466,11 +1539,21 @@ def _run_guarded(
     finalize_result: int | None = None
     finalize_status: str | None = None
     kernel_peak_rss_bytes = 0
+    verdict_latched = False
+    known_owned_process_ids: set[int] = set()
 
-    def receive_signal(signum: int, _frame: object) -> None:
-        nonlocal received_signal
-        if received_signal == 0:
-            received_signal = signum
+    def latch_verdict(reason: str, status: int) -> bool:
+        """Latch the first supervision violation without controlling a process."""
+
+        nonlocal exit_reason
+        nonlocal final_status
+        nonlocal verdict_latched
+        if verdict_latched:
+            return False
+        exit_reason = reason
+        final_status = status
+        verdict_latched = True
+        return True
 
     def record_wrapper_completion(completed_session: GuardedSession) -> None:
         """Consume authenticated body status after the wrapper has exited."""
@@ -1479,25 +1562,24 @@ def _run_guarded(
         nonlocal exit_reason
         nonlocal final_status
         nonlocal kernel_peak_rss_bytes
-        child_exit_code, lingering, kernel_peak_rss_bytes = _read_guarded_exit(
-            completed_session
-        )
-        if lingering:
-            exit_reason = "lingering_process_group"
-            final_status = 1
-        else:
+        (
+            child_exit_code,
+            lifeline_lost,
+            observation_failed,
+            cancellation_latched,
+            kernel_peak_rss_bytes,
+        ) = _read_guarded_exit(completed_session)
+        if lifeline_lost:
+            latch_verdict("lifeline_lost", 1)
+        if observation_failed:
+            latch_verdict("process_observation_failure", 1)
+        if cancellation_latched:
+            latch_verdict("cancellation", CANCELLATION_EXIT_CODE)
+        if kernel_peak_rss_bytes > memory_limit_bytes:
+            latch_verdict("kernel_memory_limit", MEMORY_LIMIT_EXIT_CODE)
+        if not verdict_latched:
             exit_reason = "completed" if child_exit_code == 0 else "child_exit"
             final_status = _exit_status(child_exit_code)
-        if kernel_peak_rss_bytes > memory_limit_bytes:
-            exit_reason = "kernel_memory_limit"
-            final_status = MEMORY_LIMIT_EXIT_CODE
-
-    watched_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
-    previous_handlers = {
-        signum: signal.getsignal(signum) for signum in watched_signals
-    }
-    for signum in watched_signals:
-        signal.signal(signum, receive_signal)
 
     try:
         report.write(
@@ -1518,8 +1600,7 @@ def _run_guarded(
         foreign = _foreign_heavy_jobs(_process_rows())
         if foreign:
             first = foreign[0]
-            exit_reason = "foreign_heavy_job"
-            final_status = FOREIGN_JOB_EXIT_CODE
+            latch_verdict("foreign_heavy_job", FOREIGN_JOB_EXIT_CODE)
             _record_foreign_heavy_job(
                 report,
                 first,
@@ -1547,177 +1628,220 @@ def _run_guarded(
                 "wrapper_pid": session.wrapper.pid,
             }
         )
+        known_owned_process_ids.add(session.process_group_id)
         next_sample = time.monotonic()
         next_physical_footprint = (
             next_sample + physical_footprint_interval_seconds
         )
+        recorded_violations: set[str] = set()
         while True:
-            if received_signal:
-                exit_reason = "signal"
-                final_status = min(255, 128 + received_signal)
-                _terminate_owned_group(session.wrapper, session.process_group_id)
-                (
-                    child_exit_code,
-                    _lingering,
-                    kernel_peak_rss_bytes,
-                ) = _read_guarded_exit(session)
-                break
-
-            if session.wrapper.poll() is not None:
-                record_wrapper_completion(session)
-                break
-
-            now = time.monotonic()
-            if now >= next_sample:
-                # A global Darwin ``ps -axo`` can block for seconds under the
-                # generator's APFS write pressure. The held host lock already
-                # excludes cooperating heavy jobs, so use a kernel-scoped PGID
-                # selector in the hot loop. Admission and final success remain
-                # guarded by full-host snapshots.
-                process_rows: Sequence[ProcessRow] | None = None
-                if sys.platform != "darwin":
-                    process_rows = _process_rows()
-                    foreign = _foreign_heavy_jobs(
-                        process_rows,
-                        owned_process_group_id=session.process_group_id,
-                    )
-                    if foreign:
-                        first = foreign[0]
-                        exit_reason = "foreign_heavy_job"
-                        final_status = FOREIGN_JOB_EXIT_CODE
-                        _kill_owned_group_immediately(
-                            session.wrapper, session.process_group_id
+            try:
+                if cancellation_requested is not None and cancellation_requested():
+                    if latch_verdict("cancellation", CANCELLATION_EXIT_CODE):
+                        report.write(
+                            {
+                                "event": "cancellation_observed",
+                                "process_group_id": session.process_group_id,
+                                "schema_version": 1,
+                                "timestamp_utc": _utc_now(),
+                            }
                         )
-                        (
-                            child_exit_code,
-                            _lingering,
-                            kernel_peak_rss_bytes,
-                        ) = _read_guarded_exit(session)
-                        _record_foreign_heavy_job(
-                            report,
-                            first,
-                            phase="runtime",
-                            owned_process_group_id=session.process_group_id,
-                        )
-                        break
-                include_physical_footprint = now >= next_physical_footprint
-                try:
-                    sample = _sample_group(
-                        session.process_group_id,
-                        process_rows,
-                        include_physical_footprint=include_physical_footprint,
-                        memory_enforcement_mode=memory_enforcement_mode,
-                        expected_body_identity=session.body_identity,
-                    )
-                except GuardError:
-                    # The body can exit between the readiness record and a
-                    # libproc identity read. Trust that race only when the
-                    # authenticated lifeline wrapper finishes within the
-                    # existing bounded control-record deadline.
-                    try:
-                        session.wrapper.wait(timeout=CONTROL_RECORD_TIMEOUT_SECONDS)
-                    except subprocess.TimeoutExpired:
-                        raise
+
+                if session.wrapper.poll() is not None:
                     record_wrapper_completion(session)
                     break
-                if include_physical_footprint:
-                    next_physical_footprint = (
-                        time.monotonic() + physical_footprint_interval_seconds
-                    )
-                sample_count += 1
-                peak_memory_bytes = max(peak_memory_bytes, sample.memory_bytes)
-                peak_rss_bytes = max(peak_rss_bytes, sample.rss_bytes)
-                peak_footprint_bytes = max(
-                    peak_footprint_bytes, sample.physical_footprint_bytes
-                )
-                report.write(
-                    {
-                        "accounting_method": sample.accounting_method,
-                        "elapsed_seconds": round(now - started_monotonic, 6),
-                        "event": "sample",
-                        "memory_bytes": sample.memory_bytes,
-                        "memory_limit_bytes": memory_limit_bytes,
-                        "physical_footprint_bytes": sample.physical_footprint_bytes,
-                        "process_count": sample.process_count,
-                        "process_group_id": session.process_group_id,
-                        "rss_bytes": sample.rss_bytes,
-                        "schema_version": 1,
-                        "timestamp_utc": _utc_now(),
-                    }
-                )
-                if sample.memory_bytes > memory_limit_bytes:
-                    exit_reason = "memory_limit"
-                    final_status = MEMORY_LIMIT_EXIT_CODE
-                    stopped_sample = _stop_remeasure_then_kill_owned_group(
-                        session.wrapper,
-                        session.process_group_id,
-                        lambda: _sample_group(
+
+                now = time.monotonic()
+                if now >= next_sample:
+                    try:
+                        process_rows = _process_rows()
+                        owned_rows = _group_rows(
                             session.process_group_id,
-                            include_physical_footprint=True,
+                            process_rows,
+                            known_owned_process_ids=known_owned_process_ids,
+                        )
+                        foreign = _foreign_heavy_jobs(
+                            process_rows,
+                            owned_process_ids=known_owned_process_ids,
+                        )
+                        if foreign and "foreign_heavy_job" not in recorded_violations:
+                            first = foreign[0]
+                            latch_verdict(
+                                "foreign_heavy_job", FOREIGN_JOB_EXIT_CODE
+                            )
+                            _record_foreign_heavy_job(
+                                report,
+                                first,
+                                phase="runtime",
+                                owned_process_group_id=session.process_group_id,
+                            )
+                            recorded_violations.add("foreign_heavy_job")
+                        if session.wrapper.poll() is not None:
+                            record_wrapper_completion(session)
+                            break
+                        include_physical_footprint = (
+                            now >= next_physical_footprint
+                        )
+                        sample = _sample_group(
+                            session.process_group_id,
+                            process_rows,
+                            include_physical_footprint=include_physical_footprint,
                             memory_enforcement_mode=memory_enforcement_mode,
                             expected_body_identity=session.body_identity,
-                        ),
+                            known_owned_process_ids=known_owned_process_ids,
+                        )
+                    except GuardViolation as error:
+                        violation_status = (
+                            CANCELLATION_EXIT_CODE
+                            if error.reason == "cancellation"
+                            else 1
+                        )
+                        latch_verdict(error.reason, violation_status)
+                        if error.reason not in recorded_violations:
+                            report.write(
+                                {
+                                    "detail": str(error),
+                                    "event": "observation_violation",
+                                    "process_group_id": session.process_group_id,
+                                    "reason": error.reason,
+                                    "schema_version": 1,
+                                    "timestamp_utc": _utc_now(),
+                                }
+                            )
+                            recorded_violations.add(error.reason)
+                        next_sample = time.monotonic() + sample_interval_seconds
+                        continue
+                    except GuardError as error:
+                        latch_verdict("process_observation_failure", 1)
+                        if "process_observation_failure" not in recorded_violations:
+                            report.write(
+                                {
+                                    "detail": str(error),
+                                    "event": "observation_violation",
+                                    "process_group_id": session.process_group_id,
+                                    "reason": "process_observation_failure",
+                                    "schema_version": 1,
+                                    "timestamp_utc": _utc_now(),
+                                }
+                            )
+                            recorded_violations.add("process_observation_failure")
+                        next_sample = time.monotonic() + sample_interval_seconds
+                        continue
+                    if include_physical_footprint:
+                        next_physical_footprint = (
+                            time.monotonic() + physical_footprint_interval_seconds
+                        )
+                    if sample.process_count > 0:
+                        sample_count += 1
+                        peak_memory_bytes = max(
+                            peak_memory_bytes, sample.memory_bytes
+                        )
+                        peak_rss_bytes = max(peak_rss_bytes, sample.rss_bytes)
+                        peak_footprint_bytes = max(
+                            peak_footprint_bytes,
+                            sample.physical_footprint_bytes,
+                        )
+                        report.write(
+                            {
+                                "accounting_method": sample.accounting_method,
+                                "elapsed_seconds": round(
+                                    now - started_monotonic, 6
+                                ),
+                                "event": "sample",
+                                "memory_bytes": sample.memory_bytes,
+                                "memory_limit_bytes": memory_limit_bytes,
+                                "physical_footprint_bytes": (
+                                    sample.physical_footprint_bytes
+                                ),
+                                "process_count": sample.process_count,
+                                "process_group_id": session.process_group_id,
+                                "rss_bytes": sample.rss_bytes,
+                                "schema_version": 1,
+                                "timestamp_utc": _utc_now(),
+                            }
+                        )
+                        if (
+                            sample.memory_bytes > memory_limit_bytes
+                            and "memory_limit" not in recorded_violations
+                        ):
+                            latch_verdict(
+                                "memory_limit", MEMORY_LIMIT_EXIT_CODE
+                            )
+                            report.write(
+                                {
+                                    "accounting_method": sample.accounting_method,
+                                    "elapsed_seconds": round(
+                                        time.monotonic() - started_monotonic, 6
+                                    ),
+                                    "event": "memory_limit_observed",
+                                    "memory_bytes": sample.memory_bytes,
+                                    "memory_limit_bytes": memory_limit_bytes,
+                                    "physical_footprint_bytes": (
+                                        sample.physical_footprint_bytes
+                                    ),
+                                    "process_count": sample.process_count,
+                                    "process_group_id": session.process_group_id,
+                                    "rss_bytes": sample.rss_bytes,
+                                    "schema_version": 1,
+                                    "timestamp_utc": _utc_now(),
+                                }
+                            )
+                            recorded_violations.add("memory_limit")
+                    # Schedule from probe completion. Reusing the timestamp
+                    # from before inspection can create a catch-up storm.
+                    next_sample = time.monotonic() + sample_interval_seconds
+
+                if session.wrapper.poll() is not None:
+                    record_wrapper_completion(session)
+                    break
+                try:
+                    time.sleep(
+                        min(0.05, max(0.0, next_sample - time.monotonic()))
                     )
-                    sample_count += 1
-                    peak_memory_bytes = max(
-                        peak_memory_bytes, stopped_sample.memory_bytes
-                    )
-                    peak_rss_bytes = max(peak_rss_bytes, stopped_sample.rss_bytes)
-                    peak_footprint_bytes = max(
-                        peak_footprint_bytes,
-                        stopped_sample.physical_footprint_bytes,
-                    )
+                except KeyboardInterrupt:
+                    if latch_verdict("cancellation", CANCELLATION_EXIT_CODE):
+                        report.write(
+                            {
+                                "event": "cancellation_observed",
+                                "process_group_id": session.process_group_id,
+                                "schema_version": 1,
+                                "timestamp_utc": _utc_now(),
+                            }
+                        )
+            except KeyboardInterrupt:
+                if latch_verdict("cancellation", CANCELLATION_EXIT_CODE):
                     report.write(
                         {
-                            "accounting_method": stopped_sample.accounting_method,
-                            "elapsed_seconds": round(
-                                time.monotonic() - started_monotonic, 6
-                            ),
-                            "event": "memory_limit_remeasure",
-                            "memory_bytes": stopped_sample.memory_bytes,
-                            "memory_limit_bytes": memory_limit_bytes,
-                            "physical_footprint_bytes": (
-                                stopped_sample.physical_footprint_bytes
-                            ),
-                            "process_count": stopped_sample.process_count,
+                            "event": "cancellation_observed",
                             "process_group_id": session.process_group_id,
-                            "rss_bytes": stopped_sample.rss_bytes,
                             "schema_version": 1,
                             "timestamp_utc": _utc_now(),
                         }
                     )
-                    (
-                        child_exit_code,
-                        _lingering,
-                        kernel_peak_rss_bytes,
-                    ) = _read_guarded_exit(session)
-                    break
-                # Schedule from probe completion. Reusing the timestamp from
-                # before ``ps``/``footprint`` can create an immediate catch-up
-                # storm whenever an inspection exceeds the target cadence.
-                next_sample = time.monotonic() + sample_interval_seconds
-
-            wrapper_returncode = session.wrapper.poll()
-            if wrapper_returncode is not None:
-                record_wrapper_completion(session)
-                break
-            time.sleep(min(0.05, max(0.0, next_sample - time.monotonic())))
     except BaseException as error:
-        if session is not None:
-            try:
-                _terminate_owned_group(session.wrapper, session.process_group_id)
-            except BaseException as cleanup_error:
-                print(f"TLAPS guard cleanup failed: {cleanup_error}", file=sys.stderr)
-            child_exit_code = session.wrapper.returncode
-        if isinstance(error, GuardError) and exit_reason == "foreign_heavy_job":
+        if isinstance(error, GuardViolation):
+            latch_verdict(
+                error.reason,
+                (
+                    CANCELLATION_EXIT_CODE
+                    if error.reason == "cancellation"
+                    else 1
+                ),
+            )
+        elif isinstance(error, KeyboardInterrupt):
+            latch_verdict("cancellation", CANCELLATION_EXIT_CODE)
+        elif isinstance(error, GuardError) and verdict_latched:
             pass
         else:
-            exit_reason = "guard_error"
-            final_status = 1
+            latch_verdict("guard_error", 1)
         print(f"TLAPS guard failed: {error}", file=sys.stderr)
     finally:
         if session is not None:
-            session.close()
+            try:
+                session.close()
+            except GuardViolation as error:
+                latch_verdict(error.reason, 1)
+                print(f"TLAPS guard control failed: {error}", file=sys.stderr)
         if post_run_validation is not None:
             try:
                 post_run_validation()
@@ -1769,11 +1893,9 @@ def _run_guarded(
                 cleanup_status = "completed"
             except BaseException as error:
                 cleanup_status = "failed"
-                exit_reason = "post_run_cleanup_error"
-                final_status = 1
+                if final_status == 0:
+                    latch_verdict("post_run_cleanup_error", 1)
                 print(f"resource guard post-run cleanup failed: {error}", file=sys.stderr)
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
         ended_utc = _utc_now()
         summary: dict[str, object] = {
             "child_exit_code": child_exit_code,

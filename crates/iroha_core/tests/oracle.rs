@@ -26,13 +26,14 @@ use iroha_core::{
 use iroha_crypto::{Hash, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::{
     account::Account,
-    asset::{Asset, AssetDefinition},
+    asset::{Asset, AssetDefinition, AssetTransferAvailability},
     block::BlockHeader,
     domain::Domain,
     isi::{
         AggregateOracleFeed, InstructionBox, OpenOracleDispute, ProposeOracleChange,
         RecordTwitterBinding, RegisterOracleFeed, ResolveOracleDispute, RevokeTwitterBinding,
-        RollbackOracleChange, SubmitOracleObservation, VoteOracleChangeStage,
+        RollbackOracleChange, SetAssetTransferAvailability, SubmitOracleObservation,
+        VoteOracleChangeStage,
     },
     nexus::UniversalAccountId,
     oracle::{
@@ -301,7 +302,13 @@ fn oracle_state_with_accounts(
     let sora_domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain");
     let sora_domain: Domain = Domain::new(sora_domain_id.clone()).build(&reward_pool);
 
-    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&reward_pool);
+    let asset_def = AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&reward_pool);
     let mut assets = vec![
         Asset::new(
             AssetId::new(asset_def_id.clone(), reward_pool.clone()),
@@ -3405,6 +3412,121 @@ fn oracle_applies_rewards_and_penalties() {
 }
 
 #[test]
+fn oracle_reward_respects_reward_pool_outgoing_availability() {
+    let (provider, signer) = iroha_test_samples::gen_account_in("validators");
+    let feed_id: FeedId = "reward_pool_control".parse().expect("feed id");
+    let (state, asset_def_id, reward_pool, _) =
+        oracle_state_with_accounts(std::slice::from_ref(&provider));
+
+    let mut sb = state.block(header(1));
+    let mut stx = sb.transaction();
+    SetAssetTransferAvailability::new(
+        reward_pool.clone(),
+        asset_def_id.clone(),
+        0,
+        AssetTransferAvailability::Enabled,
+        AssetTransferAvailability::Disabled,
+        Some("oracle reward pool maintenance".to_owned()),
+    )
+    .execute(&reward_pool, &mut stx)
+    .expect("asset owner can suspend reward-pool debits");
+    RegisterOracleFeed {
+        feed: feed_config(feed_id.clone(), vec![provider.clone()]),
+    }
+    .execute(&provider, &mut stx)
+    .expect("register feed");
+
+    let request = Hash::new(b"reward-pool-control");
+    SubmitOracleObservation {
+        observation: observation(provider.clone(), &signer, &feed_id, 1, request, 10),
+    }
+    .execute(&provider, &mut stx)
+    .expect("submit observation");
+
+    let pool_id = AssetId::new(asset_def_id.clone(), reward_pool);
+    let provider_id = AssetId::new(asset_def_id, provider.clone());
+    let pool_before = asset_value(&stx.world, &pool_id);
+    let provider_before = asset_value(&stx.world, &provider_id);
+    let error = AggregateOracleFeed {
+        feed_id,
+        slot: 1,
+        request_hash: request,
+        evidence_hashes: Vec::new(),
+    }
+    .execute(&provider, &mut stx)
+    .expect_err("Oracle rewards must not bypass reward-pool transfer controls");
+
+    assert!(format!("{error:?}").contains("OutgoingDisabled"));
+    assert_eq!(asset_value(&stx.world, &pool_id), pool_before);
+    assert_eq!(asset_value(&stx.world, &provider_id), provider_before);
+}
+
+#[test]
+fn oracle_penalty_is_an_explicit_mandatory_control_exception() {
+    let (provider_a, signer_a) = iroha_test_samples::gen_account_in("validators");
+    let (provider_b, signer_b) = iroha_test_samples::gen_account_in("validators");
+    let (outlier, outlier_signer) = iroha_test_samples::gen_account_in("validators");
+    let feed_id: FeedId = "mandatory_penalty_control".parse().expect("feed id");
+    let (state, asset_def_id, reward_pool, slash_receiver) =
+        oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone(), outlier.clone()]);
+
+    let mut sb = state.block(header(1));
+    let mut stx = sb.transaction();
+    SetAssetTransferAvailability::new(
+        outlier.clone(),
+        asset_def_id.clone(),
+        0,
+        AssetTransferAvailability::Enabled,
+        AssetTransferAvailability::Disabled,
+        Some("account outgoing suspension".to_owned()),
+    )
+    .execute(&reward_pool, &mut stx)
+    .expect("asset owner can suspend provider debits");
+
+    let mut config = feed_config(
+        feed_id.clone(),
+        vec![provider_a.clone(), provider_b.clone(), outlier.clone()],
+    );
+    config.outlier_policy = OutlierPolicy::Absolute(AbsoluteOutlier { max_delta: 5 });
+    RegisterOracleFeed { feed: config }
+        .execute(&provider_a, &mut stx)
+        .expect("register feed");
+
+    let request = Hash::new(b"mandatory-penalty-control");
+    for (provider, signer, value) in [
+        (&provider_a, &signer_a, 10),
+        (&provider_b, &signer_b, 12),
+        (&outlier, &outlier_signer, 100),
+    ] {
+        SubmitOracleObservation {
+            observation: observation(provider.clone(), signer, &feed_id, 1, request, value),
+        }
+        .execute(provider, &mut stx)
+        .expect("submit observation");
+    }
+
+    AggregateOracleFeed {
+        feed_id,
+        slot: 1,
+        request_hash: request,
+        evidence_hashes: Vec::new(),
+    }
+    .execute(&provider_a, &mut stx)
+    .expect("a retained mandatory penalty is not a voluntary outbound transfer");
+
+    let outlier_id = AssetId::new(asset_def_id.clone(), outlier);
+    let receiver_id = AssetId::new(asset_def_id, slash_receiver);
+    assert_eq!(
+        asset_value(&stx.world, &outlier_id),
+        Quantity::from_str("4").expect("quantity")
+    );
+    assert_eq!(
+        asset_value(&stx.world, &receiver_id),
+        Quantity::from_str("6").expect("quantity")
+    );
+}
+
+#[test]
 fn oracle_dispute_bond_and_resolution_flow() {
     let (challenger, challenger_signer) = iroha_test_samples::gen_account_in("validators");
     let (target, target_signer) = iroha_test_samples::gen_account_in("validators");
@@ -4009,191 +4131,4 @@ fn record_twitter_binding_rejects_attestation_value_not_anchored_to_history() {
     );
 }
 
-#[test]
-fn record_twitter_binding_rejects_version_ttl_and_non_provider_revoke() {
-    let (provider, signer) = iroha_test_samples::gen_account_in("validators");
-    let (outsider, _) = iroha_test_samples::gen_account_in("validators");
-    let feed_id: FeedId = TWITTER_FOLLOW_FEED_ID.parse().expect("feed id");
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-ttl-negative"));
-
-    let (state, _, _, _) = oracle_state_with_accounts(&[provider.clone(), outsider.clone()]);
-
-    let kit = iroha_data_model::oracle::kits::twitter_follow_binding();
-    let mut feed_config = kit.feed_config;
-    feed_config.providers = vec![provider.clone()];
-    feed_config.min_signers = 1;
-    feed_config.committee_size = 1;
-    feed_config.feed_id = feed_id.clone();
-    let binding_hash = KeyedHash::new(
-        defaults::oracle::twitter_binding_pepper_id(),
-        defaults::oracle::twitter_binding_pepper_id(),
-        b"user-ttl-negative",
-    );
-    let attestation = twitter_binding_attestation(&feed_config, &uaid, binding_hash.clone(), 5_000);
-
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
-    execute_boxed(
-        RegisterOracleFeed {
-            feed: feed_config.clone(),
-        },
-        &provider,
-        &mut stx,
-    )
-    .expect("register twitter feed");
-
-    let mut wrong_version = attestation.clone();
-    wrong_version.feed_config_version = FeedConfigVersion(2);
-    assert_rejects_with(
-        execute_boxed(
-            RecordTwitterBinding {
-                attestation: wrong_version,
-                feed_id: feed_id.clone(),
-            },
-            &provider,
-            &mut stx,
-        ),
-        "does not match registered version",
-    );
-
-    let mut too_long = attestation.clone();
-    too_long.expires_at_ms =
-        too_long.observed_at_ms + defaults::oracle::twitter_binding_max_ttl_ms() + 1;
-    assert_rejects_with(
-        execute_boxed(
-            RecordTwitterBinding {
-                attestation: too_long,
-                feed_id: feed_id.clone(),
-            },
-            &provider,
-            &mut stx,
-        ),
-        "exceeds max",
-    );
-
-    let mut too_short = attestation.clone();
-    too_short.expires_at_ms =
-        too_short.observed_at_ms + defaults::oracle::twitter_binding_min_ttl_ms() - 1;
-    assert_rejects_with(
-        execute_boxed(
-            RecordTwitterBinding {
-                attestation: too_short,
-                feed_id: feed_id.clone(),
-            },
-            &provider,
-            &mut stx,
-        ),
-        "below min",
-    );
-
-    SubmitOracleObservation {
-        observation: twitter_binding_observation(&provider, &signer, &feed_config, &attestation),
-    }
-    .execute(&provider, &mut stx)
-    .expect("submit twitter binding observation");
-    AggregateOracleFeed {
-        feed_id: feed_id.clone(),
-        slot: attestation.slot,
-        request_hash: attestation.request_hash,
-        evidence_hashes: Vec::new(),
-    }
-    .execute(&provider, &mut stx)
-    .expect("aggregate twitter binding slot");
-    RecordTwitterBinding {
-        attestation,
-        feed_id,
-    }
-    .execute(&provider, &mut stx)
-    .expect("record binding");
-
-    assert_rejects_with(
-        execute_boxed(
-            RevokeTwitterBinding {
-                binding_hash,
-                reason: "outsider revoke".to_string(),
-            },
-            &outsider,
-            &mut stx,
-        ),
-        "is not part of feed",
-    );
-}
-
-#[test]
-fn record_twitter_binding_rejects_expired_and_duplicates_and_allows_revoke() {
-    let (provider, signer) = iroha_test_samples::gen_account_in("validators");
-    let feed_id: FeedId = TWITTER_FOLLOW_FEED_ID.parse().expect("feed id");
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-456"));
-
-    let (state, _, _, _) = oracle_state_with_accounts(std::slice::from_ref(&provider));
-
-    let kit = iroha_data_model::oracle::kits::twitter_follow_binding();
-    let mut feed_config = kit.feed_config;
-    feed_config.providers = vec![provider.clone()];
-    feed_config.min_signers = 1;
-    feed_config.committee_size = 1;
-    feed_config.feed_id = feed_id.clone();
-    let binding_hash = KeyedHash::new(
-        defaults::oracle::twitter_binding_pepper_id(),
-        defaults::oracle::twitter_binding_pepper_id(),
-        b"user-456",
-    );
-    let base_attestation =
-        twitter_binding_attestation(&feed_config, &uaid, binding_hash.clone(), 5_000);
-
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
-    record_twitter_binding_round(
-        &mut stx,
-        &provider,
-        &signer,
-        &feed_config,
-        &base_attestation,
-    );
-    stx.apply();
-    sb.commit().expect("commit block");
-
-    // Expired attestation rejected.
-    let mut sb = state.block(header(2));
-    let mut stx = sb.transaction();
-    let mut expired = base_attestation.clone();
-    expired.expires_at_ms = expired.observed_at_ms;
-    assert!(
-        RecordTwitterBinding {
-            attestation: expired,
-            feed_id: feed_id.clone(),
-        }
-        .execute(&provider, &mut stx)
-        .is_err()
-    );
-
-    // Duplicate within spacing rejected.
-    let mut duplicate = base_attestation.clone();
-    duplicate.observed_at_ms += 1;
-    assert!(
-        RecordTwitterBinding {
-            attestation: duplicate,
-            feed_id: feed_id.clone(),
-        }
-        .execute(&provider, &mut stx)
-        .is_err()
-    );
-
-    // Revoke removes registry entries.
-    RevokeTwitterBinding {
-        binding_hash: binding_hash.clone(),
-        reason: "duplicate user report".to_string(),
-    }
-    .execute(&provider, &mut stx)
-    .expect("revoke binding");
-    stx.apply();
-    sb.commit().expect("commit revoke block");
-
-    let view = state.view();
-    assert!(
-        view.world()
-            .twitter_bindings()
-            .get(&binding_hash.digest)
-            .is_none()
-    );
-}
+include!("oracle_tail_tests.rs");

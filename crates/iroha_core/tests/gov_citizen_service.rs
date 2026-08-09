@@ -36,7 +36,13 @@ fn build_world(def_id: &AssetDefinitionId) -> World {
     let escrow_account = iroha_data_model::account::Account::new(bob_id.clone()).build(&bob_id);
     let carpenter_account =
         iroha_data_model::account::Account::new(carpenter_id.clone()).build(&carpenter_id);
-    let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
+    let asset_def = AssetDefinition::numeric(
+        def_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),
         Quantity::from(1_000_u64),
@@ -82,7 +88,7 @@ fn configure_state(def_id: &AssetDefinitionId, seat_cooldown_blocks: u64) -> Sta
 }
 
 fn xor_definition_id() -> AssetDefinitionId {
-    iroha_data_model::asset::AssetDefinitionId::new(
+    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     )
@@ -180,7 +186,7 @@ fn council_persist_enforces_service_discipline() {
 }
 
 #[test]
-fn council_persist_requires_manage_permission_before_mutating_state() {
+fn council_persist_requires_exact_manage_permission_before_mutating_state() {
     let def_id: AssetDefinitionId = xor_definition_id();
     let state = configure_state(&def_id, 0);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -194,6 +200,16 @@ fn council_persist_requires_manage_permission_before_mutating_state() {
     .execute(&ALICE_ID, &mut tx)
     .expect("citizen bond succeeds");
 
+    Grant::account_permission(
+        Permission::new(
+            "CanManageParliament".to_owned(),
+            iroha_primitives::json::Json::from(norito::json!({ "unexpected": true })),
+        ),
+        ALICE_ID.clone(),
+    )
+    .execute(&ALICE_ID, &mut tx)
+    .expect("store adversarial same-name permission");
+
     let before = tx
         .world
         .citizens()
@@ -206,7 +222,7 @@ fn council_persist_requires_manage_permission_before_mutating_state() {
         alternates: Vec::new(),
     }
     .execute(&ALICE_ID, &mut tx)
-    .expect_err("permissionless council persist must fail");
+    .expect_err("a malformed same-name permission must not authorize council persistence");
     assert!(
         format!("{err:?}").contains("CanManageParliament"),
         "unexpected permission error: {err:?}"
@@ -223,11 +239,11 @@ fn council_persist_requires_manage_permission_before_mutating_state() {
     );
     assert!(
         tx.world.council().get(&1).is_none(),
-        "permissionless persist must not write council state"
+        "malformed same-name permission must not write council state"
     );
     assert!(
         tx.world.parliament_bodies().get(&1).is_none(),
-        "permissionless persist must not derive body rosters"
+        "malformed same-name permission must not derive body rosters"
     );
 }
 

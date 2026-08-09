@@ -3,42 +3,37 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use eyre::Result;
+use iroha_crypto::derive_non_signing_ed25519_public_key;
+#[cfg(test)]
 use iroha_crypto::{Algorithm, Hash, KeyPair};
+#[cfg(test)]
+use iroha_data_model::fastpq::TransferDeltaTranscript;
 use iroha_data_model::{
     IntoKeyValue,
     account::{Account, AccountId},
     asset::{AssetDefinitionId, AssetId},
     escrow::{
-        AnonymousAssetEscrowProofRecord, AnonymousAssetEscrowRecord,
-        AnonymousAssetEscrowResolution, AssetEscrowKind, AssetEscrowRecord, AssetEscrowResolution,
-        AssetEscrowStatus, ConditionalEscrowAttestation, ConditionalEscrowCondition,
-        ConditionalEscrowConditionState, ConditionalEscrowPredicate, ConditionalEscrowValue,
-        EscrowId,
+        AssetEscrowKind, AssetEscrowRecord, AssetEscrowResolution, AssetEscrowStatus,
+        ConditionalEscrowAttestation, ConditionalEscrowCondition, ConditionalEscrowConditionState,
+        ConditionalEscrowPredicate, ConditionalEscrowValue, EscrowId,
     },
     events::data::escrow::{
         AssetEscrowDisputed, AssetEscrowResolved, ConditionalEscrowAttested, EscrowEvent,
     },
-    fastpq::TransferDeltaTranscript,
     isi::escrow::{
-        AcceptAnonymousAssetEscrow, AcceptAssetEscrow, AttestEscrowCondition,
-        CancelAnonymousAssetEscrow, CancelAssetEscrow, CancelAssetLock, DrawdownAssetLock,
-        ExpireAssetLock, ExpireConditionalEscrow, MarkAnonymousEscrowPaymentSent,
-        MarkEscrowPaymentSent, OpenAnonymousAssetEscrow, OpenAnonymousEscrowDispute,
+        AcceptAssetEscrow, AttestEscrowCondition, CancelAssetEscrow, CancelAssetLock,
+        DrawdownAssetLock, ExpireAssetLock, ExpireConditionalEscrow, MarkEscrowPaymentSent,
         OpenAssetEscrow, OpenAssetLock, OpenConditionalEscrow, OpenEscrowDispute,
-        ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow, ResolveAnonymousEscrowDispute,
-        ResolveEscrowDispute,
+        ReleaseAssetEscrow, ResolveEscrowDispute,
     },
     permission::Permission,
     prelude::*,
-    proof::ProofAttachment,
     query::{
         dsl::{CompoundPredicate, EvaluatePredicate},
         error::{FindError, QueryExecutionFail},
         escrow::prelude::{
-            FindAnonymousAssetEscrowById, FindAnonymousAssetEscrows,
-            FindAnonymousAssetEscrowsByBuyer, FindAnonymousAssetEscrowsBySeller,
-            FindAnonymousAssetEscrowsByStatus, FindAssetEscrowById, FindAssetEscrows,
-            FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
+            FindAssetEscrowById, FindAssetEscrows, FindAssetEscrowsByBuyer,
+            FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
         },
         json::PredicateJson,
     },
@@ -46,21 +41,12 @@ use iroha_data_model::{
         is_orderbook_order_escrow_id_v1, is_orderbook_settlement_escrow_id_v1,
         is_reserved_orderbook_escrow_id_v1,
     },
-    zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::json::Value;
 
-use super::{
-    Error, Execute,
-    asset::isi::{
-        NumericAssetTransferSourcePolicy, apply_resolved_numeric_asset_transfer_delta,
-        assert_numeric_spec_with, emit_numeric_asset_transfer_events,
-        ensure_numeric_asset_transfer_policies, prepare_outbound_asset_transfer_control_update,
-        update_control_record,
-    },
-};
+use super::{Error, Execute, asset::isi::assert_numeric_spec_with};
 use crate::{
     prelude::ValidSingularQuery,
     smartcontracts::ValidQuery,
@@ -68,10 +54,123 @@ use crate::{
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
 };
 
+/// Exact native-escrow purpose carried by a one-shot balance movement capability.
+pub(in crate::smartcontracts::isi) enum VerifiedNativeEscrowPurpose {
+    Funding {
+        escrow_id: EscrowId,
+        authority: AccountId,
+    },
+    Retained {
+        escrow_id: EscrowId,
+    },
+    CustodyPartition {
+        parent_id: EscrowId,
+        child_id: EscrowId,
+    },
+}
+
+/// Non-reusable proof that native escrow admission selected one exact movement.
+pub(in crate::smartcontracts::isi) struct VerifiedNativeEscrowMovement {
+    purpose: VerifiedNativeEscrowPurpose,
+    source_id: AssetId,
+    destination_id: AssetId,
+    amount: Quantity,
+}
+
+/// Non-reusable proof for an exact multi-recipient orderbook custody settlement.
+pub(in crate::smartcontracts::isi) struct VerifiedNativeEscrowBatch {
+    escrow_id: EscrowId,
+    authority: AccountId,
+    legs: Vec<(AssetId, AssetId, Quantity)>,
+}
+
+impl VerifiedNativeEscrowBatch {
+    fn orderbook_settlement(
+        escrow_id: EscrowId,
+        authority: AccountId,
+        legs: Vec<(AssetId, AssetId, Quantity)>,
+    ) -> Self {
+        Self {
+            escrow_id,
+            authority,
+            legs,
+        }
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (EscrowId, AccountId, Vec<(AssetId, AssetId, Quantity)>) {
+        (self.escrow_id, self.authority, self.legs)
+    }
+}
+
+impl VerifiedNativeEscrowMovement {
+    fn funding(
+        escrow_id: EscrowId,
+        authority: AccountId,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            purpose: VerifiedNativeEscrowPurpose::Funding {
+                escrow_id,
+                authority,
+            },
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+
+    fn retained(
+        escrow_id: EscrowId,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            purpose: VerifiedNativeEscrowPurpose::Retained { escrow_id },
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+
+    fn custody_partition(
+        parent_id: EscrowId,
+        child_id: EscrowId,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            purpose: VerifiedNativeEscrowPurpose::CustodyPartition {
+                parent_id,
+                child_id,
+            },
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (VerifiedNativeEscrowPurpose, AssetId, AssetId, Quantity) {
+        (
+            self.purpose,
+            self.source_id,
+            self.destination_id,
+            self.amount,
+        )
+    }
+}
+
 /// Permission name required to resolve disputed native escrows.
 pub const CAN_RESOLVE_ESCROW_DISPUTE: &str = "CanResolveEscrowDispute";
 
-const ESCROW_CUSTODY_SEED_LABEL: &str = "iroha-native-asset-escrow-v1";
+const ESCROW_CUSTODY_ACCOUNT_DOMAIN: &str = "iroha-native-asset-escrow-v1";
 const ORDERBOOK_ORDER_LOCK_MARKER_KEY_PREFIX: &str = "sorafs_orderbook_order_lock_marker_v1_";
 const ORDERBOOK_ORDER_LOCK_MARKER_VALUE: &[u8] = b"v1";
 const ORDERBOOK_CHANNEL_LOCK_MARKER_KEY_PREFIX: &str = "sorafs_orderbook_channel_lock_marker_v1_";
@@ -289,16 +388,16 @@ pub fn escrow_custody_account_id(
     escrow_id: &EscrowId,
     asset_definition: &AssetDefinitionId,
 ) -> Result<AccountId, Error> {
-    let seed_material = format!(
-        "{ESCROW_CUSTODY_SEED_LABEL}|{}|{}|{asset_definition}",
-        chain_id.as_str(),
-        hex::encode(escrow_id.as_hash().as_ref()),
+    let asset_definition = asset_definition.to_string();
+    let public_key = derive_non_signing_ed25519_public_key(
+        ESCROW_CUSTODY_ACCOUNT_DOMAIN.as_bytes(),
+        &[
+            chain_id.as_str().as_bytes(),
+            escrow_id.as_hash().as_ref(),
+            asset_definition.as_bytes(),
+        ],
     );
-    let seed: [u8; Hash::LENGTH] = Hash::new(seed_material).into();
-    let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519).map_err(|err| {
-        validation_err(format!("escrow custody account seed was rejected: {err}"))
-    })?;
-    Ok(AccountId::new(keypair.public_key().clone()))
+    Ok(AccountId::new(public_key))
 }
 
 fn ensure_custody_account(
@@ -365,44 +464,12 @@ fn party_asset(record: &AssetEscrowRecord, account: &AccountId) -> AssetId {
 
 fn transfer_numeric_asset_for_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
-    source_id: &AssetId,
-    destination_id: &AssetId,
-    amount: &Quantity,
-    source_policy: NumericAssetTransferSourcePolicy,
-) -> Result<TransferDeltaTranscript, Error> {
-    let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
+    authorization: VerifiedNativeEscrowMovement,
+) -> Result<(), Error> {
+    crate::smartcontracts::isi::asset::isi::execute_verified_native_escrow_movement(
         state_transaction,
-        source_id,
-        destination_id,
-        amount,
-        source_policy,
-    )?;
-    let control_update =
-        prepare_outbound_asset_transfer_control_update(state_transaction, &source_id, amount)?;
-    let delta = apply_resolved_numeric_asset_transfer_delta(
-        state_transaction,
-        &source_id,
-        &destination_id,
-        amount,
-    )?;
-    if let Some(record) = control_update {
-        update_control_record(state_transaction, source_id.account(), record)?;
-    }
-
-    #[allow(clippy::float_arithmetic)]
-    #[cfg(feature = "telemetry")]
-    state_transaction
-        .telemetry
-        .observe_tx_amount(amount.as_numeric().to_f64_lossy());
-
-    emit_numeric_asset_transfer_events(
-        state_transaction,
-        source_id,
-        destination_id,
-        amount.clone(),
-    );
-
-    Ok(delta)
+        authorization,
+    )
 }
 
 /// Atomically partition an admitted bid lock into one provider-bound channel lock.
@@ -583,7 +650,6 @@ pub(crate) fn validate_active_orderbook_order_asset_lock(
 fn close_native_orderbook_asset_lock(
     state_transaction: &mut StateTransaction<'_, '_>,
     escrow_id: &EscrowId,
-    authority: &AccountId,
     kind: NativeOrderbookLockKind,
     close: NativeOrderbookClose,
 ) -> Result<AssetEscrowRecord, Error> {
@@ -614,14 +680,15 @@ fn close_native_orderbook_asset_lock(
 
         let custody_asset = custody_asset(&record);
         let seller_asset = party_asset(&record, &record.seller);
-        let delta = transfer_numeric_asset_for_escrow(
+        transfer_numeric_asset_for_escrow(
             state_transaction,
-            &custody_asset,
-            &seller_asset,
-            &record.remaining_amount,
-            NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+            VerifiedNativeEscrowMovement::retained(
+                record.id.clone(),
+                custody_asset,
+                seller_asset,
+                record.remaining_amount.clone(),
+            ),
         )?;
-        state_transaction.record_transfer_transcript(authority, delta)?;
         record.remaining_amount = Quantity::zero();
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         record.status = match close {
@@ -671,7 +738,6 @@ pub(crate) fn cancel_orderbook_order_asset_lock(
     close_native_orderbook_asset_lock(
         state_transaction,
         escrow_id,
-        owner,
         NativeOrderbookLockKind::Order,
         NativeOrderbookClose::Cancelled,
     )
@@ -680,7 +746,6 @@ pub(crate) fn cancel_orderbook_order_asset_lock(
 pub(crate) fn expire_orderbook_order_asset_lock(
     state_transaction: &mut StateTransaction<'_, '_>,
     escrow_id: &EscrowId,
-    authority: &AccountId,
     owner: &AccountId,
     asset_definition: &AssetDefinitionId,
     initial_amount: &Quantity,
@@ -698,7 +763,6 @@ pub(crate) fn expire_orderbook_order_asset_lock(
     close_native_orderbook_asset_lock(
         state_transaction,
         escrow_id,
-        authority,
         NativeOrderbookLockKind::Order,
         NativeOrderbookClose::Expired,
     )
@@ -707,7 +771,6 @@ pub(crate) fn expire_orderbook_order_asset_lock(
 pub(crate) fn close_filled_orderbook_order_asset_lock(
     state_transaction: &mut StateTransaction<'_, '_>,
     escrow_id: &EscrowId,
-    authority: &AccountId,
     owner: &AccountId,
     asset_definition: &AssetDefinitionId,
     initial_amount: &Quantity,
@@ -725,7 +788,6 @@ pub(crate) fn close_filled_orderbook_order_asset_lock(
     close_native_orderbook_asset_lock(
         state_transaction,
         escrow_id,
-        authority,
         NativeOrderbookLockKind::Order,
         NativeOrderbookClose::Filled,
     )
@@ -734,12 +796,10 @@ pub(crate) fn close_filled_orderbook_order_asset_lock(
 pub(crate) fn expire_orderbook_channel_asset_lock(
     state_transaction: &mut StateTransaction<'_, '_>,
     escrow_id: &EscrowId,
-    authority: &AccountId,
 ) -> Result<AssetEscrowRecord, Error> {
     close_native_orderbook_asset_lock(
         state_transaction,
         escrow_id,
-        authority,
         NativeOrderbookLockKind::Channel,
         NativeOrderbookClose::Expired,
     )
@@ -773,11 +833,6 @@ pub(crate) fn partition_orderbook_asset_lock(
         .asset_escrows
         .get(&child_id)
         .is_some()
-        || state_transaction
-            .world
-            .anonymous_asset_escrows
-            .get(&child_id)
-            .is_some()
     {
         return Err(validation_err(
             "orderbook settlement channel asset lock already exists",
@@ -892,10 +947,13 @@ pub(crate) fn partition_orderbook_asset_lock(
     let custody_created = ensure_custody_account(&child_custody, state_transaction)?;
     let transfer = transfer_numeric_asset_for_escrow(
         state_transaction,
-        &source,
-        &destination,
-        &amount,
-        NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+        VerifiedNativeEscrowMovement::custody_partition(
+            parent.id.clone(),
+            child_id.clone(),
+            source,
+            destination,
+            amount.clone(),
+        ),
     );
     if transfer.is_err() && custody_created {
         state_transaction
@@ -903,8 +961,7 @@ pub(crate) fn partition_orderbook_asset_lock(
             .accounts
             .remove(child_custody.clone());
     }
-    let delta = transfer?;
-    state_transaction.record_transfer_transcript(&release_authority, delta)?;
+    transfer?;
 
     parent.remaining_amount = parent
         .remaining_amount
@@ -1081,42 +1138,21 @@ pub(crate) fn settle_orderbook_asset_lock(
     }
 
     let event_source_id = custody_asset(&record);
-    let control_update = prepare_outbound_asset_transfer_control_update(
-        state_transaction,
-        &event_source_id,
-        &total,
-    )?;
     let mut plans = Vec::with_capacity(allocations.len());
     for (destination, amount) in allocations {
         let event_destination_id = party_asset(&record, &destination);
-        let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
-            state_transaction,
-            &event_source_id,
-            &event_destination_id,
-            &amount,
-            NumericAssetTransferSourcePolicy::NativeEscrowCustody,
-        )?;
-        plans.push((
-            event_source_id.clone(),
-            event_destination_id,
-            source_id,
-            destination_id,
-            amount,
-        ));
+        plans.push((event_source_id.clone(), event_destination_id, amount));
     }
 
-    let Some(resolved_source_id) = plans
-        .first()
-        .map(|(_, _, source_id, _, _)| source_id.clone())
-    else {
+    if plans.is_empty() {
         return Err(validation_err(
             "orderbook settlement has no non-zero allocation",
         ));
-    };
+    }
     let source_balance = state_transaction
         .world
         .assets
-        .get(&resolved_source_id)
+        .get(&event_source_id)
         .map(|value| value.as_ref().clone())
         .ok_or_else(|| validation_err("orderbook settlement custody balance is missing"))?;
     if source_balance != record.remaining_amount {
@@ -1127,7 +1163,7 @@ pub(crate) fn settle_orderbook_asset_lock(
     let _remaining_source = source_balance
         .checked_sub(&total)
         .map_err(|_| validation_err("orderbook settlement custody balance underflow"))?;
-    for (_, _, _, destination_id, amount) in &plans {
+    for (_, destination_id, amount) in &plans {
         let destination_balance = state_transaction
             .world
             .assets
@@ -1139,35 +1175,15 @@ pub(crate) fn settle_orderbook_asset_lock(
             .map_err(|_| validation_err("orderbook settlement destination balance overflow"))?;
     }
 
-    let mut deltas = Vec::with_capacity(plans.len());
-    for (event_source_id, event_destination_id, source_id, destination_id, amount) in plans {
-        let delta = apply_resolved_numeric_asset_transfer_delta(
-            state_transaction,
-            &source_id,
-            &destination_id,
-            &amount,
-        )?;
-        deltas.push(delta);
-        #[allow(clippy::float_arithmetic)]
-        #[cfg(feature = "telemetry")]
-        state_transaction
-            .telemetry
-            .observe_tx_amount(amount.as_numeric().to_f64_lossy());
-        emit_numeric_asset_transfer_events(
-            state_transaction,
-            event_source_id,
-            event_destination_id,
-            amount,
-        );
-    }
-    if let Some(control_record) = control_update {
-        update_control_record(
-            state_transaction,
-            resolved_source_id.account(),
-            control_record,
-        )?;
-    }
-    state_transaction.record_transfer_transcripts(authority, deltas)?;
+    let authorization = VerifiedNativeEscrowBatch::orderbook_settlement(
+        record.id.clone(),
+        authority.clone(),
+        plans,
+    );
+    crate::smartcontracts::isi::asset::isi::execute_verified_native_escrow_batch(
+        state_transaction,
+        authorization,
+    )?;
 
     record.remaining_amount = remaining_lock_amount;
     if record.remaining_amount.is_zero() {
@@ -1186,238 +1202,11 @@ pub(crate) fn settle_orderbook_asset_lock(
     Ok(record)
 }
 
-fn ensure_non_zero_bytes(label: &str, value: &[u8; 32]) -> Result<(), Error> {
-    if *value == [0u8; 32] {
-        return Err(validation_err(format!("{label} must not be zero")));
-    }
-    Ok(())
-}
-
-fn ensure_unique_non_zero_bytes(label: &str, values: &[[u8; 32]]) -> Result<(), Error> {
-    if values.is_empty() {
-        return Err(validation_err(format!("{label} must not be empty")));
-    }
-    ensure_optional_unique_non_zero_bytes(label, values)
-}
-
-fn ensure_optional_unique_non_zero_bytes(label: &str, values: &[[u8; 32]]) -> Result<(), Error> {
-    let mut seen = std::collections::BTreeSet::new();
-    for value in values {
-        ensure_non_zero_bytes(label, value)?;
-        if !seen.insert(*value) {
-            return Err(validation_err(format!("{label} must be unique")));
-        }
-    }
-    Ok(())
-}
-
-fn ensure_single_escrow_nullifier(nullifiers: &[[u8; 32]]) -> Result<(), Error> {
-    ensure_unique_non_zero_bytes("escrow nullifier", nullifiers)?;
-    if nullifiers.len() != 1 {
-        return Err(validation_err(
-            "anonymous escrow v1 spends exactly one escrow note",
-        ));
-    }
-    Ok(())
-}
-
-fn ensure_close_proof_uses_canonical_transfer_v2_envelope(
-    proof: &ProofAttachment,
-) -> Result<(), Error> {
-    if proof.backend != proof.proof.backend {
-        return Err(validation_err(
-            "anonymous escrow close proof backend mismatch",
-        ));
-    }
-    if proof.backend != proof.vk_ref.backend {
-        return Err(validation_err(
-            "anonymous escrow close proof verifier-key backend mismatch",
-        ));
-    }
-    if proof.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
-        return Err(validation_err(
-            "anonymous escrow close proof requires halo2/ipa backend",
-        ));
-    }
-    let envelope: OpenVerifyEnvelope =
-        norito::decode_canonical(&proof.proof.bytes).map_err(|_| {
-            validation_err("anonymous escrow close proof must use OpenVerifyEnvelope payload")
-        })?;
-    if envelope.backend != BackendTag::Halo2IpaPasta {
-        return Err(validation_err(
-            "anonymous escrow close proof unexpected OpenVerifyEnvelope backend tag",
-        ));
-    }
-    if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(&envelope.circuit_id) {
-        return Err(validation_err(
-            "anonymous escrow close proof requires confidential transfer v2 circuit",
-        ));
-    }
-    if envelope.public_inputs
-        != crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
-    {
-        return Err(validation_err(
-            "anonymous escrow close proof public inputs schema mismatch",
-        ));
-    }
-    if !envelope.aux.is_empty() {
-        return Err(validation_err(
-            "anonymous escrow close proof envelope auxiliary bytes must be empty",
-        ));
-    }
-    if envelope.vk_hash == [0u8; 32] {
-        return Err(validation_err(
-            "anonymous escrow close proof verifier key hash must be non-zero",
-        ));
-    }
-    if proof
-        .vk_commitment
-        .is_some_and(|commitment| commitment != envelope.vk_hash)
-    {
-        return Err(validation_err(
-            "anonymous escrow close proof verifier key commitment mismatch",
-        ));
-    }
-    Ok(())
-}
-
-fn ensure_close_proof_spends_escrow_commitment(
-    proof: &ProofAttachment,
-    escrow_commitment: [u8; 32],
-) -> Result<(), Error> {
-    ensure_close_proof_uses_canonical_transfer_v2_envelope(proof)?;
-    let (input_commitments, _nullifiers, _outputs, _root, _asset_tag, _chain_tag) =
-        crate::zk::confidential_v2::parse_transfer_public_inputs(&proof.proof.bytes).map_err(
-            |err| {
-                validation_err(format!(
-                    "invalid anonymous escrow close proof public inputs: {err}"
-                ))
-            },
-        )?;
-
-    let zero = [0u8; 32];
-    let mut non_zero_inputs = input_commitments
-        .iter()
-        .copied()
-        .filter(|commitment| commitment != &zero);
-    let Some(proof_commitment) = non_zero_inputs.next() else {
-        return Err(validation_err(
-            "anonymous escrow close proof must spend exactly one escrow commitment",
-        ));
-    };
-    if non_zero_inputs.next().is_some() {
-        return Err(validation_err(
-            "anonymous escrow close proof must spend exactly one escrow commitment",
-        ));
-    }
-    if proof_commitment != escrow_commitment {
-        return Err(validation_err(
-            "anonymous escrow close proof input commitment mismatch",
-        ));
-    }
-    Ok(())
-}
-
-fn proof_record(
-    proof: &ProofAttachment,
-    nullifiers: Vec<[u8; 32]>,
-    output_commitments: Vec<[u8; 32]>,
-    root_hint: Option<[u8; 32]>,
-    recorded_at_ms: u64,
-) -> AnonymousAssetEscrowProofRecord {
-    AnonymousAssetEscrowProofRecord {
-        nullifiers,
-        output_commitments,
-        proof_hash: crate::zk::hash_proof(&proof.proof),
-        envelope_hash: proof.envelope_hash,
-        root_hint,
-        recorded_at_ms,
-    }
-}
-
-fn ensure_anonymous_escrow_asset_uses_transfer_v2(
-    state_transaction: &StateTransaction<'_, '_>,
-    asset_definition: &AssetDefinitionId,
-) -> Result<(), Error> {
-    state_transaction.world.asset_definition(asset_definition)?;
-    let Some(zk_state) = state_transaction.world.zk_assets.get(asset_definition) else {
-        return Err(validation_err(
-            "anonymous escrow requires a registered shielded asset",
-        ));
-    };
-    let Some(binding) = zk_state.vk_transfer.as_ref() else {
-        return Err(validation_err(
-            "anonymous escrow requires a bound transfer verifying key",
-        ));
-    };
-    let Some(record) = state_transaction.world.verifying_keys.get(&binding.id) else {
-        return Err(validation_err(
-            "anonymous escrow transfer verifying key is missing",
-        ));
-    };
-    if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(&record.circuit_id) {
-        return Err(validation_err(
-            "anonymous escrow requires confidential transfer v2 public input commitments",
-        ));
-    }
-    Ok(())
-}
-
-fn execute_anonymous_escrow_transfer(
-    authority: &AccountId,
-    state_transaction: &mut StateTransaction<'_, '_>,
-    asset_definition: AssetDefinitionId,
-    nullifiers: Vec<[u8; 32]>,
-    output_commitments: Vec<[u8; 32]>,
-    proof: ProofAttachment,
-    root_hint: Option<[u8; 32]>,
-) -> Result<AnonymousAssetEscrowProofRecord, Error> {
-    ensure_unique_non_zero_bytes("shielded nullifier", &nullifiers)?;
-    ensure_unique_non_zero_bytes("shielded output commitment", &output_commitments)?;
-    ensure_anonymous_escrow_asset_uses_transfer_v2(state_transaction, &asset_definition)?;
-    let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
-    let record = proof_record(
-        &proof,
-        nullifiers.clone(),
-        output_commitments.clone(),
-        root_hint,
-        recorded_at_ms,
-    );
-    let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
-        asset_definition,
-        nullifiers,
-        output_commitments,
-        proof,
-        root_hint,
-    );
-    state_transaction.native_anonymous_escrow_transfer_depth = state_transaction
-        .native_anonymous_escrow_transfer_depth
-        .saturating_add(1);
-    let result = transfer.execute(authority, state_transaction);
-    state_transaction.native_anonymous_escrow_transfer_depth = state_transaction
-        .native_anonymous_escrow_transfer_depth
-        .saturating_sub(1);
-    result?;
-    Ok(record)
-}
-
-fn anonymous_escrow_record(
-    state_transaction: &StateTransaction<'_, '_>,
-    escrow_id: &EscrowId,
-) -> Result<AnonymousAssetEscrowRecord, Error> {
-    state_transaction
-        .world
-        .anonymous_asset_escrows
-        .get(escrow_id)
-        .cloned()
-        .ok_or_else(|| validation_err("anonymous escrow not found"))
-}
-
 /// Return whether the asset id points at a protocol custody account recorded by a native escrow.
 ///
 /// The guard intentionally covers closed records too. Escrow ISIs should leave closed custody
-/// balances at zero, and keeping the source permanently blocked avoids ever making public,
-/// deterministically derived custody controllers useful as generic asset debit authorities.
+/// balances at zero, and keeping the source permanently blocked preserves protocol-only custody
+/// semantics independently of the account controller construction.
 pub(crate) fn is_native_escrow_custody_asset(
     state_transaction: &StateTransaction<'_, '_>,
     source_id: &AssetId,
@@ -1450,6 +1239,26 @@ pub(crate) fn is_native_escrow_custody_asset(
             }))
 }
 
+/// Return whether an account is retained as native-escrow or VPN-lease custody.
+///
+/// Closed records remain authoritative: removing their accounts would destroy audit history and
+/// any unexpected residual balance instead of surfacing the violated zero-balance invariant.
+pub(crate) fn is_protocol_escrow_custody_account(
+    state_transaction: &StateTransaction<'_, '_>,
+    account_id: &AccountId,
+) -> bool {
+    state_transaction
+        .world
+        .asset_escrows
+        .iter()
+        .any(|(_, record)| record.custody == *account_id)
+        || state_transaction
+            .world
+            .vpn_leases
+            .iter()
+            .any(|(_, record)| record.custody_account_id == *account_id)
+}
+
 impl Execute for OpenAssetEscrow {
     fn execute(
         self,
@@ -1462,11 +1271,6 @@ impl Execute for OpenAssetEscrow {
             .asset_escrows
             .get(&self.escrow_id)
             .is_some()
-            || state_transaction
-                .world
-                .anonymous_asset_escrows
-                .get(&self.escrow_id)
-                .is_some()
         {
             return Err(validation_err("escrow already exists"));
         }
@@ -1492,16 +1296,18 @@ impl Execute for OpenAssetEscrow {
         let custody_created = ensure_custody_account(&custody, state_transaction)?;
         let transfer_result = transfer_numeric_asset_for_escrow(
             state_transaction,
-            &seller_asset,
-            &custody_asset,
-            &self.amount,
-            NumericAssetTransferSourcePolicy::User,
+            VerifiedNativeEscrowMovement::funding(
+                self.escrow_id.clone(),
+                authority.clone(),
+                seller_asset,
+                custody_asset,
+                self.amount.clone(),
+            ),
         );
         if transfer_result.is_err() && custody_created {
             state_transaction.world.accounts.remove(custody.clone());
         }
-        let delta = transfer_result?;
-        state_transaction.record_transfer_transcript(authority, delta)?;
+        transfer_result?;
 
         let record = AssetEscrowRecord {
             id: self.escrow_id,
@@ -1626,14 +1432,15 @@ impl Execute for ReleaseAssetEscrow {
             .ok_or_else(|| validation_err("escrow buyer missing"))?;
         let escrow_asset = custody_asset(&record);
         let buyer_asset = party_asset(&record, &buyer);
-        let delta = transfer_numeric_asset_for_escrow(
+        transfer_numeric_asset_for_escrow(
             state_transaction,
-            &escrow_asset,
-            &buyer_asset,
-            &record.amount,
-            NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+            VerifiedNativeEscrowMovement::retained(
+                record.id.clone(),
+                escrow_asset,
+                buyer_asset,
+                record.amount.clone(),
+            ),
         )?;
-        state_transaction.record_transfer_transcript(authority, delta)?;
         record.status = AssetEscrowStatus::Released;
         record.remaining_amount = Quantity::zero();
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
@@ -1674,14 +1481,15 @@ impl Execute for CancelAssetEscrow {
         }
         let escrow_asset = custody_asset(&record);
         let seller_asset = party_asset(&record, &record.seller);
-        let delta = transfer_numeric_asset_for_escrow(
+        transfer_numeric_asset_for_escrow(
             state_transaction,
-            &escrow_asset,
-            &seller_asset,
-            &record.amount,
-            NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+            VerifiedNativeEscrowMovement::retained(
+                record.id.clone(),
+                escrow_asset,
+                seller_asset,
+                record.amount.clone(),
+            ),
         )?;
-        state_transaction.record_transfer_transcript(authority, delta)?;
         record.status = AssetEscrowStatus::Cancelled;
         record.remaining_amount = Quantity::zero();
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
@@ -1769,30 +1577,30 @@ impl Execute for ResolveEscrowDispute {
             .clone()
             .ok_or_else(|| validation_err("escrow buyer missing"))?;
         let escrow_asset = custody_asset(&record);
-        let mut deltas = Vec::new();
         if !self.buyer_amount.is_zero() {
             let buyer_asset = party_asset(&record, &buyer);
-            let delta = transfer_numeric_asset_for_escrow(
+            transfer_numeric_asset_for_escrow(
                 state_transaction,
-                &escrow_asset,
-                &buyer_asset,
-                &self.buyer_amount,
-                NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+                VerifiedNativeEscrowMovement::retained(
+                    record.id.clone(),
+                    escrow_asset.clone(),
+                    buyer_asset,
+                    self.buyer_amount.clone(),
+                ),
             )?;
-            deltas.push(delta);
         }
         if !self.seller_amount.is_zero() {
             let seller_asset = party_asset(&record, &record.seller);
-            let delta = transfer_numeric_asset_for_escrow(
+            transfer_numeric_asset_for_escrow(
                 state_transaction,
-                &escrow_asset,
-                &seller_asset,
-                &self.seller_amount,
-                NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+                VerifiedNativeEscrowMovement::retained(
+                    record.id.clone(),
+                    escrow_asset.clone(),
+                    seller_asset,
+                    self.seller_amount.clone(),
+                ),
             )?;
-            deltas.push(delta);
         }
-        state_transaction.record_transfer_transcripts(authority, deltas)?;
         let resolved_at_ms = state_transaction.block_unix_timestamp_ms();
         record.status = AssetEscrowStatus::Resolved;
         record.remaining_amount = Quantity::zero();
@@ -1833,11 +1641,6 @@ fn execute_open_asset_lock(
         .asset_escrows
         .get(&instruction.escrow_id)
         .is_some()
-        || state_transaction
-            .world
-            .anonymous_asset_escrows
-            .get(&instruction.escrow_id)
-            .is_some()
     {
         return Err(validation_err("escrow already exists"));
     }
@@ -1866,16 +1669,18 @@ fn execute_open_asset_lock(
     let custody_created = ensure_custody_account(&custody, state_transaction)?;
     let transfer_result = transfer_numeric_asset_for_escrow(
         state_transaction,
-        &source_asset,
-        &custody_asset,
-        &instruction.amount,
-        NumericAssetTransferSourcePolicy::User,
+        VerifiedNativeEscrowMovement::funding(
+            instruction.escrow_id.clone(),
+            authority.clone(),
+            source_asset,
+            custody_asset,
+            instruction.amount.clone(),
+        ),
     );
     if transfer_result.is_err() && custody_created {
         state_transaction.world.accounts.remove(custody.clone());
     }
-    let delta = transfer_result?;
-    state_transaction.record_transfer_transcript(authority, delta)?;
+    transfer_result?;
 
     let record = AssetEscrowRecord {
         id: instruction.escrow_id,
@@ -1964,14 +1769,15 @@ impl Execute for DrawdownAssetLock {
             .ok_or_else(|| validation_err("lock destination missing"))?;
         let custody_asset = custody_asset(&record);
         let destination_asset = party_asset(&record, &destination);
-        let delta = transfer_numeric_asset_for_escrow(
+        transfer_numeric_asset_for_escrow(
             state_transaction,
-            &custody_asset,
-            &destination_asset,
-            &self.amount,
-            NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+            VerifiedNativeEscrowMovement::retained(
+                record.id.clone(),
+                custody_asset,
+                destination_asset,
+                self.amount.clone(),
+            ),
         )?;
-        state_transaction.record_transfer_transcript(authority, delta)?;
         record.remaining_amount = record
             .remaining_amount
             .checked_sub(&self.amount)
@@ -2024,14 +1830,15 @@ impl Execute for CancelAssetLock {
         }
         let custody_asset = custody_asset(&record);
         let seller_asset = party_asset(&record, &record.seller);
-        let delta = transfer_numeric_asset_for_escrow(
+        transfer_numeric_asset_for_escrow(
             state_transaction,
-            &custody_asset,
-            &seller_asset,
-            &record.remaining_amount,
-            NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+            VerifiedNativeEscrowMovement::retained(
+                record.id.clone(),
+                custody_asset,
+                seller_asset,
+                record.remaining_amount.clone(),
+            ),
         )?;
-        state_transaction.record_transfer_transcript(authority, delta)?;
         record.status = AssetEscrowStatus::Cancelled;
         record.remaining_amount = Quantity::zero();
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
@@ -2048,7 +1855,7 @@ impl Execute for CancelAssetLock {
 impl Execute for ExpireAssetLock {
     fn execute(
         self,
-        authority: &AccountId,
+        _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let Some(mut record) = state_transaction
@@ -2072,14 +1879,15 @@ impl Execute for ExpireAssetLock {
         }
         let custody_asset = custody_asset(&record);
         let seller_asset = party_asset(&record, &record.seller);
-        let delta = transfer_numeric_asset_for_escrow(
+        transfer_numeric_asset_for_escrow(
             state_transaction,
-            &custody_asset,
-            &seller_asset,
-            &record.remaining_amount,
-            NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+            VerifiedNativeEscrowMovement::retained(
+                record.id.clone(),
+                custody_asset,
+                seller_asset,
+                record.remaining_amount.clone(),
+            ),
         )?;
-        state_transaction.record_transfer_transcript(authority, delta)?;
         record.status = AssetEscrowStatus::Expired;
         record.remaining_amount = Quantity::zero();
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
@@ -2134,11 +1942,6 @@ impl Execute for OpenConditionalEscrow {
             .asset_escrows
             .get(&self.escrow_id)
             .is_some()
-            || state_transaction
-                .world
-                .anonymous_asset_escrows
-                .get(&self.escrow_id)
-                .is_some()
         {
             return Err(validation_err("escrow already exists"));
         }
@@ -2242,16 +2045,18 @@ impl Execute for OpenConditionalEscrow {
         let custody_created = ensure_custody_account(&custody, state_transaction)?;
         let transfer_result = transfer_numeric_asset_for_escrow(
             state_transaction,
-            &source_asset,
-            &custody_asset,
-            &self.amount,
-            NumericAssetTransferSourcePolicy::User,
+            VerifiedNativeEscrowMovement::funding(
+                self.escrow_id.clone(),
+                authority.clone(),
+                source_asset,
+                custody_asset,
+                self.amount.clone(),
+            ),
         );
         if transfer_result.is_err() && custody_created {
             state_transaction.world.accounts.remove(custody.clone());
         }
-        let delta = transfer_result?;
-        state_transaction.record_transfer_transcript(authority, delta)?;
+        transfer_result?;
 
         let record = AssetEscrowRecord {
             id: self.escrow_id,
@@ -2408,14 +2213,15 @@ impl Execute for AttestEscrowCondition {
                 .ok_or_else(|| validation_err("conditional escrow beneficiary missing"))?;
             let custody_asset = custody_asset(&record);
             let destination_asset = party_asset(&record, &destination);
-            let delta = transfer_numeric_asset_for_escrow(
+            transfer_numeric_asset_for_escrow(
                 state_transaction,
-                &custody_asset,
-                &destination_asset,
-                &record.remaining_amount,
-                NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+                VerifiedNativeEscrowMovement::retained(
+                    record.id.clone(),
+                    custody_asset,
+                    destination_asset,
+                    record.remaining_amount.clone(),
+                ),
             )?;
-            state_transaction.record_transfer_transcript(authority, delta)?;
             record.remaining_amount = Quantity::zero();
             record.status = AssetEscrowStatus::Released;
             record.closed_at_ms = Some(now_ms);
@@ -2444,7 +2250,7 @@ impl Execute for AttestEscrowCondition {
 impl Execute for ExpireConditionalEscrow {
     fn execute(
         self,
-        authority: &AccountId,
+        _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let Some(mut record) = state_transaction
@@ -2471,14 +2277,15 @@ impl Execute for ExpireConditionalEscrow {
 
         let custody_asset = custody_asset(&record);
         let seller_asset = party_asset(&record, &record.seller);
-        let delta = transfer_numeric_asset_for_escrow(
+        transfer_numeric_asset_for_escrow(
             state_transaction,
-            &custody_asset,
-            &seller_asset,
-            &record.remaining_amount,
-            NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+            VerifiedNativeEscrowMovement::retained(
+                record.id.clone(),
+                custody_asset,
+                seller_asset,
+                record.remaining_amount.clone(),
+            ),
         )?;
-        state_transaction.record_transfer_transcript(authority, delta)?;
         record.status = AssetEscrowStatus::Expired;
         record.remaining_amount = Quantity::zero();
         record.closed_at_ms = Some(now_ms);
@@ -2488,283 +2295,6 @@ impl Execute for ExpireConditionalEscrow {
         state_transaction
             .world
             .emit_events(Some(EscrowEvent::Expired(record)));
-        Ok(())
-    }
-}
-
-impl Execute for OpenAnonymousAssetEscrow {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        reject_reserved_orderbook_escrow_id(&self.escrow_id)?;
-        if state_transaction
-            .world
-            .asset_escrows
-            .get(&self.escrow_id)
-            .is_some()
-            || state_transaction
-                .world
-                .anonymous_asset_escrows
-                .get(&self.escrow_id)
-                .is_some()
-        {
-            return Err(validation_err("escrow already exists"));
-        }
-        state_transaction.world.account(authority)?;
-        ensure_non_zero_bytes("escrow commitment", &self.escrow_commitment)?;
-
-        let opening = execute_anonymous_escrow_transfer(
-            authority,
-            state_transaction,
-            self.asset_definition.clone(),
-            self.funding_nullifiers,
-            vec![self.escrow_commitment],
-            self.proof,
-            self.root_hint,
-        )?;
-        let created_at_ms = state_transaction.block_unix_timestamp_ms();
-        let record = AnonymousAssetEscrowRecord {
-            id: self.escrow_id,
-            seller: authority.clone(),
-            buyer: None,
-            asset_definition: self.asset_definition,
-            escrow_commitment: self.escrow_commitment,
-            status: AssetEscrowStatus::Open,
-            evidence_hashes: self.evidence_hashes,
-            opening,
-            release: None,
-            cancellation: None,
-            created_at_ms,
-            accepted_at_ms: None,
-            payment_sent_at_ms: None,
-            disputed_at_ms: None,
-            closed_at_ms: None,
-            resolution: None,
-        };
-        state_transaction
-            .world
-            .insert_anonymous_asset_escrow_entry(record);
-        Ok(())
-    }
-}
-
-impl Execute for AcceptAnonymousAssetEscrow {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        state_transaction.world.account(authority)?;
-        let mut record = anonymous_escrow_record(state_transaction, &self.escrow_id)?;
-        if record.status != AssetEscrowStatus::Open {
-            return Err(validation_err("only open escrows can be accepted"));
-        }
-        if &record.seller == authority {
-            return Err(validation_err("seller cannot accept own escrow"));
-        }
-        record.buyer = Some(authority.clone());
-        record.status = AssetEscrowStatus::Accepted;
-        record.accepted_at_ms = Some(state_transaction.block_unix_timestamp_ms());
-        state_transaction
-            .world
-            .insert_anonymous_asset_escrow_entry(record);
-        Ok(())
-    }
-}
-
-impl Execute for MarkAnonymousEscrowPaymentSent {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let mut record = anonymous_escrow_record(state_transaction, &self.escrow_id)?;
-        if record.status != AssetEscrowStatus::Accepted {
-            return Err(validation_err("only accepted escrows can be marked paid"));
-        }
-        if record.buyer.as_ref() != Some(authority) {
-            return Err(validation_err("only accepted buyer may mark payment sent"));
-        }
-        record.status = AssetEscrowStatus::PaymentSent;
-        record.payment_sent_at_ms = Some(state_transaction.block_unix_timestamp_ms());
-        state_transaction
-            .world
-            .insert_anonymous_asset_escrow_entry(record);
-        Ok(())
-    }
-}
-
-impl Execute for ReleaseAnonymousAssetEscrow {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let mut record = anonymous_escrow_record(state_transaction, &self.escrow_id)?;
-        if record.status != AssetEscrowStatus::PaymentSent {
-            return Err(validation_err("only paid escrows can be released"));
-        }
-        if &record.seller != authority {
-            return Err(validation_err("only seller may release escrow"));
-        }
-        if record.buyer.is_none() {
-            return Err(validation_err("escrow buyer missing"));
-        }
-        ensure_single_escrow_nullifier(&self.escrow_nullifiers)?;
-        ensure_unique_non_zero_bytes("buyer output commitment", &self.buyer_output_commitments)?;
-        ensure_close_proof_spends_escrow_commitment(&self.proof, record.escrow_commitment)?;
-        let release = execute_anonymous_escrow_transfer(
-            authority,
-            state_transaction,
-            record.asset_definition.clone(),
-            self.escrow_nullifiers,
-            self.buyer_output_commitments,
-            self.proof,
-            self.root_hint,
-        )?;
-        record.status = AssetEscrowStatus::Released;
-        record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
-        record.release = Some(release);
-        state_transaction
-            .world
-            .insert_anonymous_asset_escrow_entry(record);
-        Ok(())
-    }
-}
-
-impl Execute for CancelAnonymousAssetEscrow {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let mut record = anonymous_escrow_record(state_transaction, &self.escrow_id)?;
-        if !matches!(
-            record.status,
-            AssetEscrowStatus::Open | AssetEscrowStatus::Accepted
-        ) {
-            return Err(validation_err(
-                "escrow can only be cancelled before payment is marked",
-            ));
-        }
-        if &record.seller != authority {
-            return Err(validation_err("only seller may cancel escrow"));
-        }
-        ensure_single_escrow_nullifier(&self.escrow_nullifiers)?;
-        ensure_unique_non_zero_bytes("seller output commitment", &self.seller_output_commitments)?;
-        ensure_close_proof_spends_escrow_commitment(&self.proof, record.escrow_commitment)?;
-        let cancellation = execute_anonymous_escrow_transfer(
-            authority,
-            state_transaction,
-            record.asset_definition.clone(),
-            self.escrow_nullifiers,
-            self.seller_output_commitments,
-            self.proof,
-            self.root_hint,
-        )?;
-        record.status = AssetEscrowStatus::Cancelled;
-        record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
-        record.cancellation = Some(cancellation);
-        state_transaction
-            .world
-            .insert_anonymous_asset_escrow_entry(record);
-        Ok(())
-    }
-}
-
-impl Execute for OpenAnonymousEscrowDispute {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let mut record = anonymous_escrow_record(state_transaction, &self.escrow_id)?;
-        if !matches!(
-            record.status,
-            AssetEscrowStatus::Accepted | AssetEscrowStatus::PaymentSent
-        ) {
-            return Err(validation_err(
-                "only accepted or paid escrows can enter dispute",
-            ));
-        }
-        let is_seller = &record.seller == authority;
-        let is_buyer = record.buyer.as_ref() == Some(authority);
-        if !(is_seller || is_buyer) {
-            return Err(validation_err(
-                "only escrow buyer or seller may open dispute",
-            ));
-        }
-        record.status = AssetEscrowStatus::Disputed;
-        record.disputed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
-        record
-            .evidence_hashes
-            .extend(self.evidence_hashes.iter().copied());
-        state_transaction
-            .world
-            .insert_anonymous_asset_escrow_entry(record);
-        Ok(())
-    }
-}
-
-impl Execute for ResolveAnonymousEscrowDispute {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        if !has_permission(state_transaction, authority, CAN_RESOLVE_ESCROW_DISPUTE) {
-            return Err(validation_err("not permitted: CanResolveEscrowDispute"));
-        }
-        let mut record = anonymous_escrow_record(state_transaction, &self.escrow_id)?;
-        if record.status != AssetEscrowStatus::Disputed {
-            return Err(validation_err("only disputed escrows can be resolved"));
-        }
-        if record.buyer.is_none() {
-            return Err(validation_err("escrow buyer missing"));
-        }
-        ensure_single_escrow_nullifier(&self.escrow_nullifiers)?;
-        if self.buyer_output_commitments.is_empty() && self.seller_output_commitments.is_empty() {
-            return Err(validation_err(
-                "court resolution must create at least one shielded output",
-            ));
-        }
-        ensure_optional_unique_non_zero_bytes(
-            "buyer output commitment",
-            &self.buyer_output_commitments,
-        )?;
-        ensure_optional_unique_non_zero_bytes(
-            "seller output commitment",
-            &self.seller_output_commitments,
-        )?;
-        let mut outputs = self.buyer_output_commitments.clone();
-        outputs.extend(self.seller_output_commitments.iter().copied());
-        ensure_unique_non_zero_bytes("resolution output commitment", &outputs)?;
-        ensure_close_proof_spends_escrow_commitment(&self.proof, record.escrow_commitment)?;
-        let proof = execute_anonymous_escrow_transfer(
-            authority,
-            state_transaction,
-            record.asset_definition.clone(),
-            self.escrow_nullifiers,
-            outputs,
-            self.proof,
-            self.root_hint,
-        )?;
-        let resolved_at_ms = state_transaction.block_unix_timestamp_ms();
-        record.status = AssetEscrowStatus::Resolved;
-        record.closed_at_ms = Some(resolved_at_ms);
-        record.resolution = Some(AnonymousAssetEscrowResolution {
-            resolver: authority.clone(),
-            buyer_output_commitments: self.buyer_output_commitments,
-            seller_output_commitments: self.seller_output_commitments,
-            proof,
-            evidence_hashes: self.evidence_hashes,
-            resolved_at_ms,
-        });
-        state_transaction
-            .world
-            .insert_anonymous_asset_escrow_entry(record);
         Ok(())
     }
 }
@@ -2824,28 +2354,6 @@ fn asset_escrow_ids_for_accounts(
     ids
 }
 
-fn anonymous_asset_escrow_ids_for_accounts(
-    world: &impl WorldReadOnly,
-    index: AssetEscrowAccountIndex,
-    accounts: impl IntoIterator<Item = AccountId>,
-) -> BTreeSet<EscrowId> {
-    let mut ids = BTreeSet::new();
-    for account_id in accounts {
-        let escrow_ids = match index {
-            AssetEscrowAccountIndex::Seller => {
-                world.anonymous_asset_escrows_by_seller().get(&account_id)
-            }
-            AssetEscrowAccountIndex::Buyer => {
-                world.anonymous_asset_escrows_by_buyer().get(&account_id)
-            }
-        };
-        if let Some(escrow_ids) = escrow_ids {
-            ids.extend(escrow_ids.iter().copied());
-        }
-    }
-    ids
-}
-
 fn asset_escrow_ids_for_statuses(
     world: &impl WorldReadOnly,
     statuses: impl IntoIterator<Item = AssetEscrowStatus>,
@@ -2853,19 +2361,6 @@ fn asset_escrow_ids_for_statuses(
     let mut ids = BTreeSet::new();
     for status in statuses {
         if let Some(escrow_ids) = world.asset_escrows_by_status().get(&status) {
-            ids.extend(escrow_ids.iter().copied());
-        }
-    }
-    ids
-}
-
-fn anonymous_asset_escrow_ids_for_statuses(
-    world: &impl WorldReadOnly,
-    statuses: impl IntoIterator<Item = AssetEscrowStatus>,
-) -> BTreeSet<EscrowId> {
-    let mut ids = BTreeSet::new();
-    for status in statuses {
-        if let Some(escrow_ids) = world.anonymous_asset_escrows_by_status().get(&status) {
             ids.extend(escrow_ids.iter().copied());
         }
     }
@@ -2929,82 +2424,6 @@ fn asset_escrow_candidate_ids(
             intersect_escrow_candidate_ids(
                 &mut best,
                 asset_escrow_ids_for_statuses(
-                    world,
-                    cond.values
-                        .iter()
-                        .filter_map(asset_escrow_status_from_value),
-                ),
-            );
-        }
-    }
-
-    best
-}
-
-fn anonymous_asset_escrow_candidate_ids(
-    predicate: &PredicateJson,
-    world: &impl WorldReadOnly,
-) -> Option<BTreeSet<EscrowId>> {
-    let mut best = None;
-
-    for cond in &predicate.equals {
-        if cond.field == "id" {
-            intersect_escrow_candidate_ids(
-                &mut best,
-                asset_escrow_id_from_value(&cond.value)
-                    .into_iter()
-                    .collect(),
-            );
-            continue;
-        }
-        if let Some(index) = asset_escrow_account_index(&cond.field) {
-            intersect_escrow_candidate_ids(
-                &mut best,
-                anonymous_asset_escrow_ids_for_accounts(
-                    world,
-                    index,
-                    account_id_from_value(&cond.value),
-                ),
-            );
-            continue;
-        }
-        if cond.field == "status" {
-            intersect_escrow_candidate_ids(
-                &mut best,
-                anonymous_asset_escrow_ids_for_statuses(
-                    world,
-                    asset_escrow_status_from_value(&cond.value),
-                ),
-            );
-        }
-    }
-
-    for cond in &predicate.r#in {
-        if cond.field == "id" {
-            intersect_escrow_candidate_ids(
-                &mut best,
-                cond.values
-                    .iter()
-                    .filter_map(asset_escrow_id_from_value)
-                    .collect(),
-            );
-            continue;
-        }
-        if let Some(index) = asset_escrow_account_index(&cond.field) {
-            intersect_escrow_candidate_ids(
-                &mut best,
-                anonymous_asset_escrow_ids_for_accounts(
-                    world,
-                    index,
-                    cond.values.iter().filter_map(account_id_from_value),
-                ),
-            );
-            continue;
-        }
-        if cond.field == "status" {
-            intersect_escrow_candidate_ids(
-                &mut best,
-                anonymous_asset_escrow_ids_for_statuses(
                     world,
                     cond.values
                         .iter()
@@ -3120,109 +2539,6 @@ impl ValidQuery for FindAssetEscrowsByStatus {
     }
 }
 
-impl ValidQuery for FindAnonymousAssetEscrows {
-    fn execute(
-        self,
-        filter: CompoundPredicate<AnonymousAssetEscrowRecord>,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<impl Iterator<Item = AnonymousAssetEscrowRecord>, QueryExecutionFail> {
-        let world = state_ro.world();
-        let predicate_json = filter
-            .json_payload()
-            .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
-        if let Some(candidate_ids) = predicate_json
-            .as_ref()
-            .and_then(|predicate| anonymous_asset_escrow_candidate_ids(predicate, world))
-        {
-            let iter: Box<dyn Iterator<Item = AnonymousAssetEscrowRecord> + '_> =
-                Box::new(candidate_ids.into_iter().filter_map(move |escrow_id| {
-                    world
-                        .anonymous_asset_escrows()
-                        .get(&escrow_id)
-                        .filter(|record| filter.applies(*record))
-                        .cloned()
-                }));
-            return Ok(iter);
-        }
-
-        let iter: Box<dyn Iterator<Item = AnonymousAssetEscrowRecord> + '_> = Box::new(
-            world
-                .anonymous_asset_escrows()
-                .iter()
-                .filter_map(move |(_, record)| filter.applies(record).then(|| record.clone())),
-        );
-        Ok(iter)
-    }
-}
-
-impl ValidSingularQuery for FindAnonymousAssetEscrowById {
-    fn execute(
-        &self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<AnonymousAssetEscrowRecord, QueryExecutionFail> {
-        state_ro
-            .world()
-            .anonymous_asset_escrows()
-            .get(&self.escrow_id)
-            .cloned()
-            .ok_or_else(|| QueryExecutionFail::Find(FindError::AssetEscrow(self.escrow_id)))
-    }
-}
-
-impl ValidQuery for FindAnonymousAssetEscrowsBySeller {
-    fn execute(
-        self,
-        filter: CompoundPredicate<AnonymousAssetEscrowRecord>,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<impl Iterator<Item = AnonymousAssetEscrowRecord>, QueryExecutionFail> {
-        let seller = self.seller;
-        let world = state_ro.world();
-        Ok(world
-            .anonymous_asset_escrows_by_seller()
-            .get(&seller)
-            .into_iter()
-            .flat_map(BTreeSet::iter)
-            .filter_map(move |escrow_id| world.anonymous_asset_escrows().get(escrow_id).cloned())
-            .filter(move |record| filter.applies(record)))
-    }
-}
-
-impl ValidQuery for FindAnonymousAssetEscrowsByBuyer {
-    fn execute(
-        self,
-        filter: CompoundPredicate<AnonymousAssetEscrowRecord>,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<impl Iterator<Item = AnonymousAssetEscrowRecord>, QueryExecutionFail> {
-        let buyer = self.buyer;
-        let world = state_ro.world();
-        Ok(world
-            .anonymous_asset_escrows_by_buyer()
-            .get(&buyer)
-            .into_iter()
-            .flat_map(BTreeSet::iter)
-            .filter_map(move |escrow_id| world.anonymous_asset_escrows().get(escrow_id).cloned())
-            .filter(move |record| filter.applies(record)))
-    }
-}
-
-impl ValidQuery for FindAnonymousAssetEscrowsByStatus {
-    fn execute(
-        self,
-        filter: CompoundPredicate<AnonymousAssetEscrowRecord>,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<impl Iterator<Item = AnonymousAssetEscrowRecord>, QueryExecutionFail> {
-        let status = self.status;
-        let world = state_ro.world();
-        Ok(world
-            .anonymous_asset_escrows_by_status()
-            .get(&status)
-            .into_iter()
-            .flat_map(BTreeSet::iter)
-            .filter_map(move |escrow_id| world.anonymous_asset_escrows().get(escrow_id).cloned())
-            .filter(move |record| filter.applies(record)))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3248,9 +2564,13 @@ mod tests {
         AccountId::new(public_key)
     }
 
+    fn fixture_asset_definition_domain() -> DomainId {
+        DomainId::try_new("aitai", "universal").expect("domain id")
+    }
+
     fn fixture_asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
-            DomainId::try_new("aitai", "universal").expect("domain id"),
+        AssetDefinitionId::derive_from_components(
+            fixture_asset_definition_domain(),
             "xor".parse().expect("asset name"),
         )
     }
@@ -3281,9 +2601,13 @@ mod tests {
         asset_definition: &AssetDefinitionId,
         seller_balance: Quantity,
     ) -> State {
-        let asset_definition_entry = AssetDefinition::numeric(asset_definition.clone())
-            .with_name("XOR".to_owned())
-            .build(seller);
+        let asset_definition_entry = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(seller);
         state_with_parties_and_definition(
             seller,
             buyer,
@@ -3302,7 +2626,7 @@ mod tests {
         asset_definition_entry: AssetDefinition,
         seller_balance: Quantity,
     ) -> State {
-        let domain = Domain::new(asset_definition.domain().clone()).build(seller);
+        let domain = Domain::new(fixture_asset_definition_domain()).build(seller);
         let seller_asset_id = AssetId::of(asset_definition.clone(), seller.clone());
         let seller_asset = Asset::new(seller_asset_id, seller_balance);
         let world = crate::state::World::with_assets(
@@ -3344,12 +2668,12 @@ mod tests {
                 let EventBox::Data(data_event) = event else {
                     return None;
                 };
-                let data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
-                    data_pre::AccountEvent::Asset(asset_event),
-                )) = data_event.as_ref()
+                let data_pre::DataEvent::Domain(data_pre::DomainEvent::Asset(scoped)) =
+                    data_event.as_ref()
                 else {
                     return None;
                 };
+                let asset_event = &scoped.event;
                 match asset_event {
                     data_pre::AssetEvent::Removed(changed) => {
                         Some(("removed", changed.asset().clone(), changed.amount().clone()))
@@ -3415,17 +2739,6 @@ mod tests {
             .collect()
     }
 
-    fn query_anonymous_asset_escrow_ids(
-        state_transaction: &StateTransaction<'_, '_>,
-        predicate: CompoundPredicate<AnonymousAssetEscrowRecord>,
-    ) -> Vec<EscrowId> {
-        FindAnonymousAssetEscrows
-            .execute(predicate, state_transaction)
-            .expect("query anonymous asset escrows")
-            .map(|record| record.id)
-            .collect()
-    }
-
     fn parse_predicate_json<T>(
         predicate: &CompoundPredicate<T>,
     ) -> iroha_data_model::query::json::PredicateJson {
@@ -3467,122 +2780,6 @@ mod tests {
         }
     }
 
-    fn anonymous_proof_record() -> AnonymousAssetEscrowProofRecord {
-        AnonymousAssetEscrowProofRecord {
-            nullifiers: vec![[0x11; 32]],
-            output_commitments: vec![[0x22; 32]],
-            proof_hash: [0x33; 32],
-            envelope_hash: None,
-            root_hint: None,
-            recorded_at_ms: 1,
-        }
-    }
-
-    fn anonymous_escrow_fixture(
-        escrow_id: EscrowId,
-        seller: AccountId,
-        buyer: Option<AccountId>,
-        asset_definition: AssetDefinitionId,
-        status: AssetEscrowStatus,
-    ) -> AnonymousAssetEscrowRecord {
-        AnonymousAssetEscrowRecord {
-            id: escrow_id,
-            seller,
-            buyer,
-            asset_definition,
-            escrow_commitment: [0x22; 32],
-            status,
-            evidence_hashes: Vec::new(),
-            opening: anonymous_proof_record(),
-            release: None,
-            cancellation: None,
-            created_at_ms: 1,
-            accepted_at_ms: None,
-            payment_sent_at_ms: None,
-            disputed_at_ms: None,
-            closed_at_ms: None,
-            resolution: None,
-        }
-    }
-
-    fn anonymous_escrow_record_for_test(
-        state_transaction: &StateTransaction<'_, '_>,
-        escrow_id: &EscrowId,
-    ) -> AnonymousAssetEscrowRecord {
-        state_transaction
-            .world
-            .anonymous_asset_escrows
-            .get(escrow_id)
-            .cloned()
-            .expect("anonymous escrow record")
-    }
-
-    fn anonymous_close_proof_with_input_commitments(
-        input_commitments: [[u8; 32]; 2],
-    ) -> ProofAttachment {
-        let zero = [0u8; 32];
-        let public_inputs = vec![
-            input_commitments[0],
-            input_commitments[1],
-            [0x11; 32],
-            zero,
-            [0x22; 32],
-            zero,
-            [0x33; 32],
-            [0x44; 32],
-            [0x55; 32],
-        ];
-        let inner = iroha_zkp_halo2::Halo2ProofEnvelope::new(
-            18,
-            2,
-            4,
-            iroha_zkp_halo2::FLAG_LOOKUPS,
-            public_inputs,
-            vec![0xAB; 64],
-        )
-        .expect("confidential transfer public-input envelope")
-        .to_bytes();
-        let outer = iroha_data_model::zk::OpenVerifyEnvelope {
-            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
-            vk_hash: [0x99; 32],
-            public_inputs:
-                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
-                    .to_vec(),
-            proof_bytes: inner,
-            aux: Vec::new(),
-        };
-        let proof_bytes = norito::encode_canonical(&outer).expect("encode proof envelope");
-        ProofAttachment {
-            backend: crate::zk::ZK_BACKEND_HALO2_IPA.into(),
-            proof: iroha_data_model::proof::ProofBox::new(
-                crate::zk::ZK_BACKEND_HALO2_IPA.into(),
-                proof_bytes,
-            ),
-            vk_ref: iroha_data_model::proof::VerifyingKeyId::new(
-                crate::zk::ZK_BACKEND_HALO2_IPA,
-                "anonymous_escrow",
-            ),
-            vk_commitment: None,
-            envelope_hash: None,
-            lane_privacy: None,
-        }
-    }
-
-    fn tamper_anonymous_close_proof_envelope(
-        mut proof: ProofAttachment,
-        mutate: impl FnOnce(&mut OpenVerifyEnvelope),
-    ) -> ProofAttachment {
-        let mut envelope: OpenVerifyEnvelope =
-            norito::decode_canonical(&proof.proof.bytes).expect("decode proof envelope");
-        mutate(&mut envelope);
-        proof.proof = iroha_data_model::proof::ProofBox::new(
-            proof.proof.backend.clone(),
-            norito::encode_canonical(&envelope).expect("encode proof envelope"),
-        );
-        proof
-    }
-
     fn grant_court_permission(state_transaction: &mut StateTransaction<'_, '_>, court: &AccountId) {
         let mut permissions = Permissions::default();
         permissions.insert(CanResolveEscrowDispute.into());
@@ -3597,10 +2794,12 @@ mod tests {
         custody_asset: &AssetId,
         amount: Quantity,
     ) {
-        state_transaction
-            .world
-            .deposit_numeric_asset(custody_asset, &amount)
-            .expect("deposit closed custody dust");
+        crate::smartcontracts::isi::asset::isi::seed_numeric_asset_balance_for_test(
+            &mut state_transaction.world,
+            custody_asset,
+            &amount,
+        )
+        .expect("deposit closed custody dust");
     }
 
     fn disable_outbound_asset_transfers(
@@ -3637,11 +2836,26 @@ mod tests {
         let asset_definition: AssetDefinitionId =
             "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().expect("asset");
         let escrow_id = EscrowId::new(Hash::new("escrow"));
+        let custody = escrow_custody_account_id(&chain_id, &escrow_id, &asset_definition)
+            .expect("custody account derivation succeeds");
         assert_eq!(
-            escrow_custody_account_id(&chain_id, &escrow_id, &asset_definition)
-                .expect("custody account derivation succeeds"),
+            custody,
             escrow_custody_account_id(&chain_id, &escrow_id, &asset_definition)
                 .expect("custody account derivation is repeatable")
+        );
+
+        let legacy_seed_material = format!(
+            "{ESCROW_CUSTODY_ACCOUNT_DOMAIN}|{}|{}|{asset_definition}",
+            chain_id.as_str(),
+            hex::encode(escrow_id.as_hash().as_ref()),
+        );
+        let legacy_seed: [u8; Hash::LENGTH] = Hash::new(legacy_seed_material).into();
+        let legacy_keypair = KeyPair::try_from_seed(legacy_seed.to_vec(), Algorithm::Ed25519)
+            .expect("legacy public seed derives");
+        assert_ne!(
+            custody,
+            AccountId::new(legacy_keypair.public_key().clone()),
+            "protocol custody must not expose a signing key through public seed derivation"
         );
     }
 
@@ -3682,420 +2896,20 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_escrow_byte_guards_reject_empty_zero_and_duplicate_values() {
-        assert!(ensure_unique_non_zero_bytes("test", &[[0x01; 32]]).is_ok());
-        assert!(ensure_unique_non_zero_bytes("test", &[]).is_err());
-        assert!(ensure_unique_non_zero_bytes("test", &[[0; 32]]).is_err());
-        assert!(ensure_unique_non_zero_bytes("test", &[[0x01; 32], [0x01; 32]]).is_err());
-        assert!(ensure_single_escrow_nullifier(&[[0x01; 32]]).is_ok());
-        assert!(ensure_single_escrow_nullifier(&[[0x01; 32], [0x02; 32]]).is_err());
-    }
-
-    #[test]
-    fn anonymous_escrow_close_proof_must_bind_stored_commitment() {
-        let escrow_commitment = [0x22; 32];
-
-        let matching = anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]);
-        ensure_close_proof_spends_escrow_commitment(&matching, escrow_commitment)
-            .expect("matching close proof must pass");
-
-        let wrong = anonymous_close_proof_with_input_commitments([[0x44; 32], [0; 32]]);
-        let err = ensure_close_proof_spends_escrow_commitment(&wrong, escrow_commitment)
-            .expect_err("wrong close proof input commitment must fail");
-        assert!(
-            err.to_string().contains("input commitment mismatch"),
-            "unexpected error: {err}"
-        );
-
-        let missing = anonymous_close_proof_with_input_commitments([[0; 32], [0; 32]]);
-        let err = ensure_close_proof_spends_escrow_commitment(&missing, escrow_commitment)
-            .expect_err("close proof without a non-zero input must fail");
-        assert!(
-            err.to_string().contains("exactly one escrow commitment"),
-            "unexpected error: {err}"
-        );
-
-        let extra = anonymous_close_proof_with_input_commitments([escrow_commitment, [0x55; 32]]);
-        let err = ensure_close_proof_spends_escrow_commitment(&extra, escrow_commitment)
-            .expect_err("close proof with multiple non-zero inputs must fail");
-        assert!(
-            err.to_string().contains("exactly one escrow commitment"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn anonymous_escrow_close_proof_rejects_noncanonical_envelope_before_public_input_trust() {
-        let escrow_commitment = [0x22; 32];
-
-        for (suffix, proof, expected_msg) in [
-            (
-                "backend_tag",
-                tamper_anonymous_close_proof_envelope(
-                    anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]),
-                    |envelope| envelope.backend = BackendTag::Stark,
-                ),
-                "unexpected OpenVerifyEnvelope backend tag",
-            ),
-            (
-                "circuit_id",
-                tamper_anonymous_close_proof_envelope(
-                    anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]),
-                    |envelope| envelope.circuit_id = "halo2/pasta/ipa/vote-ballot".to_owned(),
-                ),
-                "requires confidential transfer v2 circuit",
-            ),
-            (
-                "schema",
-                tamper_anonymous_close_proof_envelope(
-                    anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]),
-                    |envelope| envelope.public_inputs = b"wrong-schema".to_vec(),
-                ),
-                "public inputs schema mismatch",
-            ),
-            (
-                "aux",
-                tamper_anonymous_close_proof_envelope(
-                    anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]),
-                    |envelope| envelope.aux = b"side-channel".to_vec(),
-                ),
-                "envelope auxiliary bytes must be empty",
-            ),
-            (
-                "zero_vk_hash",
-                tamper_anonymous_close_proof_envelope(
-                    anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]),
-                    |envelope| envelope.vk_hash = [0u8; 32],
-                ),
-                "verifier key hash must be non-zero",
-            ),
-            (
-                "vk_commitment",
-                {
-                    let mut proof =
-                        anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]);
-                    proof.vk_commitment = Some([0x55; 32]);
-                    proof
-                },
-                "verifier key commitment mismatch",
-            ),
-            (
-                "attachment_backend",
-                {
-                    let mut proof =
-                        anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]);
-                    let bytes = proof.proof.bytes.clone();
-                    proof.proof =
-                        iroha_data_model::proof::ProofBox::new("halo2/ipa/other".into(), bytes);
-                    proof
-                },
-                "backend mismatch",
-            ),
-            (
-                "verifier_key_backend",
-                {
-                    let mut proof =
-                        anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]);
-                    proof.vk_ref = iroha_data_model::proof::VerifyingKeyId::new(
-                        "stark/fri/sha256-goldilocks",
-                        "anonymous_escrow",
-                    );
-                    proof
-                },
-                "verifier-key backend mismatch",
-            ),
-        ] {
-            let err = ensure_close_proof_spends_escrow_commitment(&proof, escrow_commitment)
-                .expect_err("noncanonical close proof should fail before public input trust");
-            let msg = err.to_string();
-            assert!(
-                msg.contains(expected_msg),
-                "case {suffix}: expected {expected_msg:?}, got {msg:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn anonymous_escrow_close_proof_rejects_alternate_norito_layout() {
-        let escrow_commitment = [0x22; 32];
-        let mut proof = anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]);
-        let envelope: OpenVerifyEnvelope =
-            norito::decode_canonical(&proof.proof.bytes).expect("canonical fixture envelope");
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        let alternate = {
-            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            norito::to_bytes(&envelope).expect("alternate-layout envelope")
-        };
-        assert_ne!(alternate, proof.proof.bytes);
-        proof.proof =
-            iroha_data_model::proof::ProofBox::new(proof.proof.backend.clone(), alternate);
-
-        let error = ensure_close_proof_spends_escrow_commitment(&proof, escrow_commitment)
-            .expect_err("alternate-layout close proof must fail before public-input trust");
-        assert!(
-            error
-                .to_string()
-                .contains("must use OpenVerifyEnvelope payload"),
-            "unexpected alternate-layout error: {error}"
-        );
-    }
-
-    #[test]
-    fn anonymous_escrow_accept_mark_and_dispute_updates_lifecycle() {
-        let seller = fixture_account("seller");
-        let buyer = fixture_account("buyer");
-        let court = fixture_account("court");
-        let asset_definition = fixture_asset_definition_id();
-        let escrow_id = fixture_escrow_id("anonymous-lifecycle");
-        let state = state_with_parties(
-            &seller,
-            &buyer,
-            &court,
-            &asset_definition,
-            Quantity::from(100_u32),
-        );
-        let mut block = state.block(block_header(5_000));
-        let mut tx = block.transaction();
-        tx.world
-            .insert_anonymous_asset_escrow_entry(anonymous_escrow_fixture(
-                escrow_id,
-                seller.clone(),
-                None,
-                asset_definition,
-                AssetEscrowStatus::Open,
-            ));
-
-        assert!(
-            AcceptAnonymousAssetEscrow { escrow_id }
-                .execute(&seller, &mut tx)
-                .is_err(),
-            "seller cannot accept own anonymous escrow"
-        );
-        AcceptAnonymousAssetEscrow { escrow_id }
-            .execute(&buyer, &mut tx)
-            .expect("accept anonymous escrow");
-        MarkAnonymousEscrowPaymentSent { escrow_id }
-            .execute(&buyer, &mut tx)
-            .expect("mark anonymous payment sent");
-        OpenAnonymousEscrowDispute {
-            escrow_id,
-            evidence_hashes: vec![Hash::new("anonymous-dispute-evidence")],
-        }
-        .execute(&seller, &mut tx)
-        .expect("open anonymous dispute");
-
-        let record = anonymous_escrow_record_for_test(&tx, &escrow_id);
-        assert_eq!(record.status, AssetEscrowStatus::Disputed);
-        assert_eq!(record.buyer, Some(buyer.clone()));
-        assert_eq!(record.disputed_at_ms, Some(5_000));
-        assert_eq!(record.evidence_hashes.len(), 1);
-        assert_eq!(
-            FindAnonymousAssetEscrowById { escrow_id }
-                .execute(&tx)
-                .expect("query anonymous escrow by id")
-                .status,
-            AssetEscrowStatus::Disputed
-        );
-        let by_status = FindAnonymousAssetEscrowsByStatus {
-            status: AssetEscrowStatus::Disputed,
-        }
-        .execute(CompoundPredicate::PASS, &tx)
-        .expect("query anonymous escrows by status")
-        .collect::<Vec<_>>();
-        assert_eq!(by_status.len(), 1);
-
-        let by_id = query_anonymous_asset_escrow_ids(
-            &tx,
-            CompoundPredicate::<AnonymousAssetEscrowRecord>::build(|predicate| {
-                predicate.equals("id", escrow_id)
-            }),
-        );
-        assert_eq!(by_id, vec![escrow_id]);
-
-        let by_seller = query_anonymous_asset_escrow_ids(
-            &tx,
-            CompoundPredicate::<AnonymousAssetEscrowRecord>::build(|predicate| {
-                predicate.equals("seller", seller.clone())
-            }),
-        );
-        assert_eq!(by_seller, vec![escrow_id]);
-
-        let by_buyer = query_anonymous_asset_escrow_ids(
-            &tx,
-            CompoundPredicate::<AnonymousAssetEscrowRecord>::build(|predicate| {
-                predicate.equals("buyer", buyer.clone())
-            }),
-        );
-        assert_eq!(by_buyer, vec![escrow_id]);
-
-        let by_generic_status = query_anonymous_asset_escrow_ids(
-            &tx,
-            CompoundPredicate::<AnonymousAssetEscrowRecord>::build(|predicate| {
-                predicate.equals("status", AssetEscrowStatus::Disputed)
-            }),
-        );
-        assert_eq!(by_generic_status, vec![escrow_id]);
-
-        let missing_buyer = fixture_account("missing-anonymous-buyer");
-        let missing = query_anonymous_asset_escrow_ids(
-            &tx,
-            CompoundPredicate::<AnonymousAssetEscrowRecord>::build(|predicate| {
-                predicate.equals("buyer", missing_buyer)
-            }),
-        );
-        assert!(missing.is_empty());
-    }
-
-    #[test]
-    fn anonymous_escrow_close_authorization_runs_before_proof() {
-        let seller = fixture_account("seller");
-        let buyer = fixture_account("buyer");
-        let court = fixture_account("court");
-        let asset_definition = fixture_asset_definition_id();
-        let state = state_with_parties(
-            &seller,
-            &buyer,
-            &court,
-            &asset_definition,
-            Quantity::from(100_u32),
-        );
-        let mut block = state.block(block_header(6_000));
-        let mut tx = block.transaction();
-        let dummy_proof = ProofAttachment {
-            backend: "dummy".into(),
-            proof: iroha_data_model::proof::ProofBox::new("dummy".into(), Vec::new()),
-            vk_ref: iroha_data_model::proof::VerifyingKeyId::new("dummy", "dummy"),
-            vk_commitment: None,
-            envelope_hash: None,
-            lane_privacy: None,
-        };
-
-        let release_id = fixture_escrow_id("anonymous-release-auth");
-        tx.world
-            .insert_anonymous_asset_escrow_entry(anonymous_escrow_fixture(
-                release_id,
-                seller.clone(),
-                Some(buyer.clone()),
-                asset_definition.clone(),
-                AssetEscrowStatus::PaymentSent,
-            ));
-        assert!(
-            ReleaseAnonymousAssetEscrow {
-                escrow_id: release_id,
-                escrow_nullifiers: vec![[0x44; 32]],
-                buyer_output_commitments: vec![[0x55; 32]],
-                proof: dummy_proof.clone(),
-                root_hint: None,
-            }
-            .execute(&buyer, &mut tx)
-            .is_err(),
-            "buyer cannot release anonymous escrow"
-        );
-
-        let cancel_id = fixture_escrow_id("anonymous-cancel-auth");
-        tx.world
-            .insert_anonymous_asset_escrow_entry(anonymous_escrow_fixture(
-                cancel_id,
-                seller.clone(),
-                Some(buyer.clone()),
-                asset_definition.clone(),
-                AssetEscrowStatus::Accepted,
-            ));
-        assert!(
-            CancelAnonymousAssetEscrow {
-                escrow_id: cancel_id,
-                escrow_nullifiers: vec![[0x44; 32]],
-                seller_output_commitments: vec![[0x66; 32]],
-                proof: dummy_proof.clone(),
-                root_hint: None,
-            }
-            .execute(&buyer, &mut tx)
-            .is_err(),
-            "buyer cannot cancel anonymous escrow"
-        );
-
-        let dispute_id = fixture_escrow_id("anonymous-resolve-auth");
-        tx.world
-            .insert_anonymous_asset_escrow_entry(anonymous_escrow_fixture(
-                dispute_id,
-                seller,
-                Some(buyer),
-                asset_definition,
-                AssetEscrowStatus::Disputed,
-            ));
-        assert!(
-            ResolveAnonymousEscrowDispute {
-                escrow_id: dispute_id,
-                escrow_nullifiers: vec![[0x44; 32]],
-                buyer_output_commitments: vec![[0x55; 32]],
-                seller_output_commitments: vec![],
-                proof: dummy_proof,
-                root_hint: None,
-                evidence_hashes: Vec::new(),
-            }
-            .execute(&court, &mut tx)
-            .is_err(),
-            "court needs CanResolveEscrowDispute before proof verification"
-        );
-    }
-
-    #[test]
-    fn escrow_open_rejects_id_used_by_anonymous_escrow() {
-        let seller = fixture_account("seller");
-        let buyer = fixture_account("buyer");
-        let court = fixture_account("court");
-        let asset_definition = fixture_asset_definition_id();
-        let escrow_id = fixture_escrow_id("public-collides-with-anonymous");
-        let state = state_with_parties(
-            &seller,
-            &buyer,
-            &court,
-            &asset_definition,
-            Quantity::from(100_u32),
-        );
-        let mut block = state.block(block_header(7_000));
-        let mut tx = block.transaction();
-        tx.world
-            .insert_anonymous_asset_escrow_entry(anonymous_escrow_fixture(
-                escrow_id,
-                seller.clone(),
-                None,
-                asset_definition.clone(),
-                AssetEscrowStatus::Open,
-            ));
-
-        let err = OpenAssetEscrow {
-            escrow_id,
-            asset_definition: asset_definition.clone(),
-            amount: Quantity::from(40_u32),
-            evidence_hashes: Vec::new(),
-        }
-        .execute(&seller, &mut tx)
-        .expect_err("public escrow id must not collide with anonymous escrow id");
-
-        assert!(
-            err.to_string().contains("escrow already exists"),
-            "unexpected error: {err}"
-        );
-        assert!(tx.world.asset_escrows.get(&escrow_id).is_none());
-        assert_eq!(
-            balance(&tx, &seller, &asset_definition),
-            Quantity::from(100_u32)
-        );
-    }
-
-    #[test]
     fn escrow_open_rejects_shielded_only_asset() {
         let seller = fixture_account("seller");
         let buyer = fixture_account("buyer");
         let court = fixture_account("court");
         let asset_definition = fixture_asset_definition_id();
         let escrow_id = fixture_escrow_id("shielded-open");
-        let asset_definition_entry = AssetDefinition::numeric(asset_definition.clone())
-            .with_name("XOR".to_owned())
-            .confidential_policy(AssetConfidentialPolicy::shielded_only())
-            .build(&seller);
+        let asset_definition_entry = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .confidential_policy(AssetConfidentialPolicy::shielded_only())
+        .build(&seller);
         let state = state_with_parties_and_definition(
             &seller,
             &buyer,
@@ -4138,9 +2952,13 @@ mod tests {
         let court = fixture_account("court");
         let asset_definition = fixture_asset_definition_id();
         let escrow_id = fixture_escrow_id("issuer-policy-open");
-        let mut asset_definition_entry = AssetDefinition::numeric(asset_definition.clone())
-            .with_name("XOR".to_owned())
-            .build(&seller);
+        let mut asset_definition_entry = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&seller);
         let issuer_policy = AssetIssuerUsagePolicyV1 {
             require_subject_binding: true,
             subject_bindings: BTreeMap::from([(seller.clone(), AssetSubjectBindingV1::default())]),
@@ -4381,12 +3199,13 @@ mod tests {
         let asset_definition = fixture_asset_definition_id();
         let escrow_id = fixture_escrow_id("lock-definition-home");
         let home_dataspace = iroha_data_model::nexus::DataSpaceId::new(7);
-        let asset_definition_entry = AssetDefinition::numeric(asset_definition.clone())
-            .with_name("XOR".to_owned())
-            .with_balance_scope_policy(
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            )
-            .build(&source);
+        let asset_definition_entry = AssetDefinition::numeric(
+            asset_definition.clone(),
+            "XOR".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            Some(fixture_asset_definition_domain()),
+        )
+        .build(&source);
         let source_asset_id = AssetId::with_scope(
             asset_definition.clone(),
             source.clone(),
@@ -4394,7 +3213,7 @@ mod tests {
         );
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(100_u32));
         let mut world = crate::state::World::with_assets(
-            [Domain::new(asset_definition.domain().clone()).build(&source)],
+            [Domain::new(fixture_asset_definition_domain()).build(&source)],
             [
                 Account::new(source.clone()).build(&source),
                 Account::new(destination.clone()).build(&destination),
@@ -4785,28 +3604,6 @@ mod tests {
             .expect("custody account derivation succeeds");
         assert!(tx.world.asset_escrows.get(&over_balance_id).is_none());
         assert!(tx.world.account(&custody).is_err());
-
-        let duplicate_id = fixture_escrow_id("lock-open-duplicate-anonymous");
-        tx.world
-            .insert_anonymous_asset_escrow_entry(anonymous_escrow_fixture(
-                duplicate_id,
-                source.clone(),
-                None,
-                asset_definition.clone(),
-                AssetEscrowStatus::Open,
-            ));
-        let err = OpenAssetLock::new(
-            duplicate_id,
-            asset_definition.clone(),
-            destination.clone(),
-            Quantity::from(5_u32),
-        )
-        .execute(&source, &mut tx)
-        .expect_err("duplicate anonymous escrow id must be rejected");
-        assert!(
-            err.to_string().contains("already exists"),
-            "unexpected error: {err}"
-        );
 
         assert_eq!(
             balance(&tx, &source, &asset_definition),
@@ -5374,65 +4171,6 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_asset_escrow_candidates_intersect_status_and_buyer_indexes() {
-        let seller = fixture_account("anonymous-candidate-seller");
-        let buyer = fixture_account("anonymous-candidate-buyer");
-        let wrong_buyer = fixture_account("anonymous-candidate-wrong-buyer");
-        let wrong_seller = fixture_account("anonymous-candidate-wrong-seller");
-        let court = fixture_account("anonymous-candidate-court");
-        let asset_definition = fixture_asset_definition_id();
-        let state = state_with_parties(
-            &seller,
-            &buyer,
-            &court,
-            &asset_definition,
-            Quantity::from(100_u32),
-        );
-        let mut block = state.block(block_header(1_000));
-        let mut tx = block.transaction();
-        let target = fixture_escrow_id("anonymous-candidate-target");
-        let same_status = fixture_escrow_id("anonymous-candidate-same-status");
-        let same_buyer = fixture_escrow_id("anonymous-candidate-same-buyer");
-
-        for record in [
-            anonymous_escrow_fixture(
-                target,
-                seller.clone(),
-                Some(buyer.clone()),
-                asset_definition.clone(),
-                AssetEscrowStatus::PaymentSent,
-            ),
-            anonymous_escrow_fixture(
-                same_status,
-                seller,
-                Some(wrong_buyer),
-                asset_definition.clone(),
-                AssetEscrowStatus::PaymentSent,
-            ),
-            anonymous_escrow_fixture(
-                same_buyer,
-                wrong_seller,
-                Some(buyer.clone()),
-                asset_definition,
-                AssetEscrowStatus::Accepted,
-            ),
-        ] {
-            tx.world.insert_anonymous_asset_escrow_entry(record);
-        }
-
-        let predicate = CompoundPredicate::<AnonymousAssetEscrowRecord>::build(|predicate| {
-            predicate
-                .equals("status", AssetEscrowStatus::PaymentSent)
-                .equals("buyer", buyer)
-        });
-        let predicate_json = parse_predicate_json(&predicate);
-        let candidate_ids = anonymous_asset_escrow_candidate_ids(&predicate_json, &tx.world)
-            .expect("indexed anonymous asset escrow candidates");
-
-        assert_eq!(candidate_ids, std::collections::BTreeSet::from([target]));
-    }
-
-    #[test]
     fn escrow_open_and_release_record_transfer_artifacts() {
         let seller = fixture_account("seller");
         let buyer = fixture_account("buyer");
@@ -5957,7 +4695,34 @@ mod tests {
         .expect("open escrow");
 
         let record = escrow_record(&tx, &escrow_id);
+        let custody = record.custody.clone();
         let custody_asset = AssetId::of(asset_definition.clone(), record.custody.clone());
+        let replacement = fixture_account("custody-controller-replacement");
+        let rekey_error = ReplaceAccountController {
+            account: custody.clone(),
+            new_controller: replacement.controller().clone(),
+        }
+        .execute(&custody, &mut tx)
+        .expect_err("protocol custody account must not be rekeyed");
+        assert!(
+            rekey_error
+                .to_string()
+                .contains("native escrow or VPN lease custody"),
+            "unexpected error: {rekey_error}"
+        );
+        let unregister_error = Unregister::account(custody.clone())
+            .execute(&custody, &mut tx)
+            .expect_err("protocol custody account must not be unregistered");
+        assert!(
+            unregister_error
+                .to_string()
+                .contains("native escrow or VPN lease custody"),
+            "unexpected error: {unregister_error}"
+        );
+        assert!(
+            tx.world.accounts.get(&custody).is_some(),
+            "rejected unregister must retain the custody account"
+        );
         assert!(
             Transfer::asset_quantity(custody_asset.clone(), 1_u32, buyer.clone())
                 .execute(&seller, &mut tx)

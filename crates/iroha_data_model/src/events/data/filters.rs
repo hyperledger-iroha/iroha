@@ -48,8 +48,6 @@ mod model {
         Executor(ExecutorEventFilter),
         /// Matches proof verification events
         Proof(ProofEventFilter),
-        /// Matches confidential asset events
-        Confidential(ConfidentialEventFilter),
         /// Matches verifying key registry lifecycle events
         VerifyingKey(VerifyingKeyEventFilter),
         /// Matches runtime upgrade lifecycle events
@@ -58,6 +56,8 @@ mod model {
         Soradns(SoradnsDirectoryEventFilter),
         /// Matches `SoraFS` gateway compliance events
         Sorafs(SorafsGatewayEventFilter),
+        /// Matches Musubi package-registry and archive lifecycle events
+        Musubi(MusubiEventFilter),
         /// Matches Space Directory manifest lifecycle events
         SpaceDirectory(SpaceDirectoryEventFilter),
         /// Matches native asset escrow lifecycle events
@@ -81,16 +81,6 @@ mod model {
         pub(super) id_matcher: Option<crate::proof::ProofId>,
         /// Matches only events from this set
         pub(super) event_set: super::proof::ProofEventSet,
-    }
-
-    /// An event filter for [`super::confidential::ConfidentialEvent`] values.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    pub struct ConfidentialEventFilter {
-        /// If specified, matches only events for this asset definition id
-        pub(super) asset_matcher: Option<AssetDefinitionId>,
-        /// Matches only events from this set
-        pub(super) event_set: super::confidential::ConfidentialEventSet,
     }
 
     /// An event filter for [`super::verifying_keys::VerifyingKeyEvent`] values.
@@ -147,6 +137,20 @@ mod model {
         pub(super) detail_matcher: Option<super::sorafs::SorafsGarPolicyDetail>,
         /// Matches only events from this set.
         pub(super) event_set: super::sorafs::SorafsGatewayEventSet,
+    }
+
+    /// Exact structural filter for Musubi registry events.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct MusubiEventFilter {
+        /// If set, match only events structurally associated with this package.
+        pub(super) package_matcher: Option<crate::musubi::MusubiPackageIdV1>,
+        /// If set, match only events structurally associated with this archive.
+        pub(super) archive_matcher: Option<crate::musubi::ArchiveId>,
+        /// If set, match only events structurally associated with this permanent alias.
+        pub(super) alias_matcher: Option<crate::musubi::MusubiAliasNameV1>,
+        /// Closed set of accepted Musubi transition variants.
+        pub(super) event_set: super::musubi::MusubiEventSet,
     }
 
     /// Filter for Space Directory manifest lifecycle events.
@@ -310,6 +314,7 @@ impl_json_via_norito_bytes!(
     ProofEventFilter,
     VerifyingKeyEventFilter,
     RuntimeUpgradeEventFilter,
+    MusubiEventFilter,
     PeerEventFilter,
     DomainEventFilter,
     AccountEventFilter,
@@ -370,33 +375,6 @@ impl ProofEventFilter {
     /// Filter by event kinds.
     #[must_use]
     pub const fn for_events(mut self, event_set: super::proof::ProofEventSet) -> Self {
-        self.event_set = event_set;
-        self
-    }
-}
-
-impl ConfidentialEventFilter {
-    /// Creates a new [`ConfidentialEventFilter`] accepting all [`ConfidentialEvent`]s.
-    pub const fn new() -> Self {
-        Self {
-            asset_matcher: None,
-            event_set: super::confidential::ConfidentialEventSet::all(),
-        }
-    }
-
-    /// Filter by asset definition identifier.
-    #[must_use]
-    pub fn for_asset_definition(mut self, id: AssetDefinitionId) -> Self {
-        self.asset_matcher = Some(id);
-        self
-    }
-
-    /// Filter by confidential event kinds.
-    #[must_use]
-    pub const fn for_events(
-        mut self,
-        event_set: super::confidential::ConfidentialEventSet,
-    ) -> Self {
         self.event_set = event_set;
         self
     }
@@ -502,6 +480,46 @@ impl SorafsGatewayEventFilter {
     /// Filter by event variant set.
     #[must_use]
     pub const fn for_events(mut self, event_set: super::sorafs::SorafsGatewayEventSet) -> Self {
+        self.event_set = event_set;
+        self
+    }
+}
+
+impl MusubiEventFilter {
+    /// Create a filter accepting every Musubi transition.
+    pub const fn new() -> Self {
+        Self {
+            package_matcher: None,
+            archive_matcher: None,
+            alias_matcher: None,
+            event_set: super::musubi::MusubiEventSet::all(),
+        }
+    }
+
+    /// Match only events structurally associated with `package`.
+    #[must_use]
+    pub fn for_package(mut self, package: crate::musubi::MusubiPackageIdV1) -> Self {
+        self.package_matcher = Some(package);
+        self
+    }
+
+    /// Match only events structurally associated with `archive`.
+    #[must_use]
+    pub const fn for_archive(mut self, archive: crate::musubi::ArchiveId) -> Self {
+        self.archive_matcher = Some(archive);
+        self
+    }
+
+    /// Match only events structurally associated with `alias`.
+    #[must_use]
+    pub fn for_alias(mut self, alias: crate::musubi::MusubiAliasNameV1) -> Self {
+        self.alias_matcher = Some(alias);
+        self
+    }
+
+    /// Match only transition variants contained in `event_set`.
+    #[must_use]
+    pub const fn for_events(mut self, event_set: super::musubi::MusubiEventSet) -> Self {
         self.event_set = event_set;
         self
     }
@@ -640,13 +658,13 @@ impl Default for ProofEventFilter {
     }
 }
 
-impl Default for ConfidentialEventFilter {
+impl Default for SorafsGatewayEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Default for SorafsGatewayEventFilter {
+impl Default for MusubiEventFilter {
     fn default() -> Self {
         Self::new()
     }
@@ -764,20 +782,6 @@ impl super::EventFilter for ProofEventFilter {
             });
 
         id_ok && self.event_set.matches(event)
-    }
-}
-
-#[cfg(feature = "transparent_api")]
-impl super::EventFilter for ConfidentialEventFilter {
-    type Event = super::confidential::ConfidentialEvent;
-
-    fn matches(&self, event: &Self::Event) -> bool {
-        let asset_ok = self.asset_matcher.as_ref().is_none_or(|id| match event {
-            super::confidential::ConfidentialEvent::Shielded(e) => id == &e.asset_definition,
-            super::confidential::ConfidentialEvent::Transferred(e) => id == &e.asset_definition,
-            super::confidential::ConfidentialEvent::Unshielded(e) => id == &e.asset_definition,
-        });
-        asset_ok && self.event_set.matches(event)
     }
 }
 
@@ -1009,6 +1013,26 @@ impl super::EventFilter for SorafsGatewayEventFilter {
                 }
             }
         }
+    }
+}
+
+#[cfg(feature = "transparent_api")]
+impl super::EventFilter for MusubiEventFilter {
+    type Event = super::musubi::MusubiEvent;
+
+    fn matches(&self, event: &Self::Event) -> bool {
+        self.event_set.matches(event)
+            && self
+                .package_matcher
+                .as_ref()
+                .is_none_or(|package| event.package() == Some(package))
+            && self
+                .archive_matcher
+                .is_none_or(|archive| event.archive() == Some(archive))
+            && self
+                .alias_matcher
+                .as_ref()
+                .is_none_or(|alias| event.alias() == Some(alias))
     }
 }
 
@@ -1628,19 +1652,25 @@ impl EventFilter for DataEventFilter {
             (
                 DataEventFilter::Account(filter),
                 DataEvent::Domain(DomainEvent::Account(account_event)),
-            ) => filter.matches(account_event),
+            ) => filter.matches(&account_event.event),
+            (DataEventFilter::Account(filter), DataEvent::Account(account_event)) => {
+                filter.matches(account_event)
+            }
             (
                 DataEventFilter::Asset(filter),
-                DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(asset_event))),
-            ) => filter.matches(asset_event),
+                DataEvent::Domain(DomainEvent::Asset(asset_event)),
+            ) => filter.matches(&asset_event.event),
+            (DataEventFilter::Asset(filter), DataEvent::Asset(asset_event)) => {
+                filter.matches(asset_event)
+            }
             (
                 DataEventFilter::AssetDefinition(filter),
                 DataEvent::Domain(DomainEvent::AssetDefinition(asset_definition_event)),
-            ) => filter.matches(asset_definition_event),
+            ) => filter.matches(&asset_definition_event.event),
             (
                 DataEventFilter::AssetDefinition(filter),
-                DataEvent::AssetDefinitionStandalone(asset_definition_event),
-            ) => filter.matches(&asset_definition_event.event),
+                DataEvent::AssetDefinition(asset_definition_event),
+            ) => filter.matches(asset_definition_event),
             (DataEventFilter::Nft(filter), DataEvent::Domain(DomainEvent::Nft(nft_event))) => {
                 filter.matches(nft_event)
             }
@@ -1664,10 +1694,6 @@ impl EventFilter for DataEventFilter {
                 filter.matches(proof_event)
             }
             (
-                DataEventFilter::Confidential(filter),
-                DataEvent::Confidential(confidential_event),
-            ) => filter.matches(confidential_event),
-            (
                 DataEventFilter::VerifyingKey(filter),
                 DataEvent::VerifyingKey(verifying_key_event),
             ) => filter.matches(verifying_key_event),
@@ -1680,6 +1706,9 @@ impl EventFilter for DataEventFilter {
             }
             (DataEventFilter::Sorafs(filter), DataEvent::Sorafs(sorafs_event)) => {
                 filter.matches(sorafs_event)
+            }
+            (DataEventFilter::Musubi(filter), DataEvent::Musubi(musubi_event)) => {
+                filter.matches(musubi_event)
             }
             (DataEventFilter::SpaceDirectory(filter), DataEvent::SpaceDirectory(space_event)) => {
                 filter.matches(space_event)
@@ -1755,8 +1784,8 @@ pub mod prelude {
     pub use super::GovernanceEventFilter;
     pub use super::{
         AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, BridgeEventFilter,
-        ConfidentialEventFilter, ConfigurationEventFilter, DataEventFilter, DomainEventFilter,
-        EscrowEventFilter, ExecutorEventFilter, NftEventFilter, OracleEventFilter, PeerEventFilter,
+        ConfigurationEventFilter, DataEventFilter, DomainEventFilter, EscrowEventFilter,
+        ExecutorEventFilter, MusubiEventFilter, NftEventFilter, OracleEventFilter, PeerEventFilter,
         ProofEventFilter, RoleEventFilter, RwaEventFilter, SocialEventFilter,
         SoradnsDirectoryEventFilter, SorafsGatewayEventFilter, TriggerEventFilter,
         VerifyingKeyEventFilter,
@@ -1786,7 +1815,7 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = checked_random_account_id();
         let definition_id: crate::asset::AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
@@ -1802,21 +1831,17 @@ mod tests {
         let account = Account::new(account_id.clone()).into_account();
         let asset = Asset::new(asset_id.clone(), 0_u32);
 
-        // Create three events with three levels of nesting
-        // the first one is just a domain event
-        // the second one is an account event with a domain event inside
-        // the third one is an asset event with an account event with a domain event inside
+        // Explicit domain routing is carried by the scoped wrappers, never inferred from ids.
         let domain_created = DomainEvent::Created(domain).into();
-        let account_created = DomainEvent::Account(AccountEvent::Created(AccountCreated {
-            account,
-            domain: domain_id.clone(),
-        }))
-        .into();
-        let asset_created =
-            DomainEvent::Account(AccountEvent::Asset(AssetEvent::Created(asset))).into();
+        let account_created = DataEvent::account_in_domain(
+            AccountEvent::Created(AccountCreated { account }),
+            domain_id.clone(),
+        );
+        let asset_created = DataEvent::asset(AssetEvent::Created(asset), Some(domain_id.clone()));
 
         // test how the differently nested filters with with the events
-        let domain_filter = DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id));
+        let domain_filter =
+            DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id.clone()));
         let account_filter =
             DataEventFilter::Account(AccountEventFilter::new().for_account(account_id));
         let asset_filter = DataEventFilter::Asset(AssetEventFilter::new().for_asset(asset_id));
@@ -1829,7 +1854,7 @@ mod tests {
         // account event does not match the domain created event, as it is not an account event
         assert!(!account_filter.matches(&domain_created));
         assert!(account_filter.matches(&account_created));
-        assert!(account_filter.matches(&asset_created));
+        assert!(!account_filter.matches(&asset_created));
 
         // asset event matches only the domain->account->asset event
         assert!(!asset_filter.matches(&domain_created));
@@ -1840,11 +1865,11 @@ mod tests {
     #[test]
     fn asset_filter_matches_by_asset_definition_only() {
         let account_id = checked_random_account_id();
-        let matching_definition = crate::asset::AssetDefinitionId::new(
+        let matching_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-        let other_definition = crate::asset::AssetDefinitionId::new(
+        let other_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "tulip".parse().unwrap(),
         );
@@ -1869,7 +1894,7 @@ mod tests {
     #[test]
     fn asset_filter_matches_by_asset_id_only() {
         let account_id = checked_random_account_id();
-        let definition = crate::asset::AssetDefinitionId::new(
+        let definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -1894,11 +1919,11 @@ mod tests {
     #[test]
     fn asset_filter_matches_with_asset_and_asset_definition_matchers() {
         let account_id = checked_random_account_id();
-        let matching_definition = crate::asset::AssetDefinitionId::new(
+        let matching_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-        let other_definition = crate::asset::AssetDefinitionId::new(
+        let other_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "tulip".parse().unwrap(),
         );
@@ -1924,7 +1949,7 @@ mod tests {
     #[test]
     fn asset_filter_behavior_is_unchanged_without_asset_definition_matcher() {
         let account_id = checked_random_account_id();
-        let definition = crate::asset::AssetDefinitionId::new(
+        let definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -1948,7 +1973,7 @@ mod tests {
         let source = checked_random_account_id();
         let destination = checked_random_account_id();
         let other = checked_random_account_id();
-        let definition = crate::asset::AssetDefinitionId::new(
+        let definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
@@ -1984,7 +2009,7 @@ mod tests {
     fn escrow_filter_matches_by_scope_status_and_event_kind() {
         let seller = checked_random_account_id();
         let buyer = checked_random_account_id();
-        let asset_definition = crate::asset::AssetDefinitionId::new(
+        let asset_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
@@ -2152,8 +2177,10 @@ mod tests {
     #[test]
     fn asset_definition_filter_matches_standalone_opaque_event() {
         let domain_id: DomainId = DomainId::try_new("reward", "universal").unwrap();
-        let scoped_definition =
-            AssetDefinitionId::new(domain_id, "fee".parse().expect("asset name"));
+        let scoped_definition = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "fee".parse().expect("asset name"),
+        );
         let opaque_definition: AssetDefinitionId = scoped_definition
             .to_string()
             .parse()
@@ -2164,7 +2191,51 @@ mod tests {
             AssetDefinitionEventFilter::new().for_asset_definition(opaque_definition),
         );
         assert!(filter.matches(&event));
-        assert!(matches!(event, DataEvent::AssetDefinitionStandalone(_)));
+        assert!(matches!(event, DataEvent::AssetDefinition(_)));
+    }
+
+    #[test]
+    fn asset_filter_matches_standalone_opaque_event() {
+        let domain_id: DomainId = DomainId::try_new("reward", "universal").unwrap();
+        let scoped_definition = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "fee".parse().expect("asset name"),
+        );
+        let opaque_definition: AssetDefinitionId = scoped_definition
+            .to_string()
+            .parse()
+            .expect("opaque canonical id");
+        let public_key: crate::PublicKey =
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                .parse()
+                .expect("public key");
+        let account_id = AccountId::new(public_key);
+        let asset_id = AssetId::of(opaque_definition.clone(), account_id);
+        let event = DataEvent::from(AssetEvent::Added(AssetChanged {
+            asset: asset_id.clone(),
+            amount: 1_u32.into(),
+        }));
+
+        let asset_filter =
+            DataEventFilter::Asset(AssetEventFilter::new().for_asset(asset_id.clone()));
+        assert!(asset_filter.matches(&event));
+        assert!(matches!(&event, DataEvent::Asset(_)));
+
+        let domain_filter =
+            DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id.clone()));
+        assert!(!domain_filter.matches(&event));
+        assert!(event.domain().is_none());
+
+        let scoped_event = DataEvent::asset(
+            AssetEvent::Added(AssetChanged {
+                asset: asset_id,
+                amount: 1_u32.into(),
+            }),
+            Some(domain_id.clone()),
+        );
+        let domain_filter = DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id));
+        assert!(domain_filter.matches(&scoped_event));
+        assert!(asset_filter.matches(&scoped_event));
     }
 
     #[test]
@@ -2258,6 +2329,56 @@ mod tests {
             OracleEventFilter::new().for_feed("other_feed".parse().unwrap()),
         );
         assert!(!mismatching.matches(&event));
+    }
+
+    #[test]
+    fn musubi_filter_matches_structural_package_and_archive() {
+        use crate::{
+            events::data::musubi::{MusubiEvent, MusubiReleasePublishedEventV1},
+            musubi::{
+                ArchiveId, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseDigestV1,
+                MusubiReleaseIdV1,
+            },
+            nexus::DataSpaceId,
+        };
+
+        let package = MusubiPackageIdV1::new(
+            DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "codec".parse().expect("package name"),
+        );
+        let archive = ArchiveId::new([0x22; 32]);
+        let event = DataEvent::Musubi(MusubiEvent::ReleasePublished(
+            MusubiReleasePublishedEventV1 {
+                release: MusubiReleaseIdV1::new(package.clone(), "1.2.3".parse().expect("version")),
+                release_digest: MusubiReleaseDigestV1::new([0x11; 32]),
+                archive_id: archive,
+                published_by: checked_random_account_id(),
+                finalized_height: 9,
+            },
+        ));
+
+        let matching = DataEventFilter::Musubi(
+            MusubiEventFilter::new()
+                .for_package(package.clone())
+                .for_archive(archive),
+        );
+        assert!(matching.matches(&event));
+        let other_package = MusubiPackageIdV1::new(
+            DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "other".parse().expect("package name"),
+        );
+        assert!(
+            !DataEventFilter::Musubi(MusubiEventFilter::new().for_package(other_package))
+                .matches(&event)
+        );
+        assert!(
+            !DataEventFilter::Musubi(
+                MusubiEventFilter::new().for_archive(ArchiveId::new([0x33; 32]))
+            )
+            .matches(&event)
+        );
     }
 }
 

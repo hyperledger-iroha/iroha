@@ -18,12 +18,12 @@ use iroha_config_base::toml::WriteExt;
 use iroha_core::sumeragi::network_topology::{Topology, commit_quorum_from_len};
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    ChainId, Level, asset::AssetDefinition, isi::Register, parameter::BlockParameter, prelude::*,
+    ChainId, Level, asset::AssetDefinition, block::consensus_v2::is_valid_committee_size,
+    isi::Register, parameter::BlockParameter, prelude::*,
 };
+use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
 use iroha_primitives::addr::socket_addr;
-use iroha_test_network::{
-    BlockHeight, Network, NetworkBuilder, NetworkPeer, genesis_factory, once_blocks_sync,
-};
+use iroha_test_network::{BlockHeight, Network, NetworkBuilder, NetworkPeer, once_blocks_sync};
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 use rand::{SeedableRng, prelude::IteratorRandom};
@@ -57,6 +57,7 @@ mod relay {
     use std::{
         collections::HashMap,
         iter::once,
+        net::TcpListener as StdTcpListener,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -194,31 +195,48 @@ mod relay {
         }
 
         /// Start the relay, i.e. the set of TCP proxies between the peers.
-        pub fn start(&mut self) {
+        pub fn start(&mut self) -> eyre::Result<()> {
+            let mut proxy_specs = Vec::new();
             for peer in self.peers.values() {
                 for (other, (other_mock_addr, _)) in &peer.mock_outgoing {
                     let other_peer = self.peers.get(other).expect("must be present");
                     let suspend =
                         SuspendIfAny(vec![peer.suspend.clone(), other_peer.suspend.clone()]);
 
-                    P2pRelay::run_proxy(
-                        &mut self.tasks,
+                    proxy_specs.push((
                         other_mock_addr.clone(),
                         other_peer.real_addr.clone(),
                         suspend,
-                    );
+                    ));
                 }
             }
+
+            // Bind every proxy before spawning any accept loop. This makes `start` a readiness
+            // barrier: once it returns, the kernel can queue connections for every virtual peer
+            // address, even if the spawned tasks have not yet been polled.
+            let mut ready = Vec::with_capacity(proxy_specs.len());
+            for (from, to, suspend) in proxy_specs {
+                let listener = StdTcpListener::bind(from.to_string())?;
+                listener.set_nonblocking(true)?;
+                let listener = TcpListener::from_std(listener)?;
+                ready.push((listener, from, to, suspend));
+            }
+            for (listener, from, to, suspend) in ready {
+                P2pRelay::run_proxy(&mut self.tasks, listener, from, to, suspend);
+            }
+
+            Ok(())
         }
 
         fn run_proxy(
             tasks: &mut JoinSet<()>,
+            listener: TcpListener,
             from: SocketAddr,
             to: SocketAddr,
             suspend: SuspendIfAny,
         ) {
             let span = tracing::span!(Level::INFO, "proxy_run", from = %from, to = %to);
-            let mut proxy = Proxy::new(from, to, suspend);
+            let mut proxy = Proxy::new(listener, from, to, suspend);
 
             tasks.spawn(
                 async move {
@@ -292,20 +310,30 @@ mod relay {
     }
 
     struct Proxy {
+        listener: TcpListener,
         from: SocketAddr,
         to: SocketAddr,
         suspend: SuspendIfAny,
     }
 
     impl Proxy {
-        fn new(from: SocketAddr, to: SocketAddr, suspend: SuspendIfAny) -> Self {
-            Self { from, to, suspend }
+        fn new(
+            listener: TcpListener,
+            from: SocketAddr,
+            to: SocketAddr,
+            suspend: SuspendIfAny,
+        ) -> Self {
+            Self {
+                listener,
+                from,
+                to,
+                suspend,
+            }
         }
 
         async fn run(&mut self) -> eyre::Result<()> {
-            let listener = TcpListener::bind(self.from.to_string()).await?;
             loop {
-                let (client, _) = listener.accept().await?;
+                let (client, _) = self.listener.accept().await?;
                 let server = match TcpStream::connect(self.to.to_string()).await {
                     Ok(server) => server,
                     Err(err) => {
@@ -323,22 +351,24 @@ mod relay {
                 let (mut oread, mut owrite) = server.into_split();
 
                 let suspend = self.suspend.clone();
-                let e2o =
+                let mut e2o =
                     tokio::spawn(
                         async move { Proxy::copy(&suspend, &mut eread, &mut owrite).await },
                     );
                 let suspend = self.suspend.clone();
-                let o2e =
+                let mut o2e =
                     tokio::spawn(
                         async move { Proxy::copy(&suspend, &mut oread, &mut ewrite).await },
                     );
 
                 select! {
-                    _ = e2o => {
-                        // eprintln!("{} → {}: client-to-server closed ×", self.from, self.to);
+                    _ = &mut e2o => {
+                        o2e.abort();
+                        let _ = o2e.await;
                     },
-                    _ = o2e => {
-                        // eprintln!("{} → {}: server-to-client closed ×", self.from, self.to);
+                    _ = &mut o2e => {
+                        e2o.abort();
+                        let _ = e2o.await;
                     },
                 }
             }
@@ -435,12 +465,6 @@ fn stagger_recovery_gap(pipeline_time: Duration) -> Duration {
         .max(Duration::from_secs(1))
 }
 
-fn bootstrap_torii_ready_timeout(sync_timeout: Duration) -> Duration {
-    sync_timeout
-        .min(Duration::from_secs(90))
-        .max(Duration::from_secs(30))
-}
-
 fn should_resubmit_tx(allow_resubmit: bool, now: Instant, next_resubmit_at: Instant) -> bool {
     allow_resubmit && now >= next_resubmit_at
 }
@@ -454,15 +478,6 @@ fn is_submission_accepted_duplicate(err: &eyre::Report) -> bool {
     })
 }
 
-fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
-    err.chain().any(|cause| {
-        let text = cause.to_string();
-        text.contains("tx confirmation timed out")
-            || text.contains("haven't got tx confirmation within")
-            || text.contains("transaction queued for too long")
-    })
-}
-
 fn allow_supply_resubmit(faulty_peers: usize, force_soft_fork: bool) -> bool {
     faulty_peers > 0 || force_soft_fork
 }
@@ -471,81 +486,6 @@ fn allow_round_supply_deadline_slip(faulty_peers: usize, force_soft_fork: bool) 
     // Under partitioned rounds, transaction dissemination can lag one round behind while
     // still converging globally; defer strictness to the final supply assertion.
     force_soft_fork || faulty_peers > 0
-}
-
-async fn wait_for_torii_ready_client(
-    network: &Network,
-    readiness_timeout: Duration,
-) -> Result<iroha::client::Client> {
-    let deadline = Instant::now() + readiness_timeout;
-    let probe_timeout = Duration::from_secs(2).min(readiness_timeout);
-    let mut last_error: Option<String> = None;
-
-    loop {
-        for peer in network.peers() {
-            match timeout(probe_timeout, peer.status()).await {
-                Ok(Ok(_)) => return Ok(peer.client()),
-                Ok(Err(err)) => {
-                    last_error = Some(format!("{}: {err}", peer.mnemonic()));
-                }
-                Err(_) => {
-                    last_error = Some(format!(
-                        "{}: Torii /status probe exceeded {:?}",
-                        peer.mnemonic(),
-                        probe_timeout
-                    ));
-                }
-            }
-        }
-
-        if Instant::now() >= deadline {
-            let detail = last_error.unwrap_or_else(|| "no peer probes recorded".to_string());
-            return Err(eyre!(
-                "no Torii-ready peer became available within {:?}; last probe: {detail}",
-                readiness_timeout
-            ));
-        }
-
-        sleep(Duration::from_millis(200)).await;
-    }
-}
-
-async fn asset_definition_visible_on_any_peer(
-    network: &Network,
-    asset_definition_id: &AssetDefinitionId,
-) -> bool {
-    for peer in network.peers() {
-        let client = peer.client();
-        match spawn_blocking(move || client.query(FindAssetsDefinitions::new()).execute_all()).await
-        {
-            Ok(Ok(definitions)) => {
-                if definitions
-                    .into_iter()
-                    .any(|definition| definition.id() == asset_definition_id)
-                {
-                    return true;
-                }
-            }
-            Ok(Err(err)) => {
-                iroha_logger::debug!(
-                    ?err,
-                    peer = peer.mnemonic(),
-                    ?asset_definition_id,
-                    "asset definition query failed during bootstrap confirmation"
-                );
-            }
-            Err(err) => {
-                iroha_logger::debug!(
-                    ?err,
-                    peer = peer.mnemonic(),
-                    ?asset_definition_id,
-                    "asset definition query task failed during bootstrap confirmation"
-                );
-            }
-        }
-    }
-
-    false
 }
 
 fn permissioned_prf_seed(chain_id: &ChainId) -> [u8; 32] {
@@ -576,15 +516,7 @@ async fn start_network_under_relay(
     // Callers already hold the serial guard via SerializedNetwork.
     // Iroha refuses to start on empty storage without a genesis file, so hand the
     // canonical genesis block to every peer up front.
-    let genesis_block = genesis_factory(
-        network.genesis_isi().clone(),
-        network
-            .peers()
-            .iter()
-            .map(iroha_test_network::NetworkPeer::id)
-            .collect(),
-        network.topology_entries().to_vec(),
-    );
+    let genesis_block = network.genesis();
     let mut pops_by_peer_id = HashMap::new();
     for peer in network.peers() {
         let pop = peer.bls_pop().expect("network peers should have BLS PoPs");
@@ -700,8 +632,63 @@ async fn start_network_under_relay(
     for result in start_results {
         result?;
     }
+    network.ensure_blocks(1).await?;
 
     Ok(())
+}
+
+async fn wait_for_full_peer_connectivity(network: &Network, wait_timeout: Duration) -> Result<()> {
+    let expected = u64::try_from(network.peers().len().saturating_sub(1))
+        .expect("test-network peer count should fit into u64");
+    let deadline = Instant::now() + wait_timeout;
+
+    loop {
+        let mut all_ready = true;
+        let mut snapshot = Vec::with_capacity(network.peers().len());
+        for peer in network.peers() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                all_ready = false;
+                snapshot.push(format!("{}: deadline elapsed", peer.mnemonic()));
+                break;
+            }
+            match timeout(remaining.min(Duration::from_secs(5)), peer.status()).await {
+                Ok(Ok(status)) => {
+                    all_ready &= status.peers >= expected;
+                    snapshot.push(format!("{}: peers={}", peer.mnemonic(), status.peers));
+                }
+                Ok(Err(err)) => {
+                    all_ready = false;
+                    snapshot.push(format!("{}: status error: {err:?}", peer.mnemonic()));
+                }
+                Err(_) => {
+                    all_ready = false;
+                    snapshot.push(format!("{}: status timed out", peer.mnemonic()));
+                }
+            }
+        }
+
+        if all_ready && snapshot.len() == network.peers().len() {
+            iroha_logger::info!(
+                expected_remote_peers = expected,
+                snapshot = ?snapshot,
+                "relay network reached full peer connectivity"
+            );
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "relay network did not reach {expected} remote peers on every node within {wait_timeout:?}; last snapshot: [{}]",
+                snapshot.join(", ")
+            ));
+        }
+        sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(250)),
+        )
+        .await;
+    }
 }
 
 fn panic_reason(panic: &(dyn Any + Send)) -> Option<String> {
@@ -773,7 +760,7 @@ async fn network_starts_with_relay() -> Result<()> {
         return Ok(());
     };
 
-    relay.start();
+    relay.start()?;
     if sandbox::handle_result(
         start_network_under_relay(&network, &relay, GenesisPeer::Whichever).await,
         stringify!(network_starts_with_relay),
@@ -903,7 +890,7 @@ async fn suspending_works() -> Result<()> {
     let suspend = relay.suspend(&last_peer.id());
 
     suspend.activate();
-    relay.start();
+    relay.start()?;
     if sandbox::handle_result(
         start_network_under_relay(&network, &relay, GenesisPeer::Whichever).await,
         stringify!(suspending_works),
@@ -967,7 +954,7 @@ async fn block_after_genesis_is_synced() -> Result<()> {
             let guard = sandbox::serial_guard();
             let network = NetworkBuilder::new()
                 .with_base_seed(SEED)
-                .with_peers(5)
+                .with_peers(7)
                 // Align test timing with the new consensus pipeline (3s block, 6s commit).
                 .with_block_cadence(Duration::from_secs(9))
                 .build();
@@ -981,7 +968,7 @@ async fn block_after_genesis_is_synced() -> Result<()> {
     let pipeline_window = network.block_cadence() + Duration::from_secs(3);
     let sync_timeout = scaled_timeout(network.sync_timeout(), network.peers().len());
 
-    relay.start();
+    relay.start()?;
     if sandbox::handle_result(
         start_network_under_relay(&network, &relay, GenesisPeer::Nth(GENESIS_PEER_INDEX)).await,
         stringify!(block_after_genesis_is_synced),
@@ -1037,6 +1024,12 @@ struct UnstableNetwork {
 
 impl UnstableNetwork {
     async fn run(self) -> Result<()> {
+        if !is_valid_committee_size(self.n_peers) {
+            return Err(eyre!(
+                "expected an exact revision-4 3f + 1 committee in 4..=31, got {} peers",
+                self.n_peers
+            ));
+        }
         if self.n_peers <= self.n_faulty_peers {
             return Err(eyre!(
                 "expected more peers than faulty peers (peers={}, faulty={})",
@@ -1057,15 +1050,15 @@ impl UnstableNetwork {
         }
 
         let account_id = ALICE_ID.clone();
-        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").expect("Valid"),
+        let asset_owning_domain = DomainId::try_new("wonderland", "universal").expect("Valid");
+        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+            asset_owning_domain.clone(),
             "unstable".parse().expect("Valid"),
         );
-
         let Some((network, mut relay)) =
             run_or_skip_on_sandbox_panic("unstable_network::run", || {
                 let guard = sandbox::serial_guard();
-                let network = self.build_network();
+                let network = self.build_network(&asset_definition_id);
                 let network = sandbox::SerializedNetwork::new(network, guard);
                 let relay = P2pRelay::for_network(&network);
                 (network, relay)
@@ -1073,14 +1066,18 @@ impl UnstableNetwork {
         else {
             return Ok(());
         };
-        relay.start();
+        relay.start()?;
         let start_result =
             start_network_under_relay(&network, &relay, GenesisPeer::Whichever).await;
         if sandbox::handle_result(start_result, "unstable_network::run")?.is_none() {
             return Ok(());
         }
-        Self::register_numeric_asset(&network, &asset_definition_id).await?;
-        let init_blocks = 2;
+        wait_for_full_peer_connectivity(
+            &network,
+            scaled_timeout(network.sync_timeout(), network.peers().len()),
+        )
+        .await?;
+        let init_blocks = 1;
         let preexisting_faulty_ids =
             Self::wait_for_initial_sync_budget(&network, init_blocks, self.n_faulty_peers).await?;
 
@@ -1204,7 +1201,7 @@ impl UnstableNetwork {
         selected
     }
 
-    fn build_network(&self) -> Network {
+    fn build_network(&self, asset_definition_id: &AssetDefinitionId) -> Network {
         let builder = NetworkBuilder::new()
             .with_auto_populated_trusted_peers()
             .with_peers(self.n_peers)
@@ -1213,67 +1210,66 @@ impl UnstableNetwork {
             // the default consensus pipeline.
             .with_block_sync_gossip_period(Duration::from_millis(400))
             .with_config_layer(|cfg| {
+                // Keep handshake PoW enabled while reducing its Argon2 work to the supported
+                // minimum. This test targets consensus partitions, not handshake-puzzle cost.
                 if self.force_soft_fork {
-                    cfg.write(["sumeragi", "debug", "force_soft_fork"], true);
+                    cfg.write(["sumeragi", "debug", "force_soft_fork"], true)
+                        .write(
+                            [
+                                "network",
+                                "soranet_handshake",
+                                "pow",
+                                "puzzle",
+                                "memory_kib",
+                            ],
+                            i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                        )
+                        .write(
+                            ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                            1_i64,
+                        )
+                        .write(
+                            ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                            1_i64,
+                        );
+                } else {
+                    cfg.write(
+                        [
+                            "network",
+                            "soranet_handshake",
+                            "pow",
+                            "puzzle",
+                            "memory_kib",
+                        ],
+                        i64::from(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB),
+                    )
+                    .write(
+                        ["network", "soranet_handshake", "pow", "puzzle", "time_cost"],
+                        1_i64,
+                    )
+                    .write(
+                        ["network", "soranet_handshake", "pow", "puzzle", "lanes"],
+                        1_i64,
+                    );
                 }
             })
             .with_genesis_instruction(SetParameter::new(Parameter::Block(
                 BlockParameter::MaxTransactions(nonzero!(1u64)),
-            )));
+            )))
+            .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "unstable".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )))
+            .with_genesis_instruction(Grant::account_permission(
+                CanMintAssetWithDefinition {
+                    asset_definition: asset_definition_id.clone(),
+                },
+                ALICE_ID.clone(),
+            ));
 
         builder.build()
-    }
-
-    async fn register_numeric_asset(
-        network: &Network,
-        asset_definition_id: &AssetDefinitionId,
-    ) -> Result<()> {
-        let status_timeout = scaled_timeout(network.sync_timeout(), network.peers().len());
-        let readiness_timeout = bootstrap_torii_ready_timeout(network.sync_timeout());
-        let mut client = wait_for_torii_ready_client(network, readiness_timeout).await?;
-        if client.transaction_status_timeout < status_timeout {
-            client.transaction_status_timeout = status_timeout;
-        }
-        if let Some(ttl) = client.transaction_ttl {
-            let min_ttl = status_timeout + Duration::from_secs(120);
-            if ttl < min_ttl {
-                client.transaction_ttl = Some(min_ttl);
-            }
-        }
-        let isi = Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        });
-        let submit_res = spawn_blocking(move || {
-            client.submit_blocking(
-                isi,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-        })
-        .await?;
-        match submit_res {
-            Ok(_) => Ok(()),
-            Err(err) if is_tx_confirmation_timeout(&err) => {
-                let deadline = Instant::now() + status_timeout;
-                loop {
-                    if asset_definition_visible_on_any_peer(network, asset_definition_id).await {
-                        iroha_logger::warn!(
-                            ?asset_definition_id,
-                            "asset definition registration confirmed via peer query after tx confirmation timeout"
-                        );
-                        return Ok(());
-                    }
-                    if Instant::now() >= deadline {
-                        return Err(err.wrap_err(format!(
-                            "asset definition {asset_definition_id} stayed absent after tx confirmation timeout"
-                        )));
-                    }
-                    sleep(Duration::from_millis(200)).await;
-                }
-            }
-            Err(err) => Err(err),
-        }
     }
 
     async fn wait_for_initial_sync_budget(
@@ -1657,21 +1653,24 @@ impl UnstableNetwork {
         let mut resubmit_attempt = 0usize;
         let mut next_resubmit_at = initial_resubmit_at;
         'wait_supply: loop {
+            let mut converged_peers = 0usize;
             for peer in &supply_peers {
                 if let Some(height) = peer.best_effort_block_height() {
                     last_height = Some(height);
                 }
                 let client = peer.client();
+                let asset_id =
+                    AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone());
                 let asset =
-                    match spawn_blocking(move || client.query(FindAssets).execute_all()).await {
-                        Ok(Ok(assets)) => assets
-                            .into_iter()
-                            .find(|asset| asset.id().definition() == ctx.asset_definition_id),
+                    match spawn_blocking(move || client.query_single(FindAssetById::new(asset_id)))
+                        .await
+                    {
+                        Ok(Ok(asset)) => Some(asset),
                         Ok(Err(err)) => {
-                            iroha_logger::warn!(
+                            iroha_logger::debug!(
                                 ?err,
                                 peer = peer.mnemonic(),
-                                "asset query failed during supply check"
+                                "exact asset query did not resolve during supply check"
                             );
                             None
                         }
@@ -1687,10 +1686,14 @@ impl UnstableNetwork {
                 let asset_value = asset.as_ref().map(|asset| asset.value().clone());
                 if let Some(asset) = asset.as_ref() {
                     if asset.value() == &expected_supply {
-                        break 'wait_supply;
+                        converged_peers = converged_peers.saturating_add(1);
+                        continue;
                     }
                 }
                 last_seen = asset_value;
+            }
+            if converged_peers == supply_peers.len() {
+                break 'wait_supply;
             }
             let now = Instant::now();
             if should_resubmit_tx(allow_resubmit, now, next_resubmit_at) {
@@ -1741,18 +1744,14 @@ impl UnstableNetwork {
         {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
-                iroha_logger::warn!(
-                    ?err,
-                    target_height,
-                    "non-faulty peers failed to catch up before timeout"
-                );
+                return Err(eyre!(
+                    "non-faulty peers failed to catch up to height {target_height}: {err}"
+                ));
             }
             Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    target_height,
-                    "non-faulty peers did not catch up before timeout"
-                );
+                return Err(eyre!(
+                    "non-faulty peers did not catch up to height {target_height} within {catch_up_timeout:?}: {err}"
+                ));
             }
         }
 
@@ -1768,18 +1767,14 @@ impl UnstableNetwork {
             {
                 Ok(Ok(())) => {}
                 Ok(Err(err)) => {
-                    iroha_logger::warn!(
-                        ?err,
-                        target_height,
-                        "faulty peers failed to catch up before timeout"
-                    );
+                    return Err(eyre!(
+                        "healed peers failed to catch up to height {target_height}: {err}"
+                    ));
                 }
                 Err(err) => {
-                    iroha_logger::warn!(
-                        ?err,
-                        target_height,
-                        "faulty peers did not catch up before timeout"
-                    );
+                    return Err(eyre!(
+                        "healed peers did not catch up to height {target_height} within {catch_up_timeout:?}: {err}"
+                    ));
                 }
             }
         }
@@ -1806,21 +1801,24 @@ impl UnstableNetwork {
         loop {
             let mut last_seen = None;
             let mut last_height = None;
+            let mut converged_peers = 0usize;
             for peer in peers {
-                if let Some(height) = peer.best_effort_block_height() {
+                let observed_height = peer.best_effort_block_height();
+                if let Some(height) = observed_height {
                     last_height = Some(height);
                 }
                 let client = peer.client();
+                let asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
                 let asset =
-                    match spawn_blocking(move || client.query(FindAssets).execute_all()).await {
-                        Ok(Ok(assets)) => assets
-                            .into_iter()
-                            .find(|asset| asset.id().definition() == asset_definition_id),
+                    match spawn_blocking(move || client.query_single(FindAssetById::new(asset_id)))
+                        .await
+                    {
+                        Ok(Ok(asset)) => Some(asset),
                         Ok(Err(err)) => {
-                            iroha_logger::warn!(
+                            iroha_logger::debug!(
                                 ?err,
                                 peer = peer.mnemonic(),
-                                "asset query failed during final supply check"
+                                "exact asset query did not resolve during final supply check"
                             );
                             None
                         }
@@ -1835,13 +1833,19 @@ impl UnstableNetwork {
                     };
                 let asset_value = asset.as_ref().map(|asset| asset.value().clone());
                 if let Some(asset) = asset.as_ref() {
-                    if asset.value() == &expected
-                        || (force_soft_fork && asset.value() == &expected_floor)
-                    {
-                        return Ok(());
+                    let supply_matches = asset.value() == &expected
+                        || (force_soft_fork && asset.value() == &expected_floor);
+                    let height_matches =
+                        observed_height.is_some_and(|height| height.non_empty >= expected_height);
+                    if supply_matches && height_matches {
+                        converged_peers = converged_peers.saturating_add(1);
+                        continue;
                     }
                 }
                 last_seen = asset_value;
+            }
+            if converged_peers == peers.len() {
+                return Ok(());
             }
             if Instant::now() >= deadline {
                 return Err(eyre!(
@@ -1868,7 +1872,7 @@ mod tests {
 
     #[test]
     fn faulty_peer_selection_preserves_the_active_leader() {
-        let peer_ids: Vec<_> = (0..9)
+        let peer_ids: Vec<_> = (0..10)
             .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
             .collect();
         let chain_id: ChainId = "unstable-network-selection".parse().expect("chain id");
@@ -1905,7 +1909,7 @@ mod tests {
 
     #[test]
     fn preferred_faulty_peers_are_selected_first() {
-        let peer_ids: Vec<_> = (0..5)
+        let peer_ids: Vec<_> = (0..4)
             .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
             .collect();
         let chain_id: ChainId = "unstable-network-preferred-faults"
@@ -1935,7 +1939,7 @@ mod tests {
 
     #[test]
     fn preferred_active_leader_does_not_override_safe_selection() {
-        let peer_ids: Vec<_> = (0..8)
+        let peer_ids: Vec<_> = (0..7)
             .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
             .collect();
         let chain_id: ChainId = "unstable-network-unsafe-preferred"
@@ -1964,7 +1968,7 @@ mod tests {
 
     #[test]
     fn fault_budget_matches_commit_quorum_tail() {
-        let peer_count = 9;
+        let peer_count = 10;
         let commit_quorum = commit_quorum_from_len(peer_count);
         let fault_budget = UnstableNetwork::fault_budget_for_peer_count(peer_count);
         assert_eq!(fault_budget, peer_count - commit_quorum);
@@ -1972,7 +1976,7 @@ mod tests {
 
     #[test]
     fn fault_round_seed_sticks_at_budget() {
-        let budget = UnstableNetwork::fault_budget_for_peer_count(12);
+        let budget = UnstableNetwork::fault_budget_for_peer_count(13);
         assert!(budget > 0);
         let sticky = UnstableNetwork::fault_round_seed(4, budget, budget);
         assert_eq!(sticky, 0);
@@ -2072,28 +2076,12 @@ mod tests {
             Duration::from_secs(1)
         );
     }
-
-    #[test]
-    fn bootstrap_torii_ready_timeout_has_floor_and_cap() {
-        assert_eq!(
-            bootstrap_torii_ready_timeout(Duration::from_secs(5)),
-            Duration::from_secs(30)
-        );
-        assert_eq!(
-            bootstrap_torii_ready_timeout(Duration::from_secs(45)),
-            Duration::from_secs(45)
-        );
-        assert_eq!(
-            bootstrap_torii_ready_timeout(Duration::from_secs(300)),
-            Duration::from_secs(90)
-        );
-    }
 }
 
 #[tokio::test]
-async fn unstable_network_5_peers_1_fault() -> Result<()> {
+async fn unstable_network_4_peers_1_fault() -> Result<()> {
     UnstableNetwork {
-        n_peers: 5,
+        n_peers: 4,
         n_faulty_peers: 1,
         n_rounds: 5,
         force_soft_fork: false,
@@ -2115,9 +2103,9 @@ async fn soft_fork() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unstable_network_8_peers_1_fault() -> Result<()> {
+async fn unstable_network_7_peers_1_fault() -> Result<()> {
     UnstableNetwork {
-        n_peers: 8,
+        n_peers: 7,
         n_faulty_peers: 1,
         n_rounds: 3,
         force_soft_fork: false,
@@ -2127,9 +2115,9 @@ async fn unstable_network_8_peers_1_fault() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unstable_network_9_peers_2_faults() -> Result<()> {
+async fn unstable_network_7_peers_2_faults() -> Result<()> {
     UnstableNetwork {
-        n_peers: 9,
+        n_peers: 7,
         n_faulty_peers: 2,
         n_rounds: 3,
         force_soft_fork: false,
@@ -2139,9 +2127,9 @@ async fn unstable_network_9_peers_2_faults() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unstable_network_9_peers_3_faults() -> Result<()> {
+async fn unstable_network_10_peers_3_faults() -> Result<()> {
     UnstableNetwork {
-        n_peers: 9,
+        n_peers: 10,
         n_faulty_peers: 3,
         // Keep this high-fault scenario to two rounds to reduce host-load flakiness in the
         // grouped `network_functional` harness while still exercising repeated partition recovery.
@@ -2153,13 +2141,31 @@ async fn unstable_network_9_peers_3_faults() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unstable_network_12_peers_4_faults() -> Result<()> {
+async fn unstable_network_13_peers_4_faults() -> Result<()> {
     UnstableNetwork {
-        n_peers: 12,
+        n_peers: 13,
         n_faulty_peers: 4,
         n_rounds: 1,
         force_soft_fork: false,
     }
     .run()
     .await
+}
+
+#[tokio::test]
+async fn unstable_network_rejects_non_revision4_committee_geometry() {
+    let error = UnstableNetwork {
+        n_peers: 5,
+        n_faulty_peers: 1,
+        n_rounds: 1,
+        force_soft_fork: false,
+    }
+    .run()
+    .await
+    .expect_err("invalid revision-4 committee geometry must fail before startup");
+
+    assert!(
+        error.to_string().contains("exact revision-4 3f + 1"),
+        "unexpected geometry error: {error}"
+    );
 }

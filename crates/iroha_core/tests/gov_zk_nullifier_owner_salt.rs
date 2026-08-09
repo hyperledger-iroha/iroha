@@ -28,7 +28,7 @@ fn proposal_contract_address(
     owner: &iroha_data_model::account::AccountId,
 ) -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
-        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         owner,
         0,
         iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -62,11 +62,18 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     let acc = Account::new(alice_id.clone()).build(&alice_id);
     let escrow_acc = Account::new(escrow_id.clone()).build(&alice_id);
     let receiver_acc = Account::new(receiver_id.clone()).build(&alice_id);
-    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
-    let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
+    let def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+    let asset_def = AssetDefinition::numeric(
+        def_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), alice_id.clone()),
         Quantity::from(1_000_u64),

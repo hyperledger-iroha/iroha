@@ -1,13 +1,4 @@
-//! Canonically framed Fiat--Shamir transcript for Jindo.
-//!
-//! Challenges use exactly 120 bits, matching the published parameter search.
-//! The 15-byte value is injected into one balanced base-183 digit in
-//! `[-91, 91]` followed by fifteen balanced base-181 digits in `[-90, 90]`.
-//! The mixed-radix space has more than `2^120` elements, while its maximum
-//! Euclidean norm remains below the parameter search's challenge norm.  This
-//! mapping is injective and every nonzero difference decodes to a nonzero
-//! element of the prime coefficient field because its integer magnitude is
-//! strictly below `p = 60272^16 + 1`.
+//! Canonically framed Fiat--Shamir transcript for revised Jindo.
 
 use sha3::{
     Shake256,
@@ -19,36 +10,44 @@ use crate::privacy_engines::p256::{P256EngineError, TranscriptBindingV1};
 
 use super::{
     JINDO_RING_DEGREE_V1,
-    ring::{JindoPrimeModulusV1, JindoRnsPolynomialV1},
+    field::JindoFieldElementV1,
+    parameters::JINDO_PARAMETERS_V1,
+    ring::{
+        JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1,
+    },
 };
 
-const TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.transcript.v1";
-const CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.challenge.v1";
-const TRANSCRIPT_VERSION_V1: u8 = 1;
-const JINDO_CHALLENGE_BYTES_V1: usize = 15;
-const JINDO_CHALLENGE_FIRST_RADIX_V1: u128 = 183;
-const JINDO_CHALLENGE_REMAINING_RADIX_V1: u128 = 181;
-const JINDO_CHALLENGE_FIRST_OFFSET_V1: i16 = 91;
-const JINDO_CHALLENGE_REMAINING_OFFSET_V1: i16 = 90;
-const MAX_CHALLENGE_RETRIES_V1: u32 = 1 << 16;
+const TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.current.transcript.v1";
+const CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.current.challenge.v1";
+const TRANSCRIPT_VERSION_V1: u8 = 2;
+const MAX_DERIVATION_RETRIES_V1: u32 = 1 << 16;
+const MAX_RANGE_REJECTIONS_V1: usize = 4096;
 
-/// One accepted 120-bit short challenge in coefficient form.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// One uniformly sampled signed fixed-weight challenge in `S_35`.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct JindoShortChallengeV1 {
-    coefficients: [i16; 16],
+    coefficients: [i8; JINDO_RING_DEGREE_V1],
 }
 
 impl JindoShortChallengeV1 {
-    pub(crate) fn polynomial(self, moduli: [JindoPrimeModulusV1; 2]) -> JindoRnsPolynomialV1 {
-        let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
-        for (digit, coefficient) in self.coefficients.into_iter().enumerate() {
-            coefficients[digit * 16] = i128::from(coefficient);
-        }
-        JindoRnsPolynomialV1::from_balanced_coefficients(coefficients, moduli)
+    pub(crate) fn polynomial(&self, moduli: [JindoPrimeModulusV1; 2]) -> JindoRnsPolynomialV1 {
+        JindoRnsPolynomialV1::from_balanced_coefficients(self.coefficients.map(i128::from), moduli)
+    }
+
+    pub(crate) fn inner_polynomial(&self) -> JindoRnsPolynomialV1 {
+        self.polynomial(JINDO_INNER_MODULI_V1)
+    }
+
+    pub(crate) fn outer_polynomial(&self) -> JindoRnsPolynomialV1 {
+        self.polynomial(JINDO_OUTER_MODULI_V1)
+    }
+
+    pub(crate) fn encoded(&self) -> [u8; JINDO_RING_DEGREE_V1] {
+        self.coefficients.map(|value| value as u8)
     }
 
     #[cfg(test)]
-    const fn coefficients(&self) -> &[i16; 16] {
+    pub(crate) const fn coefficients(&self) -> &[i8; JINDO_RING_DEGREE_V1] {
         &self.coefficients
     }
 }
@@ -71,7 +70,7 @@ impl JindoTranscriptV1 {
             return Err(JindoTranscriptErrorV1::CrsDigestMismatch);
         }
         let mut transcript = Self {
-            state: Vec::with_capacity(1024),
+            state: Vec::with_capacity(4096),
         };
         transcript.append_message(b"domain", TRANSCRIPT_DOMAIN_V1)?;
         transcript.append_message(b"version", &[TRANSCRIPT_VERSION_V1])?;
@@ -104,93 +103,137 @@ impl JindoTranscriptV1 {
         Ok(())
     }
 
-    pub(crate) fn challenge(
+    /// Derive the paper's uniform coefficient-field challenge
+    /// `x* <- F_p^x` for ΠSplit.
+    pub(crate) fn field_challenge(
+        &mut self,
+        label: &[u8],
+        ordinal: u32,
+    ) -> Result<JindoFieldElementV1, JindoTranscriptErrorV1> {
+        for retry in 0..MAX_DERIVATION_RETRIES_V1 {
+            let mut reader = self.challenge_reader(label, ordinal, retry)?;
+            for _ in 0..MAX_RANGE_REJECTIONS_V1 {
+                let mut bytes = [0_u8; 32];
+                reader.read(&mut bytes);
+                if let Some(value) = decode_nonzero_field_challenge(bytes) {
+                    drop(reader);
+                    self.bind_challenge(label, ordinal, retry, &bytes)?;
+                    return Ok(value);
+                }
+            }
+        }
+        Err(JindoTranscriptErrorV1::ChallengeExhausted)
+    }
+
+    /// Derive one uniform member of the paper's complete signed fixed-weight
+    /// challenge set `S_35`.
+    ///
+    /// Individual challenges are deliberately not conditioned on being
+    /// units. The revised paper's extraction argument uses well-spreadness of
+    /// the complete `S_35` distribution and the probability that the
+    /// difference of two challenges is invertible.
+    pub(crate) fn sparse_challenge(
         &mut self,
         label: &[u8],
         ordinal: u32,
     ) -> Result<JindoShortChallengeV1, JindoTranscriptErrorV1> {
-        if label.len() > usize::from(u16::MAX) {
-            return Err(JindoTranscriptErrorV1::FieldTooLarge);
-        }
-        for retry in 0..MAX_CHALLENGE_RETRIES_V1 {
-            let mut hash = Shake256::default();
-            hash.update(
-                &u64::try_from(CHALLENGE_DOMAIN_V1.len())
-                    .expect("fixed challenge domain length fits u64")
-                    .to_be_bytes(),
-            );
-            hash.update(CHALLENGE_DOMAIN_V1);
-            hash.update(
-                &u64::try_from(self.state.len())
-                    .map_err(|_| JindoTranscriptErrorV1::FieldTooLarge)?
-                    .to_be_bytes(),
-            );
-            hash.update(&self.state);
-            hash.update(
-                &u16::try_from(label.len())
-                    .expect("label length prevalidated")
-                    .to_be_bytes(),
-            );
-            hash.update(label);
-            hash.update(&ordinal.to_be_bytes());
-            hash.update(&retry.to_be_bytes());
-            let mut reader = hash.finalize_xof();
-            let mut bytes = [0_u8; JINDO_CHALLENGE_BYTES_V1];
-            reader.read(&mut bytes);
-            let challenge = decode_challenge(bytes);
-            if challenge
-                .coefficients
-                .iter()
-                .all(|coefficient| *coefficient == 0)
-            {
-                continue;
-            }
-            self.append_message(b"challenge_label", label)?;
-            self.append_message(b"challenge_ordinal", &ordinal.to_be_bytes())?;
-            self.append_message(b"challenge_retry", &retry.to_be_bytes())?;
-            self.append_message(b"challenge_value", &bytes)?;
-            return Ok(challenge);
-        }
-        Err(JindoTranscriptErrorV1::ChallengeExhausted)
+        let mut reader = self.challenge_reader(label, ordinal, 0)?;
+        let challenge = sample_uniform_fixed_weight(&mut reader)?;
+        let encoded = challenge.encoded();
+        drop(reader);
+        self.bind_challenge(label, ordinal, 0, &encoded)?;
+        Ok(challenge)
+    }
+
+    fn challenge_reader(
+        &self,
+        label: &[u8],
+        ordinal: u32,
+        retry: u32,
+    ) -> Result<impl XofReader, JindoTranscriptErrorV1> {
+        let mut hash = Shake256::default();
+        absorb(&mut hash, CHALLENGE_DOMAIN_V1)?;
+        absorb(&mut hash, &self.state)?;
+        absorb(&mut hash, label)?;
+        hash.update(&ordinal.to_be_bytes());
+        hash.update(&retry.to_be_bytes());
+        Ok(hash.finalize_xof())
+    }
+
+    fn bind_challenge(
+        &mut self,
+        label: &[u8],
+        ordinal: u32,
+        retry: u32,
+        encoded: &[u8],
+    ) -> Result<(), JindoTranscriptErrorV1> {
+        self.append_message(b"challenge_label", label)?;
+        self.append_message(b"challenge_ordinal", &ordinal.to_be_bytes())?;
+        self.append_message(b"challenge_retry", &retry.to_be_bytes())?;
+        self.append_message(b"challenge_value", encoded)
     }
 }
 
-fn decode_challenge(bytes: [u8; JINDO_CHALLENGE_BYTES_V1]) -> JindoShortChallengeV1 {
-    let mut wide = [0_u8; 16];
-    wide[1..].copy_from_slice(&bytes);
-    let mut value = u128::from_be_bytes(wide);
-    let mut coefficients = [0_i16; 16];
-    let first_digit = value % JINDO_CHALLENGE_FIRST_RADIX_V1;
-    value /= JINDO_CHALLENGE_FIRST_RADIX_V1;
-    coefficients[0] = i16::try_from(first_digit).expect("base-183 digit fits i16")
-        - JINDO_CHALLENGE_FIRST_OFFSET_V1;
-    for coefficient in &mut coefficients[1..] {
-        let digit = value % JINDO_CHALLENGE_REMAINING_RADIX_V1;
-        value /= JINDO_CHALLENGE_REMAINING_RADIX_V1;
-        *coefficient = i16::try_from(digit).expect("base-181 digit fits i16")
-            - JINDO_CHALLENGE_REMAINING_OFFSET_V1;
+fn decode_nonzero_field_challenge(bytes: [u8; 32]) -> Option<JindoFieldElementV1> {
+    let value = JindoFieldElementV1::from_canonical_bytes(bytes)?;
+    (!value.is_zero()).then_some(value)
+}
+
+fn absorb(hash: &mut Shake256, value: &[u8]) -> Result<(), JindoTranscriptErrorV1> {
+    let len = u64::try_from(value.len()).map_err(|_| JindoTranscriptErrorV1::FieldTooLarge)?;
+    hash.update(&len.to_be_bytes());
+    hash.update(value);
+    Ok(())
+}
+
+/// Partial Fisher--Yates: every ordered 35-tuple without replacement has the
+/// same probability, and each unordered support has exactly `35!` preimages.
+/// Independent sign bits then make all `2^35 * C(1024,35)` members equiprobable.
+fn sample_uniform_fixed_weight(
+    reader: &mut impl XofReader,
+) -> Result<JindoShortChallengeV1, JindoTranscriptErrorV1> {
+    let mut positions: [u16; JINDO_RING_DEGREE_V1] =
+        core::array::from_fn(|index| u16::try_from(index).expect("degree fits u16"));
+    let mut coefficients = [0_i8; JINDO_RING_DEGREE_V1];
+    for selected in 0..JINDO_PARAMETERS_V1.challenge_weight {
+        let remaining = JINDO_RING_DEGREE_V1 - selected;
+        let offset = usize::try_from(sample_bounded(reader, remaining as u64)?)
+            .map_err(|_| JindoTranscriptErrorV1::ChallengeExhausted)?;
+        positions.swap(selected, selected + offset);
+        let mut sign = [0_u8; 1];
+        reader.read(&mut sign);
+        coefficients[usize::from(positions[selected])] = if sign[0] & 1 == 0 { 1 } else { -1 };
     }
-    debug_assert_eq!(
-        value, 0,
-        "183 * 181^15 exceeds the 120-bit challenge domain"
-    );
-    JindoShortChallengeV1 { coefficients }
+    Ok(JindoShortChallengeV1 { coefficients })
+}
+
+fn sample_bounded(reader: &mut impl XofReader, bound: u64) -> Result<u64, JindoTranscriptErrorV1> {
+    let acceptance_limit = u64::MAX - (u64::MAX % bound);
+    for _ in 0..MAX_RANGE_REJECTIONS_V1 {
+        let mut bytes = [0_u8; 8];
+        reader.read(&mut bytes);
+        let candidate = u64::from_be_bytes(bytes);
+        if candidate < acceptance_limit {
+            return Ok(candidate % bound);
+        }
+    }
+    Err(JindoTranscriptErrorV1::ChallengeExhausted)
 }
 
 /// Jindo transcript failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum JindoTranscriptErrorV1 {
-    /// A mandatory shared consensus binding was malformed.
+    /// The consensus transcript binding is structurally invalid.
     #[error("invalid Jindo consensus transcript binding: {0}")]
     Binding(P256EngineError),
-    /// The runtime supplied a CRS digest other than the compiled transparent key.
+    /// The bound CRS digest differs from the compiled transparent key.
     #[error("Jindo transcript CRS digest differs from the compiled transparent key")]
     CrsDigestMismatch,
-    /// A transcript label, value, or accumulated state exceeded its fixed framing.
+    /// A framed transcript field exceeds the canonical length limit.
     #[error("Jindo transcript field is too large")]
     FieldTooLarge,
-    /// Every bounded candidate was the excluded all-zero short challenge.
-    #[error("Jindo short-challenge derivation exhausted its fixed retry budget")]
+    /// Challenge derivation exhausted its fixed retry budget.
+    #[error("Jindo challenge derivation exhausted its fixed retry budget")]
     ChallengeExhausted,
 }
 
@@ -214,96 +257,78 @@ mod tests {
     }
 
     #[test]
-    fn mixed_radix_mapping_covers_bounds_and_preserves_all_120_input_bits() {
-        for bytes in [
-            [0; JINDO_CHALLENGE_BYTES_V1],
-            [u8::MAX; JINDO_CHALLENGE_BYTES_V1],
-            {
-                let mut value = [0; JINDO_CHALLENGE_BYTES_V1];
-                value[JINDO_CHALLENGE_BYTES_V1 - 1] = 1;
-                value
-            },
-        ] {
-            let challenge = decode_challenge(bytes);
-            assert!(
-                (-JINDO_CHALLENGE_FIRST_OFFSET_V1..=JINDO_CHALLENGE_FIRST_OFFSET_V1)
-                    .contains(&challenge.coefficients()[0])
-            );
-            assert!(challenge.coefficients()[1..].iter().all(|coefficient| {
-                (-JINDO_CHALLENGE_REMAINING_OFFSET_V1..=JINDO_CHALLENGE_REMAINING_OFFSET_V1)
-                    .contains(coefficient)
-            }));
-            let mut reconstructed = 0_u128;
-            for coefficient in challenge.coefficients()[1..].iter().rev() {
-                reconstructed = reconstructed * JINDO_CHALLENGE_REMAINING_RADIX_V1
-                    + u128::try_from(*coefficient + JINDO_CHALLENGE_REMAINING_OFFSET_V1)
-                        .expect("shifted base-181 digit is nonnegative");
-            }
-            reconstructed = reconstructed * JINDO_CHALLENGE_FIRST_RADIX_V1
-                + u128::try_from(challenge.coefficients()[0] + JINDO_CHALLENGE_FIRST_OFFSET_V1)
-                    .expect("shifted base-183 digit is nonnegative");
-            let mut wide = [0; 16];
-            wide[1..].copy_from_slice(&bytes);
-            assert_eq!(reconstructed, u128::from_be_bytes(wide));
-        }
-    }
-
-    #[test]
-    fn challenge_space_and_norm_cover_the_full_security_target() {
-        let mixed_radix_space =
-            JINDO_CHALLENGE_FIRST_RADIX_V1 * JINDO_CHALLENGE_REMAINING_RADIX_V1.pow(15);
-        assert!(mixed_radix_space > 1_u128 << 120);
-
-        let maximum_norm_squared = i32::from(JINDO_CHALLENGE_FIRST_OFFSET_V1).pow(2)
-            + 15 * i32::from(JINDO_CHALLENGE_REMAINING_OFFSET_V1).pow(2);
-        // The parameter search uses c_1 = sqrt(16) * 2^(120/16) / 2,
-        // whose square is exactly 131_072.
-        assert!(maximum_norm_squared < 131_072);
-    }
-
-    #[test]
-    fn transcript_binds_every_consensus_field_and_prior_message() {
-        let expected = [8; 32];
-        let mut first = JindoTranscriptV1::new(&binding(), expected).expect("transcript");
-        first.append_message(b"commitments", b"one").unwrap();
-        let first_challenge = first.challenge(b"batch", 0).expect("challenge");
-
-        let mut replay = JindoTranscriptV1::new(&binding(), expected).expect("transcript");
-        replay.append_message(b"commitments", b"one").unwrap();
+    fn sparse_challenge_has_exact_weight_and_signed_coefficients() {
+        let mut transcript = JindoTranscriptV1::new(&binding(), [8; 32]).unwrap();
+        let challenge = transcript.sparse_challenge(b"alpha", 0).unwrap();
         assert_eq!(
-            replay.challenge(b"batch", 0).expect("challenge"),
-            first_challenge
+            challenge.coefficients().iter().filter(|v| **v != 0).count(),
+            35
         );
-
-        let mut changed = JindoTranscriptV1::new(&binding(), expected).expect("transcript");
-        changed.append_message(b"commitments", b"two").unwrap();
-        assert_ne!(
-            changed.challenge(b"batch", 0).expect("challenge"),
-            first_challenge
-        );
-
-        let mut wrong_binding = binding();
-        wrong_binding.statement_digest[0] ^= 1;
-        let mut changed =
-            JindoTranscriptV1::new(&wrong_binding, expected).expect("changed transcript");
-        changed.append_message(b"commitments", b"one").unwrap();
-        assert_ne!(
-            changed.challenge(b"batch", 0).expect("challenge"),
-            first_challenge
+        assert!(
+            challenge
+                .coefficients()
+                .iter()
+                .all(|v| [-1, 0, 1].contains(v))
         );
     }
 
     #[test]
-    fn wrong_or_zero_binding_fails_closed() {
-        assert!(matches!(
-            JindoTranscriptV1::new(&binding(), [9; 32]),
-            Err(JindoTranscriptErrorV1::CrsDigestMismatch)
-        ));
-        let mut invalid = binding();
-        invalid.genesis_hash = [0; 32];
-        assert!(matches!(
-            JindoTranscriptV1::new(&invalid, [8; 32]),
-            Err(JindoTranscriptErrorV1::Binding(_))
-        ));
+    fn challenge_is_replayable_and_binds_prior_messages() {
+        let mut a = JindoTranscriptV1::new(&binding(), [8; 32]).unwrap();
+        a.append_message(b"phase", b"one").unwrap();
+        let ca = a.sparse_challenge(b"alpha", 0).unwrap();
+        let mut b = JindoTranscriptV1::new(&binding(), [8; 32]).unwrap();
+        b.append_message(b"phase", b"one").unwrap();
+        assert_eq!(ca, b.sparse_challenge(b"alpha", 0).unwrap());
+        let mut c = JindoTranscriptV1::new(&binding(), [8; 32]).unwrap();
+        c.append_message(b"phase", b"two").unwrap();
+        assert_ne!(ca, c.sparse_challenge(b"alpha", 0).unwrap());
+    }
+
+    #[test]
+    fn field_challenge_is_nonzero_and_bound() {
+        let mut a = JindoTranscriptV1::new(&binding(), [8; 32]).unwrap();
+        let x = a.field_challenge(b"split-x-star", 0).unwrap();
+        assert!(!x.is_zero());
+        let mut b = JindoTranscriptV1::new(&binding(), [8; 32]).unwrap();
+        assert_eq!(x, b.field_challenge(b"split-x-star", 0).unwrap());
+    }
+
+    #[test]
+    fn split_challenge_boundary_is_exactly_the_nonzero_canonical_field() {
+        let zero = [0_u8; 32];
+        let one = {
+            let mut bytes = [0_u8; 32];
+            bytes[0] = 1;
+            bytes
+        };
+        let modulus_minus_two = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xa0, 0xf9, 0x0e, 0x57, 0x64, 0x77, 0xbe, 0x54,
+            0xe8, 0x17, 0xec, 0xae, 0x55, 0x03, 0x13, 0x70, 0xde, 0xc1, 0x7c, 0x27, 0x71, 0xb8,
+            0x69, 0x09, 0x00, 0x40,
+        ];
+        let modulus_minus_one = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa1, 0xf9, 0x0e, 0x57, 0x64, 0x77, 0xbe, 0x54,
+            0xe8, 0x17, 0xec, 0xae, 0x55, 0x03, 0x13, 0x70, 0xde, 0xc1, 0x7c, 0x27, 0x71, 0xb8,
+            0x69, 0x09, 0x00, 0x40,
+        ];
+        let modulus = [
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa1, 0xf9, 0x0e, 0x57, 0x64, 0x77, 0xbe, 0x54,
+            0xe8, 0x17, 0xec, 0xae, 0x55, 0x03, 0x13, 0x70, 0xde, 0xc1, 0x7c, 0x27, 0x71, 0xb8,
+            0x69, 0x09, 0x00, 0x40,
+        ];
+
+        assert_eq!(decode_nonzero_field_challenge(zero), None);
+        assert_eq!(
+            decode_nonzero_field_challenge(one),
+            Some(JindoFieldElementV1::ONE)
+        );
+        assert!(decode_nonzero_field_challenge(modulus_minus_two).is_some());
+        assert_eq!(
+            decode_nonzero_field_challenge(modulus_minus_one),
+            Some(-JindoFieldElementV1::ONE),
+            "unlike the Go digit sampler, the paper-canonical sampler admits -1"
+        );
+        assert_eq!(decode_nonzero_field_challenge(modulus), None);
     }
 }

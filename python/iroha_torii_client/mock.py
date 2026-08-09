@@ -206,8 +206,8 @@ class _MockState:
             return self._gov_referendum_get(referendum_id)
         if method == "POST" and path == "/v1/gov/ballots/plain":
             return self._gov_ballot_plain(body)
-        if method == "POST" and path == "/v1/gov/ballots/zk":
-            return self._gov_ballot_zk(body)
+        if method == "POST" and path == "/v1/gov/ballots/zk-v1":
+            return self._gov_ballot_zk_v1(body)
         if method == "GET" and path == "/v1/gov/council/current":
             return _json_response(HTTPStatus.OK, self.gov_council_current)
         if method == "GET" and path.startswith("/v1/contracts/code-bytes/"):
@@ -328,27 +328,26 @@ class _MockState:
             self.contract_manifests.clear()
             self.contract_code_bytes.clear()
 
-            scaffold = b"\x01\x02\x03"
+            transaction_payload = b"\x01\x02\x03"
             signing_message = bytearray(
-                hashlib.blake2b(scaffold, digest_size=32).digest()
+                hashlib.blake2b(transaction_payload, digest_size=32).digest()
             )
             signing_message[-1] |= 1
-            scaffold_b64 = base64.b64encode(scaffold).decode("ascii")
+            transaction_payload_b64 = base64.b64encode(transaction_payload).decode("ascii")
             self.contract_call_response = {
                 "ok": True,
                 "submitted": False,
                 "dataspace": "universal",
                 "code_hash_hex": "22" * 32,
                 "abi_hash_hex": "33" * 32,
-                "creation_time_ms": 0,
-                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "creation_time_ms": 1,
+                "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                 "tx_hash_hex": None,
                 "pipeline_status": None,
                 "entrypoint": "ping",
                 "transaction_ttl_ms": 60_000,
-                "entrypoint_hash_hex": "55" * 32,
-                "transaction_scaffold_b64": scaffold_b64,
-                "signed_transaction_b64": scaffold_b64,
+                "entrypoint_hash_hex": None,
+                "transaction_payload_b64": transaction_payload_b64,
                 "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
                 "operation_receipt": {
                     "operation_kind": "contract_call",
@@ -356,12 +355,12 @@ class _MockState:
                     "transport": "torii",
                     "dataspace": "universal",
                     "contract_alias": "router::universal",
-                    "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                    "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                     "code_hash_hex": "22" * 32,
                     "abi_hash_hex": "33" * 32,
                     "tx_hash_hex": None,
                     "entrypoint": "ping",
-                    "entrypoint_hash_hex": "55" * 32,
+                    "entrypoint_hash_hex": None,
                     "gas_limit": 5_000,
                     "gas_used": None,
                     "payload_digest_hex": "66" * 32,
@@ -641,7 +640,7 @@ class _MockState:
             new_state[referendum_id] = {
                 "referendum": referendum_payload,
                 "ballot_plain": entry.get("ballot_plain_response"),
-                "ballot_zk": entry.get("ballot_zk_response"),
+                "ballot_zk_v1": entry.get("ballot_zk_response"),
             }
         self.gov_referenda = new_state
 
@@ -962,35 +961,65 @@ class _MockState:
             raise KeyError("governance plain ballot not configured")
         return _json_response(HTTPStatus.OK, entry["ballot_plain"])
 
-    def _gov_ballot_zk(self, body: bytes) -> _Response:
+    def _gov_ballot_zk_v1(self, body: bytes) -> _Response:
         try:
             payload = json.loads(body.decode("utf-8") or "{}")
         except json.JSONDecodeError as err:
-            raise ValueError(f"invalid zk ballot payload: {err}") from err
-        election_id = payload.get("election_id")
-        if not isinstance(election_id, str):
-            raise ValueError("election_id must be provided")
-        public_inputs = payload.get("public")
-        if public_inputs is not None:
-            if not isinstance(public_inputs, Mapping):
-                raise ValueError("public inputs must be a JSON object")
-            has_owner = public_inputs.get("owner") is not None
-            has_amount = public_inputs.get("amount") is not None
-            has_duration = public_inputs.get("duration_blocks") is not None
-            if (has_owner or has_amount or has_duration) and not (
-                has_owner and has_amount and has_duration
+            raise ValueError(f"invalid zk-v1 ballot payload: {err}") from err
+        if not isinstance(payload, dict):
+            raise ValueError("zk-v1 ballot payload must be an object")
+        supported_fields = {
+            "authority",
+            "chain_id",
+            "election_id",
+            "backend",
+            "envelope_b64",
+            "root_hint",
+            "owner",
+            "amount",
+            "duration_blocks",
+            "direction",
+            "nullifier",
+        }
+        unknown = sorted(set(payload).difference(supported_fields))
+        if unknown:
+            raise ValueError(f"zk-v1 ballot payload contains unknown field {unknown[0]!r}")
+        for field in ("authority", "chain_id", "election_id", "backend"):
+            value = payload.get(field)
+            if (
+                not isinstance(value, str)
+                or not value
+                or value != value.strip()
+                or any(char.isspace() for char in value)
             ):
-                raise ValueError(
-                    "lock hints must include owner, amount, duration_blocks"
-                )
-            _ensure_governance_owner_canonical(
-                public_inputs.get("owner"),
-                context="zk ballot public inputs",
+                raise ValueError(f"zk-v1 ballot payload.{field} must be an exact token")
+        envelope_b64 = payload.get("envelope_b64")
+        if not isinstance(envelope_b64, str) or not envelope_b64:
+            raise ValueError("zk-v1 ballot payload.envelope_b64 must be non-empty base64")
+        try:
+            envelope = base64.b64decode(envelope_b64, validate=True)
+        except (ValueError, base64.binascii.Error) as err:
+            raise ValueError("zk-v1 ballot payload.envelope_b64 must be valid base64") from err
+        if not envelope or base64.b64encode(envelope).decode("ascii") != envelope_b64:
+            raise ValueError("zk-v1 ballot payload.envelope_b64 must be canonical base64")
+        election_id = payload.get("election_id")
+        has_owner = payload.get("owner") is not None
+        has_amount = payload.get("amount") is not None
+        has_duration = payload.get("duration_blocks") is not None
+        if (has_owner or has_amount or has_duration) and not (
+            has_owner and has_amount and has_duration
+        ):
+            raise ValueError(
+                "zk-v1 lock hints must include owner, amount, duration_blocks"
             )
+        _ensure_governance_owner_canonical(
+            payload.get("owner"),
+            context="zk-v1 ballot",
+        )
         entry = self.gov_referenda.get(election_id)
-        if entry is None or entry.get("ballot_zk") is None:
-            raise KeyError("governance zk ballot not configured")
-        return _json_response(HTTPStatus.OK, entry["ballot_zk"])
+        if entry is None or entry.get("ballot_zk_v1") is None:
+            raise KeyError("governance zk-v1 ballot not configured")
+        return _json_response(HTTPStatus.OK, entry["ballot_zk_v1"])
 
     def _gov_contract_get(self, contract_address: str) -> _Response:
         entry = self.gov_contracts.get(contract_address)
@@ -1583,7 +1612,7 @@ class _MockState:
             "payload_hash": _canonical_hash(0x33),
         }
         self.sumeragi_status = {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "node_fingerprint": _canonical_hash(0x11),
             "build_fingerprint": _canonical_hash(0x12),
             "config_fingerprint": _canonical_hash(0x13),
@@ -1632,6 +1661,8 @@ class _MockState:
                             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
                         ),
                         "native_amx_application_manifest_count": 0,
+                        "merge_carrier": None,
+                        "executed_block_wire_len": 123,
                         "executed_block_wire_hash": _canonical_hash(0x53),
                     },
                 },

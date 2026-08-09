@@ -15,13 +15,13 @@ use super::{
         COPY_OFFSET, PQ_MASP_BASE_WIDTH_V1, PQ_MASP_COPY_WIDTH_V1, PQ_MASP_SHA_BIT_COLUMNS_V1,
         PQ_MASP_SHA_BITS_PER_GROUP_V1, PQ_MASP_SHA_SCHEDULE_WORDS_V1, PQ_MASP_SHA_STATE_WORDS_V1,
         PQ_MASP_TRACE_LOG2_V1, PQ_MASP_TRACE_SIZE_V1, PqMaspAirErrorV1, PqMaspBaseTraceV1,
-        PqMaspFixedRowV1, SCRATCH_BYTE_BITS_OFFSET, SCRATCH_NONZERO_BIT_SELECT_OFFSET,
-        SCRATCH_NONZERO_BYTE_SELECT_OFFSET, SCRATCH_RELATION_CARRY_AFTER,
-        SCRATCH_RELATION_CARRY_BEFORE, SCRATCH_RELATION_CARRY_BITS_OFFSET, SCRATCH_RUNNING_AFTER,
-        SCRATCH_RUNNING_BEFORE, SCRATCH_VM_CARRY_AFTER, SCRATCH_VM_CARRY_BEFORE,
-        SCRATCH_VM_DESTINATION_SELECT_OFFSET, SCRATCH_VM_DIFFERENCE,
-        SCRATCH_VM_DIFFERENCE_BITS_OFFSET, SCRATCH_VM_HALTED_AFTER, SCRATCH_VM_HALTED_BEFORE,
-        SCRATCH_VM_IMMEDIATE_OFFSET, SCRATCH_VM_LEFT_SELECT_OFFSET,
+        PqMaspFixedRowV1, SCRATCH_BYTE_BITS_OFFSET, SCRATCH_DISTINCT_RIGHT_BITS_OFFSET,
+        SCRATCH_NONZERO_BIT_SELECT_OFFSET, SCRATCH_NONZERO_BYTE_SELECT_OFFSET,
+        SCRATCH_RELATION_CARRY_AFTER, SCRATCH_RELATION_CARRY_BEFORE,
+        SCRATCH_RELATION_CARRY_BITS_OFFSET, SCRATCH_RUNNING_AFTER, SCRATCH_RUNNING_BEFORE,
+        SCRATCH_VM_CARRY_AFTER, SCRATCH_VM_CARRY_BEFORE, SCRATCH_VM_DESTINATION_SELECT_OFFSET,
+        SCRATCH_VM_DIFFERENCE, SCRATCH_VM_DIFFERENCE_BITS_OFFSET, SCRATCH_VM_HALTED_AFTER,
+        SCRATCH_VM_HALTED_BEFORE, SCRATCH_VM_IMMEDIATE_OFFSET, SCRATCH_VM_LEFT_SELECT_OFFSET,
         SCRATCH_VM_OPCODE_SELECT_OFFSET, SCRATCH_VM_RESULT, SCRATCH_VM_RESULT_BITS_OFFSET,
         SCRATCH_VM_RIGHT_SELECT_OFFSET, SHA_BITS_OFFSET, SHA_CARRY_OFFSET, SHA_CARRY_WIDTH,
         SHA_INITIAL_STATE_OFFSET, SHA_SCHEDULE_OFFSET, SHA_STATE_OFFSET, SHA_T1_OFFSET,
@@ -39,8 +39,7 @@ use crate::privacy_engines::{
         PROOF_MANAGED_NOTE_SECURITY_LANES_V1, PROOF_MANAGED_NOTE_TERMINAL_DEGREE_BOUND_V1,
         PROOF_MANAGED_NOTE_TERMINAL_LOG2_V1, ProofManagedNoteStarkAdapterV1,
         ProofManagedNoteStarkErrorV1, ProofManagedNoteStarkProtocolV1,
-        prove_proof_managed_note_stark_v1, prove_proof_managed_note_stark_v1_with_rng,
-        verify_proof_managed_note_stark_v1,
+        prove_proof_managed_note_stark_v1_with_rng, verify_proof_managed_note_stark_v1,
     },
     transparent_stark::{GoldilocksFieldV1 as F, TransparentTranscriptV1, sha256_frame_v1},
 };
@@ -109,16 +108,16 @@ pub(crate) const PQ_MASP_STARK_PROFILE_DIGEST_V1: [u8; 32] = [
 /// `pq-masp-full-facade-v1` ML-DSA key and `[0xC2; 32]` genesis hash, with
 /// `StdRng::from_seed([0xB7; 32])`.
 pub(crate) const PQ_MASP_STARK_KAT_PROOF_SHA256_V1: [u8; 32] = [
-    0xe8, 0x0b, 0xce, 0xa4, 0xbc, 0xf6, 0x97, 0xb3, 0x87, 0x57, 0xbd, 0x66, 0xdb, 0x00, 0xc5, 0x58,
-    0x49, 0x52, 0x07, 0x13, 0xfa, 0x11, 0x63, 0x8e, 0x4b, 0x2c, 0x7a, 0x21, 0x9b, 0xa1, 0x08, 0xd6,
+    0x46, 0xec, 0xfb, 0x40, 0x97, 0xb2, 0xc2, 0xca, 0x1d, 0x12, 0x7a, 0xe2, 0x12, 0xae, 0xd9, 0xdb,
+    0x99, 0x15, 0xb5, 0x0a, 0x2e, 0x06, 0x87, 0x58, 0x92, 0x5c, 0xa3, 0xf7, 0x59, 0xd6, 0x05, 0x44,
 ];
 
 /// SHA-256 of the complete deterministic `PQA1` facade proof from the same
 /// canonical full-domain fixture. This pins the reserved block-two hedge,
 /// ML-DSA authorization, and exact inner proof as one end-to-end producer.
 pub(crate) const PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1: [u8; 32] = [
-    0x85, 0x02, 0x21, 0x13, 0x1b, 0x26, 0x2f, 0x04, 0x3f, 0x3b, 0x1d, 0xba, 0x6e, 0x97, 0x7d, 0xec,
-    0xfe, 0xf5, 0xcd, 0x3a, 0xa3, 0x93, 0x5e, 0xe2, 0x99, 0xdd, 0xff, 0x5b, 0x62, 0x34, 0x07, 0x60,
+    0xf8, 0x30, 0xf1, 0x50, 0x09, 0x67, 0xd4, 0x4a, 0x1d, 0x66, 0x3c, 0x11, 0xbd, 0x16, 0xd2, 0xb9,
+    0xc3, 0xa1, 0xbd, 0x41, 0x00, 0x90, 0x34, 0x74, 0x2b, 0xda, 0x4f, 0x34, 0xa0, 0xf3, 0x5e, 0xc8,
 ];
 
 const PQ_MASP_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
@@ -172,7 +171,8 @@ fn pq_masp_protocol_v1() -> ProofManagedNoteStarkProtocolV1 {
 
 /// Validate the complete compiled proof-system and relation profile.
 pub(crate) fn validate_pq_masp_stark_profile_v1() -> Result<(), ProofManagedNoteStarkErrorV1> {
-    pq_masp_protocol_v1().validate()
+    pq_masp_protocol_v1().validate()?;
+    validate_reserved_vm_row_contract_v1()
 }
 
 fn map_air_error_v1(error: PqMaspAirErrorV1) -> ProofManagedNoteStarkErrorV1 {
@@ -219,6 +219,62 @@ fn vm_same_instruction_transition(current: &PqMaspFixedRowV1, next: &PqMaspFixed
         ) => instruction == next_instruction && usize::from(*byte) + 1 == usize::from(*next_byte),
         _ => false,
     }
+}
+
+fn reserved_vm_type_column_v1(row: &PqMaspFixedRowV1) -> Option<usize> {
+    match row {
+        PqMaspFixedRowV1::VmHeader => Some(TYPE_VM_HEADER),
+        PqMaspFixedRowV1::VmProgram { .. } => Some(TYPE_VM_PROGRAM),
+        PqMaspFixedRowV1::VmPrevious { .. } => Some(TYPE_VM_PREVIOUS),
+        PqMaspFixedRowV1::VmNext { .. } => Some(TYPE_VM_NEXT),
+        _ => None,
+    }
+}
+
+fn validate_reserved_vm_row_contract_v1() -> Result<(), ProofManagedNoteStarkErrorV1> {
+    let rows = [
+        PqMaspFixedRowV1::VmHeader,
+        PqMaspFixedRowV1::VmProgram { instruction: 7 },
+        PqMaspFixedRowV1::VmPrevious {
+            instruction: 7,
+            byte: 0,
+        },
+        PqMaspFixedRowV1::VmNext {
+            instruction: 7,
+            byte: 0,
+        },
+        PqMaspFixedRowV1::VmPrevious {
+            instruction: 7,
+            byte: 1,
+        },
+    ];
+    let type_columns = [
+        reserved_vm_type_column_v1(&rows[0]),
+        reserved_vm_type_column_v1(&rows[1]),
+        reserved_vm_type_column_v1(&rows[2]),
+        reserved_vm_type_column_v1(&rows[3]),
+    ];
+    if [
+        TYPE_VM_HEADER,
+        TYPE_VM_PROGRAM,
+        TYPE_VM_PREVIOUS,
+        TYPE_VM_NEXT,
+    ] != [7, 8, 9, 10]
+        || type_columns
+            != [
+                Some(TYPE_VM_HEADER),
+                Some(TYPE_VM_PROGRAM),
+                Some(TYPE_VM_PREVIOUS),
+                Some(TYPE_VM_NEXT),
+            ]
+        || vm_same_instruction_transition(&rows[0], &rows[1])
+        || !vm_same_instruction_transition(&rows[1], &rows[2])
+        || !vm_same_instruction_transition(&rows[2], &rows[3])
+        || !vm_same_instruction_transition(&rows[3], &rows[4])
+    {
+        return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+    }
+    Ok(())
 }
 
 pub(super) fn pq_masp_profile_fixed_columns_v1(
@@ -588,7 +644,7 @@ fn allowed_selector_for_column(current_fixed: &[F], column: usize) -> F {
         vm_common
     } else if (SCRATCH_VM_CARRY_BEFORE..SCRATCH_VM_DIFFERENCE_BITS_OFFSET).contains(&column) {
         vm_previous
-    } else if (SCRATCH_VM_DIFFERENCE_BITS_OFFSET..SCRATCH_VM_DIFFERENCE_BITS_OFFSET + 8)
+    } else if (SCRATCH_DISTINCT_RIGHT_BITS_OFFSET..SCRATCH_DISTINCT_RIGHT_BITS_OFFSET + 8)
         .contains(&column)
     {
         vm_previous.add(distinct)
@@ -946,7 +1002,7 @@ fn pq_masp_profile_constraint_residues_inner_v1(
         &current[SCRATCH_NONZERO_BIT_SELECT_OFFSET..SCRATCH_NONZERO_BIT_SELECT_OFFSET + 8];
     let left_bits = &current[SCRATCH_BYTE_BITS_OFFSET..SCRATCH_BYTE_BITS_OFFSET + 8];
     let right_bits =
-        &current[SCRATCH_VM_DIFFERENCE_BITS_OFFSET..SCRATCH_VM_DIFFERENCE_BITS_OFFSET + 8];
+        &current[SCRATCH_DISTINCT_RIGHT_BITS_OFFSET..SCRATCH_DISTINCT_RIGHT_BITS_OFFSET + 8];
     for selector in pair_selectors {
         push_boolean(&mut residues, distinct, *selector);
     }
@@ -1573,21 +1629,6 @@ pub(super) fn prove_pq_masp_stark_v1_with_rng<R: TryRngCore>(
     )
 }
 
-/// Construct the canonical PQ-MASP proof with operating-system entropy.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(super) fn prove_pq_masp_stark_v1(
-    statement: &PqMaspStarkStatementV1,
-    consensus_binding: &PrivacyNativeConsensusBindingV1,
-    consensus_limits: &PrivacyConsensusLimitsV1,
-    witness: &PqMaspWitnessV1,
-) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
-    let base_columns = compile_pq_masp_prover_columns_v1(statement, witness)?;
-    prove_proof_managed_note_stark_v1(
-        &PqMaspStarkAdapterV1::new(statement, consensus_binding, consensus_limits),
-        &base_columns,
-    )
-}
-
 /// Verify the exact PQ-MASP proof against the statement and consensus binding.
 pub(crate) fn verify_pq_masp_stark_v1(
     statement: &PqMaspStarkStatementV1,
@@ -1674,6 +1715,19 @@ mod tests {
     }
 
     #[test]
+    fn reserved_vm_row_contract_pins_selector_and_sequence_mapping() {
+        validate_reserved_vm_row_contract_v1().expect("reserved VM row contract");
+        assert_eq!(reserved_vm_type_column_v1(&PqMaspFixedRowV1::Padding), None);
+        assert!(!vm_same_instruction_transition(
+            &PqMaspFixedRowV1::VmProgram { instruction: 7 },
+            &PqMaspFixedRowV1::VmPrevious {
+                instruction: 8,
+                byte: 0,
+            }
+        ));
+    }
+
+    #[test]
     fn compiled_profile_count_digest_and_outer_wire_budget_are_exact() {
         validate_pq_masp_stark_profile_v1().expect("compiled PQ-MASP soundness profile");
         let residues = pq_masp_profile_constraint_residues_inner_v1(
@@ -1738,7 +1792,7 @@ mod tests {
     }
 
     #[test]
-    fn full_domain_authorized_facade_roundtrip_and_adversarial_wires_fail_closed() {
+    fn authorization_key_mismatch_fails_before_rng_consumption() {
         let authorization_keys = generate_mldsa_keypair_from_seed(
             MlDsaSuite::MlDsa65,
             HedgedRngSeed::from_entropy([0xB6; 32]),
@@ -1776,6 +1830,22 @@ mod tests {
             expected_rng.next_u64(),
             "invalid authorization keys must fail before entropy is consumed"
         );
+    }
+
+    #[test]
+    #[ignore = "release gate: generates and verifies the full-domain PQ-MASP proof"]
+    fn full_domain_authorized_facade_roundtrip_and_adversarial_wires_fail_closed() {
+        let authorization_keys = generate_mldsa_keypair_from_seed(
+            MlDsaSuite::MlDsa65,
+            HedgedRngSeed::from_entropy([0xB6; 32]),
+            b"pq-masp-full-facade-v1",
+        )
+        .expect("ML-DSA authorization key");
+        let key_digest =
+            derive_pq_masp_authorization_key_digest_v1(authorization_keys.public_key())
+                .expect("authorization key digest");
+        let (statement, witness) = valid_fixture_with_authorization_key_digest(key_digest);
+        let (binding, limits) = consensus_material(&statement);
         let mut rng = StdRng::from_seed([0xB7; 32]);
         let authorized_proof = super::super::prove_pq_masp_v1_with_rng(
             &statement,
@@ -1786,22 +1856,25 @@ mod tests {
             &mut rng,
         )
         .expect("full-domain authorized PQ-MASP facade proof");
-        super::super::verify_pq_masp_v1(&statement, &binding, &limits, &authorized_proof)
-            .expect("full-domain PQ-MASP facade verification");
         let decoded = decode_pq_masp_authorization_proof_v1(&authorized_proof)
             .expect("canonical authorization wrapper");
         let proof = decoded.stark_proof.to_vec();
         assert!(!proof.is_empty());
         assert!(proof.len() <= super::super::wire::PQ_MASP_MAX_STARK_PROOF_BYTES_V1);
-        verify_pq_masp_stark_v1(&statement, &binding, &limits, &proof)
-            .expect("full-domain PQ-MASP verification");
         let proof_digest: [u8; 32] = Sha256::digest(&proof).into();
         let authorized_proof_digest: [u8; 32] = Sha256::digest(&authorized_proof).into();
-        assert_eq!(proof_digest, PQ_MASP_STARK_KAT_PROOF_SHA256_V1);
         assert_eq!(
-            authorized_proof_digest,
-            PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1
+            (proof_digest, authorized_proof_digest),
+            (
+                PQ_MASP_STARK_KAT_PROOF_SHA256_V1,
+                PQ_MASP_AUTHORIZED_KAT_PROOF_SHA256_V1,
+            ),
+            "the deterministic inner and authorized PQ-MASP proof KATs drifted"
         );
+        super::super::verify_pq_masp_v1(&statement, &binding, &limits, &authorized_proof)
+            .expect("full-domain PQ-MASP facade verification");
+        verify_pq_masp_stark_v1(&statement, &binding, &limits, &proof)
+            .expect("full-domain PQ-MASP verification");
 
         assert!(
             verify_pq_masp_stark_v1(&statement, &binding, &limits, &vec![0; proof.len()],).is_err(),

@@ -338,7 +338,7 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
                     }
                     saw_role_deleted = true;
                 }
-                DataEvent::Domain(DomainEvent::Account(AccountEvent::RoleGranted(event))) => {
+                DataEvent::Account(AccountEvent::RoleGranted(event)) => {
                     if event.role != role_id {
                         unexpected_events.push(format!(
                             "role granted for unexpected role {:?} to {:?}",
@@ -353,7 +353,7 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
                         ));
                     }
                 }
-                DataEvent::Domain(DomainEvent::Account(AccountEvent::RoleRevoked(event))) => {
+                DataEvent::Account(AccountEvent::RoleRevoked(event)) => {
                     if event.role != role_id {
                         unexpected_events.push(format!(
                             "role revoked for unexpected role {:?} from {:?}",

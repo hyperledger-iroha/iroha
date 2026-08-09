@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use iroha_data_model::{
     AssetDefinitionId,
     account::AccountId,
+    asset::AssetBalanceScope,
     privacy::{
         ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1,
         BootleLanternIssuerPolicyV1, FCMP_MAX_INPUTS_V1, FCMP_MAX_OUTPUTS_V1,
@@ -22,14 +23,14 @@ use iroha_data_model::{
         PrivacyConsensusPolicyV1, PrivacyFcmpKeyImageV1, PrivacyFcmpOutputIdV1,
         PrivacyFcmpOutputTupleV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
         PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNullifierV1,
-        PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-        PrivacyProofManagedPoolBootstrapDigestV1, PrivacyProofManagedPoolBootstrapV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-        PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootPublicationV1,
-        PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-        PrivacyTrustAnchorNamespaceV1, PrivacyTrustAnchorPolicyNamespaceV1,
+        PrivacyOrchardPoolBootstrapDigestV1, PrivacyOrchardPoolBootstrapV1,
+        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
+        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyProofManagedPoolBootstrapDigestV1,
+        PrivacyProofManagedPoolBootstrapV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+        PrivacyProtocolLifecycleV1, PrivacyRootManagementV1, PrivacyRootPublicationDigestV1,
+        PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
+        PrivacyStatementV1, PrivacyTrustAnchorNamespaceV1, PrivacyTrustAnchorPolicyNamespaceV1,
         PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
         PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
         PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPhcHashV1,
@@ -713,15 +714,6 @@ impl PrivacyPgcPoolSnapshotV1 {
             .iter()
             .any(|(key, _)| key.epoch() == self.current_epoch && key.root() == self.current_root)
             .then_some((self.current_epoch, self.current_root))
-    }
-
-    /// Return whether an exact historical epoch/root pair remains retained.
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[must_use]
-    pub(crate) fn contains_retained_root(&self, epoch: u64, root: PrivacyRootV1) -> bool {
-        self.retained_roots
-            .iter()
-            .any(|(key, _)| key.epoch() == epoch && key.root() == root)
     }
 }
 
@@ -1834,7 +1826,7 @@ pub(crate) fn load_privacy_zk_x509_certificate_policy_v1(
 }
 
 /// Load the current self-chained signed-CRL record for one policy lineage.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn load_privacy_zk_x509_crl_v1(
     trust_anchor_id: PrivacyIssuerIdV1,
     policy_id: PrivacyPolicyIdV1,
@@ -2677,60 +2669,7 @@ pub(crate) fn load_privacy_zk_ams_registry_snapshot_v1(
     })
 }
 
-fn fcmp_output_to_native_v1(
-    output: PrivacyFcmpOutputTupleV1,
-) -> Result<crate::privacy_engines::fcmp_plus_plus::FcmpOutputTupleV1, &'static str> {
-    crate::privacy_engines::fcmp_plus_plus::FcmpOutputTupleV1::new(
-        output.output_key,
-        output.linking_tag_generator,
-        output.amount_commitment,
-    )
-    .map_err(|_| "FCMP++ output tuple is not a canonical prime-order Edwards tuple")
-}
-
-fn fcmp_output_from_native_v1(
-    output: crate::privacy_engines::fcmp_plus_plus::FcmpOutputTupleV1,
-) -> PrivacyFcmpOutputTupleV1 {
-    let (output_key, linking_tag_generator, amount_commitment) = output.components();
-    PrivacyFcmpOutputTupleV1 {
-        output_key,
-        linking_tag_generator,
-        amount_commitment,
-    }
-}
-
-fn fcmp_root_to_native_v1(
-    root: PrivacyFcmpTreeRootV1,
-) -> Result<crate::privacy_engines::fcmp_plus_plus::FcmpTreeRootV1, &'static str> {
-    crate::privacy_engines::fcmp_plus_plus::FcmpTreeRootV1::new(root.layers, root.point)
-        .map_err(|_| "FCMP++ root is not canonical for its layer-selected curve")
-}
-
-fn fcmp_root_from_native_v1(
-    root: crate::privacy_engines::fcmp_plus_plus::FcmpTreeRootV1,
-) -> PrivacyFcmpTreeRootV1 {
-    PrivacyFcmpTreeRootV1 {
-        layers: root.layers(),
-        point: root.point(),
-    }
-}
-
-/// Validator-owned alternating Selene/Helios frontier for one FCMP++ pool.
-///
-/// The complete typed root, active `(O, I, C)` branch, and every mixed-radix
-/// level are durable. Restore validates the native frontier and independently
-/// rebuilds it from the complete position-bound output registry.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
-#[norito(deny_unknown_fields)]
-pub struct PrivacyFcmpAccumulatorStateV1 {
-    namespace: PrivacyNamespaceV1,
-    bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
-    epoch: u64,
-    root: PrivacyFcmpTreeRootV1,
-    tree_size: u64,
-    active_outputs: Vec<PrivacyFcmpOutputTupleV1>,
-    levels: Vec<Vec<[u8; 32]>>,
-}
+include!("privacy_state/fcmp_state.rs");
 
 impl PrivacyFcmpAccumulatorStateV1 {
     fn bootstrap(
@@ -5331,6 +5270,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
 pub struct PrivacyOrchardPoolStateV1 {
     bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
     asset_definition_id: AssetDefinitionId,
+    public_balance_scope: AssetBalanceScope,
     reserve_account: AccountId,
     epoch: u64,
     root: PrivacyRootV1,
@@ -5344,11 +5284,13 @@ impl PrivacyOrchardPoolStateV1 {
     pub(crate) fn bootstrap(
         bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
         asset_definition_id: AssetDefinitionId,
+        public_balance_scope: AssetBalanceScope,
         reserve_account: AccountId,
     ) -> Result<Self, &'static str> {
         Self::new(
             bootstrap_digest,
             asset_definition_id,
+            public_balance_scope,
             reserve_account,
             PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
             PrivacyRootV1::new(crate::privacy_engines::orchard::orchard_empty_root_v1()),
@@ -5362,6 +5304,7 @@ impl PrivacyOrchardPoolStateV1 {
     fn new(
         bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
         asset_definition_id: AssetDefinitionId,
+        public_balance_scope: AssetBalanceScope,
         reserve_account: AccountId,
         epoch: u64,
         root: PrivacyRootV1,
@@ -5372,6 +5315,7 @@ impl PrivacyOrchardPoolStateV1 {
         let state = Self {
             bootstrap_digest,
             asset_definition_id,
+            public_balance_scope,
             reserve_account,
             epoch,
             root,
@@ -5406,6 +5350,7 @@ impl PrivacyOrchardPoolStateV1 {
         Self::new(
             self.bootstrap_digest,
             self.asset_definition_id.clone(),
+            self.public_balance_scope,
             self.reserve_account.clone(),
             epoch,
             PrivacyRootV1::new(successor.root),
@@ -5419,6 +5364,12 @@ impl PrivacyOrchardPoolStateV1 {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         if self.bootstrap_digest.is_zero() {
             return Err("Orchard pool bootstrap digest must be non-zero");
+        }
+        if matches!(
+            self.public_balance_scope,
+            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL)
+        ) {
+            return Err("Orchard public balance scope cannot be the universal dataspace");
         }
         if self.epoch < PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1 {
             return Err("Orchard pool epoch must be non-zero");
@@ -5448,6 +5399,28 @@ impl PrivacyOrchardPoolStateV1 {
         .map_err(|_| "Orchard compact frontier is invalid")
     }
 
+    fn validate_bootstrap_binding(&self, namespace: PrivacyNamespaceV1) -> Result<(), String> {
+        let PrivacyNamespaceScopeV1::Pool(pool) = namespace.scope() else {
+            return Err("Orchard pool state has a non-pool namespace".to_owned());
+        };
+        let bootstrap = PrivacyOrchardPoolBootstrapV1::new(
+            pool.pool_id,
+            self.asset_definition_id.clone(),
+            self.public_balance_scope,
+            self.reserve_account.clone(),
+        )
+        .map_err(|error| format!("invalid reconstructed Orchard bootstrap: {error}"))?;
+        let digest = bootstrap.digest().map_err(|error| {
+            format!("failed to digest reconstructed Orchard bootstrap: {error}")
+        })?;
+        if digest != self.bootstrap_digest {
+            return Err(
+                "Orchard pool state fields do not match the governed bootstrap digest".to_owned(),
+            );
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub(crate) const fn bootstrap_digest(&self) -> PrivacyOrchardPoolBootstrapDigestV1 {
         self.bootstrap_digest
@@ -5456,6 +5429,11 @@ impl PrivacyOrchardPoolStateV1 {
     #[must_use]
     pub(crate) const fn asset_definition_id(&self) -> &AssetDefinitionId {
         &self.asset_definition_id
+    }
+
+    #[must_use]
+    pub(crate) const fn public_balance_scope(&self) -> AssetBalanceScope {
+        self.public_balance_scope
     }
 
     #[must_use]
@@ -5542,6 +5520,7 @@ pub(crate) fn load_privacy_orchard_pool_references_v1(
         let state = record
             .orchard_pool_state_ref()
             .ok_or_else(|| format!("Orchard pool state {namespace:?} has wrong-role provenance"))?;
+        state.validate_bootstrap_binding(namespace)?;
         references.push(PrivacyOrchardPoolReferenceV1 {
             namespace,
             asset_definition_id: state.asset_definition_id().clone(),
@@ -5662,12 +5641,14 @@ impl PrivacyOrchardPoolSnapshotV1 {
         namespace: PrivacyNamespaceV1,
         bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
         asset_definition_id: AssetDefinitionId,
+        public_balance_scope: AssetBalanceScope,
         reserve_account: AccountId,
     ) -> Self {
         validate_orchard_namespace(namespace).expect("test Orchard namespace is canonical");
         let state = PrivacyOrchardPoolStateV1::bootstrap(
             bootstrap_digest,
             asset_definition_id,
+            public_balance_scope,
             reserve_account,
         )
         .expect("test Orchard state is canonical");
@@ -5872,6 +5853,7 @@ pub(crate) fn load_privacy_orchard_pool_snapshot_v1(
         .orchard_pool_state_ref()
         .ok_or_else(|| "Orchard pool-state key has wrong-role provenance".to_owned())?
         .clone();
+    state.validate_bootstrap_binding(namespace)?;
 
     let head_key = PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::NoteCommitmentAnchor)
         .map_err(|error| format!("invalid Orchard root-head key: {error}"))?;
@@ -6141,8 +6123,8 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the exact X.509 policy namespace and certificate nullifier.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn zk_x509_certificate_identity(
         self,
     ) -> Option<(PrivacyNamespaceV1, PrivacyNullifierV1)> {
@@ -6159,37 +6141,9 @@ impl PrivacyNullifierKeyV1 {
         }
     }
 
-    /// Return the Orchard namespace, if this is an Orchard nullifier.
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[must_use]
-    pub(crate) const fn orchard_namespace(self) -> Option<PrivacyNamespaceV1> {
-        match self {
-            Self::OrchardNullifier { namespace, .. } => Some(namespace),
-            Self::ZkAceReplay { .. }
-            | Self::ZkAmsKeyImage { .. }
-            | Self::ZkX509CertificateNullifier { .. }
-            | Self::FcmpKeyImage { .. }
-            | Self::ProofManagedNullifier { .. } => None,
-        }
-    }
-
-    /// Return the exact Orchard nullifier bytes, if present.
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[must_use]
-    pub(crate) const fn orchard_nullifier_bytes(self) -> Option<[u8; 32]> {
-        match self {
-            Self::OrchardNullifier { nullifier, .. } => Some(nullifier),
-            Self::ZkAceReplay { .. }
-            | Self::ZkAmsKeyImage { .. }
-            | Self::ZkX509CertificateNullifier { .. }
-            | Self::FcmpKeyImage { .. }
-            | Self::ProofManagedNullifier { .. } => None,
-        }
-    }
-
     /// Return the proof-managed pool namespace and nullifier, if present.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn proof_managed_identity(
         self,
     ) -> Option<(PrivacyNamespaceV1, PrivacyNullifierV1)> {
@@ -6207,8 +6161,8 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Return the exact FCMP++ namespace and typed key image, if present.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn fcmp_identity(self) -> Option<(PrivacyNamespaceV1, PrivacyFcmpKeyImageV1)> {
         match self {
             Self::FcmpKeyImage {
@@ -6251,8 +6205,8 @@ impl PrivacyNullifierKeyV1 {
     }
 
     /// Ordered bounds covering consumed certificate nullifiers in one X.509 policy.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn zk_x509_certificate_nullifier_range(
         namespace: PrivacyNamespaceV1,
     ) -> core::ops::RangeInclusive<Self> {
@@ -6549,25 +6503,6 @@ impl PrivacyCommitmentKeyV1 {
         })
     }
 
-    /// Ordered bounds covering every proof-managed pool configuration.
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[must_use]
-    pub(crate) fn proof_managed_pool_config_range() -> core::ops::RangeInclusive<Self> {
-        let namespace = |protocol_id, pool_id| {
-            PrivacyNamespaceV1::new(
-                protocol_id,
-                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
-                    pool_id: PrivacyPoolIdV1::new(pool_id),
-                }),
-            )
-        };
-        Self::ProofManagedPoolConfig {
-            namespace: namespace(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1, [0; 32]),
-        }..=Self::ProofManagedPoolConfig {
-            namespace: namespace(PrivacyProtocolIdV1::PqMaspStarkV0, [u8::MAX; 32]),
-        }
-    }
-
     /// Ordered bounds covering all commitments in exactly one proof-managed pool.
     #[must_use]
     pub(crate) fn proof_managed_pool_commitment_range(
@@ -6682,8 +6617,8 @@ impl PrivacyCommitmentKeyV1 {
     }
 
     /// Return the proof-managed pool namespace, if this key belongs to one.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn proof_managed_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
             Self::ProofManagedPoolConfig { namespace }
@@ -9770,7 +9705,7 @@ mod tests {
             PrivacyCommitmentV1::new(nonzero(13)),
             PrivacyPolicyDigestV1::new(nonzero(14)),
             1,
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("asset").expect("asset name"),
             ),
@@ -9800,7 +9735,7 @@ mod tests {
                 .collect(),
         });
         let issuer_public_matrix =
-            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
                 .expect("canonical degree-512 multiplication matrix");
         let mut policy = BootleLanternIssuerPolicyV1 {
             issuer_id: PrivacyIssuerIdV1::new(nonzero(issuer_byte)),
@@ -10657,13 +10592,14 @@ mod tests {
     fn orchard_persisted_fixture() -> OrchardPersistedFixture {
         let namespace = orchard_namespace(0xA7);
         let bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0xA8));
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("orchard_asset").expect("asset name"),
         );
         let state = PrivacyOrchardPoolStateV1::bootstrap(
             bootstrap_digest,
             asset_definition_id,
+            AssetBalanceScope::Global,
             account(0xA9),
         )
         .expect("canonical Orchard empty state");
@@ -10857,7 +10793,7 @@ mod tests {
     fn proof_managed_note_persisted_fixture(
         protocol_id: PrivacyProtocolIdV1,
     ) -> ProofManagedPersistedFixture {
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("private_note_state").expect("asset name"),
         );
@@ -10871,6 +10807,7 @@ mod tests {
                     iroha_data_model::privacy::PrivacyIvmPrivateNotePoolBootstrapV1 {
                         pool_id: PrivacyPoolIdV1::new(nonzero(0xB1)),
                         asset_definition_id,
+                        public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
                         reserve_account: account(0xB2),
                         program_id: iroha_data_model::privacy::PrivacyProgramIdV1::new(nonzero(
                             0xB3,
@@ -11072,7 +11009,7 @@ mod tests {
     }
 
     fn fcmp_persisted_fixture() -> FcmpPersistedFixture {
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("fcmp_state").expect("asset name"),
         );
@@ -13972,7 +13909,7 @@ mod tests {
 
     #[test]
     fn proof_managed_note_frontier_is_durable_bounded_and_self_authenticating() {
-        let asset_definition_id = AssetDefinitionId::new(
+        let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("private_note").expect("asset name"),
         );
@@ -13980,6 +13917,7 @@ mod tests {
             iroha_data_model::privacy::PrivacyIvmPrivateNotePoolBootstrapV1 {
                 pool_id: PrivacyPoolIdV1::new(nonzero(0xC7)),
                 asset_definition_id,
+                public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
                 reserve_account: account(0xC8),
                 program_id: iroha_data_model::privacy::PrivacyProgramIdV1::new(nonzero(0xC9)),
                 initial_note_commitments: vec![
@@ -16175,132 +16113,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn compiled_limits_keep_bounded_root_history() {
-        assert_eq!(
-            PrivacyConsensusLimitsV1::taira_default().retained_root_count,
-            2_048
-        );
-    }
-
-    #[test]
-    fn root_history_prunes_independently_per_namespace() {
-        let mut roots = Storage::new();
-        let record = root_provenance();
-        let independent_namespace = pgc_namespace(0xE1);
-        for epoch in 1..=2_048 {
-            let root_byte = (epoch % 251 + 1) as u8;
-            roots.insert(
-                x509_root_key(
-                    PrivacyRootRoleV1::CertificateAuthorityMembership,
-                    epoch,
-                    root_byte,
-                ),
-                record,
-            );
-            roots.insert(
-                PrivacyRootKeyV1::new(
-                    independent_namespace,
-                    PrivacyRootRoleV1::PgcAccountState,
-                    epoch,
-                    PrivacyRootV1::new(nonzero(root_byte)),
-                )
-                .expect("independent root key"),
-                record,
-            );
-        }
-
-        let added = x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 2_049, 43);
-        let removals = plan_privacy_root_history_update_v1(&roots.view(), &[added], 2_048)
-            .expect("valid plan");
-
-        assert_eq!(
-            removals,
-            vec![x509_root_key(
-                PrivacyRootRoleV1::CertificateAuthorityMembership,
-                1,
-                2
-            )]
-        );
-        assert!(
-            roots
-                .view()
-                .get(
-                    &PrivacyRootKeyV1::new(
-                        independent_namespace,
-                        PrivacyRootRoleV1::PgcAccountState,
-                        1,
-                        PrivacyRootV1::new(nonzero(2)),
-                    )
-                    .expect("independent root key")
-                )
-                .is_some(),
-            "planning one namespace must not prune another namespace"
-        );
-    }
-
-    #[test]
-    fn root_history_rejects_replays_epoch_conflicts_and_stale_epochs() {
-        let mut roots = Storage::new();
-        roots.insert(
-            x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 7, 70),
-            root_provenance(),
-        );
-
-        let exact_replay = x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 7, 70);
-        assert!(matches!(
-            plan_privacy_root_history_update_v1(&roots.view(), &[exact_replay], 8),
-            Err(PrivacyRootHistoryErrorV1::ExistingRoot { key }) if key == exact_replay
-        ));
-
-        assert!(matches!(
-            plan_privacy_root_history_update_v1(
-                &roots.view(),
-                &[x509_root_key(
-                    PrivacyRootRoleV1::CertificateAuthorityMembership,
-                    7,
-                    71,
-                )],
-                8,
-            ),
-            Err(PrivacyRootHistoryErrorV1::EpochConflict { epoch: 7, .. })
-        ));
-
-        assert!(matches!(
-            plan_privacy_root_history_update_v1(
-                &roots.view(),
-                &[x509_root_key(
-                    PrivacyRootRoleV1::CertificateAuthorityMembership,
-                    6,
-                    60,
-                )],
-                8,
-            ),
-            Err(PrivacyRootHistoryErrorV1::NonMonotonicEpoch {
-                latest_epoch: 7,
-                added_epoch: 6,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn root_history_rejects_duplicate_and_over_capacity_effects() {
-        let roots = Storage::new();
-        let duplicate = x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 1, 10);
-        assert!(matches!(
-            plan_privacy_root_history_update_v1(&roots.view(), &[duplicate, duplicate], 8),
-            Err(PrivacyRootHistoryErrorV1::DuplicateAddedRoot { key }) if key == duplicate
-        ));
-
-        let additions = [
-            x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 1, 10),
-            x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 2, 20),
-            x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 3, 30),
-        ];
-        assert!(matches!(
-            plan_privacy_root_history_update_v1(&roots.view(), &additions, 2),
-            Err(PrivacyRootHistoryErrorV1::AddedRootsExceedRetention { count: 3, max: 2 })
-        ));
-    }
+    include!("privacy_state_root_history_tests.rs");
 }

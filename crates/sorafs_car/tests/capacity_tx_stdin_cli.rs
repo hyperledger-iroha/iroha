@@ -41,7 +41,7 @@ fn tx_stdin_builder_wraps_capacity_declaration_summaries() {
                 "  \"valid_from_epoch\": 580,\n",
                 "  \"valid_until_epoch\": 10580,\n",
                 "  \"metadata\": {{\n",
-                "    \"sorafs.owner_account_id\": \"testuExampleCanary\"\n",
+                "    \"sorafs.owner_account_id\": \"testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"\n",
                 "  }}\n",
                 "}}\n"
             ),
@@ -280,7 +280,7 @@ fn sample_declaration() -> CapacityDeclarationV1 {
         valid_until: 1_700_086_400,
         metadata: vec![CapacityMetadataEntry {
             key: "sorafs.owner_account_id".to_owned(),
-            value: "testuExampleCanary".to_owned(),
+            value: "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
         }],
     }
 }

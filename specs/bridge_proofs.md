@@ -322,7 +322,7 @@ decode. It then derives hardware-independent work from bounded framing and
 atomically registers the complete transaction/block delta before signature
 recovery, BLS verification, or BN254 pairing. An abandoned or rejected
 transaction does not leak staged work into the block. Destination admission
-conservatively reserves two passes over the maximum 4,096-validator Taira
+conservatively reserves two passes over the maximum 31-validator Taira
 roster, covering both key validation and all-signer PoP/aggregation. Ethereum
 reserves one 513-key bootstrap plus up to 128 updates, each with 513 next-
 committee key validations and 512 possible signer contributions. BSC reserves
@@ -343,11 +343,16 @@ Before finality is published or a block body can be evicted, Kura writes one
 immutable retained-block record containing the exact canonical header and the
 canonical SCCP payload archive in commitment-index order. It validates every
 payload, reconstructs the header commitment root, and rejects a conflicting
-rewrite. Finality-proof, message-bundle, proof-request, and recent-message
+rewrite. The same version-3 record may contain the compact merge reference
+extracted from the live canonical body for local historical sidecar service;
+that field is not part of SCCP proof authority. Finality-proof, message-bundle, proof-request, and recent-message
 reconstruction use this root-authenticated archive. They never require the
 historical block body and never treat a mutable WSV payload copy as proof
 material. Restart performs the same header, canonical-hash, archive, and root
-checks before serving history.
+checks before serving history. Canonical version-2 records remain readable;
+because they predate the optional merge field, Kura upgrades one only from the
+exact still-present body before eviction and otherwise preserves its absent
+witness without weakening SCCP proof authority.
 
 Every V1 proof request exposes the governed policy as four required fields:
 `semantic_proof_profile`, `semantic_proof_profile_hash`,
@@ -425,13 +430,15 @@ and use the same two states:
    `tx_hash_hex`. Torii runs the same authoritative fee-quote engine as
    `POST /v1/fees/quote` and returns the exact canonical quoted transaction
    payload plus its 32-byte signing prehash. Sign that returned payload without
-   rebuilding or editing it.
+   rebuilding or editing it. The payload carries the standard 100-second
+   signature-bound transaction TTL and no nonce.
 2. **Direct submit:** resend the same artifact and payer selection with both
    `signature_b64` and the quoted `transaction_payload_b64`, plus the exact
    positive `creation_time_ms`. Torii decodes and re-encodes the bounded
    payload, byte-compares its chain, authority, fee payer and exact sponsor
-   revision, proof instruction, metadata, and time, verifies the detached
-   signature, and queues exactly that transaction. The response has
+   revision, proof instruction, metadata, creation time, default TTL, and absent
+   nonce, verifies the detached signature, and queues exactly that transaction.
+   The response has
    `submitted: true` and `tx_hash_hex`, with no signing scaffold.
 
 Detached signatures are canonical padded base64 of one nonempty, nonzero
@@ -558,7 +565,7 @@ profile:
 - the exact reproducible witness-generator SHA-256;
 - the fixed ordered eleven-public-signal schema hash;
 - the domain-separated semantic-profile hash derived from those three roles;
-- a typed wire-revision-3 Taira checkpoint containing the chain id, height, block
+- a typed wire-revision-4 Taira checkpoint containing the chain id, height, block
   hash, context id, and finality-artifact hash, plus the independently derived
   finality-anchor hash;
 - the exact verifier-key hash;

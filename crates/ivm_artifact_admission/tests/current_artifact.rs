@@ -47,23 +47,23 @@ fn current_fixture() -> CurrentFixture {
         .get("artifact_base64")
         .and_then(norito::json::Value::as_str)
         .expect("fixture carries artifact_base64");
-    let verifier = fixture
-        .get("rust_verifier")
+    let semantics = fixture
+        .get("artifact_semantics")
         .and_then(norito::json::Value::as_object)
-        .expect("fixture carries rust_verifier");
+        .expect("fixture carries artifact_semantics");
     let string_field = |name| {
-        verifier
+        semantics
             .get(name)
             .and_then(norito::json::Value::as_str)
-            .unwrap_or_else(|| panic!("rust_verifier carries string {name}"))
+            .unwrap_or_else(|| panic!("artifact_semantics carries string {name}"))
             .to_owned()
     };
     let usize_field = |name| {
-        verifier
+        semantics
             .get(name)
             .and_then(norito::json::Value::as_u64)
             .and_then(|value| usize::try_from(value).ok())
-            .unwrap_or_else(|| panic!("rust_verifier carries usize {name}"))
+            .unwrap_or_else(|| panic!("artifact_semantics carries usize {name}"))
     };
     CurrentFixture {
         artifact: STANDARD.decode(encoded).expect("decode fixture artifact"),

@@ -28,10 +28,21 @@ from check_sorafs_governance_dag_rollout_evidence import (  # noqa: E402
     DEFAULT_MIN_BLOCKS,
     DEFAULT_MIN_PAYLOAD_KINDS,
     FORBIDDEN_INVENTORY_LABEL_MARKERS,
+    INGRESS_ENFORCEMENT,
     KIND_BY_NAME,
+    KUBO_CID_MULTIHASH,
+    KUBO_CID_VERSION,
+    KUBO_UNIXFS_CHUNK_SIZE_BYTES,
+    KUBO_UNIXFS_MAX_LINKS_PER_NODE,
+    KUBO_UNIXFS_PROFILE,
+    MIRROR_RETENTION_MAX_BYTES,
+    MIRROR_RETENTION_MAX_ENTRIES,
+    REPLAY_POSTURE,
     REQUIRED_DASHBOARD_ROUTES,
     REQUIRED_METRICS,
     REQUIRED_PAYLOAD_KINDS,
+    STEADY_AUDIT_MAX_BYTES_PER_POLL,
+    STEADY_AUDIT_MAX_ENTRIES_PER_POLL,
     ValidationOptions,
     validate_evidence_payload,
 )
@@ -65,6 +76,11 @@ CANARY_KINDS = tuple(KIND_BY_NAME)
 HEX64_LEN = 64
 PUBLIC_HEAD_KINDS = tuple(kind for kind in CANARY_KINDS if kind != "ingest_service")
 POLICY_DIGEST_KINDS = ("publisher_service", "governance_approval")
+INGRESS_QUALIFICATION_DIGEST_KINDS = (
+    "publisher_service",
+    "governance_approval",
+)
+INGRESS_BINDING_DIGEST_KINDS = INGRESS_QUALIFICATION_DIGEST_KINDS
 TRUE_CLAIMS: dict[str, tuple[str, ...]] = {
     "ingest_service": (
         "daemonized",
@@ -75,42 +91,71 @@ TRUE_CLAIMS: dict[str, tuple[str, ...]] = {
     ),
     "publisher_service": (
         "dag_builder_daemonized",
-        "ipfs_cluster_pinning_enabled",
-        "ipns_head_publication_enabled",
+        "unixfs_raw_leaves",
+        "unixfs_balanced_layout",
+        "locally_derived_cids_verified",
+        "signed_http_head_cas_enabled",
+        "strong_single_etag_verified",
+        "conditional_cas_readback_verified",
         "signed_head_verified",
         "parent_chain_verified",
-        "car_segments_pinned",
+        "objects_pinned",
+        "authenticated_ingress_qualified",
+        "ingress_scope_binding_verified",
     ),
     "mirror_datastore": (
-        "rocksdb_ipld_enabled",
+        "sealed_typed_store_enabled",
         "query_service_enabled",
         "mirror_index_verified",
         "head_lookup_verified",
         "block_lookup_verified",
         "node_lookup_verified",
         "digest_lookup_verified",
+        "exact_retained_source_suffix_verified",
+        "fresh_checkpoint_coherent_reads_verified",
+        "liveness_bound_reader_verified",
     ),
     "operator_recovery": (
         "live_head_fetch_verified",
         "public_checkpoint_published",
         "checkpoint_recovery_verified",
-        "public_recovery_cli_verified",
+        "derived_mirror_recovery_verified",
         "recovered_head_matches_public_head",
+        "post_loss_repair_verified",
+        "head_object_repaired_with_same_cid",
+        "block_object_repaired_with_same_cid",
+        "public_head_unchanged_during_repair",
     ),
-    "dashboard_api": ("runtime_ipfs_backed",),
+    "dashboard_api": (
+        "service_mirror_capability_installed",
+        "fresh_checkpoint_coherent_reads_verified",
+        "liveness_bound_reader_verified",
+        "unready_reader_rejected",
+        "reader_withdrawal_verified",
+    ),
     "observability": (
         "metrics_scrape_success",
         "dashboard_provisioned",
         "alert_rules_installed",
-        "ipfs_ipns_metrics_present",
+        "publication_metrics_present",
+        "first_full_audit_verified",
+        "readiness_withheld_until_full_audit",
+        "bounded_rotating_audit_verified",
     ),
-    "ipfs_ipns_e2e": (
-        "local_ipfs_backed_tests_passed",
-        "public_head_resolved",
+    "publication_e2e": (
+        "local_kubo_tests_passed",
+        "deterministic_unixfs_profile_verified",
+        "signed_http_head_resolved",
+        "strong_single_etag_cas_verified",
+        "authenticated_ingress_qualification_verified",
+        "replay_attack_rejected",
         "block_replay_verified",
         "duplicate_payload_rejected",
         "invalid_parent_quarantined",
-        "pinning_outage_tested",
+        "post_loss_same_cid_repair_verified",
+        "bounded_rotating_audit_verified",
+        "fresh_torii_reads_verified",
+        "stopped_service_reads_rejected",
         "publisher_key_failure_tested",
     ),
     "governance_approval": (
@@ -118,19 +163,20 @@ TRUE_CLAIMS: dict[str, tuple[str, ...]] = {
         "governance_vote_recorded",
         "iroha_config_bound",
         "publisher_keys_governed",
-        "ipns_name_governed",
-        "mirror_retention_policy_bound",
-        "emergency_pause_tested",
+        "signed_http_head_endpoint_governed",
+        "ingress_receiver_policy_governed",
+        "replay_namespace_governed",
+        "fixed_retention_contract_bound",
     ),
 }
 FORCED_FALSE_FIELDS: dict[str, tuple[str, ...]] = {
     "ingest_service": ("payload_bytes_included",),
-    "publisher_service": ("raw_head_included", "raw_car_included"),
+    "publisher_service": ("raw_head_included",),
     "mirror_datastore": ("mirror_drift_detected", "raw_blocks_included"),
     "operator_recovery": ("raw_checkpoint_included",),
     "dashboard_api": ("response_bodies_included",),
     "observability": ("critical_alerts_firing", "response_bodies_included"),
-    "ipfs_ipns_e2e": ("raw_blocks_included",),
+    "publication_e2e": ("raw_blocks_included",),
     "governance_approval": (),
 }
 
@@ -236,6 +282,7 @@ def validate_hex64(value: str | None, *, option: str, errors: list[str]) -> None
         not isinstance(value, str)
         or len(value) != HEX64_LEN
         or any(character not in "0123456789abcdef" for character in value)
+        or value == "0" * HEX64_LEN
     ):
         errors.append(f"{option} must be exact lowercase 32-byte hex")
 
@@ -320,6 +367,20 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     elif args.kind == "publisher_service":
         payload.update(
             {
+                "kubo_unixfs_profile": KUBO_UNIXFS_PROFILE,
+                "unixfs_chunk_size_bytes": KUBO_UNIXFS_CHUNK_SIZE_BYTES,
+                "unixfs_max_links_per_node": KUBO_UNIXFS_MAX_LINKS_PER_NODE,
+                "cid_version": KUBO_CID_VERSION,
+                "cid_multihash": KUBO_CID_MULTIHASH,
+                "ingress_enforcement": INGRESS_ENFORCEMENT,
+                "replay_posture": REPLAY_POSTURE,
+                "receiver_policy_digest_hex": args.receiver_policy_digest_hex,
+                "replay_namespace_digest_hex": args.replay_namespace_digest_hex,
+                "replica_set_digest_hex": args.replica_set_digest_hex,
+                "kubo_ingress_binding_digest_hex": args.kubo_ingress_binding_digest_hex,
+                "signed_head_ingress_binding_digest_hex": (
+                    args.signed_head_ingress_binding_digest_hex
+                ),
                 "policy_digest_hex": args.policy_digest_hex,
                 "pin_lag_seconds": args.pin_lag_seconds,
                 "head_age_seconds": args.head_age_seconds,
@@ -330,7 +391,13 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     elif args.kind == "mirror_datastore":
-        payload["missing_block_count"] = 0
+        payload.update(
+            {
+                "retention_max_entries": MIRROR_RETENTION_MAX_ENTRIES,
+                "retention_max_bytes": MIRROR_RETENTION_MAX_BYTES,
+                "missing_block_count": 0,
+            }
+        )
     elif args.kind == "operator_recovery":
         payload["checkpoint_digest_hex"] = args.checkpoint_digest_hex
     elif args.kind == "dashboard_api":
@@ -345,11 +412,13 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     elif args.kind == "observability":
         payload.update(
             {
+                "audit_max_entries_per_poll": STEADY_AUDIT_MAX_ENTRIES_PER_POLL,
+                "audit_max_bytes_per_poll": STEADY_AUDIT_MAX_BYTES_PER_POLL,
                 "metrics": args.metrics,
                 "metric_count": len(args.metrics),
             }
         )
-    elif args.kind == "ipfs_ipns_e2e":
+    elif args.kind == "publication_e2e":
         payload.update(
             {
                 "block_count": args.block_count,
@@ -363,6 +432,15 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "config_source": "iroha_config",
                 "policy_digest_hex": args.policy_digest_hex,
+                "receiver_policy_digest_hex": args.receiver_policy_digest_hex,
+                "replay_namespace_digest_hex": args.replay_namespace_digest_hex,
+                "replica_set_digest_hex": args.replica_set_digest_hex,
+                "kubo_ingress_binding_digest_hex": args.kubo_ingress_binding_digest_hex,
+                "signed_head_ingress_binding_digest_hex": (
+                    args.signed_head_ingress_binding_digest_hex
+                ),
+                "retention_max_entries": MIRROR_RETENTION_MAX_ENTRIES,
+                "retention_max_bytes": MIRROR_RETENTION_MAX_BYTES,
             }
         )
     return payload
@@ -383,6 +461,22 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--policy-digest-hex",
             errors=errors,
         )
+    if args.kind in INGRESS_QUALIFICATION_DIGEST_KINDS:
+        for value, option in (
+            (args.receiver_policy_digest_hex, "--receiver-policy-digest-hex"),
+            (args.replay_namespace_digest_hex, "--replay-namespace-digest-hex"),
+            (args.replica_set_digest_hex, "--replica-set-digest-hex"),
+        ):
+            validate_hex64(value, option=option, errors=errors)
+    if args.kind in INGRESS_BINDING_DIGEST_KINDS:
+        for value, option in (
+            (args.kubo_ingress_binding_digest_hex, "--kubo-ingress-binding-digest-hex"),
+            (
+                args.signed_head_ingress_binding_digest_hex,
+                "--signed-head-ingress-binding-digest-hex",
+            ),
+        ):
+            validate_hex64(value, option=option, errors=errors)
     args.verified_claims = validate_name_set(
         split_csv_values(args.verified_claim),
         allowed=TRUE_CLAIMS[args.kind],
@@ -448,13 +542,13 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--metric",
             errors=errors,
         )
-    elif args.kind == "ipfs_ipns_e2e":
+    elif args.kind == "publication_e2e":
         block_count = required_positive(args.block_count, option="--block-count", errors=errors)
         args.block_refs = validate_reviewed_inventory(
             split_csv_values(args.block_ref),
             expected_count=block_count,
             option="--block-ref",
-            kind="ipfs_ipns_e2e",
+            kind="publication_e2e",
             count_option="--block-count",
             pattern=BLOCK_REF_LABEL_PATTERN,
             label_error=BLOCK_REF_LABEL_ERROR,
@@ -595,6 +689,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--policy-digest-hex")
+    parser.add_argument("--receiver-policy-digest-hex")
+    parser.add_argument("--replay-namespace-digest-hex")
+    parser.add_argument("--replica-set-digest-hex")
+    parser.add_argument("--kubo-ingress-binding-digest-hex")
+    parser.add_argument("--signed-head-ingress-binding-digest-hex")
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

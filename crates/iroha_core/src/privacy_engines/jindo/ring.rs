@@ -1,8 +1,8 @@
 //! Fixed RNS arithmetic for the Jindo application rings.
 //!
-//! Both rings are `Z_q[X]/(X^256 + 1)`.  The two inner 53-bit primes and two
-//! outer 47-bit primes are pinned, prime, pairwise distinct, and congruent to
-//! one modulo 512.  Their pinned primitive 512th roots make negacyclic NTT
+//! Both rings are `Z_q[X]/(X^1024 + 1)`.  The two inner 46-bit primes and two
+//! outer 36-bit primes are pinned, prime, pairwise distinct, and congruent to
+//! one modulo 2048. Their pinned primitive 2048th roots make negacyclic NTT
 //! multiplication deterministic across every target without native-width
 //! overflow.
 
@@ -17,7 +17,7 @@ pub(crate) struct JindoPrimeModulusV1 {
 }
 
 impl JindoPrimeModulusV1 {
-    const fn new(modulus: u64, psi: u64) -> Self {
+    pub(crate) const fn new(modulus: u64, psi: u64) -> Self {
         Self { modulus, psi }
     }
 
@@ -26,16 +26,16 @@ impl JindoPrimeModulusV1 {
     }
 }
 
-/// Inner-commitment modulus `q` as two pinned 53-bit RNS primes.
+/// Inner-commitment modulus `q` from the current N=256, batch=4 reference profile.
 pub(crate) const JINDO_INNER_MODULI_V1: [JindoPrimeModulusV1; 2] = [
-    JindoPrimeModulusV1::new(9_007_199_254_740_481, 5_304_589_329_351_765),
-    JindoPrimeModulusV1::new(9_007_199_254_746_113, 469_272_423_371_168),
+    JindoPrimeModulusV1::new(70_368_744_067_073, 22_701_904_919_461),
+    JindoPrimeModulusV1::new(70_368_744_183_809, 12_022_014_596_385),
 ];
 
-/// Outer-commitment modulus `q_o` as two pinned 47-bit RNS primes.
+/// Outer-commitment modulus `q_o` from the same closed profile.
 pub(crate) const JINDO_OUTER_MODULI_V1: [JindoPrimeModulusV1; 2] = [
-    JindoPrimeModulusV1::new(140_737_488_357_377, 4_221_852_558_177),
-    JindoPrimeModulusV1::new(140_737_488_360_961, 54_241_512_517_934),
+    JindoPrimeModulusV1::new(48_591_984_641, 25_236_428_417),
+    JindoPrimeModulusV1::new(48_592_009_217, 4_690_178_537),
 ];
 
 /// One application-ring element in a fixed two-prime RNS basis.
@@ -131,7 +131,7 @@ impl JindoRnsPolynomialV1 {
         }
     }
 
-    /// Multiply in `Z_q[X]/(X^256 + 1)` using the pinned negacyclic NTT.
+    /// Multiply in `Z_q[X]/(X^1024 + 1)` using the pinned negacyclic NTT.
     pub(crate) fn mul(&self, rhs: &Self, moduli: [JindoPrimeModulusV1; 2]) -> Self {
         let mut residues = [[0_u64; JINDO_RING_DEGREE_V1]; 2];
         for (((out, left), right), prime) in residues
@@ -164,6 +164,32 @@ impl JindoRnsPolynomialV1 {
     /// Return whether this ring element is the additive identity.
     pub(crate) fn is_zero(&self) -> bool {
         self.residues.iter().flatten().all(|residue| *residue == 0)
+    }
+
+    /// Return whether this element is a unit in every RNS ring factor.
+    ///
+    /// Each pinned prime splits `X^1024 + 1` completely. The twisted NTT is
+    /// evaluation at its 1024 distinct roots, so an element is invertible if
+    /// and only if every evaluation is non-zero in every CRT component.
+    pub(crate) fn is_unit(&self, moduli: [JindoPrimeModulusV1; 2]) -> bool {
+        self.residues
+            .iter()
+            .zip(moduli)
+            .all(|(coefficients, prime)| {
+                let modulus = prime.modulus;
+                let mut evaluations = *coefficients;
+                let mut twist = 1_u64;
+                for value in &mut evaluations {
+                    *value = mul_mod(*value, twist, modulus);
+                    twist = mul_mod(twist, prime.psi, modulus);
+                }
+                cyclic_ntt(
+                    &mut evaluations,
+                    mul_mod(prime.psi, prime.psi, modulus),
+                    modulus,
+                );
+                evaluations.iter().all(|value| *value != 0)
+            })
     }
 
     /// Reconstruct one coefficient in `[0, q_0 q_1)`.
@@ -390,9 +416,9 @@ mod tests {
         ];
         for (index, prime) in all.into_iter().enumerate() {
             assert!(is_prime_64(prime.modulus), "modulus {index}");
-            assert_eq!((prime.modulus - 1) % 512, 0);
-            assert_eq!(pow_mod(prime.psi, 512, prime.modulus), 1);
-            assert_eq!(pow_mod(prime.psi, 256, prime.modulus), prime.modulus - 1);
+            assert_eq!((prime.modulus - 1) % 2048, 0);
+            assert_eq!(pow_mod(prime.psi, 2048, prime.modulus), 1);
+            assert_eq!(pow_mod(prime.psi, 1024, prime.modulus), prime.modulus - 1);
         }
         for left in 0..all.len() {
             for right in (left + 1)..all.len() {
@@ -497,5 +523,28 @@ mod tests {
             JindoRnsPolynomialV1::zero()
         );
         assert_eq!(left.mul(&right, moduli), right.mul(&left, moduli));
+    }
+
+    #[test]
+    fn unit_test_uses_every_negacyclic_root_and_rns_factor() {
+        let mut monomial = [0_i128; JINDO_RING_DEGREE_V1];
+        monomial[JINDO_RING_DEGREE_V1 - 1] = -1;
+        assert!(
+            JindoRnsPolynomialV1::from_balanced_coefficients(monomial, JINDO_OUTER_MODULI_V1)
+                .is_unit(JINDO_OUTER_MODULI_V1)
+        );
+
+        let mut residues = [[0_u64; JINDO_RING_DEGREE_V1]; 2];
+        residues[0][0] = sub_mod(
+            0,
+            JINDO_OUTER_MODULI_V1[0].psi,
+            JINDO_OUTER_MODULI_V1[0].modulus,
+        );
+        residues[0][1] = 1;
+        residues[1][0] = 1;
+        let vanishes_at_first_root =
+            JindoRnsPolynomialV1::from_residues(residues, JINDO_OUTER_MODULI_V1)
+                .expect("canonical residues");
+        assert!(!vanishes_at_first_root.is_unit(JINDO_OUTER_MODULI_V1));
     }
 }

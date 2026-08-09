@@ -922,31 +922,41 @@ fn small_decay_q256_v1(value: U512, terms: usize) -> U512 {
 }
 
 fn integer_decay_table_q256_v1() -> &'static [U512; MAX_DECAY_INTEGER_V1 + 1] {
-    static TABLE: OnceLock<[U512; MAX_DECAY_INTEGER_V1 + 1]> = OnceLock::new();
+    static TABLE: OnceLock<Box<[U512; MAX_DECAY_INTEGER_V1 + 1]>> = OnceLock::new();
     TABLE.get_or_init(|| {
         let one = q256_one_v1();
         let decay_one = small_decay_q256_v1(one, UNIT_DECAY_SERIES_TERMS_V1);
-        let mut table = [U512::ZERO; MAX_DECAY_INTEGER_V1 + 1];
+        let mut table = vec![U512::ZERO; MAX_DECAY_INTEGER_V1 + 1];
         table[0] = one;
         for index in 1..table.len() {
             table[index] = q256_mul_round_v1(table[index - 1], decay_one);
         }
         table
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("fixed integer-decay table length"))
     })
 }
 
 fn fraction_decay_table_q256_v1() -> &'static [U512; FRACTION_TABLE_LEN_V1] {
-    static TABLE: OnceLock<[U512; FRACTION_TABLE_LEN_V1]> = OnceLock::new();
+    // Keep the 256 KiB table heap-owned. Returning a fixed array from the
+    // `OnceLock` initializer makes unoptimized builds materialize several
+    // full-size return buffers on the caller's stack, which is unsafe for FFI
+    // callers with legitimately small native thread stacks.
+    static TABLE: OnceLock<Box<[U512; FRACTION_TABLE_LEN_V1]>> = OnceLock::new();
     TABLE.get_or_init(|| {
         let one = q256_one_v1();
         let step = U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1);
         let decay_step = small_decay_q256_v1(step, FRACTION_STEP_SERIES_TERMS_V1);
-        let mut table = [U512::ZERO; FRACTION_TABLE_LEN_V1];
+        let mut table = vec![U512::ZERO; FRACTION_TABLE_LEN_V1];
         table[0] = one;
         for index in 1..table.len() {
             table[index] = q256_mul_round_v1(table[index - 1], decay_step);
         }
         table
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("fixed fractional-decay table length"))
     })
 }
 

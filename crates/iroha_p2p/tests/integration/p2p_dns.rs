@@ -6,7 +6,6 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_config_base::WithOrigin;
-use iroha_crypto::KeyPair;
 use iroha_data_model::{ChainId, prelude::Peer};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::NetworkHandle;
@@ -25,8 +24,8 @@ impl iroha_p2p::network::message::ClassifyTopic for TestMsg {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interval_dns_refresh_increments_counter() {
     let chain = ChainId::from("test_chain");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
 
     // Bind real TCP listeners on ephemeral ports; advertise via Host("localhost", port)
     let l1 = socket_addr!(127.0.0.1:0);
@@ -116,7 +115,7 @@ async fn interval_dns_refresh_increments_counter() {
     };
 
     let started1 = NetworkHandle::<TestMsg>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg1,
         chain.clone(),
         None,
@@ -129,7 +128,7 @@ async fn interval_dns_refresh_increments_counter() {
         Err(_e) => return,
     };
     let started2 = NetworkHandle::<TestMsg>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg2,
         chain.clone(),
         None,

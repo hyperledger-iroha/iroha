@@ -103,6 +103,25 @@ const TTL_SECS: u64 = 3_600;
 const STATUS_TIMESTAMP_KEY: &str = "sorafs_status_timestamp_unix";
 const GOVERNANCE_REFS_KEY: &str = "sorafs_governance_refs";
 
+trait ProviderAdvertCacheTestExt {
+    fn ingest(
+        &mut self,
+        advert: ProviderAdvertV1,
+        now: u64,
+    ) -> Result<AdvertIngestResult, AdvertError>;
+}
+
+impl ProviderAdvertCacheTestExt for ProviderAdvertCache {
+    fn ingest(
+        &mut self,
+        advert: ProviderAdvertV1,
+        now: u64,
+    ) -> Result<AdvertIngestResult, AdvertError> {
+        let prepared = self.validation_policy().prepare(advert, now)?;
+        self.commit_prepared(prepared, now)
+    }
+}
+
 fn ingest_tests_enabled() -> bool {
     std::env::var("SORAFS_TORII_SKIP_INGEST_TESTS").map_or(true, |value| value != "1")
 }
@@ -2222,20 +2241,12 @@ fn ensure_authority_registered(
             .insert_account_for_testing(account_id, account_value);
     }
 
-    if let Some(domain_id) = fee_asset_id.try_domain().cloned()
-        && tx.world().domains().get(&domain_id).is_none()
-    {
-        dm::Register::domain(dm::Domain::new(domain_id))
-            .execute(&authority.account, &mut tx)
-            .expect("register SoraFS fee asset domain");
-    }
-
     if !fee_asset_exists {
-        let definition = dm::AssetDefinition::numeric(fee_asset_id.clone()).with_name(
-            fee_asset_id
-                .try_name()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "xor".to_owned()),
+        let definition = dm::AssetDefinition::numeric(
+            fee_asset_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         );
         dm::Register::asset_definition(definition)
             .execute(&authority.account, &mut tx)
@@ -3842,38 +3853,4 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
     );
 }
 
-#[test]
-fn disk_fixtures_detect_advert_key_mismatch() {
-    let fixtures = [("advert_v1.to", "envelope_v1.to")];
-
-    for (advert_path, envelope_path) in fixtures {
-        let fixture = fixture_from_disk(advert_path, envelope_path);
-        let registry = admission_registry_from_fixtures(std::slice::from_ref(&fixture));
-        let mut cache = ProviderAdvertCache::new(
-            [
-                CapabilityType::ToriiGateway,
-                CapabilityType::ChunkRangeFetch,
-            ],
-            registry,
-        );
-
-        let now = fixture
-            .advert
-            .issued_at
-            .saturating_add(30)
-            .min(fixture.advert.expires_at.saturating_sub(1))
-            .max(fixture.advert.issued_at);
-        let err = cache
-            .ingest(fixture.advert.clone(), now)
-            .expect_err("fixture ingestion must fail due to advert key mismatch");
-        match err {
-            AdvertError::AdmissionFailed { error, .. } => {
-                assert!(
-                    matches!(error, AdmissionCheckError::AdvertKeyMismatch),
-                    "expected advert key mismatch, got {error:?}"
-                );
-            }
-            other => panic!("expected admission failure, got {other:?}"),
-        }
-    }
-}
+include!("sorafs_discovery/fixture_key_mismatch_test.rs");

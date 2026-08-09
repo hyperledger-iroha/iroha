@@ -13,7 +13,7 @@ readonly FIXED_EXECUTION_CONFIG="commit_import_provenance_fixed.cfg"
 readonly EXECUTION_BUG_CONFIG="commit_import_provenance_execution_bug.cfg"
 readonly FIXED_SUCCESSOR_CONFIG="commit_import_successor_fixed.cfg"
 readonly SUCCESSOR_BUG_CONFIG="commit_import_successor_replacement_bug.cfg"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if (($#)); then

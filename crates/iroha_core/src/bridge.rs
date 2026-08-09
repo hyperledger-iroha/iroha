@@ -11,7 +11,7 @@ use iroha_data_model::{
         consensus_v2::finality::{V2FinalityArtifact, V2QuorumCertificateVerificationError},
     },
     bridge::{
-        BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeCommitment,
+        BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeCommitment,
         BridgeFinalityAttestationBodyV1, BridgeFinalityAttestationV1,
         BridgeFinalityAttestationValidationError, BridgeFinalityBundle, BridgeFinalityProof,
         SccpGovernedRouteV1, SccpOutboundMessageKeyV1,
@@ -576,9 +576,7 @@ fn signed_transaction_from_sccp_entrypoint(
     match entrypoint {
         TransactionEntrypoint::External(transaction) => Some(transaction),
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-        TransactionEntrypoint::SealedCommitment(_)
-        | TransactionEntrypoint::PrivateKaigi(_)
-        | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
 }
 
@@ -932,9 +930,9 @@ fn collect_sccp_messages_from_signed_block_with_deduplication(
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-            TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::PrivateKaigi(_)
-            | TransactionEntrypoint::Time(_) => continue,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                continue;
+            }
         };
         if !entrypoint_has_successful_or_pending_result(block, entrypoint_index) {
             continue;
@@ -1159,9 +1157,9 @@ fn invalid_sccp_record_instruction_in_signed_block(
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-            TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::PrivateKaigi(_)
-            | TransactionEntrypoint::Time(_) => continue,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                continue;
+            }
         };
         if !entrypoint_has_successful_or_pending_result(block, entrypoint_index) {
             continue;
@@ -1372,7 +1370,7 @@ fn build_finality_proof_from_verified(
     }
 
     Ok(BridgeFinalityProof {
-        version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+        version: BRIDGE_FINALITY_PROOF_VERSION_V2,
         block_header,
         finality_artifact,
     })
@@ -1560,7 +1558,7 @@ pub fn build_sccp_groth16_bn254_proof_request_from_verified_finality_v1(
     governed_route: &SccpGovernedRouteV1,
 ) -> Option<SccpGroth16Bn254ProofRequestV1> {
     let finality = TairaBridgeFinalityProofV1 {
-        version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+        version: BRIDGE_FINALITY_PROOF_VERSION_V2,
         block_header: verified_finality.retained_header().clone(),
         finality_artifact: verified_finality.artifact().clone(),
     };
@@ -1899,7 +1897,7 @@ mod tests {
         isi::InstructionBox,
         nexus::DataSpaceId,
         prelude::TransactionBuilder,
-        smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress},
+        smart_contract::ContractAddress,
         transaction::{
             DataTriggerSequence, Executable, ExecutionStep, IvmBytecode, IvmProved,
             SignedTransaction, TransactionEntrypoint, TransactionResultInner,
@@ -3193,7 +3191,7 @@ mod tests {
         let keypair = checked_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let contract_address = ContractAddress::derive(
-            CHAIN_DISCRIMINANT_MAINNET,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,

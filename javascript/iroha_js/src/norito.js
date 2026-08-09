@@ -1,7 +1,8 @@
 import { Buffer } from "buffer";
 import { blake3 } from "@noble/hashes/blake3";
-import { blake2b } from "@noble/hashes/blake2.js";
 import { sha256 } from "@noble/hashes/sha2";
+import { blake2b256 } from "./blake2b.js";
+import { createBlockProofVerification } from "./blockProofVerification.js";
 import {
   AccountAddress,
   canonicalizeDomainLabel,
@@ -22,8 +23,13 @@ import {
   normalizeAssetId,
 } from "./normalizers.js";
 import { getNativeBinding } from "./native.js";
-import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
+import {
+  createNoritoContractCodecs,
+  createNoritoProofValueCodecs,
+} from "./noritoContractCodecs.js";
+import { createNoritoGovernanceInstructionBoundary } from "./noritoGovernanceBoundary.js";
 import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
+import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import {
   LANE_PRIVACY_MERKLE_MAX_DEPTH,
   PROOF_BOX_MAX_ENCODED_BYTES,
@@ -85,6 +91,12 @@ const CANCEL_ASSET_LOCK_WIRE_ID =
 const CANCEL_ASSET_LOCK_V1_SCHEMA_HASH = schemaHashForTypeName(
   CANCEL_ASSET_LOCK_WIRE_ID,
 );
+// A transparent 32-byte EscrowId plus one positive signed-512-bit Quantity
+// yields an unpadded canonical archive in this exact range. Enforce it before
+// CRC work so an oversized attacker-controlled frame cannot make this fixed
+// schema perform an unbounded payload scan.
+const CANCEL_ASSET_LOCK_V1_MIN_ARCHIVE_BYTES = 85;
+const CANCEL_ASSET_LOCK_V1_MAX_ARCHIVE_BYTES = 148;
 const SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID =
   "iroha.asset.transfer.availability.set";
 const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
@@ -122,7 +134,7 @@ const EVENT_FILTER_BOX_SCHEMA_HASH = schemaHashForTypeName(
 export const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1 =
   "iroha.privacy.exact12-typed-fixture-bundle.v1";
 export const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 = 2 * 1024 * 1024;
-export const PRIVACY_EXACT12_PROTOCOL_IDS_V1 = Object.freeze([
+export const PRIVACY_EXACT12_PROTOCOL_IDS_V1 = /* @__PURE__ */ Object.freeze([
   "zk-ace-pq-authorization-v0",
   "anonymous-pgc-k-out-of-n-v1",
   "verange-transparent-range-v1",
@@ -136,30 +148,30 @@ export const PRIVACY_EXACT12_PROTOCOL_IDS_V1 = Object.freeze([
   "iroha-ivm-private-note-stark-v1",
   "pq-masp-stark-v0",
 ]);
-const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_HASH_V1 = schemaHashForTypeName(
+const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_HASH_V1 = /* @__PURE__ */ schemaHashForTypeName(
   PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1,
 );
-const PRIVACY_EXACT12_STATEMENT_SCHEMA_HASH_V1 = schemaHashForTypeName(
+const PRIVACY_EXACT12_STATEMENT_SCHEMA_HASH_V1 = /* @__PURE__ */ schemaHashForTypeName(
   "iroha.privacy.statement.v1",
 );
-const PRIVACY_EXACT12_ENVELOPE_SCHEMA_HASH_V1 = schemaHashForTypeName(
+const PRIVACY_EXACT12_ENVELOPE_SCHEMA_HASH_V1 = /* @__PURE__ */ schemaHashForTypeName(
   "iroha.privacy.proof-envelope.v1",
 );
-const PRIVACY_EXACT12_SUBMIT_PROOF_SCHEMA_HASH_V1 = schemaHashForTypeName(
+const PRIVACY_EXACT12_SUBMIT_PROOF_SCHEMA_HASH_V1 = /* @__PURE__ */ schemaHashForTypeName(
   "iroha_data_model::isi::privacy::SubmitPrivacyProofV1",
 );
-const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_SCHEMA_HASH_V1 = schemaHashForTypeName(
+const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_SCHEMA_HASH_V1 = /* @__PURE__ */ schemaHashForTypeName(
   "iroha_data_model::transaction::signed::model::TransactionPayload",
 );
 const PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1 =
   "iroha.privacy.submit_proof.v1";
-const PRIVACY_EXACT12_INTENT_DIGEST_DOMAIN_V1 = Buffer.from(
+const PRIVACY_EXACT12_INTENT_DIGEST_DOMAIN_V1 = /* @__PURE__ */ Buffer.from(
   "iroha.privacy.transaction-intent-digest.v1",
   "ascii",
 );
 const PRIVACY_EXACT12_ALIGNED_NESTED_FRAME_PADDING_V1 = 8;
 const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FRAME_PADDING_V1 = 0;
-const PRIVACY_EXACT12_ROW_FIELD_NAMES_V1 = Object.freeze([
+const PRIVACY_EXACT12_ROW_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
   "protocol_id",
   "statement_norito",
   "envelope_norito",
@@ -171,7 +183,7 @@ const PRIVACY_EXACT12_ROW_FIELD_NAMES_V1 = Object.freeze([
   "signed_transaction_versioned_norito",
   "signed_transaction_hash",
 ]);
-const PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1 = Object.freeze([
+const PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
   "protocolId",
   "statementNorito",
   "envelopeNorito",
@@ -183,7 +195,7 @@ const PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1 = Object.freeze([
   "signedTransactionVersionedNorito",
   "signedTransactionHash",
 ]);
-const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1 = Object.freeze([
+const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
   "chain",
   "authority",
   "creation_time_ms",
@@ -194,7 +206,7 @@ const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1 = Object.freeze([
   "metadata",
   "attachments",
 ]);
-const PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1 = Object.freeze([
+const PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
   "protocol_id",
   "proof_system_id",
   "engine_id",
@@ -224,7 +236,37 @@ const CONTRACT_MANIFEST_SIGNATURE_PAYLOAD_SCHEMA_HASH = Buffer.from(
 );
 const BLOCK_PROOFS_TYPE_NAME =
   "iroha_data_model::block::proofs::BlockProofs";
-const BLOCK_MERKLE_MAX_HEIGHT = 32;
+const REGISTER_SMART_CONTRACT_CODE_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode";
+const REGISTER_SMART_CONTRACT_BYTES_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes";
+const DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance";
+const ACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha_data_model::isi::smart_contract_code::ActivateContractInstance";
+const COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID = "iroha_data_model::isi::smart_contract_code::CommitContractDeployment";
+const UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID = "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk";
+const FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload";
+const CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload";
+const REMOVE_SMART_CONTRACT_BYTES_WIRE_ID = "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes";
+const CREATE_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::CreateKaigi";
+const JOIN_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::JoinKaigi";
+const LEAVE_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::LeaveKaigi";
+const END_KAIGI_WIRE_ID = "iroha_data_model::isi::kaigi::EndKaigi";
+const RECORD_KAIGI_USAGE_WIRE_ID = "iroha_data_model::isi::kaigi::RecordKaigiUsage";
+const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = "iroha_data_model::isi::kaigi::SetKaigiRelayManifest";
+const REGISTER_KAIGI_RELAY_WIRE_ID = "iroha_data_model::isi::kaigi::RegisterKaigiRelay";
+const PROPOSE_DEPLOY_CONTRACT_WIRE_ID = "iroha_data_model::isi::governance::ProposeDeployContract";
+const CAST_ZK_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastZkBallot";
+const CAST_PLAIN_BALLOT_WIRE_ID = "iroha_data_model::isi::governance::CastPlainBallot";
+const ENACT_REFERENDUM_WIRE_ID = "iroha_data_model::isi::governance::EnactReferendum";
+const FINALIZE_REFERENDUM_WIRE_ID = "iroha_data_model::isi::governance::FinalizeReferendum";
+const PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID = "iroha_data_model::isi::governance::PersistCouncilForEpoch";
+const CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID = "iroha_data_model::isi::social::ClaimTwitterFollowReward";
+const SEND_TO_TWITTER_WIRE_ID = "iroha_data_model::isi::social::SendToTwitter";
+const CANCEL_TWITTER_ESCROW_WIRE_ID = "iroha_data_model::isi::social::CancelTwitterEscrow";
+const REGISTER_ZK_ASSET_WIRE_ID = "iroha_data_model::isi::zk::RegisterZkAsset";
+const CREATE_ELECTION_WIRE_ID = "iroha_data_model::isi::zk::CreateElection";
+const SUBMIT_BALLOT_WIRE_ID = "iroha_data_model::isi::zk::SubmitBallot";
+const FINALIZE_ELECTION_WIRE_ID = "iroha_data_model::isi::zk::FinalizeElection";
+const REGISTER_VERIFYING_KEY_WIRE_ID = "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey";
+const UPDATE_VERIFYING_KEY_WIRE_ID = "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey";
 const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   "iroha.mint": "iroha_data_model::isi::mint_burn::MintBox",
   "iroha.burn": "iroha_data_model::isi::mint_burn::BurnBox",
@@ -240,68 +282,36 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   [ISSUE_REPLICATION_ORDER_WIRE_ID]: ISSUE_REPLICATION_ORDER_WIRE_ID,
   [COMPLETE_REPLICATION_ORDER_WIRE_ID]: COMPLETE_REPLICATION_ORDER_WIRE_ID,
   [EXPIRE_REPLICATION_ORDER_WIRE_ID]: EXPIRE_REPLICATION_ORDER_WIRE_ID,
-  "iroha_data_model::isi::kaigi::CreateKaigi":
-    "iroha_data_model::isi::kaigi::CreateKaigi",
-  "iroha_data_model::isi::kaigi::JoinKaigi":
-    "iroha_data_model::isi::kaigi::JoinKaigi",
-  "iroha_data_model::isi::kaigi::LeaveKaigi":
-    "iroha_data_model::isi::kaigi::LeaveKaigi",
-  "iroha_data_model::isi::kaigi::EndKaigi":
-    "iroha_data_model::isi::kaigi::EndKaigi",
-  "iroha_data_model::isi::kaigi::RecordKaigiUsage":
-    "iroha_data_model::isi::kaigi::RecordKaigiUsage",
-  "iroha_data_model::isi::kaigi::SetKaigiRelayManifest":
-    "iroha_data_model::isi::kaigi::SetKaigiRelayManifest",
-  "iroha_data_model::isi::kaigi::RegisterKaigiRelay":
-    "iroha_data_model::isi::kaigi::RegisterKaigiRelay",
-  "iroha_data_model::isi::governance::ProposeDeployContract":
-    "iroha_data_model::isi::governance::ProposeDeployContract",
-  "iroha_data_model::isi::governance::CastZkBallot":
-    "iroha_data_model::isi::governance::CastZkBallot",
-  "iroha_data_model::isi::governance::CastPlainBallot":
-    "iroha_data_model::isi::governance::CastPlainBallot",
-  "iroha_data_model::isi::governance::EnactReferendum":
-    "iroha_data_model::isi::governance::EnactReferendum",
-  "iroha_data_model::isi::governance::FinalizeReferendum":
-    "iroha_data_model::isi::governance::FinalizeReferendum",
-  "iroha_data_model::isi::governance::PersistCouncilForEpoch":
-    "iroha_data_model::isi::governance::PersistCouncilForEpoch",
-  "iroha_data_model::isi::social::ClaimTwitterFollowReward":
-    "iroha_data_model::isi::social::ClaimTwitterFollowReward",
-  "iroha_data_model::isi::social::SendToTwitter":
-    "iroha_data_model::isi::social::SendToTwitter",
-  "iroha_data_model::isi::social::CancelTwitterEscrow":
-    "iroha_data_model::isi::social::CancelTwitterEscrow",
-  "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode":
-    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode",
-  "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes":
-    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes",
-  "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance":
-    "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance",
-  "iroha_data_model::isi::smart_contract_code::ActivateContractInstance":
-    "iroha_data_model::isi::smart_contract_code::ActivateContractInstance",
-  "iroha_data_model::isi::smart_contract_code::CommitContractDeployment":
-    "iroha_data_model::isi::smart_contract_code::CommitContractDeployment",
-  "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk":
-    "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
-  "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload":
-    "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
-  "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload":
-    "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload",
-  "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes":
-    "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes",
-  "iroha_data_model::isi::zk::RegisterZkAsset":
-    "iroha_data_model::isi::zk::RegisterZkAsset",
+  [CREATE_KAIGI_WIRE_ID]: CREATE_KAIGI_WIRE_ID,
+  [JOIN_KAIGI_WIRE_ID]: JOIN_KAIGI_WIRE_ID,
+  [LEAVE_KAIGI_WIRE_ID]: LEAVE_KAIGI_WIRE_ID,
+  [END_KAIGI_WIRE_ID]: END_KAIGI_WIRE_ID,
+  [RECORD_KAIGI_USAGE_WIRE_ID]: RECORD_KAIGI_USAGE_WIRE_ID,
+  [SET_KAIGI_RELAY_MANIFEST_WIRE_ID]: SET_KAIGI_RELAY_MANIFEST_WIRE_ID,
+  [REGISTER_KAIGI_RELAY_WIRE_ID]: REGISTER_KAIGI_RELAY_WIRE_ID,
+  [PROPOSE_DEPLOY_CONTRACT_WIRE_ID]: PROPOSE_DEPLOY_CONTRACT_WIRE_ID,
+  [CAST_ZK_BALLOT_WIRE_ID]: CAST_ZK_BALLOT_WIRE_ID,
+  [CAST_PLAIN_BALLOT_WIRE_ID]: CAST_PLAIN_BALLOT_WIRE_ID,
+  [ENACT_REFERENDUM_WIRE_ID]: ENACT_REFERENDUM_WIRE_ID,
+  [FINALIZE_REFERENDUM_WIRE_ID]: FINALIZE_REFERENDUM_WIRE_ID,
+  [PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID]: PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID,
+  [CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID]: CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID,
+  [SEND_TO_TWITTER_WIRE_ID]: SEND_TO_TWITTER_WIRE_ID,
+  [CANCEL_TWITTER_ESCROW_WIRE_ID]: CANCEL_TWITTER_ESCROW_WIRE_ID,
+  [REGISTER_SMART_CONTRACT_CODE_WIRE_ID]: REGISTER_SMART_CONTRACT_CODE_WIRE_ID,
+  [REGISTER_SMART_CONTRACT_BYTES_WIRE_ID]: REGISTER_SMART_CONTRACT_BYTES_WIRE_ID,
+  [DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID]: DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
+  [ACTIVATE_CONTRACT_INSTANCE_WIRE_ID]: ACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
+  [COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID]: COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID,
+  [UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID]: UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID,
+  [FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]: FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID,
+  [CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]: CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID,
+  [REMOVE_SMART_CONTRACT_BYTES_WIRE_ID]: REMOVE_SMART_CONTRACT_BYTES_WIRE_ID,
+  [REGISTER_ZK_ASSET_WIRE_ID]: REGISTER_ZK_ASSET_WIRE_ID,
   "zk::ScheduleConfidentialPolicyTransition":
     "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition",
   "zk::CancelConfidentialPolicyTransition":
     "iroha_data_model::isi::zk::CancelConfidentialPolicyTransition",
-  "iroha_data_model::isi::zk::Shield":
-    "iroha_data_model::isi::zk::Shield",
-  "iroha_data_model::isi::zk::ZkTransfer":
-    "iroha_data_model::isi::zk::ZkTransfer",
-  "iroha_data_model::isi::zk::Unshield":
-    "iroha_data_model::isi::zk::Unshield",
   "iroha_data_model::isi::zk::CreateElection":
     "iroha_data_model::isi::zk::CreateElection",
   "iroha_data_model::isi::zk::SubmitBallot":
@@ -321,10 +331,7 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
     ]),
   ),
 );
-const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({
-  "iroha_data_model::isi::zk::Shield": 8,
-  "iroha_data_model::isi::zk::Unshield": 8,
-});
+const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({});
 
 const CRC64_TABLE = (() => {
   const table = new Array(256);
@@ -510,18 +517,41 @@ function shouldUsePureJsInstructionFallback(error) {
   return isNativeBindingUnavailable(error) || isNativeBindingUnsupportedInstruction(error);
 }
 
-function encodeNormalizedInstruction(normalized) {
-  const deployProposal = normalized?.ProposeDeployContract;
-  if (
-    isPlainObject(deployProposal) &&
-    deployProposal.mode !== undefined &&
-    deployProposal.mode !== null
-  ) {
-    // Rust's JSON bridge has historically accepted case-folded enum text.
-    // Bind the public JS wire contract to the exact canonical spellings before
-    // native dispatch so non-canonical JSON cannot acquire canonical bytes.
-    encodeVotingModeValue(deployProposal.mode, "ProposeDeployContract.mode");
+const validateGovernanceInstructionBoundary =
+  /* @__PURE__ */ createNoritoGovernanceInstructionBoundary({
+    assertExactNonEmptyString,
+    assertOnlyObjectKeys,
+    decodeExactStandardBase64,
+    decodeManifestProvenanceValue: (...args) =>
+      decodeManifestProvenanceValue(...args),
+    encodeManifestProvenanceValue: (...args) =>
+      encodeManifestProvenanceValue(...args),
+    encodeVotingModeValue,
+    isPlainObject,
+  });
+
+const RETIRED_GENERIC_ZK_VARIANTS = Object.freeze([
+  ["Shi", "eld"].join(""),
+  ["Zk", "Transfer"].join(""),
+  ["Un", "shield"].join(""),
+]);
+
+function rejectRetiredGenericZkInstruction(instruction) {
+  if (!isPlainObject(instruction) || !isPlainObject(instruction.zk)) {
+    return;
   }
+  for (const variant of RETIRED_GENERIC_ZK_VARIANTS) {
+    if (Object.prototype.hasOwnProperty.call(instruction.zk, variant)) {
+      throw new TypeError(
+        `zk.${variant} is retired in ABI V1; use the typed Kagemusha flow`,
+      );
+    }
+  }
+}
+
+function encodeNormalizedInstruction(normalized) {
+  rejectRetiredGenericZkInstruction(normalized);
+  validateGovernanceInstructionBoundary(normalized);
   let encoded;
   try {
     const native = resolveNative("noritoEncodeInstruction");
@@ -610,7 +640,10 @@ export function noritoEncodeInstruction(instruction) {
     const trimmed = instruction.trim();
     try {
       const parsed = JSON.parse(trimmed);
-      const normalized = normalizeInstructionJsonValue(parsed);
+      const exactParsed = isStrictGovernanceInstructionCandidate(parsed)
+        ? parseStrictLosslessIntegerJson(trimmed, "governance instruction")
+        : parsed;
+      const normalized = normalizeInstructionJsonValue(exactParsed);
       return encodeNormalizedInstruction(normalized);
     } catch (error) {
       if (error instanceof SyntaxError) {
@@ -1454,12 +1487,11 @@ export function noritoDecodeInstruction(bytes, options = {}) {
 }
 
 function validateDecodedInstructionProofAttachments(instruction) {
+  rejectRetiredGenericZkInstruction(instruction);
   if (!isPlainObject(instruction) || !isPlainObject(instruction.zk)) {
     return;
   }
   for (const [variant, field] of [
-    ["ZkTransfer", "proof"],
-    ["Unshield", "proof"],
     ["SubmitBallot", "ballot_proof"],
     ["FinalizeElection", "tally_proof"],
   ]) {
@@ -1525,6 +1557,18 @@ function decodeBlockMerkleProofValue(payload, context) {
         ),
       `${context}.audit_path`,
     ),
+  };
+}
+
+function decodeBlockMerkleCommitmentValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["root", "leaf_count"]);
+  const leafCount = decodeU64Value(fields.leaf_count, `${context}.leaf_count`);
+  if (leafCount === "0") {
+    throw new Error(`${context}.leaf_count must be non-zero`);
+  }
+  return {
+    root: decodeHashValue(fields.root, `${context}.root`),
+    leaf_count: leafCount,
   };
 }
 
@@ -1695,10 +1739,12 @@ export function noritoDecodeBlockProofs(bytes) {
   return withNoritoLengthFlags(frame.flags & COMPACT_LEN_FLAG, () => {
     const fields = decodeStructFields(frame.payload, "BlockProofs", [
       "block_height",
+      "block_hash",
+      "executed_block_wire_hash",
       "entry_hash",
-      "entry_root",
+      "entry_commitment",
       "entry_proof",
-      "result_root",
+      "result_commitment",
       "result_proof",
       "fastpq_transcripts",
     ]);
@@ -1706,22 +1752,33 @@ export function noritoDecodeBlockProofs(bytes) {
     if (blockHeight === "0") {
       throw new Error("BlockProofs.block_height must be non-zero");
     }
+    const entryCommitment = decodeBlockMerkleCommitmentValue(
+      fields.entry_commitment,
+      "BlockProofs.entry_commitment",
+    );
+    const resultCommitment = decodeBlockMerkleCommitmentValue(
+      fields.result_commitment,
+      "BlockProofs.result_commitment",
+    );
+    if (entryCommitment.leaf_count !== resultCommitment.leaf_count) {
+      throw new Error("BlockProofs entry/result commitment leaf counts must match");
+    }
     return {
       block_height: blockHeight,
+      block_hash: decodeHashValue(fields.block_hash, "BlockProofs.block_hash"),
+      executed_block_wire_hash: decodeHashValue(
+        fields.executed_block_wire_hash,
+        "BlockProofs.executed_block_wire_hash",
+      ),
       entry_hash: decodeHashValue(fields.entry_hash, "BlockProofs.entry_hash"),
-      entry_root: decodeHashValue(fields.entry_root, "BlockProofs.entry_root"),
+      entry_commitment: entryCommitment,
       entry_proof: decodeBlockReceiptProofValue(
         fields.entry_proof,
         "BlockProofs.entry_proof",
       ),
-      result_root: decodeOptionValue(
-        fields.result_root,
-        decodeHashValue,
-        "BlockProofs.result_root",
-      ),
-      result_proof: decodeOptionValue(
+      result_commitment: resultCommitment,
+      result_proof: decodeBlockReceiptProofValue(
         fields.result_proof,
-        decodeBlockReceiptProofValue,
         "BlockProofs.result_proof",
       ),
       fastpq_transcripts: decodeFastpqTranscriptMap(
@@ -1732,113 +1789,9 @@ export function noritoDecodeBlockProofs(bytes) {
   });
 }
 
-function blockProofHashBytes(value, context) {
-  const bytes = encodeHashLiteralBytes(value, context);
-  if ((bytes[bytes.length - 1] & 1) !== 1) {
-    throw new Error(`${context} does not carry Iroha's hash marker bit`);
-  }
-  return bytes;
-}
-
-function blockProofHashesEqual(left, right, context) {
-  return blockProofHashBytes(left, `${context}.left`).equals(
-    blockProofHashBytes(right, `${context}.right`),
-  );
-}
-
-/** Verify one Iroha block Merkle audit path locally. */
-export function verifyBlockMerkleProof(leaf, proof, root) {
-  try {
-    const leafBytes = blockProofHashBytes(leaf, "Merkle proof leaf");
-    const rootBytes = blockProofHashBytes(root, "Merkle proof root");
-    if (!isPlainObject(proof)) return false;
-    const leafIndex = proof.leaf_index;
-    const auditPath = proof.audit_path;
-    if (
-      !Number.isInteger(leafIndex) ||
-      leafIndex < 0 ||
-      leafIndex > 0xffff_ffff ||
-      !Array.isArray(auditPath) ||
-      auditPath.length > BLOCK_MERKLE_MAX_HEIGHT
-    ) {
-      return false;
-    }
-    if (leafIndex >= 2 ** auditPath.length) return false;
-
-    let index = 2 ** auditPath.length - 1 + leafIndex;
-    let accumulator = leafBytes;
-    for (let level = 0; level < auditPath.length; level += 1) {
-      const rawSibling = auditPath[level];
-      const sibling = rawSibling === null
-        ? null
-        : blockProofHashBytes(rawSibling, `Merkle proof audit_path[${level}]`);
-      const currentIsRight = index % 2 === 0;
-      if (currentIsRight && sibling === null) return false;
-      if (!currentIsRight && sibling === null) {
-        index = Math.max(0, index - 1) >> 1;
-        continue;
-      }
-      const parentInput = currentIsRight
-        ? Buffer.concat([sibling, accumulator])
-        : Buffer.concat([accumulator, sibling]);
-      accumulator = Buffer.from(blake2b(parentInput, { dkLen: 32 }));
-      accumulator[31] |= 1;
-      index = Math.max(0, index - 1) >> 1;
-    }
-    return accumulator.equals(rootBytes);
-  } catch {
-    return false;
-  }
-}
-
-/** Verify the locally-checkable entry and execution paths in `BlockProofs`. */
-export function verifyBlockProofs(proofs) {
-  const invalid = {
-    valid: false,
-    entry_hash_matches: false,
-    entry_proof_valid: false,
-    result_pair_consistent: false,
-    result_proof_valid: null,
-  };
-  if (!isPlainObject(proofs) || !isPlainObject(proofs.entry_proof)) return invalid;
-  try {
-    const entryHashMatches = blockProofHashesEqual(
-      proofs.entry_hash,
-      proofs.entry_proof.leaf,
-      "BlockProofs entry hash",
-    );
-    const entryProofValid = verifyBlockMerkleProof(
-      proofs.entry_proof.leaf,
-      proofs.entry_proof.proof,
-      proofs.entry_root,
-    );
-    const hasResultRoot = proofs.result_root !== null && proofs.result_root !== undefined;
-    const hasResultProof = proofs.result_proof !== null && proofs.result_proof !== undefined;
-    const resultPairConsistent = hasResultRoot === hasResultProof;
-    const resultProofValid = !hasResultRoot && !hasResultProof
-      ? null
-      : resultPairConsistent && isPlainObject(proofs.result_proof)
-        ? verifyBlockMerkleProof(
-            proofs.result_proof.leaf,
-            proofs.result_proof.proof,
-            proofs.result_root,
-          )
-        : false;
-    return {
-      valid:
-        entryHashMatches &&
-        entryProofValid &&
-        resultPairConsistent &&
-        resultProofValid !== false,
-      entry_hash_matches: entryHashMatches,
-      entry_proof_valid: entryProofValid,
-      result_pair_consistent: resultPairConsistent,
-      result_proof_valid: resultProofValid,
-    };
-  } catch {
-    return invalid;
-  }
-}
+const { verifyBlockMerkleProof, verifyBlockProofs } =
+  createBlockProofVerification(encodeHashLiteralBytes);
+export { verifyBlockMerkleProof, verifyBlockProofs };
 
 /**
  * Encode an `iroha_data_model::zk::OpenVerifyEnvelope` as standalone Norito bytes.
@@ -2257,9 +2210,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     encodeCompactLength(row.unsignedTransactionPayloadNorito.length),
     row.unsignedTransactionPayloadNorito,
   ]);
-  const expectedTransactionHash = Buffer.from(
-    blake2b(transactionHashPreimage, { dkLen: 32 }),
-  );
+  const expectedTransactionHash = Buffer.from(blake2b256(transactionHashPreimage));
   expectedTransactionHash[31] |= 1;
   if (!expectedTransactionHash.equals(row.signedTransactionHash)) {
     throw new TypeError(
@@ -2913,47 +2864,44 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
       return {
         RecordSccpMessage: decodeRecordSccpMessagePayload(payload, innerFlags),
       };
-    case "iroha_data_model::isi::governance::ProposeDeployContract":
-    case "iroha_data_model::isi::governance::CastZkBallot":
-    case "iroha_data_model::isi::governance::CastPlainBallot":
-    case "iroha_data_model::isi::governance::EnactReferendum":
-    case "iroha_data_model::isi::governance::FinalizeReferendum":
-    case "iroha_data_model::isi::governance::PersistCouncilForEpoch":
+    case PROPOSE_DEPLOY_CONTRACT_WIRE_ID:
+    case CAST_ZK_BALLOT_WIRE_ID:
+    case CAST_PLAIN_BALLOT_WIRE_ID:
+    case ENACT_REFERENDUM_WIRE_ID:
+    case FINALIZE_REFERENDUM_WIRE_ID:
+    case PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID:
       return decodeGovernanceInstructionPayload(wireId, payload);
-    case "iroha_data_model::isi::social::ClaimTwitterFollowReward":
-    case "iroha_data_model::isi::social::SendToTwitter":
-    case "iroha_data_model::isi::social::CancelTwitterEscrow":
+    case CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID:
+    case SEND_TO_TWITTER_WIRE_ID:
+    case CANCEL_TWITTER_ESCROW_WIRE_ID:
       return decodeSocialInstructionPayload(wireId, payload);
-    case "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode":
-    case "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes":
-    case "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance":
-    case "iroha_data_model::isi::smart_contract_code::ActivateContractInstance":
-    case "iroha_data_model::isi::smart_contract_code::CommitContractDeployment":
-    case "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk":
-    case "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload":
-    case "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload":
-    case "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes":
+    case REGISTER_SMART_CONTRACT_CODE_WIRE_ID:
+    case REGISTER_SMART_CONTRACT_BYTES_WIRE_ID:
+    case DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID:
+    case ACTIVATE_CONTRACT_INSTANCE_WIRE_ID:
+    case COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID:
+    case UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID:
+    case FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID:
+    case CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID:
+    case REMOVE_SMART_CONTRACT_BYTES_WIRE_ID:
       return decodeSmartContractInstructionPayload(wireId, payload);
-    case "iroha_data_model::isi::kaigi::CreateKaigi":
-    case "iroha_data_model::isi::kaigi::JoinKaigi":
-    case "iroha_data_model::isi::kaigi::LeaveKaigi":
-    case "iroha_data_model::isi::kaigi::EndKaigi":
-    case "iroha_data_model::isi::kaigi::RecordKaigiUsage":
-    case "iroha_data_model::isi::kaigi::SetKaigiRelayManifest":
-    case "iroha_data_model::isi::kaigi::RegisterKaigiRelay":
+    case CREATE_KAIGI_WIRE_ID:
+    case JOIN_KAIGI_WIRE_ID:
+    case LEAVE_KAIGI_WIRE_ID:
+    case END_KAIGI_WIRE_ID:
+    case RECORD_KAIGI_USAGE_WIRE_ID:
+    case SET_KAIGI_RELAY_MANIFEST_WIRE_ID:
+    case REGISTER_KAIGI_RELAY_WIRE_ID:
       return decodeKaigiInstructionPayload(wireId, payload);
-    case "iroha_data_model::isi::zk::RegisterZkAsset":
+    case REGISTER_ZK_ASSET_WIRE_ID:
     case "zk::ScheduleConfidentialPolicyTransition":
     case "zk::CancelConfidentialPolicyTransition":
-    case "iroha_data_model::isi::zk::Shield":
-    case "iroha_data_model::isi::zk::ZkTransfer":
-    case "iroha_data_model::isi::zk::Unshield":
     case "iroha_data_model::isi::zk::CreateElection":
     case "iroha_data_model::isi::zk::SubmitBallot":
     case "iroha_data_model::isi::zk::FinalizeElection":
       return decodeZkInstructionPayload(wireId, payload);
-    case "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey":
-    case "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey":
+    case REGISTER_VERIFYING_KEY_WIRE_ID:
+    case UPDATE_VERIFYING_KEY_WIRE_ID:
       return decodeVerifyingKeyInstructionPayload(wireId, payload);
     default:
       const cached = getCachedInstruction(framedInstruction);
@@ -3268,36 +3216,70 @@ function decodeCancelAssetLockInstructionPayload(payload) {
  * accepted for either field.
  *
  * @param {{escrow_id: string, expected_remaining_amount: string}} value
- * @returns {Buffer}
+ * @returns {Uint8Array<ArrayBuffer>}
  */
 export function encodeCancelAssetLockV1(value) {
   const canonical = normalizeStrictCancelAssetLockV1(value);
   const payload = withNoritoCompactLengths(() =>
     encodeCancelAssetLockPayload(canonical),
   );
-  return frameNoritoPayload(
-    payload,
-    CANCEL_ASSET_LOCK_V1_SCHEMA_HASH,
-    COMPACT_LEN_FLAG,
+  return Uint8Array.from(
+    frameNoritoPayload(
+      payload,
+      CANCEL_ASSET_LOCK_V1_SCHEMA_HASH,
+      COMPACT_LEN_FLAG,
+    ),
   );
+}
+
+function isExactOwnedUint8Array(value) {
+  if (
+    !(value instanceof Uint8Array) ||
+    Buffer.isBuffer(value) ||
+    Object.getPrototypeOf(value) !== Uint8Array.prototype
+  ) {
+    return false;
+  }
+  try {
+    const buffer = value.buffer;
+    return (
+      Object.getPrototypeOf(buffer) === ArrayBuffer.prototype &&
+      value.byteOffset === 0 &&
+      value.byteLength === buffer.byteLength
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Decode one exact schema-bound bare `CancelAssetLock` V1 archive.
  *
- * Only byte containers are accepted. Textual hex/base64 aliases, arrays,
- * padding, substituted schemas or flags, and trailing bytes are rejected.
+ * Textual hex/base64 aliases, arrays, padding, substituted schemas or flags,
+ * and trailing bytes are rejected.
  *
- * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * The archive must be an ordinary, full-span `Uint8Array` backed by its own
+ * `ArrayBuffer`. Buffer, ArrayBuffer, shared, subclass, and partial-view aliases
+ * are rejected.
+ *
+ * @param {Uint8Array<ArrayBuffer>} bytes
  * @returns {{escrow_id: string, expected_remaining_amount: string}}
  */
 export function decodeCancelAssetLockV1(bytes) {
-  if (!isBinaryLike(bytes)) {
+  if (!isExactOwnedUint8Array(bytes)) {
     throw new TypeError(
-      "CancelAssetLockV1 archive must be a Buffer, ArrayBuffer, or typed array",
+      "CancelAssetLockV1 archive must be an owned, full-span Uint8Array",
     );
   }
-  const archive = toBuffer(bytes);
+  if (
+    bytes.byteLength < CANCEL_ASSET_LOCK_V1_MIN_ARCHIVE_BYTES ||
+    bytes.byteLength > CANCEL_ASSET_LOCK_V1_MAX_ARCHIVE_BYTES
+  ) {
+    throw new RangeError(
+      `CancelAssetLockV1 archive must contain between ${CANCEL_ASSET_LOCK_V1_MIN_ARCHIVE_BYTES} and ${CANCEL_ASSET_LOCK_V1_MAX_ARCHIVE_BYTES} canonical bytes`,
+    );
+  }
+  const archive = Buffer.from(bytes.buffer);
   const frame = validateNoritoFrame(archive, {
     context: "CancelAssetLockV1",
     expectedSchemaHash: CANCEL_ASSET_LOCK_V1_SCHEMA_HASH,
@@ -3602,7 +3584,7 @@ function unwrapStructBody(payload, context) {
 
 function decodeGovernanceInstructionPayload(wireId, payload) {
   switch (wireId) {
-    case "iroha_data_model::isi::governance::ProposeDeployContract": {
+    case PROPOSE_DEPLOY_CONTRACT_WIRE_ID: {
       const fields = decodeStructFields(payload, "ProposeDeployContract", [
         "contract_address",
         "code_hash_hex",
@@ -3610,7 +3592,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         "abi_version",
         "window",
         "mode",
-        "limits",
+        "manifest_provenance",
       ]);
       const decoded = {
         contract_address: decodeStringValue(
@@ -3623,19 +3605,23 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
       };
       const window = decodeOptionValue(fields.window, decodeAtWindowValue, "ProposeDeployContract.window");
       const mode = decodeOptionValue(fields.mode, decodeVotingModeValue, "ProposeDeployContract.mode");
-      const limits = decodeOptionValue(fields.limits, decodeJsonValue, "ProposeDeployContract.limits");
+      const manifestProvenance = decodeOptionValue(
+        fields.manifest_provenance,
+        decodeManifestProvenanceValue,
+        "ProposeDeployContract.manifest_provenance",
+      );
       if (window !== null) {
         decoded.window = window;
       }
       if (mode !== null) {
         decoded.mode = mode;
       }
-      if (limits !== null) {
-        decoded.limits = limits;
+      if (manifestProvenance !== null) {
+        decoded.manifest_provenance = manifestProvenance;
       }
       return { ProposeDeployContract: decoded };
     }
-    case "iroha_data_model::isi::governance::CastZkBallot": {
+    case CAST_ZK_BALLOT_WIRE_ID: {
       const fields = decodeStructFields(payload, "CastZkBallot", [
         "election_id",
         "proof_b64",
@@ -3652,7 +3638,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::governance::CastPlainBallot": {
+    case CAST_PLAIN_BALLOT_WIRE_ID: {
       const fields = decodeStructFields(payload, "CastPlainBallot", [
         "referendum_id",
         "owner",
@@ -3673,7 +3659,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::governance::EnactReferendum": {
+    case ENACT_REFERENDUM_WIRE_ID: {
       const fields = decodeStructFields(payload, "EnactReferendum", [
         "referendum_id",
         "preimage_hash",
@@ -3691,7 +3677,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::governance::FinalizeReferendum": {
+    case FINALIZE_REFERENDUM_WIRE_ID: {
       const fields = decodeStructFields(payload, "FinalizeReferendum", [
         "referendum_id",
         "proposal_id",
@@ -3705,7 +3691,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::governance::PersistCouncilForEpoch": {
+    case PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID: {
       const fields = decodeStructFields(payload, "PersistCouncilForEpoch", [
         "epoch",
         "members",
@@ -3736,7 +3722,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
 
 function decodeSocialInstructionPayload(wireId, payload) {
   switch (wireId) {
-    case "iroha_data_model::isi::social::ClaimTwitterFollowReward": {
+    case CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID: {
       const fields = decodeStructFields(payload, "ClaimTwitterFollowReward", ["binding_hash"]);
       return {
         ClaimTwitterFollowReward: {
@@ -3747,7 +3733,7 @@ function decodeSocialInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::social::SendToTwitter": {
+    case SEND_TO_TWITTER_WIRE_ID: {
       const fields = decodeStructFields(payload, "SendToTwitter", ["binding_hash", "amount"]);
       return {
         SendToTwitter: {
@@ -3756,7 +3742,7 @@ function decodeSocialInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::social::CancelTwitterEscrow": {
+    case CANCEL_TWITTER_ESCROW_WIRE_ID: {
       const fields = decodeStructFields(payload, "CancelTwitterEscrow", ["binding_hash"]);
       return {
         CancelTwitterEscrow: {
@@ -3774,7 +3760,7 @@ function decodeSocialInstructionPayload(wireId, payload) {
 
 function decodeSmartContractInstructionPayload(wireId, payload) {
   switch (wireId) {
-    case "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode": {
+    case REGISTER_SMART_CONTRACT_CODE_WIRE_ID: {
       const fields = decodeStructFields(payload, "RegisterSmartContractCode", ["manifest"]);
       return {
         RegisterSmartContractCode: {
@@ -3785,7 +3771,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes": {
+    case REGISTER_SMART_CONTRACT_BYTES_WIRE_ID: {
       const fields = decodeStructFields(payload, "RegisterSmartContractBytes", [
         "code_hash",
         "code",
@@ -3797,7 +3783,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance": {
+    case DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID: {
       const fields = decodeStructFields(payload, "DeactivateContractInstance", [
         "contract_address",
         "reason",
@@ -3816,7 +3802,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::smart_contract_code::ActivateContractInstance": {
+    case ACTIVATE_CONTRACT_INSTANCE_WIRE_ID: {
       const fields = decodeStructFields(payload, "ActivateContractInstance", [
         "contract_address",
         "code_hash",
@@ -3831,7 +3817,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::smart_contract_code::CommitContractDeployment": {
+    case COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID: {
       const fields = decodeStructFields(payload, "CommitContractDeployment", [
         "expected_deploy_nonce",
         "contract_address",
@@ -3871,7 +3857,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk": {
+    case UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID: {
       const fields = decodeStructFields(payload, "UploadSmartContractCodeChunk", [
         "code_hash",
         "total_size",
@@ -3904,7 +3890,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload": {
+    case FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID: {
       const fields = decodeStructFields(payload, "FinalizeSmartContractCodeUpload", [
         "code_hash",
         "total_size",
@@ -3927,7 +3913,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload": {
+    case CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID: {
       const fields = decodeStructFields(payload, "CancelSmartContractCodeUpload", [
         "code_hash",
       ]);
@@ -3940,7 +3926,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes": {
+    case REMOVE_SMART_CONTRACT_BYTES_WIRE_ID: {
       const fields = decodeStructFields(payload, "RemoveSmartContractBytes", [
         "code_hash",
         "reason",
@@ -3963,7 +3949,7 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
 
 function decodeKaigiInstructionPayload(wireId, payload) {
   switch (wireId) {
-    case "iroha_data_model::isi::kaigi::CreateKaigi": {
+    case CREATE_KAIGI_WIRE_ID: {
       const fields = decodeStructFields(payload, "Kaigi.CreateKaigi", [
         "call",
         "commitment",
@@ -3999,8 +3985,8 @@ function decodeKaigiInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::kaigi::JoinKaigi":
-    case "iroha_data_model::isi::kaigi::LeaveKaigi": {
+    case JOIN_KAIGI_WIRE_ID:
+    case LEAVE_KAIGI_WIRE_ID: {
       const fields = decodeStructFields(payload, `Kaigi.${wireId}`, [
         "call_id",
         "participant",
@@ -4042,7 +4028,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::kaigi::EndKaigi": {
+    case END_KAIGI_WIRE_ID: {
       const fields = decodeStructFields(payload, "Kaigi.EndKaigi", [
         "call_id",
         "ended_at_ms",
@@ -4084,7 +4070,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::kaigi::RecordKaigiUsage": {
+    case RECORD_KAIGI_USAGE_WIRE_ID: {
       const fields = decodeStructFields(payload, "Kaigi.RecordKaigiUsage", [
         "call_id",
         "duration_ms",
@@ -4118,7 +4104,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::kaigi::SetKaigiRelayManifest": {
+    case SET_KAIGI_RELAY_MANIFEST_WIRE_ID: {
       const fields = decodeStructFields(payload, "Kaigi.SetKaigiRelayManifest", [
         "call_id",
         "relay_manifest",
@@ -4139,7 +4125,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::kaigi::RegisterKaigiRelay": {
+    case REGISTER_KAIGI_RELAY_WIRE_ID: {
       const fields = decodeStructFields(payload, "Kaigi.RegisterKaigiRelay", ["relay"]);
       return {
         Kaigi: {
@@ -4159,13 +4145,12 @@ function decodeKaigiInstructionPayload(wireId, payload) {
 
 function decodeZkInstructionPayload(wireId, payload) {
   switch (wireId) {
-    case "iroha_data_model::isi::zk::RegisterZkAsset": {
+    case REGISTER_ZK_ASSET_WIRE_ID: {
       const fields = decodeStructFields(payload, "zk.RegisterZkAsset", [
         "asset",
         "mode",
         "allow_shield",
         "allow_unshield",
-        "vk_transfer",
         "vk_unshield",
         "vk_shield",
       ]);
@@ -4181,11 +4166,6 @@ function decodeZkInstructionPayload(wireId, payload) {
             allow_unshield: decodeBoolValue(
               fields.allow_unshield,
               "zk.RegisterZkAsset.allow_unshield",
-            ),
-            vk_transfer: decodeOptionValue(
-              fields.vk_transfer,
-              decodeVerifyingKeyIdValue,
-              "zk.RegisterZkAsset.vk_transfer",
             ),
             vk_unshield: decodeOptionValue(
               fields.vk_unshield,
@@ -4257,145 +4237,6 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::Shield": {
-      const fields = decodeStructFields(payload, "zk.Shield", [
-        "asset",
-        "from",
-        "amount",
-        "note_commitment",
-        "enc_payload",
-      ]);
-      return {
-        zk: {
-          Shield: {
-            asset: decodeAssetDefinitionIdValue(fields.asset, "zk.Shield.asset"),
-            from: decodeAccountIdValue(fields.from, "zk.Shield.from"),
-            amount: decodeQuantityValue(fields.amount, "zk.Shield.amount"),
-            note_commitment: Array.from(
-              decodeFixedBytesValue(fields.note_commitment, 32, "zk.Shield.note_commitment"),
-            ),
-            enc_payload: decodeConfidentialEncryptedPayloadValue(
-              fields.enc_payload,
-              "zk.Shield.enc_payload",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::ZkTransfer": {
-      const fields = decodeStructFields(payload, "zk.ZkTransfer", [
-        "asset",
-        "inputs",
-        "outputs",
-        "proof",
-        "root_hint",
-      ]);
-      return {
-        zk: {
-          ZkTransfer: {
-            asset: decodeAssetDefinitionIdValue(fields.asset, "zk.ZkTransfer.asset"),
-            inputs: decodeNoritoVec(
-              fields.inputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.ZkTransfer.inputs[${index}]`,
-                  ),
-                ),
-              "zk.ZkTransfer.inputs",
-            ),
-            outputs: decodeNoritoVec(
-              fields.outputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.ZkTransfer.outputs[${index}]`,
-                  ),
-                ),
-              "zk.ZkTransfer.outputs",
-            ),
-            proof: decodeProofAttachmentValue(fields.proof, "zk.ZkTransfer.proof"),
-            root_hint: decodeOptionValue(
-              fields.root_hint,
-              (entry, context) =>
-                Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
-              "zk.ZkTransfer.root_hint",
-            ),
-          },
-        },
-      };
-    }
-    case "iroha_data_model::isi::zk::Unshield": {
-      let fields;
-      try {
-        fields = decodeStructFields(payload, "zk.Unshield", [
-          "asset",
-          "to",
-          "public_amount",
-          "inputs",
-          "outputs",
-          "proof",
-          "root_hint",
-        ]);
-      } catch (_error) {
-        fields = decodeStructFields(payload, "zk.Unshield", [
-          "asset",
-          "to",
-          "public_amount",
-          "inputs",
-          "proof",
-          "root_hint",
-        ]);
-        fields.outputs = encodeNoritoVec([], (entry) => entry);
-      }
-      return {
-        zk: {
-          Unshield: {
-            asset: decodeAssetDefinitionIdValue(fields.asset, "zk.Unshield.asset"),
-            to: decodeAccountIdValue(fields.to, "zk.Unshield.to"),
-            public_amount: decodeQuantityValue(
-              fields.public_amount,
-              "zk.Unshield.public_amount",
-            ),
-            inputs: decodeNoritoVec(
-              fields.inputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.Unshield.inputs[${index}]`,
-                  ),
-                ),
-              "zk.Unshield.inputs",
-            ),
-            outputs: decodeNoritoVec(
-              fields.outputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.Unshield.outputs[${index}]`,
-                  ),
-                ),
-              "zk.Unshield.outputs",
-            ),
-            proof: decodeProofAttachmentValue(fields.proof, "zk.Unshield.proof"),
-            root_hint: decodeOptionValue(
-              fields.root_hint,
-              (entry, context) =>
-                Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
-              "zk.Unshield.root_hint",
-            ),
-          },
-        },
-      };
-    }
     case "iroha_data_model::isi::zk::CreateElection": {
       const fields = decodeStructFields(payload, "zk.CreateElection", [
         "election_id",
@@ -4430,7 +4271,7 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::SubmitBallot": {
+    case SUBMIT_BALLOT_WIRE_ID: {
       const fields = decodeStructFields(payload, "zk.SubmitBallot", [
         "election_id",
         "ciphertext",
@@ -4455,7 +4296,7 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case "iroha_data_model::isi::zk::FinalizeElection": {
+    case FINALIZE_ELECTION_WIRE_ID: {
       const fields = decodeStructFields(payload, "zk.FinalizeElection", [
         "election_id",
         "tally",
@@ -5009,6 +4850,50 @@ function encodeNewAssetDefinitionValue(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
+  const hasOwningDomain = Object.prototype.hasOwnProperty.call(value, "owning_domain");
+  const hasCamelOwningDomain = Object.prototype.hasOwnProperty.call(value, "owningDomain");
+  if (!hasOwningDomain && !hasCamelOwningDomain) {
+    throw new TypeError(
+      `${context}.owning_domain is required; use null for an intentionally unowned global definition`,
+    );
+  }
+  if (
+    hasOwningDomain &&
+    hasCamelOwningDomain &&
+    value.owning_domain !== value.owningDomain
+  ) {
+    throw new TypeError(`${context} ownership aliases disagree`);
+  }
+  const owningDomain = hasOwningDomain ? value.owning_domain : value.owningDomain;
+  if (owningDomain === undefined) {
+    throw new TypeError(`${context}.owning_domain must be a domain identifier or null`);
+  }
+  const hasBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
+    value,
+    "balance_scope_policy",
+  );
+  const hasCamelBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
+    value,
+    "balanceScopePolicy",
+  );
+  if (!hasBalanceScopePolicy && !hasCamelBalanceScopePolicy) {
+    throw new TypeError(`${context}.balance_scope_policy is required`);
+  }
+  if (
+    hasBalanceScopePolicy &&
+    hasCamelBalanceScopePolicy &&
+    value.balance_scope_policy !== value.balanceScopePolicy
+  ) {
+    throw new TypeError(`${context} balance-scope policy aliases disagree`);
+  }
+  const balanceScopePolicy = hasBalanceScopePolicy
+    ? value.balance_scope_policy
+    : value.balanceScopePolicy;
+  if (balanceScopePolicy === "DataspaceRestricted" && owningDomain === null) {
+    throw new TypeError(
+      `${context}.owning_domain is required for DataspaceRestricted balances`,
+    );
+  }
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.id, `${context}.id`)],
     [encodeStringValue(value.name ?? "", `${context}.name`)],
@@ -5026,10 +4911,11 @@ function encodeNewAssetDefinitionValue(value, context) {
     [encodeMetadataValue(value.metadata ?? {}, `${context}.metadata`)],
     [
       encodeAssetBalancePolicyValue(
-        value.balance_scope_policy ?? value.balanceScopePolicy ?? "Global",
+        balanceScopePolicy,
         `${context}.balance_scope_policy`,
       ),
     ],
+    [encodeOptionValue(owningDomain, encodeDomainIdValue, `${context}.owning_domain`)],
     [
       encodeAssetConfidentialPolicyValue(
         value.confidential_policy ?? value.confidentialPolicy ?? defaultAssetConfidentialPolicy(),
@@ -5050,6 +4936,7 @@ function decodeNewAssetDefinitionValue(payload, context) {
     "logo",
     "metadata",
     "balance_scope_policy",
+    "owning_domain",
     "confidential_policy",
   ]);
   return {
@@ -5068,6 +4955,11 @@ function decodeNewAssetDefinitionValue(payload, context) {
     balance_scope_policy: decodeAssetBalancePolicyValue(
       fields.balance_scope_policy,
       `${context}.balance_scope_policy`,
+    ),
+    owning_domain: decodeOptionValue(
+      fields.owning_domain,
+      decodeDomainIdValue,
+      `${context}.owning_domain`,
     ),
     confidential_policy: decodeAssetConfidentialPolicyValue(
       fields.confidential_policy,
@@ -5751,37 +5643,37 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
 function encodeGovernanceInstruction(instruction) {
   if (isPlainObject(instruction.ProposeDeployContract)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::governance::ProposeDeployContract",
+      PROPOSE_DEPLOY_CONTRACT_WIRE_ID,
       encodeProposeDeployContractPayload(instruction.ProposeDeployContract),
     );
   }
   if (isPlainObject(instruction.CastZkBallot)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::governance::CastZkBallot",
+      CAST_ZK_BALLOT_WIRE_ID,
       encodeCastZkBallotPayload(instruction.CastZkBallot),
     );
   }
   if (isPlainObject(instruction.CastPlainBallot)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::governance::CastPlainBallot",
+      CAST_PLAIN_BALLOT_WIRE_ID,
       encodeCastPlainBallotPayload(instruction.CastPlainBallot),
     );
   }
   if (isPlainObject(instruction.EnactReferendum)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::governance::EnactReferendum",
+      ENACT_REFERENDUM_WIRE_ID,
       encodeEnactReferendumPayload(instruction.EnactReferendum),
     );
   }
   if (isPlainObject(instruction.FinalizeReferendum)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::governance::FinalizeReferendum",
+      FINALIZE_REFERENDUM_WIRE_ID,
       encodeFinalizeReferendumPayload(instruction.FinalizeReferendum),
     );
   }
   if (isPlainObject(instruction.PersistCouncilForEpoch)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::governance::PersistCouncilForEpoch",
+      PERSIST_COUNCIL_FOR_EPOCH_WIRE_ID,
       encodePersistCouncilForEpochPayload(instruction.PersistCouncilForEpoch),
     );
   }
@@ -5793,7 +5685,7 @@ function encodeGovernanceInstruction(instruction) {
 function encodeSocialInstruction(instruction) {
   if (isPlainObject(instruction.ClaimTwitterFollowReward)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::social::ClaimTwitterFollowReward",
+      CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID,
       encodeStructValue([
         [encodeKeyedHashValue(
           instruction.ClaimTwitterFollowReward.binding_hash,
@@ -5804,7 +5696,7 @@ function encodeSocialInstruction(instruction) {
   }
   if (isPlainObject(instruction.SendToTwitter)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::social::SendToTwitter",
+      SEND_TO_TWITTER_WIRE_ID,
       encodeStructValue([
         [encodeKeyedHashValue(instruction.SendToTwitter.binding_hash, "SendToTwitter.binding_hash")],
         [encodeQuantityValue(instruction.SendToTwitter.amount, "SendToTwitter.amount")],
@@ -5813,7 +5705,7 @@ function encodeSocialInstruction(instruction) {
   }
   if (isPlainObject(instruction.CancelTwitterEscrow)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::social::CancelTwitterEscrow",
+      CANCEL_TWITTER_ESCROW_WIRE_ID,
       encodeStructValue([
         [encodeKeyedHashValue(
           instruction.CancelTwitterEscrow.binding_hash,
@@ -5836,7 +5728,7 @@ function encodeSmartContractInstruction(instruction) {
 function encodeSmartContractInstructionCompact(instruction) {
   if (isPlainObject(instruction.RegisterSmartContractCode)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode",
+      REGISTER_SMART_CONTRACT_CODE_WIRE_ID,
       encodeStructValue([
         [encodeContractManifestValue(
           instruction.RegisterSmartContractCode.manifest,
@@ -5847,7 +5739,7 @@ function encodeSmartContractInstructionCompact(instruction) {
   }
   if (isPlainObject(instruction.RegisterSmartContractBytes)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes",
+      REGISTER_SMART_CONTRACT_BYTES_WIRE_ID,
       encodeStructValue([
         [encodeHashValue(
           instruction.RegisterSmartContractBytes.code_hash,
@@ -5862,7 +5754,7 @@ function encodeSmartContractInstructionCompact(instruction) {
   }
   if (isPlainObject(instruction.DeactivateContractInstance)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance",
+      DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
       encodeStructValue([
         [encodeNoritoStringValue(
           assertNonEmptyString(
@@ -5880,7 +5772,7 @@ function encodeSmartContractInstructionCompact(instruction) {
   }
   if (isPlainObject(instruction.ActivateContractInstance)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::smart_contract_code::ActivateContractInstance",
+      ACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
       encodeStructValue([
         [encodeNoritoStringValue(
           assertNonEmptyString(
@@ -5897,7 +5789,7 @@ function encodeSmartContractInstructionCompact(instruction) {
   }
   if (isPlainObject(instruction.CommitContractDeployment)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::smart_contract_code::CommitContractDeployment",
+      COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID,
       encodeStructValue([
         [encodeU64Value(
           instruction.CommitContractDeployment.expected_deploy_nonce,
@@ -5930,7 +5822,7 @@ function encodeSmartContractInstructionCompact(instruction) {
   }
   if (isPlainObject(instruction.UploadSmartContractCodeChunk)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
+      UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID,
       encodeStructValue([
         [encodeHashValue(
           instruction.UploadSmartContractCodeChunk.code_hash,
@@ -5957,7 +5849,7 @@ function encodeSmartContractInstructionCompact(instruction) {
   }
   if (isPlainObject(instruction.FinalizeSmartContractCodeUpload)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
+      FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID,
       encodeStructValue([
         [encodeHashValue(
           instruction.FinalizeSmartContractCodeUpload.code_hash,
@@ -5976,7 +5868,7 @@ function encodeSmartContractInstructionCompact(instruction) {
   }
   if (isPlainObject(instruction.CancelSmartContractCodeUpload)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload",
+      CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID,
       encodeStructValue([
         [encodeHashValue(
           instruction.CancelSmartContractCodeUpload.code_hash,
@@ -5987,7 +5879,7 @@ function encodeSmartContractInstructionCompact(instruction) {
   }
   if (isPlainObject(instruction.RemoveSmartContractBytes)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes",
+      REMOVE_SMART_CONTRACT_BYTES_WIRE_ID,
       encodeStructValue([
         [encodeHashValue(
           instruction.RemoveSmartContractBytes.code_hash,
@@ -6007,6 +5899,7 @@ function encodeSmartContractInstructionCompact(instruction) {
 }
 
 function encodeProposeDeployContractPayload(value) {
+  validateProposeDeployContractPayload(value);
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.contract_address, "ProposeDeployContract.contract_address"))],
     [encodeNoritoStringValue(assertNonEmptyString(value.code_hash_hex, "ProposeDeployContract.code_hash_hex"))],
@@ -6014,14 +5907,19 @@ function encodeProposeDeployContractPayload(value) {
     [encodeNoritoStringValue(assertNonEmptyString(value.abi_version, "ProposeDeployContract.abi_version"))],
     [encodeOptionValue(value.window ?? null, encodeAtWindowValue, "ProposeDeployContract.window")],
     [encodeOptionValue(value.mode ?? null, encodeVotingModeValue, "ProposeDeployContract.mode")],
-    [encodeOptionValue(value.limits ?? null, encodeNoritoJsonValue, "ProposeDeployContract.limits")],
+    [encodeOptionValue(
+      value.manifest_provenance ?? null,
+      encodeManifestProvenanceValue,
+      "ProposeDeployContract.manifest_provenance",
+    )],
   ]);
 }
 
 function encodeCastZkBallotPayload(value) {
+  validateCastZkBallotPayload(value);
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "CastZkBallot.election_id"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.proof_b64, "CastZkBallot.proof_b64"))],
+    [encodeExactBase64StringValue(value.proof_b64, "CastZkBallot.proof_b64")],
     [encodeNoritoStringValue(
       assertNonEmptyString(value.public_inputs_json ?? "{}", "CastZkBallot.public_inputs_json"),
     )],
@@ -6030,7 +5928,10 @@ function encodeCastZkBallotPayload(value) {
 
 function encodeCastPlainBallotPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.referendum_id, "CastPlainBallot.referendum_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.referendum_id,
+      "CastPlainBallot.referendum_id",
+    ))],
     [encodeAccountIdValue(value.owner, "CastPlainBallot.owner")],
     [encodeQuantityValue(value.amount, "CastPlainBallot.amount")],
     [encodeU64NumberValue(value.duration_blocks, "CastPlainBallot.duration_blocks")],
@@ -6048,7 +5949,10 @@ function encodeEnactReferendumPayload(value) {
 
 function encodeFinalizeReferendumPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.referendum_id, "FinalizeReferendum.referendum_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.referendum_id,
+      "FinalizeReferendum.referendum_id",
+    ))],
     [encodeFixedBytesValue(value.proposal_id, 32, "FinalizeReferendum.proposal_id")],
   ]);
 }
@@ -6075,51 +5979,51 @@ function encodeAtWindowValue(value, context) {
 function decodeAtWindowValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["lower", "upper"]);
   return {
-    lower: decodeU64NumberValue(fields.lower, `${context}.lower`),
-    upper: decodeU64NumberValue(fields.upper, `${context}.upper`),
+    lower: decodeU64Value(fields.lower, `${context}.lower`),
+    upper: decodeU64Value(fields.upper, `${context}.upper`),
   };
 }
 
 function encodeKaigiInstruction(instruction) {
   if (isPlainObject(instruction.CreateKaigi)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::CreateKaigi",
+      CREATE_KAIGI_WIRE_ID,
       encodeCreateKaigiPayload(instruction.CreateKaigi),
     );
   }
   if (isPlainObject(instruction.JoinKaigi)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::JoinKaigi",
+      JOIN_KAIGI_WIRE_ID,
       encodeJoinLeaveKaigiPayload(instruction.JoinKaigi, "JoinKaigi"),
     );
   }
   if (isPlainObject(instruction.LeaveKaigi)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::LeaveKaigi",
+      LEAVE_KAIGI_WIRE_ID,
       encodeJoinLeaveKaigiPayload(instruction.LeaveKaigi, "LeaveKaigi"),
     );
   }
   if (isPlainObject(instruction.EndKaigi)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::EndKaigi",
+      END_KAIGI_WIRE_ID,
       encodeEndKaigiPayload(instruction.EndKaigi),
     );
   }
   if (isPlainObject(instruction.RecordKaigiUsage)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::RecordKaigiUsage",
+      RECORD_KAIGI_USAGE_WIRE_ID,
       encodeRecordKaigiUsagePayload(instruction.RecordKaigiUsage),
     );
   }
   if (isPlainObject(instruction.SetKaigiRelayManifest)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::SetKaigiRelayManifest",
+      SET_KAIGI_RELAY_MANIFEST_WIRE_ID,
       encodeSetKaigiRelayManifestPayload(instruction.SetKaigiRelayManifest),
     );
   }
   if (isPlainObject(instruction.RegisterKaigiRelay)) {
     return encodeInstructionEnvelope(
-      "iroha_data_model::isi::kaigi::RegisterKaigiRelay",
+      REGISTER_KAIGI_RELAY_WIRE_ID,
       encodeRegisterKaigiRelayPayload(instruction.RegisterKaigiRelay),
     );
   }
@@ -6187,12 +6091,12 @@ function encodeVerifyingKeyInstruction(instruction) {
   const entries = [
     [
       "RegisterVerifyingKey",
-      "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+      REGISTER_VERIFYING_KEY_WIRE_ID,
       encodeVerifyingKeyInstructionPayload,
     ],
     [
       "UpdateVerifyingKey",
-      "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+      UPDATE_VERIFYING_KEY_WIRE_ID,
       encodeVerifyingKeyInstructionPayload,
     ],
   ];
@@ -6218,7 +6122,7 @@ function encodeVerifyingKeyInstructionPayload(value, context) {
 
 function decodeVerifyingKeyInstructionPayload(wireId, payload) {
   const variant =
-    wireId === "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey"
+    wireId === REGISTER_VERIFYING_KEY_WIRE_ID
       ? "RegisterVerifyingKey"
       : "UpdateVerifyingKey";
   const fields = decodeStructFields(payload, `verifying_keys.${variant}`, [
@@ -6240,12 +6144,9 @@ function decodeVerifyingKeyInstructionPayload(wireId, payload) {
 
 function encodeZkInstruction(instruction) {
   const entries = [
-    ["RegisterZkAsset", "iroha_data_model::isi::zk::RegisterZkAsset", encodeRegisterZkAssetPayload],
+    ["RegisterZkAsset", REGISTER_ZK_ASSET_WIRE_ID, encodeRegisterZkAssetPayload],
     ["ScheduleConfidentialPolicyTransition", "zk::ScheduleConfidentialPolicyTransition", encodeScheduleConfidentialPolicyTransitionPayload],
     ["CancelConfidentialPolicyTransition", "zk::CancelConfidentialPolicyTransition", encodeCancelConfidentialPolicyTransitionPayload],
-    ["Shield", "iroha_data_model::isi::zk::Shield", encodeShieldPayload],
-    ["ZkTransfer", "iroha_data_model::isi::zk::ZkTransfer", encodeZkTransferPayload],
-    ["Unshield", "iroha_data_model::isi::zk::Unshield", encodeUnshieldPayload],
     ["CreateElection", "iroha_data_model::isi::zk::CreateElection", encodeCreateElectionPayload],
     ["SubmitBallot", "iroha_data_model::isi::zk::SubmitBallot", encodeSubmitBallotPayload],
     ["FinalizeElection", "iroha_data_model::isi::zk::FinalizeElection", encodeFinalizeElectionPayload],
@@ -6266,7 +6167,6 @@ function encodeRegisterZkAssetPayload(value) {
     [encodeZkAssetModeValue(value.mode, "zk.RegisterZkAsset.mode")],
     [encodeBoolValue(value.allow_shield, "zk.RegisterZkAsset.allow_shield")],
     [encodeBoolValue(value.allow_unshield, "zk.RegisterZkAsset.allow_unshield")],
-    [encodeOptionValue(value.vk_transfer, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_transfer")],
     [encodeOptionValue(value.vk_unshield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_unshield")],
     [encodeOptionValue(value.vk_shield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_shield")],
   ]);
@@ -6289,61 +6189,12 @@ function encodeCancelConfidentialPolicyTransitionPayload(value) {
   ]);
 }
 
-function encodeShieldPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.Shield.asset")],
-    [encodeAccountIdValue(value.from, "zk.Shield.from")],
-    [encodeQuantityValue(value.amount, "zk.Shield.amount")],
-    [encodeFixedBytesValue(value.note_commitment, 32, "zk.Shield.note_commitment")],
-    [encodeConfidentialEncryptedPayloadValue(value.enc_payload, "zk.Shield.enc_payload")],
-  ]);
-}
-
-function encodeZkTransferPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.ZkTransfer.asset")],
-    [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.ZkTransfer.inputs[${index}]`),
-    )],
-    [encodeNoritoVec(value.outputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.ZkTransfer.outputs[${index}]`),
-    )],
-    [encodeProofAttachmentValue(value.proof, "zk.ZkTransfer.proof")],
-    [
-      encodeOptionValue(
-        value.root_hint,
-        (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
-        "zk.ZkTransfer.root_hint",
-      ),
-    ],
-  ]);
-}
-
-function encodeUnshieldPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.Unshield.asset")],
-    [encodeAccountIdValue(value.to, "zk.Unshield.to")],
-    [encodeQuantityValue(value.public_amount, "zk.Unshield.public_amount")],
-    [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.inputs[${index}]`),
-    )],
-    [encodeNoritoVec(value.outputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.outputs[${index}]`),
-    )],
-    [encodeProofAttachmentValue(value.proof, "zk.Unshield.proof")],
-    [
-      encodeOptionValue(
-        value.root_hint,
-        (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
-        "zk.Unshield.root_hint",
-      ),
-    ],
-  ]);
-}
-
 function encodeCreateElectionPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "zk.CreateElection.election_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.election_id,
+      "zk.CreateElection.election_id",
+    ))],
     [encodeU32Value(value.options, "zk.CreateElection.options")],
     [encodeFixedBytesValue(value.eligible_root, 32, "zk.CreateElection.eligible_root")],
     [encodeU64NumberValue(value.start_ts, "zk.CreateElection.start_ts")],
@@ -6356,7 +6207,10 @@ function encodeCreateElectionPayload(value) {
 
 function encodeSubmitBallotPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "zk.SubmitBallot.election_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.election_id,
+      "zk.SubmitBallot.election_id",
+    ))],
     [encodeByteVecValue(value.ciphertext, "zk.SubmitBallot.ciphertext")],
     [encodeProofAttachmentValue(value.ballot_proof, "zk.SubmitBallot.ballot_proof")],
     [encodeFixedBytesValue(value.nullifier, 32, "zk.SubmitBallot.nullifier")],
@@ -6365,7 +6219,10 @@ function encodeSubmitBallotPayload(value) {
 
 function encodeFinalizeElectionPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "zk.FinalizeElection.election_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.election_id,
+      "zk.FinalizeElection.election_id",
+    ))],
     [encodeNoritoVec(value.tally ?? [], (entry, index) =>
       encodeU64NumberValue(entry, `zk.FinalizeElection.tally[${index}]`),
     )],
@@ -7605,13 +7462,10 @@ function decodeKaigiRoomPolicyValue(payload, context) {
 
 function encodeZkAssetModeValue(value, context) {
   const normalized = assertNonEmptyString(value, context).toLowerCase();
-  if (normalized === "zknative") {
+  if (normalized === "hybrid") {
     return encodeEnumTagValue(0);
   }
-  if (normalized === "hybrid") {
-    return encodeEnumTagValue(1);
-  }
-  throw new Error(`${context} must be ZkNative or Hybrid`);
+  throw new Error(`${context} must be Hybrid`);
 }
 
 function decodeZkAssetModeValue(payload, context) {
@@ -7620,8 +7474,6 @@ function decodeZkAssetModeValue(payload, context) {
   reader.assertEof();
   switch (tag) {
     case 0:
-      return "ZkNative";
-    case 1:
       return "Hybrid";
     default:
       throw new Error(`${context} uses unsupported zk asset mode ${tag}`);
@@ -8053,7 +7905,7 @@ function normalizeCanonicalProofAttachmentValue(value, context) {
       value.envelope_hash,
       `${context}.envelope_hash`,
     );
-    const expected = Array.from(blake2b(Buffer.from(proof.bytes), { dkLen: 32 }));
+    const expected = Array.from(blake2b256(Buffer.from(proof.bytes)));
     expected[31] |= 1;
     if (!envelopeHash.every((byte, index) => byte === expected[index])) {
       throw new TypeError(`${context}.envelope_hash must match proof bytes`);
@@ -8301,1130 +8153,40 @@ function decodeLanePrivacyWitnessValue(payload, context) {
   }
 }
 
-function encodeMerkleProofValue(value, context) {
-  return encodeTupleValue([
-    encodeU32Value(value.leaf_index ?? value.leafIndex, `${context}.leaf_index`),
-    encodeNoritoVec(value.audit_path ?? value.auditPath ?? [], (entry, index) =>
-      encodeOptionValue(
-        entry,
-        encodeHashLiteralBytes,
-        `${context}.audit_path[${index}]`,
-      ),
-    ),
-  ]);
-}
-
-function decodeMerkleProofValue(payload, context) {
-  const fields = decodeTupleFields(payload, context, ["leaf_index", "audit_path"]);
-  return {
-    leaf_index: decodeU32Value(fields.leaf_index, `${context}.leaf_index`),
-    audit_path: decodeNoritoVec(
-      fields.audit_path,
-      (entry, index) =>
-        decodeOptionValue(
-          entry,
-          decodeHashValue,
-          `${context}.audit_path[${index}]`,
-        ),
-      `${context}.audit_path`,
-      LANE_PRIVACY_MERKLE_MAX_DEPTH,
-    ),
-  };
-}
-
-function encodeConfidentialEncryptedPayloadValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  const version = encodeU8Value(value.version, `${context}.version`);
-  const ephemeral = encodeFixedBytesValue(value.ephemeral_pubkey, 32, `${context}.ephemeral_pubkey`);
-  const nonce = encodeFixedBytesValue(value.nonce, 24, `${context}.nonce`);
-  const ciphertext = Buffer.from(normalizeFlexibleBytes(value.ciphertext, `${context}.ciphertext`));
-  return Buffer.concat([
-    version,
-    ephemeral,
-    nonce,
-    encodeCompactLength(ciphertext.length),
-    ciphertext,
-  ]);
-}
-
-function decodeConfidentialEncryptedPayloadValue(payload, context) {
-  const reader = new BufferReader(payload, context);
-  const version = reader.readU8("version");
-  const ephemeral_pubkey = Array.from(reader.readBytes(32, "ephemeral_pubkey"));
-  const nonce = Array.from(reader.readBytes(24, "nonce"));
-  const [ciphertextLength, lengthBytes] = decodeUnsignedLeb128(
-    payload,
-    reader.offset,
-    `${context}.ciphertext.length`,
-  );
-  reader.offset += lengthBytes;
-  const ciphertext = reader.readBytes(ciphertextLength, "ciphertext");
-  reader.assertEof();
-  return {
-    version,
-    ephemeral_pubkey,
-    nonce,
-    ciphertext: Buffer.from(ciphertext).toString("base64"),
-  };
-}
-
-const CONTRACT_MANIFEST_KEYS = Object.freeze([
-  "seiyaku_name",
-  "code_hash",
-  "abi_hash",
-  "compiler_fingerprint",
-  "features_bitmap",
-  "access_set_hints",
-  "entrypoints",
-  "states",
-  "error_codes",
-  "kotoba",
-  "provenance",
-]);
-
-function contractManifestSignatureFields(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, CONTRACT_MANIFEST_KEYS, context);
-  return [
-    [encodeOptionValue(value.seiyaku_name, encodeNoritoStringValue, `${context}.seiyaku_name`)],
-    [encodeOptionValue(value.code_hash, encodeHashValue, `${context}.code_hash`)],
-    [encodeOptionValue(value.abi_hash, encodeHashValue, `${context}.abi_hash`)],
-    [encodeOptionValue(value.compiler_fingerprint, encodeNoritoStringValue, `${context}.compiler_fingerprint`)],
-    [encodeOptionValue(value.features_bitmap, encodeU64NumberValue, `${context}.features_bitmap`)],
-    [encodeOptionValue(value.access_set_hints, encodeAccessSetHintsValue, `${context}.access_set_hints`)],
-    [
-      encodeOptionValue(
-        value.entrypoints ?? null,
-        encodeEntrypointDescriptorsValue,
-        `${context}.entrypoints`,
-      ),
-    ],
-    [
-      encodeOptionValue(
-        value.states ?? null,
-        encodeStateDescriptorsValue,
-        `${context}.states`,
-      ),
-    ],
-    [
-      encodeOptionValue(
-        value.error_codes ?? null,
-        encodeContractErrorCodeDescriptorsValue,
-        `${context}.error_codes`,
-      ),
-    ],
-    [
-      encodeOptionValue(
-        value.kotoba ?? null,
-        encodeKotobaTranslationEntriesValue,
-        `${context}.kotoba`,
-      ),
-    ],
-  ];
-}
-
-function encodeContractManifestSignaturePayloadValue(value, context) {
-  return encodeStructValue(contractManifestSignatureFields(value, context));
-}
-
-function encodeContractManifestValue(value, context) {
-  return encodeStructValue([
-    ...contractManifestSignatureFields(value, context),
-    [
-      encodeOptionValue(
-        value.provenance ?? null,
-        encodeManifestProvenanceValue,
-        `${context}.provenance`,
-      ),
-    ],
-  ]);
-}
-
-function decodeContractManifestValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "seiyaku_name",
-    "code_hash",
-    "abi_hash",
-    "compiler_fingerprint",
-    "features_bitmap",
-    "access_set_hints",
-    "entrypoints",
-    "states",
-    "error_codes",
-    "kotoba",
-    "provenance",
-  ]);
-  return {
-    seiyaku_name: decodeOptionValue(
-      fields.seiyaku_name,
-      decodeStringValue,
-      `${context}.seiyaku_name`,
-    ),
-    code_hash: decodeOptionValue(
-      fields.code_hash,
-      decodeHashValue,
-      `${context}.code_hash`,
-    ),
-    abi_hash: decodeOptionValue(
-      fields.abi_hash,
-      decodeHashValue,
-      `${context}.abi_hash`,
-    ),
-    compiler_fingerprint: decodeOptionValue(
-      fields.compiler_fingerprint,
-      decodeStringValue,
-      `${context}.compiler_fingerprint`,
-    ),
-    features_bitmap: decodeOptionValue(
-      fields.features_bitmap,
-      decodeU64NumberValue,
-      `${context}.features_bitmap`,
-    ),
-    access_set_hints: decodeOptionValue(
-      fields.access_set_hints,
-      decodeAccessSetHintsValue,
-      `${context}.access_set_hints`,
-    ),
-    entrypoints: decodeOptionValue(
-      fields.entrypoints,
-      decodeEntrypointDescriptorsValue,
-      `${context}.entrypoints`,
-    ),
-    states: decodeOptionValue(
-      fields.states,
-      decodeStateDescriptorsValue,
-      `${context}.states`,
-    ),
-    error_codes: decodeOptionValue(
-      fields.error_codes,
-      decodeContractErrorCodeDescriptorsValue,
-      `${context}.error_codes`,
-    ),
-    kotoba: decodeOptionValue(
-      fields.kotoba,
-      decodeKotobaTranslationEntriesValue,
-      `${context}.kotoba`,
-    ),
-    provenance: decodeOptionValue(
-      fields.provenance,
-      decodeManifestProvenanceValue,
-      `${context}.provenance`,
-    ),
-  };
-}
-
-function encodeAccessSetHintsValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, [
-    "read_keys",
-    "write_keys",
-    "dynamic_reads",
-    "dynamic_writes",
-  ], context);
-  return encodeStructValue([
-    [encodeNoritoVec(value.read_keys ?? [], (entry, index) =>
-      encodeNoritoStringValue(assertNonEmptyString(entry, `${context}.read_keys[${index}]`)),
-    )],
-    [encodeNoritoVec(value.write_keys ?? [], (entry, index) =>
-      encodeNoritoStringValue(assertNonEmptyString(entry, `${context}.write_keys[${index}]`)),
-    )],
-    [encodeNoritoVec(value.dynamic_reads ?? [], (entry, index) =>
-      encodeDynamicAccessHintValue(entry, `${context}.dynamic_reads[${index}]`),
-    )],
-    [encodeNoritoVec(value.dynamic_writes ?? [], (entry, index) =>
-      encodeDynamicAccessHintValue(entry, `${context}.dynamic_writes[${index}]`),
-    )],
-  ]);
-}
-
-function decodeAccessSetHintsValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "read_keys",
-    "write_keys",
-    "dynamic_reads",
-    "dynamic_writes",
-  ]);
-  return {
-    read_keys: decodeNoritoVec(
-      fields.read_keys,
-      (entry, index) => decodeStringValue(entry, `${context}.read_keys[${index}]`),
-      `${context}.read_keys`,
-    ),
-    write_keys: decodeNoritoVec(
-      fields.write_keys,
-      (entry, index) => decodeStringValue(entry, `${context}.write_keys[${index}]`),
-      `${context}.write_keys`,
-    ),
-    dynamic_reads: decodeNoritoVec(
-      fields.dynamic_reads,
-      (entry, index) =>
-        decodeDynamicAccessHintValue(entry, `${context}.dynamic_reads[${index}]`),
-      `${context}.dynamic_reads`,
-    ),
-    dynamic_writes: decodeNoritoVec(
-      fields.dynamic_writes,
-      (entry, index) =>
-        decodeDynamicAccessHintValue(entry, `${context}.dynamic_writes[${index}]`),
-      `${context}.dynamic_writes`,
-    ),
-  };
-}
-
-function encodeDynamicAccessHintValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, ["base_key", "key_type", "bound_kind", "max_keys"], context);
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.base_key, `${context}.base_key`))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.key_type, `${context}.key_type`))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.bound_kind, `${context}.bound_kind`))],
-    [encodeU32Value(value.max_keys, `${context}.max_keys`)],
-  ]);
-}
-
-function decodeDynamicAccessHintValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "base_key",
-    "key_type",
-    "bound_kind",
-    "max_keys",
-  ]);
-  return {
-    base_key: decodeStringValue(fields.base_key, `${context}.base_key`),
-    key_type: decodeStringValue(fields.key_type, `${context}.key_type`),
-    bound_kind: decodeStringValue(fields.bound_kind, `${context}.bound_kind`),
-    max_keys: decodeU32Value(fields.max_keys, `${context}.max_keys`),
-  };
-}
-
-function encodeEntrypointDescriptorsValue(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return encodeNoritoVec(value, (entry, index) =>
-    encodeEntrypointDescriptorValue(entry, `${context}[${index}]`),
-  );
-}
-
-function decodeEntrypointDescriptorsValue(payload, context) {
-  return decodeNoritoVec(
-    payload,
-    (entry, index) => decodeEntrypointDescriptorValue(entry, `${context}[${index}]`),
-    context,
-  );
-}
-
-function encodeEntrypointDescriptorValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, [
-    "name",
-    "kind",
-    "params",
-    "argument_schema",
-    "return_type",
-    "return_schema",
-    "permission",
-    "read_keys",
-    "write_keys",
-    "access_hints_complete",
-    "access_hints_skipped",
-    "triggers",
-  ], context);
-  const triggers = value.triggers ?? [];
-  if (!Array.isArray(triggers)) {
-    throw new TypeError(`${context}.triggers must be an array`);
-  }
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
-    [encodeEntryPointKindValue(value.kind, `${context}.kind`)],
-    [
-      encodeNoritoVec(value.params ?? [], (param, index) =>
-        encodeEntrypointParamDescriptorValue(param, `${context}.params[${index}]`),
-      ),
-    ],
-    [
-      encodeOptionValue(
-        value.argument_schema ?? null,
-        encodeEntrypointArgumentSchemaValue,
-        `${context}.argument_schema`,
-      ),
-    ],
-    [
-      encodeOptionValue(
-        value.return_type ?? null,
-        encodeNoritoStringValue,
-        `${context}.return_type`,
-      ),
-    ],
-    [
-      encodeOptionValue(
-        value.return_schema ?? null,
-        encodeEntrypointValueTypeValue,
-        `${context}.return_schema`,
-      ),
-    ],
-    [
-      encodeOptionValue(
-        value.permission ?? null,
-        encodeNoritoStringValue,
-        `${context}.permission`,
-      ),
-    ],
-    [
-      encodeNoritoVec(value.read_keys ?? [], (entry, index) =>
-        encodeNoritoStringValue(
-          assertNonEmptyString(entry, `${context}.read_keys[${index}]`),
-        ),
-      ),
-    ],
-    [
-      encodeNoritoVec(value.write_keys ?? [], (entry, index) =>
-        encodeNoritoStringValue(
-          assertNonEmptyString(entry, `${context}.write_keys[${index}]`),
-        ),
-      ),
-    ],
-    [
-      encodeOptionValue(
-        value.access_hints_complete ?? null,
-        encodeBoolValue,
-        `${context}.access_hints_complete`,
-      ),
-    ],
-    [
-      encodeNoritoVec(
-        value.access_hints_skipped ?? [],
-        (entry, index) =>
-          encodeNoritoStringValue(
-            assertNonEmptyString(entry, `${context}.access_hints_skipped[${index}]`),
-          ),
-      ),
-    ],
-    [
-      encodeNoritoVec(triggers, (entry, index) =>
-        encodeManifestTriggerDescriptorValue(entry, `${context}.triggers[${index}]`),
-      ),
-    ],
-  ]);
-}
-
-function decodeEntrypointDescriptorValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "name",
-    "kind",
-    "params",
-    "argument_schema",
-    "return_type",
-    "return_schema",
-    "permission",
-    "read_keys",
-    "write_keys",
-    "access_hints_complete",
-    "access_hints_skipped",
-    "triggers",
-  ]);
-  return {
-    name: decodeStringValue(fields.name, `${context}.name`),
-    kind: decodeEntryPointKindValue(fields.kind, `${context}.kind`),
-    params: decodeNoritoVec(
-      fields.params,
-      (entry, index) => decodeEntrypointParamDescriptorValue(entry, `${context}.params[${index}]`),
-      `${context}.params`,
-    ),
-    argument_schema: decodeOptionValue(
-      fields.argument_schema,
-      decodeEntrypointArgumentSchemaValue,
-      `${context}.argument_schema`,
-    ),
-    return_type: decodeOptionValue(
-      fields.return_type,
-      decodeStringValue,
-      `${context}.return_type`,
-    ),
-    return_schema: decodeOptionValue(
-      fields.return_schema,
-      decodeEntrypointValueTypeValue,
-      `${context}.return_schema`,
-    ),
-    permission: decodeOptionValue(
-      fields.permission,
-      decodeStringValue,
-      `${context}.permission`,
-    ),
-    read_keys: decodeNoritoVec(
-      fields.read_keys,
-      (entry, index) => decodeStringValue(entry, `${context}.read_keys[${index}]`),
-      `${context}.read_keys`,
-    ),
-    write_keys: decodeNoritoVec(
-      fields.write_keys,
-      (entry, index) => decodeStringValue(entry, `${context}.write_keys[${index}]`),
-      `${context}.write_keys`,
-    ),
-    access_hints_complete: decodeOptionValue(
-      fields.access_hints_complete,
-      decodeBoolValue,
-      `${context}.access_hints_complete`,
-    ),
-    access_hints_skipped: decodeNoritoVec(
-      fields.access_hints_skipped,
-      (entry, index) =>
-        decodeStringValue(entry, `${context}.access_hints_skipped[${index}]`),
-      `${context}.access_hints_skipped`,
-    ),
-    triggers: decodeNoritoVec(
-      fields.triggers,
-      (entry, index) =>
-        decodeManifestTriggerDescriptorValue(entry, `${context}.triggers[${index}]`),
-      `${context}.triggers`,
-    ),
-  };
-}
-
-function encodeEntryPointKindValue(value, context) {
-  const kind = typeof value === "string" ? value : value?.kind;
-  const normalized = assertNonEmptyString(kind, context).toLowerCase();
-  switch (normalized) {
-    case "kotoage":
-      return encodeEnumTagValue(0);
-    case "view":
-      return encodeEnumTagValue(1);
-    case "hajimari":
-      return encodeEnumTagValue(2);
-    case "kaizen":
-      return encodeEnumTagValue(3);
-    default:
-      throw new Error(`${context} must be Kotoage, View, Hajimari, or Kaizen`);
-  }
-}
-
-function decodeEntryPointKindValue(payload, context) {
-  const reader = new BufferReader(payload, context);
-  const tag = reader.readU32LE("tag");
-  reader.assertEof();
-  switch (tag) {
-    case 0:
-      return { kind: "Kotoage", value: null };
-    case 1:
-      return { kind: "View", value: null };
-    case 2:
-      return { kind: "Hajimari", value: null };
-    case 3:
-      return { kind: "Kaizen", value: null };
-    default:
-      throw new Error(`${context} uses unsupported entrypoint kind ${tag}`);
-  }
-}
-
-function encodeEntrypointParamDescriptorValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, ["name", "type_name"], context);
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.type_name, `${context}.type_name`))],
-  ]);
-}
-
-function decodeEntrypointParamDescriptorValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["name", "type_name"]);
-  return {
-    name: decodeStringValue(fields.name, `${context}.name`),
-    type_name: decodeStringValue(fields.type_name, `${context}.type_name`),
-  };
-}
-
-function encodeEntrypointArgumentSchemaValue(value, context) {
-  if (!isPlainObject(value) || !Array.isArray(value.fields)) {
-    throw new TypeError(`${context} must contain a fields array`);
-  }
-  assertOnlyObjectKeys(value, ["fields"], context);
-  return encodeStructValue([
-    [
-      encodeNoritoVec(value.fields, (field, index) =>
-        encodeEntrypointArgumentFieldValue(field, `${context}.fields[${index}]`),
-      ),
-    ],
-  ]);
-}
-
-function decodeEntrypointArgumentSchemaValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["fields"]);
-  return {
-    fields: decodeNoritoVec(
-      fields.fields,
-      (field, index) =>
-        decodeEntrypointArgumentFieldValue(field, `${context}.fields[${index}]`),
-      `${context}.fields`,
-    ),
-  };
-}
-
-function encodeEntrypointArgumentFieldValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, ["name", "ty"], context);
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
-    [encodeEntrypointValueTypeValue(value.ty, `${context}.ty`)],
-  ]);
-}
-
-function decodeEntrypointArgumentFieldValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["name", "ty"]);
-  return {
-    name: decodeStringValue(fields.name, `${context}.name`),
-    ty: decodeEntrypointValueTypeValue(fields.ty, `${context}.ty`),
-  };
-}
-
-function encodeEntrypointValueTypeValue(value, context) {
-  if (!isPlainObject(value) || !Array.isArray(value.nodes)) {
-    throw new TypeError(`${context} must contain a nodes array`);
-  }
-  assertOnlyObjectKeys(value, ["nodes"], context);
-  analyzeEntrypointValueTypeV1(value, context);
-  return encodeStructValue([
-    [
-      encodeNoritoVec(value.nodes, (node, index) =>
-        encodeEntrypointValueTypeNodeValue(node, `${context}.nodes[${index}]`),
-      ),
-    ],
-  ]);
-}
-
-function decodeEntrypointValueTypeValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["nodes"]);
-  const value = {
-    nodes: decodeNoritoVec(
-      fields.nodes,
-      (node, index) =>
-        decodeEntrypointValueTypeNodeValue(node, `${context}.nodes[${index}]`),
-      `${context}.nodes`,
-    ),
-  };
-  analyzeEntrypointValueTypeV1(value, context);
-  return value;
-}
-
-function taggedEnumParts(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be a tagged object`);
-  }
-  assertOnlyObjectKeys(value, ["kind", "value"], context);
-  return {
-    kind: assertNonEmptyString(value.kind, `${context}.kind`),
-    value: value.value ?? null,
-  };
-}
-
-function encodeEntrypointValueTypeNodeValue(value, context) {
-  const tagged = taggedEnumParts(value, context);
-  switch (tagged.kind) {
-    case "Struct":
-      return encodeEnumTagValue(0, () =>
-        encodeEntrypointStructTypeNodeValue(tagged.value, `${context}.value`),
-      );
-    case "Tuple":
-      return encodeEnumTagValue(1, () =>
-        encodeU16Value(tagged.value, `${context}.value`),
-      );
-    case "Option":
-      requireNullEnumPayload(tagged.value, context);
-      return encodeEnumTagValue(2);
-    case "Result":
-      requireNullEnumPayload(tagged.value, context);
-      return encodeEnumTagValue(3);
-    case "List":
-      return encodeEnumTagValue(4, () =>
-        encodeEntrypointListTypeNodeValue(tagged.value, `${context}.value`),
-      );
-    case "Leaf":
-      return encodeEnumTagValue(5, () =>
-        encodeEntrypointValueKindValue(tagged.value, `${context}.value`),
-      );
-    default:
-      throw new Error(`${context}.kind uses unsupported value-type node ${tagged.kind}`);
-  }
-}
-
-function decodeEntrypointValueTypeNodeValue(payload, context) {
-  const reader = new BufferReader(payload, context);
-  const tag = reader.readU32LE("tag");
-  switch (tag) {
-    case 0:
-      return {
-        kind: "Struct",
-        value: decodeEntrypointStructTypeNodeValue(
-          readSingleEnumPayload(reader, context),
-          `${context}.value`,
-        ),
-      };
-    case 1:
-      return {
-        kind: "Tuple",
-        value: decodeU16Value(readSingleEnumPayload(reader, context), `${context}.value`),
-      };
-    case 2:
-      reader.assertEof();
-      return { kind: "Option", value: null };
-    case 3:
-      reader.assertEof();
-      return { kind: "Result", value: null };
-    case 4:
-      return {
-        kind: "List",
-        value: decodeEntrypointListTypeNodeValue(
-          readSingleEnumPayload(reader, context),
-          `${context}.value`,
-        ),
-      };
-    case 5:
-      return {
-        kind: "Leaf",
-        value: decodeEntrypointValueKindValue(
-          readSingleEnumPayload(reader, context),
-          `${context}.value`,
-        ),
-      };
-    default:
-      throw new Error(`${context} uses unsupported value-type node tag ${tag}`);
-  }
-}
-
-function readSingleEnumPayload(reader, context) {
-  const value = readNoritoField(reader, "value");
-  reader.assertEof();
-  return value;
-}
-
-function requireNullEnumPayload(value, context) {
-  if (value !== null && value !== undefined) {
-    throw new TypeError(`${context}.value must be null for a unit variant`);
-  }
-}
-
-function encodeEntrypointStructTypeNodeValue(value, context) {
-  if (!isPlainObject(value) || !Array.isArray(value.fields)) {
-    throw new TypeError(`${context} must contain a fields array`);
-  }
-  assertOnlyObjectKeys(value, ["name", "fields"], context);
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
-    [
-      encodeNoritoVec(value.fields, (field, index) =>
-        encodeNoritoStringValue(
-          assertNonEmptyString(field, `${context}.fields[${index}]`),
-        ),
-      ),
-    ],
-  ]);
-}
-
-function decodeEntrypointStructTypeNodeValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["name", "fields"]);
-  return {
-    name: decodeStringValue(fields.name, `${context}.name`),
-    fields: decodeNoritoVec(
-      fields.fields,
-      (field, index) => decodeStringValue(field, `${context}.fields[${index}]`),
-      `${context}.fields`,
-    ),
-  };
-}
-
-function encodeEntrypointListTypeNodeValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, ["capacity"], context);
-  return encodeStructValue([
-    [encodeU8Value(value.capacity, `${context}.capacity`)],
-  ]);
-}
-
-function decodeEntrypointListTypeNodeValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["capacity"]);
-  return {
-    capacity: decodeU8Value(fields.capacity, `${context}.capacity`),
-  };
-}
-
-const ENTRYPOINT_VALUE_KIND_NAMES = Object.freeze([
-  "Int",
-  "Decimal",
-  "Quantity",
-  "Bool",
-  "String",
-  "Json",
-  "Name",
-  "AccountId",
-  "AssetDefinitionId",
-  "AssetId",
-  "DomainId",
-  "NftId",
-  "DataSpaceId",
-  "Blob",
-]);
-
-function encodeEntrypointValueKindValue(value, context) {
-  const tagged = taggedEnumParts(value, context);
-  requireNullEnumPayload(tagged.value, context);
-  const tag = ENTRYPOINT_VALUE_KIND_NAMES.indexOf(tagged.kind);
-  if (tag < 0) {
-    throw new Error(`${context}.kind uses unsupported value kind ${tagged.kind}`);
-  }
-  return encodeEnumTagValue(tag);
-}
-
-function decodeEntrypointValueKindValue(payload, context) {
-  const reader = new BufferReader(payload, context);
-  const tag = reader.readU32LE("tag");
-  reader.assertEof();
-  const kind = ENTRYPOINT_VALUE_KIND_NAMES[tag];
-  if (kind === undefined) {
-    throw new Error(`${context} uses unsupported value-kind tag ${tag}`);
-  }
-  return { kind, value: null };
-}
-
-function encodeStateDescriptorsValue(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return encodeNoritoVec(value, (entry, index) =>
-    encodeStateDescriptorValue(entry, `${context}[${index}]`),
-  );
-}
-
-function decodeStateDescriptorsValue(payload, context) {
-  return decodeNoritoVec(
-    payload,
-    (entry, index) => decodeStateDescriptorValue(entry, `${context}[${index}]`),
-    context,
-  );
-}
-
-function encodeStateDescriptorValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, ["name", "type_name"], context);
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
-    [
-      encodeNoritoStringValue(
-        assertNonEmptyString(value.type_name, `${context}.type_name`),
-      ),
-    ],
-  ]);
-}
-
-function decodeStateDescriptorValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["name", "type_name"]);
-  return {
-    name: decodeStringValue(fields.name, `${context}.name`),
-    type_name: decodeStringValue(fields.type_name, `${context}.type_name`),
-  };
-}
-
-function encodeContractErrorCodeDescriptorsValue(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return encodeNoritoVec(value, (entry, index) =>
-    encodeContractErrorCodeDescriptorValue(entry, `${context}[${index}]`),
-  );
-}
-
-function decodeContractErrorCodeDescriptorsValue(payload, context) {
-  return decodeNoritoVec(
-    payload,
-    (entry, index) =>
-      decodeContractErrorCodeDescriptorValue(entry, `${context}[${index}]`),
-    context,
-  );
-}
-
-function encodeContractErrorCodeDescriptorValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, ["namespace", "name", "code"], context);
-  return encodeStructValue([
-    [
-      encodeNoritoStringValue(
-        assertNonEmptyString(value.namespace, `${context}.namespace`),
-      ),
-    ],
-    [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
-    [encodeU32Value(value.code, `${context}.code`)],
-  ]);
-}
-
-function decodeContractErrorCodeDescriptorValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["namespace", "name", "code"]);
-  return {
-    namespace: decodeStringValue(fields.namespace, `${context}.namespace`),
-    name: decodeStringValue(fields.name, `${context}.name`),
-    code: decodeU32Value(fields.code, `${context}.code`),
-  };
-}
-
-function encodeKotobaTranslationEntriesValue(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return encodeNoritoVec(value, (entry, index) =>
-    encodeKotobaTranslationEntryValue(entry, `${context}[${index}]`),
-  );
-}
-
-function decodeKotobaTranslationEntriesValue(payload, context) {
-  return decodeNoritoVec(
-    payload,
-    (entry, index) => decodeKotobaTranslationEntryValue(entry, `${context}[${index}]`),
-    context,
-  );
-}
-
-function encodeKotobaTranslationEntryValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, ["msg_id", "translations"], context);
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.msg_id, `${context}.msg_id`))],
-    [
-      encodeNoritoVec(value.translations ?? [], (entry, index) =>
-        encodeKotobaTranslationValue(entry, `${context}.translations[${index}]`),
-      ),
-    ],
-  ]);
-}
-
-function decodeKotobaTranslationEntryValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["msg_id", "translations"]);
-  return {
-    msg_id: decodeStringValue(fields.msg_id, `${context}.msg_id`),
-    translations: decodeNoritoVec(
-      fields.translations,
-      (entry, index) => decodeKotobaTranslationValue(entry, `${context}.translations[${index}]`),
-      `${context}.translations`,
-    ),
-  };
-}
-
-function encodeKotobaTranslationValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, ["lang", "text"], context);
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.lang, `${context}.lang`))],
-    [encodeStringValue(value.text, `${context}.text`)],
-  ]);
-}
-
-function decodeKotobaTranslationValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["lang", "text"]);
-  return {
-    lang: decodeStringValue(fields.lang, `${context}.lang`),
-    text: decodeStringValue(fields.text, `${context}.text`),
-  };
-}
-
-function encodeManifestProvenanceValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, ["signer", "signature"], context);
-  const signer = parsePublicKeyLiteral(value.signer, `${context}.signer`);
-  const signatureLiteral = assertNonEmptyString(value.signature, `${context}.signature`);
-  if (
-    signatureLiteral.length % 2 !== 0 ||
-    !/^[0-9A-Fa-f]+$/u.test(signatureLiteral)
-  ) {
-    throw new Error(`${context}.signature must be an even-length hexadecimal string`);
-  }
-  const signature = Buffer.from(signatureLiteral, "hex");
-  validateManifestSignatureBytes(signature, `${context}.signature`);
-  return encodeStructValue([
-    [encodePublicKeyValue(signer, `${context}.signer`)],
-    [encodeConstVecU8Value(signature)],
-  ]);
-}
-
-function decodeManifestProvenanceValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["signer", "signature"]);
-  const signer = decodePublicKeyValue(fields.signer, `${context}.signer`);
-  const signature = decodeConstVecU8Value(fields.signature, `${context}.signature`);
-  validateManifestSignatureBytes(signature, `${context}.signature`);
-  return {
-    signer: publicKeyLiteralFromParts(
-      signer.curve,
-      signer.publicKey,
-      `${context}.signer`,
-    ),
-    signature: signature.toString("hex").toUpperCase(),
-  };
-}
-
-function validateManifestSignatureBytes(signature, context) {
-  if (signature.length === 0) {
-    throw new Error(`${context} must not be empty`);
-  }
-  if (signature.every((byte) => byte === 0)) {
-    throw new Error(`${context} must not be all zero`);
-  }
-}
-
-function encodeManifestTriggerDescriptorValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, [
-    "id",
-    "repeats",
-    "filter",
-    "authority",
-    "metadata",
-    "callback",
-  ], context);
-  return encodeStructValue([
-    [encodeTriggerIdValue(value.id, `${context}.id`)],
-    [encodeTriggerRepeatsValue(value.repeats, `${context}.repeats`)],
-    [encodeEventFilterBoxFramePayload(value.filter, `${context}.filter`)],
-    [
-      encodeOptionValue(
-        value.authority ?? null,
-        encodeAccountIdValue,
-        `${context}.authority`,
-      ),
-    ],
-    [encodeMetadataValue(value.metadata ?? {}, `${context}.metadata`)],
-    [encodeTriggerCallbackValue(value.callback, `${context}.callback`)],
-  ]);
-}
-
-function decodeManifestTriggerDescriptorValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "id",
-    "repeats",
-    "filter",
-    "authority",
-    "metadata",
-    "callback",
-  ]);
-  return {
-    id: decodeTriggerIdValue(fields.id, `${context}.id`),
-    repeats: decodeTriggerRepeatsValue(fields.repeats, `${context}.repeats`),
-    filter: decodeEventFilterBoxFramePayload(fields.filter, `${context}.filter`),
-    authority: decodeOptionValue(
-      fields.authority,
-      decodeAccountIdValue,
-      `${context}.authority`,
-    ),
-    metadata: decodeMetadataValue(fields.metadata, `${context}.metadata`),
-    callback: decodeTriggerCallbackValue(fields.callback, `${context}.callback`),
-  };
-}
-
-function encodeTriggerIdValue(value, context) {
-  return encodeStructValue([
-    [encodeNameValue(assertNonEmptyString(value, context), `${context}.name`)],
-  ]);
-}
-
-function decodeTriggerIdValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["name"]);
-  return decodeNameValue(fields.name, `${context}.name`);
-}
-
-function encodeTriggerRepeatsValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(
-      `${context} must be {Indefinitely:null} or {Exactly:<u32>}`,
-    );
-  }
-  const keys = Object.keys(value);
-  if (keys.length !== 1) {
-    throw new TypeError(`${context} must contain exactly one repeat variant`);
-  }
-  if (keys[0] === "Indefinitely") {
-    requireNullEnumPayload(value.Indefinitely, context);
-    return encodeEnumTagValue(0);
-  }
-  if (keys[0] === "Exactly") {
-    return encodeEnumTagValue(1, () =>
-      encodeU32Value(value.Exactly, `${context}.Exactly`),
-    );
-  }
-  throw new Error(`${context} uses unsupported repeat variant ${keys[0]}`);
-}
-
-function decodeTriggerRepeatsValue(payload, context) {
-  const reader = new BufferReader(payload, context);
-  const tag = reader.readU32LE("tag");
-  if (tag === 0) {
-    reader.assertEof();
-    return { Indefinitely: null };
-  }
-  if (tag === 1) {
-    return {
-      Exactly: decodeU32Value(
-        readSingleEnumPayload(reader, context),
-        `${context}.Exactly`,
-      ),
-    };
-  }
-  throw new Error(`${context} uses unsupported repeat tag ${tag}`);
-}
-
-function encodeTriggerCallbackValue(value, context) {
-  if (!isPlainObject(value)) {
-    throw new TypeError(`${context} must be an object`);
-  }
-  assertOnlyObjectKeys(value, ["namespace", "entrypoint"], context);
-  return encodeStructValue([
-    [
-      encodeOptionValue(
-        value.namespace ?? null,
-        encodeNoritoStringValue,
-        `${context}.namespace`,
-      ),
-    ],
-    [
-      encodeNoritoStringValue(
-        assertNonEmptyString(value.entrypoint, `${context}.entrypoint`),
-      ),
-    ],
-  ]);
-}
-
-function decodeTriggerCallbackValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["namespace", "entrypoint"]);
-  return {
-    namespace: decodeOptionValue(
-      fields.namespace,
-      decodeStringValue,
-      `${context}.namespace`,
-    ),
-    entrypoint: decodeStringValue(fields.entrypoint, `${context}.entrypoint`),
-  };
-}
-
+const [
+  encodeMerkleProofValue,
+  decodeMerkleProofValue,
+  encodeConfidentialEncryptedPayloadValue,
+  decodeConfidentialEncryptedPayloadValue,
+] = /* @__PURE__ */ createNoritoProofValueCodecs(
+  BufferReader, LANE_PRIVACY_MERKLE_MAX_DEPTH, decodeHashValue,
+  decodeNoritoVec, decodeOptionValue, decodeTupleFields,
+  decodeU32Value, decodeUnsignedLeb128, encodeCompactLength,
+  encodeFixedBytesValue, encodeHashLiteralBytes, encodeNoritoVec,
+  encodeOptionValue, encodeTupleValue, encodeU32Value,
+  encodeU8Value, isPlainObject, normalizeFlexibleBytes,
+);
+
+const [
+  encodeContractManifestSignaturePayloadValue,
+  encodeContractManifestValue,
+  decodeContractManifestValue,
+] = /* @__PURE__ */ createNoritoContractCodecs(
+  BufferReader, assertNonEmptyString, assertOnlyObjectKeys,
+  decodeAccountIdValue, decodeBoolValue, decodeConstVecU8Value,
+  decodeEventFilterBoxFramePayload, decodeHashValue, decodeMetadataValue,
+  decodeNameValue, decodeNoritoVec, decodeOptionValue,
+  decodePublicKeyValue, decodeStringValue, decodeStructFields,
+  decodeU16Value, decodeU32Value, decodeU64NumberValue,
+  decodeU8Value, encodeAccountIdValue, encodeBoolValue,
+  encodeConstVecU8Value, encodeEnumTagValue, encodeEventFilterBoxFramePayload,
+  encodeHashValue, encodeMetadataValue, encodeNameValue,
+  encodeNoritoStringValue, encodeNoritoVec, encodeOptionValue,
+  encodePublicKeyValue, encodeStringValue, encodeStructValue,
+  encodeU16Value, encodeU32Value, encodeU64NumberValue,
+  encodeU8Value, isPlainObject, parsePublicKeyLiteral,
+  publicKeyLiteralFromParts, readNoritoField,
+);
 function encodeEventFilterBoxFramePayload(value, context) {
   const frameBytes = decodeExactStandardBase64(value, context);
   const frame = decodeNoritoFrame(frameBytes, context, EVENT_FILTER_BOX_SCHEMA_HASH);

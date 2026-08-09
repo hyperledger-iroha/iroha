@@ -20,14 +20,14 @@ use super::{
 use crate::block::BlockHeader;
 
 /// Current Norito layout version of [`V2FinalityArtifact`].
-pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 3;
+pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 4;
 /// Maximum encoded BLS proof-of-possession bytes retained per validator.
 pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
 
 /// Election inputs finalized for the epoch immediately following a block.
 ///
 /// The snapshot is optional because most blocks do not finalize an epoch
-/// transition. When present, it carries the complete ordered voting-power
+/// transition. When present, it carries the complete ordered equal-vote
 /// roster rather than a reference to mutable world state.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -40,13 +40,13 @@ pub struct FinalizedNextEpochSnapshot {
     pub epoch: u64,
     /// Last height governed by the next epoch.
     pub epoch_end_height: Height,
-    /// Genesis-selected consensus mode used to interpret voting powers.
+    /// Genesis-selected consensus mode used to select the committee.
     pub mode: ConsensusMode,
-    /// Canonically ordered voting roster and exact integer powers.
+    /// Canonically ordered voting roster; every entry has one consensus vote.
     pub roster: Vec<ValidatorPower>,
     /// BLS proofs of possession aligned exactly with `roster`.
     pub validator_set_pops: Vec<Vec<u8>>,
-    /// Canonical dual quorum derived from `roster`.
+    /// Canonical `2f + 1` quorum derived from `roster`.
     pub quorum: DualQuorum,
     /// Finalized seed used for deterministic leader rotation in this epoch.
     pub leader_seed: [u8; 32],
@@ -88,10 +88,8 @@ impl FinalizedNextEpochSnapshot {
         {
             return Err(ValidationError::NextEpochProofOfPossessionTooLarge);
         }
-        if self.mode == ConsensusMode::Permissioned
-            && self.roster.iter().any(|validator| validator.power != 1)
-        {
-            return Err(ValidationError::NextEpochPermissionedPowerNotOne);
+        if self.roster.iter().any(|validator| validator.power != 1) {
+            return Err(ValidationError::NextEpochVotingPowerNotOne);
         }
         Ok(())
     }
@@ -319,7 +317,7 @@ impl V2FinalityArtifact {
     ///
     /// This is the canonical cryptographic verification boundary shared by
     /// consensus recovery, bridge proof construction, and light-client proof
-    /// verification. Structural validation, dual count-and-power quorum, every
+    /// verification. Structural validation, the exact equal-vote quorum, every
     /// signer index, every roster proof of possession, and the aggregate
     /// signature are checked over the exact Sumeragi-v2 vote preimage.
     ///
@@ -399,8 +397,8 @@ pub enum V2QuorumCertificateVerificationError {
 /// and roster-aligned BLS proofs of possession.
 ///
 /// The certificate's own validation enforces strictly ordered, in-range
-/// signers plus both the count threshold and strictly-greater-than-two-thirds
-/// signed voting power. This helper then verifies the selected BLS keys, `PoPs`,
+/// signers plus the `2f + 1` threshold under a unit-vote `3f + 1` roster.
+/// This helper then verifies the selected BLS keys, `PoPs`,
 /// and aggregate signature over [`QuorumCertificate::signer_preimage`].
 ///
 /// # Errors
@@ -775,12 +773,12 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"finality nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::Plain,
+                encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x5A; 32],
         }
@@ -795,12 +793,13 @@ mod tests {
     }
 
     fn execution_commitment(seed: u8) -> super::super::ExecutionCommitment {
-        super::super::ExecutionCommitment::new(
+        super::super::ExecutionCommitment::new_without_merge_carrier(
             Hash::new([seed, 3]),
             Hash::new([seed, 4]),
             Hash::new([seed, 5]),
             None,
             0,
+            1,
             Hash::new([seed, 6]),
         )
         .expect("canonical fixture execution commitment")
@@ -860,6 +859,20 @@ mod tests {
 
         assert_eq!(decoded, artifact);
         decoded.validate().expect("roundtrip remains valid");
+    }
+
+    #[test]
+    fn artifact_rejects_legacy_v3_layout() {
+        let mut legacy = artifact();
+        legacy.format_version = 3;
+
+        assert_eq!(
+            legacy.validate(),
+            Err(V2FinalityValidationError::UnsupportedFormatVersion {
+                expected: V2_FINALITY_ARTIFACT_VERSION,
+                actual: 3,
+            })
+        );
     }
 
     #[test]

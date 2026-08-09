@@ -17,14 +17,16 @@ The `mochi-integration` crate provides lightweight Torii mocks and supervisor sm
 For the desktop shell itself, the quickest happy path is:
 
 ```sh
-cargo run -p mochi-ui --features gui --bin mochi -- --profile single-peer --build-binaries
+cargo run -p mochi-ui --features gui --bin mochi -- --profile four-peer-bft --build-binaries
 ```
 
-Use `--profile four-peer-bft` when you want a closer validator/quorum rehearsal.
-Unprofiled `single-peer` genesis keeps a 100 ms signed block cadence, while
-multi-peer profiles use the one-second localnet cadence so crash-safe consensus
-persistence can keep up when all validators share one development machine.
-Explicit Kagami genesis profiles retain their profile-defined cadence.
+The default four-validator topology is the smallest exact Sumeragi committee.
+Custom profiles may use four or seven validators and use the one-second
+localnet cadence so crash-safe consensus persistence can keep up when all
+validators share one development machine. Explicit Kagami genesis profiles
+retain their profile-defined cadence. The historical `single-peer` profile
+name remains readable for saved-config compatibility but launches four
+validators.
 
 The desktop app now treats the selected workspace as the home for bootstrap files and uses
 `<workspace>/.mochi/sandbox/<profile>` as the default runtime state root. The dashboard and the
@@ -57,9 +59,8 @@ scripts/mochi_local_sandbox.sh mcp-add-command
 ```
 
 By default the helper uses the current directory as `MOCHI_WORKSPACE_ROOT` and starts the
-`single-peer` preset. Set `MOCHI_PROFILE=four-peer-bft` for the four-validator rehearsal, or
-set `MOCHI_WORKSPACE_ROOT=/path/to/app` when the current shell is not already in the target app
-workspace.
+`four-peer-bft` preset. Set `MOCHI_WORKSPACE_ROOT=/path/to/app` when the current shell is not
+already in the target app workspace.
 Set `MOCHI_PYTHON=/absolute/path/to/python3` when you need to select a specific validated
 interpreter; the helper uses that one interpreter for every Python step.
 
@@ -76,19 +77,54 @@ The generated local Torii config enables both the curated `/v1/mcp` endpoint and
 transport (`stage = "ga"`, no mTLS) so the same sandbox works for Codex MCP clients and local SDK
 smoke tests without extra hand-edited config.
 
+Mochi also provisions signer-backed local account onboarding for the universal dataspace. The
+owner-only signer and token remain under the sandbox `runtime/` directory; `session.json` exposes
+only the `local-dev` credential identifier and the `onboarding_signer_file` and
+`onboarding_token_file` paths so local applications can use the bundle without copying its raw
+secrets or digest into generated metadata.
+
+To qualify the transactional wipe path against real binaries, use the bounded one-shot rehearsal
+with a fresh data root:
+
+```sh
+rehearsal_root="$(mktemp -d)"
+cargo run -p mochi-ui --features gui --bin mochi -- \
+  sandbox rehearse-wipe-and-regenerate \
+  --data-root "$rehearsal_root" \
+  --profile four-peer-bft \
+  --build-binaries \
+  --enable-smoke
+```
+
+The command starts four real peers, proves committed genesis, readiness, and the local MCP surface,
+calls `Supervisor::wipe_and_regenerate` while that exact peer set is running, and repeats every
+proof against the new generation. It fails unless the selected generation changes and all four
+aliases return. On success it stops the peers and prints one bounded Norito JSON evidence record;
+the disposable data root remains available for audit.
+
 Generated local validator configs pin the runtime-critical local defaults Mochi depends on:
 `nexus.enabled = false` unless explicitly enabled and `confidential.enabled = true`. Consensus mode
 is carried by the signed genesis/height context, so Mochi does not emit the retired mutable
 `sumeragi.consensus_mode` setting. If you enable Nexus, Mochi fails fast unless the selected profile
 generates an NPoS signed genesis.
 
-Each peer keeps its runtime data under `peers/<alias>/storage`, with independent `kura`, `snapshot`,
-and `torii` children. Kura receives the dedicated `storage/kura` root so it can establish and
-authenticate its configured-catalog baseline without unrelated runtime files in that directory.
-Mochi initializes `storage/snapshot/generations` whenever it creates the explicit snapshot root,
-matching the snapshot reader's authenticated directory contract.
+Mochi publishes configs and genesis as immutable generations under `generations/<generation-id>`.
+The closed `generation.json` inventory binds every artifact and its BLAKE3 digest; the
+`current-generation` record is replaced atomically while `.generation.lock` serializes writers.
+Failed candidates never replace the selected record, and previously published generations remain
+available for audit.
+
+Each peer keeps mutable runtime data under
+`peers/<alias>/storage-generations/<generation-id>`, with independent `kura`, `snapshot`, and
+`torii` children. A config-only generation keeps using the current storage generation, while wipe
+and re-genesis prepares a fresh empty storage generation before committing its config/genesis
+generation. This avoids a partially wiped peer set after the atomic selection point. Kura receives
+the dedicated `storage-generations/<generation-id>/kura` root, and Mochi initializes the matching
+`snapshot/generations` directory whenever it creates a fresh runtime generation.
 Snapshot metadata pins this as `storage_layout = "kura-subdirectory-v1"`; restore rejects older
-unmarked aggregate-layout snapshots because their Kura data cannot be relocated safely by inference.
+unmarked aggregate-layout snapshots and snapshots from another immutable generation. Config and
+genesis copies in a snapshot are audit evidence; restore verifies them and rewrites only mutable
+storage and logs.
 
 ## Repo-Shared Skill
 

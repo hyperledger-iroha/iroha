@@ -4,6 +4,10 @@
 
 #[path = "../model_parser.rs"]
 mod model_parser;
+#[path = "../musubi_instruction_fixture.rs"]
+mod musubi_instruction_fixture;
+#[path = "../musubi_sdk_fixture.rs"]
+mod musubi_sdk_fixture;
 #[path = "../mutators.rs"]
 mod mutators;
 #[path = "../norito_chain_layout.rs"]
@@ -62,7 +66,5 @@ mod transaction_parameters;
 mod transaction_traits;
 #[path = "../unregistered_instruction.rs"]
 mod unregistered_instruction;
-#[path = "../unshield_json_defaults.rs"]
-mod unshield_json_defaults;
 #[path = "../zk_envelope_roundtrip.rs"]
 mod zk_envelope_roundtrip;

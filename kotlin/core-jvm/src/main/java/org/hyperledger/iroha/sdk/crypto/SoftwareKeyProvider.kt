@@ -229,7 +229,7 @@ class SoftwareKeyProvider(
             throw KeyManagementException("Passphrase provider must be configured for export store")
         }
         val passphrase = passphraseProvider.passphrase()
-        if (passphrase == null || passphrase.isEmpty()) {
+        if (passphrase.isEmpty()) {
             throw KeyManagementException("Passphrase must not be empty")
         }
         return passphrase

@@ -774,24 +774,6 @@ impl LiveQueryStoreHandle {
         ))
     }
 
-    /// Start an iterable query without storing it in the `LiveQueryStore`.
-    ///
-    /// Returns the first batch and the remaining items; the cursor is always `None`.
-    /// Intended for short-lived contexts (e.g., inside smart contracts) where
-    /// cursors must not be reusable after the context ends.
-    /// # Errors
-    /// Returns an error if the first batch cannot be produced by the iterator.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn handle_iter_start_ephemeral(
-        &self,
-        mut live_query: ErasedQueryIterator,
-    ) -> Result<QueryOutput, QueryExecutionFail> {
-        let curr_cursor = 0;
-        let (batch, _next_cursor) = live_query.next_batch(curr_cursor)?;
-        let remaining_items = live_query.remaining().unwrap_or(0);
-        Ok(QueryOutput::new(batch, remaining_items, None))
-    }
-
     /// Retrieve the next batch of query output using `cursor` as `authority`.
     ///
     /// # Errors

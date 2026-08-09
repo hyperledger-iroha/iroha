@@ -55,6 +55,7 @@ required_paths = (
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
     "crates/iroha/src/client.rs",
     "crates/iroha_torii/src/openapi.rs",
+    "crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs",
     "crates/iroha_torii/src/routing.rs",
     "crates/iroha_torii/tests/sorafs_discovery.rs",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java",
@@ -93,6 +94,14 @@ negative_control_commands = (
     (
         "tracked Python bytecode workflow negative control",
         f"{main_command} --negative-control-bytecode-workflow",
+    ),
+    (
+        "OpenAPI split-test include negative control",
+        f"{main_command} --negative-control-openapi-test-include",
+    ),
+    (
+        "OpenAPI split-test body negative control",
+        f"{main_command} --negative-control-openapi-test-function",
     ),
     ("Swift SDK job workflow negative control", f"{main_command} --negative-control-swift-sdk-job-workflow"),
     ("Swift SDK runner workflow negative control", f"{main_command} --negative-control-swift-sdk-runner-workflow"),
@@ -494,6 +503,7 @@ def check_scripts():
     require_contains("ci/check_sorafs_pin_register_swift_sdk.sh", 'SWIFTC_BIN="${SORAFS_PIN_REGISTER_SWIFTC_BIN:-swiftc}"', "Swift SDK swiftc override variable")
     require_contains("ci/check_sorafs_pin_register_swift_sdk.sh", '"${SWIFTC_BIN}" --version', "Swift SDK swiftc version evidence")
     require_contains("ci/check_sorafs_pin_register_csharp_sdk.sh", "RegisterSoraFsPinManifestAsync", "C# paid-pin test filter")
+    require_contains("ci/check_sorafs_pin_register_csharp_sdk.sh", '--filter-method "*RegisterSoraFsPinManifestAsync*"', "C# Microsoft Testing Platform method filter")
     require_contains("ci/check_sorafs_pin_register_csharp_sdk.sh", 'DOTNET_BIN="${SORAFS_PIN_REGISTER_DOTNET_BIN:-dotnet}"', "C# SDK dotnet override variable")
     require_contains("ci/check_sorafs_pin_register_csharp_sdk.sh", 'DOTNET_VERSION="$("${DOTNET_BIN}" --version)"', "C# SDK selected dotnet capture")
     require_contains("ci/check_sorafs_pin_register_csharp_sdk.sh", 'printf \'%s\\n\' "${DOTNET_VERSION}"', "C# SDK dotnet version evidence")
@@ -594,9 +604,20 @@ def check_rust_wire_contract():
         ("#/components/schemas/SorafsPinRegisterResponseV1", "admission response schema"),
         ('"enum": ["submitted"]', "submitted-only status"),
         ("Submitted never means committed or finalized", "admission semantics"),
-        ("sorafs_pin_register_openapi_is_caller_signed_transaction_transport", "OpenAPI guard"),
     ):
         require(needle in openapi, f"Torii pin-register OpenAPI missing {label}")
+    require(
+        'include!("openapi/tests/sorafs_contracts.rs");' in openapi,
+        "Torii pin-register OpenAPI missing its identity-preserving contract-test include",
+    )
+    openapi_contract_tests = read(
+        "crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs"
+    )
+    require(
+        "fn sorafs_pin_register_openapi_is_caller_signed_transaction_transport()"
+        in openapi_contract_tests,
+        "Torii pin-register OpenAPI missing OpenAPI guard",
+    )
     require(
         '"SorafsPinRegisterRequestV1".to_owned()' not in openapi,
         "OpenAPI must not retain the secret-bearing request schema",
@@ -838,6 +859,34 @@ if mode == "--negative-control-bytecode-workflow":
         "",
         "tracked Python bytecode workflow drift",
     )
+
+if mode == "--negative-control-openapi-test-include":
+    target = "crates/iroha_torii/src/openapi.rs"
+    original = read(target)
+    mutated = original.replace(
+        '    include!("openapi/tests/sorafs_contracts.rs");',
+        '    include!("openapi/tests/sorafs_contracts_disabled.rs");',
+        1,
+    )
+    require(
+        mutated != original,
+        "negative control failed: unable to mutate OpenAPI split-test include",
+    )
+    reject_mutation(target, mutated, "OpenAPI split-test include drift")
+
+if mode == "--negative-control-openapi-test-function":
+    target = "crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs"
+    original = read(target)
+    mutated = original.replace(
+        "fn sorafs_pin_register_openapi_is_caller_signed_transaction_transport()",
+        "fn sorafs_pin_register_openapi_transport_disabled()",
+        1,
+    )
+    require(
+        mutated != original,
+        "negative control failed: unable to mutate OpenAPI split-test body",
+    )
+    reject_mutation(target, mutated, "OpenAPI split-test body drift")
 
 if mode == "--negative-control-jvm-sdk-jdk21-script":
     target = "ci/check_sorafs_pin_register_jvm_sdk.sh"

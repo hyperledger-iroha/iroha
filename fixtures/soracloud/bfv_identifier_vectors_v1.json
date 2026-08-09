@@ -1904,8 +1904,7 @@
       "verifier_key_digest_hex": "63c5755db74a73b47b9c4a38420a86f807c181bee9357eace19c235644a854ad",
       "verifier_key_material_commitment_hex": "756f1bb101584fecb180ae4f484533377c07e27d7395609388d072dde88fd88d",
       "vk_commitment_hex": "756f1bb101584fecb180ae4f484533377c07e27d7395609388d072dde88fd88d",
-      "expected_material_digest_hex": "82e044c3ae3e4307b19b28a78f3a20e2f222c02022e37d3efac7047853cffb11",
-      "expected_statement_digest_hex": "02fb435e71999a389e94241b89087964f3a0ae51f29b838da3f1b1ecea224351"
+      "expected_material_digest_hex": "82e044c3ae3e4307b19b28a78f3a20e2f222c02022e37d3efac7047853cffb11"
     },
     "bootstrap_refresh_vectors": [
       {

@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use clap::ValueEnum;
 use eyre::Result;
 
@@ -25,7 +23,7 @@ pub enum Command {
     Phases(PhasesArgs),
     /// Show aggregated telemetry snapshot (availability, QC, RBC, VRF)
     Telemetry(TelemetryArgs),
-    /// Evidence helpers (list/count/submit)
+    /// Evidence audit helpers (list/count)
     #[command(subcommand)]
     Evidence(EvidenceCommand),
     /// Show VRF penalties for the given epoch
@@ -49,8 +47,6 @@ pub enum EvidenceCommand {
     List(EvidenceListArgs),
     /// Show evidence count
     Count(EvidenceCountArgs),
-    /// Submit hex-encoded evidence payload
-    Submit(EvidenceSubmitArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -81,23 +77,20 @@ pub struct EvidenceListArgs {
 #[derive(clap::Args, Debug)]
 pub struct EvidenceCountArgs {}
 
-#[derive(clap::Args, Debug)]
-pub struct EvidenceSubmitArgs {
-    /// Hex-encoded Norito evidence payload (0x optional)
-    #[arg(long, conflicts_with = "evidence_hex_file")]
-    pub evidence_hex: Option<String>,
-    /// Path to file containing hex-encoded proof (whitespace ignored)
-    #[arg(long, value_name = "PATH", conflicts_with = "evidence_hex")]
-    pub evidence_hex_file: Option<PathBuf>,
-}
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum EvidenceKindArg {
+    #[value(name = "DoublePrepare")]
     DoublePrepare,
+    #[value(name = "DoubleCommit")]
     DoubleCommit,
-    #[value(alias = "invalid-qc")]
+    #[value(name = "InvalidQc")]
     InvalidQc,
+    #[value(name = "InvalidProposal")]
     InvalidProposal,
+    #[value(name = "Censorship")]
+    Censorship,
+    #[value(name = "SumeragiV2Equivocation")]
+    SumeragiV2Equivocation,
 }
 
 impl EvidenceKindArg {
@@ -107,6 +100,8 @@ impl EvidenceKindArg {
             EvidenceKindArg::DoubleCommit => "DoubleCommit",
             EvidenceKindArg::InvalidQc => "InvalidQc",
             EvidenceKindArg::InvalidProposal => "InvalidProposal",
+            EvidenceKindArg::Censorship => "Censorship",
+            EvidenceKindArg::SumeragiV2Equivocation => "SumeragiV2Equivocation",
         }
     }
 }
@@ -176,7 +171,38 @@ impl Run for EvidenceCommand {
         match self {
             EvidenceCommand::List(args) => evidence::list(context, args),
             EvidenceCommand::Count(args) => evidence::count(context, args),
-            EvidenceCommand::Submit(args) => evidence::submit(context, args),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::ValueEnum as _;
+
+    use super::EvidenceKindArg;
+
+    #[test]
+    fn evidence_kind_filters_map_to_the_six_canonical_wire_names() {
+        let cases = [
+            (EvidenceKindArg::DoublePrepare, "DoublePrepare"),
+            (EvidenceKindArg::DoubleCommit, "DoubleCommit"),
+            (EvidenceKindArg::InvalidQc, "InvalidQc"),
+            (EvidenceKindArg::InvalidProposal, "InvalidProposal"),
+            (EvidenceKindArg::Censorship, "Censorship"),
+            (
+                EvidenceKindArg::SumeragiV2Equivocation,
+                "SumeragiV2Equivocation",
+            ),
+        ];
+
+        for (kind, expected) in cases {
+            assert_eq!(kind.as_str(), expected);
+            assert_eq!(
+                kind.to_possible_value()
+                    .expect("evidence kind must have a CLI value")
+                    .get_name(),
+                expected
+            );
         }
     }
 }

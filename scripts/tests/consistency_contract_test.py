@@ -23,7 +23,7 @@ def _fixture(
     script.parent.mkdir(parents=True)
     shutil.copy2(CONSISTENCY_SCRIPT, script)
 
-    schema = tmp_path / "docs" / "source" / "references" / "schema.json"
+    schema = tmp_path / "specs" / "references" / "schema.json"
     schema.parent.mkdir(parents=True)
     schema.write_bytes(target)
 
@@ -51,6 +51,8 @@ def test_schema_uses_active_advanced_command() -> None:
 
     assert 'cmd_schema="${bin_kagami[@]} advanced schema"' in source
     assert 'cmd_schema="${bin_kagami[@]} schema"' not in source
+    assert 'do_check "$cmd_schema" "specs/references/schema.json"' in source
+    assert "docs/source/references/schema.json" not in source
 
 
 def test_failed_generator_cannot_truncate_checked_in_schema(tmp_path: Path) -> None:

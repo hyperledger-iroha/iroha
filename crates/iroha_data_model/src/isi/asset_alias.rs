@@ -20,23 +20,6 @@ isi! {
     }
 }
 
-isi! {
-    /// Change the balance partition policy for an existing asset definition.
-    ///
-    /// Transitioning from `Global` to `DataspaceRestricted` may migrate existing global balance
-    /// buckets into one dataspace-scoped bucket. Transitioning from `DataspaceRestricted` back to
-    /// `Global` is intentionally rejected by the executor.
-    pub struct SetAssetDefinitionBalancePolicy {
-        /// Asset definition that should be updated.
-        pub asset_definition_id: AssetDefinitionId,
-        /// New balance partition policy.
-        pub balance_scope_policy: crate::asset::AssetBalancePolicy,
-        /// Dataspace that should receive existing global buckets when restricting a legacy asset.
-        #[norito(default)]
-        pub migrate_global_balances_to_dataspace: Option<crate::nexus::DataSpaceId>,
-    }
-}
-
 impl SetAssetDefinitionAlias {
     /// Stable wire identifier for this instruction.
     pub const WIRE_ID: &'static str = "iroha.asset_definition.alias.set";
@@ -67,27 +50,6 @@ impl SetAssetDefinitionAlias {
 }
 
 impl crate::seal::Instruction for SetAssetDefinitionAlias {}
-
-impl SetAssetDefinitionBalancePolicy {
-    /// Stable wire identifier for this instruction.
-    pub const WIRE_ID: &'static str = "iroha.asset_definition.balance_policy.set";
-
-    /// Build a policy update instruction.
-    #[must_use]
-    pub const fn new(
-        asset_definition_id: AssetDefinitionId,
-        balance_scope_policy: crate::asset::AssetBalancePolicy,
-        migrate_global_balances_to_dataspace: Option<crate::nexus::DataSpaceId>,
-    ) -> Self {
-        Self {
-            asset_definition_id,
-            balance_scope_policy,
-            migrate_global_balances_to_dataspace,
-        }
-    }
-}
-
-impl crate::seal::Instruction for SetAssetDefinitionBalancePolicy {}
 
 impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetDefinitionAlias {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -133,59 +95,15 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetDefinitionAlias {
     }
 }
 
-impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetDefinitionBalancePolicy {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let flags = norito::core::effective_decode_flags()
-            .unwrap_or_else(norito::core::default_encode_flags);
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
-
-        let mut offset = 0usize;
-        let asset_definition_id = super::decode_aos_canonical_field::<AssetDefinitionId>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let balance_scope_policy = super::decode_aos_canonical_field::<
-            crate::asset::AssetBalancePolicy,
-        >(
-            super::read_aos_field(bytes, &mut offset, flags)?, flags
-        )?;
-        let migrate_global_balances_to_dataspace = if offset < bytes.len() {
-            super::decode_aos_canonical_field::<Option<crate::nexus::DataSpaceId>>(
-                super::read_aos_field(bytes, &mut offset, flags)?,
-                flags,
-            )?
-        } else {
-            None
-        };
-        if offset != bytes.len() {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        norito::core::note_payload_access(bytes, offset);
-        Ok((
-            Self {
-                asset_definition_id,
-                balance_scope_policy,
-                migrate_global_balances_to_dataspace,
-            },
-            offset,
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use norito::core::DecodeFromSlice;
 
     use super::*;
-    use crate::{
-        asset::{AssetBalancePolicy, AssetDefinitionAlias},
-        nexus::DataSpaceId,
-    };
+    use crate::asset::AssetDefinitionAlias;
 
     fn asset_definition() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         )
@@ -236,35 +154,19 @@ mod tests {
             Some(42),
         ));
         assert_slice_roundtrip(SetAssetDefinitionAlias::clear(definition.clone()));
-        assert_slice_roundtrip(SetAssetDefinitionBalancePolicy::new(
-            definition,
-            AssetBalancePolicy::DataspaceRestricted,
-            Some(DataSpaceId::UNIVERSAL),
-        ));
+        let _ = definition;
     }
 
     #[test]
     fn asset_alias_registry_decodes_stable_ids() {
         let registry = crate::isi::InstructionRegistry::new()
-            .register_with_id_slice::<SetAssetDefinitionAlias>(SetAssetDefinitionAlias::WIRE_ID)
-            .register_with_id_slice::<SetAssetDefinitionBalancePolicy>(
-                SetAssetDefinitionBalancePolicy::WIRE_ID,
-            );
+            .register_with_id_slice::<SetAssetDefinitionAlias>(SetAssetDefinitionAlias::WIRE_ID);
         let definition = asset_definition();
 
         assert_registry_decodes(
             &registry,
             SetAssetDefinitionAlias::WIRE_ID,
             SetAssetDefinitionAlias::bind(definition.clone(), asset_alias(), Some(7)),
-        );
-        assert_registry_decodes(
-            &registry,
-            SetAssetDefinitionBalancePolicy::WIRE_ID,
-            SetAssetDefinitionBalancePolicy::new(
-                definition,
-                AssetBalancePolicy::DataspaceRestricted,
-                Some(DataSpaceId::UNIVERSAL),
-            ),
         );
     }
 }

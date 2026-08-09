@@ -11,7 +11,10 @@ fn signature(byte: u8) -> OpaqueSignature {
     OpaqueSignature::new(vec![byte; 8])
 }
 
-fn context_with_powers(mode: VotingMode, powers: &[u64]) -> HeightContext {
+fn try_context_with_powers(
+    mode: VotingMode,
+    powers: &[u64],
+) -> Result<HeightContext, HeightContextError> {
     let roster = powers
         .iter()
         .enumerate()
@@ -40,7 +43,10 @@ fn context_with_powers(mode: VotingMode, powers: &[u64]) -> HeightContext {
         Digest::repeat(0x53),
         Digest::repeat(0x54),
     )
-    .expect("valid fixture context")
+}
+
+fn context_with_powers(mode: VotingMode, powers: &[u64]) -> HeightContext {
+    try_context_with_powers(mode, powers).expect("valid fixture context")
 }
 
 fn context() -> HeightContext {
@@ -270,6 +276,8 @@ fn height_context_rejects_rosters_above_first_release_bound() {
     assert!(matches!(result, Err(HeightContextError::RosterTooLarge)));
 }
 
+include!("tests/committee_fallback_and_retransmit.rs");
+
 #[test]
 fn height_context_requires_one_same_round_parent_commit_geometry() {
     let roster = context().roster().to_vec();
@@ -312,90 +320,7 @@ fn height_context_requires_one_same_round_parent_commit_geometry() {
     ));
 }
 
-#[test]
-fn view_zero_binds_semantic_parent_decision_across_reproposal_rounds() {
-    let context = context();
-    let frozen = context.parent_commit().expect("fixture parent CommitQC");
-    let proposal_subject = Subject::repeat(0x64);
-    let mut accepts_frozen = Reducer::new(
-        context.clone(),
-        Some(context.leader(0)),
-        Generation::new(31),
-    )
-    .expect("reducer");
-    let accepted = accepts_frozen
-        .step(Event::ProposalReceived {
-            tag: accepts_frozen.current_tag(),
-            proposal: proposal(
-                &context,
-                0,
-                proposal_subject,
-                ProposalJustification::ParentCommit(Some(frozen)),
-            ),
-        })
-        .expect("the frozen parent reference is accepted");
-    assert!(matches!(accepted.effects(), [Effect::FetchBody { .. }]));
-
-    let redecided_round = Round::new(frozen.round().height(), frozen.round().view() + 3);
-    let equivalent_other_view = CertificateRef::new_with_proposal_round(
-        frozen.context_id(),
-        redecided_round,
-        redecided_round,
-        Phase::Commit,
-        frozen.subject(),
-    );
-    assert!(frozen.same_commit_decision(equivalent_other_view));
-    assert!(!frozen.same_commit_decision(CertificateRef::new(
-        frozen.context_id(),
-        frozen.round(),
-        Phase::Prepare,
-        frozen.subject(),
-    )));
-    let mut accepts_other_view = Reducer::new(
-        context.clone(),
-        Some(context.leader(0)),
-        Generation::new(31),
-    )
-    .expect("reducer");
-    let accepted = accepts_other_view
-        .step(Event::ProposalReceived {
-            tag: accepts_other_view.current_tag(),
-            proposal: proposal(
-                &context,
-                0,
-                proposal_subject,
-                ProposalJustification::ParentCommit(Some(equivalent_other_view)),
-            ),
-        })
-        .expect("an equivalent parent CommitQC after unchanged re-proposal is accepted");
-    assert!(matches!(accepted.effects(), [Effect::FetchBody { .. }]));
-
-    let foreign_context = CertificateRef::new(
-        ContextId::repeat(0x42),
-        equivalent_other_view.round(),
-        Phase::Commit,
-        frozen.subject(),
-    );
-    let mut rejects_foreign = Reducer::new(
-        context.clone(),
-        Some(context.leader(0)),
-        Generation::new(31),
-    )
-    .expect("reducer");
-    assert_eq!(
-        rejects_foreign.step(Event::ProposalReceived {
-            tag: rejects_foreign.current_tag(),
-            proposal: proposal(
-                &context,
-                0,
-                proposal_subject,
-                ProposalJustification::ParentCommit(Some(foreign_context)),
-            ),
-        }),
-        Err(ReducerError::InvalidProposalJustification)
-    );
-}
-
+include!("tests/v2_core_view_zero_parent_binding.rs");
 #[test]
 fn certificate_height_subject_identity_ignores_round_and_phase_only() {
     let context = context();
@@ -790,7 +715,7 @@ fn proposal_then_prepare_qc_monotonically_upgrades_the_body_fetch() {
     );
     let manifest = *proposal.proposal().manifest();
     let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
-    let mut reducer = Reducer::new(context, Some(id(4)), Generation::new(33)).unwrap();
+    let mut reducer = Reducer::new(context, Some(id(3)), Generation::new(33)).unwrap();
 
     let ordinary = reducer
         .step(Event::ProposalReceived {
@@ -834,7 +759,7 @@ fn equal_prepare_qcs_with_different_quorum_subsets_reuse_first_fetch_authority()
     let second = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 4]);
     assert_eq!(first.reference(), second.reference());
     assert_ne!(first, second);
-    let mut reducer = Reducer::new(context, Some(id(4)), Generation::new(35)).unwrap();
+    let mut reducer = Reducer::new(context, Some(id(3)), Generation::new(35)).unwrap();
 
     let started = reducer
         .step(Event::QuorumCertificateReceived {
@@ -888,7 +813,7 @@ fn prepare_qc_then_proposal_adds_the_manifest_without_dropping_certification() {
     );
     let manifest = *proposal.proposal().manifest();
     let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
-    let mut reducer = Reducer::new(context, Some(id(4)), Generation::new(34)).unwrap();
+    let mut reducer = Reducer::new(context, Some(id(3)), Generation::new(34)).unwrap();
 
     let certified = reducer
         .step(Event::QuorumCertificateReceived {
@@ -1133,22 +1058,11 @@ fn stale_persistence_completions_stutter_while_current_append_is_pending() {
 }
 
 #[test]
-fn quorum_requires_both_validator_count_and_voting_power() {
-    let context = context_with_powers(VotingMode::Npos, &[7, 1, 1, 1]);
-    let count_only = Quorum::calculate(&context, &[id(2), id(3), id(4)]).unwrap();
-    assert_eq!(count_only.signer_count(), 3);
-    assert!(!count_only.satisfies(&context));
-
-    let power_only = Quorum::calculate(&context, &[id(1)]).unwrap();
-    assert_eq!(power_only.voting_power(), VotingPower::new(7));
-    assert!(
-        !power_only.satisfies(&context),
-        "a supermajority of power cannot replace the independent signer-count quorum"
-    );
-
-    let dual = Quorum::calculate(&context, &[id(1), id(2), id(3)]).unwrap();
-    assert!(dual.satisfies(&context));
-    assert!(Quorum::require(&context, &[id(1), id(2), id(3)]).is_ok());
+fn npos_context_rejects_stake_weighted_consensus_votes() {
+    assert!(matches!(
+        try_context_with_powers(VotingMode::Npos, &[7, 1, 1, 1]),
+        Err(HeightContextError::VotingPowerNotOne(validator)) if validator == id(1)
+    ));
 }
 
 #[test]
@@ -1246,12 +1160,18 @@ fn timeout_is_durable_before_signing_and_view_change() {
             assert!(matches!(install.record(), WalRecord::InstallTimeout(_)));
             assert_eq!(reducer.current_tag().view(), 0);
             let entered = acknowledge(&mut reducer, &install);
-            assert!(
-                entered
-                    .effects()
-                    .iter()
-                    .any(|effect| matches!(effect, Effect::EnterView { .. }))
-            );
+            assert!(matches!(
+                entered.effects(),
+                [
+                    Effect::EnterView {
+                        tag,
+                        protected_lock: None,
+                        ..
+                    },
+                    Effect::Broadcast(ConsensusMessageV2::TimeoutCertificate(certificate)),
+                ] if tag.view() == 1
+                    && certificate.round() == Round::new(context.height(), 0)
+            ));
         }
     }
     assert_eq!(reducer.current_tag().view(), 1);
@@ -1265,6 +1185,71 @@ fn timeout_is_durable_before_signing_and_view_change() {
         Effect::Broadcast(ConsensusMessageV2::TimeoutVote(vote))
             if vote.vote().round() == Round::new(context.height(), 0)
     )));
+}
+
+#[test]
+fn quorum_forming_local_timeout_broadcasts_only_durable_certificate() {
+    let context = context();
+    let mut reducer = Reducer::new(context.clone(), Some(id(1)), Generation::new(1)).unwrap();
+    let tag = reducer.current_tag();
+    let round = Round::new(context.height(), tag.view());
+
+    for signer in [2_u8, 3] {
+        let retained = reducer
+            .step(Event::TimeoutVoteReceived {
+                tag,
+                vote: SignedTimeoutVote::new(
+                    TimeoutVote::new(context.id(), round, id(signer), None),
+                    signature(signer),
+                ),
+            })
+            .expect("retain the remote timeout share before local signing");
+        assert!(retained.effects().is_empty());
+    }
+
+    let timeout_intent = only_persist(
+        reducer
+            .step(Event::TimeoutElapsed { tag })
+            .expect("start the local durable timeout intent"),
+    );
+    let sign = acknowledge(&mut reducer, &timeout_intent);
+    assert!(matches!(
+        sign.effects(),
+        [Effect::Sign {
+            message: SignableMessage::TimeoutVote(_),
+            ..
+        }]
+    ));
+
+    let formed = reducer
+        .step(Event::Signed {
+            tag,
+            signature: signature(1),
+        })
+        .expect("the local signature forms the timeout certificate");
+    let install = match formed.effects() {
+        [Effect::Persist { entry, .. }]
+            if matches!(entry.record(), WalRecord::InstallTimeout(_)) =>
+        {
+            entry.clone()
+        }
+        effects => panic!(
+            "quorum-forming local timeout must expose only its durable TC fence: {effects:?}"
+        ),
+    };
+
+    let entered = acknowledge(&mut reducer, &install);
+    assert!(matches!(
+        entered.effects(),
+        [
+            Effect::EnterView {
+                tag: entered_tag,
+                protected_lock: None,
+                ..
+            },
+            Effect::Broadcast(ConsensusMessageV2::TimeoutCertificate(certificate)),
+        ] if entered_tag.view() == tag.view() + 1 && certificate.round() == round
+    ));
 }
 
 #[test]
@@ -1292,7 +1277,7 @@ fn self_contained_timeout_high_qc_cannot_poison_an_eligible_quorum() {
         if signer == 2 {
             let install = only_persist(outcome);
             let WalRecord::InstallTimeout(certificate) = install.record() else {
-                panic!("dual quorum must form a grouped timeout certificate");
+                panic!("equal-vote quorum must form a grouped timeout certificate");
             };
             assert_eq!(certificate.groups().len(), 2);
             assert_eq!(certificate.highest_prepare(), Some(&expected_high));
@@ -3722,12 +3707,21 @@ fn retained_high_without_lock_can_sign_a_successor_view_timeout() {
             &install.expect("the third Timeout vote forms a TC"),
         );
         assert_eq!(formed_timeout.current_tag().view(), 2);
-        assert!(
-            entered
-                .effects()
-                .iter()
-                .any(|effect| matches!(effect, Effect::EnterView { .. }))
-        );
+        let effects = entered.effects();
+        assert!(matches!(
+            effects.first(),
+            Some(Effect::EnterView { tag, .. }) if tag.view() == 2
+        ));
+        assert!(matches!(
+            effects.last(),
+            Some(Effect::Broadcast(ConsensusMessageV2::TimeoutCertificate(certificate)))
+                if certificate.round() == successor_round
+        ));
+        if carried_high {
+            assert!(matches!(effects.get(1), Some(Effect::FetchBody { .. })));
+        } else {
+            assert_eq!(effects.len(), 2);
+        }
     }
 
     let timeout_entry = only_persist(
@@ -4735,7 +4729,7 @@ fn decision_persistence_fences_timeout_certificate_view_change() {
 }
 
 #[test]
-fn commit_qc_cannot_overtake_timeout_frontier() {
+fn commit_qc_preempts_hung_timeout_signature_but_not_pending_wal() {
     let context = context();
     let round = Round::new(context.height(), 0);
     let subject = Subject::repeat(0x93);
@@ -4791,92 +4785,53 @@ fn commit_qc_cannot_overtake_timeout_frontier() {
         }] if *tag == original_tag && vote.round() == round && vote.signer() == id(1)
     ));
 
-    let before_timeout_signature = reducer.clone();
+    let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let before_prepare = reducer.clone();
     let busy = reducer
         .step(Event::QuorumCertificateReceived {
             tag: original_tag,
-            certificate: commit.clone(),
+            certificate: prepare,
         })
-        .expect("CommitQC cannot overtake timeout signing");
+        .expect("PrepareQC remains behind the exact signing fence");
     assert_eq!(
         busy.disposition(),
         StepDisposition::Ignored(IgnoreReason::Busy)
     );
     assert!(busy.effects().is_empty());
-    assert_eq!(reducer, before_timeout_signature);
-
-    let formed = reducer
-        .step(Event::Signed {
-            tag: original_tag,
-            signature: signature(1),
-        })
-        .expect("the local timeout signature atomically forms its TC");
-    let install_entry = match formed.effects() {
-        [
-            Effect::Broadcast(ConsensusMessageV2::TimeoutVote(vote)),
-            Effect::Persist { tag, entry },
-        ] if vote.vote().round() == round
-            && vote.vote().signer() == id(1)
-            && *tag == original_tag
-            && matches!(entry.record(), WalRecord::InstallTimeout(_)) =>
-        {
-            entry.clone()
-        }
-        effects => panic!("timeout quorum must broadcast then persist its TC: {effects:?}"),
-    };
-    assert!(
-        reducer
-            .timeout_pool_snapshots()
-            .iter()
-            .all(|pool| pool.certificate_formed)
-    );
-    assert!(reducer.durable_state().decision().is_none());
-
-    let before_install_ack = reducer.clone();
-    let busy = reducer
-        .step(Event::QuorumCertificateReceived {
-            tag: original_tag,
-            certificate: commit.clone(),
-        })
-        .expect("CommitQC cannot overtake InstallTimeout persistence");
-    assert_eq!(
-        busy.disposition(),
-        StepDisposition::Ignored(IgnoreReason::Busy)
-    );
-    assert!(busy.effects().is_empty());
-    assert_eq!(reducer, before_install_ack);
-
-    let entered = acknowledge(&mut reducer, &install_entry);
-    assert!(matches!(
-        entered.effects(),
-        [
-            Effect::Broadcast(ConsensusMessageV2::TimeoutCertificate(certificate)),
-            Effect::EnterView {
-                tag,
-                certificate: entered_certificate,
-                protected_lock: None,
-            },
-        ] if certificate == entered_certificate
-            && certificate.round() == round
-            && tag.view() == 1
-            && tag.strictly_advances(original_tag)
-    ));
-    assert_eq!(reducer.current_tag().view(), 1);
-    assert!(reducer.durable_state().decision().is_none());
-    assert_eq!(reducer.progress_witness_violation(), None);
+    assert_eq!(reducer, before_prepare);
 
     let decision_entry = only_persist(
         reducer
             .step(Event::QuorumCertificateReceived {
-                tag: reducer.current_tag(),
+                tag: original_tag,
                 certificate: commit.clone(),
             })
-            .expect("retagged historical CommitQC starts Decision persistence"),
+            .expect("authenticated CommitQC supersedes the hung local signature"),
     );
     assert!(matches!(
         decision_entry.record(),
         WalRecord::Decision(certificate) if certificate == &commit
     ));
+    assert!(reducer.awaiting_signature().is_none());
+    assert!(reducer.queued_signatures().any(
+        |message| matches!(message, SignableMessage::TimeoutVote(vote) if vote.round() == round)
+    ));
+    assert!(reducer.durable_state().decision().is_none());
+
+    let before_stale_completion = reducer.clone();
+    let busy = reducer
+        .step(Event::Signed {
+            tag: original_tag,
+            signature: signature(1),
+        })
+        .expect("pending Decision WAL still fences the old signature completion");
+    assert_eq!(
+        busy.disposition(),
+        StepDisposition::Ignored(IgnoreReason::Busy)
+    );
+    assert!(busy.effects().is_empty());
+    assert_eq!(reducer, before_stale_completion);
+
     let decided = acknowledge(&mut reducer, &decision_entry);
     assert!(matches!(
         decided.effects(),
@@ -4890,11 +4845,12 @@ fn commit_qc_cannot_overtake_timeout_frontier() {
             && certificate == &commit
     ));
     assert_eq!(reducer.durable_state().decision(), Some(&commit));
+    assert!(reducer.awaiting_signature().is_none());
+    assert_eq!(reducer.queued_signatures().count(), 0);
     assert_eq!(reducer.progress_witness_violation(), None);
 
     let application_owner = reducer.current_tag();
-    assert_eq!(application_owner.view(), 1);
-    assert_ne!(application_owner.generation(), original_tag.generation());
+    assert_eq!(application_owner, original_tag);
 
     let available = reducer
         .step(Event::BodyAvailable {
@@ -4963,6 +4919,130 @@ fn commit_qc_cannot_overtake_timeout_frontier() {
     assert!(completed.effects().is_empty());
     assert_eq!(reducer.applied_subject(), Some(subject));
     assert!(reducer.ready_to_finish());
+    assert_eq!(reducer.progress_witness_violation(), None);
+}
+
+#[test]
+fn same_view_tc_upgrade_reissues_hung_signature_under_new_generation() {
+    let context = context();
+    let mut reducer =
+        Reducer::new(context.clone(), Some(id(1)), Generation::new(48)).expect("reducer");
+    let initial_tag = reducer.current_tag();
+    let first_timeout = tc_without_high(&context, 0, &[1, 2, 3]);
+    let first_entry = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: initial_tag,
+                certificate: first_timeout,
+            })
+            .expect("initial TC starts the view-advance WAL transition"),
+    );
+    let first_install = acknowledge(&mut reducer, &first_entry);
+    assert!(matches!(
+        first_install.effects(),
+        [Effect::EnterView {
+            tag,
+            protected_lock: None,
+            ..
+        }] if tag.view() == 1 && tag.strictly_advances(initial_tag)
+    ));
+
+    let signing_tag = reducer.current_tag();
+    let timeout_round = Round::new(context.height(), signing_tag.view());
+    let timeout_entry = only_persist(
+        reducer
+            .step(Event::TimeoutElapsed { tag: signing_tag })
+            .expect("current-view timeout starts its durable intent"),
+    );
+    let sign = acknowledge(&mut reducer, &timeout_entry);
+    assert!(matches!(
+        sign.effects(),
+        [Effect::Sign {
+            tag,
+            message: SignableMessage::TimeoutVote(vote),
+        }] if *tag == signing_tag && vote.round() == timeout_round
+    ));
+
+    let locked_subject = Subject::repeat(0x95);
+    let high = qc(&context, 0, Phase::Prepare, locked_subject, &[1, 2, 3]);
+    let upgrade = tc_with_high(&context, 0, high.clone(), &[1, 2, 3]);
+    let upgrade_entry = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: signing_tag,
+                certificate: upgrade.clone(),
+            })
+            .expect("strict same-view TC upgrade supersedes the hung signing task"),
+    );
+    assert!(reducer.awaiting_signature().is_none());
+    assert!(reducer.queued_signatures().any(
+        |message| matches!(message, SignableMessage::TimeoutVote(vote) if vote.round() == timeout_round)
+    ));
+
+    let upgraded = acknowledge(&mut reducer, &upgrade_entry);
+    let upgraded_tag = reducer.current_tag();
+    assert_eq!(upgraded_tag.view(), signing_tag.view());
+    assert!(upgraded_tag.strictly_advances(signing_tag));
+    assert!(matches!(
+        upgraded.effects(),
+        [
+            Effect::EnterView {
+                tag,
+                certificate,
+                protected_lock: Some(locked),
+            },
+            Effect::FetchBody {
+                tag: fetch_tag,
+                round,
+                subject,
+                certificate: Some(fetch_certificate),
+                ..
+            },
+            Effect::Sign {
+                tag: sign_tag,
+                message: SignableMessage::TimeoutVote(vote),
+            },
+        ] if *tag == upgraded_tag
+            && certificate == &upgrade
+            && locked == &high
+            && *fetch_tag == upgraded_tag
+            && *round == high.round()
+            && *subject == locked_subject
+            && fetch_certificate == &high
+            && *sign_tag == upgraded_tag
+            && vote.round() == timeout_round
+    ));
+    assert!(matches!(
+        reducer.awaiting_signature(),
+        Some(SignableMessage::TimeoutVote(vote)) if vote.round() == timeout_round
+    ));
+
+    let before_stale = reducer.clone();
+    let stale = reducer
+        .step(Event::Signed {
+            tag: signing_tag,
+            signature: signature(1),
+        })
+        .expect("old-generation signature completion is a typed stale stutter");
+    assert_eq!(
+        stale.disposition(),
+        StepDisposition::Ignored(IgnoreReason::StaleGeneration)
+    );
+    assert!(stale.effects().is_empty());
+    assert_eq!(reducer, before_stale);
+
+    let completed = reducer
+        .step(Event::Signed {
+            tag: upgraded_tag,
+            signature: signature(1),
+        })
+        .expect("reissued signing task completes under the new generation");
+    assert!(matches!(
+        completed.effects(),
+        [Effect::Broadcast(ConsensusMessageV2::TimeoutVote(vote))]
+            if vote.vote().round() == timeout_round
+    ));
+    assert!(reducer.awaiting_signature().is_none());
     assert_eq!(reducer.progress_witness_violation(), None);
 }
 
@@ -6184,177 +6264,6 @@ fn durable_lock_replay_retains_one_exact_certified_body_owner() {
 }
 
 #[test]
-fn retransmit_rebinds_durable_locked_validation_after_view_change() {
-    let context = context();
-    let subject = Subject::repeat(0x7c);
-    let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
-    let commit_vote = Vote::new(context.id(), prepare.round(), Phase::Commit, subject, id(4));
-    let entries = [
-        WalEntry::new(
-            PersistenceId::new(1),
-            WalRecord::ObservePrepare(prepare.clone()),
-        ),
-        WalEntry::new(
-            PersistenceId::new(2),
-            WalRecord::LockAndCommit {
-                prepare: prepare.clone(),
-                vote: commit_vote.clone(),
-            },
-        ),
-    ];
-    let mut recovered =
-        Reducer::recover(context.clone(), Some(id(4)), Generation::new(25), entries).unwrap();
-
-    let resumed = resume_after_replay(&mut recovered);
-    assert!(matches!(
-        resumed.effects(),
-        [Effect::Sign {
-            message: SignableMessage::Vote(vote),
-            ..
-        }] if *vote == commit_vote
-    ));
-    complete_signature(&mut recovered, 0x7c);
-
-    let available = recovered
-        .step(Event::BodyAvailable {
-            tag: recovered.current_tag(),
-            round: prepare.round(),
-            subject,
-        })
-        .expect("the locked body enters the durable pipeline");
-    assert!(matches!(available.effects(), [Effect::StoreBody { .. }]));
-    let stored = recovered
-        .step(Event::BodyStored {
-            tag: recovered.current_tag(),
-            round: prepare.round(),
-            subject,
-        })
-        .expect("the locked body starts validation in the original view");
-    assert!(matches!(stored.effects(), [Effect::ValidateBody { .. }]));
-    assert_eq!(
-        recovered.body_state(prepare.round(), subject),
-        BodyState::Durable
-    );
-
-    let old_tag = recovered.current_tag();
-    let timeout = tc_with_high(&context, 0, prepare.clone(), &[1, 2, 3]);
-    let install = only_persist(
-        recovered
-            .step(Event::TimeoutCertificateReceived {
-                tag: old_tag,
-                certificate: timeout,
-            })
-            .expect("the timeout certificate starts a certified view change"),
-    );
-    let entered = acknowledge(&mut recovered, &install);
-    let current_tag = recovered.current_tag();
-    assert_eq!(current_tag.view(), 1);
-    assert_ne!(current_tag.generation(), old_tag.generation());
-    assert!(entered.effects().iter().any(|effect| matches!(
-        effect,
-        Effect::EnterView { tag, .. } if *tag == current_tag
-    )));
-    assert!(entered.effects().iter().any(|effect| matches!(
-        effect,
-        Effect::FetchBody {
-            tag,
-            round,
-            subject: fetched_subject,
-            certificate: Some(certificate),
-            ..
-        } if *tag == current_tag
-            && *round == prepare.round()
-            && *fetched_subject == subject
-            && certificate == &prepare
-    )));
-    assert_eq!(
-        recovered.body_state(prepare.round(), subject),
-        BodyState::Missing
-    );
-    let signed = complete_signature(&mut recovered, 0x7d);
-    assert!(signed.effects().iter().any(|effect| matches!(
-        effect,
-        Effect::Broadcast(ConsensusMessageV2::Vote(vote)) if vote.vote() == commit_vote
-    )));
-
-    let rebound_available = recovered
-        .step(Event::BodyAvailable {
-            tag: current_tag,
-            round: prepare.round(),
-            subject,
-        })
-        .expect("the current view recovers the exact locked body");
-    assert!(matches!(
-        rebound_available.effects(),
-        [Effect::StoreBody { tag, .. }] if *tag == current_tag
-    ));
-    let store_retry = recovered
-        .step(Event::RetransmitElapsed { tag: current_tag })
-        .expect("retransmission rebinds available locked storage to the current view");
-    assert!(store_retry.effects().iter().any(|effect| matches!(
-        effect,
-        Effect::StoreBody {
-            tag,
-            round,
-            subject: stored_subject,
-        } if *tag == current_tag
-            && *round == prepare.round()
-            && *stored_subject == subject
-    )));
-    let rebound_stored = recovered
-        .step(Event::BodyStored {
-            tag: current_tag,
-            round: prepare.round(),
-            subject,
-        })
-        .expect("the current view restarts locked-body validation");
-    assert!(matches!(
-        rebound_stored.effects(),
-        [Effect::ValidateBody { tag, .. }] if *tag == current_tag
-    ));
-    assert_eq!(
-        recovered.body_state(prepare.round(), subject),
-        BodyState::Durable
-    );
-
-    let retransmitted = recovered
-        .step(Event::RetransmitElapsed { tag: current_tag })
-        .expect("retransmission rebinds durable locked validation to the current view");
-    assert_eq!(
-        retransmitted
-            .effects()
-            .iter()
-            .filter(|effect| matches!(effect, Effect::ValidateBody { .. }))
-            .count(),
-        1
-    );
-    assert!(retransmitted.effects().iter().any(|effect| matches!(
-        effect,
-        Effect::ValidateBody {
-            tag,
-            round,
-            subject: validated_subject,
-        } if *tag == current_tag
-            && *round == prepare.round()
-            && *validated_subject == subject
-    )));
-
-    recovered
-        .step(Event::ValidationCompleted {
-            tag: current_tag,
-            round: prepare.round(),
-            subject,
-            valid: true,
-        })
-        .expect("the current-view validation completion is accepted");
-    assert_eq!(
-        recovered.body_state(prepare.round(), subject),
-        BodyState::Validated
-    );
-    assert_eq!(recovered.durable_state().locked(), Some(&prepare));
-}
-
-#[test]
 fn certificate_first_decision_validates_and_applies_without_a_proposal() {
     let context = context();
     let subject = Subject::repeat(0x85);
@@ -6422,27 +6331,7 @@ fn certificate_first_decision_validates_and_applies_without_a_proposal() {
     assert!(reducer.durable_state().commit_intent(round).is_none());
 }
 
-#[test]
-fn empty_replay_resume_is_one_applied_stutter_then_duplicate() {
-    let context = context();
-    let mut recovered = Reducer::recover(
-        context,
-        Some(id(1)),
-        Generation::new(21),
-        std::iter::empty(),
-    )
-    .unwrap();
-    let resumed = resume_after_replay(&mut recovered);
-    assert_eq!(resumed.disposition(), StepDisposition::Applied);
-    assert!(resumed.effects().is_empty());
-
-    let duplicate = resume_after_replay(&mut recovered);
-    assert_eq!(
-        duplicate.disposition(),
-        StepDisposition::Ignored(IgnoreReason::Duplicate)
-    );
-    assert!(duplicate.effects().is_empty());
-}
+include!("tests/empty_replay_resume_test.rs");
 
 #[test]
 fn replay_rejects_non_contiguous_or_post_timeout_vote_records() {
@@ -7352,7 +7241,7 @@ fn decision_retains_in_flight_body_pipeline_without_duplicate_fetch() {
     let context = context();
     let subject = Subject::repeat(0x84);
     let round = Round::new(context.height(), 0);
-    let mut reducer = Reducer::new(context.clone(), Some(id(4)), Generation::new(34)).unwrap();
+    let mut reducer = Reducer::new(context.clone(), Some(id(3)), Generation::new(34)).unwrap();
 
     let proposed = reducer
         .step(Event::ProposalReceived {
@@ -7578,7 +7467,7 @@ fn conflicting_local_manifest_cannot_replace_decided_body_identity() {
     let subject = Subject::repeat(0x8e);
     let round = Round::new(context.height(), 0);
     let mut reducer =
-        Reducer::new(context.clone(), Some(id(4)), Generation::new(43)).expect("reducer");
+        Reducer::new(context.clone(), Some(id(3)), Generation::new(43)).expect("reducer");
     let admitted = reducer
         .step(Event::ProposalReceived {
             tag: reducer.current_tag(),
@@ -8004,125 +7893,4 @@ fn future_prepare_qc_is_transactionally_ignored_without_retransmit_ownership() {
     }));
 }
 
-#[test]
-fn delayed_proposal_is_ignored_and_never_regresses_body_progress() {
-    let context = context();
-    let subject = Subject::repeat(0x7e);
-    let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
-    let mut reducer = Reducer::new(context.clone(), Some(id(4)), Generation::new(31)).unwrap();
-
-    let observed = reducer
-        .step(Event::QuorumCertificateReceived {
-            tag: reducer.current_tag(),
-            certificate: prepare,
-        })
-        .unwrap();
-    let observe_entry = observed
-        .effects()
-        .iter()
-        .find_map(|effect| match effect {
-            Effect::Persist { entry, .. } => Some(entry.clone()),
-            _ => None,
-        })
-        .expect("observing a highest PrepareQC is durable");
-    acknowledge(&mut reducer, &observe_entry);
-    reducer
-        .step(Event::BodyAvailable {
-            tag: reducer.current_tag(),
-            round: Round::new(context.height(), 0),
-            subject,
-        })
-        .unwrap();
-    assert_eq!(
-        reducer.body_state(Round::new(context.height(), 0), subject),
-        BodyState::Available
-    );
-
-    let received = reducer
-        .step(Event::ProposalReceived {
-            tag: reducer.current_tag(),
-            proposal: proposal(
-                &context,
-                0,
-                subject,
-                ProposalJustification::ParentCommit(context.parent_commit()),
-            ),
-        })
-        .unwrap();
-    assert!(received.effects().is_empty());
-    assert_eq!(
-        reducer.body_state(Round::new(context.height(), 0), subject),
-        BodyState::Available
-    );
-
-    let timeout = tc_without_high(&context, 0, &[1, 2, 3]);
-    let install = only_persist(
-        reducer
-            .step(Event::TimeoutCertificateReceived {
-                tag: reducer.current_tag(),
-                certificate: timeout,
-            })
-            .unwrap(),
-    );
-    acknowledge(&mut reducer, &install);
-    let old = reducer
-        .step(Event::ProposalReceived {
-            tag: reducer.current_tag(),
-            proposal: proposal(
-                &context,
-                0,
-                subject,
-                ProposalJustification::ParentCommit(context.parent_commit()),
-            ),
-        })
-        .unwrap();
-    assert_eq!(
-        old.disposition(),
-        StepDisposition::Ignored(IgnoreReason::IrrelevantView)
-    );
-}
-
-#[test]
-fn reducer_error_is_transactional_for_conflicting_prepare_certificates() {
-    let context = context();
-    let mut reducer = Reducer::new(context.clone(), Some(id(4)), Generation::new(32)).unwrap();
-    let first = qc(
-        &context,
-        0,
-        Phase::Prepare,
-        Subject::repeat(0x80),
-        &[1, 2, 3],
-    );
-    let observe = reducer
-        .step(Event::QuorumCertificateReceived {
-            tag: reducer.current_tag(),
-            certificate: first,
-        })
-        .unwrap();
-    let entry = observe
-        .effects()
-        .iter()
-        .find_map(|effect| match effect {
-            Effect::Persist { entry, .. } => Some(entry.clone()),
-            _ => None,
-        })
-        .expect("highest PrepareQC is persisted");
-    acknowledge(&mut reducer, &entry);
-
-    let before = reducer.clone();
-    let conflicting = qc(
-        &context,
-        0,
-        Phase::Prepare,
-        Subject::repeat(0x81),
-        &[1, 2, 3],
-    );
-    assert_eq!(
-        reducer.step(Event::QuorumCertificateReceived {
-            tag: reducer.current_tag(),
-            certificate: conflicting,
-        }),
-        Err(ReducerError::ConflictingPrepareCertificates)
-    );
-    assert_eq!(reducer, before);
-}
+include!("tests/v2_core_terminal_transactionality.rs");

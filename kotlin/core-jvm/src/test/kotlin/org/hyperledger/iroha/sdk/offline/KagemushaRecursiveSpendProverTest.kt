@@ -795,7 +795,7 @@ class KagemushaRecursiveSpendProverTest {
         val appendBuilder = KagemushaRecursiveSpendProver::class.java.declaredMethods.single {
             it.name == "buildAppendRequestV4" && java.lang.reflect.Modifier.isPublic(it.modifiers)
         }
-        assertEquals(java.util.List::class.java, appendBuilder.parameterTypes[0])
+        assertEquals(List::class.java, appendBuilder.parameterTypes[0])
         val branchMethods = KagemushaRecursiveSpendProver.BranchProjection::class.java.declaredMethods
             .map { it.name }
             .toSet()
@@ -1675,6 +1675,12 @@ class KagemushaRecursiveSpendProverTest {
         )
 
         val status = client.getOfflineCapability().join()
+        assertTrue(
+            KagemushaRecursiveSpendProver.ToriiClient::class.java.declaredMethods.none {
+                it.name == "getReadiness"
+            },
+            "selector-taking offline readiness alias must remain absent",
+        )
         assertFalse(status.mandatory)
         assertEquals("cash_handoff_v1", status.cashHandoffCapability)
         assertEquals(21, status.requiredBridgeAbiVersion)
@@ -1687,11 +1693,6 @@ class KagemushaRecursiveSpendProverTest {
             captured.get().uri.toString(),
         )
         assertEquals(listOf("application/json"), captured.get().headers["Accept"])
-
-        @Suppress("DEPRECATION")
-        val deprecatedStatus = client.getReadiness("ignored selector").join()
-        assertEquals(status.cashHandoffCapability, deprecatedStatus.cashHandoffCapability)
-        assertEquals("https://torii.example/api/v1/offline/readiness", captured.get().uri.toString())
 
         client.getRecipientRegistrationLineage(
             KagemushaRecursiveSpendProver.RecipientLineageQueryV2(

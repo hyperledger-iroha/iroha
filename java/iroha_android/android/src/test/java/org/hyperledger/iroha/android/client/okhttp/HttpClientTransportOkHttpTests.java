@@ -22,6 +22,7 @@ import org.hyperledger.iroha.android.client.AccountAliasResolution;
 import org.hyperledger.iroha.android.client.ClientConfig;
 import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
+import org.hyperledger.iroha.android.client.TransactionCompatibilityTestSupport;
 import org.hyperledger.iroha.android.client.WireFormatPreference;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.model.TransactionPayload;
@@ -39,6 +40,7 @@ public final class HttpClientTransportOkHttpTests {
   @Test
   public void submitsTransactionWithOkHttpExecutorAndNotifiesObservers() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(TransactionCompatibilityTestSupport.compatibleCapabilitiesResponse());
       server.enqueue(new MockResponse().setResponseCode(202).setBody("{\"status\":\"accepted\"}"));
       server.start();
 
@@ -91,9 +93,11 @@ public final class HttpClientTransportOkHttpTests {
       assertEquals(202, response.statusCode());
       assertEquals(SignedTransactionHasher.hashHex(tx), response.hashHex().orElse(null));
       observer.assertNoFailure();
-      assertEquals(1, observer.requestsCount());
-      assertEquals(1, observer.responsesCount());
+      assertEquals(2, observer.requestsCount());
+      assertEquals(2, observer.responsesCount());
 
+      final RecordedRequest capabilities = server.takeRequest(1, TimeUnit.SECONDS);
+      TransactionCompatibilityTestSupport.assertCompatibleCapabilitiesRequest(capabilities);
       final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
       assertNotNull(recorded);
       assertEquals("/v1/pipeline/transactions", recorded.getPath());

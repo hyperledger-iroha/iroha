@@ -555,7 +555,13 @@ pub(crate) fn certified_merge_projection_calls_for_test() -> usize {
     CERTIFIED_MERGE_PROJECTION_CALLS.get()
 }
 
-fn certified_merge_committed_transactions(
+/// Project the authenticated transaction/result pairs carried by a certified merge entry.
+///
+/// The compact carrier reference, execution-batch commitments, transcript hashes, and Merkle
+/// roots are all revalidated before any transaction is returned.  Consumers outside the query
+/// executor use this projection so transaction lifecycle status never trusts an unauthenticated
+/// merge sidecar or reimplements only a subset of these checks.
+pub fn certified_merge_committed_transactions(
     carrier_hash: HashOf<BlockHeader>,
     reference: &CertifiedMergeLedgerReference,
     entry: &MergeLedgerEntry,

@@ -98,13 +98,15 @@ fn run_block_and_events(
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
-        iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ),
+        "rose".to_owned(),
         NumericSpec::default(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
     )
-    .with_name("rose".to_owned())
     .build(&alice_id);
     let acc_a = Account::new(alice_id.clone()).build(&alice_id);
     let acc_b = Account::new(bob_id.clone()).build(&alice_id);
@@ -156,10 +158,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let chain_id = ChainId::from("chain");
     let alice_id = iroha_test_samples::ALICE_ID.clone();
     let bob_id = iroha_test_samples::BOB_ID.clone();
-    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
+    let rose: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
     let tx_mint = sign_fixture_transaction(
@@ -312,7 +315,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     write_parity_fixture("kv_and_nft_lifecycle", &events_seq, &events_par);
 
     // 3) Asset definition KV set/remove
-    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );

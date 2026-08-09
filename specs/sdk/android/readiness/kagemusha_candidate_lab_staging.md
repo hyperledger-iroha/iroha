@@ -14,7 +14,15 @@ helper rather than invoking Cargo directly:
 ```sh
 SOURCE_COMMIT=$(git rev-parse --verify 'HEAD^{commit}')
 git verify-commit "$SOURCE_COMMIT"
-python3 -I scripts/build_kagemusha_v4_candidate_bundle.py --root "$PWD"
+python3 -I scripts/kagemusha_source_tree_seal.py descriptor \
+  --root "$PWD" > /absolute/private/reviewed-source-closure-v1.json
+REVIEWED_SOURCE_CLOSURE_SHA256=<reviewed-descriptor-sha256>
+python3 -I scripts/build_kagemusha_v4_candidate_bundle.py \
+  --root "$PWD" \
+  --target-dir /absolute/private/new-kagemusha-cargo-target \
+  --reviewed-source-closure /absolute/private/reviewed-source-closure-v1.json \
+  --reviewed-source-closure-sha256 "$REVIEWED_SOURCE_CLOSURE_SHA256" \
+  > /absolute/private/sealed-build-report.json
 ```
 
 The seal requires an entirely clean checkout, including untracked files. It
@@ -86,13 +94,14 @@ duplicate-input-block-height.txt
 duplicate-input-verified-at-ms.txt
 ```
 
-The finality roster must be byte-identical to the candidate roster. The anchor,
-Commit QC, inclusion proof, and roster must come from an external finality
-ceremony or capture that already commits to this exact candidate manifest. The
-stager does not contact a live chain, manufacture consensus evidence, or define
-a live-chain capture procedure. Consequently, a successful stage means that
-the supplied external evidence was cryptographically verified and
-candidate-manifest-bound; it does not claim that this repository captured it.
+The finality roster must be byte-identical to the candidate roster and every
+release window must contain at least four public validators. The anchor, Commit
+QC, inclusion proof, and roster must come from an external finality ceremony or
+capture that already commits to this exact candidate manifest. The stager does
+not contact a live chain, manufacture consensus evidence, or define a live-chain
+capture procedure. Consequently, a successful stage means that the supplied
+external evidence was cryptographically verified and candidate-manifest-bound;
+it does not claim that this repository captured it.
 
 Operation IDs are distinct nonzero 32-byte values. The two verifier commitments
 must equal the current source's canonical transfer and unshield verifier-key
@@ -139,26 +148,34 @@ The candidate authority canonically decodes `CandidateV4`, extracts and
 serializes its embedded manifest, validates the exact inventory and each
 framed/payload content address, and revalidates the roster. Both authorities,
 all input descriptors, the complete source identity, and the staged tree are
-rechecked immediately before exclusive publication. The stager publishes once,
-without overwrite, at:
+rechecked immediately before exclusive publication. The stager pins the output
+parent before creating the stage and performs the exclusive rename and parent
+`fsync` descriptor-relative. A failure after rename is reported as an explicit
+commit-uncertain outcome. The stager publishes once, without overwrite, at:
 
 ```text
 artifacts/kagemusha-candidate-evidence/<candidate-record-sha256>/<stage-manifest-sha256>/
-  candidate-stage-manifest-v1.json
+  candidate-stage-manifest-v2.json
   evidence/candidate/candidate-v4.norito
   evidence/candidate/manifest-v4.norito
-  evidence/candidate/candidate-validation-v1.json
+  evidence/candidate/candidate-validation-v2.json
+  evidence/candidate/recursive-step-two-qualification-v4.norito
   evidence/candidate/artifacts/<exact-eight-KRV4-files>
   scenario/<exact-seed-inventory>
 ```
 
-`candidate-stage-manifest-v1.json` is canonical compact JSON with a fixed-point
+`candidate-stage-manifest-v2.json` is canonical compact JSON with a fixed-point
 self size. Its external SHA-256 is the second path component. It lists exactly
-44 non-self files (three candidate records, eight artifacts, and 33 scenario
+45 non-self files (four candidate records, eight artifacts, and 33 scenario
 files), each with relative path, `0600` mode, size, and SHA-256; self-inclusion,
 missing files, and extras are rejected. It also binds the candidate record,
-embedded manifest, candidate validation report, complete scenario inventory,
-source commit/tree pair, and both validator/toolchain identities.
+embedded manifest, candidate validation report, recursive-step-two qualification
+receipt, complete scenario inventory, source commit/tree pair, and both
+validator/toolchain identities. The qualified-candidate identity is SHA-256 of
+the ASCII domain `iroha:kagemusha:recursive-spend-qualified-candidate:v4`, one
+zero byte, the raw candidate-record digest, and the raw receipt digest. The V2
+validation report also records the exact nonzero generation memory limit and
+the `self-physical-footprint-v1` in-process enforcement profile.
 
 The scenario inventory digest is SHA-256 over the domain
 `iroha.kagemusha.android-candidate-scenario-inventory.v1\0`, big-endian `u32`
@@ -178,7 +195,7 @@ evidence.
 ## Compile-only Android contract
 
 `ci/check_kagemusha_candidate_android_lab_compile.sh` performs an actual AGP
-main and `androidTest` Kotlin compilation against a private, exact 44-entry
+main and `androidTest` Kotlin compilation against a private, exact 45-entry
 compile fixture. The Gradle property used by that check admits exactly
 `compileDebugKotlin` and `compileDebugAndroidTestKotlin`; APK packaging,
 staging, installation, instrumentation, and evidence export are rejected. The
@@ -261,8 +278,10 @@ scripts/run_kagemusha_candidate_android_lab.sh \
   --generation "$GENERATION" --slot-id "$SLOT_ID" \
   --attestation-slot "$SLOT_PATH" \
   --trusted-signer-public-key "$TRUSTED_SIGNER_PUBLIC_KEY" \
-  --apksigner "$PINNED_APKSIGNER" \
-  --apksigner-sha256 "$PINNED_APKSIGNER_SHA256" \
+  --java "$PINNED_JAVA" \
+  --java-sha256 "$PINNED_JAVA_SHA256" \
+  --apksigner-jar "$PINNED_APKSIGNER_JAR" \
+  --apksigner-jar-sha256 "$PINNED_APKSIGNER_JAR_SHA256" \
   --openssl "$PINNED_OPENSSL" \
   --openssl-sha256 "$PINNED_OPENSSL_SHA256" \
   --android-attestation-trust-root "$ANDROID_ATTESTATION_ROOT" \
@@ -279,6 +298,11 @@ evidence, exact candidate/APK/source bindings, APK signatures, KeyMint
 certificate chain and challenge, attestation application package/signer,
 offline revocation snapshot, and authority pins. The runner consumes only the
 validator's successful one-slot machine summary.
+
+APK verification invokes the pinned Java executable directly with the pinned
+`apksigner.jar`. The Android SDK's `apksigner` shell launcher is deliberately
+outside the authority closure because its bytes do not identify either its
+sibling jar or the ambient Java selected by the launcher.
 
 The subsequent instrumentation is an independent confirmation rerun, not the
 original capture that produced the signed reference slot. Its complete binding

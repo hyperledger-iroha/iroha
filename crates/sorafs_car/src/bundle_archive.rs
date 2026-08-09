@@ -668,14 +668,14 @@ fn validate_entry(
     limits: BundleArchiveLimits,
 ) -> Result<(), BundleArchiveError> {
     check_path_conflicts(&state.paths, entry)?;
-    if let Some(previous) = &state.previous_path {
-        if entry.path.as_str() <= previous.as_str() {
-            return Err(ArchiveError::PathOrder {
-                path: entry.path.clone(),
-                previous: previous.clone(),
-            }
-            .into());
+    if let Some(previous) = &state.previous_path
+        && entry.path.as_str() <= previous.as_str()
+    {
+        return Err(ArchiveError::PathOrder {
+            path: entry.path.clone(),
+            previous: previous.clone(),
         }
+        .into());
     }
     if entry.kind != BundleArchiveEntryKind::File {
         return Ok(());
@@ -1311,29 +1311,28 @@ fn check_path_conflicts(
     }
 
     for depth in 1..folded.len() {
-        if let Some(parent) = paths.get(&folded[..depth]) {
-            if parent.kind == BundleArchiveEntryKind::File {
-                return Err(ArchiveError::FileParentConflict {
-                    path: entry.path.clone(),
-                    file: display_components(&parent.original),
-                }
-                .into());
-            }
-        }
-    }
-
-    if entry.kind == BundleArchiveEntryKind::File {
-        if let Some((_, descendant)) = paths
-            .range(folded.clone()..)
-            .take_while(|(candidate, _)| candidate.starts_with(&folded))
-            .find(|(candidate, _)| candidate.len() > folded.len())
+        if let Some(parent) = paths.get(&folded[..depth])
+            && parent.kind == BundleArchiveEntryKind::File
         {
             return Err(ArchiveError::FileParentConflict {
-                path: display_components(&descendant.original),
-                file: entry.path.clone(),
+                path: entry.path.clone(),
+                file: display_components(&parent.original),
             }
             .into());
         }
+    }
+
+    if entry.kind == BundleArchiveEntryKind::File
+        && let Some((_, descendant)) = paths
+            .range(folded.clone()..)
+            .take_while(|(candidate, _)| candidate.starts_with(&folded))
+            .find(|(candidate, _)| candidate.len() > folded.len())
+    {
+        return Err(ArchiveError::FileParentConflict {
+            path: display_components(&descendant.original),
+            file: entry.path.clone(),
+        }
+        .into());
     }
     Ok(())
 }

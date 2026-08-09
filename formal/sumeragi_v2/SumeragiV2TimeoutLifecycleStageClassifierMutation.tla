@@ -103,12 +103,17 @@ SignProposalVote ==
   /\ lastTransition' = "SignProposalVote"
   /\ UNCHANGED <<replayed, freshWindowEntered>>
 
+TerminalDecided ==
+  /\ stage = "Decided"
+  /\ UNCHANGED vars
+
 Next ==
   \/ FinishPersistInstallTC
   \/ CrashAndReplayProposalSuccessor
   \/ EnterFreshSelfLeaderWindow
   \/ FetchProposalBody
   \/ SignProposalVote
+  \/ TerminalDecided
 
 Spec ==
   /\ Init

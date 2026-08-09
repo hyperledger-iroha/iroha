@@ -1,25 +1,6 @@
 {
   "chain": "iroha3-taira",
-  "chain_discriminant": 369,
-  "consensus_fingerprint": "0x61a83b5a6a9956419e69bb4d5df522b98774991318608c72c8a2b717f0451f3c",
-  "consensus_mode": "Npos",
-  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":22020096,"max_chunk_count":1024},"nexus_amx_context_hash":"FF1129DB002E7291DAA1903E4D8574B9BE9A082C3B01A5242063A3DB8AE8BC8F","execution_policy_hash":"DC2E70977C15AE195EC16C216B75053C75DADBECAB79B4462CD6D1F60AA81B89"},
-  "crypto": {
-    "allowed_curve_ids": [
-      1,
-      3,
-      4
-    ],
-    "allowed_signing": [
-      "ed25519",
-      "secp256k1",
-      "bls_normal"
-    ],
-    "default_hash": "blake2b-256",
-    "sm2_distid_default": "1234567812345678",
-    "sm_intrinsics": "auto",
-    "sm_openssl_preview": false
-  },
+  "chain_discriminant": 753,
   "executor": null,
   "ivm_dir": ".",
   "transactions": [
@@ -30,33 +11,16 @@
             "Domain": {
               "id": "wonderland.universal",
               "logo": null,
-              "metadata": {
-                "key": "value"
-              }
+              "metadata": {}
             }
           }
         },
         {
           "Register": {
             "Account": {
-              "id": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "label": null,
-              "metadata": {
-                "key": "value"
-              },
-              "opaque_ids": [],
-              "uaid": null
-            }
-          }
-        },
-        {
-          "Register": {
-            "Account": {
-              "id": "testuﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
-              "label": null,
-              "metadata": {
-                "purpose": "fee_sponsor_vault_custody"
-              },
+              "metadata": {},
               "opaque_ids": [],
               "uaid": null
             }
@@ -65,6 +29,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "balance_scope_policy": "Global",
               "confidential_policy": {
                 "mode": "TransparentOnly",
                 "pedersen_params_id": null,
@@ -72,14 +38,16 @@
                 "poseidon_params_id": null,
                 "vk_set_hash": null
               },
-              "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+              "description": null,
+              "id": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi",
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
+              "name": "rose",
+              "owning_domain": null,
               "spec": {
                 "scale": null
-              },
-              "name": "rose"
+              }
             }
           }
         },
@@ -95,7 +63,7 @@
         {
           "Register": {
             "Account": {
-              "id": "testuﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
+              "id": "sorauﾛ1PｽNgｿﾘ9ﾏﾕ2ﾕ9ﾄZﾀﾃﾌWwNｸｾヰﾄﾂT3WｺTxｶｵﾎKﾓﾛmｷ4Y6PLN",
               "label": null,
               "metadata": {},
               "opaque_ids": [],
@@ -106,6 +74,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "balance_scope_policy": "Global",
               "confidential_policy": {
                 "mode": "TransparentOnly",
                 "pedersen_params_id": null,
@@ -113,17 +83,190 @@
                 "poseidon_params_id": null,
                 "vk_set_hash": null
               },
-              "id": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
+              "description": null,
+              "id": "7juDbiprDn46sQ8YRdmM4VbUMYot",
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
+              "name": "cabbage",
+              "owning_domain": null,
               "spec": {
                 "scale": null
-              },
-              "name": "cabbage"
+              }
+            }
+          }
+        }
+      ],
+      "ivm_triggers": [],
+      "parameters": {
+        "sumeragi": {
+          "block_cadence_ms": 1000,
+          "max_clock_drift_ms": 1000,
+          "key_activation_lead_blocks": 1,
+          "key_overlap_grace_blocks": 8,
+          "key_expiry_grace_blocks": 0,
+          "key_require_hsm": false,
+          "key_allowed_algorithms": [
+            "bls_normal"
+          ],
+          "key_allowed_hsm_providers": [
+            "pkcs11",
+            "softkey",
+            "yubihsm"
+          ]
+        },
+        "block": {
+          "max_transactions": 512
+        },
+        "transaction": {
+          "max_signatures": 16,
+          "max_instructions": 100000,
+          "ivm_bytecode_size": 4194304,
+          "max_tx_bytes": 10485760,
+          "max_decompressed_bytes": 10485760,
+          "max_metadata_depth": 8,
+          "max_time_to_live_ms": 86400000,
+          "require_height_ttl": false,
+          "require_sequence": false
+        },
+        "executor": {
+          "fuel": 55000000,
+          "memory": 1048576,
+          "execution_depth": 3,
+          "max_output_items": 4096,
+          "max_output_bytes": 8388608
+        },
+        "smart_contract": {
+          "fuel": 55000000,
+          "memory": 1048576,
+          "execution_depth": 3,
+          "max_output_items": 4096,
+          "max_output_bytes": 8388608
+        },
+        "custom": {
+          "ivm_gas_limit_per_block": {
+            "id": "ivm_gas_limit_per_block",
+            "payload": 1680000
+          },
+          "sumeragi_npos_parameters": {
+            "id": "sumeragi_npos_parameters",
+            "payload": {
+              "activation_lag_blocks": 1,
+              "epoch_length_blocks": 3600,
+              "epoch_seed": "9DA3880072B44387B94BC02414E4E84AAE99F70966F8C247C092647109AFCBF3",
+              "evidence_horizon_blocks": 7200,
+              "finality_margin_blocks": 8,
+              "max_entity_correlation_pct": 25,
+              "max_nominator_concentration_pct": 25,
+              "max_validators": 31,
+              "min_nomination_bond": "1",
+              "min_self_bond": "1000",
+              "seat_band_pct": 5,
+              "slashing_delay_blocks": 259200,
+              "vrf_commit_window_blocks": 100,
+              "vrf_reveal_window_blocks": 40
+            }
+          }
+        }
+      },
+      "topology": []
+    },
+    {
+      "instructions": [
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "sorauﾛ1PLbyKｷrﾅHｱﾑWｱｵﾄrozﾘ8VｼmﾜGVｷヰZhﾂｹｴﾖkLｲXﾕMD3F7K",
+              "object": {
+                "name": "CanManageVerifyingKeys",
+                "payload": null
+              }
+            }
+          }
+        }
+      ],
+      "ivm_triggers": [],
+      "topology": []
+    },
+    {
+      "instructions": [
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": "13"
             }
           }
         },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "7juDbiprDn46sQ8YRdmM4VbUMYot#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": "44"
+            }
+          }
+        },
+        {
+          "Transfer": {
+            "AssetDefinition": {
+              "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi",
+              "source": "sorauﾛ1PLbyKｷrﾅHｱﾑWｱｵﾄrozﾘ8VｼmﾜGVｷヰZhﾂｹｴﾖkLｲXﾕMD3F7K"
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
+                "name": "CanSetParameters",
+                "payload": null
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
+                "name": "CanReadAllLedgerData",
+                "payload": null
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
+                "name": "CanManageSoracloud",
+                "payload": null
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
+                "name": "CanRegisterAccount",
+                "payload": {
+                  "domain": "wonderland.universal"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "ivm_triggers": [],
+      "topology": []
+    },
+    {
+      "instructions": [
         {
           "Register": {
             "Domain": {
@@ -136,6 +279,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "balance_scope_policy": "Global",
               "confidential_policy": {
                 "mode": "Convertible",
                 "pedersen_params_id": null,
@@ -143,14 +288,16 @@
                 "poseidon_params_id": null,
                 "vk_set_hash": null
               },
+              "description": null,
               "id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
+              "name": "xor",
+              "owning_domain": null,
               "spec": {
                 "scale": null
-              },
-              "name": "xor"
+              }
             }
           }
         },
@@ -160,20 +307,46 @@
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
             "lease_expiry_ms": null
           }
+        }
+      ],
+      "ivm_triggers": [],
+      "topology": [
+        {
+          "peer": "ea0130A281E64EED12B1A0CD3114DB7F3F33F4C923532CB0550ABB6A64911CA72EEAA1866CF77C84AD3B2C6406B0595E21FE3D",
+          "pop_hex": "aad83622df5db2568f7a01eed56592d97d9fb8077c4e31def87d6654b4906a815324493cfea2af389b5ea4c62335c7f8009e3a38f3dd6f6a08fa6492d4e77433913722f67f6210a667eb6e1ffce83522bc308e8a9ade1ee0ddad94a4d2672bd4"
         },
         {
-          "Register": {
-            "Domain": {
-              "id": "sora.universal",
-              "logo": null,
-              "metadata": {}
-            }
-          }
+          "peer": "ea013080D71C0DD03907BC174C7F4D90C23993A5BA9108A7F109A1D7966117997D4B1F3C51008F538BABB2A01D3CB5A7C15778",
+          "pop_hex": "b01b6f05f1274ef632f0a4f46bcbfdd09b69fb37dc27aa58ec4e147ba1b7cc8816c56bb098623053d0a12b3db444cea0118795f31f27d434af4200168a362da8e9d2dc508ab99e6fa0d0003d469b1bfc4fad0c0b5373b34a6f3e76267cc35399"
         },
+        {
+          "peer": "ea013086B04CCED63EC8EA1D269C5B65944D294577D3089046D47D1F4676489365B1ABC21B486EA4259762656F2D6D756119BE",
+          "pop_hex": "851800cb4af73e582091996fe0659b5200066d1bc18538ddf6fff52adc136ca76e9e406f889836e7bb33f4bcb393ebc2190d631bd9f56694c6248a4f22986995894e03519353126f950ed48a0c70cab0138793b27e5c91c2029fcce4ddc1fa80"
+        },
+        {
+          "peer": "ea0130A61F886C2EBA8DA5BC16D014029F58D0F9E2201B14C4C41668BBB8F0F68B9F4CFE8140C82555F47BA840CAA1F204791E",
+          "pop_hex": "b1e3b9bb4a8a76a1de973f1eb8cae7a14664310551f82cc5b3d82ec416883938532c2e3328f0b98729546522f7beb8350774041f30da46c1cabd0e2908c4d808ada51ae6937f3572a8d297335f5f6f32eb681c3b48538d3bca8c1d1f6217c37d"
+        },
+        {
+          "peer": "ea013093594AD979F8D743275F33F9A59C3F9086BE5C72968C6C9D74FF4D43C6F4499B72212E93A3E57D7BF6DF7292ED2414DB",
+          "pop_hex": "a9a0e83792f7ed94a2165deb706ccf550b656927bc52c42b1f30aa05ac81a669109eaa3a4c365c75302fc3b22305f0fa1436df8d5bac209a76f9af9d9c4c018ce33ebf73e7321377a326c10a0ba9194697659afae2cba40502139dd1181a32c8"
+        },
+        {
+          "peer": "ea01308C0DA48B70E186205D0DFF8D00B170DE09B9B082725C7CBB16CC77C13808EB81BF027EDE1EF017E4E7D599DAAAD19034",
+          "pop_hex": "a67a14fb715c271a25dc2b6c3ed4d4ba92d7fe03bf60eea1882e5147a5fa46fd4d526628f34e2bd906e5d37eb399c51f0e88989ef60b076f5486d695e372a35ac3388542e2e16a01a3e72b27a5e332438dfda669fade3997b88f38d33680396b"
+        },
+        {
+          "peer": "ea013086C1B85CD4512F7714C17C191F8448B6D2827AE199F09B98C7FCAA3151EA279B08BCE28A10E45279E3CD5A9DA7B3343E",
+          "pop_hex": "8d500cbc7e50d5cb5f63196d75dd31ed54b8fb281916b2655689978f0085ff69e3f064e902ab4a8f9855d2daad6b596602de1f19d6fcb5b5f1eb46c368e09c43cbe68a52a8e5389b24032d0080f4070805f81a7719cd72c4d54394d546862a39"
+        }
+      ]
+    },
+    {
+      "instructions": [
         {
           "Register": {
             "Account": {
-              "id": "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
+              "id": "soraﾜヰ8ｽﾆYﾒﾎﾏｲUNｴ1ﾋpｴ7ﾍﾎｹeヱLDｲkﾕ6WｴﾛﾊWﾒﾒUVYﾃXFｲWﾌﾊﾐﾛbﾏﾆM6ﾓA8F9ﾀﾆWG63CF8",
               "label": null,
               "metadata": {},
               "opaque_ids": [],
@@ -182,442 +355,276 @@
           }
         },
         {
+          "Mint": {
+            "Asset": {
+              "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#soraﾜヰ8ｽﾆYﾒﾎﾏｲUNｴ1ﾋpｴ7ﾍﾎｹeヱLDｲkﾕ6WｴﾛﾊWﾒﾒUVYﾃXFｲWﾌﾊﾐﾛbﾏﾆM6ﾓA8F9ﾀﾆWG63CF8",
+              "object": "10000"
+            }
+          }
+        },
+        {
+          "RegisterPublicLaneValidator": {
+            "initial_stake": "10000",
+            "lane_id": 0,
+            "metadata": {},
+            "peer_id": "ea0130A281E64EED12B1A0CD3114DB7F3F33F4C923532CB0550ABB6A64911CA72EEAA1866CF77C84AD3B2C6406B0595E21FE3D",
+            "stake_account": "soraﾜヰ8ｽﾆYﾒﾎﾏｲUNｴ1ﾋpｴ7ﾍﾎｹeヱLDｲkﾕ6WｴﾛﾊWﾒﾒUVYﾃXFｲWﾌﾊﾐﾛbﾏﾆM6ﾓA8F9ﾀﾆWG63CF8",
+            "validator": "soraﾜヰ8ｽﾆYﾒﾎﾏｲUNｴ1ﾋpｴ7ﾍﾎｹeヱLDｲkﾕ6WｴﾛﾊWﾒﾒUVYﾃXFｲWﾌﾊﾐﾛbﾏﾆM6ﾓA8F9ﾀﾆWG63CF8"
+          }
+        },
+        {
+          "ActivatePublicLaneValidator": {
+            "lane_id": 0,
+            "validator": "soraﾜヰ8ｽﾆYﾒﾎﾏｲUNｴ1ﾋpｴ7ﾍﾎｹeヱLDｲkﾕ6WｴﾛﾊWﾒﾒUVYﾃXFｲWﾌﾊﾐﾛbﾏﾆM6ﾓA8F9ﾀﾆWG63CF8"
+          }
+        },
+        {
           "Register": {
-            "AssetDefinition": {
-              "confidential_policy": {
-                "mode": "TransparentOnly",
-                "pedersen_params_id": null,
-                "pending_transition": null,
-                "poseidon_params_id": null,
-                "vk_set_hash": null
-              },
-              "id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
-              "logo": null,
+            "Account": {
+              "id": "soraﾜヰ8ｽUﾆeﾖAqcLfUﾑpﾗajHtHﾃMﾋkﾄHｵgｶﾇrxヱｱSZ4ｵﾗiTWﾐrｸsﾉeﾗﾏﾙﾉﾈLﾘﾉﾐｴB89R13H",
+              "label": null,
               "metadata": {},
-              "mintable": "Infinitely",
-              "spec": {
-                "scale": 9
-              },
-              "name": "xor"
+              "opaque_ids": [],
+              "uaid": null
             }
           }
         },
         {
-          "SetAssetDefinitionAlias": {
-            "alias": "xor#sora",
-            "asset_definition_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
-            "lease_expiry_ms": null
+          "Mint": {
+            "Asset": {
+              "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#soraﾜヰ8ｽUﾆeﾖAqcLfUﾑpﾗajHtHﾃMﾋkﾄHｵgｶﾇrxヱｱSZ4ｵﾗiTWﾐrｸsﾉeﾗﾏﾙﾉﾈLﾘﾉﾐｴB89R13H",
+              "object": "10000"
+            }
           }
         },
         {
-          "Grant": {
-            "Permission": {
-              "destination": "testuﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7",
-              "object": {
-                "name": "CanManageFeeSponsorProgram",
-                "payload": {
-                  "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-                }
-              }
+          "RegisterPublicLaneValidator": {
+            "initial_stake": "10000",
+            "lane_id": 0,
+            "metadata": {},
+            "peer_id": "ea013080D71C0DD03907BC174C7F4D90C23993A5BA9108A7F109A1D7966117997D4B1F3C51008F538BABB2A01D3CB5A7C15778",
+            "stake_account": "soraﾜヰ8ｽUﾆeﾖAqcLfUﾑpﾗajHtHﾃMﾋkﾄHｵgｶﾇrxヱｱSZ4ｵﾗiTWﾐrｸsﾉeﾗﾏﾙﾉﾈLﾘﾉﾐｴB89R13H",
+            "validator": "soraﾜヰ8ｽUﾆeﾖAqcLfUﾑpﾗajHtHﾃMﾋkﾄHｵgｶﾇrxヱｱSZ4ｵﾗiTWﾐrｸsﾉeﾗﾏﾙﾉﾈLﾘﾉﾐｴB89R13H"
+          }
+        },
+        {
+          "ActivatePublicLaneValidator": {
+            "lane_id": 0,
+            "validator": "soraﾜヰ8ｽUﾆeﾖAqcLfUﾑpﾗajHtHﾃMﾋkﾄHｵgｶﾇrxヱｱSZ4ｵﾗiTWﾐrｸsﾉeﾗﾏﾙﾉﾈLﾘﾉﾐｴB89R13H"
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "soraﾜヰ8ｽaoiｾAｱﾅaﾉｳﾜヰWe5ｾAﾁKUDﾄkﾁn2tﾉDｲ4z4TﾄﾈyｷZヱ8QｾﾙHﾁfｽﾅaKﾛｷﾆo7ｵPCVYW7",
+              "label": null,
+              "metadata": {},
+              "opaque_ids": [],
+              "uaid": null
             }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#soraﾜヰ8ｽaoiｾAｱﾅaﾉｳﾜヰWe5ｾAﾁKUDﾄkﾁn2tﾉDｲ4z4TﾄﾈyｷZヱ8QｾﾙHﾁfｽﾅaKﾛｷﾆo7ｵPCVYW7",
+              "object": "10000"
+            }
+          }
+        },
+        {
+          "RegisterPublicLaneValidator": {
+            "initial_stake": "10000",
+            "lane_id": 0,
+            "metadata": {},
+            "peer_id": "ea013086B04CCED63EC8EA1D269C5B65944D294577D3089046D47D1F4676489365B1ABC21B486EA4259762656F2D6D756119BE",
+            "stake_account": "soraﾜヰ8ｽaoiｾAｱﾅaﾉｳﾜヰWe5ｾAﾁKUDﾄkﾁn2tﾉDｲ4z4TﾄﾈyｷZヱ8QｾﾙHﾁfｽﾅaKﾛｷﾆo7ｵPCVYW7",
+            "validator": "soraﾜヰ8ｽaoiｾAｱﾅaﾉｳﾜヰWe5ｾAﾁKUDﾄkﾁn2tﾉDｲ4z4TﾄﾈyｷZヱ8QｾﾙHﾁfｽﾅaKﾛｷﾆo7ｵPCVYW7"
+          }
+        },
+        {
+          "ActivatePublicLaneValidator": {
+            "lane_id": 0,
+            "validator": "soraﾜヰ8ｽaoiｾAｱﾅaﾉｳﾜヰWe5ｾAﾁKUDﾄkﾁn2tﾉDｲ4z4TﾄﾈyｷZヱ8QｾﾙHﾁfｽﾅaKﾛｷﾆo7ｵPCVYW7"
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "soraﾜヰ8ｽﾄﾒKz8pMBNﾚnｱb9p1jﾏﾆﾛcrﾙKVoｸpﾈ3Pzﾁ4ヱﾋvﾉｷ15ﾛnﾂQYamDU5ﾂﾐiuｷｲWTR2HD",
+              "label": null,
+              "metadata": {},
+              "opaque_ids": [],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#soraﾜヰ8ｽﾄﾒKz8pMBNﾚnｱb9p1jﾏﾆﾛcrﾙKVoｸpﾈ3Pzﾁ4ヱﾋvﾉｷ15ﾛnﾂQYamDU5ﾂﾐiuｷｲWTR2HD",
+              "object": "10000"
+            }
+          }
+        },
+        {
+          "RegisterPublicLaneValidator": {
+            "initial_stake": "10000",
+            "lane_id": 0,
+            "metadata": {},
+            "peer_id": "ea0130A61F886C2EBA8DA5BC16D014029F58D0F9E2201B14C4C41668BBB8F0F68B9F4CFE8140C82555F47BA840CAA1F204791E",
+            "stake_account": "soraﾜヰ8ｽﾄﾒKz8pMBNﾚnｱb9p1jﾏﾆﾛcrﾙKVoｸpﾈ3Pzﾁ4ヱﾋvﾉｷ15ﾛnﾂQYamDU5ﾂﾐiuｷｲWTR2HD",
+            "validator": "soraﾜヰ8ｽﾄﾒKz8pMBNﾚnｱb9p1jﾏﾆﾛcrﾙKVoｸpﾈ3Pzﾁ4ヱﾋvﾉｷ15ﾛnﾂQYamDU5ﾂﾐiuｷｲWTR2HD"
+          }
+        },
+        {
+          "ActivatePublicLaneValidator": {
+            "lane_id": 0,
+            "validator": "soraﾜヰ8ｽﾄﾒKz8pMBNﾚnｱb9p1jﾏﾆﾛcrﾙKVoｸpﾈ3Pzﾁ4ヱﾋvﾉｷ15ﾛnﾂQYamDU5ﾂﾐiuｷｲWTR2HD"
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "soraﾜヰ8ｽoDヰﾔｿHdNｸzbAAhﾒﾁL6LﾜﾔヰY3ﾐHuﾈsヰK9ﾋﾑCJxmqﾘu7EﾉGﾉ3ｸoXXﾉｻﾚLﾆAY6H7H4",
+              "label": null,
+              "metadata": {},
+              "opaque_ids": [],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#soraﾜヰ8ｽoDヰﾔｿHdNｸzbAAhﾒﾁL6LﾜﾔヰY3ﾐHuﾈsヰK9ﾋﾑCJxmqﾘu7EﾉGﾉ3ｸoXXﾉｻﾚLﾆAY6H7H4",
+              "object": "10000"
+            }
+          }
+        },
+        {
+          "RegisterPublicLaneValidator": {
+            "initial_stake": "10000",
+            "lane_id": 0,
+            "metadata": {},
+            "peer_id": "ea013093594AD979F8D743275F33F9A59C3F9086BE5C72968C6C9D74FF4D43C6F4499B72212E93A3E57D7BF6DF7292ED2414DB",
+            "stake_account": "soraﾜヰ8ｽoDヰﾔｿHdNｸzbAAhﾒﾁL6LﾜﾔヰY3ﾐHuﾈsヰK9ﾋﾑCJxmqﾘu7EﾉGﾉ3ｸoXXﾉｻﾚLﾆAY6H7H4",
+            "validator": "soraﾜヰ8ｽoDヰﾔｿHdNｸzbAAhﾒﾁL6LﾜﾔヰY3ﾐHuﾈsヰK9ﾋﾑCJxmqﾘu7EﾉGﾉ3ｸoXXﾉｻﾚLﾆAY6H7H4"
+          }
+        },
+        {
+          "ActivatePublicLaneValidator": {
+            "lane_id": 0,
+            "validator": "soraﾜヰ8ｽoDヰﾔｿHdNｸzbAAhﾒﾁL6LﾜﾔヰY3ﾐHuﾈsヰK9ﾋﾑCJxmqﾘu7EﾉGﾉ3ｸoXXﾉｻﾚLﾆAY6H7H4"
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "soraﾜヰ8ｽfｸﾛVﾆFﾛfUﾛHLﾜsﾅcMｷﾙKrﾜﾑｴaFｸﾂEｶV2cW9Gfﾜ8fPyMzｶﾋｿ9PPJｽGｿXﾂﾜ3N8S8H",
+              "label": null,
+              "metadata": {},
+              "opaque_ids": [],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#soraﾜヰ8ｽfｸﾛVﾆFﾛfUﾛHLﾜsﾅcMｷﾙKrﾜﾑｴaFｸﾂEｶV2cW9Gfﾜ8fPyMzｶﾋｿ9PPJｽGｿXﾂﾜ3N8S8H",
+              "object": "10000"
+            }
+          }
+        },
+        {
+          "RegisterPublicLaneValidator": {
+            "initial_stake": "10000",
+            "lane_id": 0,
+            "metadata": {},
+            "peer_id": "ea01308C0DA48B70E186205D0DFF8D00B170DE09B9B082725C7CBB16CC77C13808EB81BF027EDE1EF017E4E7D599DAAAD19034",
+            "stake_account": "soraﾜヰ8ｽfｸﾛVﾆFﾛfUﾛHLﾜsﾅcMｷﾙKrﾜﾑｴaFｸﾂEｶV2cW9Gfﾜ8fPyMzｶﾋｿ9PPJｽGｿXﾂﾜ3N8S8H",
+            "validator": "soraﾜヰ8ｽfｸﾛVﾆFﾛfUﾛHLﾜsﾅcMｷﾙKrﾜﾑｴaFｸﾂEｶV2cW9Gfﾜ8fPyMzｶﾋｿ9PPJｽGｿXﾂﾜ3N8S8H"
+          }
+        },
+        {
+          "ActivatePublicLaneValidator": {
+            "lane_id": 0,
+            "validator": "soraﾜヰ8ｽfｸﾛVﾆFﾛfUﾛHLﾜsﾅcMｷﾙKrﾜﾑｴaFｸﾂEｶV2cW9Gfﾜ8fPyMzｶﾋｿ9PPJｽGｿXﾂﾜ3N8S8H"
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "soraﾜヰ8ｽavｲgrｹfｼXﾑﾓPtXPmﾒTWｴﾉﾃｾGﾈvxvﾚﾙｾﾕWﾋ73ﾙrﾃ7dﾋLZﾍﾌzﾌｶHhRXC2ｴtJXDYLG",
+              "label": null,
+              "metadata": {},
+              "opaque_ids": [],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#soraﾜヰ8ｽavｲgrｹfｼXﾑﾓPtXPmﾒTWｴﾉﾃｾGﾈvxvﾚﾙｾﾕWﾋ73ﾙrﾃ7dﾋLZﾍﾌzﾌｶHhRXC2ｴtJXDYLG",
+              "object": "10000"
+            }
+          }
+        },
+        {
+          "RegisterPublicLaneValidator": {
+            "initial_stake": "10000",
+            "lane_id": 0,
+            "metadata": {},
+            "peer_id": "ea013086C1B85CD4512F7714C17C191F8448B6D2827AE199F09B98C7FCAA3151EA279B08BCE28A10E45279E3CD5A9DA7B3343E",
+            "stake_account": "soraﾜヰ8ｽavｲgrｹfｼXﾑﾓPtXPmﾒTWｴﾉﾃｾGﾈvxvﾚﾙｾﾕWﾋ73ﾙrﾃ7dﾋLZﾍﾌzﾌｶHhRXC2ｴtJXDYLG",
+            "validator": "soraﾜヰ8ｽavｲgrｹfｼXﾑﾓPtXPmﾒTWｴﾉﾃｾGﾈvxvﾚﾙｾﾕWﾋ73ﾙrﾃ7dﾋLZﾍﾌzﾌｶHhRXC2ｴtJXDYLG"
+          }
+        },
+        {
+          "ActivatePublicLaneValidator": {
+            "lane_id": 0,
+            "validator": "soraﾜヰ8ｽavｲgrｹfｼXﾑﾓPtXPmﾒTWｴﾉﾃｾGﾈvxvﾚﾙｾﾕWﾋ73ﾙrﾃ7dﾋLZﾍﾌzﾌｶHhRXC2ｴtJXDYLG"
           }
         }
       ],
       "ivm_triggers": [],
-      "parameters": {
-        "block": {
-          "max_transactions": 512
-        },
-        "custom": {
-          "ivm_gas_limit_per_block": {
-            "id": "ivm_gas_limit_per_block",
-            "payload": 50000000
-          },
-          "sumeragi_npos_parameters": {
-            "id": "sumeragi_npos_parameters",
-            "payload": {
-              "activation_lag_blocks": 1,
-              "epoch_length_blocks": 3600,
-              "epoch_seed": "8BBF8F12EC79F8D85D18E2CE7A84B66C53E9CD4D4EBA357CD33CF28F0D65720B",
-              "evidence_horizon_blocks": 7200,
-              "finality_margin_blocks": 8,
-              "max_entity_correlation_pct": 25,
-              "max_nominator_concentration_pct": 25,
-              "max_validators": 128,
-              "min_nomination_bond": "1",
-              "min_self_bond": "1000",
-              "seat_band_pct": 5,
-              "slashing_delay_blocks": 259200,
-              "vrf_commit_window_blocks": 100,
-              "vrf_reveal_window_blocks": 40
-            }
-          }
-        },
-        "executor": {
-          "execution_depth": 3,
-          "fuel": 55000000,
-          "memory": 1048576,
-          "max_output_items": 4096,
-          "max_output_bytes": 8388608
-        },
-        "smart_contract": {
-          "execution_depth": 3,
-          "fuel": 55000000,
-          "memory": 1048576,
-          "max_output_items": 4096,
-          "max_output_bytes": 8388608
-        },
-        "sumeragi": {
-          "block_cadence_ms": 1000,
-          "key_activation_lead_blocks": 1,
-          "key_allowed_algorithms": [
-            "bls_normal"
-          ],
-          "key_allowed_hsm_providers": [
-            "pkcs11",
-            "yubihsm",
-            "softkey"
-          ],
-          "key_expiry_grace_blocks": 0,
-          "key_overlap_grace_blocks": 8,
-          "key_require_hsm": false,
-          "max_clock_drift_ms": 1000
-        },
-        "transaction": {
-          "ivm_bytecode_size": 4194304,
-          "max_decompressed_bytes": 10485760,
-          "max_instructions": 50000,
-          "max_metadata_depth": 8,
-          "max_signatures": 16,
-          "max_time_to_live_ms": 86400000,
-          "max_tx_bytes": 10485760,
-          "require_height_ttl": false,
-          "require_sequence": false
-        }
-      },
       "topology": []
-    },
-    {
-      "instructions": [
-        {
-          "Mint": {
-            "Asset": {
-              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "object": "13"
-            }
-          }
-        },
-        {
-          "Mint": {
-            "Asset": {
-              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "object": "44"
-            }
-          }
-        },
-        {
-          "Mint": {
-            "Asset": {
-              "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "object": "100000000"
-            }
-          }
-        },
-        {
-          "CreateFeeSponsorProgram": {
-            "program": {
-              "id": {
-                "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "name": "default"
-              },
-              "lifecycle": {
-                "state": "staged"
-              }
-            }
-          }
-        },
-        {
-          "StageFeeSponsorProgramRevision": {
-            "revision": {
-              "program_id": {
-                "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "name": "default"
-              },
-              "revision": 1,
-              "eligibility": {
-                "mode": "enrolled_or_route_default"
-              },
-              "rules": [
-                {
-                  "id": "taira_writes",
-                  "effect": {
-                    "effect": "allow"
-                  },
-                  "selectors": [
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha.log"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha.register"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha.grant"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha.alias.ensure"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "nexus::EnrollFeeSponsorBeneficiary"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha.account.alias.primary.compare_and_set"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::ActivateContractInstance"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha.contract.alias.set"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha_data_model::isi::sorafs::RegisterCapacityDeclaration"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha.set_key_value"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "soracloud::HeartbeatSoracloudModelHost"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "soracloud::AdvertiseSoracloudInrouHost"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "soracloud::ReconcileSoracloudInrouPlacements"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "soracloud::SetSoracloudInrouReplicaRuntimeState"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "soracloud::ClearSoracloudInrouReplicaRuntimeState"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "soracloud::ReportSoracloudServiceLeaseUsage"
-                      }
-                    }
-                  ]
-                }
-              ],
-              "asset_budgets": [
-                {
-                  "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                  "per_transaction": "1000000",
-                  "per_block": "10000000",
-                  "per_program_epoch": "1000000000",
-                  "per_beneficiary_epoch": "50000000",
-                  "reserve_floor": "10000000",
-                  "epoch_length_blocks": 3600
-                }
-              ]
-            }
-          }
-        },
-        {
-          "EnrollFeeSponsorBeneficiary": {
-            "program_id": {
-              "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "name": "default"
-            },
-            "beneficiary": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
-          }
-        },
-        {
-          "FundFeeSponsorProgram": {
-            "program_id": {
-              "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "name": "default"
-            },
-            "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-            "amount": "100000000"
-          }
-        },
-        {
-          "ActivateFeeSponsorProgramRevision": {
-            "program_id": {
-              "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "name": "default"
-            },
-            "revision": 1,
-            "activate_at_height": 1
-          }
-        },
-        {
-          "Grant": {
-            "Permission": {
-              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "object": {
-                "name": "CanEnrollFeeSponsorProgram",
-                "payload": {
-                  "program_id": {
-                    "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                    "name": "default"
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "Mint": {
-            "Asset": {
-              "destination": "61CtjvNd9T3THAR65GsMVHr82Bjc#testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
-              "object": "250000000"
-            }
-          }
-        },
-        {
-          "Transfer": {
-            "AssetDefinition": {
-              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "source": "testuﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7"
-            }
-          }
-        },
-        {
-          "Grant": {
-            "Permission": {
-              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "object": {
-                "name": "CanSetParameters"
-              }
-            }
-          }
-        },
-        {
-          "Grant": {
-            "Permission": {
-              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "object": {
-                "name": "CanRegisterAccount"
-              }
-            }
-          }
-        }
-      ],
-      "ivm_triggers": [],
-      "topology": [
-        {
-          "peer": "ea0130A71AAB00BE72C1BDF6B6A7F5D107E9D224DE900C3DDF6C84C1F17B0BB31E59A1403C9028320058E08D6659E0E7F92F0F",
-          "pop_hex": "b08719da2ee0976152c12bd33e4f3e40670287ce1a6b764fe58bf1f21ce379e38f72e379bf0623101bbe63a2687ecf06047fd807f14fd2cde9c565c2bd25b29a96986944ca71b962d7d0e1a96ea0d692ec592a2971112ba8f582f06c0a546f43"
-        },
-        {
-          "peer": "ea0130A7E9D016D723F72942FCF4B988FB599EA0E092F73C8B68E69F4E8B3FE542A3F7E48AD6CD15F3EB484E45F79399071F77",
-          "pop_hex": "a14eb180f0d78c55d2c034e91ccf691378e9c3ceed8e0b81d3e4b7c215c0dbb633bb9f1c5063911c31af4610016c164015f0f93db3c7df6a2ad0c39338fe7695b976a59fd13797615f229fbd77276a8bb2842e4e44fadcafdb7b37f4a143b913"
-        },
-        {
-          "peer": "ea0130B0AC152F7A4288F1ABE531D50CCC01EF5958EFA12F9F39168E2D0D6FCFF3800F3DCF30203A9F30D3A9F262556CE414B4",
-          "pop_hex": "a0ff6f7dfc6e4109bb1a341ea118b0eb7012bcb1be809444c0c131664a00beb0e0318b5dbf75f1ab878d9c696625646805fece416ed8865549176b25871ac3bb17e80f49d4231c8f13f057075192d8edc9a7d4f4f1280406281b880a729b01e5"
-        },
-        {
-          "peer": "ea0130B42F548672230B0A7F38AC30686F9F5B24799507B7A4A904F7E08C98C3385A4095906FC6D1BF8D67CC181084D68DAE73",
-          "pop_hex": "a9ed4797dfda4ce53a4e7ad945196969b300fd984d553a5da7c230a7796bdef99c86e90cc11db3703f49948f11238d360130b7b9642dafb3cf9c644a3828ed74a5b0eb1e229879d87651e5e04852b18a1de0b8119058291aca5a48534523fc21"
-        },
-        {
-          "peer": "ea01308524AA484E6E6F06DD88E20D74A2493C3586B036F5394EB0B53C7C172653BFBE6EF08BF6468D5F1335547B6878138C20",
-          "pop_hex": "a0fba64c24895c6d5634abdf56d13c8f720bcb5b98f3245db3c1a6306226a8b7815df2e3c2545de9b77b48713a48f7fd18fcd2373b30d74b1dc89833b27f305101671319213f9177fe3e2d64906951737e2869560ace7f0deeb707b7154daee0"
-        },
-        {
-          "peer": "ea0130A844144B7FC75B277AD83C3608B17613EE8336A1EE5F39406627B7C183416CE19F064FCDC26F85F7F21380077CB5BDDD",
-          "pop_hex": "870ef4af8ac87b313e1322029f62039d95897c400f719ca8db58aa5b63e85179cead1d7ddb0b0533a972c6fc0307798505aafff4dd50262c41107b5b5c183eaf1dc6ae50e9236acc9ab2d1062d145bbf222eb3c9e53fae3bd20272d8b31b0414"
-        },
-        {
-          "peer": "ea01308E10E640916ADFAC87A8B22FE4EF7383AAC610D09DC07322029A0913CA919176887FF1B418DEF885113E3CCC4C9CAC53",
-          "pop_hex": "935f3cb1167a391410d16ba2a7558a0400b76b8433c6fc9cafa23f8c584c5167354ea180672cab3be55db8c86ec81e7d133a03bada91ccfa69c0cca4675398dea7299abc51f086b1760d37281d61fc01de20279cd0bd597a970e0549b035c00e"
-        }
-      ]
     }
   ],
-  "wire_protocol_version": 3
+  "consensus_mode": "Npos",
+  "wire_protocol_version": 4,
+  "consensus_fingerprint": "0x97e7df878d5c1dec8111807d7ce79c2dfb6bd33db64e55795262b757b7c25e7a",
+  "sumeragi_v2": {
+    "da_layout": {
+      "encoding": {
+        "encoding": "reed_solomon16",
+        "details": null
+      },
+      "chunk_size_bytes": 262144,
+      "data_shards": 4,
+      "parity_shards": 2,
+      "max_payload_size_bytes": 16777216,
+      "max_chunk_count": 1024
+    },
+    "nexus_amx_context_hash": "C25A997CE30C064ED2D9A0F6DFB4636961C9FD7D4854DEAB6C9952FE3AA0E607",
+    "execution_policy_hash": "E02F738054B03E636BEB14D97400E83C7915C3202A35E86DC89E5174222DA83D"
+  },
+  "crypto": {
+    "sm_openssl_preview": false,
+    "sm_intrinsics": "auto",
+    "default_hash": "blake2b-256",
+    "allowed_signing": [
+      "ed25519",
+      "secp256k1",
+      "bls_normal"
+    ],
+    "sm2_distid_default": "1234567812345678",
+    "allowed_curve_ids": [
+      1,
+      3,
+      4
+    ]
+  }
 }

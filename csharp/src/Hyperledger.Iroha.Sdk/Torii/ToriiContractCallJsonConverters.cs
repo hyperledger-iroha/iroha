@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Hyperledger.Iroha.Norito;
 
 namespace Hyperledger.Iroha.Torii;
 
@@ -15,6 +16,14 @@ internal static class ToriiContractCallJson
         if (root.ValueKind != JsonValueKind.Object)
         {
             throw new JsonException($"{context} must be an object.");
+        }
+
+        foreach (var retired in new[] { "transaction_scaffold_b64", "signed_transaction_b64" })
+        {
+            if (root.TryGetProperty(retired, out _))
+            {
+                throw new JsonException($"{context}.{retired} is a retired field.");
+            }
         }
 
         RequireJsonBoolean(root, "ok", context);
@@ -103,8 +112,7 @@ internal static class ToriiContractCallJson
         }
 
         ValidateOptionalTransactionHashHex(response.TransactionHashHex, $"{context}.tx_hash_hex");
-        ValidateOptionalBase64(response.TransactionScaffoldBase64, $"{context}.transaction_scaffold_b64");
-        ValidateOptionalBase64(response.SignedTransactionBase64, $"{context}.signed_transaction_b64");
+        ValidateOptionalBase64(response.TransactionPayloadBase64, $"{context}.transaction_payload_b64");
         ValidateOptionalBase64(response.SigningMessageBase64, $"{context}.signing_message_b64");
         ToriiSseEventJson.RequireOptionalExactTokenText(response.Entrypoint, $"{context}.entrypoint");
         if (response.TransactionTimeToLiveMilliseconds is 0)
@@ -120,7 +128,46 @@ internal static class ToriiContractCallJson
                 32);
         }
 
+        if (response.Submitted)
+        {
+            if (response.TransactionHashHex is null
+                || response.TransactionPayloadBase64 is not null
+                || response.SigningMessageBase64 is not null)
+            {
+                throw new JsonException(
+                    $"{context} submitted response must contain only the final transaction hash.");
+            }
+        }
+        else
+        {
+            if (response.TransactionHashHex is not null
+                || response.EntrypointHashHex is not null
+                || response.PipelineStatus is not null
+                || response.TransactionPayloadBase64 is null
+                || response.SigningMessageBase64 is null)
+            {
+                throw new JsonException(
+                    $"{context} unsigned response must contain exactly one payload and signing-message pair.");
+            }
+
+            var transactionPayload = Convert.FromBase64String(response.TransactionPayloadBase64);
+            var signingMessage = Convert.FromBase64String(response.SigningMessageBase64);
+            if (signingMessage.Length != IrohaHash.Length
+                || !signingMessage.AsSpan().SequenceEqual(IrohaHash.Hash(transactionPayload)))
+            {
+                throw new JsonException(
+                    $"{context}.signing_message_b64 must be the exact TransactionPayload hash.");
+            }
+        }
+
         ValidateOperationReceipt(response.OperationReceipt, $"{context}.operation_receipt");
+        if (!response.Submitted
+            && (response.OperationReceipt.TransactionHashHex is not null
+                || response.OperationReceipt.EntrypointHashHex is not null))
+        {
+            throw new JsonException(
+                $"{context}.operation_receipt must not contain draft transaction hashes.");
+        }
     }
 
     private static void ValidateOperationReceipt(ToriiOperationReceipt receipt, string context)
@@ -564,8 +611,7 @@ internal static class ToriiContractCallJson
             nameof(ToriiContractCallResponse.AbiHashHex) => "abi_hash_hex",
             nameof(ToriiContractCallResponse.CreationTimeMilliseconds) => "creation_time_ms",
             nameof(ToriiContractCallResponse.TransactionHashHex) => "tx_hash_hex",
-            nameof(ToriiContractCallResponse.TransactionScaffoldBase64) => "transaction_scaffold_b64",
-            nameof(ToriiContractCallResponse.SignedTransactionBase64) => "signed_transaction_b64",
+            nameof(ToriiContractCallResponse.TransactionPayloadBase64) => "transaction_payload_b64",
             nameof(ToriiContractCallResponse.SigningMessageBase64) => "signing_message_b64",
             nameof(ToriiContractCallResponse.Entrypoint) => "entrypoint",
             "ContractId" => "contract_id",

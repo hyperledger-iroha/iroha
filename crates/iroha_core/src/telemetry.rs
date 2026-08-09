@@ -72,6 +72,11 @@ use iroha_primitives::{json::Json, numeric::Numeric, time::TimeSource};
 use iroha_telemetry::metrics::GaugeVec;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::global_sorafs_node_otel;
+pub use iroha_telemetry::metrics::musubi::{
+    MusubiCacheOperationV1, MusubiCursorFailureReasonV1, MusubiGovernanceActionV1,
+    MusubiGovernanceRejectionReasonV1, MusubiIngestDeadletterReasonV1, MusubiIntegritySurfaceV1,
+    MusubiPublicationPhaseMetricV1,
+};
 pub use iroha_telemetry::metrics::{
     GOVERNANCE_MANIFEST_RECENT_CAP, GovernanceManifestActivation, Halo2Status,
     LaneSettlementBuffer, LaneSettlementSnapshot, LaneSwaplineSnapshot, Metrics,
@@ -2062,6 +2067,41 @@ impl StateTelemetry {
     pub fn inc_sorafs_disputes(&self, result: &'static str) {
         if self.enabled.load(Ordering::Relaxed) {
             self.metrics.inc_sorafs_disputes(result);
+        }
+    }
+
+    /// Mirror the committed count of Musubi releases below fresh-selection quorum.
+    ///
+    /// This exact setter intentionally remains active while telemetry collection is
+    /// disabled so enabling telemetry later exposes the current committed value.
+    pub fn set_musubi_replication_shortfall_releases(&self, releases: u64) {
+        self.metrics
+            .musubi
+            .set_replication_shortfall_releases(releases);
+    }
+
+    /// Record a rejected Musubi package, alias, or Parliament mutation.
+    pub fn record_musubi_governance_rejection(
+        &self,
+        action: MusubiGovernanceActionV1,
+        reason: MusubiGovernanceRejectionReasonV1,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.musubi.inc_governance_rejection(action, reason);
+        }
+    }
+
+    /// Record one Musubi commitment verification failure.
+    pub fn record_musubi_integrity_failure(&self, surface: MusubiIntegritySurfaceV1) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.musubi.inc_integrity_failure(surface);
+        }
+    }
+
+    /// Record one bounded Musubi finalized-query cursor failure.
+    pub fn record_musubi_cursor_failure(&self, reason: MusubiCursorFailureReasonV1) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.musubi.inc_cursor_failure(reason);
         }
     }
 
@@ -5447,6 +5487,13 @@ impl Telemetry {
         self.enabled.store(enabled, Ordering::Relaxed);
     }
 
+    /// Record one bounded Musubi finalized-query cursor failure.
+    pub fn record_musubi_cursor_failure(&self, reason: MusubiCursorFailureReasonV1) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.musubi.inc_cursor_failure(reason);
+        }
+    }
+
     /// Enable telemetry observations at runtime.
     #[inline]
     pub fn enable(&self) {
@@ -8786,21 +8833,7 @@ impl Telemetry {
     /// to the last snapshot when the telemetry actor is unavailable.
     #[cfg(feature = "telemetry")]
     pub async fn metrics_fresh(&self) -> &Metrics {
-        let sync_result = async {
-            let (tx, rx) = oneshot::channel();
-            self.sync_requested.store(true, Ordering::Release);
-            self.actor
-                .try_send(Message::Sync { reply: Some(tx) })
-                .map_err(|err| format!("schedule telemetry sync: {err}"))?;
-            tokio::time::timeout(METRICS_SYNC_TIMEOUT, rx)
-                .await
-                .map_err(|_| "telemetry sync timed out")?
-                .map_err(|_| "telemetry actor closed")?;
-            Ok::<(), String>(())
-        }
-        .await;
-
-        if let Err(err) = sync_result {
+        if let Err(err) = self.synchronize_metrics().await {
             self.sync_requested.store(false, Ordering::Release);
             iroha_logger::warn!(
                 ?err,
@@ -8810,6 +8843,32 @@ impl Telemetry {
         }
         refresh_ivm_cache_metrics(&self.metrics);
         &self.metrics
+    }
+
+    /// Refresh lazy metrics and report synchronization failure to callers that
+    /// must not publish a stale mixed-frontier snapshot.
+    #[cfg(feature = "telemetry")]
+    pub async fn metrics_fresh_checked(&self) -> Result<&Metrics, String> {
+        if let Err(err) = self.synchronize_metrics().await {
+            self.sync_requested.store(false, Ordering::Release);
+            return Err(err);
+        }
+        refresh_ivm_cache_metrics(&self.metrics);
+        Ok(&self.metrics)
+    }
+
+    #[cfg(feature = "telemetry")]
+    async fn synchronize_metrics(&self) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.sync_requested.store(true, Ordering::Release);
+        self.actor
+            .try_send(Message::Sync { reply: Some(tx) })
+            .map_err(|err| format!("schedule telemetry sync: {err}"))?;
+        tokio::time::timeout(METRICS_SYNC_TIMEOUT, rx)
+            .await
+            .map_err(|_| "telemetry sync timed out".to_owned())?
+            .map_err(|_| "telemetry actor closed".to_owned())?;
+        Ok(())
     }
 
     /// Access the `SoraNet` privacy aggregator.
@@ -11728,10 +11787,11 @@ mod tests {
     fn confidential_tree_metrics_recorded() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
-        let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("sora", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let label = asset_id.to_string();
 
         let initial = ConfidentialTreeStats {
@@ -11880,10 +11940,11 @@ mod tests {
     fn confidential_tree_metrics_skip_when_disabled() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), false);
-        let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("sora", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset_id: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let label = asset_id.to_string();
         let stats = ConfidentialTreeStats {
             commitments: 5,
@@ -13388,7 +13449,7 @@ mod tests {
 
         telemetry.record_manifest_activation(None, "manifest_inserted");
         let activation = GovernanceManifestActivation {
-            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .to_string(),
             code_hash_hex: "deadbeef".to_string(),
             abi_hash_hex: Some("cafebabe".to_string()),
@@ -14122,10 +14183,11 @@ mod tests {
         let sut = SystemUnderTest::new();
 
         let trigger_id: TriggerId = "telemetry_time_trigger".parse().expect("trigger id");
-        let missing_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("ghost", "universal").unwrap(),
-            "ghost".parse().unwrap(),
-        );
+        let missing_def: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("ghost", "universal").unwrap(),
+                "ghost".parse().unwrap(),
+            );
         let missing_asset = AssetId::new(missing_def, sut.account_id.clone());
         let action = Action::new(
             [Transfer::asset_quantity(
@@ -14136,7 +14198,8 @@ mod tests {
             Repeats::Indefinitely,
             sut.account_id.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         let trigger = Trigger::new(trigger_id, action);
 
         let register_tx = sut.accepted_transaction([Register::trigger(trigger)]);
@@ -15354,159 +15417,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn genesis_commit_time_is_zero() {
-        let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1500));
-        let creation_time_ms =
-            u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX);
-        let header = BlockHeader::new(
-            std::num::NonZeroU64::new(1).expect("non-zero height"),
-            None,
-            None,
-            None,
-            creation_time_ms,
-            0,
-        );
+    include!("telemetry/genesis_commit_time_test.rs");
 
-        time_handle.advance(Duration::from_secs(12));
-        let report = BlockCommitReport::new(&header, &time_source);
-
-        assert_eq!(report.commit_time, Duration::ZERO)
-    }
-
-    #[test]
-    fn block_payload_detects_transaction_blocks() {
-        let block = block_with_transactions(2);
-        assert!(block_counts_as_non_empty(&block));
-    }
-
-    #[test]
-    fn block_payload_flags_genesis_without_transactions() {
-        let block = empty_block(1);
-        assert!(block_counts_as_non_empty(&block));
-    }
-
-    #[test]
-    fn block_payload_rejects_non_genesis_empty_block() {
-        let block = empty_block(2);
-        assert!(!block_counts_as_non_empty(&block));
-    }
-
-    fn checked_block_signature(
-        private_key: &PrivateKey,
-        header: &iroha_data_model::block::BlockHeader,
-    ) -> SignatureOf<iroha_data_model::block::BlockHeader> {
-        SignatureOf::try_new(private_key, header).expect("test block signing should succeed")
-    }
-
-    #[test]
-    fn block_payload_detects_da_commitment_blocks() {
-        let block = block_with_da_commitments(2);
-        assert!(block_counts_as_non_empty(&block));
-    }
-
-    fn empty_block(height: u64) -> iroha_data_model::block::SignedBlock {
-        use std::num::NonZeroU64;
-
-        use iroha_data_model::block::{BlockHeader, BlockSignature};
-
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height must be > 0"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let signer = checked_keypair();
-        let signature =
-            BlockSignature::new(0, checked_block_signature(signer.private_key(), &header));
-
-        iroha_data_model::block::SignedBlock::presigned(signature, header, Vec::new())
-    }
-
-    fn block_with_da_commitments(height: u64) -> iroha_data_model::block::SignedBlock {
-        use std::num::NonZeroU64;
-
-        use iroha_crypto::{Hash, Signature};
-        use iroha_data_model::{
-            block::{BlockHeader, BlockSignature},
-            da::{
-                commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme},
-                types::{BlobDigest, RetentionPolicy, StorageTicketId},
-            },
-            nexus::LaneId,
-            sorafs::pin_registry::ManifestDigest,
-        };
-
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height must be > 0"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let signer = checked_keypair();
-        let signature =
-            BlockSignature::new(0, checked_block_signature(signer.private_key(), &header));
-        let mut block =
-            iroha_data_model::block::SignedBlock::presigned(signature, header, Vec::new());
-
-        let record = DaCommitmentRecord::new(
-            LaneId::new(0),
-            1,
-            1,
-            BlobDigest::new([0x11; 32]),
-            ManifestDigest::new([0x22; 32]),
-            DaProofScheme::MerkleSha256,
-            Hash::prehashed([0x33; 32]),
-            Some(Hash::prehashed([0x55; 32])),
-            RetentionPolicy::default(),
-            StorageTicketId::new([0x66; 32]),
-            Signature::try_from_bytes(&[0x77; 64])
-                .expect("checked telemetry DA acknowledgement signature fixture"),
-        );
-        let bundle = DaCommitmentBundle::new(vec![record]);
-        block.set_da_commitments(Some(bundle));
-
-        block
-    }
-
-    fn block_with_transactions(height: u64) -> iroha_data_model::block::SignedBlock {
-        use std::num::NonZeroU64;
-
-        use iroha_data_model::{
-            ChainId,
-            block::{BlockHeader, BlockSignature},
-            transaction::signed::SignedTransaction,
-        };
-
-        fn dummy_transaction() -> SignedTransaction {
-            let chain_id: ChainId = "test-chain".parse().expect("chain id");
-            let key_pair = checked_keypair();
-            let authority = AccountId::new(key_pair.public_key().clone());
-            TransactionBuilder::new(
-                chain_id,
-                authority,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .sign(key_pair.private_key())
-        }
-
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height must be > 0"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let signer = checked_keypair();
-        let signature =
-            BlockSignature::new(0, checked_block_signature(signer.private_key(), &header));
-        let tx = dummy_transaction();
-
-        iroha_data_model::block::SignedBlock::presigned(signature, header, vec![tx])
-    }
+    include!("telemetry/block_payload_tests.rs");
 }

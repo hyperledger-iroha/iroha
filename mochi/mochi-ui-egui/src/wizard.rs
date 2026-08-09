@@ -23,10 +23,12 @@ impl MochiApp {
 
                 ui.label(RichText::new("Topology").strong());
                 ui.horizontal_wrapped(|ui| {
-                    for preset in [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft] {
+                    for preset in [ProfilePreset::FourPeerBft] {
                         let selected = self.first_run_wizard.preset == preset;
                         let subtitle = match preset {
-                            ProfilePreset::SinglePeer => "Fastest loop for app work and demos.",
+                            ProfilePreset::SinglePeer => {
+                                "Historical name; now launches the same four-validator committee."
+                            }
                             ProfilePreset::FourPeerBft => "Better for consensus debugging and failure drills.",
                         };
                         Frame::new()

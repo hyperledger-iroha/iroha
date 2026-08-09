@@ -39,6 +39,7 @@ _PROPOSAL_PREIMAGE_TYPE = (
 )
 _SETTLEMENT_TYPE = "iroha_data_model::block::consensus::LaneBlockCommitment"
 _SETTLEMENT_HASH_DOMAIN = b"iroha.nexus.lane-relay.settlement.v1"
+_APPLICATION_MANIFEST_LEAF_DOMAIN = b"iroha:merkle:leaf:v1\0"
 
 
 def _crc16_ccitt_false(payload: bytes) -> int:
@@ -71,6 +72,18 @@ def _hash_literal_bytes(value: str) -> bytes:
     if matched is None:
         raise ValueError("expected a previously validated canonical hash literal")
     return bytes.fromhex(matched.group(1))
+
+
+def compute_native_amx_application_manifest_singleton_root(leaf_hash: str) -> str:
+    """Derive the exact singleton Native AMX application-manifest root."""
+
+    leaf_hash_bytes = _hash_literal_bytes(leaf_hash)
+    body = leaf_hash_bytes.hex().upper()
+    checksum = _crc16_ccitt_false(f"hash:{body}".encode("ascii"))
+    canonical = f"hash:{body}#{checksum:04X}"
+    if leaf_hash != canonical or leaf_hash_bytes[-1] & 1 != 1:
+        raise ValueError("manifest leaf hash must be canonical")
+    return _hash_literal(_APPLICATION_MANIFEST_LEAF_DOMAIN + leaf_hash_bytes)
 
 
 def _u8(value: int) -> bytes:

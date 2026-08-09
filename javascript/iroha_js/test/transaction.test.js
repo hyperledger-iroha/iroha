@@ -926,6 +926,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
           assetDefinitionId: ASSET_DEFINITION_ID,
+          owningDomain: null, balanceScopePolicy: "Global",
           metadata: { description: "Rose asset" },
           mintable: "Not",
           spec: { scale: 4 },
@@ -953,6 +954,8 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
         metadata: { description: "Rose asset" },
         mintable: "Not",
         spec: { scale: 4 },
+        balance_scope_policy: "Global",
+        owning_domain: null,
         confidential_policy: {
           mode: "TransparentOnly",
           vk_set_hash: "deadbeef",
@@ -990,7 +993,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "4" },
           { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "2" },
@@ -1019,6 +1022,40 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
   });
 });
 
+test("buildRegisterAssetDefinitionAndMintTransaction requires ownership intent", () => {
+  assert.throws(
+    () =>
+      buildRegisterAssetDefinitionAndMintTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          balanceScopePolicy: "Global",
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+    /owningDomain is required/u,
+  );
+});
+
+test("buildRegisterAssetDefinitionAndMintTransaction requires balance policy intent", () => {
+  assert.throws(
+    () =>
+      buildRegisterAssetDefinitionAndMintTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        assetDefinition: {
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          owningDomain: null,
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+    /balanceScopePolicy is required/u,
+  );
+});
+
 test("buildRegisterAssetDefinitionAndMintTransaction rejects both mint and mints", () => {
   assert.throws(
     () =>
@@ -1026,7 +1063,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects both mint and mints
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "1" },
         mints: [],
         privateKey: PRIVATE_KEY,
@@ -1042,7 +1079,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction enforces mint destination f
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
         mints: [{ quantity: "1" }],
         privateKey: PRIVATE_KEY,
       }),
@@ -1057,7 +1094,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects mismatched assetId/
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
         mints: [
           {
             accountId: NEW_ACCOUNT_ID_INPUT,
@@ -1089,7 +1126,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "5" },
         transfer: { destinationAccountId: AUTHORITY_ID_INPUT, quantity: "2" },
         privateKey: PRIVATE_KEY,
@@ -1141,7 +1178,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "6" },
           { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "1" },
@@ -1187,7 +1224,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects both transf
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "3" },
         transfer: { destinationAccountId: AUTHORITY_ID_INPUT, quantity: "2" },
         transfers: [],
@@ -1204,7 +1241,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects both mint a
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "2" },
         mints: [],
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
@@ -1221,7 +1258,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction requires mint spec"
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
         privateKey: PRIVATE_KEY,
       }),
@@ -1236,7 +1273,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction validates mint dest
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
         mints: [{ quantity: "1" }],
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
         privateKey: PRIVATE_KEY,
@@ -1252,7 +1289,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects mismatched 
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
-        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
         mints: [
           {
             accountId: NEW_ACCOUNT_ID_INPUT,

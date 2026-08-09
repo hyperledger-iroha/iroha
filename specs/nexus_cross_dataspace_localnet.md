@@ -8,7 +8,9 @@ description: Reproducible workflow for proving ds1/ds2 atomic all-or-nothing set
 
 This runbook executes the Nexus integration proof that:
 
-- boots a 12-peer localnet with disjoint four-validator Nexus, `ds1`, and `ds2` committees,
+- boots an exact 13-peer revision-4 global committee whose first 12 peers form
+  disjoint four-validator Nexus, `ds1`, and `ds2` lane committees; the final
+  peer remains a global voter and lane observer,
 - routes account traffic into each dataspace,
 - creates an asset in each dataspace,
 - executes atomic swap settlement across dataspaces in both directions,
@@ -127,11 +129,13 @@ start/completion markers; a developer opt-out cannot satisfy the gate.
 
 ## Release validation requirement
 
-The former February 19, 2026 four-peer snapshot predates the disjoint 12-peer corridor and is not
-release evidence for the current implementation. A production sign-off requires the actual network
-startup logs, all three four-validator committees, at least 9 of 10 successful paired swap
-iterations with no more than two retries, and the final adversarial underfunded rollback. A sandbox
-bind skip or a partial 3-of-10 run is not a pass.
+The former February 19, 2026 four-peer snapshot predates the disjoint
+12-lane-validator corridor on an exact 13-peer global committee and is not
+release evidence for the current implementation. A production sign-off
+requires the actual network startup logs, all three four-validator committees,
+at least 9 of 10 successful paired swap iterations with no more than two
+retries, and the final adversarial underfunded rollback. A sandbox bind skip or
+a partial 3-of-10 run is not a pass.
 
 For a multi-seed run, use `scripts/nexus/run_cross_runtime_matrix.sh` after prebuilding a compatible
 `irohad`; do not rely on `IROHA_TEST_SKIP_BUILD=1` unless that binary is present and matches the

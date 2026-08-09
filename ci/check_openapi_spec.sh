@@ -3,21 +3,70 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROCESS_POLICY="${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
+if [[ ! -f "${PROCESS_POLICY}" || -L "${PROCESS_POLICY}" ]]; then
+  echo "error: shared release process policy is unavailable or symbolic." >&2
+  exit 2
+fi
+# shellcheck source=../scripts/sumeragi_v2_release_process_policy.sh
+source "${PROCESS_POLICY}"
 
-OPENAPI_DIR="${REPO_ROOT}/artifacts/openapi"
-SPEC_PATH="${OPENAPI_DIR}/torii.json"
-CURRENT_SPEC_PATH="${OPENAPI_DIR}/versions/current/torii.json"
-MANIFEST_PATH="${OPENAPI_DIR}/manifest.json"
-CURRENT_MANIFEST_PATH="${OPENAPI_DIR}/versions/current/manifest.json"
-CONFIGURED_ALLOWED_SIGNERS_PATH="${OPENAPI_ALLOWED_SIGNERS_FILE:-${OPENAPI_DIR}/allowed_signers.json}"
-case "${CONFIGURED_ALLOWED_SIGNERS_PATH}" in
-  /*)
-    ALLOWED_SIGNERS_PATH="${CONFIGURED_ALLOWED_SIGNERS_PATH}"
-    ;;
-  *)
-    ALLOWED_SIGNERS_PATH="${REPO_ROOT}/${CONFIGURED_ALLOWED_SIGNERS_PATH}"
-    ;;
-esac
+umask 077
+OPENAPI_RUN_ROOT="$(mktemp -d /private/tmp/iroha-openapi-check.XXXXXX)"
+chmod 700 "${OPENAPI_RUN_ROOT}"
+
+REPLAY_CARGO_TARGET_DIR_FIRST="${OPENAPI_RUN_ROOT}/target-first"
+REPLAY_CARGO_TARGET_DIR_SECOND="${OPENAPI_RUN_ROOT}/target-second"
+mkdir -m 700 \
+  "${REPLAY_CARGO_TARGET_DIR_FIRST}" \
+  "${REPLAY_CARGO_TARGET_DIR_SECOND}"
+
+if [[ -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  && -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  IROHA_RELEASE_ARTIFACT_ROOT="${OPENAPI_RUN_ROOT}/artifacts"
+  mkdir -m 700 "${IROHA_RELEASE_ARTIFACT_ROOT}"
+  IROHA_RELEASE_CANCEL_REQUEST_PATH="${OPENAPI_RUN_ROOT}/cancel-request.json"
+  export IROHA_RELEASE_ARTIFACT_ROOT IROHA_RELEASE_CANCEL_REQUEST_PATH
+elif [[ -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  || -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  echo "error: IROHA_RELEASE_ARTIFACT_ROOT and IROHA_RELEASE_CANCEL_REQUEST_PATH must be supplied together." >&2
+  exit 2
+fi
+require_external_private_directory \
+  "${REPO_ROOT}" "${REPLAY_CARGO_TARGET_DIR_FIRST}" "OpenAPI Cargo target"
+require_external_private_directory \
+  "${REPO_ROOT}" "${REPLAY_CARGO_TARGET_DIR_SECOND}" "OpenAPI Cargo target"
+require_external_release_artifact_root "${REPO_ROOT}"
+CANCEL_REQUEST_PARENT="${IROHA_RELEASE_CANCEL_REQUEST_PATH%/*}"
+if [[ -z "${CANCEL_REQUEST_PARENT}" ]]; then
+  echo "error: IROHA_RELEASE_CANCEL_REQUEST_PATH must name a file below a private external directory." >&2
+  exit 2
+fi
+require_external_private_directory \
+  "${REPO_ROOT}" "${CANCEL_REQUEST_PARENT}" "release cancellation marker parent"
+CARGO_TARGET_DIR="${REPLAY_CARGO_TARGET_DIR_FIRST}" \
+  require_disjoint_release_roots "${REPO_ROOT}"
+CARGO_TARGET_DIR="${REPLAY_CARGO_TARGET_DIR_SECOND}" \
+  require_disjoint_release_roots "${REPO_ROOT}"
+release_gate_boundary "openapi:channels-ready"
+OPENAPI_EVIDENCE_DIR="$(mktemp -d "${IROHA_RELEASE_ARTIFACT_ROOT}/openapi-check.XXXXXX")"
+chmod 700 "${OPENAPI_EVIDENCE_DIR}"
+require_release_artifact_directory "${OPENAPI_EVIDENCE_DIR}"
+
+report_openapi_run_paths() {
+  local status=$?
+  trap - EXIT
+  printf 'OpenAPI immutable sources and build state: %s\n' "${OPENAPI_RUN_ROOT}" >&2
+  printf 'OpenAPI retained evidence: %s\n' "${OPENAPI_EVIDENCE_DIR}" >&2
+  exit "${status}"
+}
+trap report_openapi_run_paths EXIT
+printf 'OpenAPI authenticated artifact root: %s\n' \
+  "${IROHA_RELEASE_ARTIFACT_ROOT}" >&2
+printf 'OpenAPI cooperative cancellation marker: %s\n' \
+  "${IROHA_RELEASE_CANCEL_REQUEST_PATH}" >&2
+
+CONFIGURED_ALLOWED_SIGNERS_PATH="${OPENAPI_ALLOWED_SIGNERS_FILE:-artifacts/openapi/allowed_signers.json}"
 REQUIRE_SIGNED="${OPENAPI_REQUIRE_SIGNED:-0}"
 
 case "${REQUIRE_SIGNED}" in
@@ -35,51 +84,33 @@ if [[ "${REQUIRE_SIGNED}" == "0" ]]; then
   SIGNATURE_VERIFY_POLICY_ARGS+=(--allow-unsigned=latest --allow-unsigned=current)
 fi
 
-TMP_DIR="$(mktemp -d)"
-REPLAY_WORKTREES=()
-cleanup() {
-  local worktree
-  for worktree in "${REPLAY_WORKTREES[@]}"; do
-    git -C "${REPO_ROOT}" worktree remove --force "${worktree}" >/dev/null 2>&1 || true
-  done
-  rm -rf -- "${TMP_DIR}"
-}
-trap cleanup EXIT
-
-REPLAY_CARGO_TARGET_DIR="${TMP_DIR}/cargo-target"
-mkdir -p "${REPLAY_CARGO_TARGET_DIR}"
-
-run_xtask() {
-  local -a args=("$@")
-  NORITO_SKIP_BINDINGS_SYNC=1 \
-    CARGO_TARGET_DIR="${REPLAY_CARGO_TARGET_DIR}" \
-    cargo run \
-      --locked \
-      --offline \
-      -p xtask \
-      --features dev-tools \
-      --bin xtask \
-      -- \
-      "${args[@]}"
-}
-
 run_xtask_in_repo() {
   local source_root="$1"
-  shift
+  local target_root="$2"
+  shift 2
   local -a args=("$@")
   (
     cd "${source_root}"
+    GIT_OPTIONAL_LOCKS=0 \
     NORITO_SKIP_BINDINGS_SYNC=1 \
-      CARGO_TARGET_DIR="${REPLAY_CARGO_TARGET_DIR}" \
-      cargo run \
+      CARGO_TARGET_DIR="${target_root}" \
+      run_cargo run \
         --locked \
         --offline \
         -p xtask \
         --features dev-tools \
         --bin xtask \
         -- \
-        "${args[@]}"
+      "${args[@]}"
   )
+}
+
+resolve_allowed_signers_path() {
+  local source_root="$1"
+  case "${CONFIGURED_ALLOWED_SIGNERS_PATH}" in
+    /*) printf '%s\n' "${CONFIGURED_ALLOWED_SIGNERS_PATH}" ;;
+    *) printf '%s\n' "${source_root}/${CONFIGURED_ALLOWED_SIGNERS_PATH}" ;;
+  esac
 }
 
 require_clean_checkout() {
@@ -90,28 +121,85 @@ require_clean_checkout() {
   fi
 }
 
-create_replay_worktree() {
-  local worktree="$1"
-  REPLAY_WORKTREES+=("${worktree}")
-  git -C "${REPO_ROOT}" worktree add --quiet --detach "${worktree}" "${REPLAY_COMMIT}"
-  node --input-type=module - \
-    "${worktree}" \
+stage_replay_openapi_dependencies() {
+  local source_root="$1"
+  local source="${REPO_ROOT}/tools/openapi/node_modules"
+  local target="${source_root}/tools/openapi/node_modules"
+  if [[ ! -d "${source}" || -L "${source}" ]]; then
+    echo "error: install the pinned OpenAPI dependency graph before replay." >&2
+    exit 1
+  fi
+  if [[ -e "${target}" || -L "${target}" ]]; then
+    echo "error: immutable OpenAPI replay dependency destination is not fresh." >&2
+    exit 1
+  fi
+  if [[ -n "$(find "${source}" -type l -print -quit)" ]]; then
+    echo "error: installed OpenAPI dependency graph must not contain symlinks." >&2
+    exit 1
+  fi
+  if ! npm --prefix "${REPO_ROOT}/tools/openapi" ls --all --omit=dev --json >/dev/null; then
+    echo "error: installed OpenAPI dependency graph does not match its lockfile." >&2
+    exit 1
+  fi
+  mkdir "${target}"
+  cp -R "${source}/." "${target}/"
+  if ! diff -qr "${source}" "${target}" >/dev/null; then
+    echo "error: immutable OpenAPI replay dependency copy is not exact." >&2
+    exit 1
+  fi
+}
+
+verify_replay_source_identity() {
+  local source_root="$1"
+  local actual_commit
+  local actual_tree
+  local source_status
+
+  actual_commit="$(GIT_OPTIONAL_LOCKS=0 git -C "${source_root}" rev-parse --verify "HEAD^{commit}")"
+  if [[ "${actual_commit}" != "${REPLAY_COMMIT}" ]]; then
+    echo "error: immutable OpenAPI replay source identity changed." >&2
+    exit 1
+  fi
+  actual_tree="$(GIT_OPTIONAL_LOCKS=0 git -C "${source_root}" rev-parse --verify "HEAD^{tree}")"
+  if [[ "${actual_tree}" != "${REPLAY_TREE}" ]]; then
+    echo "error: immutable OpenAPI replay source tree identity changed." >&2
+    exit 1
+  fi
+  source_status="$(GIT_OPTIONAL_LOCKS=0 git -C "${source_root}" status --porcelain=v1 --untracked-files=all)"
+  if [[ -n "${source_status}" ]]; then
+    echo "error: immutable OpenAPI replay source is not at its exact clean candidate identity." >&2
+    exit 1
+  fi
+  if [[ -e "${source_root}/.git/objects/info/alternates" || \
+        -L "${source_root}/.git/objects/info/alternates" ]]; then
+    echo "error: immutable OpenAPI replay source must have an independent object database." >&2
+    exit 1
+  fi
+}
+
+create_replay_source() {
+  local source_root="$1"
+  git clone --quiet --local --no-hardlinks --no-checkout \
+    "${REPO_ROOT}" "${source_root}"
+  git -C "${source_root}" checkout --quiet --detach "${REPLAY_COMMIT}"
+  GIT_OPTIONAL_LOCKS=0 node --input-type=module - \
+    "${source_root}" \
     "${REPO_ROOT}/Cargo.lock" <<'NODE'
 import {realpath} from 'node:fs/promises';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
-const [worktreeArgument, sourceArgument] = process.argv.slice(2);
-if (!worktreeArgument || !sourceArgument) {
-  throw new Error('replay worktree and Cargo.lock source paths are required');
+const [sourceRootArgument, lockSourceArgument] = process.argv.slice(2);
+if (!sourceRootArgument || !lockSourceArgument) {
+  throw new Error('replay source root and Cargo.lock source paths are required');
 }
-const worktreeRoot = await realpath(worktreeArgument);
-const sourcePath = await realpath(sourceArgument);
+const replaySourceRoot = await realpath(sourceRootArgument);
+const sourcePath = await realpath(lockSourceArgument);
 const provisionModule = pathToFileURL(
   join(
-    worktreeRoot,
-    'docs',
-    'portal',
+    replaySourceRoot,
+    'tools',
+    'openapi',
     'scripts',
     'provision-openapi-cargo-lock.mjs',
   ),
@@ -123,7 +211,7 @@ const {
   provisionOpenApiCargoLock,
 } = await import(provisionModule);
 const summary = await provisionOpenApiCargoLock({
-  repoRoot: worktreeRoot,
+  repoRoot: replaySourceRoot,
   sourcePath,
 });
 if (
@@ -137,17 +225,24 @@ if (
   throw new Error('isolated OpenAPI replay Cargo.lock provisioning was not exact');
 }
 NODE
-  if [[ -n "$(git -C "${worktree}" status --porcelain=v1 --untracked-files=all)" ]]; then
-    echo "error: isolated OpenAPI replay worktree is not clean after Cargo.lock provisioning." >&2
+  if ! cmp -s "${REPO_ROOT}/Cargo.lock" "${source_root}/Cargo.lock"; then
+    echo "error: immutable OpenAPI replay Cargo.lock copy is not byte-identical." >&2
     exit 1
   fi
+  stage_replay_openapi_dependencies "${source_root}"
+  verify_replay_source_identity "${source_root}"
+  python3 -I -S "${source_root}/scripts/seal_workspace_source.py" \
+    --seal --root "${source_root}" --no-writable-paths
+  python3 -I -S "${source_root}/scripts/seal_workspace_source.py" \
+    --verify --root "${source_root}" --no-writable-paths
+  verify_replay_source_identity "${source_root}"
 }
 
 sync_unsigned_replay_bundle() {
   local source_root="$1"
   local output_dir="$2"
   local allowed_signers_path="$3"
-  node --input-type=module - \
+  GIT_OPTIONAL_LOCKS=0 node --input-type=module - \
     "${source_root}" \
     "${output_dir}" \
     "${allowed_signers_path}" <<'NODE'
@@ -219,28 +314,50 @@ NODE
 
 build_unsigned_replay_bundle() {
   local source_root="$1"
-  local output_dir="$2"
-  run_xtask_in_repo "${source_root}" openapi --unsigned-manifest
-  mkdir -p "${output_dir}"
+  local target_root="$2"
+  local generated_dir="$3"
+  local output_dir="$4"
+  local allowed_signers_path
+  allowed_signers_path="$(resolve_allowed_signers_path "${source_root}")"
+  mkdir -m 700 "${generated_dir}" "${output_dir}"
+  run_xtask_in_repo \
+    "${source_root}" \
+    "${target_root}" \
+    openapi \
+    --output-root "${generated_dir}" \
+    --unsigned-manifest
+  for generated_artifact in torii.json manifest.json; do
+    if [[ ! -f "${generated_dir}/${generated_artifact}" || \
+          -L "${generated_dir}/${generated_artifact}" ]]; then
+      printf 'error: OpenAPI replay omitted regular generated %s.\n' \
+        "${generated_artifact}" >&2
+      exit 1
+    fi
+  done
+  python3 -I -S "${source_root}/scripts/seal_workspace_source.py" \
+    --verify --root "${source_root}" --no-writable-paths
+  verify_replay_source_identity "${source_root}"
   cp -R "${REPLAY_BASELINE}/." "${output_dir}/"
-  cp "${source_root}/artifacts/openapi/torii.json" "${output_dir}/torii.json"
-  cp "${source_root}/artifacts/openapi/manifest.json" "${output_dir}/manifest.json"
+  cp "${generated_dir}/torii.json" "${output_dir}/torii.json"
+  cp "${generated_dir}/manifest.json" "${output_dir}/manifest.json"
   sync_unsigned_replay_bundle \
     "${source_root}" \
     "${output_dir}" \
-    "${ALLOWED_SIGNERS_PATH}"
+    "${allowed_signers_path}"
 }
 
-REPLAY_WORKTREE_FIRST="${TMP_DIR}/openapi-replay-source-first"
-REPLAY_WORKTREE_SECOND="${TMP_DIR}/openapi-replay-source-second"
-REPLAY_BASELINE="${TMP_DIR}/openapi-replay-baseline"
-REPLAY_BUNDLE_FIRST="${TMP_DIR}/openapi-replay-first"
-REPLAY_BUNDLE_SECOND="${TMP_DIR}/openapi-replay-second"
+REPLAY_SOURCE_FIRST="${OPENAPI_RUN_ROOT}/source-first"
+REPLAY_SOURCE_SECOND="${OPENAPI_RUN_ROOT}/source-second"
+REPLAY_BASELINE="${OPENAPI_EVIDENCE_DIR}/baseline"
+REPLAY_GENERATED_FIRST="${OPENAPI_EVIDENCE_DIR}/generated-first"
+REPLAY_GENERATED_SECOND="${OPENAPI_EVIDENCE_DIR}/generated-second"
+REPLAY_BUNDLE_FIRST="${OPENAPI_EVIDENCE_DIR}/bundle-first"
+REPLAY_BUNDLE_SECOND="${OPENAPI_EVIDENCE_DIR}/bundle-second"
 GENERATED_SPEC_FIRST="${REPLAY_BUNDLE_FIRST}/torii.json"
-RELEASE_INPUT_SUMMARY_FIRST="${TMP_DIR}/release-inputs-first.json"
-RELEASE_INPUT_SUMMARY_SECOND="${TMP_DIR}/release-inputs-second.json"
-VERSION_MAP_SUMMARY_FIRST="${TMP_DIR}/version-map-first.json"
-VERSION_MAP_SUMMARY_SECOND="${TMP_DIR}/version-map-second.json"
+RELEASE_INPUT_SUMMARY_FIRST="${OPENAPI_EVIDENCE_DIR}/release-inputs-first.json"
+RELEASE_INPUT_SUMMARY_SECOND="${OPENAPI_EVIDENCE_DIR}/release-inputs-second.json"
+VERSION_MAP_SUMMARY_FIRST="${OPENAPI_EVIDENCE_DIR}/version-map-first.json"
+VERSION_MAP_SUMMARY_SECOND="${OPENAPI_EVIDENCE_DIR}/version-map-second.json"
 GENERATED_RELEASE_ARTIFACTS=(
   "torii.json"
   "manifest.json"
@@ -252,18 +369,28 @@ GENERATED_RELEASE_ARTIFACTS=(
 print_refresh_help() {
   cat >&2 <<'EOF'
 Refresh the canonical manifest before syncing snapshots:
-  development: cargo run --locked --offline -p xtask --features dev-tools --bin xtask -- openapi --unsigned-manifest
-               (cd tools/openapi && npm run sync-openapi -- --allow-unsigned)
+  development: bash ci/run_openapi_generator.sh \
+                 --output-dir <absolute-private-tmp>/openapi \
+                 --unsigned-manifest
+               node tools/openapi/scripts/sync-openapi.mjs \
+                 --version=current --latest --allow-unsigned \
+                 --output-dir=<absolute-private-tmp>/openapi
   release payload:
-               cargo run --locked --offline -p xtask --features dev-tools --bin xtask -- openapi \
-                 --unsigned-manifest --signing-payload <operator-staging>/openapi-manifest-v2.payload
+               bash ci/run_openapi_generator.sh \
+                 --output-dir <absolute-private-tmp>/openapi \
+                 --unsigned-manifest \
+                 --signing-payload <absolute-operator-staging>/openapi-manifest-v2.payload
   release attach after the Ed25519 HSM signs those exact bytes:
-               cargo run --locked --offline -p xtask --features dev-tools --bin xtask -- openapi \
-                 --signature-envelope <operator-staging>/openapi-manifest-v2.signature.json
-               (cd tools/openapi && npm run sync-openapi -- --allowed-signers=<operator-allowlist-path>)
+               bash ci/run_openapi_generator.sh \
+                 --output-dir <absolute-private-tmp>/openapi \
+                 --signature-envelope <absolute-operator-staging>/openapi-manifest-v2.signature.json
+               node tools/openapi/scripts/sync-openapi.mjs \
+                 --version=current --latest \
+                 --allowed-signers=<absolute-operator-allowlist-path> \
+                 --output-dir=<absolute-private-tmp>/openapi
 Local private-key signing is intentionally unavailable; release signing is detached-only.
 For an operator release, set OPENAPI_REQUIRE_SIGNED=1 and
-OPENAPI_ALLOWED_SIGNERS_FILE=<operator-allowlist-path> when running this gate.
+OPENAPI_ALLOWED_SIGNERS_FILE=<absolute-operator-allowlist-path> when running this gate.
 The checked-in allowlist is intentionally empty. Signed mode requires the
 root/latest/current release artifacts to be signed.
 This gate always requires a clean checkout and clean mutable generator
@@ -276,6 +403,26 @@ EOF
 
 require_clean_checkout
 REPLAY_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --verify "HEAD^{commit}")"
+REPLAY_TREE="$(git -C "${REPO_ROOT}" rev-parse --verify "${REPLAY_COMMIT}^{tree}")"
+release_gate_boundary "openapi:before-source-mirrors"
+create_replay_source "${REPLAY_SOURCE_FIRST}"
+create_replay_source "${REPLAY_SOURCE_SECOND}"
+require_clean_checkout
+
+OPENAPI_DIR="${REPLAY_SOURCE_FIRST}/artifacts/openapi"
+SPEC_PATH="${OPENAPI_DIR}/torii.json"
+CURRENT_SPEC_PATH="${OPENAPI_DIR}/versions/current/torii.json"
+MANIFEST_PATH="${OPENAPI_DIR}/manifest.json"
+CURRENT_MANIFEST_PATH="${OPENAPI_DIR}/versions/current/manifest.json"
+ALLOWED_SIGNERS_PATH="$(resolve_allowed_signers_path "${REPLAY_SOURCE_FIRST}")"
+
+# Reject a stale first-release Musubi route/model contract before paying for
+# two complete Cargo generator replays. The read-only check runs from the same
+# sealed candidate mirror used by every Cargo gate below.
+(
+  cd "${REPLAY_SOURCE_FIRST}"
+  GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/verify-musubi-v1-contract.mjs
+)
 
 if ! diff -u "${MANIFEST_PATH}" "${CURRENT_MANIFEST_PATH}" >/dev/null; then
   diff -u "${MANIFEST_PATH}" "${CURRENT_MANIFEST_PATH}" || true
@@ -285,23 +432,29 @@ if ! diff -u "${MANIFEST_PATH}" "${CURRENT_MANIFEST_PATH}" >/dev/null; then
 fi
 
 (
-  cd "${REPO_ROOT}"
-  node tools/openapi/scripts/verify-openapi-release-inputs.mjs \
+  cd "${REPLAY_SOURCE_FIRST}"
+  GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/verify-openapi-release-inputs.mjs \
     >"${RELEASE_INPUT_SUMMARY_FIRST}"
-  python3 scripts/check_sorafs_release_version_map.py \
+  GIT_OPTIONAL_LOCKS=0 python3 scripts/check_sorafs_release_version_map.py \
     >"${VERSION_MAP_SUMMARY_FIRST}"
-  node tools/openapi/scripts/verify-openapi-versions.mjs
+  GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/verify-openapi-versions.mjs
 )
 
-# xtask intentionally emits manifests only beside the canonical spec path.
-# Generate in two pristine detached worktrees, then assemble each replay from
-# the same immutable checked-in baseline so the caller's tree remains read-only.
-mkdir -p "${REPLAY_BASELINE}"
+# Generate from two independent, hard-link-free, sealed candidate clones into
+# private out-of-tree staging directories. Assemble both replays from the same
+# immutable checked-in baseline; the caller's checkout remains read-only.
+mkdir -m 700 "${REPLAY_BASELINE}"
 cp -R "${OPENAPI_DIR}/." "${REPLAY_BASELINE}/"
-create_replay_worktree "${REPLAY_WORKTREE_FIRST}"
-create_replay_worktree "${REPLAY_WORKTREE_SECOND}"
-build_unsigned_replay_bundle "${REPLAY_WORKTREE_FIRST}" "${REPLAY_BUNDLE_FIRST}"
-build_unsigned_replay_bundle "${REPLAY_WORKTREE_SECOND}" "${REPLAY_BUNDLE_SECOND}"
+build_unsigned_replay_bundle \
+  "${REPLAY_SOURCE_FIRST}" \
+  "${REPLAY_CARGO_TARGET_DIR_FIRST}" \
+  "${REPLAY_GENERATED_FIRST}" \
+  "${REPLAY_BUNDLE_FIRST}"
+build_unsigned_replay_bundle \
+  "${REPLAY_SOURCE_SECOND}" \
+  "${REPLAY_CARGO_TARGET_DIR_SECOND}" \
+  "${REPLAY_GENERATED_SECOND}" \
+  "${REPLAY_BUNDLE_SECOND}"
 
 for artifact in "${GENERATED_RELEASE_ARTIFACTS[@]}"; do
   first="${REPLAY_BUNDLE_FIRST}/${artifact}"
@@ -339,33 +492,33 @@ fi
 
 require_clean_checkout
 
-(
-  cd "${REPO_ROOT}"
-  run_xtask openapi-verify \
-    --spec "${SPEC_PATH}" \
-    --manifest "${MANIFEST_PATH}" \
-    --allowed-signers "${ALLOWED_SIGNERS_PATH}" \
-    "${XTASK_VERIFY_POLICY_ARGS[@]}"
-)
+run_xtask_in_repo \
+  "${REPLAY_SOURCE_FIRST}" \
+  "${REPLAY_CARGO_TARGET_DIR_FIRST}" \
+  openapi-verify \
+  --spec "${SPEC_PATH}" \
+  --manifest "${MANIFEST_PATH}" \
+  --allowed-signers "${ALLOWED_SIGNERS_PATH}" \
+  "${XTASK_VERIFY_POLICY_ARGS[@]}"
+
+run_xtask_in_repo \
+  "${REPLAY_SOURCE_FIRST}" \
+  "${REPLAY_CARGO_TARGET_DIR_FIRST}" \
+  openapi-verify \
+  --spec "${CURRENT_SPEC_PATH}" \
+  --manifest "${CURRENT_MANIFEST_PATH}" \
+  --allowed-signers "${ALLOWED_SIGNERS_PATH}" \
+  "${XTASK_VERIFY_POLICY_ARGS[@]}"
 
 (
-  cd "${REPO_ROOT}"
-  run_xtask openapi-verify \
-    --spec "${CURRENT_SPEC_PATH}" \
-    --manifest "${CURRENT_MANIFEST_PATH}" \
-    --allowed-signers "${ALLOWED_SIGNERS_PATH}" \
-    "${XTASK_VERIFY_POLICY_ARGS[@]}"
-)
-
-(
-  cd "${REPO_ROOT}"
-  node tools/openapi/scripts/verify-openapi-versions.mjs
-  node tools/openapi/scripts/check-openapi-signatures.mjs \
+  cd "${REPLAY_SOURCE_FIRST}"
+  GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/verify-openapi-versions.mjs
+  GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/check-openapi-signatures.mjs \
     --allowed-signers="${ALLOWED_SIGNERS_PATH}" \
     "${SIGNATURE_VERIFY_POLICY_ARGS[@]}"
-  node tools/openapi/scripts/verify-openapi-release-inputs.mjs \
+  GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/verify-openapi-release-inputs.mjs \
     >"${RELEASE_INPUT_SUMMARY_SECOND}"
-  python3 scripts/check_sorafs_release_version_map.py \
+  GIT_OPTIONAL_LOCKS=0 python3 scripts/check_sorafs_release_version_map.py \
     >"${VERSION_MAP_SUMMARY_SECOND}"
 )
 
@@ -381,4 +534,43 @@ if ! diff -u "${VERSION_MAP_SUMMARY_FIRST}" "${VERSION_MAP_SUMMARY_SECOND}" >/de
   exit 1
 fi
 
+python3 -I -S "${REPLAY_SOURCE_FIRST}/scripts/seal_workspace_source.py" \
+  --verify --root "${REPLAY_SOURCE_FIRST}" --no-writable-paths
+python3 -I -S "${REPLAY_SOURCE_SECOND}/scripts/seal_workspace_source.py" \
+  --verify --root "${REPLAY_SOURCE_SECOND}" --no-writable-paths
+verify_replay_source_identity "${REPLAY_SOURCE_FIRST}"
+verify_replay_source_identity "${REPLAY_SOURCE_SECOND}"
+if ! cmp -s "${REPO_ROOT}/Cargo.lock" "${REPLAY_SOURCE_FIRST}/Cargo.lock" || \
+   ! cmp -s "${REPLAY_SOURCE_FIRST}/Cargo.lock" "${REPLAY_SOURCE_SECOND}/Cargo.lock"; then
+  echo "error: immutable OpenAPI replay Cargo.lock identity changed between checkpoints." >&2
+  exit 1
+fi
 require_clean_checkout
+release_gate_boundary "openapi:before-completion-publication"
+python3 -I -S - \
+  "${OPENAPI_EVIDENCE_DIR}/source-identity.json" \
+  "${REPLAY_COMMIT}" \
+  "${REPLAY_TREE}" \
+  "${REPLAY_SOURCE_FIRST}" \
+  "${REPLAY_SOURCE_SECOND}" <<'PY'
+import json
+import os
+import sys
+
+receipt_path, commit, tree, source_first, source_second = sys.argv[1:]
+payload = {
+    "candidate_commit": commit,
+    "candidate_tree": tree,
+    "schema_version": 1,
+    "source_mirrors": [source_first, source_second],
+}
+descriptor = os.open(
+    receipt_path,
+    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+    0o600,
+)
+with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
+    json.dump(payload, output, sort_keys=True, separators=(",", ":"))
+    output.write("\n")
+PY
+release_gate_boundary "openapi:after-completion-publication"

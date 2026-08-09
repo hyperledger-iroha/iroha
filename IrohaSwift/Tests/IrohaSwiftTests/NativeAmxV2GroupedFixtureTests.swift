@@ -251,6 +251,25 @@ private func fixtureScalarEqual(_ lhs: Any?, _ rhs: Any?) -> Bool {
     return false
 }
 
+private func fixtureCanonicalHashBytes(_ value: Any?, field: String) throws -> Data {
+    guard let literal = value as? String,
+          ToriiNativeAmxWire.isCanonicalHash(literal)
+    else {
+        throw NativeAmxGroupedFixtureError.malformed("\(field) must be a canonical hash")
+    }
+    let body = literal.dropFirst(5).prefix(64)
+    guard let bytes = Data(hexString: String(body)), bytes.count == 32 else {
+        throw NativeAmxGroupedFixtureError.malformed("\(field) must contain 32 hash bytes")
+    }
+    return bytes
+}
+
+private func nativeAmxApplicationManifestSingletonRoot(_ leafHash: Any?) throws -> Data {
+    var preimage = Data("iroha:merkle:leaf:v1\u{0}".utf8)
+    preimage.append(try fixtureCanonicalHashBytes(leafHash, field: "manifest leaf hash"))
+    return IrohaHash.hash(preimage)
+}
+
 private func fixtureUInt(_ object: [String: Any], _ field: String) throws -> UInt64 {
     guard let number = object[field] as? NSNumber else {
         throw NativeAmxGroupedFixtureError.malformed("\(field) must be an integer")
@@ -277,6 +296,14 @@ private func validateApplicationEvidenceFixture(_ document: [String: Any]) throw
         try fixtureUInt(execution, "native_amx_application_manifest_version") == 1,
         "manifest version"
     )
+    let parsedExecution = try JSONDecoder().decode(
+        ToriiSumeragiV2ExecutionCommitment.self,
+        from: JSONSerialization.data(withJSONObject: execution)
+    )
+    try require(
+        parsedExecution.mergeCarrier != nil,
+        "merge carrier"
+    )
     try require(
         try fixtureUInt(execution, "native_amx_application_manifest_count")
             == UInt64(artifacts.count) && artifacts.count == 1,
@@ -285,6 +312,17 @@ private func validateApplicationEvidenceFixture(_ document: [String: Any]) throw
     let artifact = artifacts[0]
     let leaf = try XCTUnwrap(artifact["leaf"] as? [String: Any])
     let proof = try XCTUnwrap(artifact["proof"] as? [String: Any])
+    let manifestCount = try fixtureUInt(
+        execution,
+        "native_amx_application_manifest_count"
+    )
+    let manifestRoot = try fixtureCanonicalHashBytes(
+        artifact["manifest_root"],
+        field: "manifest root"
+    )
+    let expectedManifestRoot = try nativeAmxApplicationManifestSingletonRoot(
+        artifact["leaf_hash"]
+    )
     try require(
         try fixtureUInt(artifact, "version") == 1
             && fixtureUInt(leaf, "version") == 1,
@@ -300,13 +338,13 @@ private func validateApplicationEvidenceFixture(_ document: [String: Any]) throw
         "singleton proof path"
     )
     try require(
-        try fixtureUInt(artifact, "manifest_leaf_count") == 1
+        try fixtureUInt(artifact, "manifest_leaf_count") == manifestCount
             && fixtureScalarEqual(
                 artifact["manifest_root"],
                 execution["native_amx_application_manifest_root"]
             )
-            && fixtureScalarEqual(artifact["manifest_root"], artifact["leaf_hash"]),
-        "manifest root"
+            && manifestRoot == expectedManifestRoot,
+        "manifest root must match the execution commitment and authenticate the leaf hash"
     )
     try require(
         fixtureScalarEqual(
@@ -314,6 +352,10 @@ private func validateApplicationEvidenceFixture(_ document: [String: Any]) throw
             execution["executed_block_wire_hash"]
         ),
         "executed wire"
+    )
+    try require(
+        try fixtureUInt(execution, "executed_block_wire_len") == 49,
+        "executed wire length"
     )
     try require(
         try fixtureUInt(leaf, "predecessor_height") + 1
@@ -425,6 +467,31 @@ private func validateApplicationEvidenceFixture(_ document: [String: Any]) throw
 }
 
 final class NativeAmxV2GroupedFixtureTests: XCTestCase {
+    func testRustOwnedGroupedNativeAmxV2ApplicationEvidenceNegativeCorpus() throws {
+        let canonical = try loadNativeAmxGroupedFixture()
+        try validateApplicationEvidenceFixture(canonical)
+        let controls = try XCTUnwrap(canonical["negative_controls"] as? [[String: Any]])
+        let applicationControls = controls.filter {
+            $0["validator"] as? String == "application_evidence"
+        }
+        XCTAssertTrue(
+            applicationControls.contains {
+                $0["id"] as? String == "manifest_leaf_hash_tampering"
+            }
+        )
+        for control in applicationControls {
+            let identifier = try XCTUnwrap(control["id"] as? String)
+            try XCTContext.runActivity(named: identifier) { _ in
+                var mutated: Any = canonical
+                for mutation in try XCTUnwrap(control["mutations"] as? [[String: Any]]) {
+                    mutated = try applyFixtureMutation(mutation, to: mutated)
+                }
+                let root = try XCTUnwrap(mutated as? [String: Any])
+                XCTAssertThrowsError(try validateApplicationEvidenceFixture(root))
+            }
+        }
+    }
+
     func testRustOwnedGroupedNativeAmxV2GoldenFixture() throws {
         try requireNativeAmxABI21Bridge()
         let document = try loadNativeAmxGroupedFixture()
@@ -494,6 +561,30 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
             diagnostics.nativeAmxParticipantApplications.first?.sourceCount,
             2
         )
+
+        var diagnosticsWithUnknownApplicationField = try XCTUnwrap(
+            expected as? [String: Any]
+        )
+        var applicationRows = try XCTUnwrap(
+            diagnosticsWithUnknownApplicationField[
+                "native_amx_participant_applications"
+            ] as? [[String: Any]]
+        )
+        var applicationRow = try XCTUnwrap(applicationRows.first)
+        applicationRow["unexpected_application_field"] = true
+        applicationRows[0] = applicationRow
+        diagnosticsWithUnknownApplicationField[
+            "native_amx_participant_applications"
+        ] = applicationRows
+        let diagnosticsWithUnknownApplicationFieldData = try JSONSerialization.data(
+            withJSONObject: diagnosticsWithUnknownApplicationField
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: diagnosticsWithUnknownApplicationFieldData
+            )
+        )
         try validateApplicationEvidenceFixture(document)
     }
 
@@ -517,7 +608,7 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
         )
         let idle: [String: Any] = ["stage": "idle", "details": NSNull()]
         let statusObject: [String: Any] = [
-            "protocol_version": 3,
+            "protocol_version": 4,
             "node_fingerprint": canonicalHash,
             "build_fingerprint": canonicalHash,
             "config_fingerprint": canonicalHash,
@@ -645,7 +736,12 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
                 "coherent_stale_descriptor_hash",
                 "coherent_stale_proposal_hash",
                 "coherent_stale_settlement_hash",
+                "coherent_duplicate_validator_set",
+                "coherent_over_quorum_requirement",
+                "manifest_leaf_hash_tampering",
                 "non_canonical_validator_peer_id",
+                "execution_commitment_merge_carrier_wrong_version",
+                "execution_commitment_missing_merge_carrier_field",
             ]).isSubset(of: identifiers)
         )
 

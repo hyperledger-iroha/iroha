@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+import { build } from "esbuild";
 
 import {
   PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
@@ -362,13 +365,37 @@ test("Exact12 encoder authenticates every byte-complete row field", () => {
   );
 });
 
-test("source, distribution, and browser Exact12 codecs stay byte-identical", async () => {
-  for (const [surface, moduleUrl] of [
-    ["source", new URL("../src/norito.js", import.meta.url)],
-    ["distribution", new URL("../dist/norito.js", import.meta.url)],
-    ["browser", new URL("../dist/browser.js", import.meta.url)],
+test("source, distribution, and browser-leaf Exact12 codecs stay byte-identical", async () => {
+  const originalBuffer = globalThis.Buffer;
+  const browserBuild = await build({
+    entryPoints: [fileURLToPath(new URL("../dist/norito.js", import.meta.url))],
+    bundle: true,
+    format: "esm",
+    logLevel: "silent",
+    metafile: true,
+    platform: "browser",
+    write: false,
+  });
+  assert.equal(browserBuild.outputFiles.length, 1);
+  assert.equal(
+    Object.keys(browserBuild.metafile.inputs).some((input) => input.startsWith("node:")),
+    false,
+    "the Exact12 Norito leaf must retain a browser-only graph",
+  );
+  const browserModule = await import(
+    `data:text/javascript;base64,${Buffer.from(browserBuild.outputFiles[0].contents).toString("base64")}`
+  );
+  assert.equal(
+    globalThis.Buffer,
+    originalBuffer,
+    "the Exact12 Norito leaf must not install a global Buffer shim",
+  );
+
+  for (const [surface, module] of [
+    ["source", await import(new URL("../src/norito.js", import.meta.url))],
+    ["distribution", await import(new URL("../dist/norito.js", import.meta.url))],
+    ["browser leaf", browserModule],
   ]) {
-    const module = await import(moduleUrl);
     const decoded = module.noritoDecodePrivacyExact12FixtureBundleBase64V1(
       BUNDLE_BASE64,
     );
@@ -385,6 +412,22 @@ test("source, distribution, and browser Exact12 codecs stay byte-identical", asy
         ),
       /base64/,
       surface,
+    );
+  }
+
+  const browserFacade = await import(new URL("../dist/browser.js", import.meta.url));
+  for (const fixtureOnlyExport of [
+    "noritoDecodePrivacyExact12FixtureBundleBase64V1",
+    "noritoDecodePrivacyExact12FixtureBundleV1",
+    "noritoEncodePrivacyExact12FixtureBundleV1",
+    "PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1",
+    "PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1",
+    "PRIVACY_EXACT12_PROTOCOL_IDS_V1",
+  ]) {
+    assert.equal(
+      Object.hasOwn(browserFacade, fixtureOnlyExport),
+      false,
+      `${fixtureOnlyExport} must stay on the root/Norito APIs, not the broad browser facade`,
     );
   }
 });

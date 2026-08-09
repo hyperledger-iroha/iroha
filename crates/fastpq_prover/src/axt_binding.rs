@@ -51,6 +51,12 @@ pub struct AxtVerifiedProof {
     pub statement_digest: [u8; 32],
     /// Digest of the envelope-carried `FastPQ` proof payload.
     pub proof_digest: Hash,
+    /// Proven pre-execution state root.
+    pub old_root: [u8; 32],
+    /// Proven post-execution state root.
+    pub new_root: [u8; 32],
+    /// Proven transaction/statement-set commitment.
+    pub tx_set_hash: [u8; 32],
 }
 
 /// Canonicalize a structured AXT FASTPQ binding before proving or verification.
@@ -231,6 +237,9 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
     Ok(AxtVerifiedProof {
         statement_digest: axt_statement_digest(envelope, binding, &payload.batch)?,
         proof_digest: Hash::new(&envelope.proof),
+        old_root: batch.public_inputs.old_root,
+        new_root: batch.public_inputs.new_root,
+        tx_set_hash: batch.public_inputs.tx_set_hash,
     })
 }
 
@@ -639,27 +648,27 @@ fn normalized_claim_type(value: &str) -> Result<String> {
 fn canonicalize_effect_binding(binding: &AxtEffectBinding) -> Result<AxtEffectBinding> {
     Ok(AxtEffectBinding {
         destination_domain: canonical_optional_string(
-            &binding.destination_domain,
+            binding.destination_domain.as_deref(),
             "effect_binding.destination_domain",
         )?,
         destination_account_id: canonical_optional_string(
-            &binding.destination_account_id,
+            binding.destination_account_id.as_deref(),
             "effect_binding.destination_account_id",
         )?,
         vault_account_id: canonical_optional_string(
-            &binding.vault_account_id,
+            binding.vault_account_id.as_deref(),
             "effect_binding.vault_account_id",
         )?,
         issuance_account_id: canonical_optional_string(
-            &binding.issuance_account_id,
+            binding.issuance_account_id.as_deref(),
             "effect_binding.issuance_account_id",
         )?,
         source_asset_definition_id: canonical_optional_string(
-            &binding.source_asset_definition_id,
+            binding.source_asset_definition_id.as_deref(),
             "effect_binding.source_asset_definition_id",
         )?,
         destination_asset_definition_id: canonical_optional_string(
-            &binding.destination_asset_definition_id,
+            binding.destination_asset_definition_id.as_deref(),
             "effect_binding.destination_asset_definition_id",
         )?,
         source_amount_i64: binding.source_amount_i64,
@@ -667,11 +676,8 @@ fn canonicalize_effect_binding(binding: &AxtEffectBinding) -> Result<AxtEffectBi
     })
 }
 
-fn canonical_optional_string(value: &Option<String>, field: &str) -> Result<Option<String>> {
-    value
-        .as_deref()
-        .map(|value| required_string(value, field))
-        .transpose()
+fn canonical_optional_string(value: Option<&str>, field: &str) -> Result<Option<String>> {
+    value.map(|value| required_string(value, field)).transpose()
 }
 
 fn require_canonical_binding(binding: &AxtFastpqBinding) -> Result<AxtFastpqBinding> {
@@ -850,7 +856,8 @@ mod tests {
         const RECEIVER_START: u64 = 120;
 
         let domain = DomainId::try_new("axt", "universal").expect("domain id");
-        let asset_definition = AssetDefinitionId::new(domain.clone(), "rose".parse().unwrap());
+        let asset_definition =
+            AssetDefinitionId::derive_from_components(domain.clone(), "rose".parse().unwrap());
         let from_account = deterministic_account("transfer_sender", &domain);
         let to_account = deterministic_account("transfer_receiver", &domain);
         let entry_hash = decode_hex_digest(&binding.source_tx_commitment, "source_tx_commitment")
@@ -1780,6 +1787,9 @@ mod tests {
         let verified = verify_axt_proof_envelope(&envelope).expect("verified AXT proof");
         assert!(verified.statement_digest.iter().any(|byte| *byte != 0));
         assert!(verified.proof_digest.as_ref().iter().any(|byte| *byte != 0));
+        assert_eq!(verified.old_root, batch.public_inputs.old_root);
+        assert_eq!(verified.new_root, batch.public_inputs.new_root);
+        assert_eq!(verified.tx_set_hash, batch.public_inputs.tx_set_hash);
     }
 
     #[test]

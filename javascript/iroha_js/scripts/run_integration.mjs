@@ -17,7 +17,7 @@ const JS_DIR = path.resolve(SCRIPT_DIR, "..");
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "../../..");
 const DEFAULT_COMPOSE_FILE = path.join(REPO_ROOT, "defaults", "docker-compose.single.yml");
 const DEFAULT_TORII_URL = process.env.IROHA_TORII_INTEGRATION_URL ?? "http://127.0.0.1:8080";
-const DEFAULT_SERVICE = process.env.COMPOSE_SERVICE ?? "irohad0";
+const DEFAULT_SERVICE = process.env.COMPOSE_SERVICE;
 const DEFAULT_WAIT_SECONDS = Number.parseInt(process.env.JS_TORII_WAIT_SECONDS ?? process.env.WAIT_SECONDS ?? "", 10) || 90;
 const DEFAULT_ACCOUNT_ID =
   process.env.IROHA_TORII_INTEGRATION_ACCOUNT_ID ??
@@ -39,7 +39,7 @@ const { values, positionals } = parseArgs({
     "compose-bin": { type: "string" },
     start: { type: "boolean" },
     "no-start": { type: "boolean" },
-    "skip-install": { type: "boolean" },
+    qualification: { type: "boolean" },
     "enable-iso": { type: "boolean" },
     "iso-alias": { type: "string" },
     "iso-alias-index": { type: "string" },
@@ -63,7 +63,8 @@ const waitSeconds = values["wait-seconds"]
   ? Number.parseInt(values["wait-seconds"], 10)
   : DEFAULT_WAIT_SECONDS;
 const composeBin = values["compose-bin"] ?? process.env.JS_TORII_COMPOSE_BIN ?? process.env.COMPOSE_BIN;
-const skipInstall = values["skip-install"] ?? parseBooleanEnv(process.env.JS_TORII_SKIP_INSTALL ?? "0");
+const qualificationEnabled =
+  values.qualification ?? parseBooleanEnv(process.env.JS_TORII_QUALIFICATION ?? "0");
 const isoCliOptions = {
   enabled: values["enable-iso"],
   alias: values["iso-alias"],
@@ -81,21 +82,19 @@ async function main() {
     throw new Error(`compose file not found: ${composeFile}`);
   }
   if (shouldStart && composeFile === DEFAULT_COMPOSE_FILE) {
-    await validateDefaultComposeGenesisCustody();
+    await validateDefaultComposeGenesisArtifacts();
   }
 
   const composeCommand = shouldStart ? await detectComposeCommand(composeBin) : null;
   let composeRunning = false;
 
   try {
-    if (!skipInstall) {
-      await runProcess("npm", ["ci", "--no-audit", "--prefer-offline"], { cwd: JS_DIR });
-    }
+    await runProcess("npm", ["ci", "--no-audit", "--prefer-offline"], { cwd: JS_DIR });
 
     await runProcess("npm", ["run", "build:native"], { cwd: JS_DIR });
 
     if (shouldStart && composeCommand) {
-      await runCompose(composeCommand, ["-f", composeFile, "up", "-d", composeService]);
+      await runCompose(composeCommand, composeUpArgs(composeFile, composeService));
       composeRunning = true;
     }
 
@@ -138,6 +137,10 @@ async function main() {
     if (isoJsonOverrides.pacs009 && !testEnv.IROHA_TORII_INTEGRATION_ISO_PACS009) {
       testEnv.IROHA_TORII_INTEGRATION_ISO_PACS009 = isoJsonOverrides.pacs009;
     }
+    if (qualificationEnabled) {
+      testEnv.IROHA_JS_RELEASE_INTEGRATION = "1";
+      validateQualificationEnvironment(testEnv);
+    }
 
     await runProcess("node", ["--test", ...testArgs], {
       cwd: JS_DIR,
@@ -154,25 +157,131 @@ async function main() {
   }
 }
 
-export async function validateDefaultComposeGenesisCustody(env = process.env) {
+export function composeUpArgs(composeFile, composeService) {
+  const args = ["-f", composeFile, "up", "-d"];
+  if (composeService) {
+    args.push(composeService);
+  }
+  return args;
+}
+
+export async function validateDefaultComposeGenesisArtifacts(env = process.env) {
   for (const name of [
     "IROHA_GENESIS_PUBLIC_KEY_FILE",
-    "IROHA_GENESIS_PRIVATE_KEY_FILE",
+    "IROHA_GENESIS_SIGNED_FILE",
+    "IROHA_GENESIS_EXPECTED_HASH_FILE",
   ]) {
-    const keyPath = env[name];
-    if (!keyPath) {
+    const artifactPath = env[name];
+    if (!artifactPath) {
       throw new Error(
-        `${name} is required by the default Compose stack; generate runtime-only ` +
-          "genesis key files with kagami and never commit the private file",
+        `${name} is required by the default Compose stack; generate a signed genesis, ` +
+          "verifier key, and exact hash with kagami",
       );
     }
-    if (!existsSync(keyPath)) {
+    if (!existsSync(artifactPath)) {
       throw new Error(`${name} does not point to an existing file`);
     }
-    const record = await readFile(keyPath, "utf8");
-    if (!record.endsWith("\n") || record.trim().length === 0 || record.trim().includes("\n")) {
-      throw new Error(`${name} must contain exactly one non-empty key record and a final newline`);
+    if (name === "IROHA_GENESIS_SIGNED_FILE") {
+      const body = await readFile(artifactPath);
+      if (body.length === 0) {
+        throw new Error(`${name} must point to a non-empty file`);
+      }
+      continue;
     }
+    const record = await readFile(artifactPath, "utf8");
+    const payload = record.endsWith("\n") ? record.slice(0, -1) : record;
+    if (
+      !record.endsWith("\n") ||
+      payload.length === 0 ||
+      payload.includes("\n") ||
+      payload.includes("\r") ||
+      payload !== payload.trim()
+    ) {
+      throw new Error(`${name} must contain exactly one non-empty record and a final newline`);
+    }
+    if (
+      name === "IROHA_GENESIS_EXPECTED_HASH_FILE" &&
+      !/^[0-9a-f]{63}[13579bdf]\n$/.test(record)
+    ) {
+      throw new Error(`${name} must contain one canonical lowercase Iroha hash record`);
+    }
+  }
+}
+
+export function validateQualificationEnvironment(env = process.env) {
+  const missing = [];
+  const requireText = (name) => {
+    if (typeof env[name] !== "string" || env[name].trim().length === 0) {
+      missing.push(name);
+    }
+  };
+  const requireEnabled = (name) => {
+    if (env[name] !== "1") {
+      missing.push(`${name}=1`);
+    }
+  };
+
+  for (const name of [
+    "IROHA_TORII_INTEGRATION_URL",
+    "IROHA_TORII_INTEGRATION_SORAFS_FETCH_MANIFEST",
+    "IROHA_TORII_INTEGRATION_SORAFS_FETCH_LENGTH",
+    "IROHA_TORII_INTEGRATION_SORAFS_POR_WEEK",
+    "IROHA_TORII_INTEGRATION_UAID",
+    "IROHA_TORII_INTEGRATION_UAID_DATASPACE",
+    "IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_MANIFEST",
+    "IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH",
+    "IROHA_TORII_INTEGRATION_DA_TICKET",
+    "IROHA_TORII_INTEGRATION_DA_GATEWAYS",
+  ]) {
+    requireText(name);
+  }
+  for (const name of [
+    "IROHA_TORII_INTEGRATION_MUTATE",
+    "IROHA_TORII_INTEGRATION_SORAFS_ENABLED",
+    "IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_ENABLED",
+    "IROHA_TORII_INTEGRATION_DA_ENABLED",
+  ]) {
+    requireEnabled(name);
+  }
+  if (missing.length !== 0) {
+    throw new Error(
+      `release qualification requires explicit live inputs: ${missing.join(", ")}`,
+    );
+  }
+
+  const fetchLength = Number(env.IROHA_TORII_INTEGRATION_SORAFS_FETCH_LENGTH);
+  if (!Number.isSafeInteger(fetchLength) || fetchLength <= 0) {
+    throw new Error(
+      "IROHA_TORII_INTEGRATION_SORAFS_FETCH_LENGTH must be a positive safe integer for release qualification",
+    );
+  }
+  const dataspace = Number(env.IROHA_TORII_INTEGRATION_UAID_DATASPACE);
+  if (!Number.isSafeInteger(dataspace) || dataspace < 0) {
+    throw new Error(
+      "IROHA_TORII_INTEGRATION_UAID_DATASPACE must be a non-negative safe integer for release qualification",
+    );
+  }
+  const revokeEpoch = Number(
+    env.IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH,
+  );
+  if (!Number.isSafeInteger(revokeEpoch) || revokeEpoch < 0) {
+    throw new Error(
+      "IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH must be a non-negative safe integer for release qualification",
+    );
+  }
+  let gateways;
+  try {
+    gateways = JSON.parse(env.IROHA_TORII_INTEGRATION_DA_GATEWAYS);
+  } catch (error) {
+    throw new Error(
+      "IROHA_TORII_INTEGRATION_DA_GATEWAYS must be valid JSON for release qualification",
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(gateways) || gateways.length < 2) {
+    throw new Error(
+      "IROHA_TORII_INTEGRATION_DA_GATEWAYS must describe at least two gateways for release qualification",
+    );
   }
 }
 

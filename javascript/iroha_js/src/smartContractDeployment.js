@@ -4,10 +4,10 @@ import { blake3 } from "@noble/hashes/blake3";
 import { AccountAddress } from "./address.js";
 import { verifyEd25519 } from "./crypto.browser.js";
 import {
+  CONTRACT_ADDRESS_HRP,
   CONTRACT_ADDRESS_V1_VERSION,
-  contractAddressHrp,
   encodeContractAddressBech32m,
-  requireContractAddressForChain,
+  parseCanonicalContractAddress,
 } from "./contractAddress.js";
 import {
   buildCommitContractDeploymentInstruction,
@@ -16,7 +16,6 @@ import {
   buildUploadSmartContractCodeChunkInstruction,
 } from "./instructionBuilders.js";
 import { computeIvmArtifactHashes } from "./ivmArtifact.js";
-import { verifyIvmContractArtifactAdmission } from "./ivmArtifactAdmissionWasm.js";
 import { verifyCompiledContractArtifact } from "./kotodamaCompiler/normalize.js";
 import { noritoEncodeContractManifestSignaturePayload } from "./norito.js";
 import {
@@ -35,11 +34,35 @@ const CONTRACT_ADDRESS_DOMAIN = Buffer.from(
   "utf8",
 );
 const CONTRACT_ADDRESS_HASH_BYTES = 20;
+const CHAIN_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/u;
 const HASH_LITERAL_PATTERN = /^hash:([0-9A-F]{64})#[0-9A-F]{4}$/u;
 const CURRENT_IVM_ABI_VERSION = 1;
 const CURRENT_DATA_MODEL_VERSION = 4;
 const CURRENT_SIGNED_TRANSACTION_SCHEMA_HASH_HEX =
   "7ab5ff9c572efb316deac478f19209c5";
+const BROWSER_DEPLOYMENT_OPTION_KEYS = Object.freeze([
+  "artifactBytes",
+  "manifest",
+  "compilerCodeHash",
+  "compilerAbiHash",
+  "chainId",
+  "chainDiscriminant",
+  "authority",
+  "contractAlias",
+  "leaseExpiryMs",
+  "ttlMs",
+  "feePayment",
+  "feePaymentForStep",
+  "metadata",
+  "clock",
+  "nonceForStep",
+  "metadataForStep",
+  "sign",
+  "signManifest",
+  "readNodeCapabilities",
+  "submitAndWait",
+  "readDeploymentState",
+]);
 
 function requirePlainObject(value, context) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -71,6 +94,19 @@ function requireExactString(value, context) {
   ) {
     throw new TypeError(
       `${context} must be a non-empty exact NFC string without control characters`,
+    );
+  }
+  return value;
+}
+
+function requireCanonicalChainId(value) {
+  if (
+    typeof value !== "string" ||
+    !CHAIN_ID_PATTERN.test(value) ||
+    Buffer.byteLength(value, "utf8") > 128
+  ) {
+    throw new TypeError(
+      "chainId must be an exact canonical ASCII ChainId of at most 128 bytes",
     );
   }
   return value;
@@ -248,6 +284,12 @@ function u16Be(value) {
   return output;
 }
 
+function u32Be(value) {
+  const output = Buffer.allocUnsafe(4);
+  output.writeUInt32BE(Number(value));
+  return output;
+}
+
 function u64Be(value) {
   const output = Buffer.allocUnsafe(8);
   output.writeBigUInt64BE(value);
@@ -288,11 +330,14 @@ function authorityDetails(authority, expectedDiscriminant) {
 
 /** Derive the exact current V1 Bech32m contract address locally. */
 export function deriveContractAddress({
+  chainId,
   chainDiscriminant,
   authority,
   deployNonce,
   dataspaceId,
 }) {
+  const canonicalChainId = requireCanonicalChainId(chainId);
+  const chainIdBytes = Buffer.from(canonicalChainId, "ascii");
   const discriminant = normalizeUnsigned(
     chainDiscriminant,
     U16_MAX,
@@ -303,9 +348,11 @@ export function deriveContractAddress({
   const authorityInfo = authorityDetails(authority, discriminant);
   const preimage = Buffer.concat([
     CONTRACT_ADDRESS_DOMAIN,
-    u16Be(discriminant),
+    u16Be(BigInt(chainIdBytes.length)),
+    chainIdBytes,
     u64Be(dataspace),
     u64Be(nonce),
+    u32Be(BigInt(authorityInfo.canonicalBytes.length)),
     authorityInfo.canonicalBytes,
   ]);
   const digest = Buffer.from(blake3(preimage));
@@ -314,7 +361,7 @@ export function deriveContractAddress({
     u64Be(dataspace),
     digest.subarray(0, CONTRACT_ADDRESS_HASH_BYTES),
   ]);
-  return encodeContractAddressBech32m(contractAddressHrp(discriminant), payload);
+  return encodeContractAddressBech32m(CONTRACT_ADDRESS_HRP, payload);
 }
 
 /**
@@ -405,63 +452,6 @@ export function prepareBrowserContractArtifact({
     manifest: normalizedManifest,
     chunkCount,
     steps: Object.freeze(steps),
-  });
-}
-
-function requireSharedArtifactAdmission(prepared, verifier) {
-  const admission = verifyIvmContractArtifactAdmission(
-    verifier,
-    prepared.artifactBytes,
-  );
-  if (!admission.ok) {
-    throw new Error(`shared IVM artifact admission rejected deployment: ${admission.error}`);
-  }
-  if (admission.codeHashHex !== prepared.codeHash) {
-    throw new Error(
-      "shared IVM artifact admission code hash does not match the compiled artifact",
-    );
-  }
-  if (admission.abiHashHex !== prepared.abiHash) {
-    throw new Error(
-      "shared IVM artifact admission ABI hash does not match the compiler ABI hash",
-    );
-  }
-  if (
-    admission.headerLength > admission.codeOffset ||
-    admission.codeOffset > prepared.artifactBytes.length
-  ) {
-    throw new Error("shared IVM artifact admission returned invalid artifact offsets");
-  }
-  const admittedManifest =
-    buildRegisterSmartContractCodeInstruction({ manifest: admission.manifest })
-      .RegisterSmartContractCode.manifest;
-  if (admittedManifest.provenance !== null) {
-    throw new Error("shared IVM artifact admission manifest must be unsigned");
-  }
-  if (admittedManifest.entrypoints.length !== admission.entrypointCount) {
-    throw new Error(
-      "shared IVM artifact admission entrypoint count disagrees with its manifest",
-    );
-  }
-  const suppliedPayload = noritoEncodeContractManifestSignaturePayload(
-    prepared.manifest,
-  );
-  const admittedPayload = noritoEncodeContractManifestSignaturePayload(
-    admittedManifest,
-  );
-  if (
-    !admittedPayload.equals(suppliedPayload) ||
-    JSON.stringify(admittedManifest) !== JSON.stringify(prepared.manifest)
-  ) {
-    throw new Error(
-      "shared IVM artifact admission manifest does not match the compiler manifest",
-    );
-  }
-  return Object.freeze({
-    verifierSha256Hex: verifier.verifierSha256Hex,
-    headerLength: admission.headerLength,
-    codeOffset: admission.codeOffset,
-    entrypointCount: admission.entrypointCount,
   });
 }
 
@@ -715,6 +705,11 @@ async function submitDeploymentStep({
  */
 export async function deploySmartContractBrowser(options) {
   const source = requirePlainObject(options, "deployment options");
+  assertOnlyObjectKeys(
+    source,
+    BROWSER_DEPLOYMENT_OPTION_KEYS,
+    "deployment options",
+  );
   if (typeof source.sign !== "function") {
     throw new TypeError("deployment options.sign must be a local signer callback");
   }
@@ -746,7 +741,7 @@ export async function deploySmartContractBrowser(options) {
       "deployment options require feePayment or a feePaymentForStep callback",
     );
   }
-  const chainId = requireExactString(source.chainId, "chainId");
+  const chainId = requireCanonicalChainId(source.chainId);
   const chainDiscriminant = normalizeUnsigned(
     source.chainDiscriminant,
     U16_MAX,
@@ -755,10 +750,6 @@ export async function deploySmartContractBrowser(options) {
   const authority = authorityDetails(source.authority, chainDiscriminant);
   const contractAlias = normalizeContractAlias(source.contractAlias);
   const prepared = prepareBrowserContractArtifact(source);
-  const artifactAdmission = requireSharedArtifactAdmission(
-    prepared,
-    source.artifactAdmissionVerifier,
-  );
   const nodeCapabilities = validateNodeCapabilities(
     await source.readNodeCapabilities(
       Object.freeze({
@@ -782,9 +773,8 @@ export async function deploySmartContractBrowser(options) {
     },
   );
   if (state.previousContractAddress !== null) {
-    const previous = requireContractAddressForChain(
+    const previous = parseCanonicalContractAddress(
       state.previousContractAddress,
-      chainDiscriminant,
       "previousContractAddress",
     );
     if (previous.dataspaceId !== state.dataspaceId) {
@@ -794,6 +784,7 @@ export async function deploySmartContractBrowser(options) {
     }
   }
   const contractAddress = deriveContractAddress({
+    chainId,
     chainDiscriminant,
     authority: authority.literal,
     deployNonce: state.deployNonce,
@@ -866,7 +857,6 @@ export async function deploySmartContractBrowser(options) {
     observedBlockHashHex: state.observedBlockHashHex,
     ledgerTimeMs: state.ledgerTimeMs.toString(),
     nodeCapabilities,
-    artifactAdmission,
     transactions: Object.freeze(results),
   });
 }

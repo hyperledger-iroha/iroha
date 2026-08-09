@@ -5,16 +5,20 @@
 //! It is compiled only for tests and the isolated privacy-release runner.
 
 use iroha_crypto::{Algorithm, KeyPair};
+#[cfg(test)]
 use iroha_data_model::{
     ChainId,
+    privacy::{
+        PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+        PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+    },
+};
+use iroha_data_model::{
     account::AccountId,
     privacy::{
-        PrivacyChallengeV1, PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1,
-        PrivacyIssuerIdV1, PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyDigestV1,
+        PrivacyChallengeV1, PrivacyConsensusLimitsV1, PrivacyIssuerIdV1, PrivacyPolicyDigestV1,
         PrivacyPolicyIdV1, PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1,
-        PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
-        PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
-        PrivacyX509KeyUsageRequirementV1, PrivacyX509TrustStoreDigestV1,
+        PrivacyStatementContextV1, PrivacyX509KeyUsageRequirementV1, PrivacyX509TrustStoreDigestV1,
         PrivacyZkX509DisclosedAttributeV1, ZK_X509_MAX_CERTIFICATE_BYTES_V1,
     },
 };
@@ -136,6 +140,7 @@ pub(crate) struct ZkX509ReleaseFixtureV1 {
 
 /// Reference-test context retained independently of the compiled release
 /// manifest. Release evidence supplies the actual compiled profile context.
+#[cfg(test)]
 pub(crate) fn reference_statement_context_v1() -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
         chain_id: ChainId::from("taira-zk-x509-reference-test"),
@@ -150,6 +155,7 @@ pub(crate) fn reference_statement_context_v1() -> PrivacyStatementContextV1 {
 }
 
 /// Build the canonical two-certificate, one-disclosure fixture.
+#[cfg(test)]
 pub(crate) fn build_zk_x509_reference_fixture_v1() -> Result<ZkX509ReleaseFixtureV1, &'static str> {
     build_zk_x509_fixture_v1(reference_statement_context_v1(), false, &[])
 }

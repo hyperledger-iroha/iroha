@@ -93,11 +93,11 @@ toml = { workspace = true }
 hmac = "0.12.1"
 blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
 blake3.workspace = true
+tempfile = { workspace = true }
 
 [dev-dependencies]
 iroha_test_samples = { workspace = true }
 iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
-tempfile = { workspace = true }
 assertables = { workspace = true }
 tokio-stream = { workspace = true }
 sorafs_chunker = { workspace = true }

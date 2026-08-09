@@ -18,7 +18,10 @@ use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_ru
 use iroha_data_model::{
     ChainId,
     query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
-    sorafs::{capacity::ProviderId, reputation::PorTerminalOutcomeV1},
+    sorafs::{
+        capacity::ProviderId,
+        reputation::{PorTerminalOutcomeV1, StreamTokenValidationOutcomeV1},
+    },
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use sorafs_manifest::{
@@ -44,7 +47,7 @@ use sorafs_node::reputation::{
         ReputationPublicationPolicyV1, ReputationPublicationReconcilerV1, ReputationRuntimeError,
         ReputationRuntimeProviderQualificationV1, ReputationRuntimeStatusV1,
         ReputationRuntimeSupervisorV1, ReputationThresholdSignerClientV1,
-        reputation_journal_submitter_policy_digest_v1,
+        StreamTokenReputationAdmissionOutcomeV1, reputation_journal_submitter_policy_digest_v1,
     },
 };
 
@@ -459,6 +462,34 @@ impl ReputationRuntimeHandleV1 {
         active.check_external_bindings()?;
         result
     }
+
+    /// Durably admit one authenticated, externally sequenced stream-token outcome.
+    ///
+    /// The regional gateway owner remains responsible for authenticating the
+    /// outcome and allocating its sequence from sealed monotonic state. This
+    /// boundary uses that exact binding, consults immutable finalized history
+    /// for compacted replay, and revalidates every active runtime dependency
+    /// before and after durable admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime-binding, validation, finalized-query, source-conflict,
+    /// or durable producer error.
+    pub fn record_authenticated_stream_token_validation(
+        &self,
+        provider_id: ProviderId,
+        outcome: StreamTokenValidationOutcomeV1,
+    ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError> {
+        let active = self.active()?;
+        active.check_external_bindings()?;
+        let result = active
+            .runtime
+            .stream_token_journal_producer()
+            .ok_or(ReputationRuntimeError::RuntimeBindingMismatch)?
+            .enqueue_authenticated_validation(provider_id, outcome);
+        active.check_external_bindings()?;
+        result
+    }
 }
 
 impl ReputationCommittedReadApiV1 for ReputationRuntimeHandleV1 {
@@ -502,6 +533,18 @@ impl ReputationNativeOutcomeAdmissionApiV1 for ReputationRuntimeHandleV1 {
         ReputationRuntimeError,
     > {
         ReputationRuntimeHandleV1::record_por_terminal(self, provider_id, outcome)
+    }
+
+    fn record_authenticated_stream_token_validation(
+        &self,
+        provider_id: ProviderId,
+        outcome: StreamTokenValidationOutcomeV1,
+    ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError> {
+        ReputationRuntimeHandleV1::record_authenticated_stream_token_validation(
+            self,
+            provider_id,
+            outcome,
+        )
     }
 }
 
@@ -1327,7 +1370,8 @@ mod tests {
                 REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
                 ReputationJournalAuthorityPolicyRecordV1, ReputationJournalAuthorityPolicyV1,
                 ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
-                ReputationJournalFinalizedEventPageV1,
+                ReputationJournalFinalizedEventPageV1, StreamTokenValidationBindingV1,
+                StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
             },
             reserve::{
                 ReserveFinalizedEventCursorV1, ReserveFinalizedEventPageV1,
@@ -2286,6 +2330,44 @@ mod tests {
         );
         let admission: &dyn ReputationNativeOutcomeAdmissionApiV1 = &handle;
         let activation_unix_ms: u64 = 1_800_000_000_000;
+        let token_outcome = StreamTokenValidationOutcomeV1 {
+            binding: StreamTokenValidationBindingV1 {
+                gateway_id: [0x18; 32],
+                gateway_sequence: 1,
+                request_context_digest: [0x19; 32],
+            },
+            token_body_digest: Some([0x1A; 32]),
+            token_key_version: Some(7),
+            validated_at_unix_ms: activation_unix_ms,
+            status: StreamTokenValidationStatusV1::Accepted,
+        };
+        let inserted_token = admission
+            .record_authenticated_stream_token_validation(
+                ProviderId::new([0x1B; 32]),
+                token_outcome,
+            )
+            .expect("durably insert authenticated stream-token outcome");
+        let replayed_token = admission
+            .record_authenticated_stream_token_validation(
+                ProviderId::new([0x1B; 32]),
+                token_outcome,
+            )
+            .expect("replay authenticated stream-token outcome");
+        assert!(matches!(
+            (inserted_token, replayed_token),
+            (
+                StreamTokenReputationAdmissionOutcomeV1::Enqueued(
+                    sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::Inserted {
+                        event_id: inserted,
+                    },
+                ),
+                StreamTokenReputationAdmissionOutcomeV1::Enqueued(
+                    sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                        event_id: replay,
+                    },
+                ),
+            ) if inserted == replay
+        ));
         let terminal_at = |challenge_id: u8, decided_at_unix_ms: u64| PorTerminalOutcomeV1 {
             challenge_id: [challenge_id; 32],
             manifest_digest: [0x21; 32],

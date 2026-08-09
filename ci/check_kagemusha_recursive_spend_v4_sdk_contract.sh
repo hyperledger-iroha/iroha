@@ -911,6 +911,13 @@ for method in native_methods:
             f"Rust JNI export {package}.{method}",
         )
 
+privacy_compiled_profile_symbols = (
+    "iroha_privacy_compiled_profile_catalog_v1",
+    "iroha_privacy_validate_compiled_profile_catalog_v1",
+    "iroha_privacy_exact12_fixture_bundle_v1",
+    "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_free_buffer",
+)
 base_bridge_symbols = (
     "connect_norito_bridge_abi_version",
     "connect_norito_free",
@@ -923,6 +930,7 @@ base_bridge_symbols = (
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    *privacy_compiled_profile_symbols,
     "connect_norito_sorafs_reference_validate_bundle_json",
     "connect_norito_sorafs_reference_validate_governance_json",
     "connect_norito_sorafs_reference_validate_governance_dag_block_json",
@@ -1013,7 +1021,12 @@ def parse_manifest_symbol_inventory(label: str) -> tuple[str, ...]:
     if match is None:
         errors.append(f"{paths[label]}: missing required_symbols manifest inventory")
         return ()
-    return tuple(re.findall(r'"(connect_norito_[A-Za-z0-9_]+)"', match.group("body")))
+    return tuple(
+        re.findall(
+            r'"((?:connect_norito|iroha_privacy)_[A-Za-z0-9_]+)"',
+            match.group("body"),
+        )
+    )
 
 
 actual_kagemusha_symbols = parse_shell_symbol_array("mobile_check", "KAGEMUSHA_C_SYMBOLS")
@@ -1035,12 +1048,25 @@ if actual_appeal_finance_symbols != expected_appeal_finance_symbols:
         f"(found {len(actual_appeal_finance_symbols)})"
     )
 
+actual_privacy_compiled_profile_symbols = parse_shell_symbol_array(
+    "mobile_check", "PRIVACY_COMPILED_PROFILE_C_SYMBOLS"
+)
+if actual_privacy_compiled_profile_symbols != privacy_compiled_profile_symbols:
+    errors.append(
+        f"{paths['mobile_check']}: exact ordered "
+        f"{len(privacy_compiled_profile_symbols)}-symbol privacy compiled-profile "
+        "C inventory mismatch "
+        f"(found {len(actual_privacy_compiled_profile_symbols)})"
+    )
+
 actual_required_bridge_symbols: list[str] = []
 for value in parse_shell_symbol_array("mobile_check", "REQUIRED_BRIDGE_SYMBOLS"):
     if value == "${KAGEMUSHA_C_SYMBOLS[@]}":
         actual_required_bridge_symbols.extend(actual_kagemusha_symbols)
     elif value == "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}":
         actual_required_bridge_symbols.extend(actual_appeal_finance_symbols)
+    elif value == "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}":
+        actual_required_bridge_symbols.extend(actual_privacy_compiled_profile_symbols)
     else:
         actual_required_bridge_symbols.append(value)
 if tuple(actual_required_bridge_symbols) != required_bridge_symbols:
@@ -1298,6 +1324,26 @@ if mode == "--self-test":
             '    "connect_norito_chain_discriminant_scope_exit",',
             '    "connect_norito_chain_discriminant_scope_exit",\n'
             '    "connect_norito_chain_discriminant_scope_enter",',
+        ),
+        f"exact ordered {len(required_bridge_symbols)}-symbol required bridge inventory mismatch",
+    )
+    run_negative(
+        "privacy bridge symbol order drift is rejected",
+        lambda fixture: replace_once(
+            fixture / paths["mobile_check"],
+            "  iroha_privacy_compiled_profile_catalog_v1\n"
+            "  iroha_privacy_validate_compiled_profile_catalog_v1",
+            "  iroha_privacy_validate_compiled_profile_catalog_v1\n"
+            "  iroha_privacy_compiled_profile_catalog_v1",
+        ),
+        "exact ordered 5-symbol privacy compiled-profile C inventory mismatch",
+    )
+    run_negative(
+        "privacy bridge manifest omission is rejected",
+        lambda fixture: replace_once(
+            fixture / paths["xcframework_build"],
+            '    "iroha_privacy_exact12_fixture_bundle_v1",\n',
+            "",
         ),
         f"exact ordered {len(required_bridge_symbols)}-symbol required bridge inventory mismatch",
     )

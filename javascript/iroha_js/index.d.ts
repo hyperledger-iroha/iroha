@@ -2,9 +2,14 @@
 
 import type { BrowserFeePayment } from "./transaction-codec.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
+import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./src/blockProofTypes.js";
+import type { ToriiBrowserExplorerAccountsOptions, ToriiBrowserExplorerAssetDefinition, ToriiBrowserExplorerAssetDefinitionsOptions, ToriiBrowserExplorerAssetsOptions, ToriiBrowserExplorerCursorPage, ToriiBrowserExplorerDomainsOptions, ToriiBrowserExplorerOwnedDomainOptions } from "./src/toriiBrowserExplorerTypes.js";
 export * from "./kotodama-compiler.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
+export * from "./bootle-lantern-issuance.js";
+export * from "./src/blockProofTypes.js";
+export * from "./src/toriiBrowserExplorerTypes.js";
 
 export type JsonValue =
   | null
@@ -69,9 +74,6 @@ export interface OfflineStatus {
   readonly blockers: readonly [];
 }
 
-/** @deprecated Use OfflineStatus. Offline capability is asset-neutral. */
-export type KagemushaReadinessV4 = OfflineStatus;
-
 export type KagemushaOperationKind = Readonly<{
   kind: "top_up" | "redeem";
   value: null;
@@ -120,7 +122,6 @@ export type KagemushaOperationStatus =
       }>;
     }>;
 
-export function normalizeKagemushaAssetSelector(value: string, context?: string): string;
 export function normalizeKagemushaOperationId(value: string, context?: string): string;
 export function normalizeKagemushaTopUpRequestV4(
   value: KagemushaNoritoRequestV4,
@@ -133,11 +134,6 @@ export function normalizeKagemushaRedeemRequestV4(
 export function normalizeOfflineStatus(
   payload: Record<string, unknown>,
 ): OfflineStatus;
-/** @deprecated Use normalizeOfflineStatus(payload). */
-export function normalizeKagemushaReadinessV4(
-  payload: Record<string, unknown>,
-  requestedAssetSelector?: string,
-): KagemushaReadinessV4;
 export function normalizeKagemushaOperationReference(
   payload: Record<string, unknown>,
   expected: {
@@ -172,7 +168,11 @@ export type {
   PrivacyConsensusLimitsV1,
   PrivacyConsensusPolicyTighteningV1,
   PrivacyConsensusPolicyV1,
+  PrivacyEngineIdV1,
+  PrivacyEngineTagV1,
   PrivacyFixed32BytesV1,
+  PrivacyProofSystemIdV1,
+  PrivacyProofSystemTagV1,
   PrivacyProtocolActivationRecordV1,
   PrivacyProtocolIdV1,
   PrivacyProtocolLifecycleV1,
@@ -589,12 +589,13 @@ export interface MultisigContractCallApprovePayload {
 export interface MultisigContractCallResponse {
   ok: boolean;
   resolved_multisig_account_id: string;
-  submitted: boolean | null;
+  submitted: boolean;
   proposal_id: string | null;
   instructions_hash: string | null;
   tx_hash_hex: string | null;
   executed_tx_hash_hex: string | null;
   creation_time_ms: number | null;
+  transaction_payload_b64: string | null;
   signing_message_b64: string | null;
 }
 
@@ -828,7 +829,7 @@ export interface SccpSemanticProofProfileV1 {
 export interface SccpSoraFinalityAnchorV1 {
   readonly version: 1;
   readonly source_network: SccpNetworkV1;
-  readonly protocol_version: 3;
+  readonly protocol_version: 3 | 4;
   readonly chain_id_hash: string;
   readonly checkpoint_height: number;
   readonly checkpoint_block_hash: string;
@@ -1239,13 +1240,6 @@ export interface OpenVerifyEnvelope {
   aux?: BinaryLike;
 }
 
-export interface ConfidentialEncryptedPayloadInput {
-  version?: number;
-  ephemeralPublicKey: BinaryLike;
-  nonce: BinaryLike;
-  ciphertext: BinaryLike;
-}
-
 export interface ProofAttachmentInput {
   backend: string;
   proof: BinaryLike;
@@ -1566,32 +1560,26 @@ export interface AssetHolderIteratorOptions extends PaginationIteratorOptions {
 }
 
 export interface ExplorerNftListOptions {
-  page?: NumericLike;
-  perPage?: NumericLike;
   limit?: NumericLike;
-  offset?: NumericLike;
+  cursor?: string;
   ownedBy?: string;
   domainId?: string;
   signal?: AbortSignal;
 }
 
 export interface ExplorerNftIteratorOptions extends ExplorerNftListOptions {
-  pageSize?: NumericLike;
   maxItems?: NumericLike;
 }
 
 export interface ExplorerRwaListOptions {
-  page?: NumericLike;
-  perPage?: NumericLike;
   limit?: NumericLike;
-  offset?: NumericLike;
+  cursor?: string;
   ownedBy?: string;
   domainId?: string;
   signal?: AbortSignal;
 }
 
 export interface ExplorerRwaIteratorOptions extends ExplorerRwaListOptions {
-  pageSize?: NumericLike;
   maxItems?: NumericLike;
 }
 
@@ -2474,6 +2462,13 @@ export interface ToriiExplorerPaginationMeta {
   totalItems: number;
 }
 
+/** Seek-pagination metadata for canonical Explorer world collections. */
+export interface ToriiExplorerCursorMeta {
+  limit: number;
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export interface ToriiExplorerNft {
   id: string;
   ownedBy: string;
@@ -2481,7 +2476,7 @@ export interface ToriiExplorerNft {
 }
 
 export interface ToriiExplorerNftsPage {
-  pagination: ToriiExplorerPaginationMeta;
+  pagination: ToriiExplorerCursorMeta;
   items: ReadonlyArray<ToriiExplorerNft>;
 }
 
@@ -2498,7 +2493,7 @@ export interface ToriiExplorerRwa {
 }
 
 export interface ToriiExplorerRwasPage {
-  pagination: ToriiExplorerPaginationMeta;
+  pagination: ToriiExplorerCursorMeta;
   items: ReadonlyArray<ToriiExplorerRwa>;
 }
 
@@ -2541,14 +2536,17 @@ export interface ToriiVpnProfile {
   tunnelAddresses: ReadonlyArray<string>;
   mtuBytes: number;
   displayBillingLabel: string;
-  feeAssetId: string;
-  escrowAccountId: string;
   operatorAccountId: string;
   leaseFee: string;
   settlementGraceSecs: number;
   flowLabelBits: number;
   paddingBudgetMs: number;
-  relayTlsSpkiSha256Hex: string | null;
+  relayIdHex: string;
+  descriptorCommitHex: string;
+  tlsServerName: string;
+  relayTlsSpkiSha256Hex: string;
+  relayCertificateSha256Hex: string;
+  directorySnapshotDigestHex: string;
 }
 
 export interface ToriiVpnTxInstruction {
@@ -2578,10 +2576,14 @@ export interface ToriiVpnQuote {
   meterFamily: string;
   flowLabelBits: number;
   paddingBudgetMs: number;
-  relayTlsSpkiSha256Hex: string | null;
+  relayIdHex: string;
+  descriptorCommitHex: string;
+  tlsServerName: string;
+  relayTlsSpkiSha256Hex: string;
+  relayCertificateSha256Hex: string;
+  directorySnapshotDigestHex: string;
   meteringPublicKeyHex: string;
-  openLeaseInstruction: ToriiVpnTxInstruction | null;
-  txInstructions: ReadonlyArray<ToriiVpnTxInstruction>;
+  openLeaseInstruction: ToriiVpnTxInstruction;
 }
 
 export interface ToriiVpnSession {
@@ -2602,7 +2604,12 @@ export interface ToriiVpnSession {
   leaseFee: string;
   flowLabelBits: number;
   paddingBudgetMs: number;
-  relayTlsSpkiSha256Hex: string | null;
+  relayIdHex: string;
+  descriptorCommitHex: string;
+  tlsServerName: string;
+  relayTlsSpkiSha256Hex: string;
+  relayCertificateSha256Hex: string;
+  directorySnapshotDigestHex: string;
   routePushes: ReadonlyArray<string>;
   excludedRoutes: ReadonlyArray<string>;
   dnsServers: ReadonlyArray<string>;
@@ -2637,7 +2644,6 @@ export interface ToriiVpnReceipt {
   refundedFee: string;
   leaseIdHex: string;
   settleLeaseInstruction: ToriiVpnTxInstruction | null;
-  txInstructions: ReadonlyArray<ToriiVpnTxInstruction>;
 }
 
 export interface ToriiVpnReceiptListResponse {
@@ -3331,30 +3337,23 @@ export type SorafsValidationOutcome =
 export interface SorafsOrderbookValidationOptions {
   label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export interface SorafsAppealFinanceValidationOptions {
   label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export interface SorafsPdpPayloadValidationOptions {
   label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export interface SorafsPdpPairValidationOptions {
   commitmentLabel?: string;
-  commitment_label?: string;
   challengeLabel?: string;
-  challenge_label?: string;
   proofLabel?: string;
-  proof_label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export type SorafsReferenceBytesInput =
@@ -3363,57 +3362,36 @@ export type SorafsReferenceBytesInput =
   | Buffer;
 
 export interface SorafsGovernanceDagBlockInput {
-  payload?: SorafsReferenceBytesInput;
-  bytes?: SorafsReferenceBytesInput;
-  noritoBytes?: SorafsReferenceBytesInput;
-  norito_bytes?: SorafsReferenceBytesInput;
+  bytes: SorafsReferenceBytesInput;
   label?: string;
 }
 
 export interface SorafsFixtureBundlePayloadInput {
   kind: SorafsFixtureBundlePayloadKind;
-  bytes?: SorafsReferenceBytesInput;
-  payload?: SorafsReferenceBytesInput;
-  noritoBytes?: SorafsReferenceBytesInput;
-  norito_bytes?: SorafsReferenceBytesInput;
+  bytes: SorafsReferenceBytesInput;
   label?: string;
 }
 
 export interface SorafsFixtureBundleValidationOptions {
   nowUnix?: number | bigint;
-  now_unix?: number | bigint;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
-export type SorafsGovernanceLogNodeValidationOptions = {
+export interface SorafsGovernanceLogNodeValidationOptions {
   label?: string;
+  expectedNodeCid: SorafsReferenceBytesInput;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
-} & (
-  | {
-      expectedNodeCid: SorafsReferenceBytesInput;
-      expected_node_cid?: never;
-    }
-  | {
-      expectedNodeCid?: never;
-      expected_node_cid: SorafsReferenceBytesInput;
-    }
-);
+}
 
 export interface SorafsGovernanceDagBlockValidationOptions {
   label?: string;
   expectedBlockCid?: SorafsReferenceBytesInput;
-  expected_block_cid?: SorafsReferenceBytesInput;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export interface SorafsGovernanceDagHeadValidationOptions {
   headLabel?: string;
-  head_label?: string;
   generatedAtUnix?: number | bigint;
-  generated_at?: number | bigint;
 }
 
 export function decodeReplicationOrder(
@@ -3946,8 +3924,8 @@ type NoritoRuntimeNamespaceExport =
 
 type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
-  | "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1"
   | "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES"
+  | "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1"
   | "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION"
   | "SM2_DEFAULT_DISTINGUISHED_ID"
   | "SM2_PRIVATE_KEY_LENGTH"
@@ -4699,7 +4677,7 @@ export type ToriiNativeAmxTransactionEntrypointHash = string & {
 };
 
 export interface ToriiNativeAmxAttestationBody {
-  round: ToriiSumeragiV2Round;
+  round: ToriiSumeragiV2ConsensusRound;
   epoch: ToriiU64;
   chain_id_hash: string;
   source_id: ToriiNativeAmxSourceId;
@@ -4773,6 +4751,8 @@ export interface ToriiNativeAmxLeg {
   participant_settlement_hash: string;
   prepare_qc: Readonly<ToriiNativeAmxAttestationQc>;
   commit_qc: Readonly<ToriiNativeAmxAttestationQc>;
+  /** Full block validation must establish the mixed-role coordinator anchor. */
+  readonly requires_mixed_role_anchor_validation: boolean;
 }
 
 export interface ToriiNativeAmxReceipt {
@@ -5023,14 +5003,12 @@ export interface ToriiGovernanceFinalizeRequest {
 }
 
 export interface ToriiGovernanceWindow {
-  lower: number;
-  upper: number;
+  lower: number | string | bigint;
+  upper: number | string | bigint;
 }
 
 export interface ToriiGovernanceEnactRequest {
   proposalId: string;
-  preimageHash?: string | null;
-  window?: ToriiGovernanceWindow | null;
 }
 
 export interface ToriiGovernanceDraftInstruction {
@@ -5047,8 +5025,70 @@ export interface ToriiGovernanceDraftResponse {
 }
 
 export interface MinistryAgendaProposalDraftRequest {
-  proposal: Record<string, unknown>;
+  proposal: MinistryAgendaProposalV1;
   authority: string;
+}
+
+export type MinistryAgendaProposalAction =
+  | "add-to-denylist"
+  | "remove-from-denylist"
+  | "amend-policy";
+
+export type MinistryAgendaProposalTag =
+  | "csam"
+  | "malware"
+  | "fraud"
+  | "harassment"
+  | "impersonation"
+  | "policy-escalation"
+  | "terrorism"
+  | "spam";
+
+export type MinistryAgendaEvidenceKind =
+  | "url"
+  | "torii-case"
+  | "sorafs-cid"
+  | "attachment";
+
+export interface MinistryAgendaProposalSummaryV1 {
+  title: string;
+  motivation: string;
+  expected_impact: string;
+}
+
+export interface MinistryAgendaProposalTargetV1 {
+  label: string;
+  hash_family: string;
+  hash_hex: string;
+  reason: string;
+}
+
+export interface MinistryAgendaEvidenceAttachmentV1 {
+  kind: MinistryAgendaEvidenceKind;
+  uri: string;
+  digest_blake3_hex?: string | null;
+  description?: string | null;
+}
+
+export interface MinistryAgendaProposalSubmitterV1 {
+  name: string;
+  contact: string;
+  organization?: string | null;
+  pgp_fingerprint?: string | null;
+}
+
+export interface MinistryAgendaProposalV1 {
+  version: 1;
+  proposal_id: string;
+  submitted_at_unix_ms: number | string | bigint;
+  language: string;
+  action: MinistryAgendaProposalAction;
+  summary: MinistryAgendaProposalSummaryV1;
+  tags?: ReadonlyArray<MinistryAgendaProposalTag>;
+  targets: ReadonlyArray<MinistryAgendaProposalTargetV1>;
+  evidence: ReadonlyArray<MinistryAgendaEvidenceAttachmentV1>;
+  submitter: MinistryAgendaProposalSubmitterV1;
+  duplicates?: ReadonlyArray<string>;
 }
 
 export interface MinistryAgendaProposalDraftResponse {
@@ -5060,7 +5100,7 @@ export interface MinistryAgendaProposalDraftResponse {
 }
 
 export interface MinistryAgendaProposalRecord {
-  proposal: Record<string, unknown>;
+  proposal: MinistryAgendaProposalV1;
   authority: string;
   submitted_tx_hash_hex: string;
   submitted_height: number;
@@ -5073,15 +5113,20 @@ export interface MinistryAgendaProposalGetResponse {
 
 export type ToriiGovernanceBallotDirection = "Aye" | "Nay" | "Abstain";
 
+export interface ToriiGovernanceManifestProvenanceInput {
+  signer: string;
+  signature: string;
+}
+
 export interface ToriiGovernanceDeployContractProposalRequest {
   contractAddress?: string;
   contractAlias?: string;
   codeHash: string | BinaryLike;
   abiHash: string | BinaryLike;
-  abiVersion?: string;
+  abiVersion?: "1";
   window?: ToriiGovernanceWindow | null;
   mode?: "Zk" | "Plain";
-  limits?: JsonValue;
+  manifestProvenance?: ToriiGovernanceManifestProvenanceInput | null;
 }
 
 export interface ToriiGovernancePlainBallotRequest {
@@ -5091,16 +5136,29 @@ export interface ToriiGovernancePlainBallotRequest {
   owner: string;
   amount: QuantityInput;
   durationBlocks: number | string | bigint;
-  direction: ToriiGovernanceBallotDirection | string;
+  direction: ToriiGovernanceBallotDirection;
 }
 
-export interface ToriiGovernanceZkBallotRequest {
+export type ToriiGovernanceParliamentBody =
+  | "rules-committee"
+  | "agenda-council"
+  | "interest-panel"
+  | "review-panel"
+  | "policy-jury"
+  | "oversight-committee"
+  | "fma-committee";
+
+export type ToriiGovernanceParliamentDecision =
+  | "approve"
+  | "reject"
+  | "abstain";
+
+export interface ToriiGovernanceParliamentBallotRequest {
   authority: string;
   chainId: string;
-  electionId: string;
-  proof?: BinaryLike | string;
-  proofB64?: BinaryLike | string;
-  public?: JsonValue;
+  proposalId: string;
+  body: ToriiGovernanceParliamentBody;
+  decision: ToriiGovernanceParliamentDecision;
 }
 
 export interface ToriiGovernanceZkBallotV1Request {
@@ -5108,25 +5166,24 @@ export interface ToriiGovernanceZkBallotV1Request {
   chainId: string;
   electionId: string;
   backend: string;
-  envelope?: BinaryLike | string;
-  envelopeB64?: BinaryLike | string;
-  root_hint?: string | BinaryLike | null;
+  envelope: BinaryLike | string;
+  rootHint?: string | BinaryLike | null;
   owner?: string | null;
   amount?: QuantityInput | null;
   durationBlocks?: number | string | bigint | null;
-  direction?: ToriiGovernanceBallotDirection | string | null;
+  direction?: ToriiGovernanceBallotDirection | null;
   nullifier?: string | BinaryLike | null;
 }
 
 export interface ToriiGovernanceBallotProof {
   backend: string;
-  envelope_bytes: string;
-  root_hint?: string | null;
+  envelopeBytes: BinaryLike | string;
+  rootHint?: string | null;
   owner?: string | null;
   nullifier?: string | null;
   amount?: QuantityInput | null;
-  duration_blocks?: number | null;
-  direction?: ToriiGovernanceBallotDirection | string | null;
+  durationBlocks?: number | string | bigint | null;
+  direction?: ToriiGovernanceBallotDirection | null;
 }
 
 export interface ToriiGovernanceZkBallotProofRequest {
@@ -5643,7 +5700,7 @@ export interface ToriiPipelineRecoveryFastpqProofs {
   proofs: ReadonlyArray<ToriiPipelineRecoveryFastpqProof>;
 }
 
-export type ToriiSumeragiV2ContextId = readonly [string];
+export type ToriiSumeragiV2HeightContextId = readonly [string];
 
 export type ToriiSumeragiV2ConsensusMode = Readonly<{
   mode: "permissioned" | "npos";
@@ -5677,8 +5734,8 @@ export type ToriiSumeragiV2BodyState = Readonly<{
   details: null;
 }>;
 
-export interface ToriiSumeragiV2Round {
-  context_id: ToriiSumeragiV2ContextId;
+export interface ToriiSumeragiV2ConsensusRound {
+  context_id: ToriiSumeragiV2HeightContextId;
   height: ToriiU64;
   view: ToriiU64;
 }
@@ -5687,6 +5744,11 @@ export interface ToriiSumeragiV2BlockSubject {
   parent_block_hash: string | null;
   block_hash: string;
   payload_hash: string;
+}
+
+export interface ToriiSumeragiV2MergeCarrierCommitment {
+  version: 1;
+  entry_hash: string;
 }
 
 export interface ToriiSumeragiV2ExecutionCommitment {
@@ -5698,34 +5760,24 @@ export interface ToriiSumeragiV2ExecutionCommitment {
   native_amx_application_manifest_version: number;
   native_amx_application_manifest_root: string;
   native_amx_application_manifest_count: number;
+  merge_carrier: ToriiSumeragiV2MergeCarrierCommitment | null;
+  executed_block_wire_len: ToriiU64;
   executed_block_wire_hash: string;
 }
 
-export interface ToriiSumeragiV2QcReference {
-  round: ToriiSumeragiV2Round;
-  proposal_round: ToriiSumeragiV2Round;
+export interface ToriiSumeragiV2QuorumCertificateRef {
+  round: ToriiSumeragiV2ConsensusRound;
+  proposal_round: ToriiSumeragiV2ConsensusRound;
   phase: ToriiSumeragiV2GlobalPhase;
   subject: ToriiSumeragiV2BlockSubject;
   execution_commitment: ToriiSumeragiV2ExecutionCommitment;
 }
 
-export interface ToriiSumeragiV2TimeoutReference {
-  round: ToriiSumeragiV2Round;
-  highest_prepare_qc: ToriiSumeragiV2QcReference | null;
+export interface ToriiSumeragiV2TimeoutCertificateRef {
+  round: ToriiSumeragiV2ConsensusRound;
+  highest_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
   certificate_hash: string;
 }
-
-/** Canonical-name alias retained for consumers of the reducer-only draft. */
-export type ToriiSumeragiV2HeightContextId = ToriiSumeragiV2ContextId;
-
-/** Canonical-name alias retained for consumers of the reducer-only draft. */
-export type ToriiSumeragiV2ConsensusRound = ToriiSumeragiV2Round;
-
-/** Canonical-name alias retained for consumers of the reducer-only draft. */
-export type ToriiSumeragiV2QuorumCertificateRef = ToriiSumeragiV2QcReference;
-
-/** Canonical-name alias retained for consumers of the reducer-only draft. */
-export type ToriiSumeragiV2TimeoutCertificateRef = ToriiSumeragiV2TimeoutReference;
 
 export interface ToriiSumeragiV2HeightContextStatus {
   epoch: ToriiU64;
@@ -5740,7 +5792,7 @@ export interface ToriiSumeragiV2HeightContextStatus {
 }
 
 export interface ToriiSumeragiV2CommitQcStatus {
-  certificate: ToriiSumeragiV2QcReference;
+  certificate: ToriiSumeragiV2QuorumCertificateRef;
   validator_count: number;
   signer_count: number;
   min_signers: number;
@@ -5749,8 +5801,8 @@ export interface ToriiSumeragiV2CommitQcStatus {
 }
 
 export interface ToriiSumeragiV2VoteQuorumStatus {
-  round: ToriiSumeragiV2Round;
-  proposal_round: ToriiSumeragiV2Round;
+  round: ToriiSumeragiV2ConsensusRound;
+  proposal_round: ToriiSumeragiV2ConsensusRound;
   subject: ToriiSumeragiV2BlockSubject;
   execution_commitment: ToriiSumeragiV2ExecutionCommitment;
   signer_count: number;
@@ -5760,7 +5812,7 @@ export interface ToriiSumeragiV2VoteQuorumStatus {
 }
 
 export interface ToriiSumeragiV2TimeoutQuorumStatus {
-  round: ToriiSumeragiV2Round;
+  round: ToriiSumeragiV2ConsensusRound;
   signer_count: number;
   signed_power: ToriiU64;
   min_signers: number;
@@ -5787,8 +5839,8 @@ export type ToriiSumeragiV2OutboundIntentStage = Readonly<{
 
 export interface ToriiSumeragiV2OutboundIntentStatus {
   kind: ToriiSumeragiV2OutboundIntentKind;
-  round: ToriiSumeragiV2Round;
-  proposal_round: ToriiSumeragiV2Round | null;
+  round: ToriiSumeragiV2ConsensusRound;
+  proposal_round: ToriiSumeragiV2ConsensusRound | null;
   subject: ToriiSumeragiV2BlockSubject | null;
   execution_commitment: ToriiSumeragiV2ExecutionCommitment | null;
   stage: ToriiSumeragiV2OutboundIntentStage;
@@ -5854,7 +5906,7 @@ export type ToriiSumeragiV2ProgressTransition = Readonly<{
 
 export interface ToriiSumeragiV2ProgressTransitionStatus {
   generation: ToriiU64;
-  round: ToriiSumeragiV2Round;
+  round: ToriiSumeragiV2ConsensusRound;
   transition: ToriiSumeragiV2ProgressTransition;
   age_ms: ToriiU64;
 }
@@ -5868,6 +5920,7 @@ export type ToriiSumeragiV2LivenessBlocker = Readonly<{
     | "timeout_certificate_missing"
     | "scheduler_starvation"
     | "application_pending"
+    | "successor_activation_pending"
     | "local_control_pending";
   details: null;
 }>;
@@ -6023,19 +6076,19 @@ export interface ToriiSumeragiSafetyHaltStatus {
 }
 
 export interface ToriiSumeragiStatus {
-  protocol_version: 3;
+  protocol_version: 4;
   node_fingerprint: string;
   build_fingerprint: string;
   config_fingerprint: string;
   restart_required: boolean;
-  height_context_id: ToriiSumeragiV2ContextId;
+  height_context_id: ToriiSumeragiV2HeightContextId;
   height: ToriiU64;
   view: ToriiU64;
   phase: ToriiSumeragiV2StatusPhase;
   leader: number;
-  locked_prepare_qc: ToriiSumeragiV2QcReference | null;
-  highest_prepare_qc: ToriiSumeragiV2QcReference | null;
-  last_timeout_certificate: ToriiSumeragiV2TimeoutReference | null;
+  locked_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
+  highest_prepare_qc: ToriiSumeragiV2QuorumCertificateRef | null;
+  last_timeout_certificate: ToriiSumeragiV2TimeoutCertificateRef | null;
   body_state: ToriiSumeragiV2BodyState;
   pending_persistence_id: ToriiU64 | null;
   last_committed_height: ToriiU64;
@@ -6149,6 +6202,7 @@ export type ToriiSumeragiAutonomousLaneExecutionStage =
   | "conflict";
 
 export type ToriiSumeragiAutonomousLaneExecutionStuckReason =
+  | "awaiting_executable_payload"
   | "awaiting_payload_availability"
   | "awaiting_lane_certification"
   | "certified_bundle_unavailable"
@@ -6165,9 +6219,12 @@ export interface ToriiSumeragiAutonomousLaneExecution {
   lane_block_height: ToriiU64;
   lane_block_view: ToriiU64;
   proposal_height: ToriiU64;
-  proposal_view: ToriiU64;
-  proposal_hash: string;
-  descriptor_hash: string;
+  proposal_view: ToriiU64 | null;
+  reservation_owner_hash: string;
+  proposal_identity_hash: string;
+  reservation_group_hash: string;
+  proposal_hash: string | null;
+  descriptor_hash: string | null;
   executable_payload_hash: string | null;
   source_bundle_hash: string | null;
   merge_entry_hash: string | null;
@@ -6339,7 +6396,8 @@ export type SumeragiEvidenceKind =
   | "DoubleCommit"
   | "InvalidQc"
   | "InvalidProposal"
-  | "Censorship";
+  | "Censorship"
+  | "SumeragiV2Equivocation";
 
 export interface SumeragiEvidenceListOptions {
   limit?: NumericLike;
@@ -6349,10 +6407,11 @@ export interface SumeragiEvidenceListOptions {
 }
 
 export interface SumeragiEvidenceRecordBase {
-  kind: string;
+  kind: SumeragiEvidenceKind;
   recorded_height: number;
   recorded_view: number;
   recorded_ms: number;
+  consensus_admitted_height: number | null;
 }
 
 export interface SumeragiDoubleVoteEvidenceRecord
@@ -6362,7 +6421,7 @@ export interface SumeragiDoubleVoteEvidenceRecord
   height: number;
   view: number;
   epoch: number;
-  signer: string;
+  signer: number;
   block_hash_1: string;
   block_hash_2: string;
 }
@@ -6374,7 +6433,7 @@ export interface SumeragiInvalidQcEvidenceRecord
   view: number;
   epoch: number;
   subject_block_hash: string;
-  phase: string;
+  phase: "Prepare" | "Commit" | "NewView";
   reason: string;
 }
 
@@ -6394,14 +6453,22 @@ export interface SumeragiCensorshipEvidenceRecord
   kind: "Censorship";
   tx_hash: string;
   receipt_count: number;
-  min_height: number;
-  max_height: number;
   signers: ReadonlyArray<string>;
+  submitted_at_height_min?: number;
+  submitted_at_height_max?: number;
 }
 
-export interface SumeragiUnknownEvidenceRecord
+export interface SumeragiV2EquivocationEvidenceRecord
   extends SumeragiEvidenceRecordBase {
-  detail?: string;
+  kind: "SumeragiV2Equivocation";
+  class: "proposal" | "phase_vote" | "timeout_vote";
+  height: number;
+  view: number;
+  epoch: number;
+  signer: number;
+  context_id: string;
+  artifact_hash_1: string;
+  artifact_hash_2: string;
 }
 
 export type SumeragiEvidenceRecord =
@@ -6409,7 +6476,7 @@ export type SumeragiEvidenceRecord =
   | SumeragiInvalidQcEvidenceRecord
   | SumeragiInvalidProposalEvidenceRecord
   | SumeragiCensorshipEvidenceRecord
-  | SumeragiUnknownEvidenceRecord;
+  | SumeragiV2EquivocationEvidenceRecord;
 
 export interface SumeragiEvidenceListResponse {
   total: number;
@@ -6418,16 +6485,6 @@ export interface SumeragiEvidenceListResponse {
 
 export interface SumeragiEvidenceCountResponse {
   count: number;
-}
-
-export interface SumeragiEvidenceSubmitRequest {
-  evidence_hex: string;
-  apiToken?: string;
-}
-
-export interface SumeragiEvidenceSubmitResponse {
-  status: string;
-  kind: string;
 }
 
 export type KaigiRelayHealthStatus = "healthy" | "degraded" | "unavailable";
@@ -7379,11 +7436,14 @@ interface RegisterAssetDefinitionAndMintInputBase {
   authority: string;
   assetDefinition: {
     assetDefinitionId: string;
+    /** Immutable ownership intent; null means intentionally unowned global. */
+    owningDomain: string | null;
     metadata?: object;
     mintable?: string;
     logo?: string | null;
     spec?: object;
     confidentialPolicy?: object;
+    balanceScopePolicy: string;
   };
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -7543,13 +7603,13 @@ export interface GovernanceWindowInput {
 }
 
 export interface ProposeDeployContractInstructionInput {
-  contractAddress?: string;
-  contractAlias?: string;
+  contractAddress: string;
   codeHash: HashLike;
   abiHash: HashLike;
-  abiVersion?: string;
+  abiVersion?: "1";
   window?: GovernanceWindowInput | null;
   votingMode?: GovernanceVotingMode | null;
+  manifestProvenance?: ToriiGovernanceManifestProvenanceInput | null;
 }
 
 export interface ProposeSccpRouteGovernanceInstructionInput {
@@ -7561,7 +7621,16 @@ export interface ProposeSccpRouteGovernanceInstructionInput {
 export interface CastZkBallotInstructionInput {
   electionId: string;
   proof: ArrayBufferView | ArrayBuffer | Buffer | string;
-  publicInputs: Record<string, unknown> | string;
+  publicInputs?: GovernanceZkBallotPublicInputs;
+}
+
+export interface GovernanceZkBallotPublicInputs {
+  root_hint?: string | null;
+  owner?: string | null;
+  amount?: QuantityInput | null;
+  duration_blocks?: number | string | bigint | null;
+  direction?: ToriiGovernanceBallotDirection | null;
+  nullifier?: string | null;
 }
 
 export interface CastPlainBallotInstructionInput {
@@ -7579,7 +7648,9 @@ export interface EnactReferendumInstructionInput {
 }
 
 export interface FinalizeReferendumInstructionInput {
+  /** Exact lowercase 32-byte proposal digest; must equal `proposalId`. */
   referendumId: string;
+  /** Proposal digest bytes, or the same exact lowercase digest string as `referendumId`. */
   proposalId: HashLike;
 }
 
@@ -7591,10 +7662,9 @@ export interface PersistCouncilForEpochInstructionInput {
 
 export interface RegisterZkAssetInstructionInput {
   assetDefinitionId: string;
-  mode?: "ZkNative" | "Hybrid" | string;
+  mode?: "Hybrid";
   allowShield?: boolean;
   allowUnshield?: boolean;
-  transferVerifyingKey?: VerifyingKeyIdLike | null;
   unshieldVerifyingKey?: VerifyingKeyIdLike | null;
   shieldVerifyingKey?: VerifyingKeyIdLike | null;
 }
@@ -7610,32 +7680,6 @@ export interface ScheduleConfidentialPolicyTransitionInstructionInput {
 export interface CancelConfidentialPolicyTransitionInstructionInput {
   assetDefinitionId: string;
   transitionId: HashLike;
-}
-
-export interface ShieldInstructionInput {
-  assetDefinitionId: string;
-  fromAccountId: string;
-  amount: QuantityInput;
-  noteCommitment: BinaryLike;
-  encryptedPayload: ConfidentialEncryptedPayloadInput;
-}
-
-export interface ZkTransferInstructionInput {
-  assetDefinitionId: string;
-  inputs: ReadonlyArray<BinaryLike>;
-  outputs: ReadonlyArray<BinaryLike>;
-  proof: ProofAttachmentInput;
-  rootHint?: BinaryLike | null;
-}
-
-export interface UnshieldInstructionInput {
-  assetDefinitionId: string;
-  destinationAccountId: string;
-  publicAmount: QuantityInput;
-  inputs: ReadonlyArray<BinaryLike>;
-  outputs?: ReadonlyArray<BinaryLike>;
-  proof: ProofAttachmentInput;
-  rootHint?: BinaryLike | null;
 }
 
 export interface CreateElectionInstructionInput {
@@ -8088,8 +8132,7 @@ export interface ContractCallResponse {
   entrypoint_hash_hex: string | null;
   pipeline_status?: ToriiPipelineTransactionStatus | null;
   entrypoint: string | null;
-  transaction_scaffold_b64: string | null;
-  signed_transaction_b64: string | null;
+  transaction_payload_b64: string | null;
   signing_message_b64: string | null;
   operation_receipt: ContractOperationReceipt;
 }
@@ -8645,13 +8688,17 @@ export interface SorafsPorStatusOptions {
   epoch?: NumericLike;
   status?: string;
   limit?: NumericLike;
-  pageTokenHex?: string | null;
+  maxBytes?: NumericLike;
+  cursor?: string | null;
   signal?: AbortSignal;
 }
 
 export interface SorafsPorExportOptions {
   startEpoch?: NumericLike;
   endEpoch?: NumericLike;
+  limit?: NumericLike;
+  maxBytes?: NumericLike;
+  cursor?: string | null;
   signal?: AbortSignal;
 }
 
@@ -9117,7 +9164,7 @@ export interface SorafsOrderbookEventsResponse {
 }
 
 export interface SorafsReputationWitnessHeaders
-  extends Record<string, string> {
+  extends Record<string, string | undefined> {
   /**
    * Exact canonical Norito witness. Reputation requests carrying a static
    * witness are single-attempt and are never transparently retried.
@@ -9501,30 +9548,6 @@ export interface EndKaigiTransactionInput {
   privateKeyAlgorithm?: string | null;
 }
 
-export interface PrivateKaigiEntrypointResult {
-  transactionEntrypoint: Buffer;
-  hash: Buffer;
-  actionHash: Buffer;
-}
-
-export interface PrivateKaigiFeeSpendResult {
-  asset_definition_id: string;
-  anchor_root: Buffer;
-  nullifiers: ReadonlyArray<Buffer>;
-  output_commitments: ReadonlyArray<Buffer>;
-  encrypted_change_payloads: ReadonlyArray<Buffer>;
-  proof: Buffer;
-}
-
-export interface PrivateKaigiFeeSpendInput {
-  chainId: string;
-  assetDefinitionId: string;
-  actionHash: BinaryLike;
-  anchorRootHex: string;
-  feeAmount: QuantityInput;
-  verifyingKey: Record<string, unknown>;
-}
-
 export interface ConfidentialTransferProofInputV2 {
   amount: NumericLike;
   rhoHex?: string;
@@ -9567,37 +9590,6 @@ export interface ConfidentialUnshieldProofResultV3 {
   outputCommitments: ReadonlyArray<Buffer>;
   root: Buffer;
   proof: Buffer;
-}
-
-export interface PrivateCreateKaigiTransactionInput {
-  chainId: string;
-  call: Record<string, unknown>;
-  artifacts: Record<string, unknown>;
-  feeSpend: Record<string, unknown>;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  nonce?: number | null;
-}
-
-export interface PrivateJoinKaigiTransactionInput {
-  chainId: string;
-  callId: string;
-  artifacts: Record<string, unknown>;
-  feeSpend: Record<string, unknown>;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  nonce?: number | null;
-}
-
-export interface PrivateEndKaigiTransactionInput {
-  chainId: string;
-  callId: string;
-  endedAtMs?: number | null;
-  artifacts: Record<string, unknown>;
-  feeSpend: Record<string, unknown>;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  nonce?: number | null;
 }
 
 export interface RecordKaigiUsageTransactionInput {
@@ -9742,42 +9734,6 @@ export interface CancelConfidentialPolicyTransitionTransactionInput {
   chainId: string;
   authority: string;
   cancellation: CancelConfidentialPolicyTransitionInstructionInput;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
-export interface ShieldTransactionInput {
-  chainId: string;
-  authority: string;
-  shield: ShieldInstructionInput;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
-export interface ZkTransferTransactionInput {
-  chainId: string;
-  authority: string;
-  transfer: ZkTransferInstructionInput;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
-export interface UnshieldTransactionInput {
-  chainId: string;
-  authority: string;
-  unshield: UnshieldInstructionInput;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -10017,63 +9973,6 @@ export interface ToriiLedgerHeadersOptions {
   signal?: AbortSignal;
 }
 
-export interface ToriiBlockMerkleProof {
-  readonly leaf_index: number;
-  readonly audit_path: ReadonlyArray<string | null>;
-}
-
-export interface ToriiBlockReceiptProof {
-  readonly leaf: string;
-  readonly proof: ToriiBlockMerkleProof;
-}
-
-export interface ToriiBlockProofTransferSmtWitness {
-  readonly root_before: string;
-  readonly root_after: string;
-  readonly path_bits: ReadonlyArray<number>;
-  readonly siblings: ReadonlyArray<string>;
-}
-
-export interface ToriiBlockProofTransferDeltaTranscript {
-  readonly from_account: string;
-  readonly to_account: string;
-  readonly asset_definition: string;
-  readonly amount: string;
-  readonly from_balance_before: string;
-  readonly from_balance_after: string;
-  readonly to_balance_before: string;
-  readonly to_balance_after: string;
-  readonly from_smt_witness: ToriiBlockProofTransferSmtWitness;
-  readonly to_smt_witness: ToriiBlockProofTransferSmtWitness;
-}
-
-export interface ToriiBlockProofTransferTranscript {
-  readonly batch_hash: string;
-  readonly deltas: ReadonlyArray<ToriiBlockProofTransferDeltaTranscript>;
-  readonly authority_digest: string;
-  readonly poseidon_preimage_digest: string | null;
-}
-
-export interface ToriiBlockProofs {
-  readonly block_height: string;
-  readonly entry_hash: string;
-  readonly entry_root: string;
-  readonly entry_proof: ToriiBlockReceiptProof;
-  readonly result_root: string | null;
-  readonly result_proof: ToriiBlockReceiptProof | null;
-  readonly fastpq_transcripts: Readonly<
-    Record<string, ReadonlyArray<ToriiBlockProofTransferTranscript>>
-  >;
-}
-
-export interface ToriiBlockProofVerification {
-  readonly valid: boolean;
-  readonly entry_hash_matches: boolean;
-  readonly entry_proof_valid: boolean;
-  readonly result_pair_consistent: boolean;
-  readonly result_proof_valid: boolean | null;
-}
-
 export interface ToriiBrowserTransactionStatusOptions
   extends ToriiBrowserRequestOptions {
   scope?: "local" | "global";
@@ -10215,11 +10114,6 @@ export declare class ToriiBrowserClient {
   getOfflineCapability(
     options?: { signal?: AbortSignal },
   ): Promise<OfflineStatus>;
-  /** @deprecated Use getOfflineCapability(). */
-  getKagemushaReadinessV4(
-    assetDefinitionId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<KagemushaReadinessV4>;
   submitKagemushaTopUpV4(
     request: KagemushaNoritoRequestV4,
     options?: { signal?: AbortSignal },
@@ -10232,17 +10126,23 @@ export declare class ToriiBrowserClient {
     operationId: string,
     options?: { signal?: AbortSignal },
   ): Promise<KagemushaOperationStatus>;
-  listExplorerAccounts(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerAccounts<T = unknown>(
+    options?: ToriiBrowserExplorerAccountsOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAccount(
     accountId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerDomains(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerDomains<T = unknown>(
+    options?: ToriiBrowserExplorerDomainsOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerDomain(
     domainId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerAssets(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerAssets<T = unknown>(
+    options?: ToriiBrowserExplorerAssetsOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAsset(
     assetId: string,
     options?: Record<string, unknown>,
@@ -10296,9 +10196,9 @@ export declare class ToriiBrowserClient {
     aliasOrRequest: string | Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerAssetDefinitions(
-    options?: Record<string, unknown>,
-  ): Promise<unknown>;
+  listExplorerAssetDefinitions<T = ToriiBrowserExplorerAssetDefinition>(
+    options?: ToriiBrowserExplorerAssetDefinitionsOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerAssetDefinitionEconometrics(
     assetDefinitionId: string,
     options?: Record<string, unknown>,
@@ -10307,12 +10207,16 @@ export declare class ToriiBrowserClient {
     assetDefinitionId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerNfts(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerNfts<T = unknown>(
+    options?: ToriiBrowserExplorerOwnedDomainOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerNft(
     nftId: string,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  listExplorerRwas(options?: Record<string, unknown>): Promise<unknown>;
+  listExplorerRwas<T = unknown>(
+    options?: ToriiBrowserExplorerOwnedDomainOptions,
+  ): Promise<ToriiBrowserExplorerCursorPage<T>>;
   getExplorerRwa(
     rwaId: string,
     options?: Record<string, unknown>,
@@ -10331,6 +10235,11 @@ export declare class ToriiBrowserClient {
     height: number | string | bigint,
     options?: { signal?: AbortSignal },
   ): Promise<unknown>;
+  /** Exact canonical result-bearing SignedBlockWire at a finalized height. */
+  getLedgerExecutedBlockWire(
+    height: number | string | bigint,
+    options?: { signal?: AbortSignal },
+  ): Promise<Buffer>;
   getLedgerBlockProof(
     height: number | string | bigint,
     entryHash: string,
@@ -10384,8 +10293,14 @@ export declare class ToriiBrowserClient {
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
-  getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
-  getSumeragiDiagnostics(options?: Record<string, unknown>): Promise<unknown>;
+  getSumeragiStatus(
+    options?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
+  getSumeragiStatusTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiStatus>;
+  getSumeragiDiagnostics(
+    options?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>>;
+  getSumeragiDiagnosticsTyped(options?: { signal?: AbortSignal }): Promise<ToriiSumeragiDiagnostics>;
   getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
   listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
   getKaigiRelay(
@@ -10542,11 +10457,6 @@ export declare class ToriiClient {
   getOfflineCapability(
     options?: { signal?: AbortSignal },
   ): Promise<OfflineStatus>;
-  /** @deprecated Use getOfflineCapability(). */
-  getKagemushaReadinessV4(
-    assetDefinitionId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<KagemushaReadinessV4>;
   submitKagemushaTopUpV4(
     request: KagemushaNoritoRequestV4,
     options?: { signal?: AbortSignal },
@@ -11369,8 +11279,8 @@ export declare class ToriiClient {
     payload: ToriiGovernancePlainBallotRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiGovernanceBallotResponse>;
-  governanceSubmitZkBallot(
-    payload: ToriiGovernanceZkBallotRequest,
+  governanceSubmitParliamentBallot(
+    payload: ToriiGovernanceParliamentBallotRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiGovernanceBallotResponse>;
   governanceSubmitZkBallotV1(
@@ -11432,14 +11342,16 @@ export declare class ToriiClient {
     options?: SumeragiEvidenceListOptions,
   ): Promise<SumeragiEvidenceListResponse>;
   getSumeragiEvidenceCount(): Promise<SumeragiEvidenceCountResponse>;
-  submitSumeragiEvidence(
-    request: SumeragiEvidenceSubmitRequest,
-  ): Promise<SumeragiEvidenceSubmitResponse>;
   getMetrics(options: { asText: true; signal?: AbortSignal }): Promise<string>;
   getMetrics(options?: {
     asText?: boolean;
     signal?: AbortSignal;
   }): Promise<unknown>;
+  /** Exact canonical result-bearing SignedBlockWire at a finalized height. */
+  getLedgerExecutedBlockWire(
+    height: number | string | bigint,
+    options?: { signal?: AbortSignal },
+  ): Promise<Buffer>;
   getBlock(
     height: number | string | bigint,
     options?: { signal?: AbortSignal },
@@ -11969,7 +11881,11 @@ export const PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Readonly<{
   INVALID_CATALOG: 8;
 }>;
 export function isPrivacyNativeAvailable(): boolean;
-/** Return this binary's local compiled-profile catalog; use Torii for live activation/readiness. */
+/**
+ * Return this native binary's local compiled-profile catalog. This is build
+ * metadata only; network readiness requires `getPrivacyCapabilitiesV1` and a
+ * fresh committed Torii response.
+ */
 export function privacyCompiledProfileCatalogV1(): Buffer;
 
 export interface Sm2Fixture {
@@ -12007,13 +11923,18 @@ export function encodeQuantityNoritoValue(
   value: QuantityInput,
   context?: string,
 ): Uint8Array;
+/** An ordinary owned byte array; Node `Buffer` compatibility aliases are excluded. */
+export interface CancelAssetLockV1Archive extends Uint8Array<ArrayBuffer> {
+  readonly write?: never;
+}
+
 /** Encode the exact schema-bound bare `CancelAssetLock` V1 archive. */
 export function encodeCancelAssetLockV1(
   value: Readonly<CancelAssetLockV1>,
-): Buffer;
+): CancelAssetLockV1Archive;
 /** Decode an exact schema-bound bare `CancelAssetLock` V1 archive. */
 export function decodeCancelAssetLockV1(
-  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  bytes: CancelAssetLockV1Archive,
 ): CancelAssetLockV1;
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
 export function noritoDecodeBlockProofs(
@@ -12022,10 +11943,15 @@ export function noritoDecodeBlockProofs(
 export function verifyBlockMerkleProof(
   leaf: string | ArrayBufferView | ArrayBuffer | Buffer,
   proof: ToriiBlockMerkleProof,
-  root: string | ArrayBufferView | ArrayBuffer | Buffer,
+  commitment: ToriiBlockMerkleCommitment,
 ): boolean;
+/**
+ * Perform pure local Merkle consistency checks against a caller-authenticated
+ * anchor. This function does not authenticate the anchor or verify finality.
+ */
 export function verifyBlockProofs(
   proofs: ToriiBlockProofs,
+  trustedAnchor: ToriiBlockProofTrustedAnchor,
 ): ToriiBlockProofVerification;
 /** Encode a canonical compact `InstructionBox` archive for a transaction. */
 export function noritoEncodeInstructionBoxArchive(
@@ -12638,9 +12564,6 @@ export function buildPrecommitTriggerAction(
 export function buildCreateKaigiTransaction(
   input: CreateKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildPrivateKaigiFeeSpend(
-  input: PrivateKaigiFeeSpendInput,
-): PrivateKaigiFeeSpendResult;
 export function buildConfidentialTransferProofV2(input: {
   chainId: string;
   assetDefinitionId: string;
@@ -12672,24 +12595,15 @@ export function buildConfidentialUnshieldProofV3(input: {
   rootHintHex: string;
   verifyingKey: Record<string, unknown>;
 }): ConfidentialUnshieldProofResultV3;
-export function buildPrivateCreateKaigiTransaction(
-  input: PrivateCreateKaigiTransactionInput,
-): PrivateKaigiEntrypointResult;
 export function buildJoinKaigiTransaction(
   input: JoinKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildPrivateJoinKaigiTransaction(
-  input: PrivateJoinKaigiTransactionInput,
-): PrivateKaigiEntrypointResult;
 export function buildLeaveKaigiTransaction(
   input: LeaveKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildEndKaigiTransaction(
   input: EndKaigiTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
-export function buildPrivateEndKaigiTransaction(
-  input: PrivateEndKaigiTransactionInput,
-): PrivateKaigiEntrypointResult;
 export function buildRecordKaigiUsageTransaction(
   input: RecordKaigiUsageTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
@@ -12737,15 +12651,6 @@ export function buildScheduleConfidentialPolicyTransitionTransaction(
 ): SignedTransactionResult;
 export function buildCancelConfidentialPolicyTransitionTransaction(
   input: CancelConfidentialPolicyTransitionTransactionInput & FeePaymentRequired,
-): SignedTransactionResult;
-export function buildShieldTransaction(
-  input: ShieldTransactionInput & FeePaymentRequired,
-): SignedTransactionResult;
-export function buildZkTransferTransaction(
-  input: ZkTransferTransactionInput & FeePaymentRequired,
-): SignedTransactionResult;
-export function buildUnshieldTransaction(
-  input: UnshieldTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildCreateElectionTransaction(
   input: CreateElectionTransactionInput & FeePaymentRequired,
@@ -13019,8 +12924,10 @@ export function buildRegisterAssetDefinitionInstruction(options: {
   mintable?: string;
   mintOnce?: boolean;
   metadata?: object | null;
-  balanceScopePolicy?: string;
+  balanceScopePolicy: string;
   balance_scope_policy?: string;
+  /** Immutable ownership intent; null means intentionally unowned global. */
+  owningDomain: string | null;
   confidentialPolicy?: object;
   confidential_policy?: object;
 }): object;
@@ -13417,16 +13324,6 @@ export function buildScheduleConfidentialPolicyTransitionInstruction(
 
 export function buildCancelConfidentialPolicyTransitionInstruction(
   input: CancelConfidentialPolicyTransitionInstructionInput,
-): object;
-
-export function buildShieldInstruction(input: ShieldInstructionInput): object;
-
-export function buildZkTransferInstruction(
-  input: ZkTransferInstructionInput,
-): object;
-
-export function buildUnshieldInstruction(
-  input: UnshieldInstructionInput,
 ): object;
 
 export function buildCreateElectionInstruction(
@@ -13843,5 +13740,4 @@ export const NumericV1: {
 
 export * from "./nexus-app.js";
 export * from "./transaction-codec.js";
-export * from "./ivm-artifact-admission-wasm.js";
 export * from "./smart-contract-deployment.js";

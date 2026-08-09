@@ -1,5 +1,4 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { chacha20orig } from "@noble/ciphers/chacha";
 
 import {
@@ -61,13 +60,28 @@ import {
   normalizeNodeCapabilitiesResponse,
 } from "./toriiCompatibility.js";
 import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
-import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
+import {
+  parseStrictLosslessIntegerJson,
+  stringifyStrictLosslessIntegerJson,
+} from "./strictLosslessJson.js";
+import {
+  SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
+  SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
+  parseSumeragiDiagnosticsPayload,
+  parseSumeragiStatusPayload,
+} from "./sumeragiTyped.js";
+export { __sumeragiNativeAmxTestHelpers } from "./sumeragiTyped.js";
 import {
   buildCanonicalRequestHeaders,
   requireCanonicalAuthAccount,
 } from "./canonicalRequest.js";
 import { blake2b256 } from "./blake2b.js";
 import { decodeCanonicalVerifyingKeyTransactionPayload } from "./transactionCodec.js";
+import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
+import {
+  createToriiGovernanceNormalizers,
+  VERIFYING_KEY_PRIVATE_KEY_FIELDS,
+} from "./toriiGovernanceNormalizers.js";
 import {
   KotodamaQuantity,
   NumericV1,
@@ -114,9 +128,20 @@ import {
   normalizeValidationFeeLedgerBindingV1,
   verifyValidationFeeCurrentPolicyProofV1,
 } from "./validationFeeConsensus.js";
-import { assertCanonicalBls12381G1Compressed } from "./bls12381G1.js";
+import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
+import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
+import { createVpnSchema } from "./vpnSchema.js";
 
 const DEFAULT_PAGE_SIZE = 100;
+const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
+const EXPLORER_CURSOR_MAX_LIMIT = 100;
+const EXPLORER_CURSOR_MAX_LENGTH = 1_424;
+const EXPLORER_CURSOR_PATTERN = /^[A-Za-z0-9_-]+$/u;
+const EXPLORER_CURSOR_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const SORAFS_POR_PAGE_DEFAULT_LIMIT = 100;
+const SORAFS_POR_PAGE_MAX_LIMIT = 1_000;
+const SORAFS_POR_PAGE_DEFAULT_MAX_BYTES = 4_194_304;
+const SORAFS_POR_CURSOR_MAX_LENGTH = 256;
 const APPLICATION_JSON = "application/json";
 const APPLICATION_NORITO = "application/x-norito";
 const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: APPLICATION_JSON });
@@ -149,11 +174,13 @@ const IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES = 16 * 1024;
 const IVM_PROVE_JOB_STATUS_JSON_MAX_BYTES = 32 * 1024 * 1024;
 const IVM_PROOF_MAX_BYTES = 8 * 1024 * 1024;
 const VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES = 16 * 1024 * 1024;
+const VERIFYING_KEY_CLIENT_URL = new URL(
+  "./verifyingKeyClient.js",
+  import.meta.url,
+).href;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
 const PIPELINE_STATUS_JSON_MAX_BYTES = 1024 * 1024;
-const SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES = 1024 * 1024;
-const SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const SORAFS_REPUTATION_JSON_MAX_BYTES = 4 * 1024 * 1024;
 const SORAFS_REPUTATION_EVENT_DEFAULT_LIMIT_V1 = 50;
 const SORAFS_HEDGING_BILLING_JSON_MAX_BYTES = 1024 * 1024;
@@ -442,9 +469,22 @@ const EVIDENCE_KIND_VALUES = new Set([
   "InvalidQc",
   "InvalidProposal",
   "Censorship",
+  "SumeragiV2Equivocation",
 ]);
 
 const EVIDENCE_PHASE_VALUES = new Set(["Prepare", "Commit", "NewView"]);
+const EVIDENCE_EQUIVOCATION_CLASS_VALUES = new Set([
+  "proposal",
+  "phase_vote",
+  "timeout_vote",
+]);
+const EVIDENCE_BASE_FIELDS = Object.freeze([
+  "kind",
+  "recorded_height",
+  "recorded_view",
+  "recorded_ms",
+  "consensus_admitted_height",
+]);
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
 const KAIGI_EVENT_KIND_VALUES = new Set(["registration", "health"]);
@@ -681,14 +721,6 @@ const KAIGI_CALL_EVENT_KIND_VALUES = new Set(["roster_updated", "ended"]);
 const SORAFS_REPLICATION_STATUS_VALUES = new Set(["pending", "completed", "expired"]);
 const SORAFS_PIN_STATUS_VALUES = new Set(["pending", "approved", "retired"]);
 const UAID_MANIFEST_STATUS_VALUES = new Set(["Pending", "Active", "Expired", "Revoked"]);
-const VERIFYING_KEY_STATUS_VALUES = new Set([
-  "Proposed",
-  "Active",
-  "Withdrawn",
-]);
-const VERIFYING_KEY_STATUS_ALIASES = new Map(
-  [...VERIFYING_KEY_STATUS_VALUES].map((value) => [value.toLowerCase(), value]),
-);
 const SUBSCRIPTION_STATUS_VALUES = new Set([
   "active",
   "paused",
@@ -1140,41 +1172,25 @@ const TRANSACTION_QUERY_OPTION_KEYS = [
   "untilTimestampMs",
 ];
 const EXPLORER_NFT_LIST_OPTION_KEYS = new Set([
-  "page",
-  "perPage",
   "limit",
-  "offset",
+  "cursor",
   "ownedBy",
-  "owned_by",
   "domainId",
-  "domain_id",
-  "domain",
-  "pageSize",
-  "maxItems",
   "signal",
 ]);
 const EXPLORER_NFT_ITERATOR_OPTION_KEYS = new Set([
   ...EXPLORER_NFT_LIST_OPTION_KEYS,
-  "pageSize",
   "maxItems",
 ]);
 const EXPLORER_RWA_LIST_OPTION_KEYS = new Set([
-  "page",
-  "perPage",
   "limit",
-  "offset",
+  "cursor",
   "ownedBy",
-  "owned_by",
   "domainId",
-  "domain_id",
-  "domain",
-  "pageSize",
-  "maxItems",
   "signal",
 ]);
 const EXPLORER_RWA_ITERATOR_OPTION_KEYS = new Set([
   ...EXPLORER_RWA_LIST_OPTION_KEYS,
-  "pageSize",
   "maxItems",
 ]);
 const UPLOAD_ATTACHMENT_OPTION_KEYS = new Set(["contentType", "content_type"]);
@@ -1794,13 +1810,6 @@ export class ToriiClient {
     return normalizeOfflineStatus(payload);
   }
 
-  /**
-   * @deprecated Use getOfflineCapability(). The asset selector is ignored.
-   */
-  getKagemushaReadinessV4(_assetDefinitionId, options = {}) {
-    return this.getOfflineCapability(options);
-  }
-
   /** Submit an externally produced manifest-V4 top-up Norito archive. */
   submitKagemushaTopUpV4(request, options = {}) {
     return this._submitKagemushaCommandV4(
@@ -2127,7 +2136,7 @@ export class ToriiClient {
   /**
    * List explorer NFTs with optional owner/domain filters (`GET /v1/explorer/nfts`).
    * @param {ExplorerNftListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerPaginationMeta, items: Array<{id: string, ownedBy: string, metadata: unknown}>}>}
+   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<{id: string, ownedBy: string, metadata: unknown}>}>}
    */
   async listExplorerNfts(options = {}) {
     const normalized = ToriiClient._normalizeExplorerNftListOptions(
@@ -2135,9 +2144,11 @@ export class ToriiClient {
       "listExplorerNfts options",
     );
     const params = {
-      page: normalized.page,
-      per_page: normalized.perPage,
+      limit: normalized.limit,
     };
+    if (normalized.cursor !== undefined) {
+      params.cursor = normalized.cursor;
+    }
     if (normalized.ownedBy !== undefined) {
       params.owned_by = normalized.ownedBy;
     }
@@ -2170,18 +2181,20 @@ export class ToriiClient {
     const { maxItems, ...listOptions } = normalized;
     const self = this;
     return (async function* iterator() {
-      let page = normalized.page;
+      let cursor = normalized.cursor;
       let remaining = maxItems;
+      const seenCursors = new Set();
+      if (cursor !== undefined) seenCursors.add(cursor);
       while (true) {
+        const limit = remaining === null
+          ? normalized.limit
+          : Math.min(normalized.limit, remaining);
         const pageResult = await self.listExplorerNfts({
           ...listOptions,
-          page,
-          perPage: normalized.perPage,
+          cursor,
+          limit,
         });
         const items = Array.isArray(pageResult?.items) ? pageResult.items : [];
-        if (items.length === 0) {
-          return;
-        }
         for (const item of items) {
           yield item;
           if (remaining !== null) {
@@ -2192,13 +2205,14 @@ export class ToriiClient {
           }
         }
         const { pagination } = pageResult;
-        if (
-          (pagination && pagination.totalPages && page >= pagination.totalPages) ||
-          items.length < normalized.perPage
-        ) {
+        if (!pagination.hasMore) {
           return;
         }
-        page += 1;
+        cursor = pagination.nextCursor;
+        if (seenCursors.has(cursor)) {
+          throw new Error("explorer nfts endpoint repeated a cursor");
+        }
+        seenCursors.add(cursor);
       }
     })();
   }
@@ -2207,7 +2221,7 @@ export class ToriiClient {
    * List NFTs owned by an account (`GET /v1/explorer/nfts?owned_by=...`).
    * @param {string} accountId
    * @param {ExplorerNftListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerPaginationMeta, items: Array<{id: string, ownedBy: string, metadata: unknown}>}>}
+   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<{id: string, ownedBy: string, metadata: unknown}>}>}
    */
   async listAccountNfts(accountId, options = {}) {
     const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
@@ -2284,7 +2298,7 @@ export class ToriiClient {
   /**
    * List explorer RWAs with optional owner/domain filters (`GET /v1/explorer/rwas`).
    * @param {ExplorerRwaListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerPaginationMeta, items: Array<object>}>}
+   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<object>}>}
    */
   async listExplorerRwas(options = {}) {
     const normalized = ToriiClient._normalizeExplorerRwaListOptions(
@@ -2292,9 +2306,11 @@ export class ToriiClient {
       "listExplorerRwas options",
     );
     const params = {
-      page: normalized.page,
-      per_page: normalized.perPage,
+      limit: normalized.limit,
     };
+    if (normalized.cursor !== undefined) {
+      params.cursor = normalized.cursor;
+    }
     if (normalized.ownedBy !== undefined) {
       params.owned_by = normalized.ownedBy;
     }
@@ -2352,18 +2368,20 @@ export class ToriiClient {
     const { maxItems, ...listOptions } = normalized;
     const self = this;
     return (async function* iterator() {
-      let page = normalized.page;
+      let cursor = normalized.cursor;
       let remaining = maxItems;
+      const seenCursors = new Set();
+      if (cursor !== undefined) seenCursors.add(cursor);
       while (true) {
+        const limit = remaining === null
+          ? normalized.limit
+          : Math.min(normalized.limit, remaining);
         const pageResult = await self.listExplorerRwas({
           ...listOptions,
-          page,
-          perPage: normalized.perPage,
+          cursor,
+          limit,
         });
         const items = Array.isArray(pageResult?.items) ? pageResult.items : [];
-        if (items.length === 0) {
-          return;
-        }
         for (const item of items) {
           yield item;
           if (remaining !== null) {
@@ -2374,13 +2392,14 @@ export class ToriiClient {
           }
         }
         const { pagination } = pageResult;
-        if (
-          (pagination && pagination.totalPages && page >= pagination.totalPages) ||
-          items.length < normalized.perPage
-        ) {
+        if (!pagination.hasMore) {
           return;
         }
-        page += 1;
+        cursor = pagination.nextCursor;
+        if (seenCursors.has(cursor)) {
+          throw new Error("explorer rwas endpoint repeated a cursor");
+        }
+        seenCursors.add(cursor);
       }
     })();
   }
@@ -2389,7 +2408,7 @@ export class ToriiClient {
    * List explorer RWAs owned by an account (`GET /v1/explorer/rwas?owned_by=...`).
    * @param {string} accountId
    * @param {ExplorerRwaListOptions} [options]
-   * @returns {Promise<{pagination: ToriiExplorerPaginationMeta, items: Array<object>}>}
+   * @returns {Promise<{pagination: ToriiExplorerCursorMeta, items: Array<object>}>}
    */
   async listAccountRwas(accountId, options = {}) {
     const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
@@ -2897,7 +2916,8 @@ export class ToriiClient {
    * @returns {Promise<unknown>}
    */
   async listVerifyingKeys(options = {}) {
-    const { signal, params } = buildVerifyingKeyListQuery(options);
+    const verifyingKeys = await loadVerifyingKeyClient();
+    const { signal, params } = verifyingKeys.listQuery(options);
     const response = await this._request("GET", "/v1/zk/vk", {
       headers: JSON_ACCEPT_HEADERS,
       params,
@@ -2914,7 +2934,8 @@ export class ToriiClient {
    */
   async listVerifyingKeysTyped(options = {}) {
     const payload = await this.listVerifyingKeys(options);
-    return normalizeVerifyingKeyListPayload(payload);
+    const verifyingKeys = await loadVerifyingKeyClient();
+    return verifyingKeys.list(payload);
   }
 
   /**
@@ -2942,11 +2963,15 @@ export class ToriiClient {
    * @returns {Promise<unknown>}
    */
   async getVerifyingKey(backend, name, options = {}) {
+    const verifyingKeys = await loadVerifyingKeyClient();
     const normalizedBackend = encodeURIComponent(
-      assertProductionVerifyBackendLabel(backend, "getVerifyingKey backend"),
+      verifyingKeys.backend(
+        backend,
+        "getVerifyingKey backend",
+      ),
     );
     const normalizedName = encodeURIComponent(
-      normalizeVerifyingKeyName(name, "getVerifyingKey name"),
+      verifyingKeys.name(name, "getVerifyingKey name"),
     );
     const { signal } = normalizeSignalOnlyOption(options, "getVerifyingKey");
     const response = await this._request(
@@ -2970,7 +2995,8 @@ export class ToriiClient {
    */
   async getVerifyingKeyTyped(backend, name, options = {}) {
     const payload = await this.getVerifyingKey(backend, name, options);
-    return normalizeVerifyingKeyDetail(payload);
+    const verifyingKeys = await loadVerifyingKeyClient();
+    return verifyingKeys.detail(payload);
   }
 
   /**
@@ -2981,8 +3007,9 @@ export class ToriiClient {
    * @returns {Promise<ToriiVerifyingKeyTransactionDraft>}
    */
   async registerVerifyingKey(payload, options = {}) {
-    const normalizedPayload = normalizeVerifyingKeyRegisterPayload(payload);
-    const signingContext = requireVerifyingKeySigningContext(
+    const verifyingKeys = await loadVerifyingKeyClient();
+    const normalizedPayload = verifyingKeys.register(payload);
+    const signingContext = verifyingKeys.signingContext(
       this._localSigningContext,
       "registerVerifyingKey",
     );
@@ -2997,7 +3024,7 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    return normalizeVerifyingKeyTransactionDraft(
+    return verifyingKeys.draft(
       await this._maybeJson(response),
       "registerVerifyingKey response",
       {
@@ -3016,8 +3043,9 @@ export class ToriiClient {
    * @returns {Promise<ToriiVerifyingKeyTransactionDraft>}
    */
   async updateVerifyingKey(payload, options = {}) {
-    const normalizedPayload = normalizeVerifyingKeyUpdatePayload(payload);
-    const signingContext = requireVerifyingKeySigningContext(
+    const verifyingKeys = await loadVerifyingKeyClient();
+    const normalizedPayload = verifyingKeys.update(payload);
+    const signingContext = verifyingKeys.signingContext(
       this._localSigningContext,
       "updateVerifyingKey",
     );
@@ -3029,7 +3057,7 @@ export class ToriiClient {
       signal,
     });
     await this._expectStatus(response, [200]);
-    return normalizeVerifyingKeyTransactionDraft(
+    return verifyingKeys.draft(
       await this._maybeJson(response),
       "updateVerifyingKey response",
       {
@@ -6992,6 +7020,14 @@ export class ToriiClient {
     return normalizeExplorerAccountQrResponse(payload, "explorer account qr response");
   }
 
+  async _vpnRequest(method, path, options = {}) {
+    const protocol = new URL(this._baseUrl).protocol.toLowerCase();
+    if (protocol !== "https:") {
+      throw new Error("Sora VPN requests require an HTTPS Torii base URL");
+    }
+    return this._request(method, path, { ...options, redirect: "error" });
+  }
+
   /**
    * Fetch the public Sora VPN profile (`GET /v1/vpn/profile`).
    * Returns null when the control plane is unavailable.
@@ -7000,7 +7036,7 @@ export class ToriiClient {
    */
   async getVpnProfile(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getVpnProfile");
-    const response = await this._request("GET", "/v1/vpn/profile", {
+    const response = await this._vpnRequest("GET", "/v1/vpn/profile", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
     });
@@ -7017,8 +7053,9 @@ export class ToriiClient {
 
   /**
    * Create a signed Sora VPN quote (`POST /v1/vpn/quotes`).
-   * The returned `txInstructions` contain the native `OpenVpnLeaseEscrow` instruction
-   * that the wallet must submit before creating the session.
+   * The returned required `openLeaseInstruction` is the native
+   * `OpenVpnLeaseEscrow` instruction that the wallet must submit before creating
+   * the session.
    * @param {{exitClass?: string, meteringPublicKeyHex: string}} request
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ToriiVpnQuote>}
@@ -7028,7 +7065,7 @@ export class ToriiClient {
       options,
       "createVpnQuote",
     );
-    const response = await this._request("POST", "/v1/vpn/quotes", {
+    const response = await this._vpnRequest("POST", "/v1/vpn/quotes", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(normalizeVpnQuoteCreateRequest(request)),
       signal,
@@ -7054,7 +7091,7 @@ export class ToriiClient {
       options,
       "createVpnSession",
     );
-    const response = await this._request("POST", "/v1/vpn/sessions", {
+    const response = await this._vpnRequest("POST", "/v1/vpn/sessions", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(normalizeVpnSessionCreateRequest(request)),
       signal,
@@ -7081,7 +7118,7 @@ export class ToriiClient {
       options,
       "getVpnSession",
     );
-    const response = await this._request(
+    const response = await this._vpnRequest(
       "GET",
       `/v1/vpn/sessions/${encodeURIComponent(normalizedSessionId)}`,
       {
@@ -7114,7 +7151,7 @@ export class ToriiClient {
       options,
       "deleteVpnSession",
     );
-    const response = await this._request(
+    const response = await this._vpnRequest(
       "DELETE",
       `/v1/vpn/sessions/${encodeURIComponent(normalizedSessionId)}`,
       {
@@ -7146,7 +7183,7 @@ export class ToriiClient {
       options,
       "submitVpnReceipt",
     );
-    const response = await this._request("POST", "/v1/vpn/receipts", {
+    const response = await this._vpnRequest("POST", "/v1/vpn/receipts", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(normalizeVpnReceiptSubmitRequest(request)),
       signal,
@@ -7170,7 +7207,7 @@ export class ToriiClient {
       options,
       "listVpnReceipts",
     );
-    const response = await this._request("GET", "/v1/vpn/receipts", {
+    const response = await this._vpnRequest("GET", "/v1/vpn/receipts", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
       canonicalAuth,
@@ -7258,7 +7295,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceProposal(proposalId, options) {
-    const normalized = requireNonEmptyString(proposalId, "proposalId");
+    const normalized = requireExactLowerHex32String(proposalId, "proposalId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceProposal");
     const response = await this._request(
       "GET",
@@ -7298,7 +7335,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceReferendum(referendumId, options) {
-    const normalized = requireNonEmptyString(referendumId, "referendumId");
+    const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceReferendum");
     const response = await this._request(
       "GET",
@@ -7338,7 +7375,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceTally(referendumId, options) {
-    const normalized = requireNonEmptyString(referendumId, "referendumId");
+    const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceTally");
     const response = await this._request(
       "GET",
@@ -7365,7 +7402,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiGovernanceTallyResult>}
    */
   async getGovernanceTallyTyped(referendumId, options) {
-    const normalizedId = requireNonEmptyString(referendumId, "referendumId");
+    const normalizedId = requireGovernanceSelectorString(referendumId, "referendumId");
     const payload = await this.getGovernanceTally(normalizedId, options);
     if (!payload) {
       return createEmptyGovernanceTallyResult(normalizedId);
@@ -7380,7 +7417,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceLocks(referendumId, options) {
-    const normalized = requireNonEmptyString(referendumId, "referendumId");
+    const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceLocks");
     const response = await this._request(
       "GET",
@@ -7407,7 +7444,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiGovernanceLocksResult>}
    */
   async getGovernanceLocksTyped(referendumId, options) {
-    const normalizedId = requireNonEmptyString(referendumId, "referendumId");
+    const normalizedId = requireGovernanceSelectorString(referendumId, "referendumId");
     const payload = await this.getGovernanceLocks(normalizedId, options);
     if (!payload) {
       return createEmptyGovernanceLocksResult(normalizedId);
@@ -7470,7 +7507,10 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown>>}
    */
   async draftMinistryAgendaProposal(payload, options = {}) {
-    const body = JSON.stringify(normalizeMinistryAgendaProposalDraftRequest(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeMinistryAgendaProposalDraftRequest(payload),
+      "draftMinistryAgendaProposal request",
+    );
     const { signal } = normalizeSignalOnlyOption(
       options,
       "draftMinistryAgendaProposal",
@@ -7524,11 +7564,14 @@ export class ToriiClient {
 
   /**
    * Finalise a referendum (`POST /v1/gov/finalize`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceFinalizeRequest} payload
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async governanceFinalizeReferendum(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceFinalizePayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceFinalizePayload(payload),
+      "governance finalize request",
+    );
     const { signal } = normalizeSignalOnlyOption(
       options,
       "governanceFinalizeReferendum",
@@ -7555,11 +7598,14 @@ export class ToriiClient {
 
   /**
    * Enact a governance proposal (`POST /v1/gov/enact`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceEnactRequest} payload
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async governanceEnactProposal(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceEnactPayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceEnactPayload(payload),
+      "governance enact request",
+    );
     const { signal } = normalizeSignalOnlyOption(options, "governanceEnactProposal");
     const response = await this._request("POST", "/v1/gov/enact", {
       headers: JSON_REQUEST_HEADERS,
@@ -7583,7 +7629,7 @@ export class ToriiClient {
 
   /**
    * Draft a governance deployment proposal (`POST /v1/gov/proposals/deploy-contract`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceDeployContractProposalRequest} payload
    * @returns {Promise<ToriiGovernanceDraftResponse>}
    */
   async governanceProposeDeployContract(payload, options = {}) {
@@ -7591,7 +7637,10 @@ export class ToriiClient {
       options,
       "governanceProposeDeployContract",
     );
-    const body = JSON.stringify(normalizeGovernanceDeployContractProposalPayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceDeployContractProposalPayload(payload),
+      "governance deploy-contract request",
+    );
     const response = await this._request("POST", "/v1/gov/proposals/deploy-contract", {
       headers: JSON_REQUEST_HEADERS,
       body,
@@ -7607,11 +7656,14 @@ export class ToriiClient {
 
   /**
    * Submit a plain governance ballot (`POST /v1/gov/ballots/plain`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernancePlainBallotRequest} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
    */
   async governanceSubmitPlainBallot(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernancePlainBallotPayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernancePlainBallotPayload(payload),
+      "governance plain-ballot request",
+    );
     const { signal } = normalizeSignalOnlyOption(
       options,
       "governanceSubmitPlainBallot",
@@ -7630,14 +7682,20 @@ export class ToriiClient {
   }
 
   /**
-   * Submit a ZK governance ballot (`POST /v1/gov/ballots/zk`).
-   * @param {Record<string, unknown>} payload
+   * Submit an equal Parliament stage ballot (`POST /v1/gov/parliament/ballots`).
+   * @param {ToriiGovernanceParliamentBallotRequest} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
    */
-  async governanceSubmitZkBallot(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceZkBallotPayload(payload));
-    const { signal } = normalizeSignalOnlyOption(options, "governanceSubmitZkBallot");
-    const response = await this._request("POST", "/v1/gov/ballots/zk", {
+  async governanceSubmitParliamentBallot(payload, options = {}) {
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceParliamentBallotPayload(payload),
+      "governance Parliament-ballot request",
+    );
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "governanceSubmitParliamentBallot",
+    );
+    const response = await this._request("POST", "/v1/gov/parliament/ballots", {
       headers: JSON_REQUEST_HEADERS,
       body,
       signal,
@@ -7645,18 +7703,24 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const draft = await this._maybeJson(response);
     if (!draft) {
-      throw new Error("governance zk ballot endpoint returned no payload");
+      throw new Error("governance Parliament ballot endpoint returned no payload");
     }
-    return normalizeGovernanceBallotResponse(draft, "governance zk ballot response");
+    return normalizeGovernanceBallotResponse(
+      draft,
+      "governance Parliament ballot response",
+    );
   }
 
   /**
    * Submit a ZK ballot using the v1 envelope DTO (`POST /v1/gov/ballots/zk-v1`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceZkBallotV1Request} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
    */
   async governanceSubmitZkBallotV1(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceZkBallotV1Payload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceZkBallotV1Payload(payload),
+      "governance ZK-v1 ballot request",
+    );
     const { signal } = normalizeSignalOnlyOption(options, "governanceSubmitZkBallotV1");
     const response = await this._request("POST", "/v1/gov/ballots/zk-v1", {
       headers: JSON_REQUEST_HEADERS,
@@ -7673,11 +7737,14 @@ export class ToriiClient {
 
   /**
    * Submit a BallotProof payload (`POST /v1/gov/ballots/zk-v1/ballot-proof`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceZkBallotProofRequest} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
    */
   async governanceSubmitZkBallotProofV1(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceZkBallotProofPayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceZkBallotProofPayload(payload),
+      "governance BallotProof request",
+    );
     const { signal } = normalizeSignalOnlyOption(
       options,
       "governanceSubmitZkBallotProofV1",
@@ -8104,43 +8171,6 @@ export class ToriiClient {
   }
 
   /**
-   * Submit consensus evidence (`POST /v1/sumeragi/evidence/submit`).
-   * @param {SumeragiEvidenceSubmitRequest} request
-   * @returns {Promise<SumeragiEvidenceSubmitResponse>}
-   */
-  async submitSumeragiEvidence(request) {
-    const record = ensureRecord(request, "request");
-    const evidenceHex = record.evidence_hex;
-    if (typeof evidenceHex !== "string" || evidenceHex.trim().length === 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_HEX,
-        "request.evidence_hex must be a non-empty hex string",
-        "submitSumeragiEvidence.request.evidence_hex",
-      );
-    }
-    const headers = {
-      "Content-Type": APPLICATION_JSON,
-      Accept: APPLICATION_JSON,
-    };
-    if (record.apiToken) {
-      headers["X-API-Token"] = String(record.apiToken);
-    }
-    const response = await this._request("POST", "/v1/sumeragi/evidence/submit", {
-      headers,
-      body: JSON.stringify({ evidence_hex: evidenceHex }),
-    });
-    await this._expectStatus(response, [202]);
-    const payload = ensureRecord(
-      await this._maybeJson(response),
-      "sumeragi evidence submit response",
-    );
-    return {
-      status: String(payload.status ?? ""),
-      kind: String(payload.kind ?? ""),
-    };
-  }
-
-  /**
    * Fetch metrics (`GET /v1/metrics`). When `asText` is true the raw text payload is returned.
    * @param {{asText?: boolean, signal?: AbortSignal}} [options]
    * @returns {Promise<unknown>}
@@ -8178,6 +8208,65 @@ export class ToriiClient {
       return buffer.toString("utf8");
     }
     return this._maybeJson(response);
+  }
+
+  /**
+   * Fetch the exact canonical result-bearing SignedBlockWire at a finalized height.
+   * @param {number | string | bigint} height
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<Buffer>}
+   */
+  async getLedgerExecutedBlockWire(height, options = {}) {
+    const normalizedHeight = normalizeUint64DecimalString(
+      height,
+      "getLedgerExecutedBlockWire.height",
+      { allowZero: false },
+    );
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "getLedgerExecutedBlockWire",
+    );
+    const context = "executed block wire endpoint";
+    const response = await this._request(
+      "GET",
+      `/v1/ledger/block/${normalizedHeight}`,
+      {
+        headers: { Accept: APPLICATION_NORITO },
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    let contentType;
+    try {
+      contentType = this._getHeader(response, "content-type");
+    } catch (error) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected an unreadable Content-Type header`,
+      );
+      throw error;
+    }
+    if (contentType !== APPLICATION_NORITO) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected a non-Norito response body`,
+      );
+      throw new TypeError(`${context} must use the application/x-norito media type`);
+    }
+    const declaredLength = this._getHeader(response, "content-length");
+    const { bytes } = await this._readBoundedResponseBytes(
+      response,
+      AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+      context,
+      { signal },
+    );
+    if (declaredLength !== null && Number(declaredLength) !== bytes.byteLength) {
+      throw new TypeError(`${context} Content-Length does not match the response body`);
+    }
+    if (bytes.byteLength === 0) {
+      throw new TypeError(`${context} must not be empty`);
+    }
+    return Buffer.from(bytes);
   }
 
   /**
@@ -8988,7 +9077,7 @@ export class ToriiClient {
    */
   async deriveIvmProved(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "deriveIvmProved");
-    const payload = normalizeZkIvmExecutionRequest(request, {
+    const payload = await normalizeZkIvmExecutionRequest(request, {
       context: "deriveIvmProved",
       includeProved: false,
     });
@@ -9025,7 +9114,7 @@ export class ToriiClient {
    */
   async startIvmProve(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "startIvmProve");
-    const payload = normalizeZkIvmExecutionRequest(request, {
+    const payload = await normalizeZkIvmExecutionRequest(request, {
       context: "startIvmProve",
       includeProved: true,
     });
@@ -9198,7 +9287,7 @@ export class ToriiClient {
               "proveIvmAndWait options.timeoutMs",
               { allowZero: true },
             );
-    const normalizedRequest = normalizeZkIvmExecutionRequest(request, {
+    const normalizedRequest = await normalizeZkIvmExecutionRequest(request, {
       context: "proveIvmAndWait",
       includeProved: true,
     });
@@ -12431,31 +12520,20 @@ export class ToriiClient {
       EXPLORER_NFT_LIST_OPTION_KEYS,
     );
     const { signal } = normalizeSignalOption(normalized, context);
-    const perPageSource =
-      normalized.perPage ?? normalized.limit ?? normalized.per_page ?? normalized.limit;
-    const perPage = ToriiClient._normalizeUnsignedInteger(
-      perPageSource ?? DEFAULT_PAGE_SIZE,
-      `${context}.perPage`,
-      { allowZero: false },
+    const limit = ToriiClient._normalizeUnsignedInteger(
+      normalized.limit ?? EXPLORER_CURSOR_DEFAULT_LIMIT,
+      `${context}.limit`,
+      { allowZero: false, max: EXPLORER_CURSOR_MAX_LIMIT },
     );
-    let pageValue = normalized.page ?? normalized.page_number ?? null;
-    if (pageValue !== null && pageValue !== undefined) {
-      pageValue = ToriiClient._normalizeUnsignedInteger(
-        pageValue,
-        `${context}.page`,
-        { allowZero: false },
-      );
-    } else {
-      const offset = ToriiClient._normalizeOffset(normalized.offset);
-      pageValue = Math.floor(offset / perPage) + 1;
-    }
-    const ownedByRaw = normalized.ownedBy ?? normalized.owned_by;
-    const domainRaw = normalized.domainId ?? normalized.domain_id ?? normalized.domain;
+    const ownedByRaw = normalized.ownedBy;
+    const domainRaw = normalized.domainId;
     const base = {
-      page: pageValue,
-      perPage,
+      limit,
       signal,
     };
+    if (normalized.cursor !== undefined && normalized.cursor !== null) {
+      base.cursor = normalizeExplorerCursorValue(normalized.cursor, `${context}.cursor`);
+    }
     if (ownedByRaw !== undefined && ownedByRaw !== null) {
       base.ownedBy = ToriiClient._normalizeAccountId(ownedByRaw, `${context}.ownedBy`);
     }
@@ -12474,16 +12552,9 @@ export class ToriiClient {
       context,
       EXPLORER_NFT_ITERATOR_OPTION_KEYS,
     );
-    const { pageSize, maxItems, ...listOptions } = normalized;
+    const { maxItems, ...listOptions } = normalized;
     const base = ToriiClient._normalizeExplorerNftListOptions(listOptions, context);
     const iterator = { ...base };
-    if (pageSize !== undefined && pageSize !== null) {
-      iterator.perPage = ToriiClient._normalizeUnsignedInteger(
-        pageSize,
-        `${context}.pageSize`,
-        { allowZero: false },
-      );
-    }
     if (maxItems !== undefined && maxItems !== null) {
       iterator.maxItems = ToriiClient._normalizeUnsignedInteger(
         maxItems,
@@ -12503,31 +12574,20 @@ export class ToriiClient {
       EXPLORER_RWA_LIST_OPTION_KEYS,
     );
     const { signal } = normalizeSignalOption(normalized, context);
-    const perPageSource =
-      normalized.perPage ?? normalized.limit ?? normalized.per_page ?? normalized.limit;
-    const perPage = ToriiClient._normalizeUnsignedInteger(
-      perPageSource ?? DEFAULT_PAGE_SIZE,
-      `${context}.perPage`,
-      { allowZero: false },
+    const limit = ToriiClient._normalizeUnsignedInteger(
+      normalized.limit ?? EXPLORER_CURSOR_DEFAULT_LIMIT,
+      `${context}.limit`,
+      { allowZero: false, max: EXPLORER_CURSOR_MAX_LIMIT },
     );
-    let pageValue = normalized.page ?? normalized.page_number ?? null;
-    if (pageValue !== null && pageValue !== undefined) {
-      pageValue = ToriiClient._normalizeUnsignedInteger(
-        pageValue,
-        `${context}.page`,
-        { allowZero: false },
-      );
-    } else {
-      const offset = ToriiClient._normalizeOffset(normalized.offset);
-      pageValue = Math.floor(offset / perPage) + 1;
-    }
-    const ownedByRaw = normalized.ownedBy ?? normalized.owned_by;
-    const domainRaw = normalized.domainId ?? normalized.domain_id ?? normalized.domain;
+    const ownedByRaw = normalized.ownedBy;
+    const domainRaw = normalized.domainId;
     const base = {
-      page: pageValue,
-      perPage,
+      limit,
       signal,
     };
+    if (normalized.cursor !== undefined && normalized.cursor !== null) {
+      base.cursor = normalizeExplorerCursorValue(normalized.cursor, `${context}.cursor`);
+    }
     if (ownedByRaw !== undefined && ownedByRaw !== null) {
       base.ownedBy = ToriiClient._normalizeAccountId(ownedByRaw, `${context}.ownedBy`);
     }
@@ -12546,16 +12606,9 @@ export class ToriiClient {
       context,
       EXPLORER_RWA_ITERATOR_OPTION_KEYS,
     );
-    const { pageSize, maxItems, ...listOptions } = normalized;
+    const { maxItems, ...listOptions } = normalized;
     const base = ToriiClient._normalizeExplorerRwaListOptions(listOptions, context);
     const iterator = { ...base };
-    if (pageSize !== undefined && pageSize !== null) {
-      iterator.perPage = ToriiClient._normalizeUnsignedInteger(
-        pageSize,
-        `${context}.pageSize`,
-        { allowZero: false },
-      );
-    }
     if (maxItems !== undefined && maxItems !== null) {
       iterator.maxItems = ToriiClient._normalizeUnsignedInteger(
         maxItems,
@@ -13718,6 +13771,46 @@ function normalizeUint64DecimalString(value, name, options = {}) {
   return integer.toString(10);
 }
 
+function normalizeGovernanceUint64Integer(value, name) {
+  let integer;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a lossless unsigned 64-bit integer`,
+        name,
+      );
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "string") {
+    const canonical = requireExactNonEmptyString(value, name);
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(canonical)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a canonical unsigned 64-bit integer`,
+        name,
+      );
+    }
+    integer = BigInt(canonical);
+  } else {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a lossless unsigned 64-bit integer`,
+      name,
+    );
+  }
+  if (integer < 0n || integer > MAX_UINT64_BIGINT) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be at most ${MAX_UINT64_BIGINT.toString(10)}`,
+      name,
+    );
+  }
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
+}
+
 function normalizeIsoSubmissionResponse(payload, context, options = {}) {
   const record = ToriiClient._requirePlainObject(payload, context);
   const rawMessageId = record.message_id;
@@ -14595,1498 +14688,6 @@ function parseLanePrivacyCommitment(entry, context) {
   return { id, scheme, merkle };
 }
 
-function parseSumeragiNexusFeeSchedule(value, context) {
-  const record = assertExactSumeragiRecord(
-    value,
-    [
-      "tx_bytes_len",
-      "instruction_count",
-      "gas_used",
-      "base_fee",
-      "per_byte_fee",
-      "per_instruction_fee",
-      "per_gas_unit_fee",
-    ],
-    context,
-  );
-  return Object.freeze({
-    tx_bytes_len: parseSumeragiUnsigned(record.tx_bytes_len, `${context}.tx_bytes_len`),
-    instruction_count: parseSumeragiUnsigned(
-      record.instruction_count,
-      `${context}.instruction_count`,
-    ),
-    gas_used: parseSumeragiUnsigned(record.gas_used, `${context}.gas_used`),
-    base_fee: parseSumeragiQuantity(record.base_fee, `${context}.base_fee`),
-    per_byte_fee: parseSumeragiQuantity(record.per_byte_fee, `${context}.per_byte_fee`),
-    per_instruction_fee: parseSumeragiQuantity(
-      record.per_instruction_fee,
-      `${context}.per_instruction_fee`,
-    ),
-    per_gas_unit_fee: parseSumeragiQuantity(
-      record.per_gas_unit_fee,
-      `${context}.per_gas_unit_fee`,
-    ),
-  });
-}
-
-function parseSumeragiNexusFeeReceipt(value, context) {
-  const record = assertExactSumeragiRecord(
-    value,
-    [
-      "version",
-      "source_id",
-      "dataspace_id",
-      "lane_id",
-      "block_height",
-      "payer_account_id",
-      "fee_asset_id",
-      "fee_amount",
-      "schedule",
-    ],
-    context,
-  );
-  const version = parseSumeragiUnsigned(record.version, `${context}.version`, { max: 0xffff });
-  if (version !== 1) {
-    throw new RangeError(`${context}.version must equal 1`);
-  }
-  return Object.freeze({
-    version,
-    source_id: parseSumeragiByte32(record.source_id, `${context}.source_id`),
-    dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`),
-    lane_id: parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
-      max: 0xffffffff,
-    }),
-    block_height: parseSumeragiUnsigned(record.block_height, `${context}.block_height`),
-    payer_account_id: requireExactNonEmptyString(
-      record.payer_account_id,
-      `${context}.payer_account_id`,
-    ),
-    fee_asset_id: requireExactNonEmptyString(record.fee_asset_id, `${context}.fee_asset_id`),
-    fee_amount: parseSumeragiQuantity(record.fee_amount, `${context}.fee_amount`),
-    schedule: parseSumeragiNexusFeeSchedule(record.schedule, `${context}.schedule`),
-  });
-}
-
-const MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS = 4096;
-
-function parseSumeragiNativeAmxBody(value, context) {
-  const record = assertExactSumeragiRecord(
-    value,
-    [
-      "round",
-      "epoch",
-      "chain_id_hash",
-      "source_id",
-      "tx_entrypoint_hash",
-      "plan_digest",
-      "phase",
-      "coordinator_lane_id",
-      "coordinator_dataspace_id",
-      "coordinator_lane_incarnation",
-      "participant_lane_id",
-      "participant_dataspace_id",
-      "participant_lane_incarnation",
-      "participant_previous_block_height",
-      "participant_previous_block_descriptor_hash",
-      "participant_lane_block_height",
-      "participant_lane_block_view",
-      "participant_proposal_hash",
-      "participant_settlement_commitment",
-      "participant_validator_set_hash",
-      "participant_validator_count",
-      "participant_min_quorum",
-      "authority_context_height",
-      "planned_coordinator_block_height",
-      "coordinator_lane_block_view",
-      "coordinator_proposal_hash",
-    ],
-    context,
-  );
-  assertExactSumeragiRecord(record.round, ["context_id", "height", "view"], `${context}.round`);
-  const round = parseSumeragiRound(record.round, `${context}.round`);
-  const phase = parseSumeragiTaggedUnitWithContent(
-    record.phase,
-    "phase",
-    "detail",
-    ["prepare", "commit"],
-    `${context}.phase`,
-  );
-  const validatorCount = parseSumeragiUnsigned(
-    record.participant_validator_count,
-    `${context}.participant_validator_count`,
-    { positive: true, max: 128 },
-  );
-  const minQuorum = parseSumeragiUnsigned(
-    record.participant_min_quorum,
-    `${context}.participant_min_quorum`,
-    { positive: true, max: 128 },
-  );
-  const expectedQuorum = validatorCount - Math.floor((validatorCount - 1) / 3);
-  const authorityHeight = parseSumeragiUnsigned(
-    record.authority_context_height,
-    `${context}.authority_context_height`,
-    { positive: true },
-  );
-  const plannedHeight = parseSumeragiUnsigned(
-    record.planned_coordinator_block_height,
-    `${context}.planned_coordinator_block_height`,
-    { positive: true },
-  );
-  const coordinatorView = parseSumeragiUnsigned(
-    record.coordinator_lane_block_view,
-    `${context}.coordinator_lane_block_view`,
-  );
-  const participantPreviousHeight = parseSumeragiUnsigned(
-    record.participant_previous_block_height,
-    `${context}.participant_previous_block_height`,
-  );
-  const participantPreviousDescriptorHash =
-    record.participant_previous_block_descriptor_hash === null
-      ? null
-      : parseSumeragiNonzeroHash(
-          record.participant_previous_block_descriptor_hash,
-          `${context}.participant_previous_block_descriptor_hash`,
-        );
-  const participantHeight = parseSumeragiUnsigned(
-    record.participant_lane_block_height,
-    `${context}.participant_lane_block_height`,
-    { positive: true },
-  );
-  const participantView = parseSumeragiUnsigned(
-    record.participant_lane_block_view,
-    `${context}.participant_lane_block_view`,
-  );
-  const sourceId = parseSumeragiByte32(record.source_id, `${context}.source_id`);
-  const entrypointHash = parseSumeragiHash(
-    record.tx_entrypoint_hash,
-    `${context}.tx_entrypoint_hash`,
-  );
-  if (
-    round.height !== authorityHeight ||
-    !sumeragiUnsignedSuccessorOf(participantHeight, participantPreviousHeight) ||
-    (participantPreviousHeight === 0) !== (participantPreviousDescriptorHash === null) ||
-    minQuorum !== expectedQuorum
-  ) {
-    throw new RangeError(`${context} contains inconsistent round or quorum fields`);
-  }
-  return Object.freeze({
-    round,
-    epoch: parseSumeragiUnsigned(record.epoch, `${context}.epoch`),
-    chain_id_hash: parseSumeragiHash(record.chain_id_hash, `${context}.chain_id_hash`),
-    source_id: sourceId,
-    tx_entrypoint_hash: entrypointHash,
-    plan_digest: parseSumeragiHash(record.plan_digest, `${context}.plan_digest`),
-    phase,
-    coordinator_lane_id: parseSumeragiUnsigned(
-      record.coordinator_lane_id,
-      `${context}.coordinator_lane_id`,
-      { max: 0xffffffff },
-    ),
-    coordinator_dataspace_id: parseSumeragiUnsigned(
-      record.coordinator_dataspace_id,
-      `${context}.coordinator_dataspace_id`,
-    ),
-    coordinator_lane_incarnation: parseSumeragiNonzeroHash(
-      record.coordinator_lane_incarnation,
-      `${context}.coordinator_lane_incarnation`,
-    ),
-    participant_lane_id: parseSumeragiUnsigned(
-      record.participant_lane_id,
-      `${context}.participant_lane_id`,
-      { max: 0xffffffff },
-    ),
-    participant_dataspace_id: parseSumeragiUnsigned(
-      record.participant_dataspace_id,
-      `${context}.participant_dataspace_id`,
-    ),
-    participant_lane_incarnation: parseSumeragiNonzeroHash(
-      record.participant_lane_incarnation,
-      `${context}.participant_lane_incarnation`,
-    ),
-    participant_previous_block_height: participantPreviousHeight,
-    participant_previous_block_descriptor_hash: participantPreviousDescriptorHash,
-    participant_lane_block_height: participantHeight,
-    participant_lane_block_view: participantView,
-    participant_proposal_hash: parseSumeragiNonzeroHash(
-      record.participant_proposal_hash,
-      `${context}.participant_proposal_hash`,
-    ),
-    participant_settlement_commitment: parseSumeragiNonzeroHash(
-      record.participant_settlement_commitment,
-      `${context}.participant_settlement_commitment`,
-    ),
-    participant_validator_set_hash: parseSumeragiHash(
-      record.participant_validator_set_hash,
-      `${context}.participant_validator_set_hash`,
-    ),
-    participant_validator_count: validatorCount,
-    participant_min_quorum: minQuorum,
-    authority_context_height: authorityHeight,
-    planned_coordinator_block_height: plannedHeight,
-    coordinator_lane_block_view: coordinatorView,
-    coordinator_proposal_hash: parseSumeragiNonzeroHash(
-      record.coordinator_proposal_hash,
-      `${context}.coordinator_proposal_hash`,
-    ),
-  });
-}
-
-function sumeragiNativeAmxBodyIdentityEqual(left, right) {
-  const fields = [
-    "epoch",
-    "chain_id_hash",
-    "source_id",
-    "tx_entrypoint_hash",
-    "plan_digest",
-    "coordinator_lane_id",
-    "coordinator_dataspace_id",
-    "coordinator_lane_incarnation",
-    "participant_lane_id",
-    "participant_dataspace_id",
-    "participant_lane_incarnation",
-    "participant_previous_block_height",
-    "participant_previous_block_descriptor_hash",
-    "participant_lane_block_height",
-    "participant_lane_block_view",
-    "participant_proposal_hash",
-    "participant_settlement_commitment",
-    "participant_validator_set_hash",
-    "participant_validator_count",
-    "participant_min_quorum",
-    "authority_context_height",
-    "planned_coordinator_block_height",
-    "coordinator_lane_block_view",
-    "coordinator_proposal_hash",
-  ];
-  return sumeragiRoundsEqual(left.round, right.round)
-    && fields.every((field) => left[field] === right[field]);
-}
-
-function countSumeragiBitmapSigners(bitmap) {
-  return bitmap.reduce((total, byte) => {
-    let value = byte;
-    let count = 0;
-    while (value !== 0) {
-      count += value & 1;
-      value >>>= 1;
-    }
-    return total + count;
-  }, 0);
-}
-
-const SUMERAGI_BLS_NORMAL_PEER_ID_PATTERN =
-  /^(?:bls_normal:)?(ea0130[0-9A-F]{96})$/;
-const SUMERAGI_BLS_NORMAL_VALIDATION_CACHE_MAX = 256;
-const validatedSumeragiBlsNormalPublicKeys = new Set();
-const SUMERAGI_NATIVE_DESCRIPTOR_PREIMAGE_TYPE =
-  "iroha_data_model::block::consensus::LaneBlockDescriptorPreimage";
-const SUMERAGI_NATIVE_PROPOSAL_PREIMAGE_TYPE =
-  "iroha_data_model::block::consensus::LaneBlockProposalPreimage";
-const SUMERAGI_NATIVE_SETTLEMENT_TYPE =
-  "iroha_data_model::block::consensus::LaneBlockCommitment";
-const SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN = Buffer.from(
-  "iroha.nexus.lane-relay.settlement.v1",
-  "utf8",
-);
-
-function parseSumeragiBlsNormalPeerId(value, context) {
-  if (typeof value !== "string") {
-    throw new TypeError(`${context} must be a canonical BLS-Normal PeerId string`);
-  }
-  if (value.trim() !== value) {
-    throw new TypeError(`${context} must not contain surrounding whitespace`);
-  }
-  const matched = SUMERAGI_BLS_NORMAL_PEER_ID_PATTERN.exec(value);
-  if (matched === null) {
-    throw new TypeError(`${context} must be a canonical BLS-Normal PeerId`);
-  }
-  const publicKeyHex = matched[1].slice(6);
-  const compressed = Buffer.from(publicKeyHex, "hex");
-  try {
-    if (!validatedSumeragiBlsNormalPublicKeys.has(publicKeyHex)) {
-      assertCanonicalBls12381G1Compressed(compressed);
-      if (
-        validatedSumeragiBlsNormalPublicKeys.size
-        >= SUMERAGI_BLS_NORMAL_VALIDATION_CACHE_MAX
-      ) {
-        validatedSumeragiBlsNormalPublicKeys.delete(
-          validatedSumeragiBlsNormalPublicKeys.values().next().value,
-        );
-      }
-      validatedSumeragiBlsNormalPublicKeys.add(publicKeyHex);
-    }
-  } catch (error) {
-    throw new TypeError(`${context} contains an invalid BLS-Normal public key`, {
-      cause: error,
-    });
-  }
-  return Object.freeze({
-    literal: matched[1],
-    orderingKey: Buffer.concat([Buffer.from([2]), compressed]),
-  });
-}
-
-function parseSumeragiBlsNormalValidatorSet(value, context) {
-  const parsed = value.map((validator, index) =>
-    parseSumeragiBlsNormalPeerId(validator, `${context}[${index}]`),
-  );
-  if (
-    parsed.some(
-      (validator, index) =>
-        index > 0 &&
-        Buffer.compare(parsed[index - 1].orderingKey, validator.orderingKey) >= 0,
-    )
-  ) {
-    throw new TypeError(
-      `${context} must be strictly ordered by canonical validator id`,
-    );
-  }
-  return Object.freeze(parsed.map((validator) => validator.literal));
-}
-
-function encodeSumeragiNativeU32(value) {
-  const buffer = Buffer.allocUnsafe(4);
-  buffer.writeUInt32LE(value, 0);
-  return buffer;
-}
-
-function encodeSumeragiNativeStruct(fields) {
-  return Buffer.concat(fields.map((field) => encodeNoritoField(field, true)));
-}
-
-function encodeSumeragiNativeString(value) {
-  const encoded = Buffer.from(value, "utf8");
-  return Buffer.concat([encodeUnsignedLeb128(encoded.length), encoded]);
-}
-
-function encodeSumeragiNativeHash(value) {
-  return Buffer.from(parseHashLiteralToHex(value, "Native AMX canonical hash"), "hex");
-}
-
-function encodeSumeragiNativeLaneId(value) {
-  return encodeNoritoField(encodeSumeragiNativeU32(value), true);
-}
-
-function encodeSumeragiNativeDataspaceId(value) {
-  return encodeNoritoField(u64ToLittleEndianBuffer(value), true);
-}
-
-function encodeSumeragiNativeOptionalHash(value) {
-  if (value === null || value === undefined) {
-    return Buffer.from([0]);
-  }
-  return Buffer.concat([
-    Buffer.from([1]),
-    encodeNoritoField(encodeSumeragiNativeHash(value), true),
-  ]);
-}
-
-function encodeSumeragiNativePeerId(value) {
-  const { orderingKey } = parseSumeragiBlsNormalPeerId(
-    value,
-    "Native AMX validator",
-  );
-  const compactKey = Buffer.concat([
-    u64ToLittleEndianBuffer(orderingKey.length),
-    ...Array.from(orderingKey, (byte) =>
-      encodeNoritoField(Buffer.from([byte]), true),
-    ),
-  ]);
-  return encodeNoritoField(compactKey, true);
-}
-
-function encodeSumeragiNativeValidatorSet(validators) {
-  return encodeNoritoVec(
-    validators,
-    encodeSumeragiNativePeerId,
-    true,
-  );
-}
-
-function formatSumeragiNativeHash(payload) {
-  return formatHashLiteral(irohaHashBytes([payload]).toString("hex"));
-}
-
-function computeSumeragiNativeValidatorSetHash(validators) {
-  return formatSumeragiNativeHash(
-    encodeSumeragiNativeValidatorSet(validators),
-  );
-}
-
-function computeSumeragiNativeDescriptorHash(descriptor) {
-  const payload = encodeSumeragiNativeStruct([
-    encodeSumeragiNativeString("nexus:lane-block-descriptor:v1"),
-    Buffer.from([1]),
-    encodeSumeragiNativeLaneId(descriptor.lane_id),
-    encodeSumeragiNativeDataspaceId(descriptor.dataspace_id),
-    encodeSumeragiNativeHash(descriptor.lane_incarnation),
-    u64ToLittleEndianBuffer(descriptor.proposal_height),
-    u64ToLittleEndianBuffer(descriptor.previous_lane_block_height),
-    encodeSumeragiNativeOptionalHash(
-      descriptor.previous_lane_block_descriptor_hash,
-    ),
-    u64ToLittleEndianBuffer(descriptor.lane_block_height),
-    u64ToLittleEndianBuffer(descriptor.lane_block_view),
-    encodeSumeragiNativeHash(descriptor.subject_hash),
-    encodeSumeragiNativeHash(descriptor.payload_ownership_hash),
-    encodeSumeragiNativeHash(descriptor.rbc_instance_hash),
-    encodeNoritoVec(
-      descriptor.accepted_candidate_indices,
-      u64ToLittleEndianBuffer,
-      true,
-    ),
-    encodeNoritoVec(
-      descriptor.accepted_transaction_hashes,
-      encodeSumeragiNativeHash,
-      true,
-    ),
-    Buffer.from([
-      descriptor.validator_set_hash_version & 0xff,
-      (descriptor.validator_set_hash_version >>> 8) & 0xff,
-    ]),
-    encodeSumeragiNativeHash(descriptor.validator_set_hash),
-    encodeSumeragiNativeValidatorSet(descriptor.validator_set),
-    encodeSumeragiNativeU32(descriptor.validator_count),
-    encodeSumeragiNativeU32(descriptor.min_quorum),
-    encodeSumeragiNativeString(descriptor.qc_mode_tag),
-  ]);
-  return formatSumeragiNativeHash(
-    frameNoritoPayload(
-      SUMERAGI_NATIVE_DESCRIPTOR_PREIMAGE_TYPE,
-      payload,
-      2,
-    ),
-  );
-}
-
-function computeSumeragiNativeProposalHash(descriptor) {
-  const payload = encodeSumeragiNativeStruct([
-    encodeSumeragiNativeString("nexus:lane-block-proposal:v1"),
-    Buffer.from([1]),
-    u64ToLittleEndianBuffer(descriptor.proposal_height),
-    encodeSumeragiNativeHash(descriptor.descriptor_hash),
-    encodeSumeragiNativeLaneId(descriptor.lane_id),
-    encodeSumeragiNativeDataspaceId(descriptor.dataspace_id),
-    encodeSumeragiNativeHash(descriptor.lane_incarnation),
-    u64ToLittleEndianBuffer(descriptor.lane_block_height),
-    u64ToLittleEndianBuffer(descriptor.lane_block_view),
-    encodeSumeragiNativeHash(descriptor.subject_hash),
-    encodeSumeragiNativeHash(descriptor.payload_ownership_hash),
-    encodeSumeragiNativeHash(descriptor.rbc_instance_hash),
-    encodeNoritoVec(
-      descriptor.accepted_candidate_indices,
-      u64ToLittleEndianBuffer,
-      true,
-    ),
-    encodeNoritoVec(
-      descriptor.accepted_transaction_hashes,
-      encodeSumeragiNativeHash,
-      true,
-    ),
-    Buffer.from([
-      descriptor.validator_set_hash_version & 0xff,
-      (descriptor.validator_set_hash_version >>> 8) & 0xff,
-    ]),
-    encodeSumeragiNativeHash(descriptor.validator_set_hash),
-    encodeSumeragiNativeValidatorSet(descriptor.validator_set),
-    encodeSumeragiNativeU32(descriptor.validator_count),
-    encodeSumeragiNativeU32(descriptor.min_quorum),
-    encodeSumeragiNativeString(descriptor.qc_mode_tag),
-  ]);
-  return formatSumeragiNativeHash(
-    frameNoritoPayload(
-      SUMERAGI_NATIVE_PROPOSAL_PREIMAGE_TYPE,
-      payload,
-      2,
-    ),
-  );
-}
-
-function encodeSumeragiNativeBigInt(value) {
-  if (value === 0n) {
-    return Buffer.alloc(0);
-  }
-  let hex = value.toString(16);
-  if (hex.length % 2 !== 0) {
-    hex = `0${hex}`;
-  }
-  const bigEndian = Buffer.from(hex, "hex");
-  const littleEndian = Buffer.from(bigEndian).reverse();
-  return (littleEndian[littleEndian.length - 1] & 0x80) !== 0
-    ? Buffer.concat([littleEndian, Buffer.from([0])])
-    : littleEndian;
-}
-
-function encodeSumeragiNativeQuantity(value) {
-  const [whole, fraction = ""] = value.split(".");
-  const mantissa = BigInt(`${whole}${fraction}`);
-  const encoded = encodeSumeragiNativeBigInt(mantissa);
-  return encodeSumeragiNativeStruct([
-    Buffer.concat([encodeSumeragiNativeU32(encoded.length), encoded]),
-    encodeSumeragiNativeU32(fraction.length),
-  ]);
-}
-
-function encodeSumeragiNativeSettlementReceipt(receipt) {
-  return encodeSumeragiNativeStruct([
-    Buffer.from(receipt.source_id, "hex"),
-    encodeSumeragiNativeQuantity(receipt.local_amount),
-    encodeSumeragiNativeQuantity(receipt.xor_due),
-    encodeSumeragiNativeQuantity(receipt.xor_after_haircut),
-    encodeSumeragiNativeQuantity(receipt.xor_variance),
-    u64ToLittleEndianBuffer(receipt.timestamp_ms),
-  ]);
-}
-
-function computeSumeragiNativeParticipantSettlementHash(settlement) {
-  const payload = encodeSumeragiNativeStruct([
-    u64ToLittleEndianBuffer(settlement.block_height),
-    encodeSumeragiNativeLaneId(settlement.lane_id),
-    encodeSumeragiNativeHash(settlement.lane_incarnation),
-    encodeSumeragiNativeDataspaceId(settlement.dataspace_id),
-    u64ToLittleEndianBuffer(settlement.tx_count),
-    encodeSumeragiNativeQuantity(settlement.total_local_amount),
-    encodeSumeragiNativeQuantity(settlement.total_xor_due),
-    encodeSumeragiNativeQuantity(settlement.total_xor_after_haircut),
-    encodeSumeragiNativeQuantity(settlement.total_xor_variance),
-    Buffer.from([0]),
-    encodeNoritoVec(
-      settlement.receipts,
-      encodeSumeragiNativeSettlementReceipt,
-      true,
-    ),
-    encodeNoritoVec([], (value) => value, true),
-    encodeNoritoVec([], (value) => value, true),
-  ]);
-  const framedSettlement = frameNoritoPayload(
-    SUMERAGI_NATIVE_SETTLEMENT_TYPE,
-    payload,
-    2,
-  );
-  return formatSumeragiNativeHash(Buffer.concat([
-    u64ToLittleEndianBuffer(SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN.length),
-    SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN,
-    framedSettlement,
-  ]));
-}
-
-export const __sumeragiNativeAmxTestHelpers = Object.freeze({
-  computeDescriptorHash: computeSumeragiNativeDescriptorHash,
-  computeParticipantSettlementHash:
-    computeSumeragiNativeParticipantSettlementHash,
-  computeProposalHash: computeSumeragiNativeProposalHash,
-  computeValidatorSetHash: computeSumeragiNativeValidatorSetHash,
-});
-
-function parseSumeragiNativeAmxQc(value, context) {
-  const record = assertExactSumeragiRecord(
-    value,
-    [
-      "body",
-      "validator_set_hash_version",
-      "validator_set_hash",
-      "validator_set",
-      "validator_set_pops",
-      "signers_bitmap",
-      "bls_aggregate_signature",
-    ],
-    context,
-  );
-  const body = parseSumeragiNativeAmxBody(record.body, `${context}.body`);
-  const version = parseSumeragiUnsigned(
-    record.validator_set_hash_version,
-    `${context}.validator_set_hash_version`,
-    { max: 0xffff },
-  );
-  if (version !== 1) {
-    throw new RangeError(`${context}.validator_set_hash_version must equal 1`);
-  }
-  const validators = parseSumeragiBlsNormalValidatorSet(
-    assertSumeragiArrayBound(
-      record.validator_set,
-      128,
-      `${context}.validator_set`,
-      1,
-    ),
-    `${context}.validator_set`,
-  );
-  const validatorSetHash = parseSumeragiHash(
-    record.validator_set_hash,
-    `${context}.validator_set_hash`,
-  );
-  const computedValidatorSetHash =
-    computeSumeragiNativeValidatorSetHash(validators);
-  const expectedQuorum = validators.length - Math.floor((validators.length - 1) / 3);
-  if (
-    body.participant_validator_count !== validators.length ||
-    body.participant_min_quorum !== expectedQuorum ||
-    body.participant_validator_set_hash !== validatorSetHash ||
-    validatorSetHash !== computedValidatorSetHash
-  ) {
-    throw new TypeError(`${context} committee fields differ from its signed body`);
-  }
-  const pops = Object.freeze(
-    assertSumeragiArrayBound(
-      record.validator_set_pops,
-      validators.length,
-      `${context}.validator_set_pops`,
-      validators.length,
-    ).map((pop, index) =>
-      parseSumeragiByteVector(pop, 96, `${context}.validator_set_pops[${index}]`),
-    ),
-  );
-  if (pops.some((pop) => pop.every((byte) => byte === 0))) {
-    throw new TypeError(`${context}.validator_set_pops contains an all-zero proof`);
-  }
-  const bitmapLength = Math.ceil(validators.length / 8);
-  const bitmap = parseSumeragiByteVector(
-    record.signers_bitmap,
-    bitmapLength,
-    `${context}.signers_bitmap`,
-  );
-  const trailingBits = validators.length % 8;
-  if (trailingBits !== 0 && (bitmap[bitmap.length - 1] & ~((1 << trailingBits) - 1)) !== 0) {
-    throw new TypeError(`${context}.signers_bitmap addresses an unknown validator`);
-  }
-  if (countSumeragiBitmapSigners(bitmap) < expectedQuorum) {
-    throw new RangeError(`${context}.signers_bitmap does not meet quorum`);
-  }
-  const signature = parseSumeragiByteVector(
-    record.bls_aggregate_signature,
-    96,
-    `${context}.bls_aggregate_signature`,
-  );
-  if (signature.every((byte) => byte === 0)) {
-    throw new TypeError(`${context}.bls_aggregate_signature must not be all zeroes`);
-  }
-  return Object.freeze({
-    body,
-    validator_set_hash_version: version,
-    validator_set_hash: validatorSetHash,
-    validator_set: validators,
-    validator_set_pops: pops,
-    signers_bitmap: bitmap,
-    bls_aggregate_signature: signature,
-  });
-}
-
-function parseSumeragiNativeAmxParticipantProposal(value, context) {
-  const proposal = assertExactSumeragiRecord(
-    value,
-    ["descriptor", "proposal_hash"],
-    context,
-  );
-  const descriptorContext = `${context}.descriptor`;
-  const descriptor = ensureRecord(proposal.descriptor, descriptorContext);
-  const requiredFields = [
-    "lane_id",
-    "dataspace_id",
-    "lane_incarnation",
-    "proposal_height",
-    "previous_lane_block_height",
-    "lane_block_height",
-    "lane_block_view",
-    "subject_hash",
-    "payload_ownership_hash",
-    "rbc_instance_hash",
-    "accepted_candidate_indices",
-    "accepted_transaction_hashes",
-    "validator_set_hash_version",
-    "validator_set_hash",
-    "validator_set",
-    "validator_count",
-    "min_quorum",
-    "qc_mode_tag",
-    "descriptor_hash",
-  ];
-  const allowedFields = new Set([
-    ...requiredFields,
-    "previous_lane_block_descriptor_hash",
-  ]);
-  for (const field of requiredFields) {
-    if (!Object.prototype.hasOwnProperty.call(descriptor, field)) {
-      throw new TypeError(`${descriptorContext} is missing required field ${field}`);
-    }
-  }
-  for (const field of Object.keys(descriptor)) {
-    if (!allowedFields.has(field)) {
-      throw new TypeError(`${descriptorContext} contains unknown field ${field}`);
-    }
-  }
-
-  const previousHeight = parseSumeragiUnsigned(
-    descriptor.previous_lane_block_height,
-    `${descriptorContext}.previous_lane_block_height`,
-  );
-  let previousDescriptorHash = null;
-  if (previousHeight === 0) {
-    if (Object.prototype.hasOwnProperty.call(descriptor, "previous_lane_block_descriptor_hash")) {
-      throw new TypeError(`${descriptorContext} must omit the genesis predecessor hash`);
-    }
-  } else {
-    if (!Object.prototype.hasOwnProperty.call(descriptor, "previous_lane_block_descriptor_hash")) {
-      throw new TypeError(`${descriptorContext} must carry a predecessor descriptor hash`);
-    }
-    previousDescriptorHash = parseSumeragiNonzeroHash(
-      descriptor.previous_lane_block_descriptor_hash,
-      `${descriptorContext}.previous_lane_block_descriptor_hash`,
-    );
-  }
-  const laneBlockHeight = parseSumeragiUnsigned(
-    descriptor.lane_block_height,
-    `${descriptorContext}.lane_block_height`,
-    { positive: true },
-  );
-  if (!sumeragiUnsignedSuccessorOf(laneBlockHeight, previousHeight)) {
-    throw new RangeError(`${descriptorContext} lane-block heights must be contiguous`);
-  }
-
-  const acceptedCandidateIndices = Object.freeze(
-    assertSumeragiArrayBound(
-      descriptor.accepted_candidate_indices,
-      4096,
-      `${descriptorContext}.accepted_candidate_indices`,
-      1,
-    ).map((candidate, index) =>
-      parseSumeragiUnsigned(
-        candidate,
-        `${descriptorContext}.accepted_candidate_indices[${index}]`,
-      ),
-    ),
-  );
-  const acceptedTransactionHashes = Object.freeze(
-    assertSumeragiArrayBound(
-      descriptor.accepted_transaction_hashes,
-      4096,
-      `${descriptorContext}.accepted_transaction_hashes`,
-      1,
-    ).map((hash, index) =>
-      parseSumeragiNonzeroHash(
-        hash,
-        `${descriptorContext}.accepted_transaction_hashes[${index}]`,
-      ),
-    ),
-  );
-  if (
-    acceptedCandidateIndices.length !== acceptedTransactionHashes.length ||
-    new Set(acceptedCandidateIndices).size !== acceptedCandidateIndices.length ||
-    new Set(acceptedTransactionHashes).size !== acceptedTransactionHashes.length
-  ) {
-    throw new TypeError(`${descriptorContext} accepted work is inconsistent`);
-  }
-
-  const validators = parseSumeragiBlsNormalValidatorSet(
-    assertSumeragiArrayBound(
-      descriptor.validator_set,
-      128,
-      `${descriptorContext}.validator_set`,
-      1,
-    ),
-    `${descriptorContext}.validator_set`,
-  );
-  const validatorCount = parseSumeragiExactUnsigned(
-    descriptor.validator_count,
-    `${descriptorContext}.validator_count`,
-    { positive: true, max: 128 },
-  );
-  const minQuorum = parseSumeragiExactUnsigned(
-    descriptor.min_quorum,
-    `${descriptorContext}.min_quorum`,
-    { positive: true, max: 128 },
-  );
-  const expectedQuorum = validators.length - Math.floor((validators.length - 1) / 3);
-  const validatorSetHashVersion = parseSumeragiExactUnsigned(
-    descriptor.validator_set_hash_version,
-    `${descriptorContext}.validator_set_hash_version`,
-    { max: 0xffff },
-  );
-  if (
-    validatorSetHashVersion !== 1 ||
-    validatorCount !== validators.length ||
-    minQuorum !== expectedQuorum
-  ) {
-    throw new TypeError(`${descriptorContext} committee fields are inconsistent`);
-  }
-
-  const normalizedDescriptor = {
-    lane_id: parseSumeragiExactUnsigned(descriptor.lane_id, `${descriptorContext}.lane_id`, {
-      max: 0xffffffff,
-    }),
-    dataspace_id: parseSumeragiUnsigned(
-      descriptor.dataspace_id,
-      `${descriptorContext}.dataspace_id`,
-    ),
-    lane_incarnation: parseSumeragiNonzeroHash(
-      descriptor.lane_incarnation,
-      `${descriptorContext}.lane_incarnation`,
-    ),
-    proposal_height: parseSumeragiUnsigned(
-      descriptor.proposal_height,
-      `${descriptorContext}.proposal_height`,
-      { positive: true },
-    ),
-    previous_lane_block_height: previousHeight,
-    ...(previousDescriptorHash === null
-      ? {}
-      : { previous_lane_block_descriptor_hash: previousDescriptorHash }),
-    lane_block_height: laneBlockHeight,
-    lane_block_view: parseSumeragiUnsigned(
-      descriptor.lane_block_view,
-      `${descriptorContext}.lane_block_view`,
-    ),
-    subject_hash: parseSumeragiNonzeroHash(
-      descriptor.subject_hash,
-      `${descriptorContext}.subject_hash`,
-    ),
-    payload_ownership_hash: parseSumeragiNonzeroHash(
-      descriptor.payload_ownership_hash,
-      `${descriptorContext}.payload_ownership_hash`,
-    ),
-    rbc_instance_hash: parseSumeragiNonzeroHash(
-      descriptor.rbc_instance_hash,
-      `${descriptorContext}.rbc_instance_hash`,
-    ),
-    accepted_candidate_indices: acceptedCandidateIndices,
-    accepted_transaction_hashes: acceptedTransactionHashes,
-    validator_set_hash_version: validatorSetHashVersion,
-    validator_set_hash: parseSumeragiHash(
-      descriptor.validator_set_hash,
-      `${descriptorContext}.validator_set_hash`,
-    ),
-    validator_set: validators,
-    validator_count: validatorCount,
-    min_quorum: minQuorum,
-    qc_mode_tag: requireExactNonEmptyString(
-      descriptor.qc_mode_tag,
-      `${descriptorContext}.qc_mode_tag`,
-    ),
-    descriptor_hash: parseSumeragiNonzeroHash(
-      descriptor.descriptor_hash,
-      `${descriptorContext}.descriptor_hash`,
-    ),
-  };
-  if (
-    normalizedDescriptor.validator_set_hash !==
-    computeSumeragiNativeValidatorSetHash(validators)
-  ) {
-    throw new TypeError(
-      `${descriptorContext}.validator_set_hash does not match the canonical committee`,
-    );
-  }
-  if (
-    normalizedDescriptor.descriptor_hash !==
-    computeSumeragiNativeDescriptorHash(normalizedDescriptor)
-  ) {
-    throw new TypeError(
-      `${descriptorContext}.descriptor_hash does not match its canonical preimage`,
-    );
-  }
-  const proposalHash = parseSumeragiNonzeroHash(
-    proposal.proposal_hash,
-    `${context}.proposal_hash`,
-  );
-  if (proposalHash !== computeSumeragiNativeProposalHash(normalizedDescriptor)) {
-    throw new TypeError(
-      `${context}.proposal_hash does not match its canonical preimage`,
-    );
-  }
-  return Object.freeze({
-    descriptor: Object.freeze(normalizedDescriptor),
-    proposal_hash: proposalHash,
-  });
-}
-
-function parseSumeragiNativeAmxLeg(value, context) {
-  const record = assertExactSumeragiRecord(
-    value,
-    [
-      "lane_id",
-      "dataspace_id",
-      "participant_proposal",
-      "participant_settlement",
-      "participant_settlement_hash",
-      "prepare_qc",
-      "commit_qc",
-    ],
-    context,
-  );
-  const laneId = parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
-    max: 0xffffffff,
-  });
-  const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`);
-  const participantProposal = parseSumeragiNativeAmxParticipantProposal(
-    record.participant_proposal,
-    `${context}.participant_proposal`,
-  );
-  const settlementWire = ensureRecord(
-    record.participant_settlement,
-    `${context}.participant_settlement`,
-  );
-  if (
-    !Array.isArray(settlementWire.native_amx_receipts) ||
-    settlementWire.native_amx_receipts.length !== 0
-  ) {
-    throw new TypeError(`${context}.participant_settlement must be terminal`);
-  }
-  if (
-    !Array.isArray(settlementWire.nexus_fee_receipts) ||
-    settlementWire.nexus_fee_receipts.length !== 0
-  ) {
-    throw new TypeError(`${context}.participant_settlement cannot contain fee receipts`);
-  }
-  assertSumeragiArrayBound(
-    settlementWire.receipts,
-    MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
-    `${context}.participant_settlement.receipts`,
-    1,
-  );
-  const participantSettlement = parseLaneSettlementCommitments([settlementWire])[0];
-  const participantSettlementHash = parseSumeragiNonzeroHash(
-    record.participant_settlement_hash,
-    `${context}.participant_settlement_hash`,
-  );
-  if (
-    participantSettlementHash !==
-    computeSumeragiNativeParticipantSettlementHash(participantSettlement)
-  ) {
-    throw new TypeError(
-      `${context}.participant_settlement_hash does not match its canonical commitment`,
-    );
-  }
-  const prepareQc = parseSumeragiNativeAmxQc(record.prepare_qc, `${context}.prepare_qc`);
-  const commitQc = parseSumeragiNativeAmxQc(record.commit_qc, `${context}.commit_qc`);
-  if (prepareQc.body.phase.phase !== "prepare") {
-    throw new TypeError(`${context}.prepare_qc carries the wrong phase`);
-  }
-  if (commitQc.body.phase.phase !== "commit") {
-    throw new TypeError(`${context}.commit_qc carries the wrong phase`);
-  }
-  if (!sumeragiNativeAmxBodyIdentityEqual(prepareQc.body, commitQc.body)) {
-    throw new TypeError(`${context} prepare and commit identities differ`);
-  }
-  for (const field of [
-    "validator_set_hash_version",
-    "validator_set_hash",
-    "validator_set",
-    "validator_set_pops",
-  ]) {
-    if (JSON.stringify(prepareQc[field]) !== JSON.stringify(commitQc[field])) {
-      throw new TypeError(`${context} prepare and commit committees differ`);
-    }
-  }
-  const body = prepareQc.body;
-  const descriptor = participantProposal.descriptor;
-  if (
-    body.participant_lane_id !== laneId ||
-    body.participant_dataspace_id !== dataspaceId ||
-    descriptor.lane_id !== laneId ||
-    descriptor.dataspace_id !== dataspaceId ||
-    descriptor.lane_incarnation !== body.participant_lane_incarnation ||
-    descriptor.proposal_height !== body.authority_context_height ||
-    descriptor.previous_lane_block_height !== body.participant_previous_block_height ||
-    (descriptor.previous_lane_block_descriptor_hash ?? null) !==
-      body.participant_previous_block_descriptor_hash ||
-    descriptor.lane_block_height !== body.participant_lane_block_height ||
-    descriptor.lane_block_view !== body.participant_lane_block_view ||
-    participantProposal.proposal_hash !== body.participant_proposal_hash ||
-    descriptor.validator_set_hash_version !== prepareQc.validator_set_hash_version ||
-    descriptor.validator_set_hash !== prepareQc.validator_set_hash ||
-    JSON.stringify(descriptor.validator_set) !== JSON.stringify(prepareQc.validator_set) ||
-    descriptor.validator_count !== body.participant_validator_count ||
-    descriptor.min_quorum !== body.participant_min_quorum
-  ) {
-    throw new TypeError(`${context} participant proposal differs from its signed body`);
-  }
-  const receipts = participantSettlement.receipts;
-  const receiptSources = receipts.map((receipt) => receipt.source_id);
-  if (receiptSources.some((sourceId, index) => index > 0 && receiptSources[index - 1] >= sourceId)) {
-    throw new TypeError(
-      `${context}.participant_settlement.receipts must be strictly ordered by source_id`,
-    );
-  }
-  const matchingEntrypointPositions = descriptor.accepted_transaction_hashes
-    .flatMap((hash, index) => (hash === body.tx_entrypoint_hash ? [index] : []));
-  if (matchingEntrypointPositions.length > 1) {
-    throw new TypeError(
-      `${context} participant descriptor repeats the current transaction entrypoint`,
-    );
-  }
-  const requiresMixedRoleAnchorValidation = matchingEntrypointPositions.length === 0;
-  if (
-    !requiresMixedRoleAnchorValidation &&
-    (
-      descriptor.accepted_candidate_indices.length !== receipts.length ||
-      descriptor.accepted_transaction_hashes.length !== receipts.length ||
-      receiptSources[matchingEntrypointPositions[0]] !== body.source_id
-    )
-  ) {
-    throw new TypeError(
-      `${context} participant descriptor and grouped settlement are not aligned`,
-    );
-  }
-  if (
-    participantSettlementHash !== body.participant_settlement_commitment ||
-    participantSettlement.block_height !== body.participant_lane_block_height ||
-    participantSettlement.lane_id !== laneId ||
-    participantSettlement.dataspace_id !== dataspaceId ||
-    participantSettlement.lane_incarnation !== body.participant_lane_incarnation ||
-    participantSettlement.tx_count !== receipts.length ||
-    participantSettlement.total_local_amount !== "0" ||
-    participantSettlement.total_xor_due !== "0" ||
-    participantSettlement.total_xor_after_haircut !== "0" ||
-    participantSettlement.total_xor_variance !== "0" ||
-    participantSettlement.swap_metadata !== null ||
-    new Set(receiptSources).size !== receiptSources.length ||
-    receiptSources.filter((sourceId) => sourceId === body.source_id).length !== 1 ||
-    receipts.some(
-      (receipt) =>
-        receipt.local_amount !== "0" ||
-        receipt.xor_due !== "0" ||
-        receipt.xor_after_haircut !== "0" ||
-        receipt.xor_variance !== "0" ||
-        receipt.timestamp_ms !== body.authority_context_height,
-    ) ||
-    participantSettlement.nexus_fee_receipts.length !== 0 ||
-    participantSettlement.native_amx_receipts.length !== 0
-  ) {
-    throw new TypeError(`${context} participant settlement differs from its signed body`);
-  }
-  return Object.freeze({
-    lane_id: laneId,
-    dataspace_id: dataspaceId,
-    participant_proposal: participantProposal,
-    participant_settlement: participantSettlement,
-    participant_settlement_hash: participantSettlementHash,
-    prepare_qc: prepareQc,
-    commit_qc: commitQc,
-    requires_mixed_role_anchor_validation: requiresMixedRoleAnchorValidation,
-  });
-}
-
-function parseSumeragiNativeAmxReceipt(value, context) {
-  const record = assertExactSumeragiRecord(
-    value,
-    [
-      "version",
-      "source_id",
-      "chain_id_hash",
-      "plan_digest",
-      "lane_id",
-      "dataspace_id",
-      "lane_incarnation",
-      "authority_context_height",
-      "lane_block_height",
-      "lane_block_view",
-      "coordinator_proposal_hash",
-      "legs",
-    ],
-    context,
-  );
-  const version = parseSumeragiUnsigned(record.version, `${context}.version`, { max: 0xffff });
-  if (version !== 2) {
-    throw new RangeError(`${context}.version must equal 2`);
-  }
-  const sourceId = parseSumeragiByte32(record.source_id, `${context}.source_id`);
-  const chainIdHash = parseSumeragiHash(record.chain_id_hash, `${context}.chain_id_hash`);
-  const planDigest = parseSumeragiHash(record.plan_digest, `${context}.plan_digest`);
-  const laneId = parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
-    max: 0xffffffff,
-  });
-  const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`);
-  const laneIncarnation = parseSumeragiNonzeroHash(
-    record.lane_incarnation,
-    `${context}.lane_incarnation`,
-  );
-  const authorityHeight = parseSumeragiUnsigned(
-    record.authority_context_height,
-    `${context}.authority_context_height`,
-    { positive: true },
-  );
-  const laneBlockHeight = parseSumeragiUnsigned(
-    record.lane_block_height,
-    `${context}.lane_block_height`,
-    { positive: true },
-  );
-  const laneBlockView = parseSumeragiUnsigned(
-    record.lane_block_view,
-    `${context}.lane_block_view`,
-  );
-  const proposalHash = parseSumeragiNonzeroHash(
-    record.coordinator_proposal_hash,
-    `${context}.coordinator_proposal_hash`,
-  );
-  const legs = Object.freeze(
-    assertSumeragiArrayBound(record.legs, 255, `${context}.legs`, 1).map((leg, index) =>
-      parseSumeragiNativeAmxLeg(leg, `${context}.legs[${index}]`),
-    ),
-  );
-  const routes = new Set(legs.map((leg) => `${leg.lane_id}:${leg.dataspace_id}`));
-  if (routes.size !== legs.length) {
-    throw new TypeError(`${context}.legs contains duplicate participant routes`);
-  }
-  const firstBody = legs[0].prepare_qc.body;
-  for (const leg of legs) {
-    const body = leg.prepare_qc.body;
-    if (
-      !sumeragiRoundsEqual(body.round, firstBody.round) ||
-      body.epoch !== firstBody.epoch ||
-      body.round.height !== authorityHeight ||
-      body.chain_id_hash !== chainIdHash ||
-      body.source_id !== sourceId ||
-      body.tx_entrypoint_hash !== firstBody.tx_entrypoint_hash ||
-      body.plan_digest !== planDigest ||
-      body.coordinator_lane_id !== laneId ||
-      body.coordinator_dataspace_id !== dataspaceId ||
-      body.coordinator_lane_incarnation !== laneIncarnation ||
-      body.authority_context_height !== authorityHeight ||
-      body.planned_coordinator_block_height !== laneBlockHeight ||
-      body.coordinator_lane_block_view !== laneBlockView ||
-      body.coordinator_proposal_hash !== proposalHash ||
-      (leg.lane_id === laneId &&
-        leg.dataspace_id === dataspaceId &&
-        (
-          leg.requires_mixed_role_anchor_validation ||
-          leg.participant_proposal.descriptor.lane_incarnation !== laneIncarnation ||
-          leg.participant_proposal.descriptor.lane_block_height !== laneBlockHeight ||
-          leg.participant_proposal.descriptor.lane_block_view !== laneBlockView ||
-          leg.participant_proposal.proposal_hash !== proposalHash
-        ))
-    ) {
-      throw new TypeError(`${context}.legs contain mismatched signed identities`);
-    }
-  }
-  return Object.freeze({
-    version,
-    source_id: sourceId,
-    chain_id_hash: chainIdHash,
-    plan_digest: planDigest,
-    lane_id: laneId,
-    dataspace_id: dataspaceId,
-    lane_incarnation: laneIncarnation,
-    authority_context_height: authorityHeight,
-    lane_block_height: laneBlockHeight,
-    lane_block_view: laneBlockView,
-    coordinator_proposal_hash: proposalHash,
-    legs,
-  });
-}
-
-function parseLaneSettlementCommitments(payload) {
-  assertSumeragiArrayBound(
-    payload,
-    128,
-    "status.lane_settlement_commitments",
-  );
-  return payload.map((entry, index) => {
-    const context = `status.lane_settlement_commitments[${index}]`;
-    const record = assertExactSumeragiRecord(
-      entry,
-      [
-        "block_height",
-        "lane_id",
-        "lane_incarnation",
-        "dataspace_id",
-        "tx_count",
-        "total_local_amount",
-        "total_xor_due",
-        "total_xor_after_haircut",
-        "total_xor_variance",
-        "swap_metadata",
-        "receipts",
-        "nexus_fee_receipts",
-        "native_amx_receipts",
-      ],
-      context,
-    );
-    const swapMetadataRecord = record.swap_metadata;
-    let swapMetadata = null;
-    if (swapMetadataRecord != null) {
-      const metadata = assertExactSumeragiRecord(
-        swapMetadataRecord,
-        [
-          "epsilon_bps",
-          "twap_window_seconds",
-          "liquidity_profile",
-          "twap_local_per_xor",
-          "volatility_class",
-        ],
-        `status.lane_settlement_commitments[${index}].swap_metadata`,
-      );
-      swapMetadata = {
-        epsilon_bps: parseSumeragiUnsigned(
-          metadata.epsilon_bps,
-          `status.lane_settlement_commitments[${index}].swap_metadata.epsilon_bps`,
-          { max: 0xffff },
-        ),
-        twap_window_seconds: parseSumeragiUnsigned(
-          metadata.twap_window_seconds,
-          `status.lane_settlement_commitments[${index}].swap_metadata.twap_window_seconds`,
-          { max: 0xffffffff },
-        ),
-        liquidity_profile: parseSumeragiTaggedUnitWithContent(
-          metadata.liquidity_profile,
-          "profile",
-          "state",
-          ["Tier1", "Tier2", "Tier3"],
-          `status.lane_settlement_commitments[${index}].swap_metadata.liquidity_profile`,
-        ),
-        twap_local_per_xor: requireNonEmptyString(
-          metadata.twap_local_per_xor,
-          `status.lane_settlement_commitments[${index}].swap_metadata.twap_local_per_xor`,
-        ),
-        volatility_class: parseSumeragiTaggedUnitWithContent(
-          metadata.volatility_class,
-          "bucket",
-          "state",
-          ["Stable", "Elevated", "Dislocated"],
-          `status.lane_settlement_commitments[${index}].swap_metadata.volatility_class`,
-        ),
-      };
-    }
-    const receiptsRecord = record.receipts;
-    if (!Array.isArray(receiptsRecord)) {
-      throw new TypeError(
-        `status.lane_settlement_commitments[${index}].receipts must be an array`,
-      );
-    }
-    const receipts = receiptsRecord.map((receipt, receiptIndex) => {
-      const receiptRecord = assertExactSumeragiRecord(
-        receipt,
-        [
-          "source_id",
-          "local_amount",
-          "xor_due",
-          "xor_after_haircut",
-          "xor_variance",
-          "timestamp_ms",
-        ],
-        `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}]`,
-      );
-      return {
-        source_id: parseSumeragiByte32(
-          receiptRecord.source_id,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].source_id`,
-        ),
-        local_amount: requireCanonicalQuantity(
-          receiptRecord.local_amount,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].local_amount`,
-        ),
-        xor_due: requireCanonicalQuantity(
-          receiptRecord.xor_due,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_due`,
-        ),
-        xor_after_haircut: requireCanonicalQuantity(
-          receiptRecord.xor_after_haircut,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_after_haircut`,
-        ),
-        xor_variance: requireCanonicalQuantity(
-          receiptRecord.xor_variance,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].xor_variance`,
-        ),
-        timestamp_ms: parseSumeragiUnsigned(
-          receiptRecord.timestamp_ms,
-          `status.lane_settlement_commitments[${index}].receipts[${receiptIndex}].timestamp_ms`,
-        ),
-      };
-    });
-    const nexusFeeReceipts = Object.freeze(
-      assertSumeragiArrayBound(
-        record.nexus_fee_receipts,
-        Number.MAX_SAFE_INTEGER,
-        `${context}.nexus_fee_receipts`,
-      ).map((receipt, receiptIndex) =>
-        parseSumeragiNexusFeeReceipt(
-          receipt,
-          `${context}.nexus_fee_receipts[${receiptIndex}]`,
-        ),
-      ),
-    );
-    const nativeAmxReceipts = Object.freeze(
-      assertSumeragiArrayBound(
-        record.native_amx_receipts,
-        MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
-        `${context}.native_amx_receipts`,
-      ).map((receipt, receiptIndex) =>
-        parseSumeragiNativeAmxReceipt(
-          receipt,
-          `${context}.native_amx_receipts[${receiptIndex}]`,
-        ),
-      ),
-    );
-    const blockHeight = parseSumeragiUnsigned(record.block_height, `${context}.block_height`);
-    const laneId = parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
-      max: 0xffffffff,
-    });
-    const laneIncarnation = parseSumeragiNonzeroHash(
-      record.lane_incarnation,
-      `${context}.lane_incarnation`,
-    );
-    const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`);
-    if (new Set(nexusFeeReceipts.map((receipt) => receipt.source_id)).size !== nexusFeeReceipts.length) {
-      throw new TypeError(`${context} contains duplicate Nexus fee receipt sources`);
-    }
-    if (new Set(nativeAmxReceipts.map((receipt) => receipt.source_id)).size !== nativeAmxReceipts.length) {
-      throw new TypeError(`${context} contains duplicate native AMX receipt sources`);
-    }
-    const nativeAmxSources = nativeAmxReceipts.map((receipt) => receipt.source_id);
-    if (nativeAmxSources.some(
-      (sourceId, sourceIndex) =>
-        sourceIndex > 0 && nativeAmxSources[sourceIndex - 1] >= sourceId,
-    )) {
-      throw new TypeError(`${context} native AMX receipt sources must be strictly ordered`);
-    }
-    if (
-      nexusFeeReceipts.some(
-        (receipt) =>
-          receipt.lane_id !== laneId ||
-          receipt.dataspace_id !== dataspaceId ||
-          receipt.block_height !== blockHeight,
-      )
-    ) {
-      throw new TypeError(`${context} Nexus fee receipt coordinates do not match`);
-    }
-    if (
-      nativeAmxReceipts.some(
-        (receipt) =>
-          receipt.lane_id !== laneId ||
-          receipt.dataspace_id !== dataspaceId ||
-          receipt.lane_incarnation !== laneIncarnation ||
-          receipt.lane_block_height !== blockHeight,
-      )
-    ) {
-      throw new TypeError(`${context} native AMX receipt coordinates do not match`);
-    }
-    if (
-      nativeAmxReceipts.some((receipt) =>
-        receipt.legs.some((leg) =>
-          JSON.stringify(
-            leg.participant_settlement.receipts.map((entry) => entry.source_id),
-          ) !== JSON.stringify(nativeAmxSources),
-        ),
-      )
-    ) {
-      throw new TypeError(
-        `${context} native AMX receipts do not bind the exact ordered source group`,
-      );
-    }
-    return {
-      block_height: blockHeight,
-      lane_id: laneId,
-      lane_incarnation: laneIncarnation,
-      dataspace_id: dataspaceId,
-      tx_count: parseSumeragiUnsigned(
-        record.tx_count,
-        `status.lane_settlement_commitments[${index}].tx_count`,
-      ),
-      total_local_amount: requireCanonicalQuantity(
-        record.total_local_amount,
-        `status.lane_settlement_commitments[${index}].total_local_amount`,
-      ),
-      total_xor_due: requireCanonicalQuantity(
-        record.total_xor_due,
-        `status.lane_settlement_commitments[${index}].total_xor_due`,
-      ),
-      total_xor_after_haircut: requireCanonicalQuantity(
-        record.total_xor_after_haircut,
-        `status.lane_settlement_commitments[${index}].total_xor_after_haircut`,
-      ),
-      total_xor_variance: requireCanonicalQuantity(
-        record.total_xor_variance,
-        `status.lane_settlement_commitments[${index}].total_xor_variance`,
-      ),
-      swap_metadata: swapMetadata,
-      receipts,
-      nexus_fee_receipts: nexusFeeReceipts,
-      native_amx_receipts: nativeAmxReceipts,
-    };
-  });
-}
-
-function parseLaneRelayEnvelopes(payload) {
-  assertSumeragiArrayBound(payload, 64, "status.lane_relay_envelopes");
-  return payload.map((entry, index) => {
-    const context = `status.lane_relay_envelopes[${index}]`;
-    const record = ensureRecord(entry, context);
-    const blockHeader = ensureRecord(record.block_header, `${context}.block_header`);
-    const qc =
-      record.qc === undefined || record.qc === null ? null : ensureRecord(record.qc, `${context}.qc`);
-    const settlementCommitments = parseLaneSettlementCommitments([
-      record.settlement_commitment,
-    ]);
-    if (settlementCommitments.length !== 1) {
-      throw new TypeError(`${context}.settlement_commitment must be an object`);
-    }
-    const laneId = parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
-      max: 0xffffffff,
-    });
-    const laneIncarnation = parseSumeragiNonzeroHash(
-      record.lane_incarnation,
-      `${context}.lane_incarnation`,
-    );
-    const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`);
-    const blockHeight = parseSumeragiUnsigned(record.block_height, `${context}.block_height`);
-    const settlementHash = parseSumeragiHash(
-      record.settlement_hash,
-      `${context}.settlement_hash`,
-    );
-    const manifestRoot = parseSumeragiOptionalByte32(
-      record.manifest_root,
-      `${context}.manifest_root`,
-    );
-    let fastpqProof = null;
-    if (record.fastpq_proof !== undefined && record.fastpq_proof !== null) {
-      const proof = ensureRecord(record.fastpq_proof, `${context}.fastpq_proof`);
-      fastpqProof = {
-        proof_digest: parseSumeragiHash(
-          proof.proof_digest,
-          `${context}.fastpq_proof.proof_digest`,
-        ),
-        verified_at_height: parseSumeragiUnsigned(
-          proof.verified_at_height,
-          `${context}.fastpq_proof.verified_at_height`,
-        ),
-      };
-    }
-    const settlement = settlementCommitments[0];
-    if (
-      settlement.lane_id !== laneId ||
-      settlement.lane_incarnation !== laneIncarnation ||
-      settlement.dataspace_id !== dataspaceId ||
-      settlement.block_height !== blockHeight
-    ) {
-      throw new TypeError(`${context}.settlement_commitment identity must match its relay`);
-    }
-    return {
-      lane_id: laneId,
-      lane_incarnation: laneIncarnation,
-      dataspace_id: dataspaceId,
-      block_height: blockHeight,
-      block_header: blockHeader,
-      qc,
-      da_commitment_hash:
-        record.da_commitment_hash === undefined || record.da_commitment_hash === null
-          ? null
-          : parseSumeragiHash(record.da_commitment_hash, `${context}.da_commitment_hash`),
-      lane_block_descriptor_hash:
-        record.lane_block_descriptor_hash === undefined ||
-        record.lane_block_descriptor_hash === null
-          ? null
-          : parseSumeragiHash(
-              record.lane_block_descriptor_hash,
-              `${context}.lane_block_descriptor_hash`,
-            ),
-      settlement_commitment: settlement,
-      settlement_hash: settlementHash,
-      rbc_bytes_total: parseSumeragiUnsigned(
-        record.rbc_bytes_total,
-        `${context}.rbc_bytes_total`,
-      ),
-      manifest_root: manifestRoot,
-      fastpq_proof: fastpqProof,
-    };
-  });
-}
-
 function parseLaneGovernance(payload) {
   if (payload == null) {
     return [];
@@ -16174,2318 +14775,6 @@ function parseLaneGovernance(payload) {
       ),
     };
   });
-}
-
-function parseSumeragiStatusPayload(payload) {
-  const record = ensureRecord(payload, "sumeragi status payload");
-  const allowedFields = new Set([
-    "protocol_version",
-    "node_fingerprint",
-    "build_fingerprint",
-    "config_fingerprint",
-    "restart_required",
-    "height_context_id",
-    "height",
-    "view",
-    "phase",
-    "leader",
-    "locked_prepare_qc",
-    "highest_prepare_qc",
-    "last_timeout_certificate",
-    "body_state",
-    "pending_persistence_id",
-    "last_committed_height",
-    "last_committed_subject",
-    "height_context",
-    "last_commit_qc",
-    "liveness",
-  ]);
-  const unknownField = Object.keys(record).find((field) => !allowedFields.has(field));
-  if (unknownField !== undefined) {
-    throw new TypeError(`sumeragi status payload contains unknown field ${unknownField}`);
-  }
-  const protocolVersion = parseSumeragiUnsigned(
-    record.protocol_version,
-    "sumeragi.protocol_version",
-    { max: 0xffff },
-  );
-  if (protocolVersion !== 3) {
-    throw new RangeError("sumeragi.protocol_version must equal 3");
-  }
-  const height = parseSumeragiUnsigned(record.height, "sumeragi.height");
-  const view = parseSumeragiUnsigned(record.view, "sumeragi.view");
-  const heightContextId = parseSumeragiContextId(
-    record.height_context_id,
-    "sumeragi.height_context_id",
-  );
-  const leader = parseSumeragiUnsigned(record.leader, "sumeragi.leader", {
-    max: 0xffffffff,
-  });
-  const restartRequired = parseSumeragiBoolean(
-    record.restart_required,
-    "sumeragi.restart_required",
-  );
-  const heightContext = parseSumeragiHeightContext(
-    record.height_context,
-    "sumeragi.height_context",
-  );
-  if (heightContext.epoch_end_height < height) {
-    throw new RangeError("sumeragi.height_context.epoch_end_height must cover height");
-  }
-  if (leader >= heightContext.validator_count) {
-    throw new RangeError("sumeragi.leader must index the frozen validator roster");
-  }
-  const liveness = parseSumeragiLivenessStatus(record.liveness, "sumeragi.liveness", {
-    height,
-    view,
-    contextId: heightContextId,
-    heightContext,
-  });
-
-  const lastCommittedHeight = parseSumeragiUnsigned(
-    record.last_committed_height,
-    "sumeragi.last_committed_height",
-  );
-  if (lastCommittedHeight > height) {
-    throw new RangeError("sumeragi.last_committed_height must not exceed height");
-  }
-  const lastCommittedSubject =
-    record.last_committed_subject == null
-      ? null
-      : parseSumeragiBlockSubject(
-          record.last_committed_subject,
-          "sumeragi.last_committed_subject",
-        );
-  const lastCommitQc =
-    record.last_commit_qc == null
-      ? null
-      : parseSumeragiCommitQcStatus(record.last_commit_qc, "sumeragi.last_commit_qc");
-  if (lastCommittedHeight === 0) {
-    if (lastCommittedSubject !== null || lastCommitQc !== null) {
-      throw new TypeError(
-        "sumeragi last committed subject and QC must be absent at height zero",
-      );
-    }
-  } else {
-    if ((lastCommittedSubject === null) !== (lastCommitQc === null)) {
-      throw new TypeError(
-        "sumeragi last committed subject and QC are required together when either is present after height zero",
-      );
-    }
-    if (lastCommittedSubject !== null && (
-      lastCommitQc.certificate.phase.phase !== "commit" ||
-      lastCommitQc.certificate.round.height !== lastCommittedHeight ||
-      !sumeragiSubjectsEqual(lastCommitQc.certificate.subject, lastCommittedSubject)
-    )) {
-      throw new TypeError("sumeragi.last_commit_qc does not certify the committed subject");
-    }
-  }
-
-  return Object.freeze({
-    protocol_version: protocolVersion,
-    node_fingerprint: parseSumeragiHash(
-      record.node_fingerprint,
-      "sumeragi.node_fingerprint",
-    ),
-    build_fingerprint: parseSumeragiHash(
-      record.build_fingerprint,
-      "sumeragi.build_fingerprint",
-    ),
-    config_fingerprint: parseSumeragiHash(
-      record.config_fingerprint,
-      "sumeragi.config_fingerprint",
-    ),
-    restart_required: restartRequired,
-    height_context_id: heightContextId,
-    height,
-    view,
-    phase: parseSumeragiTaggedUnit(
-      record.phase,
-      "phase",
-      [
-        "awaiting_proposal",
-        "reconstructing_payload",
-        "validating_payload",
-        "prepare",
-        "commit",
-        "pending_apply",
-      ],
-      "sumeragi.phase",
-    ),
-    leader,
-    locked_prepare_qc:
-      record.locked_prepare_qc == null
-        ? null
-        : parseSumeragiQcReference(
-            record.locked_prepare_qc,
-            "sumeragi.locked_prepare_qc",
-          ),
-    highest_prepare_qc:
-      record.highest_prepare_qc == null
-        ? null
-        : parseSumeragiQcReference(
-            record.highest_prepare_qc,
-            "sumeragi.highest_prepare_qc",
-          ),
-    last_timeout_certificate:
-      record.last_timeout_certificate == null
-        ? null
-        : parseSumeragiTimeoutReference(
-            record.last_timeout_certificate,
-            "sumeragi.last_timeout_certificate",
-          ),
-    body_state: parseSumeragiTaggedUnit(
-      record.body_state,
-      "state",
-      ["missing", "reconstructing", "stored", "validated", "pending_apply", "applied"],
-      "sumeragi.body_state",
-    ),
-    pending_persistence_id:
-      record.pending_persistence_id == null
-        ? null
-        : parseSumeragiUnsigned(
-            record.pending_persistence_id,
-            "sumeragi.pending_persistence_id",
-          ),
-    last_committed_height: lastCommittedHeight,
-    last_committed_subject: lastCommittedSubject,
-    height_context: heightContext,
-    last_commit_qc: lastCommitQc,
-    liveness,
-  });
-}
-
-const SUMERAGI_PIPELINE_EXECUTION_FIELDS = Object.freeze([
-  "tx_vertices_total",
-  "tx_edges_total",
-  "overlay_count_total",
-  "overlay_instr_total",
-  "overlay_bytes_total",
-  "rbc_chunks_total",
-  "rbc_bytes_total",
-  "detached_prepared_total",
-  "detached_merged_total",
-  "detached_fallback_total",
-  "detached_fallback_fee_postprocessing_total",
-  "detached_fallback_user_executor_total",
-  "detached_fallback_durable_state_total",
-  "detached_fallback_unsupported_instruction_total",
-  "detached_fallback_rejected_eval_total",
-  "detached_fallback_overlay_error_total",
-  "quarantine_executed_total",
-]);
-
-function parseSumeragiDiagnosticsPayload(payload) {
-  const context = "sumeragi diagnostics";
-  const record = ensureRecord(payload, context);
-  const requiredFields = [
-    "pipeline_execution",
-    "tx_queue_depth",
-    "tx_queue_capacity",
-    "tx_queue_retained_bytes",
-    "tx_queue_max_retained_bytes",
-    "tx_queue_saturated",
-    "tx_queue_saturated_by_count",
-    "tx_queue_saturated_by_bytes",
-    "tx_queue_saturated_by_age",
-    "tx_queue_oldest_queued_age_ms",
-    "lane_commitments",
-    "dataspace_commitments",
-    "lane_settlement_commitments",
-    "lane_relay_envelopes",
-    "lane_payload_ownerships",
-    "committed_lane_blocks",
-    "lane_block_sessions",
-    "lane_governance_sealed_total",
-    "lane_governance_sealed_aliases",
-    "lane_governance",
-    "native_amx_participant_applications",
-    "autonomous_lane_executions",
-  ];
-  const allowedFields = new Set([...requiredFields, "npos"]);
-  const unknown = Object.keys(record).find((field) => !allowedFields.has(field));
-  if (unknown !== undefined) {
-    throw new TypeError(`${context} contains unknown field ${unknown}`);
-  }
-  const missing = requiredFields.find(
-    (field) => !Object.prototype.hasOwnProperty.call(record, field),
-  );
-  if (missing !== undefined) {
-    throw new TypeError(`${context} is missing required field ${missing}`);
-  }
-
-  const pipelineRecord = assertExactSumeragiRecord(
-    record.pipeline_execution,
-    SUMERAGI_PIPELINE_EXECUTION_FIELDS,
-    `${context}.pipeline_execution`,
-  );
-  const pipelineExecution = Object.freeze(Object.fromEntries(
-    SUMERAGI_PIPELINE_EXECUTION_FIELDS.map((field) => [
-      field,
-      parseSumeragiUnsigned(
-        pipelineRecord[field],
-        `${context}.pipeline_execution.${field}`,
-      ),
-    ]),
-  ));
-
-  const txQueueDepth = parseSumeragiUnsigned(
-    record.tx_queue_depth,
-    `${context}.tx_queue_depth`,
-  );
-  const txQueueCapacity = parseSumeragiUnsigned(
-    record.tx_queue_capacity,
-    `${context}.tx_queue_capacity`,
-  );
-  const txQueueRetainedBytes = parseSumeragiUnsigned(
-    record.tx_queue_retained_bytes,
-    `${context}.tx_queue_retained_bytes`,
-  );
-  const txQueueMaxRetainedBytes = parseSumeragiUnsigned(
-    record.tx_queue_max_retained_bytes,
-    `${context}.tx_queue_max_retained_bytes`,
-  );
-  if (txQueueDepth > txQueueCapacity) {
-    throw new RangeError(`${context} transaction queue depth exceeds capacity`);
-  }
-  if (txQueueRetainedBytes > txQueueMaxRetainedBytes) {
-    throw new RangeError(`${context} retained queue bytes exceed the byte budget`);
-  }
-  const saturatedByCount = parseSumeragiBoolean(
-    record.tx_queue_saturated_by_count,
-    `${context}.tx_queue_saturated_by_count`,
-  );
-  const saturatedByBytes = parseSumeragiBoolean(
-    record.tx_queue_saturated_by_bytes,
-    `${context}.tx_queue_saturated_by_bytes`,
-  );
-  const saturatedByAge = parseSumeragiBoolean(
-    record.tx_queue_saturated_by_age,
-    `${context}.tx_queue_saturated_by_age`,
-  );
-  const saturated = parseSumeragiBoolean(
-    record.tx_queue_saturated,
-    `${context}.tx_queue_saturated`,
-  );
-  if (saturated !== (saturatedByCount || saturatedByBytes || saturatedByAge)) {
-    throw new TypeError(`${context}.tx_queue_saturated disagrees with its causes`);
-  }
-
-  const sealedAliases = Object.freeze(
-    assertSumeragiArrayBound(
-      record.lane_governance_sealed_aliases,
-      128,
-      `${context}.lane_governance_sealed_aliases`,
-    ).map((alias, index) =>
-      requireExactNonEmptyString(
-        alias,
-        `${context}.lane_governance_sealed_aliases[${index}]`,
-      ),
-    ),
-  );
-  const sealedTotal = parseSumeragiUnsigned(
-    record.lane_governance_sealed_total,
-    `${context}.lane_governance_sealed_total`,
-    { max: 0xffffffff },
-  );
-  if (sealedTotal !== sealedAliases.length || new Set(sealedAliases).size !== sealedAliases.length) {
-    throw new TypeError(
-      `${context} sealed lane aliases must be unique and match the sealed total`,
-    );
-  }
-
-  return Object.freeze({
-    pipeline_execution: pipelineExecution,
-    tx_queue_depth: txQueueDepth,
-    tx_queue_capacity: txQueueCapacity,
-    tx_queue_retained_bytes: txQueueRetainedBytes,
-    tx_queue_max_retained_bytes: txQueueMaxRetainedBytes,
-    tx_queue_saturated: saturated,
-    tx_queue_saturated_by_count: saturatedByCount,
-    tx_queue_saturated_by_bytes: saturatedByBytes,
-    tx_queue_saturated_by_age: saturatedByAge,
-    tx_queue_oldest_queued_age_ms: parseSumeragiUnsigned(
-      record.tx_queue_oldest_queued_age_ms,
-      `${context}.tx_queue_oldest_queued_age_ms`,
-    ),
-    npos: record.npos == null ? null : parseSumeragiNposDiagnostics(record.npos),
-    lane_commitments: parseSumeragiDiagnosticLaneCommitments(record.lane_commitments),
-    dataspace_commitments: parseSumeragiDiagnosticDataspaceCommitments(
-      record.dataspace_commitments,
-    ),
-    lane_settlement_commitments: parseLaneSettlementCommitments(
-      record.lane_settlement_commitments,
-    ),
-    lane_relay_envelopes: parseLaneRelayEnvelopes(record.lane_relay_envelopes),
-    lane_payload_ownerships: parseSumeragiLanePayloadOwnerships(
-      record.lane_payload_ownerships,
-    ),
-    committed_lane_blocks: parseSumeragiCommittedLaneBlocks(
-      record.committed_lane_blocks,
-    ),
-    lane_block_sessions: parseSumeragiLaneBlockSessions(record.lane_block_sessions),
-    lane_governance_sealed_total: sealedTotal,
-    lane_governance_sealed_aliases: sealedAliases,
-    lane_governance: parseSumeragiDiagnosticLaneGovernance(record.lane_governance),
-    native_amx_participant_applications:
-      parseSumeragiNativeParticipantApplications(
-        record.native_amx_participant_applications,
-      ),
-    autonomous_lane_executions: parseSumeragiAutonomousLaneExecutions(
-      record.autonomous_lane_executions,
-    ),
-  });
-}
-
-function parseSumeragiNposDiagnostics(value) {
-  const context = "sumeragi diagnostics.npos";
-  const fields = [
-    "epoch_length_blocks",
-    "vrf_commit_deadline_offset",
-    "vrf_reveal_deadline_offset",
-    "epoch_seed",
-    "prf_height",
-    "prf_view",
-    "vrf_penalty_epoch",
-    "vrf_committed_no_reveal_total",
-    "vrf_no_participation_total",
-    "vrf_late_reveals_total",
-  ];
-  const record = assertExactSumeragiRecord(value, fields, context);
-  const epochLength = parseSumeragiUnsigned(
-    record.epoch_length_blocks,
-    `${context}.epoch_length_blocks`,
-    { positive: true },
-  );
-  const commit = parseSumeragiUnsigned(
-    record.vrf_commit_deadline_offset,
-    `${context}.vrf_commit_deadline_offset`,
-    { positive: true },
-  );
-  const reveal = parseSumeragiUnsigned(
-    record.vrf_reveal_deadline_offset,
-    `${context}.vrf_reveal_deadline_offset`,
-    { positive: true },
-  );
-  if (!(commit < reveal && reveal <= epochLength)) {
-    throw new RangeError(`${context} windows must be strictly ordered within the epoch`);
-  }
-  const epochSeed = parseSumeragiByteVector(
-    record.epoch_seed,
-    32,
-    `${context}.epoch_seed`,
-  );
-  if (!epochSeed.some((byte) => byte !== 0)) {
-    throw new TypeError(`${context}.epoch_seed must not be zero`);
-  }
-  return Object.freeze({
-    epoch_length_blocks: epochLength,
-    vrf_commit_deadline_offset: commit,
-    vrf_reveal_deadline_offset: reveal,
-    epoch_seed: epochSeed,
-    prf_height: parseSumeragiUnsigned(record.prf_height, `${context}.prf_height`),
-    prf_view: parseSumeragiUnsigned(record.prf_view, `${context}.prf_view`),
-    vrf_penalty_epoch: parseSumeragiUnsigned(
-      record.vrf_penalty_epoch,
-      `${context}.vrf_penalty_epoch`,
-    ),
-    vrf_committed_no_reveal_total: parseSumeragiUnsigned(
-      record.vrf_committed_no_reveal_total,
-      `${context}.vrf_committed_no_reveal_total`,
-    ),
-    vrf_no_participation_total: parseSumeragiUnsigned(
-      record.vrf_no_participation_total,
-      `${context}.vrf_no_participation_total`,
-    ),
-    vrf_late_reveals_total: parseSumeragiUnsigned(
-      record.vrf_late_reveals_total,
-      `${context}.vrf_late_reveals_total`,
-    ),
-  });
-}
-
-function parseSumeragiDiagnosticLaneCommitments(value) {
-  const context = "sumeragi diagnostics.lane_commitments";
-  const fields = [
-    "block_height",
-    "lane_id",
-    "tx_count",
-    "total_chunks",
-    "rbc_bytes_total",
-    "teu_total",
-    "block_hash",
-  ];
-  return Object.freeze(
-    assertSumeragiArrayBound(value, 1024, context).map((item, index) => {
-      const itemContext = `${context}[${index}]`;
-      const record = assertExactSumeragiRecord(item, fields, itemContext);
-      return Object.freeze({
-        block_height: parseSumeragiUnsigned(
-          record.block_height,
-          `${itemContext}.block_height`,
-        ),
-        lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, {
-          max: 0xffffffff,
-        }),
-        tx_count: parseSumeragiUnsigned(record.tx_count, `${itemContext}.tx_count`),
-        total_chunks: parseSumeragiUnsigned(
-          record.total_chunks,
-          `${itemContext}.total_chunks`,
-        ),
-        rbc_bytes_total: parseSumeragiUnsigned(
-          record.rbc_bytes_total,
-          `${itemContext}.rbc_bytes_total`,
-        ),
-        teu_total: parseSumeragiUnsigned(record.teu_total, `${itemContext}.teu_total`),
-        block_hash: parseSumeragiHash(record.block_hash, `${itemContext}.block_hash`),
-      });
-    }),
-  );
-}
-
-function parseSumeragiDiagnosticDataspaceCommitments(value) {
-  const context = "sumeragi diagnostics.dataspace_commitments";
-  const fields = [
-    "block_height",
-    "lane_id",
-    "dataspace_id",
-    "tx_count",
-    "total_chunks",
-    "rbc_bytes_total",
-    "teu_total",
-    "block_hash",
-  ];
-  return Object.freeze(
-    assertSumeragiArrayBound(value, 128, context).map((item, index) => {
-      const itemContext = `${context}[${index}]`;
-      const record = assertExactSumeragiRecord(item, fields, itemContext);
-      return Object.freeze({
-        block_height: parseSumeragiUnsigned(
-          record.block_height,
-          `${itemContext}.block_height`,
-        ),
-        lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, {
-          max: 0xffffffff,
-        }),
-        dataspace_id: parseSumeragiUnsigned(
-          record.dataspace_id,
-          `${itemContext}.dataspace_id`,
-        ),
-        tx_count: parseSumeragiUnsigned(record.tx_count, `${itemContext}.tx_count`),
-        total_chunks: parseSumeragiUnsigned(
-          record.total_chunks,
-          `${itemContext}.total_chunks`,
-        ),
-        rbc_bytes_total: parseSumeragiUnsigned(
-          record.rbc_bytes_total,
-          `${itemContext}.rbc_bytes_total`,
-        ),
-        teu_total: parseSumeragiUnsigned(record.teu_total, `${itemContext}.teu_total`),
-        block_hash: parseSumeragiHash(record.block_hash, `${itemContext}.block_hash`),
-      });
-    }),
-  );
-}
-
-function parseSumeragiDiagnosticLaneGovernance(value) {
-  const context = "sumeragi diagnostics.lane_governance";
-  const fields = [
-    "lane_id",
-    "alias",
-    "governance",
-    "manifest_required",
-    "manifest_ready",
-    "manifest_path",
-    "validator_ids",
-    "quorum",
-    "protected_namespaces",
-    "runtime_upgrade",
-  ];
-  return Object.freeze(
-    assertSumeragiArrayBound(value, 128, context).map((item, index) => {
-      const itemContext = `${context}[${index}]`;
-      const record = assertExactSumeragiRecord(item, fields, itemContext);
-      const validatorIds = parseSumeragiDiagnosticStringArray(
-        record.validator_ids,
-        `${itemContext}.validator_ids`,
-      );
-      const namespaces = parseSumeragiDiagnosticStringArray(
-        record.protected_namespaces,
-        `${itemContext}.protected_namespaces`,
-      );
-      if (new Set(validatorIds).size !== validatorIds.length) {
-        throw new TypeError(`${itemContext}.validator_ids contains duplicates`);
-      }
-      if (new Set(namespaces).size !== namespaces.length) {
-        throw new TypeError(`${itemContext}.protected_namespaces contains duplicates`);
-      }
-      const quorum = record.quorum == null
-        ? null
-        : parseSumeragiUnsigned(record.quorum, `${itemContext}.quorum`, {
-          positive: true,
-          max: 0xffffffff,
-        });
-      if (quorum !== null && quorum > validatorIds.length) {
-        throw new RangeError(`${itemContext}.quorum exceeds the validator roster`);
-      }
-      return Object.freeze({
-        lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, {
-          max: 0xffffffff,
-        }),
-        alias: requireExactNonEmptyString(record.alias, `${itemContext}.alias`),
-        governance: record.governance == null
-          ? null
-          : requireExactNonEmptyString(record.governance, `${itemContext}.governance`),
-        manifest_required: parseSumeragiBoolean(
-          record.manifest_required,
-          `${itemContext}.manifest_required`,
-        ),
-        manifest_ready: parseSumeragiBoolean(
-          record.manifest_ready,
-          `${itemContext}.manifest_ready`,
-        ),
-        manifest_path: record.manifest_path == null
-          ? null
-          : requireExactNonEmptyString(
-            record.manifest_path,
-            `${itemContext}.manifest_path`,
-          ),
-        validator_ids: validatorIds,
-        quorum,
-        protected_namespaces: namespaces,
-        runtime_upgrade: record.runtime_upgrade == null
-          ? null
-          : parseSumeragiDiagnosticRuntimeUpgrade(
-            record.runtime_upgrade,
-            `${itemContext}.runtime_upgrade`,
-          ),
-      });
-    }),
-  );
-}
-
-function parseSumeragiDiagnosticRuntimeUpgrade(value, context) {
-  const record = assertExactSumeragiRecord(
-    value,
-    ["allow", "require_metadata", "metadata_key", "allowed_ids"],
-    context,
-  );
-  const allowedIds = parseSumeragiDiagnosticStringArray(
-    record.allowed_ids,
-    `${context}.allowed_ids`,
-  );
-  if (new Set(allowedIds).size !== allowedIds.length) {
-    throw new TypeError(`${context}.allowed_ids contains duplicates`);
-  }
-  return Object.freeze({
-    allow: parseSumeragiBoolean(record.allow, `${context}.allow`),
-    require_metadata: parseSumeragiBoolean(
-      record.require_metadata,
-      `${context}.require_metadata`,
-    ),
-    metadata_key: record.metadata_key == null
-      ? null
-      : requireExactNonEmptyString(record.metadata_key, `${context}.metadata_key`),
-    allowed_ids: allowedIds,
-  });
-}
-
-function parseSumeragiDiagnosticStringArray(value, context) {
-  return Object.freeze(
-    assertSumeragiArrayBound(value, 128, context).map((item, index) =>
-      requireExactNonEmptyString(item, `${context}[${index}]`),
-    ),
-  );
-}
-
-function parseSumeragiNativeParticipantApplications(value) {
-  const context = "sumeragi diagnostics.native_amx_participant_applications";
-  const requiredFields = [
-    "lane_id",
-    "dataspace_id",
-    "lane_incarnation",
-    "participant_height",
-    "participant_view",
-    "predecessor_height",
-    "descriptor_hash",
-    "proposal_hash",
-    "settlement_hash",
-    "source_count",
-    "state",
-  ];
-  const optionalFields = [
-    "predecessor_descriptor_hash",
-    "application_block_height",
-    "application_block_hash",
-  ];
-  let previousKey = null;
-  return Object.freeze(
-    assertSumeragiArrayBound(value, 1024, context).map((item, index) => {
-      const itemContext = `${context}[${index}]`;
-      const record = ensureRecord(item, itemContext);
-      const allowed = new Set([...requiredFields, ...optionalFields]);
-      const unknown = Object.keys(record).find((field) => !allowed.has(field));
-      const missing = requiredFields.find(
-        (field) => !Object.prototype.hasOwnProperty.call(record, field),
-      );
-      if (unknown !== undefined || missing !== undefined) {
-        throw new TypeError(
-          unknown !== undefined
-            ? `${itemContext} contains unknown field ${unknown}`
-            : `${itemContext} is missing required field ${missing}`,
-        );
-      }
-      const laneId = parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, {
-        max: 0xffffffff,
-      });
-      const dataspaceId = parseSumeragiUnsigned(
-        record.dataspace_id,
-        `${itemContext}.dataspace_id`,
-      );
-      const laneIncarnation = parseSumeragiNonzeroHash(
-        record.lane_incarnation,
-        `${itemContext}.lane_incarnation`,
-      );
-      const key = [laneId, dataspaceId, laneIncarnation];
-      if (previousKey !== null && compareSumeragiDiagnosticRouteKeys(previousKey, key) >= 0) {
-        throw new TypeError(
-          `${context} must be strictly ordered by route and incarnation`,
-        );
-      }
-      previousKey = key;
-      const participantHeight = parseSumeragiUnsigned(
-        record.participant_height,
-        `${itemContext}.participant_height`,
-        { positive: true },
-      );
-      const predecessorHeight = parseSumeragiUnsigned(
-        record.predecessor_height,
-        `${itemContext}.predecessor_height`,
-      );
-      const predecessorHash = record.predecessor_descriptor_hash == null
-        ? null
-        : parseSumeragiNonzeroHash(
-          record.predecessor_descriptor_hash,
-          `${itemContext}.predecessor_descriptor_hash`,
-        );
-      if (
-        !sumeragiUnsignedSuccessorOf(participantHeight, predecessorHeight) ||
-        (predecessorHeight === 0) !== (predecessorHash === null)
-      ) {
-        throw new TypeError(`${itemContext} contains inconsistent predecessor geometry`);
-      }
-      const applicationHeight = record.application_block_height == null
-        ? null
-        : parseSumeragiUnsigned(
-          record.application_block_height,
-          `${itemContext}.application_block_height`,
-          { positive: true },
-        );
-      const applicationHash = record.application_block_hash == null
-        ? null
-        : parseSumeragiNonzeroHash(
-          record.application_block_hash,
-          `${itemContext}.application_block_hash`,
-        );
-      if ((applicationHeight === null) !== (applicationHash === null)) {
-        throw new TypeError(
-          `${itemContext} application block height and hash must appear together`,
-        );
-      }
-      const state = requireExactNonEmptyString(record.state, `${itemContext}.state`);
-      const states = new Set([
-        "certified_pending_carrier",
-        "committed_evidence_pending",
-        "durably_applied",
-        "conflict",
-      ]);
-      if (!states.has(state)) {
-        throw new TypeError(`${itemContext}.state has an unknown variant`);
-      }
-      if (state === "durably_applied" && applicationHeight === null) {
-        throw new TypeError(
-          `${itemContext} durably applied evidence requires an application block`,
-        );
-      }
-      return Object.freeze({
-        lane_id: laneId,
-        dataspace_id: dataspaceId,
-        lane_incarnation: laneIncarnation,
-        participant_height: participantHeight,
-        participant_view: parseSumeragiUnsigned(
-          record.participant_view,
-          `${itemContext}.participant_view`,
-        ),
-        predecessor_height: predecessorHeight,
-        predecessor_descriptor_hash: predecessorHash,
-        descriptor_hash: parseSumeragiNonzeroHash(
-          record.descriptor_hash,
-          `${itemContext}.descriptor_hash`,
-        ),
-        proposal_hash: parseSumeragiNonzeroHash(
-          record.proposal_hash,
-          `${itemContext}.proposal_hash`,
-        ),
-        settlement_hash: parseSumeragiNonzeroHash(
-          record.settlement_hash,
-          `${itemContext}.settlement_hash`,
-        ),
-        source_count: parseSumeragiUnsigned(
-          record.source_count,
-          `${itemContext}.source_count`,
-          { positive: true, max: 4096 },
-        ),
-        application_block_height: applicationHeight,
-        application_block_hash: applicationHash,
-        state,
-      });
-    }),
-  );
-}
-
-function parseSumeragiAutonomousLaneExecutions(value) {
-  const context = "sumeragi diagnostics.autonomous_lane_executions";
-  const required = [
-    "lane_id", "dataspace_id", "lane_incarnation", "lane_block_height",
-    "lane_block_view", "proposal_height", "proposal_view", "proposal_hash",
-    "descriptor_hash", "reservation_count", "transaction_count",
-    "highest_durable_stage",
-  ];
-  const optional = [
-    "executable_payload_hash", "source_bundle_hash", "merge_entry_hash",
-    "application_block_height", "application_block_hash", "stuck_reason",
-  ];
-  const stages = new Set([
-    "reservations_durable", "executable_payload_durable",
-    "payload_availability_certified", "lane_certified",
-    "certified_bundle_durable", "merge_candidate_durable",
-    "global_carrier_committed", "kura_wsv_application_receipt_durable",
-    "queue_finalized", "conflict",
-  ]);
-  const reasons = new Set([
-    "awaiting_payload_availability", "awaiting_lane_certification",
-    "certified_bundle_unavailable", "awaiting_merge_selection",
-    "awaiting_global_carrier", "awaiting_application_receipt",
-    "queue_finalization_unverifiable", "evidence_conflict",
-  ]);
-  let previousKey = null;
-  return Object.freeze(assertSumeragiArrayBound(value, 128, context).map((item, index) => {
-    const itemContext = `${context}[${index}]`;
-    const record = ensureRecord(item, itemContext);
-    const allowed = new Set([...required, ...optional]);
-    const unknown = Object.keys(record).find((field) => !allowed.has(field));
-    const missing = required.find(
-      (field) => !Object.prototype.hasOwnProperty.call(record, field),
-    );
-    if (unknown !== undefined || missing !== undefined) {
-      throw new TypeError(unknown !== undefined
-        ? `${itemContext} contains unknown field ${unknown}`
-        : `${itemContext} is missing required field ${missing}`);
-    }
-    const u64 = (field, options = {}) => parseSumeragiUnsigned(
-      record[field], `${itemContext}.${field}`, options,
-    );
-    const hash = (field) => record[field] == null ? null : parseSumeragiNonzeroHash(
-      record[field], `${itemContext}.${field}`,
-    );
-    const laneId = u64("lane_id", { max: 0xffffffff });
-    const dataspaceId = u64("dataspace_id");
-    const incarnation = hash("lane_incarnation");
-    const laneHeight = u64("lane_block_height", { positive: true });
-    const laneView = u64("lane_block_view");
-    const proposalHeight = u64("proposal_height", { positive: true });
-    const proposalView = u64("proposal_view");
-    const proposalHash = hash("proposal_hash");
-    const descriptorHash = hash("descriptor_hash");
-    const key = [
-      laneId, dataspaceId, incarnation, laneHeight, laneView,
-      proposalHeight, proposalView, proposalHash,
-    ];
-    if (previousKey !== null && compareSumeragiDiagnosticKeys(previousKey, key) >= 0) {
-      throw new TypeError(`${context} must be strictly ordered by exact identity`);
-    }
-    previousKey = key;
-    const applicationHeight = record.application_block_height == null
-      ? null : u64("application_block_height", { positive: true });
-    const applicationHash = hash("application_block_hash");
-    if ((applicationHeight === null) !== (applicationHash === null)) {
-      throw new TypeError(`${itemContext} application block height and hash must appear together`);
-    }
-    const reservationCount = u64("reservation_count", { max: 4096 });
-    const transactionCount = u64("transaction_count", { positive: true, max: 4096 });
-    const stage = requireExactNonEmptyString(
-      record.highest_durable_stage, `${itemContext}.highest_durable_stage`,
-    );
-    if (!stages.has(stage)) {
-      throw new TypeError(`${itemContext}.highest_durable_stage has an unknown variant`);
-    }
-    const reason = record.stuck_reason == null ? null : requireExactNonEmptyString(
-      record.stuck_reason, `${itemContext}.stuck_reason`,
-    );
-    if (reason !== null && !reasons.has(reason)) {
-      throw new TypeError(`${itemContext}.stuck_reason has an unknown variant`);
-    }
-    const expectedReasons = {
-      reservations_durable: "awaiting_payload_availability",
-      executable_payload_durable: "awaiting_payload_availability",
-      payload_availability_certified: "awaiting_lane_certification",
-      lane_certified: "certified_bundle_unavailable",
-      certified_bundle_durable: "awaiting_merge_selection",
-      merge_candidate_durable: "awaiting_global_carrier",
-      global_carrier_committed: "awaiting_application_receipt",
-      kura_wsv_application_receipt_durable: "queue_finalization_unverifiable",
-      queue_finalized: null,
-      conflict: "evidence_conflict",
-    };
-    if (reason !== expectedReasons[stage]) {
-      throw new TypeError(`${itemContext} stage and stuck reason disagree`);
-    }
-    if (stage !== "conflict" && reservationCount !== transactionCount) {
-      throw new TypeError(`${itemContext} reservation and transaction counts disagree`);
-    }
-    const payloadHash = hash("executable_payload_hash");
-    const bundleHash = hash("source_bundle_hash");
-    const mergeHash = hash("merge_entry_hash");
-    if (stage !== "conflict") {
-      const geometries = {
-        reservations_durable: [false, false, false, false],
-        executable_payload_durable: [true, false, false, false],
-        payload_availability_certified: [true, false, false, false],
-        lane_certified: [true, false, false, false],
-        certified_bundle_durable: [true, true, false, false],
-        merge_candidate_durable: [true, true, true, false],
-        global_carrier_committed: [true, true, true, false],
-        kura_wsv_application_receipt_durable: [true, true, true, true],
-        queue_finalized: [true, true, true, true],
-      };
-      const observed = [
-        payloadHash !== null, bundleHash !== null, mergeHash !== null,
-        applicationHeight !== null,
-      ];
-      if (observed.some((present, offset) => present !== geometries[stage][offset])) {
-        throw new TypeError(`${itemContext} evidence does not match durable stage`);
-      }
-    }
-    return Object.freeze({
-      lane_id: laneId, dataspace_id: dataspaceId, lane_incarnation: incarnation,
-      lane_block_height: laneHeight, lane_block_view: laneView,
-      proposal_height: proposalHeight, proposal_view: proposalView,
-      proposal_hash: proposalHash, descriptor_hash: descriptorHash,
-      executable_payload_hash: payloadHash,
-      source_bundle_hash: bundleHash,
-      merge_entry_hash: mergeHash,
-      application_block_height: applicationHeight,
-      application_block_hash: applicationHash,
-      reservation_count: reservationCount, transaction_count: transactionCount,
-      highest_durable_stage: stage, stuck_reason: reason,
-    });
-  }));
-}
-
-function compareSumeragiDiagnosticKeys(left, right) {
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] === right[index]) continue;
-    return left[index] < right[index] ? -1 : 1;
-  }
-  return 0;
-}
-
-function compareSumeragiDiagnosticRouteKeys(left, right) {
-  if (left[0] !== right[0]) {
-    return left[0] - right[0];
-  }
-  if (left[1] !== right[1]) {
-    return left[1] < right[1] ? -1 : 1;
-  }
-  return left[2].localeCompare(right[2]);
-}
-
-function parseSumeragiLivenessStatus(value, context, active) {
-  const record = ensureRecord(value, context);
-  const fields = new Set([
-    "generation",
-    "prepare_quorums",
-    "commit_quorums",
-    "timeout_quorums",
-    "outbound_intents",
-    "work",
-    "queues",
-    "last_progress",
-    "no_progress_age_ms",
-    "blocker",
-    "ignore_counts",
-  ]);
-  const unknown = Object.keys(record).find((field) => !fields.has(field));
-  if (unknown !== undefined) {
-    throw new TypeError(`${context} contains unknown field ${unknown}`);
-  }
-  for (const field of fields) {
-    if (field !== "last_progress" && field !== "blocker" &&
-        !Object.prototype.hasOwnProperty.call(record, field)) {
-      throw new TypeError(`${context} is missing required field ${field}`);
-    }
-  }
-
-  const generation = parseSumeragiUnsigned(record.generation, `${context}.generation`);
-  const boundRound = (raw, roundContext) => {
-    const round = parseSumeragiRound(raw, roundContext);
-    if (
-      round.context_id[0] !== active.contextId[0] ||
-      round.height !== active.height
-    ) {
-      throw new TypeError(`${roundContext} must match the active height context`);
-    }
-    return round;
-  };
-  const checkedRound = (raw, roundContext) => {
-    const round = boundRound(raw, roundContext);
-    if (round.view > active.view) {
-      throw new RangeError(`${roundContext}.view must not exceed the active view`);
-    }
-    return round;
-  };
-  const checkedPartialQuorum = (
-    raw,
-    itemContext,
-    { timeout = false, phase = null } = {},
-  ) => {
-    const expectedFields = timeout
-      ? [
-          "round",
-          "signer_count",
-          "signed_power",
-          "min_signers",
-          "total_power",
-          "certificate_formed",
-        ]
-      : [
-          "round",
-          "proposal_round",
-          "subject",
-          "execution_commitment",
-          "signer_count",
-          "signed_power",
-          "min_signers",
-          "total_power",
-        ];
-    const item = assertExactSumeragiRecord(raw, expectedFields, itemContext);
-    const signerCount = parseSumeragiUnsigned(
-      item.signer_count,
-      `${itemContext}.signer_count`,
-      { max: active.heightContext.validator_count },
-    );
-    const signedPower = parseSumeragiUnsigned(
-      item.signed_power,
-      `${itemContext}.signed_power`,
-    );
-    const minSigners = parseSumeragiUnsigned(
-      item.min_signers,
-      `${itemContext}.min_signers`,
-      { max: active.heightContext.validator_count },
-    );
-    const totalPower = parseSumeragiUnsigned(
-      item.total_power,
-      `${itemContext}.total_power`,
-      { positive: true },
-    );
-    if (
-      minSigners !== active.heightContext.quorum.min_signers ||
-      totalPower !== active.heightContext.quorum.total_power ||
-      signedPower < signerCount ||
-      signedPower > totalPower ||
-      (active.heightContext.mode.mode === "permissioned" && signedPower !== signerCount)
-    ) {
-      throw new RangeError(`${itemContext} disagrees with the frozen dual quorum`);
-    }
-    const round = checkedRound(item.round, `${itemContext}.round`);
-    if (timeout) {
-      const certificateFormed = parseSumeragiBoolean(
-        item.certificate_formed,
-        `${itemContext}.certificate_formed`,
-      );
-      if (
-        certificateFormed &&
-        (signerCount < minSigners || BigInt(signedPower) * 3n <= BigInt(totalPower) * 2n)
-      ) {
-        throw new RangeError(`${itemContext} does not form its advertised dual quorum`);
-      }
-      return Object.freeze({
-        round,
-        signer_count: signerCount,
-        signed_power: signedPower,
-        min_signers: minSigners,
-        total_power: totalPower,
-        certificate_formed: certificateFormed,
-      });
-    }
-    const proposalRound = checkedRound(
-      item.proposal_round,
-      `${itemContext}.proposal_round`,
-    );
-    validateSumeragiProposalRound(proposalRound, round, itemContext);
-    return Object.freeze({
-      round,
-      proposal_round: proposalRound,
-      subject: parseSumeragiBlockSubject(item.subject, `${itemContext}.subject`),
-      execution_commitment: parseSumeragiExecutionCommitment(
-        item.execution_commitment,
-        `${itemContext}.execution_commitment`,
-      ),
-      signer_count: signerCount,
-      signed_power: signedPower,
-      min_signers: minSigners,
-      total_power: totalPower,
-    });
-  };
-  const voteQuorums = (field, phase) => Object.freeze(
-    assertSumeragiArrayBound(record[field], 128, `${context}.${field}`).map(
-      (item, index) => checkedPartialQuorum(
-        item,
-        `${context}.${field}[${index}]`,
-        { phase },
-      ),
-    ),
-  );
-  const timeoutQuorums = Object.freeze(
-    assertSumeragiArrayBound(
-      record.timeout_quorums,
-      128,
-      `${context}.timeout_quorums`,
-    ).map((item, index) => checkedPartialQuorum(
-      item,
-      `${context}.timeout_quorums[${index}]`,
-      { timeout: true },
-    )),
-  );
-
-  const subjectKinds = new Set([
-    "proposal",
-    "prepare_vote",
-    "commit_vote",
-    "prepare_qc",
-    "commit_qc",
-  ]);
-  const outboundIntents = Object.freeze(
-    assertSumeragiArrayBound(
-      record.outbound_intents,
-      7,
-      `${context}.outbound_intents`,
-    ).map((raw, index) => {
-      const itemContext = `${context}.outbound_intents[${index}]`;
-      const item = ensureRecord(raw, itemContext);
-      const allowedFields = new Set([
-        "kind",
-        "round",
-        "proposal_round",
-        "subject",
-        "execution_commitment",
-        "stage",
-      ]);
-      const unknownField = Object.keys(item).find((field) => !allowedFields.has(field));
-      if (unknownField !== undefined) {
-        throw new TypeError(`${itemContext} contains unknown field ${unknownField}`);
-      }
-      for (const field of ["kind", "round", "stage"]) {
-        if (!Object.prototype.hasOwnProperty.call(item, field)) {
-          throw new TypeError(`${itemContext} is missing required field ${field}`);
-        }
-      }
-      const kind = parseSumeragiTaggedUnit(
-        item.kind,
-        "kind",
-        [
-          "proposal",
-          "prepare_vote",
-          "commit_vote",
-          "timeout_vote",
-          "prepare_qc",
-          "commit_qc",
-          "timeout_certificate",
-        ],
-        `${itemContext}.kind`,
-      );
-      const stage = parseSumeragiTaggedUnit(
-        item.stage,
-        "stage",
-        ["pending_persistence", "pending_signature", "queued", "sent"],
-        `${itemContext}.stage`,
-      );
-      const subject = item.subject == null
-        ? null
-        : parseSumeragiBlockSubject(item.subject, `${itemContext}.subject`);
-      const executionCommitment = item.execution_commitment == null
-        ? null
-        : parseSumeragiExecutionCommitment(
-            item.execution_commitment,
-            `${itemContext}.execution_commitment`,
-          );
-      const carriesProposalRound = subjectKinds.has(kind.kind);
-      if (carriesProposalRound !== (item.proposal_round != null)) {
-        throw new TypeError(`${itemContext} has inconsistent proposal_round for ${kind.kind}`);
-      }
-      const shapeIsValid =
-        (kind.kind === "proposal" && subject !== null && executionCommitment === null) ||
-        (subjectKinds.has(kind.kind) && kind.kind !== "proposal" &&
-          subject !== null && executionCommitment !== null) ||
-        (!subjectKinds.has(kind.kind) && subject === null && executionCommitment === null);
-      if (!shapeIsValid) {
-        throw new TypeError(`${itemContext} has inconsistent proposal fields`);
-      }
-      const round = boundRound(item.round, `${itemContext}.round`);
-      if (kind.kind !== "commit_qc" && round.view > active.view) {
-        throw new RangeError(`${itemContext}.round.view must not exceed the active view`);
-      }
-      const proposalRound = item.proposal_round == null
-        ? null
-        : boundRound(item.proposal_round, `${itemContext}.proposal_round`);
-      if (proposalRound !== null) {
-        validateSumeragiProposalRound(proposalRound, round, itemContext);
-      }
-      return Object.freeze({
-        kind,
-        round,
-        proposal_round: proposalRound,
-        subject,
-        execution_commitment: executionCommitment,
-        stage,
-      });
-    }),
-  );
-
-  const workRecord = assertExactSumeragiRecord(
-    record.work,
-    ["candidate", "body_recovery", "body_store", "validation", "application", "successor_height"],
-    `${context}.work`,
-  );
-  const work = Object.freeze(Object.fromEntries(
-    Object.keys(workRecord).map((field) => [
-      field,
-      parseSumeragiTaggedUnit(
-        workRecord[field],
-        "stage",
-        ["idle", "queued", "running", "complete"],
-        `${context}.work.${field}`,
-      ),
-    ]),
-  ));
-
-  const queueNames = new Set();
-  const queues = Object.freeze(
-    assertSumeragiArrayBound(record.queues, 10, `${context}.queues`).map((raw, index) => {
-      const itemContext = `${context}.queues[${index}]`;
-      const item = ensureRecord(raw, itemContext);
-      const allowedFields = new Set([
-        "queue",
-        "depth",
-        "capacity",
-        "oldest_age_ms",
-        "service_debt",
-      ]);
-      const unknownField = Object.keys(item).find((field) => !allowedFields.has(field));
-      if (unknownField !== undefined) {
-        throw new TypeError(`${itemContext} contains unknown field ${unknownField}`);
-      }
-      for (const field of ["queue", "depth", "capacity", "service_debt"]) {
-        if (!Object.prototype.hasOwnProperty.call(item, field)) {
-          throw new TypeError(`${itemContext} is missing required field ${field}`);
-        }
-      }
-      const queue = parseSumeragiTaggedUnit(
-        item.queue,
-        "queue",
-        [
-          "ingress",
-          "deferred_normal",
-          "deferred_progress",
-          "deferred_completion",
-          "runtime_normal",
-          "runtime_progress",
-          "runtime_completion",
-          "effect_completion",
-          "network_ingress",
-          "effect_dispatch",
-        ],
-        `${itemContext}.queue`,
-      );
-      if (queueNames.has(queue.queue)) {
-        throw new TypeError(`${itemContext}.queue is duplicated`);
-      }
-      queueNames.add(queue.queue);
-      const depth = parseSumeragiUnsigned(item.depth, `${itemContext}.depth`, {
-        max: 0xffffffff,
-      });
-      const capacity = parseSumeragiUnsigned(item.capacity, `${itemContext}.capacity`, {
-        positive: true,
-        max: 0xffffffff,
-      });
-      const oldestAge = item.oldest_age_ms == null
-        ? null
-        : parseSumeragiUnsigned(item.oldest_age_ms, `${itemContext}.oldest_age_ms`);
-      if (depth > capacity || ((depth === 0) !== (oldestAge === null))) {
-        throw new RangeError(`${itemContext} has inconsistent occupancy and age`);
-      }
-      return Object.freeze({
-        queue,
-        depth,
-        capacity,
-        oldest_age_ms: oldestAge,
-        service_debt: parseSumeragiUnsigned(
-          item.service_debt,
-          `${itemContext}.service_debt`,
-        ),
-      });
-    }),
-  );
-
-  let lastProgress = null;
-  if (record.last_progress != null) {
-    const progress = assertExactSumeragiRecord(
-      record.last_progress,
-      ["generation", "round", "transition", "age_ms"],
-      `${context}.last_progress`,
-    );
-    const progressGeneration = parseSumeragiUnsigned(
-      progress.generation,
-      `${context}.last_progress.generation`,
-    );
-    if (progressGeneration > generation) {
-      throw new RangeError(`${context}.last_progress.generation is from the future`);
-    }
-    lastProgress = Object.freeze({
-      generation: progressGeneration,
-      round: checkedRound(progress.round, `${context}.last_progress.round`),
-      transition: parseSumeragiTaggedUnit(
-        progress.transition,
-        "transition",
-        [
-          "proposal_admitted",
-          "body_available",
-          "body_stored",
-          "body_validated",
-          "prepare_vote_admitted",
-          "commit_vote_admitted",
-          "timeout_vote_admitted",
-          "prepare_quorum",
-          "lock_installed",
-          "commit_quorum",
-          "timeout_certificate_installed",
-          "decision_persisted",
-          "applied",
-          "successor_height_activated",
-          "recovery_replayed",
-        ],
-        `${context}.last_progress.transition`,
-      ),
-      age_ms: parseSumeragiUnsigned(progress.age_ms, `${context}.last_progress.age_ms`),
-    });
-  }
-  const blocker = record.blocker == null
-    ? null
-    : parseSumeragiTaggedUnit(
-        record.blocker,
-        "blocker",
-        [
-          "missing_proposal",
-          "body_unavailable",
-          "prepare_quorum_missing",
-          "commit_quorum_missing",
-          "timeout_certificate_missing",
-          "scheduler_starvation",
-          "application_pending",
-          "local_control_pending",
-        ],
-        `${context}.blocker`,
-      );
-
-  const ignoreReasons = new Set();
-  const ignoreCounts = Object.freeze(
-    assertSumeragiArrayBound(record.ignore_counts, 12, `${context}.ignore_counts`).map(
-      (raw, index) => {
-        const itemContext = `${context}.ignore_counts[${index}]`;
-        const item = assertExactSumeragiRecord(raw, ["reason", "count"], itemContext);
-        const reason = parseSumeragiTaggedUnit(
-          item.reason,
-          "reason",
-          [
-            "wrong_height",
-            "wrong_view",
-            "stale_generation",
-            "busy",
-            "duplicate",
-            "no_matching_work",
-            "observer",
-            "view_closed",
-            "already_decided",
-            "recovery_pending",
-            "irrelevant_view",
-            "unsafe_proposal",
-          ],
-          `${itemContext}.reason`,
-        );
-        if (ignoreReasons.has(reason.reason)) {
-          throw new TypeError(`${itemContext}.reason is duplicated`);
-        }
-        ignoreReasons.add(reason.reason);
-        return Object.freeze({
-          reason,
-          count: parseSumeragiUnsigned(item.count, `${itemContext}.count`),
-        });
-      },
-    ),
-  );
-
-  return Object.freeze({
-    generation,
-    prepare_quorums: voteQuorums("prepare_quorums", "prepare"),
-    commit_quorums: voteQuorums("commit_quorums", "commit"),
-    timeout_quorums: timeoutQuorums,
-    outbound_intents: outboundIntents,
-    work,
-    queues,
-    last_progress: lastProgress,
-    no_progress_age_ms: parseSumeragiUnsigned(
-      record.no_progress_age_ms,
-      `${context}.no_progress_age_ms`,
-    ),
-    blocker,
-    ignore_counts: ignoreCounts,
-  });
-}
-
-function parseSumeragiSafetyHalt(value, context) {
-  const record = ensureRecord(value, context);
-  const allowedFields = new Set([
-    "active",
-    "reason",
-    "height",
-    "epoch",
-    "first_block_hash",
-    "conflicting_block_hash",
-    "first_parent_state_root",
-    "first_post_state_root",
-    "conflicting_parent_state_root",
-    "conflicting_post_state_root",
-  ]);
-  const unknownField = Object.keys(record).find((field) => !allowedFields.has(field));
-  if (unknownField !== undefined) {
-    throw new TypeError(`${context} contains unknown field ${unknownField}`);
-  }
-  const optionalHash = (field) =>
-    record[field] == null ? null : parseSumeragiHash(record[field], `${context}.${field}`);
-  const reason = record.reason == null ? null : record.reason;
-  if (reason !== null && typeof reason !== "string") {
-    throw new TypeError(`${context}.reason must be a string or null`);
-  }
-  return Object.freeze({
-    active: parseSumeragiBoolean(record.active, `${context}.active`),
-    reason,
-    height: parseSumeragiUnsigned(record.height, `${context}.height`),
-    epoch: parseSumeragiUnsigned(record.epoch, `${context}.epoch`),
-    first_block_hash: optionalHash("first_block_hash"),
-    conflicting_block_hash: optionalHash("conflicting_block_hash"),
-    first_parent_state_root: optionalHash("first_parent_state_root"),
-    first_post_state_root: optionalHash("first_post_state_root"),
-    conflicting_parent_state_root: optionalHash("conflicting_parent_state_root"),
-    conflicting_post_state_root: optionalHash("conflicting_post_state_root"),
-  });
-}
-
-const SUMERAGI_U64_MAX = (1n << 64n) - 1n;
-
-function parseSumeragiUnsigned(value, context, options = {}) {
-  if (
-    (
-      typeof value !== "number" ||
-      !Number.isSafeInteger(value) ||
-      Object.is(value, -0)
-    ) &&
-    typeof value !== "bigint"
-  ) {
-    throw new TypeError(`${context} must be an unsigned integer`);
-  }
-  if (value < 0) {
-    throw new RangeError(`${context} must be >= 0`);
-  }
-  const integer = BigInt(value);
-  if (options.positive === true && integer === 0n) {
-    throw new RangeError(`${context} must be positive`);
-  }
-  const maximum =
-    options.max === undefined ? SUMERAGI_U64_MAX : BigInt(options.max);
-  if (integer > maximum) {
-    throw new RangeError(`${context} exceeds its protocol bound`);
-  }
-  if (options.max !== undefined) {
-    if (maximum > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new TypeError(`${context} has an invalid narrow protocol bound`);
-    }
-    return Number(integer);
-  }
-  return value;
-}
-
-function sumeragiUnsignedSuccessorOf(successor, predecessor) {
-  return BigInt(predecessor) + 1n === BigInt(successor);
-}
-
-function sumeragiRoundsEqual(left, right) {
-  return (
-    left.height === right.height &&
-    left.view === right.view &&
-    left.context_id.length === right.context_id.length &&
-    left.context_id.every((entry, index) => entry === right.context_id[index])
-  );
-}
-
-function parseSumeragiExactUnsigned(value, context, options = {}) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-    throw new TypeError(`${context} must be an unsigned integer`);
-  }
-  return parseSumeragiUnsigned(value, context, options);
-}
-
-function parseSumeragiUnsignedDecimal(value, context) {
-  const maximum = (1n << 128n) - 1n;
-  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
-    throw new TypeError(`${context} must be a canonical unsigned decimal string`);
-  }
-  const parsed = BigInt(value);
-  if (parsed > maximum) {
-    throw new RangeError(`${context} exceeds u128`);
-  }
-  return value;
-}
-
-function parseSumeragiQuantity(value, context) {
-  return requireCanonicalQuantity(value, context);
-}
-
-function parseSumeragiBoolean(value, context) {
-  if (typeof value !== "boolean") {
-    throw new TypeError(`${context} must be a boolean`);
-  }
-  return value;
-}
-
-function parseSumeragiHash(value, context) {
-  if (typeof value !== "string" || !/^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u.test(value)) {
-    throw new TypeError(`${context} must be a canonical Iroha hash literal`);
-  }
-  const body = parseHashLiteralToHex(value, context);
-  if ((Number.parseInt(body.slice(-2), 16) & 1) === 0) {
-    throw new TypeError(`${context} has an invalid Iroha hash marker bit`);
-  }
-  return value;
-}
-
-function parseSumeragiOptionalByte32(value, context) {
-  if (value == null) {
-    return null;
-  }
-  return parseSumeragiByte32(value, context);
-}
-
-function parseSumeragiByte32(value, context) {
-  if (typeof value !== "string" || !/^[0-9A-F]{64}$/u.test(value)) {
-    throw new TypeError(`${context} must be canonical uppercase 32-byte hex`);
-  }
-  return value;
-}
-
-function parseSumeragiByteVector(value, length, context) {
-  if (!Array.isArray(value) || value.length !== length) {
-    throw new TypeError(`${context} must contain exactly ${length} byte values`);
-  }
-  return Object.freeze(
-    value.map((byte, index) => {
-      if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
-        throw new TypeError(`${context}[${index}] must be an integer byte`);
-      }
-      return byte;
-    }),
-  );
-}
-
-function assertSumeragiArrayBound(value, maximum, context, minimum = 0) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  if (value.length < minimum) {
-    throw new RangeError(`${context} contains fewer than ${minimum} items`);
-  }
-  if (value.length > maximum) {
-    throw new RangeError(`${context} exceeds its protocol item bound`);
-  }
-  return value;
-}
-
-function assertExactSumeragiRecord(value, fields, context) {
-  const record = ensureRecord(value, context);
-  const expected = new Set(fields);
-  for (const field of Object.keys(record)) {
-    if (!expected.has(field)) {
-      throw new TypeError(`${context} contains unknown field ${field}`);
-    }
-  }
-  for (const field of fields) {
-    if (!Object.prototype.hasOwnProperty.call(record, field)) {
-      throw new TypeError(`${context} is missing required field ${field}`);
-    }
-  }
-  return record;
-}
-
-function parseSumeragiContextId(value, context) {
-  if (!Array.isArray(value) || value.length !== 1) {
-    throw new TypeError(`${context} must be a one-element hash tuple`);
-  }
-  return Object.freeze([parseSumeragiHash(value[0], `${context}[0]`)]);
-}
-
-function parseSumeragiTaggedUnit(value, tag, allowed, context) {
-  return parseSumeragiTaggedUnitWithContent(
-    value,
-    tag,
-    "details",
-    allowed,
-    context,
-  );
-}
-
-function parseSumeragiTaggedUnitWithContent(value, tag, content, allowed, context) {
-  const record = ensureRecord(value, context);
-  if (Object.keys(record).some((field) => field !== tag && field !== content)) {
-    throw new TypeError(`${context} contains an unknown tagged-enum field`);
-  }
-  const variant = requireNonEmptyString(record[tag], `${context}.${tag}`);
-  if (!allowed.includes(variant)) {
-    throw new TypeError(`${context}.${tag} is not a supported v2 variant`);
-  }
-  if (!Object.prototype.hasOwnProperty.call(record, content) || record[content] !== null) {
-    throw new TypeError(`${context}.${content} must be explicitly null`);
-  }
-  return Object.freeze({ [tag]: variant, [content]: null });
-}
-
-function parseSumeragiRound(value, context) {
-  const record = ensureRecord(value, context);
-  return Object.freeze({
-    context_id: parseSumeragiContextId(record.context_id, `${context}.context_id`),
-    height: parseSumeragiUnsigned(record.height, `${context}.height`),
-    view: parseSumeragiUnsigned(record.view, `${context}.view`),
-  });
-}
-
-function validateSumeragiProposalRound(proposalRound, round, context) {
-  if (
-    proposalRound.context_id[0] !== round.context_id[0] ||
-    proposalRound.height !== round.height
-  ) {
-    throw new TypeError(`${context}.proposal_round must match round context and height`);
-  }
-  if (proposalRound.view !== round.view) {
-    throw new TypeError(`${context}.proposal_round must equal round`);
-  }
-}
-
-function parseSumeragiBlockSubject(value, context) {
-  const record = ensureRecord(value, context);
-  return Object.freeze({
-    parent_block_hash:
-      record.parent_block_hash == null
-        ? null
-        : parseSumeragiHash(record.parent_block_hash, `${context}.parent_block_hash`),
-    block_hash: parseSumeragiHash(record.block_hash, `${context}.block_hash`),
-    payload_hash: parseSumeragiHash(record.payload_hash, `${context}.payload_hash`),
-  });
-}
-
-const SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1;
-const SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024;
-const SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT =
-  "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F";
-
-function parseSumeragiExecutionCommitment(value, context) {
-  const record = ensureRecord(value, context);
-  const allowedFields = new Set([
-    "parent_state_root",
-    "post_state_root",
-    "ordinary_writes_root",
-    "topup_anchor_root",
-    "topup_anchor_count",
-    "native_amx_application_manifest_version",
-    "native_amx_application_manifest_root",
-    "native_amx_application_manifest_count",
-    "executed_block_wire_hash",
-  ]);
-  const unknown = Object.keys(record).find((field) => !allowedFields.has(field));
-  if (unknown !== undefined) {
-    throw new TypeError(`${context} contains unknown field ${unknown}`);
-  }
-  const topupAnchorCount = parseSumeragiUnsigned(
-    record.topup_anchor_count,
-    `${context}.topup_anchor_count`,
-    { max: 16 },
-  );
-  const topupAnchorRoot =
-    record.topup_anchor_root == null
-      ? null
-      : parseSumeragiHash(record.topup_anchor_root, `${context}.topup_anchor_root`);
-  if ((topupAnchorCount === 0) !== (topupAnchorRoot === null)) {
-    throw new TypeError(
-      `${context}.topup_anchor_root must be present exactly when topup_anchor_count is positive`,
-    );
-  }
-  const nativeManifestVersion = parseSumeragiUnsigned(
-    record.native_amx_application_manifest_version,
-    `${context}.native_amx_application_manifest_version`,
-    { max: 0xffff },
-  );
-  if (nativeManifestVersion !== SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION) {
-    throw new RangeError(
-      `${context}.native_amx_application_manifest_version must equal ${SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION}`,
-    );
-  }
-  const nativeManifestRoot = parseSumeragiHash(
-    record.native_amx_application_manifest_root,
-    `${context}.native_amx_application_manifest_root`,
-  );
-  const nativeManifestCount = parseSumeragiUnsigned(
-    record.native_amx_application_manifest_count,
-    `${context}.native_amx_application_manifest_count`,
-    { max: SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES },
-  );
-  if (
-    (nativeManifestCount === 0) !==
-    (nativeManifestRoot === SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT)
-  ) {
-    throw new RangeError(
-      `${context}.native_amx_application_manifest_count must be zero exactly for the canonical empty root`,
-    );
-  }
-  return Object.freeze({
-    parent_state_root: parseSumeragiHash(
-      record.parent_state_root,
-      `${context}.parent_state_root`,
-    ),
-    post_state_root: parseSumeragiHash(
-      record.post_state_root,
-      `${context}.post_state_root`,
-    ),
-    ordinary_writes_root: parseSumeragiHash(
-      record.ordinary_writes_root,
-      `${context}.ordinary_writes_root`,
-    ),
-    topup_anchor_root: topupAnchorRoot,
-    topup_anchor_count: topupAnchorCount,
-    native_amx_application_manifest_version: nativeManifestVersion,
-    native_amx_application_manifest_root: nativeManifestRoot,
-    native_amx_application_manifest_count: nativeManifestCount,
-    executed_block_wire_hash: parseSumeragiHash(
-      record.executed_block_wire_hash,
-      `${context}.executed_block_wire_hash`,
-    ),
-  });
-}
-
-function parseSumeragiQcReference(value, context) {
-  const record = ensureRecord(value, context);
-  const round = parseSumeragiRound(record.round, `${context}.round`);
-  const proposalRound = parseSumeragiRound(
-    record.proposal_round,
-    `${context}.proposal_round`,
-  );
-  const phase = parseSumeragiTaggedUnit(
-    record.phase,
-    "phase",
-    ["prepare", "commit"],
-    `${context}.phase`,
-  );
-  validateSumeragiProposalRound(proposalRound, round, context);
-  return Object.freeze({
-    round,
-    proposal_round: proposalRound,
-    phase,
-    subject: parseSumeragiBlockSubject(record.subject, `${context}.subject`),
-    execution_commitment: parseSumeragiExecutionCommitment(
-      record.execution_commitment,
-      `${context}.execution_commitment`,
-    ),
-  });
-}
-
-function parseSumeragiTimeoutReference(value, context) {
-  const record = ensureRecord(value, context);
-  return Object.freeze({
-    round: parseSumeragiRound(record.round, `${context}.round`),
-    highest_prepare_qc:
-      record.highest_prepare_qc == null
-        ? null
-        : parseSumeragiQcReference(
-            record.highest_prepare_qc,
-            `${context}.highest_prepare_qc`,
-          ),
-    certificate_hash: parseSumeragiHash(
-      record.certificate_hash,
-      `${context}.certificate_hash`,
-    ),
-  });
-}
-
-function parseSumeragiHeightContext(value, context) {
-  const record = ensureRecord(value, context);
-  const validatorCount = parseSumeragiUnsigned(
-    record.validator_count,
-    `${context}.validator_count`,
-    { positive: true, max: 128 },
-  );
-  const quorumRecord = ensureRecord(record.quorum, `${context}.quorum`);
-  const quorum = Object.freeze({
-    min_signers: parseSumeragiUnsigned(
-      quorumRecord.min_signers,
-      `${context}.quorum.min_signers`,
-      { positive: true, max: 128 },
-    ),
-    total_power: parseSumeragiUnsigned(
-      quorumRecord.total_power,
-      `${context}.quorum.total_power`,
-      { positive: true },
-    ),
-  });
-  const expectedMinSigners = Math.floor((validatorCount * 2) / 3) + 1;
-  if (quorum.min_signers !== expectedMinSigners || quorum.total_power < validatorCount) {
-    throw new RangeError(`${context}.quorum is not canonical for validator_count`);
-  }
-  const mode = parseSumeragiTaggedUnit(
-    record.mode,
-    "mode",
-    ["permissioned", "npos"],
-    `${context}.mode`,
-  );
-  if (mode.mode === "permissioned" && quorum.total_power !== validatorCount) {
-    throw new RangeError(`${context}.quorum.total_power must equal validator_count in permissioned mode`);
-  }
-  const epochSeed = parseSumeragiByte32(record.epoch_seed, `${context}.epoch_seed`);
-  return Object.freeze({
-    epoch: parseSumeragiUnsigned(record.epoch, `${context}.epoch`),
-    epoch_end_height: parseSumeragiUnsigned(
-      record.epoch_end_height,
-      `${context}.epoch_end_height`,
-    ),
-    mode,
-    epoch_seed: epochSeed,
-    validator_count: validatorCount,
-    quorum,
-  });
-}
-
-function parseSumeragiCommitQcStatus(value, context) {
-  const record = ensureRecord(value, context);
-  const validatorCount = parseSumeragiUnsigned(
-    record.validator_count,
-    `${context}.validator_count`,
-    { positive: true, max: 128 },
-  );
-  const signerCount = parseSumeragiUnsigned(
-    record.signer_count,
-    `${context}.signer_count`,
-    { max: validatorCount },
-  );
-  const minSigners = parseSumeragiUnsigned(
-    record.min_signers,
-    `${context}.min_signers`,
-    { positive: true, max: 128 },
-  );
-  const signedPower = parseSumeragiUnsigned(
-    record.signed_power,
-    `${context}.signed_power`,
-  );
-  const totalPower = parseSumeragiUnsigned(
-    record.total_power,
-    `${context}.total_power`,
-    { positive: true },
-  );
-  if (
-    signerCount > validatorCount ||
-    minSigners !== Math.floor((validatorCount * 2) / 3) + 1 ||
-    signedPower > totalPower ||
-    totalPower < validatorCount ||
-    signerCount < minSigners ||
-    BigInt(signedPower) * 3n <= BigInt(totalPower) * 2n
-  ) {
-    throw new RangeError(`${context} does not satisfy its frozen dual quorum`);
-  }
-  return Object.freeze({
-    certificate: parseSumeragiQcReference(record.certificate, `${context}.certificate`),
-    validator_count: validatorCount,
-    signer_count: signerCount,
-    min_signers: minSigners,
-    signed_power: signedPower,
-    total_power: totalPower,
-  });
-}
-
-function parseSumeragiOperatorStatus(value, context) {
-  const record = ensureRecord(value, context);
-  const adapter = ensureRecord(record.adapter_queues, `${context}.adapter_queues`);
-  const adapterQueues = Object.freeze({
-    ingress_keys: parseSumeragiUnsigned(adapter.ingress_keys, `${context}.adapter_queues.ingress_keys`),
-    ingress_capacity: parseSumeragiUnsigned(
-      adapter.ingress_capacity,
-      `${context}.adapter_queues.ingress_capacity`,
-    ),
-    deferred_completion: parseSumeragiUnsigned(
-      adapter.deferred_completion,
-      `${context}.adapter_queues.deferred_completion`,
-    ),
-    deferred_progress: parseSumeragiUnsigned(
-      adapter.deferred_progress,
-      `${context}.adapter_queues.deferred_progress`,
-    ),
-    deferred_progress_capacity: parseSumeragiUnsigned(
-      adapter.deferred_progress_capacity,
-      `${context}.adapter_queues.deferred_progress_capacity`,
-    ),
-    deferred_normal: parseSumeragiUnsigned(
-      adapter.deferred_normal,
-      `${context}.adapter_queues.deferred_normal`,
-    ),
-    deferred_normal_capacity: parseSumeragiUnsigned(
-      adapter.deferred_normal_capacity,
-      `${context}.adapter_queues.deferred_normal_capacity`,
-    ),
-  });
-  if (
-    adapterQueues.ingress_keys > adapterQueues.ingress_capacity ||
-    adapterQueues.deferred_completion > adapterQueues.deferred_progress_capacity ||
-    adapterQueues.deferred_progress > adapterQueues.deferred_progress_capacity ||
-    adapterQueues.deferred_normal > adapterQueues.deferred_normal_capacity
-  ) {
-    throw new RangeError(`${context}.adapter_queues occupancy exceeds capacity`);
-  }
-  const queue = ensureRecord(record.tx_queue, `${context}.tx_queue`);
-  const txQueue = Object.freeze({
-    tracked_transactions: parseSumeragiUnsigned(
-      queue.tracked_transactions,
-      `${context}.tx_queue.tracked_transactions`,
-    ),
-    queued_transactions: parseSumeragiUnsigned(
-      queue.queued_transactions,
-      `${context}.tx_queue.queued_transactions`,
-    ),
-    capacity: parseSumeragiUnsigned(queue.capacity, `${context}.tx_queue.capacity`, {
-      positive: true,
-    }),
-    retained_bytes: parseSumeragiUnsigned(
-      queue.retained_bytes,
-      `${context}.tx_queue.retained_bytes`,
-    ),
-    max_retained_bytes: parseSumeragiUnsigned(
-      queue.max_retained_bytes,
-      `${context}.tx_queue.max_retained_bytes`,
-      { positive: true },
-    ),
-    oldest_queued_age_ms: parseSumeragiUnsigned(
-      queue.oldest_queued_age_ms,
-      `${context}.tx_queue.oldest_queued_age_ms`,
-    ),
-    saturated_by_count: parseSumeragiBoolean(
-      queue.saturated_by_count,
-      `${context}.tx_queue.saturated_by_count`,
-    ),
-    saturated_by_bytes: parseSumeragiBoolean(
-      queue.saturated_by_bytes,
-      `${context}.tx_queue.saturated_by_bytes`,
-    ),
-    saturated_by_age: parseSumeragiBoolean(
-      queue.saturated_by_age,
-      `${context}.tx_queue.saturated_by_age`,
-    ),
-  });
-  if (
-    txQueue.queued_transactions > txQueue.tracked_transactions ||
-    txQueue.tracked_transactions > txQueue.capacity ||
-    txQueue.retained_bytes > txQueue.max_retained_bytes
-  ) {
-    throw new RangeError(`${context}.tx_queue occupancy exceeds capacity`);
-  }
-  return Object.freeze({
-    view_change_install_total: parseSumeragiUnsigned(
-      record.view_change_install_total,
-      `${context}.view_change_install_total`,
-    ),
-    busy_deferral_total: parseSumeragiUnsigned(
-      record.busy_deferral_total,
-      `${context}.busy_deferral_total`,
-    ),
-    adapter_queues: adapterQueues,
-    tx_queue: txQueue,
-  });
-}
-
-function parseSumeragiRecordArray(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  return Object.freeze(
-    value.map((entry, index) => Object.freeze({ ...ensureRecord(entry, `${context}[${index}]`) })),
-  );
-}
-
-function parseSumeragiLanePayloadOwnerships(value) {
-  const context = "status.lane_payload_ownerships";
-  assertSumeragiArrayBound(value, 128, context);
-  return Object.freeze(value.map((entry, index) => {
-    const itemContext = `${context}[${index}]`;
-    const record = assertExactSumeragiRecord(
-      entry,
-      [
-        "proposal_height",
-        "proposal_view",
-        "lane_id",
-        "dataspace_id",
-        "lane_incarnation",
-        "lane_block_height",
-        "lane_block_view",
-        "subject_hash",
-        "qc_mode_tag",
-        "accepted_candidate_indices",
-        "accepted_transaction_hashes",
-        "previous_lane_block_height",
-        "previous_lane_block_descriptor_hash",
-        "lane_block_descriptor_hash",
-        "lane_block_descriptor_validator_set",
-        "lane_block_descriptor_validator_count",
-        "lane_block_descriptor_min_quorum",
-        "payload_ownership_hash",
-        "rbc_instance_hash",
-      ],
-      itemContext,
-    );
-    const laneBlockHeight = parseSumeragiUnsigned(
-      record.lane_block_height,
-      `${itemContext}.lane_block_height`,
-      { positive: true },
-    );
-    if (!Array.isArray(record.accepted_candidate_indices)) {
-      throw new TypeError(`${itemContext}.accepted_candidate_indices must be an array`);
-    }
-    const acceptedCandidateIndices = record.accepted_candidate_indices.map((candidate, offset) =>
-      parseSumeragiUnsigned(candidate, `${itemContext}.accepted_candidate_indices[${offset}]`),
-    );
-    if (acceptedCandidateIndices.length === 0) {
-      throw new TypeError(`${itemContext}.accepted_candidate_indices must not be empty`);
-    }
-    for (let offset = 1; offset < acceptedCandidateIndices.length; offset += 1) {
-      if (acceptedCandidateIndices[offset - 1] >= acceptedCandidateIndices[offset]) {
-        throw new TypeError(`${itemContext}.accepted_candidate_indices must be strictly ordered`);
-      }
-    }
-    if (!Array.isArray(record.accepted_transaction_hashes)) {
-      throw new TypeError(`${itemContext}.accepted_transaction_hashes must be an array`);
-    }
-    const acceptedTransactionHashes = record.accepted_transaction_hashes.map((hash, offset) =>
-      parseSumeragiHash(hash, `${itemContext}.accepted_transaction_hashes[${offset}]`),
-    );
-    if (acceptedTransactionHashes.length !== acceptedCandidateIndices.length) {
-      throw new TypeError(`${itemContext} candidate/hash counts must match`);
-    }
-    const validators = assertSumeragiArrayBound(
-      record.lane_block_descriptor_validator_set,
-      128,
-      `${itemContext}.lane_block_descriptor_validator_set`,
-      1,
-    ).map((peer, offset) =>
-      requireExactNonEmptyString(
-        peer,
-        `${itemContext}.lane_block_descriptor_validator_set[${offset}]`,
-      ),
-    );
-    if (
-      new Set(validators).size !== validators.length ||
-      validators.some((validator, offset) => offset > 0 && validators[offset - 1] >= validator)
-    ) {
-      throw new TypeError(
-        `${itemContext}.lane_block_descriptor_validator_set must be canonical and unique`,
-      );
-    }
-    const validatorCount = parseSumeragiUnsigned(
-      record.lane_block_descriptor_validator_count,
-      `${itemContext}.lane_block_descriptor_validator_count`,
-      { positive: true, max: 128 },
-    );
-    const minQuorum = parseSumeragiUnsigned(
-      record.lane_block_descriptor_min_quorum,
-      `${itemContext}.lane_block_descriptor_min_quorum`,
-      { positive: true, max: 128 },
-    );
-    if (validatorCount !== validators.length || minQuorum > validatorCount) {
-      throw new RangeError(`${itemContext} descriptor quorum does not match its validator set`);
-    }
-    const previousHeight = parseSumeragiUnsigned(
-      record.previous_lane_block_height,
-      `${itemContext}.previous_lane_block_height`,
-    );
-    if (!sumeragiUnsignedSuccessorOf(laneBlockHeight, previousHeight)) {
-      throw new RangeError(`${itemContext}.previous_lane_block_height must precede lane_block_height`);
-    }
-    const previousDescriptor =
-      record.previous_lane_block_descriptor_hash == null
-        ? null
-        : parseSumeragiHash(
-            record.previous_lane_block_descriptor_hash,
-            `${itemContext}.previous_lane_block_descriptor_hash`,
-          );
-    if (previousHeight === 0 && previousDescriptor !== null) {
-      throw new TypeError(`${itemContext} genesis lane block must not name a predecessor descriptor`);
-    }
-    if (record.lane_block_descriptor_hash == null) {
-      throw new TypeError(`${itemContext}.lane_block_descriptor_hash is required`);
-    }
-    return Object.freeze({
-      proposal_height: parseSumeragiUnsigned(record.proposal_height, `${itemContext}.proposal_height`),
-      proposal_view: parseSumeragiUnsigned(record.proposal_view, `${itemContext}.proposal_view`),
-      lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
-      dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}.dataspace_id`),
-      lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}.lane_incarnation`),
-      lane_block_height: laneBlockHeight,
-      lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}.lane_block_view`),
-      subject_hash: parseSumeragiHash(record.subject_hash, `${itemContext}.subject_hash`),
-      qc_mode_tag: requireNonEmptyString(record.qc_mode_tag, `${itemContext}.qc_mode_tag`),
-      accepted_candidate_indices: Object.freeze(acceptedCandidateIndices),
-      accepted_transaction_hashes: Object.freeze(acceptedTransactionHashes),
-      previous_lane_block_height: previousHeight,
-      previous_lane_block_descriptor_hash: previousDescriptor,
-      lane_block_descriptor_hash: parseSumeragiHash(
-        record.lane_block_descriptor_hash,
-        `${itemContext}.lane_block_descriptor_hash`,
-      ),
-      lane_block_descriptor_validator_set: Object.freeze(validators),
-      lane_block_descriptor_validator_count: validatorCount,
-      lane_block_descriptor_min_quorum: minQuorum,
-      payload_ownership_hash: parseSumeragiHash(
-        record.payload_ownership_hash,
-        `${itemContext}.payload_ownership_hash`,
-      ),
-      rbc_instance_hash: parseSumeragiHash(
-        record.rbc_instance_hash,
-        `${itemContext}.rbc_instance_hash`,
-      ),
-    });
-  }));
-}
-
-function parseSumeragiCommittedLaneBlocks(value) {
-  const context = "status.committed_lane_blocks";
-  assertSumeragiArrayBound(value, 128, context);
-  return Object.freeze(value.map((entry, index) => {
-    const itemContext = `${context}[${index}]`;
-    const record = assertExactSumeragiRecord(
-      entry,
-      [
-        "lane_id",
-        "dataspace_id",
-        "lane_incarnation",
-        "lane_block_height",
-        "lane_block_view",
-        "descriptor_hash",
-        "proposal_hash",
-        "execution_status",
-        "executable_payload_available",
-        "subject_hash",
-        "payload_ownership_hash",
-        "rbc_instance_hash",
-        "qc_mode_tag",
-        "validator_count",
-        "min_quorum",
-        "prepare_qc_signer_count",
-        "commit_qc_signer_count",
-      ],
-      itemContext,
-    );
-    const validatorCount = parseSumeragiUnsigned(
-      record.validator_count,
-      `${itemContext}.validator_count`,
-      { positive: true, max: 128 },
-    );
-    const minQuorum = parseSumeragiUnsigned(
-      record.min_quorum,
-      `${itemContext}.min_quorum`,
-      { positive: true, max: 128 },
-    );
-    const prepareSigners = parseSumeragiUnsigned(
-      record.prepare_qc_signer_count,
-      `${itemContext}.prepare_qc_signer_count`,
-      { max: 128 },
-    );
-    const commitSigners = parseSumeragiUnsigned(
-      record.commit_qc_signer_count,
-      `${itemContext}.commit_qc_signer_count`,
-      { max: 128 },
-    );
-    const executionStatus = requireExactNonEmptyString(
-      record.execution_status,
-      `${itemContext}.execution_status`,
-    );
-    const executablePayloadAvailable = parseSumeragiBoolean(
-      record.executable_payload_available,
-      `${itemContext}.executable_payload_available`,
-    );
-    const unavailableStatuses = new Set([
-      "awaiting_executable_payload",
-      "application_receipt_conflicts_with_preflight",
-      "payload_preflight_rejected_awaiting_state_application",
-      "awaiting_predecessor_application",
-    ]);
-    const availableStatuses = new Set([
-      "payload_available_awaiting_executor",
-      "payload_recovered_awaiting_state_application",
-      "payload_preflighted_awaiting_state_application",
-      "state_applied_by_canonical_block",
-      "state_applied_by_direct_execution",
-    ]);
-    if (
-      (!unavailableStatuses.has(executionStatus) && !availableStatuses.has(executionStatus)) ||
-      (availableStatuses.has(executionStatus) !== executablePayloadAvailable)
-    ) {
-      throw new TypeError(
-        `${itemContext}.execution_status disagrees with executable_payload_available`,
-      );
-    }
-    if (
-      minQuorum > validatorCount ||
-      prepareSigners < minQuorum ||
-      commitSigners < minQuorum ||
-      prepareSigners > validatorCount ||
-      commitSigners > validatorCount
-    ) {
-      throw new RangeError(`${itemContext} carries an impossible certified quorum`);
-    }
-    return Object.freeze({
-      lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
-      dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}.dataspace_id`),
-      lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}.lane_incarnation`),
-      lane_block_height: parseSumeragiUnsigned(record.lane_block_height, `${itemContext}.lane_block_height`, { positive: true }),
-      lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}.lane_block_view`),
-      descriptor_hash: parseSumeragiHash(record.descriptor_hash, `${itemContext}.descriptor_hash`),
-      proposal_hash: parseSumeragiHash(record.proposal_hash, `${itemContext}.proposal_hash`),
-      execution_status: executionStatus,
-      executable_payload_available: executablePayloadAvailable,
-      subject_hash: parseSumeragiHash(record.subject_hash, `${itemContext}.subject_hash`),
-      payload_ownership_hash: parseSumeragiHash(record.payload_ownership_hash, `${itemContext}.payload_ownership_hash`),
-      rbc_instance_hash: parseSumeragiHash(record.rbc_instance_hash, `${itemContext}.rbc_instance_hash`),
-      qc_mode_tag: requireNonEmptyString(record.qc_mode_tag, `${itemContext}.qc_mode_tag`),
-      validator_count: validatorCount,
-      min_quorum: minQuorum,
-      prepare_qc_signer_count: prepareSigners,
-      commit_qc_signer_count: commitSigners,
-    });
-  }));
-}
-
-function parseSumeragiLaneBlockSessions(value) {
-  const context = "status.lane_block_sessions";
-  assertSumeragiArrayBound(value, 128, context);
-  return Object.freeze(value.map((entry, index) => {
-    const itemContext = `${context}[${index}]`;
-    const record = assertExactSumeragiRecord(
-      entry,
-      [
-        "lane_id",
-        "dataspace_id",
-        "lane_incarnation",
-        "lane_block_height",
-        "lane_block_view",
-        "proposal_hash",
-        "has_proposal",
-        "prepare_vote_count",
-        "commit_vote_count",
-        "has_prepare_qc",
-        "has_commit_qc",
-        "pending_commit_vote_request",
-        "pending_committed_session_drain",
-        "committed_session_drained",
-        "validator_count",
-        "min_quorum",
-      ],
-      itemContext,
-    );
-    const validatorCount = parseSumeragiUnsigned(
-      record.validator_count,
-      `${itemContext}.validator_count`,
-      { max: 128 },
-    );
-    const minQuorum = parseSumeragiUnsigned(
-      record.min_quorum,
-      `${itemContext}.min_quorum`,
-      { max: 128 },
-    );
-    const prepareVotes = parseSumeragiUnsigned(
-      record.prepare_vote_count,
-      `${itemContext}.prepare_vote_count`,
-      { max: 128 },
-    );
-    const commitVotes = parseSumeragiUnsigned(
-      record.commit_vote_count,
-      `${itemContext}.commit_vote_count`,
-      { max: 128 },
-    );
-    if (validatorCount === 0) {
-      if (minQuorum !== 0 || prepareVotes !== 0 || commitVotes !== 0) {
-        throw new RangeError(`${itemContext} carries impossible session quorum counts`);
-      }
-    } else if (
-      minQuorum === 0 ||
-      minQuorum > validatorCount ||
-      prepareVotes > validatorCount ||
-      commitVotes > validatorCount
-    ) {
-      throw new RangeError(`${itemContext} carries impossible session quorum counts`);
-    }
-    return Object.freeze({
-      lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
-      dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}.dataspace_id`),
-      lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}.lane_incarnation`),
-      lane_block_height: parseSumeragiUnsigned(record.lane_block_height, `${itemContext}.lane_block_height`),
-      lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}.lane_block_view`),
-      proposal_hash: parseSumeragiHash(record.proposal_hash, `${itemContext}.proposal_hash`),
-      has_proposal: parseSumeragiBoolean(record.has_proposal, `${itemContext}.has_proposal`),
-      prepare_vote_count: prepareVotes,
-      commit_vote_count: commitVotes,
-      has_prepare_qc: parseSumeragiBoolean(record.has_prepare_qc, `${itemContext}.has_prepare_qc`),
-      has_commit_qc: parseSumeragiBoolean(record.has_commit_qc, `${itemContext}.has_commit_qc`),
-      pending_commit_vote_request: parseSumeragiBoolean(
-        record.pending_commit_vote_request,
-        `${itemContext}.pending_commit_vote_request`,
-      ),
-      pending_committed_session_drain: parseSumeragiBoolean(
-        record.pending_committed_session_drain,
-        `${itemContext}.pending_committed_session_drain`,
-      ),
-      committed_session_drained: parseSumeragiBoolean(
-        record.committed_session_drained,
-        `${itemContext}.committed_session_drained`,
-      ),
-      validator_count: validatorCount,
-      min_quorum: minQuorum,
-    });
-  }));
-}
-
-function parseSumeragiNonzeroHash(value, context) {
-  const hash = parseSumeragiHash(value, context);
-  if (/^0{64}$/u.test(hash.slice(5, 69))) {
-    throw new TypeError(`${context} must not be the zero hash`);
-  }
-  return hash;
-}
-
-function sumeragiSubjectsEqual(left, right) {
-  return (
-    left.parent_block_hash === right.parent_block_hash &&
-    left.block_hash === right.block_hash &&
-    left.payload_hash === right.payload_hash
-  );
 }
 
 function normalizeSumeragiCommitQcRecord(payload, context) {
@@ -19217,7 +15506,7 @@ function normalizeProtectedNamespaceList(input) {
     throw new TypeError("protected namespaces list must not be empty");
   }
   return values.map((entry, index) =>
-    requireNonEmptyString(entry, `namespaces[${index}]`),
+    requireExactAsciiTokenString(entry, `namespaces[${index}]`),
   );
 }
 
@@ -19237,7 +15526,7 @@ function normalizeProtectedNamespacesGetResponse(payload) {
       record.namespaces,
       "protected namespaces response.namespaces",
     ).map((value, index) =>
-      requireNonEmptyString(value, `protected namespaces response.namespaces[${index}]`),
+      requireExactAsciiTokenString(value, `protected namespaces response.namespaces[${index}]`),
     ),
   };
 }
@@ -19596,148 +15885,31 @@ function normalizeExplorerMetricsResponse(payload) {
 
 const EXPLORER_ACCOUNT_QR_OPTION_KEYS = new Set(["signal"]);
 const VPN_SESSION_OPTION_KEYS = new Set(["signal", "canonicalAuth"]);
-const VPN_HELPER_TICKET_BYTES = 664;
-const VPN_HELPER_TICKET_HEX_LENGTH = VPN_HELPER_TICKET_BYTES * 2;
-const VPN_EXIT_CLASSES = new Set(["standard", "low-latency", "high-security"]);
-const VPN_SESSION_STATUSES = new Set(["active"]);
-const VPN_RECEIPT_STATUSES = new Set([
-  "disconnected",
-  "expired",
-  "replaced",
-  "settled",
-]);
-const VPN_RECEIPT_SOURCES = new Set(["torii", "relay", "wsv"]);
-const VPN_LEASE_SECONDS_MAX = 0xffff_ffff;
-const VPN_QUOTE_CREATE_REQUEST_KEYS = new Set([
-  "exitClass",
-  "exit_class",
-  "meteringPublicKeyHex",
-  "metering_public_key_hex",
-]);
-const VPN_SESSION_CREATE_REQUEST_KEYS = new Set([
-  "exitClass",
-  "exit_class",
-  "quoteId",
-  "quote_id",
-  "paymentTxHash",
-  "payment_tx_hash",
-  "meteringPublicKeyHex",
-  "metering_public_key_hex",
-]);
-const VPN_RECEIPT_SUBMIT_REQUEST_KEYS = new Set([
-  "relayReceiptHex",
-  "relay_receipt_hex",
-  "clientVoucherHex",
-  "client_voucher_hex",
-  "leaseIdHex",
-  "lease_id_hex",
-]);
-const VPN_TX_INSTRUCTION_RESPONSE_FIELDS = new Set(["wire_id", "payload_hex"]);
-const VPN_PROFILE_RESPONSE_FIELDS = new Set([
-  "available",
-  "relay_endpoint",
-  "supported_exit_classes",
-  "default_exit_class",
-  "lease_secs",
-  "dns_push_interval_secs",
-  "meter_family",
-  "route_pushes",
-  "excluded_routes",
-  "dns_servers",
-  "tunnel_addresses",
-  "mtu_bytes",
-  "display_billing_label",
-  "fee_asset_id",
-  "escrow_account_id",
-  "operator_account_id",
-  "lease_fee",
-  "settlement_grace_secs",
-  "flow_label_bits",
-  "padding_budget_ms",
-  "relay_tls_spki_sha256_hex",
-]);
-const VPN_QUOTE_RESPONSE_FIELDS = new Set([
-  "quote_id",
-  "lease_id_hex",
-  "session_id_hex",
-  "payment_reference",
-  "account_id",
-  "exit_class",
-  "relay_endpoint",
-  "lease_secs",
-  "quote_expires_at_ms",
-  "fee_asset_id",
-  "escrow_account_id",
-  "operator_account_id",
-  "lease_fee",
-  "route_pushes",
-  "excluded_routes",
-  "dns_servers",
-  "tunnel_addresses",
-  "mtu_bytes",
-  "meter_family",
-  "flow_label_bits",
-  "padding_budget_ms",
-  "relay_tls_spki_sha256_hex",
-  "metering_public_key_hex",
-  "open_lease_instruction",
-  "tx_instructions",
-]);
-const VPN_SESSION_RESPONSE_FIELDS = new Set([
-  "session_id",
-  "account_id",
-  "exit_class",
-  "relay_endpoint",
-  "lease_secs",
-  "expires_at_ms",
-  "connected_at_ms",
-  "meter_family",
-  "quote_id",
-  "payment_reference",
-  "payment_tx_hash",
-  "fee_asset_id",
-  "escrow_account_id",
-  "operator_account_id",
-  "lease_fee",
-  "flow_label_bits",
-  "padding_budget_ms",
-  "relay_tls_spki_sha256_hex",
-  "route_pushes",
-  "excluded_routes",
-  "dns_servers",
-  "tunnel_addresses",
-  "mtu_bytes",
-  "helper_ticket_hex",
-  "bytes_in",
-  "bytes_out",
-  "status",
-]);
-const VPN_RECEIPT_RESPONSE_FIELDS = new Set([
-  "session_id",
-  "account_id",
-  "exit_class",
-  "relay_endpoint",
-  "meter_family",
-  "connected_at_ms",
-  "disconnected_at_ms",
-  "duration_ms",
-  "bytes_in",
-  "bytes_out",
-  "status",
-  "receipt_source",
-  "quote_id",
-  "payment_tx_hash",
-  "fee_asset_id",
-  "escrow_account_id",
-  "operator_account_id",
-  "lease_fee",
-  "earned_fee",
-  "refunded_fee",
-  "lease_id_hex",
-  "settle_lease_instruction",
-  "tx_instructions",
-]);
-const VPN_RECEIPT_LIST_RESPONSE_FIELDS = new Set(["items", "total"]);
+const {
+  VPN_HELPER_TICKET_BYTES,
+  VPN_HELPER_TICKET_HEX_LENGTH,
+  VPN_EXIT_CLASSES,
+  VPN_SESSION_STATUSES,
+  VPN_RECEIPT_STATUSES,
+  VPN_RECEIPT_SOURCES,
+  VPN_LEASE_SECONDS_MAX,
+  VPN_QUOTE_CREATE_REQUEST_KEYS,
+  VPN_SESSION_CREATE_REQUEST_KEYS,
+  VPN_RECEIPT_SUBMIT_REQUEST_KEYS,
+  VPN_TX_INSTRUCTION_RESPONSE_FIELDS,
+  VPN_PROFILE_RESPONSE_FIELDS,
+  VPN_QUOTE_RESPONSE_FIELDS,
+  VPN_SESSION_RESPONSE_FIELDS,
+  VPN_RECEIPT_RESPONSE_FIELDS,
+  VPN_RECEIPT_LIST_RESPONSE_FIELDS,
+  normalizeVpnTrustTuple,
+  requireVpnRelayEndpoint,
+  requireVpnEnum,
+  requireVpnProfileExitClasses,
+} = createVpnSchema({
+  requireExactLowerHex32String,
+  requireExactNonEmptyString,
+});
 
 function normalizeExplorerRequestOptions(options) {
   if (options === undefined) {
@@ -19756,11 +15928,16 @@ function normalizeExplorerRequestOptions(options) {
 function normalizeVpnProfileResponse(payload) {
   const record = ensureRecord(payload ?? {}, "vpn profile response");
   assertVpnResponseFields(record, VPN_PROFILE_RESPONSE_FIELDS, "vpn profile response");
+  const available = coerceBoolean(record.available, "vpn profile response.available");
+  const trust = normalizeVpnTrustTuple(record, "vpn profile response", {
+    allowEmpty: !available,
+  });
   return {
-    available: coerceBoolean(record.available, "vpn profile response.available"),
-    relayEndpoint: requireNonEmptyString(
+    available,
+    relayEndpoint: requireVpnRelayEndpoint(
       record.relay_endpoint,
       "vpn profile response.relay_endpoint",
+      { allowEmpty: !available },
     ),
     supportedExitClasses: requireVpnProfileExitClasses(
       record.supported_exit_classes,
@@ -19810,14 +15987,6 @@ function normalizeVpnProfileResponse(payload) {
       record.display_billing_label,
       "vpn profile response.display_billing_label",
     ),
-    feeAssetId: requireNonEmptyString(
-      record.fee_asset_id,
-      "vpn profile response.fee_asset_id",
-    ),
-    escrowAccountId: requireNonEmptyString(
-      record.escrow_account_id,
-      "vpn profile response.escrow_account_id",
-    ),
     operatorAccountId: requireNonEmptyString(
       record.operator_account_id,
       "vpn profile response.operator_account_id",
@@ -19841,40 +16010,8 @@ function normalizeVpnProfileResponse(payload) {
       "vpn profile response.padding_budget_ms",
       { min: 1, max: 65535 },
     ),
-    relayTlsSpkiSha256Hex: requireNullableExactLowerHex32String(
-      record.relay_tls_spki_sha256_hex,
-      "vpn profile response.relay_tls_spki_sha256_hex",
-    ),
+    ...trust,
   };
-}
-
-function requireVpnEnum(value, allowed, context) {
-  const literal = requireExactNonEmptyString(value, context);
-  if (!allowed.has(literal)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be one of: ${[...allowed].join(", ")}`,
-      context,
-    );
-  }
-  return literal;
-}
-
-function requireVpnProfileExitClasses(value, context) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  const exits = value.map((entry, index) =>
-    requireVpnEnum(entry, VPN_EXIT_CLASSES, `${context}[${index}]`),
-  );
-  if (exits.length !== 3 || new Set(exits).size !== 3) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must contain exactly three unique exit classes`,
-      context,
-    );
-  }
-  return exits;
 }
 
 function requireVpnNumericConstant(value, context, expected) {
@@ -20004,38 +16141,10 @@ function normalizeVpnOptionalTxInstruction(payload, context) {
   return normalizeVpnTxInstruction(payload, context);
 }
 
-function normalizeVpnTxInstructionList(payload, context, { min = 0, max } = {}) {
-  if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  if (payload.length < min || (max !== undefined && payload.length > max)) {
-    const expected = min === max ? `exactly ${min}` : `from ${min} to ${max}`;
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must contain ${expected} instruction${max === 1 ? "" : "s"}`,
-      context,
-    );
-  }
-  return payload.map((entry, index) =>
-    normalizeVpnTxInstruction(entry, `${context}[${index}]`),
-  );
-}
-
-function requireNullableExactLowerHex32String(value, context) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  return requireExactLowerHex32String(value, context);
-}
-
 function normalizeVpnQuoteResponse(payload, context = "vpn quote response") {
   const record = ensureRecord(payload ?? {}, context);
   assertVpnResponseFields(record, VPN_QUOTE_RESPONSE_FIELDS, context);
-  const txInstructions = normalizeVpnTxInstructionList(
-    record.tx_instructions,
-    `${context}.tx_instructions`,
-    { min: 1, max: 1 },
-  );
+  const trust = normalizeVpnTrustTuple(record, context);
   return {
     quoteId: requireExactLowerHex32String(record.quote_id, `${context}.quote_id`),
     leaseIdHex: requireExactLowerHex32String(
@@ -20057,7 +16166,7 @@ function normalizeVpnQuoteResponse(payload, context = "vpn quote response") {
       VPN_EXIT_CLASSES,
       `${context}.exit_class`,
     ),
-    relayEndpoint: requireNonEmptyString(
+    relayEndpoint: requireVpnRelayEndpoint(
       record.relay_endpoint,
       `${context}.relay_endpoint`,
     ),
@@ -20110,25 +16219,22 @@ function normalizeVpnQuoteResponse(payload, context = "vpn quote response") {
       `${context}.padding_budget_ms`,
       { min: 1, max: 65535 },
     ),
-    relayTlsSpkiSha256Hex: requireNullableExactLowerHex32String(
-      record.relay_tls_spki_sha256_hex,
-      `${context}.relay_tls_spki_sha256_hex`,
-    ),
+    ...trust,
     meteringPublicKeyHex: requireExactLowerHex32String(
       record.metering_public_key_hex,
       `${context}.metering_public_key_hex`,
     ),
-    openLeaseInstruction: normalizeVpnOptionalTxInstruction(
+    openLeaseInstruction: normalizeVpnTxInstruction(
       record.open_lease_instruction,
       `${context}.open_lease_instruction`,
     ),
-    txInstructions,
   };
 }
 
 function normalizeVpnSessionResponse(payload, context = "vpn session response") {
   const record = ensureRecord(payload ?? {}, context);
   assertVpnResponseFields(record, VPN_SESSION_RESPONSE_FIELDS, context);
+  const trust = normalizeVpnTrustTuple(record, context);
   return {
     sessionId: requireExactLowerHex32String(record.session_id, `${context}.session_id`),
     accountId: requireNonEmptyString(record.account_id, `${context}.account_id`),
@@ -20137,7 +16243,7 @@ function normalizeVpnSessionResponse(payload, context = "vpn session response") 
       VPN_EXIT_CLASSES,
       `${context}.exit_class`,
     ),
-    relayEndpoint: requireNonEmptyString(
+    relayEndpoint: requireVpnRelayEndpoint(
       record.relay_endpoint,
       `${context}.relay_endpoint`,
     ),
@@ -20189,10 +16295,7 @@ function normalizeVpnSessionResponse(payload, context = "vpn session response") 
       `${context}.padding_budget_ms`,
       { min: 1, max: 65535 },
     ),
-    relayTlsSpkiSha256Hex: requireNullableExactLowerHex32String(
-      record.relay_tls_spki_sha256_hex,
-      `${context}.relay_tls_spki_sha256_hex`,
-    ),
+    ...trust,
     routePushes: requireStringArray(record.route_pushes, `${context}.route_pushes`),
     excludedRoutes: requireStringArray(
       record.excluded_routes,
@@ -20229,11 +16332,6 @@ function normalizeVpnSessionResponse(payload, context = "vpn session response") 
 function normalizeVpnReceiptResponse(payload, context = "vpn receipt response") {
   const record = ensureRecord(payload ?? {}, context);
   assertVpnResponseFields(record, VPN_RECEIPT_RESPONSE_FIELDS, context);
-  const txInstructions = normalizeVpnTxInstructionList(
-    record.tx_instructions,
-    `${context}.tx_instructions`,
-    { max: 1 },
-  );
   return {
     sessionId: requireExactLowerHex32String(record.session_id, `${context}.session_id`),
     accountId: requireNonEmptyString(record.account_id, `${context}.account_id`),
@@ -20312,7 +16410,6 @@ function normalizeVpnReceiptResponse(payload, context = "vpn receipt response") 
       record.settle_lease_instruction,
       `${context}.settle_lease_instruction`,
     ),
-    txInstructions,
   };
 }
 
@@ -20712,15 +16809,24 @@ function normalizeExplorerNftRecord(payload, context) {
 
 function normalizeExplorerNftPage(payload) {
   const record = ensureRecord(payload ?? {}, "explorer nfts response");
+  requireExactExplorerCursorFields(
+    record,
+    ["pagination", "items"],
+    "explorer nfts response",
+  );
   const items = record.items;
   if (!Array.isArray(items)) {
     throw new TypeError("explorer nfts response.items must be an array");
   }
+  const pagination = normalizeExplorerCursorMeta(
+    record.pagination,
+    "explorer nfts response.pagination",
+  );
+  if (items.length > pagination.limit) {
+    throw new TypeError("explorer nfts response.items must not exceed pagination.limit");
+  }
   return {
-    pagination: normalizeExplorerPaginationMeta(
-      record.pagination ?? {},
-      "explorer nfts response.pagination",
-    ),
+    pagination,
     items: items.map((item, index) =>
       normalizeExplorerNftRecord(item, `explorer nfts response.items[${index}]`),
     ),
@@ -20766,15 +16872,24 @@ function normalizeExplorerRwaRecord(payload, context) {
 
 function normalizeExplorerRwaPage(payload) {
   const record = ensureRecord(payload ?? {}, "explorer rwas response");
+  requireExactExplorerCursorFields(
+    record,
+    ["pagination", "items"],
+    "explorer rwas response",
+  );
   const items = record.items;
   if (!Array.isArray(items)) {
     throw new TypeError("explorer rwas response.items must be an array");
   }
+  const pagination = normalizeExplorerCursorMeta(
+    record.pagination,
+    "explorer rwas response.pagination",
+  );
+  if (items.length > pagination.limit) {
+    throw new TypeError("explorer rwas response.items must not exceed pagination.limit");
+  }
   return {
-    pagination: normalizeExplorerPaginationMeta(
-      record.pagination ?? {},
-      "explorer rwas response.pagination",
-    ),
+    pagination,
     items: items.map((item, index) =>
       normalizeExplorerRwaRecord(item, `explorer rwas response.items[${index}]`),
     ),
@@ -20857,6 +16972,78 @@ function normalizeExplorerPaginationMeta(payload, context) {
       `${context}.total_items`,
       { allowZero: true },
     ),
+  };
+}
+
+function normalizeExplorerCursorValue(value, context, { nullable = false } = {}) {
+  if (value === null && nullable) return null;
+  if (typeof value !== "string" || value.length === 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be a non-empty base64url string`,
+      context,
+    );
+  }
+  const remainder = value.length % 4;
+  const trailingSextet = EXPLORER_CURSOR_ALPHABET.indexOf(value[value.length - 1]);
+  const hasNonCanonicalTrailingBits =
+    (remainder === 2 && (trailingSextet & 0x0f) !== 0) ||
+    (remainder === 3 && (trailingSextet & 0x03) !== 0);
+  if (
+    value.length > EXPLORER_CURSOR_MAX_LENGTH ||
+    remainder === 1 ||
+    !EXPLORER_CURSOR_PATTERN.test(value) ||
+    hasNonCanonicalTrailingBits
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be canonical base64url without padding and at most ${EXPLORER_CURSOR_MAX_LENGTH} characters`,
+      context,
+    );
+  }
+  return value;
+}
+
+function requireExactExplorerCursorFields(record, expectedFields, context) {
+  const expected = new Set(expectedFields);
+  const unknown = Object.keys(record).find((field) => !expected.has(field));
+  if (unknown !== undefined) {
+    throw new TypeError(`${context} contains unknown field ${unknown}`);
+  }
+  const missing = expectedFields.find(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  if (missing !== undefined) {
+    throw new TypeError(`${context} is missing required field ${missing}`);
+  }
+  return record;
+}
+
+function normalizeExplorerCursorMeta(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  requireExactExplorerCursorFields(record, ["limit", "next_cursor", "has_more"], context);
+  const limit = ToriiClient._normalizeUnsignedInteger(record.limit, `${context}.limit`, {
+    allowZero: false,
+    max: EXPLORER_CURSOR_MAX_LIMIT,
+  });
+  if (typeof record.has_more !== "boolean") {
+    throw new TypeError(`${context}.has_more must be a boolean`);
+  }
+  if (record.next_cursor === undefined) {
+    throw new TypeError(`${context}.next_cursor must be a string or null`);
+  }
+  const nextCursor = normalizeExplorerCursorValue(
+    record.next_cursor,
+    `${context}.next_cursor`,
+    { nullable: true },
+  );
+  if (record.has_more !== (nextCursor !== null)) {
+    throw new TypeError(`${context}.has_more must match next_cursor availability`);
+  }
+  return {
+    limit,
+    nextCursor,
+    hasMore: record.has_more,
   };
 }
 
@@ -22121,6 +18308,30 @@ function requireExactTokenString(value, name) {
   return exact;
 }
 
+function requireGovernanceSelectorString(value, name) {
+  const exact = requireExactTokenString(value, name);
+  if (!isCanonicalGovernanceSelectorV1(exact)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot`,
+      name,
+    );
+  }
+  return exact;
+}
+
+function requireExactAsciiTokenString(value, name) {
+  const exact = requireExactTokenString(value, name);
+  if (!/^[!-~]+$/u.test(exact)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must contain only non-whitespace ASCII characters`,
+      name,
+    );
+  }
+  return exact;
+}
+
 function requireCanonicalQuantity(value, name) {
   if (typeof value !== "string") {
     throw createValidationError(
@@ -22196,6 +18407,12 @@ function requireExactJsonUnsignedInteger(value, name, options = {}) {
 
 function requireExactLowerHex32String(value, name) {
   return requireExactLowerHexBytesString(value, name, 32);
+}
+
+function requireOptionalExactLowerHex32String(value, name) {
+  return value === undefined || value === null
+    ? null
+    : requireExactLowerHex32String(value, name);
 }
 
 function requireExactLowerHexBytesString(value, name, expectedBytes) {
@@ -22369,7 +18586,7 @@ function requireExactPositiveIntegerLike(value, context) {
 }
 
 function requireEvidencePhase(value, context) {
-  const phase = requireNonEmptyString(value, context);
+  const phase = requireExactNonEmptyString(value, context);
   if (!EVIDENCE_PHASE_VALUES.has(phase)) {
     throw new RangeError(
       `${context} must be one of ${Array.from(EVIDENCE_PHASE_VALUES).join(", ")}`,
@@ -23762,6 +19979,12 @@ function normalizeOptionalBase64Payload(value, name) {
   return normalizeRequiredBase64Payload(value, name);
 }
 
+function normalizeOptionalExactBase64Payload(value, name) {
+  return value === undefined || value === null
+    ? null
+    : normalizeRequiredExactBase64Payload(value, name);
+}
+
 function normalizeRequiredBase64Payload(value, name) {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -23893,8 +20116,9 @@ function normalizeIrohaHashHex32(value, name) {
 }
 
 function normalizeHex32String(value, name, options = {}) {
-  const allowShort = options.allowShort === true;
-  const allowScheme = options.allowScheme === true;
+    const allowShort = options.allowShort === true;
+    const allowScheme = options.allowScheme === true;
+    const exactString = options.exactString === true;
   const schemeName =
     typeof options.scheme === "string" && options.scheme.trim()
       ? options.scheme.trim().toLowerCase()
@@ -23915,17 +20139,21 @@ function normalizeHex32String(value, name, options = {}) {
   if (Array.isArray(value)) {
     return normalizeHex32String(normalizeByteArray(value, name).toString("hex"), name, options);
   }
-  let normalized = requireNonEmptyString(value, name);
+  let normalized = exactString
+    ? requireExactNonEmptyString(value, name)
+    : requireNonEmptyString(value, name);
   if (allowScheme && normalized.includes(":")) {
-    const [scheme, rest] = normalized.split(":", 2);
-    if (scheme && scheme.toLowerCase() !== schemeName) {
+    const separator = normalized.indexOf(":");
+    const scheme = normalized.slice(0, separator);
+    const rest = normalized.slice(separator + 1);
+    if (!scheme || scheme.toLowerCase() !== schemeName) {
       throw createValidationError(
         ValidationErrorCode.INVALID_HEX,
         `${name} must be a 32-byte hex string`,
         name,
       );
     }
-    normalized = rest.trim();
+    normalized = exactString ? rest : rest.trim();
   }
   const hex =
     normalized.startsWith("0x") || normalized.startsWith("0X")
@@ -24579,745 +20807,43 @@ function normalizeAppApiTransactionDraft(
   };
 }
 
-function normalizeGovernanceFinalizePayload(input) {
-  const record = ensureRecord(input, "governanceFinalizeReferendum payload");
-  const referendumId = record.referendum_id ?? record.referendumId;
-  if (referendumId === undefined || referendumId === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      "governanceFinalizeReferendum.referendum_id is required",
-      "governanceFinalizeReferendum.referendum_id",
-    );
-  }
-  const proposalId = record.proposal_id ?? record.proposalId;
-  if (proposalId === undefined || proposalId === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      "governanceFinalizeReferendum.proposal_id is required",
-      "governanceFinalizeReferendum.proposal_id",
-    );
-  }
-  return {
-    referendum_id: requireNonEmptyString(
-      referendumId,
-      "governanceFinalizeReferendum.referendum_id",
-    ),
-    proposal_id: normalizeHex32String(
-      proposalId,
-      "governanceFinalizeReferendum.proposal_id",
-    ),
-  };
-}
-
-function normalizeGovernanceEnactPayload(input) {
-  const record = ensureRecord(input, "governanceEnactProposal payload");
-  const payload = {
-    proposal_id: normalizeHex32String(
-      record.proposal_id ?? record.proposalId,
-      "governanceEnactProposal.proposal_id",
-    ),
-  };
-  const preimageValue = record.preimage_hash ?? record.preimageHash;
-  if (preimageValue !== undefined && preimageValue !== null) {
-    payload.preimage_hash = normalizeHex32String(
-      preimageValue,
-      "governanceEnactProposal.preimage_hash",
-    );
-  }
-  const windowValue =
-    record.window;
-  if (windowValue !== undefined && windowValue !== null) {
-    payload.window = normalizeGovernanceWindow(
-      windowValue,
-      "governanceEnactProposal.window",
-    );
-  }
-  return payload;
-}
-
-function normalizeMinistryAgendaProposalDraftRequest(input) {
-  const record = ensureRecord(input, "draftMinistryAgendaProposal payload");
-  return {
-    proposal: ensureRecord(
-      record.proposal,
-      "draftMinistryAgendaProposal.proposal",
-    ),
-    authority: requireNonEmptyString(
-      record.authority,
-      "draftMinistryAgendaProposal.authority",
-    ),
-  };
-}
-
-function normalizeMinistryAgendaProposalRecord(
-  payload,
-  context = "ministry agenda proposal record",
-) {
-  const record = ensureRecord(payload, context);
-  return {
-    proposal: ensureRecord(record.proposal, `${context}.proposal`),
-    authority: requireNonEmptyString(record.authority, `${context}.authority`),
-    submitted_tx_hash_hex: normalizeHex32String(
-      record.submitted_tx_hash_hex,
-      `${context}.submitted_tx_hash_hex`,
-    ),
-    submitted_height: ToriiClient._normalizeUnsignedInteger(
-      record.submitted_height,
-      `${context}.submitted_height`,
-      { allowZero: true },
-    ),
-  };
-}
-
-function normalizeMinistryAgendaProposalDraftResponse(
-  payload,
-  context = "ministry agenda proposal draft response",
-) {
-  const record = ensureRecord(payload, context);
-  const base = normalizeGovernanceDraftResponse(
-    {
-      ok: record.ok,
-      tx_instructions: record.tx_instructions ?? [],
-    },
-    context,
-  );
-  return {
-    ok: base.ok,
-    agenda_proposal_id: requireNonEmptyString(
-      record.agenda_proposal_id,
-      `${context}.agenda_proposal_id`,
-    ),
-    authority: requireNonEmptyString(record.authority, `${context}.authority`),
-    tx_instructions: base.tx_instructions,
-    signable_transaction_b64: requireNonEmptyString(
-      record.signable_transaction_b64,
-      `${context}.signable_transaction_b64`,
-    ),
-  };
-}
-
-function normalizeMinistryAgendaProposalGetResponse(
-  payload,
-  context = "ministry agenda proposal lookup response",
-) {
-  const record = ensureRecord(payload, context);
-  const found = Boolean(record.found);
-  const proposalRecord =
-    record.record === undefined || record.record === null
-      ? null
-      : normalizeMinistryAgendaProposalRecord(record.record, `${context}.record`);
-  return {
-    found,
-    record: proposalRecord,
-  };
-}
-
-function normalizeGovernanceWindow(value, name) {
-  const record = ensureRecord(value, name);
-  const lowerValue = record.lower;
-  const upperValue = record.upper;
-  if (lowerValue === undefined || upperValue === undefined) {
-    const basePath = normalizeErrorPath(name);
-    if (lowerValue === undefined) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        `${name}.lower is required`,
-        `${basePath}.lower`,
-      );
-    }
-    throw createValidationError(
-      ValidationErrorCode.INVALID_NUMERIC,
-      `${name}.upper is required`,
-      `${basePath}.upper`,
-    );
-  }
-  const lower = ToriiClient._normalizeUnsignedInteger(lowerValue, `${name}.lower`, {
-    allowZero: true,
-  });
-  const upper = ToriiClient._normalizeUnsignedInteger(upperValue, `${name}.upper`, {
-    allowZero: true,
-  });
-  if (upper < lower) {
-    throw createValidationError(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name}.upper must be greater than or equal to lower`,
-      `${normalizeErrorPath(name)}.upper`,
-    );
-  }
-  return { lower, upper };
-}
-
-function normalizeGovernanceVotingMode(value, name) {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (normalized === "zk" || normalized === "zkballot" || normalized === "zk_vote") {
-    return "Zk";
-  }
-  if (normalized === "plain" || normalized === "plainballot") {
-    return "Plain";
-  }
-  throw createValidationError(
-    ValidationErrorCode.INVALID_STRING,
-    `${name} must be either 'Zk' or 'Plain'`,
-    normalizeErrorPath(name),
-  );
-}
-
-function normalizeGovernanceDraftResponse(
-  payload,
-  context = "governance draft response",
-) {
-  const record = ensureRecord(payload, context);
-  const instructionsValue = record.tx_instructions ?? [];
-  if (!Array.isArray(instructionsValue)) {
-    throw new TypeError(`${context}.tx_instructions must be an array`);
-  }
-  const txInstructions = instructionsValue.map((entry, index) => {
-    const item = ensureRecord(entry, `${context}.tx_instructions[${index}]`);
-    const wireId = requireNonEmptyString(
-      item.wire_id,
-      `${context}.tx_instructions[${index}].wire_id`,
-    );
-    const payloadHexValue = item.payload_hex;
-    const normalizedPayload =
-      payloadHexValue === undefined || payloadHexValue === null
-        ? null
-        : normalizeArbitraryHex(
-            payloadHexValue,
-            `${context}.tx_instructions[${index}].payload_hex`,
-          );
-    return normalizedPayload === null
-      ? { wire_id: wireId }
-      : { wire_id: wireId, payload_hex: normalizedPayload };
-  });
-  let proposalId = record.proposal_id ?? null;
-  if (proposalId !== null && proposalId !== undefined) {
-    proposalId = normalizeHex32String(proposalId, `${context}.proposal_id`);
-  } else {
-    proposalId = null;
-  }
-  const normalized = {
-    ok: Boolean(record.ok),
-    proposal_id: proposalId,
-    tx_instructions: txInstructions,
-  };
-  if (record.accepted !== undefined) {
-    normalized.accepted = Boolean(record.accepted);
-  }
-  if (record.reason !== undefined) {
-    normalized.reason =
-      record.reason === null || record.reason === undefined
-        ? null
-        : requireNonEmptyString(record.reason, `${context}.reason`);
-  }
-  return normalized;
-}
-
-function createEmptyGovernanceDraftResponse(context) {
-  return normalizeGovernanceDraftResponse(
-    {
-      ok: true,
-      tx_instructions: [],
-    },
-    context,
-  );
-}
-
-function normalizeTriggerMutationResponse(
-  payload,
-  context = "trigger mutation response",
-) {
-  const record = ensureRecord(payload, context);
-  const base = normalizeGovernanceDraftResponse(record, context);
-  let triggerId = record.trigger_id ?? null;
-  if (triggerId !== null && triggerId !== undefined) {
-    triggerId = requireNonEmptyString(triggerId, `${context}.trigger_id`);
-  } else {
-    triggerId = null;
-  }
-  const messageValue = record.message ?? null;
-  const message =
-    messageValue === null || messageValue === undefined
-      ? null
-      : String(messageValue);
-  const normalized = {
-    ok: base.ok,
-    trigger_id: triggerId,
-    tx_instructions: base.tx_instructions,
-  };
-  if (base.accepted !== undefined) {
-    normalized.accepted = base.accepted;
-  }
-  if (message !== null && message.length > 0) {
-    normalized.message = message;
-  }
-  return normalized;
-}
-
-function normalizeGovernanceBallotResponse(payload, context) {
-  const record = ensureRecord(payload, context);
-  if (record.accepted === undefined) {
-    throw new TypeError(`${context}.accepted is required`);
-  }
-  const base = normalizeGovernanceDraftResponse(record, context);
-  const reason =
-    record.reason === undefined || record.reason === null
-      ? null
-      : requireNonEmptyString(record.reason, `${context}.reason`);
-  return {
-    ok: base.ok,
-    proposal_id: base.proposal_id,
-    tx_instructions: base.tx_instructions,
-    accepted: Boolean(record.accepted),
-    reason,
-  };
-}
-
-function normalizeGovernanceDeployContractProposalPayload(input) {
-  const record = ensureRecord(input, "governanceProposeDeployContract payload");
-  const contractAddressValue = record.contract_address ?? record.contractAddress ?? null;
-  const contractAliasValue = record.contract_alias ?? record.contractAlias ?? null;
-  if ((contractAddressValue == null) === (contractAliasValue == null)) {
-    throw new TypeError(
-      "governanceProposeDeployContract requires exactly one of contract_address or contract_alias",
-    );
-  }
-  const abiVersion = requireNonEmptyString(
-    record.abi_version ?? record.abiVersion ?? "1",
-    "governanceProposeDeployContract.abiVersion",
-  );
-  const codeHashValue =
-    record.code_hash ?? record.codeHash;
-  if (codeHashValue === undefined || codeHashValue === null) {
-    throw new TypeError("governanceProposeDeployContract.code_hash is required");
-  }
-  const abiHashValue =
-    record.abi_hash ?? record.abiHash;
-  if (abiHashValue === undefined || abiHashValue === null) {
-    throw new TypeError("governanceProposeDeployContract.abi_hash is required");
-  }
-  const payload = {
-    abi_version: abiVersion,
-    code_hash: normalizeHashLike32(codeHashValue, "governanceProposeDeployContract.code_hash"),
-    abi_hash: normalizeHashLike32(abiHashValue, "governanceProposeDeployContract.abi_hash"),
-  };
-  if (contractAddressValue != null) {
-    payload.contract_address = requireNonEmptyString(
-      contractAddressValue,
-      "governanceProposeDeployContract.contract_address",
-    );
-  } else {
-    payload.contract_alias = requireNonEmptyString(
-      contractAliasValue,
-      "governanceProposeDeployContract.contract_alias",
-    );
-  }
-  const windowValue =
-    record.window;
-  if (windowValue !== undefined && windowValue !== null) {
-    payload.window = normalizeGovernanceWindow(
-      windowValue,
-      "governanceProposeDeployContract.window",
-    );
-  }
-  const modeValue = record.mode;
-  if (modeValue !== undefined && modeValue !== null) {
-    payload.mode = normalizeGovernanceVotingMode(
-      modeValue,
-      "governanceProposeDeployContract.mode",
-    );
-  }
-  if (record.limits !== undefined) {
-    payload.limits = cloneJsonValue(
-      record.limits,
-      "governanceProposeDeployContract.limits",
-    );
-  }
-  return payload;
-}
-
-function normalizeGovernancePlainBallotPayload(input) {
-  const record = ensureRecord(input, "governanceSubmitPlainBallot payload");
-  const direction = record.direction;
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceSubmitPlainBallot.authority",
-    ),
-    chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
-      "governanceSubmitPlainBallot.chainId",
-    ),
-    referendum_id: requireNonEmptyString(
-      record.referendum_id ?? record.referendumId,
-      "governanceSubmitPlainBallot.referendumId",
-    ),
-    owner: ToriiClient._normalizeAccountId(
-      record.owner,
-      "governanceSubmitPlainBallot.owner",
-    ),
-    amount: normalizeQuantityInput(
-      record.amount,
-      "governanceSubmitPlainBallot.amount",
-    ),
-    duration_blocks: ToriiClient._normalizeUnsignedInteger(
-      record.duration_blocks ?? record.durationBlocks,
-      "governanceSubmitPlainBallot.durationBlocks",
-      { allowZero: false },
-    ),
-    direction: normalizeGovernanceBallotDirection(
-      direction,
-      "governanceSubmitPlainBallot.direction",
-    ),
-  };
-  return payload;
-}
-
-function normalizeGovernanceBallotDirection(value, name) {
-  const normalized = requireNonEmptyString(value, name).toLowerCase();
-  if (normalized === "aye") {
-    return "Aye";
-  }
-  if (normalized === "nay") {
-    return "Nay";
-  }
-  if (normalized === "abstain") {
-    return "Abstain";
-  }
-  throw new TypeError(`${name} must be one of Aye, Nay, or Abstain`);
-}
-
-function normalizeGovernancePublicInputs(value, name) {
-  const cloned = cloneJsonValue(value, name);
-  if (!isPlainObject(cloned)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name} must be an object`,
-      name,
-    );
-  }
-  const normalized = { ...cloned };
-  rejectGovernancePublicInputKey(
-    normalized,
-    "durationBlocks",
-    "duration_blocks",
-    name,
-  );
-  rejectGovernancePublicInputKey(normalized, "root_hint_hex", "root_hint", name);
-  rejectGovernancePublicInputKey(normalized, "rootHintHex", "root_hint", name);
-  rejectGovernancePublicInputKey(normalized, "rootHint", "root_hint", name);
-  rejectGovernancePublicInputKey(normalized, "nullifier_hex", "nullifier", name);
-  rejectGovernancePublicInputKey(normalized, "nullifierHex", "nullifier", name);
-  normalizeGovernancePublicInputHex(normalized, "root_hint", name);
-  normalizeGovernancePublicInputHex(normalized, "nullifier", name);
-  ensureGovernanceLockHintsComplete(normalized, name);
-  if (
-    Object.prototype.hasOwnProperty.call(normalized, "amount") &&
-    normalized.amount !== null
-  ) {
-    normalized.amount = requireCanonicalQuantity(
-      normalized.amount,
-      `${name}.amount`,
-    );
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(normalized, "owner") &&
-    normalized.owner !== null
-  ) {
-    normalized.owner = ensureCanonicalAccountId(normalized.owner, `${name}.owner`);
-  }
-  return normalized;
-}
-
-function normalizeGovernancePublicInputHex(target, key, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, key)) {
-    return;
-  }
-  const value = target[key];
-  if (value === null) {
-    return;
-  }
-  const context = `${name}.${key}`;
-  const raw = requireNonEmptyString(value, context).trim();
-  let body = raw;
-  if (raw.includes(":")) {
-    const [scheme, rest] = raw.split(":", 2);
-    if (scheme && scheme.toLowerCase() !== "blake2b32") {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_HEX,
-        `${context} must be a 32-byte hex string`,
-        context,
-      );
-    }
-    body = rest.trim();
-  }
-  if (body.startsWith("0x") || body.startsWith("0X")) {
-    body = body.slice(2);
-  }
-  if (!/^[0-9a-fA-F]{64}$/.test(body)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context} must be a 32-byte hex string`,
-      context,
-    );
-  }
-  target[key] = body.toLowerCase();
-}
-
-function rejectGovernancePublicInputKey(target, key, canonicalKey, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, key)) {
-    return;
-  }
-  throw createValidationError(
-    ValidationErrorCode.INVALID_OBJECT,
-    `${name} must use ${canonicalKey} (unsupported key ${key})`,
-    name,
-  );
-}
-
-function ensureGovernanceLockHintsComplete(source, name) {
-  const hasOwner = source.owner !== undefined && source.owner !== null;
-  const hasAmount = source.amount !== undefined && source.amount !== null;
-  const hasDuration =
-    source.duration_blocks !== undefined && source.duration_blocks !== null;
-  const hasAnyLockHint = hasOwner || hasAmount || hasDuration;
-  if (hasAnyLockHint && !(hasOwner && hasAmount && hasDuration)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name} must include owner, amount, and duration_blocks when providing lock hints`,
-      name,
-    );
-  }
-}
-
-function normalizeGovernanceZkBallotPayload(input) {
-  const record = ensureRecord(input, "governanceSubmitZkBallot payload");
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceSubmitZkBallot.authority",
-    ),
-    chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
-      "governanceSubmitZkBallot.chainId",
-    ),
-    election_id: requireNonEmptyString(
-      record.election_id ?? record.electionId,
-      "governanceSubmitZkBallot.electionId",
-    ),
-    proof_b64: normalizeRequiredBase64Payload(
-      record.proof ?? record.proof_b64 ?? record.proofB64,
-      "governanceSubmitZkBallot.proofB64",
-    ),
-  };
-  if (record.public !== undefined && record.public !== null) {
-    payload.public = normalizeGovernancePublicInputs(
-      record.public,
-      "governanceSubmitZkBallot.public",
-    );
-  }
-  return payload;
-}
-
-function normalizeGovernanceZkBallotV1Payload(input) {
-  const record = ensureRecord(input, "governanceSubmitZkBallotV1 payload");
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceSubmitZkBallotV1.authority",
-    ),
-    chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
-      "governanceSubmitZkBallotV1.chainId",
-    ),
-    election_id: requireNonEmptyString(
-      record.election_id ?? record.electionId,
-      "governanceSubmitZkBallotV1.electionId",
-    ),
-    backend: requireNonEmptyString(
-      record.backend,
-      "governanceSubmitZkBallotV1.backend",
-    ),
-    envelope_b64: normalizeRequiredBase64Payload(
-      record.envelope ?? record.envelope_b64 ?? record.envelopeB64,
-      "governanceSubmitZkBallotV1.envelopeB64",
-    ),
-  };
-  rejectGovernancePublicInputKey(
-    record,
-    "root_hint_hex",
-    "root_hint",
-    "governanceSubmitZkBallotV1",
-  );
-  rejectGovernancePublicInputKey(
-    record,
-    "rootHintHex",
-    "root_hint",
-    "governanceSubmitZkBallotV1",
-  );
-  rejectGovernancePublicInputKey(
-    record,
-    "rootHint",
-    "root_hint",
-    "governanceSubmitZkBallotV1",
-  );
-  rejectGovernancePublicInputKey(
-    record,
-    "nullifier_hex",
-    "nullifier",
-    "governanceSubmitZkBallotV1",
-  );
-  rejectGovernancePublicInputKey(
-    record,
-    "nullifierHex",
-    "nullifier",
-    "governanceSubmitZkBallotV1",
-  );
-  const rootHint = record.root_hint;
-  if (rootHint !== undefined && rootHint !== null) {
-    payload.root_hint = normalizeHex32String(
-      rootHint,
-      "governanceSubmitZkBallotV1.root_hint",
-      { allowScheme: true, scheme: "blake2b32" },
-    );
-  }
-  if (record.owner !== undefined && record.owner !== null) {
-    payload.owner = requireNonEmptyString(
-      record.owner,
-      "governanceSubmitZkBallotV1.owner",
-    );
-  }
-  if (record.amount !== undefined && record.amount !== null) {
-    payload.amount = normalizeQuantityInput(
-      record.amount,
-      "governanceSubmitZkBallotV1.amount",
-    );
-  }
-  const durationBlocks = record.duration_blocks ?? record.durationBlocks;
-  if (durationBlocks !== undefined && durationBlocks !== null) {
-    payload.duration_blocks = ToriiClient._normalizeUnsignedInteger(
-      durationBlocks,
-      "governanceSubmitZkBallotV1.durationBlocks",
-      { allowZero: false },
-    );
-  }
-  if (record.direction !== undefined && record.direction !== null) {
-    payload.direction = normalizeGovernanceBallotDirection(
-      record.direction,
-      "governanceSubmitZkBallotV1.direction",
-    );
-  }
-  const nullifier = record.nullifier;
-  if (nullifier !== undefined && nullifier !== null) {
-    payload.nullifier = normalizeHex32String(
-      nullifier,
-      "governanceSubmitZkBallotV1.nullifier",
-      { allowScheme: true, scheme: "blake2b32" },
-    );
-  }
-  ensureGovernanceLockHintsComplete(payload, "governanceSubmitZkBallotV1");
-  if (payload.owner !== undefined && payload.owner !== null) {
-    payload.owner = ensureCanonicalAccountId(
-      payload.owner,
-      "governanceSubmitZkBallotV1.owner",
-    );
-  }
-  return payload;
-}
-
-function normalizeGovernanceZkBallotProofPayload(input) {
-  const record = ensureRecord(input, "governanceSubmitZkBallotProofV1 payload");
-  const ballot = ensureRecord(
-    record.ballot,
-    "governanceSubmitZkBallotProofV1.ballot",
-  );
-  const ballotContext = "governanceSubmitZkBallotProofV1.ballot";
-  const normalizedBallot = { ...ballot };
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "rootHintHex",
-    "root_hint",
-    ballotContext,
-  );
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "root_hint_hex",
-    "root_hint",
-    ballotContext,
-  );
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "rootHint",
-    "root_hint",
-    ballotContext,
-  );
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "nullifierHex",
-    "nullifier",
-    ballotContext,
-  );
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "nullifier_hex",
-    "nullifier",
-    ballotContext,
-  );
-  if (Object.prototype.hasOwnProperty.call(normalizedBallot, "root_hint")) {
-    const rootHint = normalizedBallot.root_hint;
-    if (rootHint !== null) {
-      normalizedBallot.root_hint = normalizeHex32String(
-        rootHint,
-        `${ballotContext}.root_hint`,
-        { allowScheme: true, scheme: "blake2b32" },
-      );
-    }
-  }
-  if (Object.prototype.hasOwnProperty.call(normalizedBallot, "nullifier")) {
-    const nullifier = normalizedBallot.nullifier;
-    if (nullifier !== null) {
-      normalizedBallot.nullifier = normalizeHex32String(
-        nullifier,
-        `${ballotContext}.nullifier`,
-        { allowScheme: true, scheme: "blake2b32" },
-      );
-    }
-  }
-  ensureGovernanceLockHintsComplete(normalizedBallot, ballotContext);
-  if (
-    Object.prototype.hasOwnProperty.call(normalizedBallot, "amount") &&
-    normalizedBallot.amount !== null
-  ) {
-    normalizedBallot.amount = normalizeQuantityInput(
-      normalizedBallot.amount,
-      `${ballotContext}.amount`,
-    );
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(normalizedBallot, "owner") &&
-    normalizedBallot.owner !== null
-  ) {
-    normalizedBallot.owner = ensureCanonicalAccountId(
-      normalizedBallot.owner,
-      `${ballotContext}.owner`,
-    );
-  }
-  const payload = {
-    authority: requireNonEmptyString(
-      record.authority,
-      "governanceSubmitZkBallotProofV1.authority",
-    ),
-    chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
-      "governanceSubmitZkBallotProofV1.chainId",
-    ),
-    election_id: requireNonEmptyString(
-      record.election_id ?? record.electionId,
-      "governanceSubmitZkBallotProofV1.electionId",
-    ),
-    ballot: normalizedBallot,
-  };
-  return payload;
-}
+const {
+  createEmptyGovernanceDraftResponse,
+  normalizeGovernanceBallotResponse,
+  normalizeGovernanceDeployContractProposalPayload,
+  normalizeGovernanceDraftResponse,
+  normalizeGovernanceEnactPayload,
+  normalizeGovernanceFinalizePayload,
+  normalizeGovernanceParliamentBallotPayload,
+  normalizeGovernancePlainBallotPayload,
+  normalizeGovernanceZkBallotProofPayload,
+  normalizeGovernanceZkBallotV1Payload,
+  normalizeMinistryAgendaProposalDraftRequest,
+  normalizeMinistryAgendaProposalDraftResponse,
+  normalizeMinistryAgendaProposalGetResponse,
+  normalizeTriggerMutationResponse,
+} = createToriiGovernanceNormalizers({
+  ToriiClient,
+  ValidationErrorCode,
+  assertSupportedOptionKeys,
+  createValidationError,
+  ensureCanonicalAccountId,
+  ensureRecord,
+  isPlainObject,
+  normalizeArbitraryHex,
+  normalizeErrorPath,
+  normalizeGovernanceUint64Integer,
+  normalizeHex32String,
+  normalizeManifestProvenancePayload,
+  normalizeQuantityInput,
+  normalizeRequiredBase64Payload,
+  normalizeUint64DecimalString,
+  requireExactLowerHex32String,
+  requireExactNonEmptyString,
+  requireExactTokenString,
+  requireGovernanceSelectorString,
+  requireNonEmptyString,
+});
 
 function normalizeArbitraryHex(value, name) {
   const normalized = requireHexString(value, name);
@@ -25475,7 +21001,8 @@ function normalizeContractOperationReceipt(payload, context) {
 }
 
 function normalizeContractCallResponse(payload) {
-  const record = ensureRecord(payload, "contractCall response");
+  const context = "contractCall response";
+  const record = ensureRecord(payload, context);
   assertSupportedOptionKeys(
     record,
     new Set([
@@ -25490,108 +21017,57 @@ function normalizeContractCallResponse(payload) {
       "tx_hash_hex",
       "pipeline_status",
       "entrypoint_hash_hex",
-      "transaction_scaffold_b64",
-      "signed_transaction_b64",
+      "transaction_payload_b64",
       "signing_message_b64",
       "entrypoint",
       "operation_receipt",
     ]),
-    "contractCall response",
+    context,
   );
   const normalized = {
-    ok: requireExactBoolean(record.ok, "contractCall response.ok"),
-    submitted: requireExactBoolean(
-      record.submitted,
-      "contractCall response.submitted",
-    ),
-    dataspace: requireExactNonEmptyString(
-      record.dataspace,
-      "contractCall response.dataspace",
-    ),
-    code_hash_hex: requireExactLowerHex32String(
-      record.code_hash_hex,
-      "contractCall response.code_hash_hex",
-    ),
-    abi_hash_hex: requireExactLowerHex32String(
-      record.abi_hash_hex,
-      "contractCall response.abi_hash_hex",
-    ),
-    creation_time_ms: requireExactJsonUnsignedInteger(
-      record.creation_time_ms,
-      "contractCall response.creation_time_ms",
-      { allowZero: true },
-    ),
+    ok: requireExactBoolean(record.ok, `${context}.ok`),
+    submitted: requireExactBoolean(record.submitted, `${context}.submitted`),
+    dataspace: requireExactNonEmptyString(record.dataspace, `${context}.dataspace`),
+    code_hash_hex: requireExactLowerHex32String(record.code_hash_hex, `${context}.code_hash_hex`),
+    abi_hash_hex: requireExactLowerHex32String(record.abi_hash_hex, `${context}.abi_hash_hex`),
+    creation_time_ms: requireExactJsonUnsignedInteger(record.creation_time_ms, `${context}.creation_time_ms`, { allowZero: true }),
     transaction_ttl_ms:
       record.transaction_ttl_ms === undefined || record.transaction_ttl_ms === null
         ? null
         : requireExactJsonUnsignedInteger(
             record.transaction_ttl_ms,
-            "contractCall response.transaction_ttl_ms",
+            `${context}.transaction_ttl_ms`,
             { allowZero: false },
           ),
   };
   if (record.contract_address !== undefined && record.contract_address !== null) {
     normalized.contract_address = requireExactNonEmptyString(
       record.contract_address,
-      "contractCall response.contract_address",
+      `${context}.contract_address`,
     );
   }
-  if (record.tx_hash_hex !== undefined && record.tx_hash_hex !== null) {
-    normalized.tx_hash_hex = requireExactLowerHex32String(
-      record.tx_hash_hex,
-      "contractCall response.tx_hash_hex",
-    );
-  } else {
-    normalized.tx_hash_hex = null;
-  }
-  normalized.entrypoint_hash_hex =
-    record.entrypoint_hash_hex === undefined || record.entrypoint_hash_hex === null
-      ? null
-      : requireExactLowerHex32String(
-          record.entrypoint_hash_hex,
-          "contractCall response.entrypoint_hash_hex",
-        );
+  normalized.tx_hash_hex = requireOptionalExactLowerHex32String(record.tx_hash_hex, `${context}.tx_hash_hex`);
+  normalized.entrypoint_hash_hex = requireOptionalExactLowerHex32String(record.entrypoint_hash_hex, `${context}.entrypoint_hash_hex`);
   normalized.entrypoint =
     record.entrypoint === undefined || record.entrypoint === null
       ? null
       : requireExactNonEmptyString(
           record.entrypoint,
-          "contractCall response.entrypoint",
+          `${context}.entrypoint`,
         );
-  normalized.transaction_scaffold_b64 =
-    record.transaction_scaffold_b64 === undefined || record.transaction_scaffold_b64 === null
-      ? null
-      : normalizeRequiredExactBase64Payload(
-          record.transaction_scaffold_b64,
-          "contractCall response.transaction_scaffold_b64",
-        );
-  normalized.signed_transaction_b64 =
-    record.signed_transaction_b64 === undefined || record.signed_transaction_b64 === null
-      ? null
-      : normalizeRequiredExactBase64Payload(
-          record.signed_transaction_b64,
-          "contractCall response.signed_transaction_b64",
-        );
-  normalized.signing_message_b64 =
-    record.signing_message_b64 === undefined || record.signing_message_b64 === null
-      ? null
-      : normalizeRequiredExactBase64Payload(
-          record.signing_message_b64,
-          "contractCall response.signing_message_b64",
-        );
+  normalized.transaction_payload_b64 = normalizeOptionalExactBase64Payload(record.transaction_payload_b64, `${context}.transaction_payload_b64`);
+  normalized.signing_message_b64 = normalizeOptionalExactBase64Payload(record.signing_message_b64, `${context}.signing_message_b64`);
   if (record.pipeline_status !== undefined) {
     normalized.pipeline_status =
       record.pipeline_status === null
         ? null
         : normalizePipelineTransactionStatus(
             record.pipeline_status,
-            "contractCall response.pipeline_status",
+            `${context}.pipeline_status`,
           );
   }
-  normalized.operation_receipt = normalizeContractOperationReceipt(
-    record.operation_receipt,
-    "contractCall response.operation_receipt",
-  );
+
+  normalized.operation_receipt = normalizeContractOperationReceipt(record.operation_receipt, `${context}.operation_receipt`);
   return normalized;
 }
 
@@ -25601,26 +21077,28 @@ function normalizeContractCallDraftResponse(payload, request) {
   if (!response.ok || response.submitted) {
     throw new TypeError("contractCall draft must be successful and not submitted");
   }
-  if (response.tx_hash_hex !== null || response.pipeline_status != null) {
+  if (
+    response.tx_hash_hex !== null ||
+    response.entrypoint_hash_hex !== null ||
+    response.pipeline_status != null
+  ) {
     throw new TypeError("contractCall draft must not contain submission state");
   }
-  if (
-    response.transaction_scaffold_b64 === null ||
-    response.transaction_scaffold_b64 !== response.signed_transaction_b64
-  ) {
-    throw new TypeError("contractCall draft must contain one exact transaction scaffold");
-  }
-  decodeVerifyingKeyDraftBase64(
-    response.signing_message_b64,
-    "contractCall response.signing_message_b64",
-    { exactBytes: 32 },
+  normalizeAppApiTransactionDraft(
+    {
+      submitted: response.submitted,
+      transaction_payload_b64: response.transaction_payload_b64,
+      signing_message_b64: response.signing_message_b64,
+    },
+    "contractCall response",
   );
   if (
     response.entrypoint !== request.entrypoint ||
     receipt.operation_kind !== "contract_call" ||
     receipt.status !== "pending_signature" ||
     receipt.entrypoint !== request.entrypoint ||
-    receipt.tx_hash_hex !== null
+    receipt.tx_hash_hex !== null ||
+    receipt.entrypoint_hash_hex !== null
   ) {
     throw new TypeError("contractCall draft is not bound to the requested entrypoint");
   }
@@ -25766,7 +21244,7 @@ function normalizeContractCallSimulateResponse(payload) {
   return normalized;
 }
 
-function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
+async function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
   const record = ensureRecord(input, `${context} request`);
   const vkRef = record.vk_ref ?? record.vkRef;
   const metadata = record.metadata ?? {};
@@ -25775,7 +21253,10 @@ function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
     `${context}.bytecode`,
   );
   const normalized = {
-    vk_ref: normalizeVerifyingKeyId(vkRef, `${context}.vk_ref`),
+    vk_ref: (await loadVerifyingKeyClient()).id(
+      vkRef,
+      `${context}.vk_ref`,
+    ),
     authority: ToriiClient._normalizeAccountId(
       record.authority,
       `${context}.authority`,
@@ -26551,29 +22032,35 @@ function normalizeMultisigContractCallResponse(
       `${context}.ok`,
     );
   }
-  return {
+  for (const retired of ["transaction_scaffold_b64", "signed_transaction_b64"]) {
+    if (Object.hasOwn(record, retired)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} contains retired field ${retired}`,
+        `${context}.${retired}`,
+      );
+    }
+  }
+  const normalized = {
     ok: true,
     resolved_multisig_account_id: requireExactAccountId(
       record.resolved_multisig_account_id,
       `${context}.resolved_multisig_account_id`,
     ),
-    submitted: optionalBoolean(record.submitted, `${context}.submitted`),
+    submitted: requireExactBoolean(record.submitted, `${context}.submitted`),
     proposal_id: optionalString(record.proposal_id, `${context}.proposal_id`),
-    instructions_hash:
-      record.instructions_hash === undefined || record.instructions_hash === null
-        ? null
-        : normalizeHex32String(record.instructions_hash, `${context}.instructions_hash`),
-    tx_hash_hex:
-      record.tx_hash_hex === undefined || record.tx_hash_hex === null
-        ? null
-        : normalizeHex32String(record.tx_hash_hex, `${context}.tx_hash_hex`),
-    executed_tx_hash_hex:
-      record.executed_tx_hash_hex === undefined || record.executed_tx_hash_hex === null
-        ? null
-        : normalizeHex32String(
-            record.executed_tx_hash_hex,
-            `${context}.executed_tx_hash_hex`,
-          ),
+    instructions_hash: requireOptionalExactLowerHex32String(
+      record.instructions_hash,
+      `${context}.instructions_hash`,
+    ),
+    tx_hash_hex: requireOptionalExactLowerHex32String(
+      record.tx_hash_hex,
+      `${context}.tx_hash_hex`,
+    ),
+    executed_tx_hash_hex: requireOptionalExactLowerHex32String(
+      record.executed_tx_hash_hex,
+      `${context}.executed_tx_hash_hex`,
+    ),
     creation_time_ms:
       record.creation_time_ms === undefined || record.creation_time_ms === null
         ? null
@@ -26582,11 +22069,41 @@ function normalizeMultisigContractCallResponse(
             `${context}.creation_time_ms`,
             { allowZero: true },
           ),
-    signing_message_b64: normalizeOptionalBase64Payload(
+    transaction_payload_b64: normalizeOptionalExactBase64Payload(
+      record.transaction_payload_b64,
+      `${context}.transaction_payload_b64`,
+    ),
+    signing_message_b64: normalizeOptionalExactBase64Payload(
       record.signing_message_b64,
       `${context}.signing_message_b64`,
     ),
   };
+  if (normalized.submitted) {
+    if (
+      normalized.tx_hash_hex === null ||
+      normalized.transaction_payload_b64 !== null ||
+      normalized.signing_message_b64 !== null
+    ) {
+      throw new TypeError(
+        `${context} submitted response must contain only the final transaction hash`,
+      );
+    }
+  } else {
+    if (normalized.tx_hash_hex !== null) {
+      throw new TypeError(
+        `${context} unsigned response must contain exactly one payload and signing-message pair`,
+      );
+    }
+    normalizeAppApiTransactionDraft(
+      {
+        submitted: normalized.submitted,
+        transaction_payload_b64: normalized.transaction_payload_b64,
+        signing_message_b64: normalized.signing_message_b64,
+      },
+      context,
+    );
+  }
+  return normalized;
 }
 
 function normalizeMultisigSpecResponse(payload, context = "multisig spec response") {
@@ -30833,21 +26350,21 @@ function buildSorafsPorStatusParams(options = {}) {
       "epoch",
       "status",
       "limit",
-      "page_token",
-      "pageToken",
-      "pageTokenHex",
+      "max_bytes",
+      "maxBytes",
+      "cursor",
     ]),
     "getSorafsPorStatus options",
   );
   const params = {};
-  const manifest = record.manifest;
+  const manifest = record.manifest ?? record.manifestHex;
   if (manifest !== undefined && manifest !== null) {
     params.manifest = requireHexString(
       manifest,
       "sorafsPorStatus.manifestHex",
     );
   }
-  const provider = record.provider;
+  const provider = record.provider ?? record.providerHex;
   if (provider !== undefined && provider !== null) {
     params.provider = requireHexString(
       provider,
@@ -30867,46 +26384,97 @@ function buildSorafsPorStatusParams(options = {}) {
       "sorafsPorStatus.status",
     ).trim();
   }
-  if (record.limit !== undefined && record.limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(
-      record.limit,
-      "sorafsPorStatus.limit",
-      { allowZero: false },
-    );
+  params.limit = ToriiClient._normalizeUnsignedInteger(
+    record.limit ?? SORAFS_POR_PAGE_DEFAULT_LIMIT,
+    "sorafsPorStatus.limit",
+    { allowZero: false, max: SORAFS_POR_PAGE_MAX_LIMIT },
+  );
+  params.max_bytes = ToriiClient._normalizeUnsignedInteger(
+    record.max_bytes ?? record.maxBytes ?? SORAFS_POR_PAGE_DEFAULT_MAX_BYTES,
+    "sorafsPorStatus.maxBytes",
+    { allowZero: false, max: SORAFS_POR_PAGE_DEFAULT_MAX_BYTES },
+  );
+  if (record.cursor !== undefined && record.cursor !== null) {
+    params.cursor = normalizeSorafsPorCursor(record.cursor, "sorafsPorStatus.cursor");
   }
-  const pageToken = record.page_token;
-  if (pageToken !== undefined && pageToken !== null) {
-    params.page_token = requireHexString(
-      pageToken,
-      "sorafsPorStatus.pageTokenHex",
-    );
-  }
-  return Object.keys(params).length === 0 ? undefined : params;
+  return params;
 }
 
 function buildSorafsPorExportParams(options = {}) {
   const record = ensureRecord(options, "exportSorafsPorStatus options");
   assertSupportedOptionKeys(
     record,
-    new Set(["start_epoch", "startEpoch", "end_epoch", "endEpoch"]),
+    new Set([
+      "start_epoch",
+      "startEpoch",
+      "end_epoch",
+      "endEpoch",
+      "limit",
+      "max_bytes",
+      "maxBytes",
+      "cursor",
+    ]),
     "exportSorafsPorStatus options",
   );
   const params = {};
-  if (record.start_epoch !== undefined || record.startEpoch !== undefined) {
+  const startEpoch = record.start_epoch ?? record.startEpoch;
+  const endEpoch = record.end_epoch ?? record.endEpoch;
+  if ((startEpoch == null) !== (endEpoch == null)) {
+    throw new TypeError(
+      "sorafsPorExport.startEpoch and sorafsPorExport.endEpoch must be supplied together",
+    );
+  }
+  if (startEpoch != null) {
     params.start_epoch = ToriiClient._normalizeUnsignedInteger(
-      record.start_epoch,
+      startEpoch,
       "sorafsPorExport.startEpoch",
       { allowZero: false },
     );
   }
-  if (record.end_epoch !== undefined || record.endEpoch !== undefined) {
+  if (endEpoch != null) {
     params.end_epoch = ToriiClient._normalizeUnsignedInteger(
-      record.end_epoch,
+      endEpoch,
       "sorafsPorExport.endEpoch",
       { allowZero: false },
     );
   }
-  return Object.keys(params).length === 0 ? undefined : params;
+  params.limit = ToriiClient._normalizeUnsignedInteger(
+    record.limit ?? SORAFS_POR_PAGE_DEFAULT_LIMIT,
+    "sorafsPorExport.limit",
+    { allowZero: false, max: SORAFS_POR_PAGE_MAX_LIMIT },
+  );
+  params.max_bytes = ToriiClient._normalizeUnsignedInteger(
+    record.max_bytes ?? record.maxBytes ?? SORAFS_POR_PAGE_DEFAULT_MAX_BYTES,
+    "sorafsPorExport.maxBytes",
+    { allowZero: false, max: SORAFS_POR_PAGE_DEFAULT_MAX_BYTES },
+  );
+  if (record.cursor !== undefined && record.cursor !== null) {
+    params.cursor = normalizeSorafsPorCursor(record.cursor, "sorafsPorExport.cursor");
+  }
+  return params;
+}
+
+function normalizeSorafsPorCursor(value, context) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > SORAFS_POR_CURSOR_MAX_LENGTH ||
+    value.length % 4 === 1 ||
+    !EXPLORER_CURSOR_PATTERN.test(value)
+  ) {
+    throw new TypeError(
+      `${context} must be canonical base64url without padding and at most ${SORAFS_POR_CURSOR_MAX_LENGTH} characters`,
+    );
+  }
+  const trailingSextet = EXPLORER_CURSOR_ALPHABET.indexOf(value[value.length - 1]);
+  const remainder = value.length % 4;
+  if (
+    (remainder === 2 && (trailingSextet & 0x0f) !== 0) ||
+    (remainder === 3 && (trailingSextet & 0x03) !== 0)
+  ) {
+    throw new TypeError(`${context} must use canonical base64url trailing bits`);
+  }
+  return value;
 }
 
 function normalizeSorafsPinListResponse(payload, context = "sorafs pin list response") {
@@ -34370,228 +29938,43 @@ const VERIFYING_KEY_ITERATOR_OPTION_KEYS = new Set([
   "maxItems",
 ]);
 
-function buildVerifyingKeyListQuery(options = {}) {
-  const { signal } = normalizeSignalOption(options, "listVerifyingKeys");
-  assertSupportedOptionKeys(
-    options ?? {},
-    VERIFYING_KEY_LIST_OPTION_KEYS,
-    "listVerifyingKeys options",
-  );
-  const params = {};
-  const backendValue = options.backend ?? options.backend_filter;
-  if (backendValue !== undefined && backendValue !== null) {
-    params.backend = assertProductionVerifyBackendLabel(
-      backendValue,
-      "listVerifyingKeys.backend",
-    );
-  }
-  const statusValue =
-    options.status ?? options.statusFilter ?? options.verifyingKeyStatus;
-  const normalizedStatus = normalizeVerifyingKeyStatusValue(
-    statusValue,
-    "listVerifyingKeys.status",
-    { optional: true },
-  );
-  if (normalizedStatus) {
-    params.status = normalizedStatus;
-  }
-  const nameContains = options.nameContains ?? options.name_contains;
-  if (nameContains !== undefined && nameContains !== null) {
-    params.name_contains = requireNonEmptyString(
-      nameContains,
-      "listVerifyingKeys.nameContains",
-    );
-  }
-  if (options.limit !== undefined && options.limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(
-      options.limit,
-      "listVerifyingKeys.limit",
-      { allowZero: false },
-    );
-  }
-  if (options.offset !== undefined && options.offset !== null) {
-    params.offset = ToriiClient._normalizeUnsignedInteger(
-      options.offset,
-      "listVerifyingKeys.offset",
-      { allowZero: true },
-    );
-  }
-  const orderValue = options.order ?? options.sort ?? options.sortOrder;
-  if (orderValue !== undefined && orderValue !== null) {
-    const normalizedOrder = requireNonEmptyString(orderValue, "listVerifyingKeys.order");
-    const lower = normalizedOrder.toLowerCase();
-    if (lower !== "asc" && lower !== "desc") {
-      throw new TypeError('listVerifyingKeys.order must be "asc" or "desc"');
-    }
-    params.order = lower;
-  }
-  const idsOnlyValue = options.idsOnly ?? options.ids_only;
-  if (idsOnlyValue !== undefined && idsOnlyValue !== null) {
-    params.ids_only = requireBooleanLike(
-      idsOnlyValue,
-      "listVerifyingKeys.idsOnly",
-    );
-  }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
-}
+let verifyingKeyClientPromise;
 
-function normalizeVerifyingKeyListPayload(
-  payload,
-  context = "verifying key list response",
-) {
-  if (payload === undefined || payload === null) {
-    return [];
-  }
-  if (Array.isArray(payload)) {
-    return payload.map((entry, index) =>
-      normalizeVerifyingKeyListItem(entry, `${context}[${index}]`),
-    );
-  }
-  const record = ensureRecord(payload, context);
-  if (!Array.isArray(record.items)) {
-    throw new TypeError(`${context} must be an array or { items: [] } object`);
-  }
-  return record.items.map((entry, index) =>
-    normalizeVerifyingKeyListItem(entry, `${context}.items[${index}]`),
-  );
-}
-
-function normalizeVerifyingKeyListItem(payload, context) {
-  const record = ensureRecord(payload, context);
-  let idPayload = record.id;
-  if (!idPayload && record.backend && record.name) {
-    idPayload = { backend: record.backend, name: record.name };
-  }
-  if (!idPayload) {
-    throw new TypeError(`${context} must include an id`);
-  }
-  const id = normalizeVerifyingKeyId(idPayload, `${context}.id`);
-  let normalizedRecord = null;
-  if (record.record !== undefined && record.record !== null) {
-    normalizedRecord = normalizeVerifyingKeyRecord(record.record, `${context}.record`);
-  }
-  return { id, record: normalizedRecord };
-}
-
-function normalizeVerifyingKeyDetail(
-  payload,
-  context = "verifying key detail response",
-) {
-  const record = ensureRecord(payload, context);
-  const id = normalizeVerifyingKeyId(record.id, `${context}.id`);
-  return {
-    id,
-    record: normalizeVerifyingKeyRecord(record.record, `${context}.record`),
-  };
-}
-
-function normalizeVerifyingKeyId(payload, context) {
-  const record = ensureRecord(payload, context);
-  return {
-    backend: assertProductionVerifyBackendLabel(record.backend, `${context}.backend`),
-    name: normalizeVerifyingKeyName(record.name, `${context}.name`),
-  };
-}
-
-function normalizeVerifyingKeyRecord(payload, context) {
-  const record = ensureRecord(payload, context);
-  const gasSchedule = record.gas_schedule_id ?? null;
-  const metadataCid = record.metadata_uri_cid ?? null;
-  const vkBytesCid = record.vk_bytes_cid ?? null;
-  const inlinePayload =
-    record.key ?? null;
-  const activationHeight =
-    record.activation_height === undefined || record.activation_height === null
-      ? null
-      : ToriiClient._normalizeUnsignedInteger(
-          record.activation_height,
-          `${context}.activation_height`,
-          { allowZero: true },
+function loadVerifyingKeyClient() {
+  return (verifyingKeyClientPromise ??= import(VERIFYING_KEY_CLIENT_URL).then(
+      (module) => {
+        if (typeof module.createVerifyingKeyClient !== "function") {
+          throw new TypeError("invalid verifying-key module");
+        }
+        const client = module.createVerifyingKeyClient(
+          VERIFYING_KEY_LIST_OPTION_KEYS,
+          assertSupportedOptionKeys,
+          decodeVerifyingKeyDraftBase64,
+          ensureRecord,
+          irohaPrehash,
+          ToriiClient._normalizeAccountId,
+          normalizeRequiredBase64Payload,
+          normalizeSignalOption,
+          ToriiClient._normalizeUnsignedInteger,
+          rejectVerifyingKeyPrivateKeyFields,
+          requireBooleanLike,
+          requireExactBoolean,
+          requireExactNonEmptyString,
+          requireHexString,
+          requireNonEmptyString,
         );
-  const withdrawHeight =
-    record.withdraw_height === undefined || record.withdraw_height === null
-      ? null
-      : ToriiClient._normalizeUnsignedInteger(
-          record.withdraw_height,
-          `${context}.withdraw_height`,
-          { allowZero: true },
-        );
-  validateVerifyingKeyHeightRange(activationHeight, withdrawHeight, context);
-  return {
-    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
-      allowZero: false,
-    }),
-    circuit_id: requireExactNonEmptyString(
-      record.circuit_id,
-      `${context}.circuit_id`,
-    ),
-    backend: assertProductionVerifyBackendLabel(record.backend, `${context}.backend`),
-    curve:
-      record.curve === undefined || record.curve === null
-        ? null
-        : requireNonEmptyString(record.curve, `${context}.curve`),
-    public_inputs_schema_hash: requireNonEmptyString(
-      record.public_inputs_schema_hash,
-      `${context}.public_inputs_schema_hash`,
-    ),
-    commitment_hex: requireHexString(
-      record.commitment,
-      `${context}.commitment_hex`,
-    ),
-    vk_len: ToriiClient._normalizeUnsignedInteger(
-      record.vk_len,
-      `${context}.vk_len`,
-      { allowZero: false },
-    ),
-    max_proof_bytes:
-      record.max_proof_bytes === undefined || record.max_proof_bytes === null
-        ? null
-        : ToriiClient._normalizeUnsignedInteger(
-            record.max_proof_bytes,
-            `${context}.max_proof_bytes`,
-            { allowZero: false },
-          ),
-    gas_schedule_id:
-      gasSchedule === null
-        ? null
-        : requireExactNonEmptyString(gasSchedule, `${context}.gas_schedule_id`),
-    metadata_uri_cid:
-      metadataCid === null ? null : requireNonEmptyString(metadataCid, `${context}.metadata_uri_cid`),
-    vk_bytes_cid:
-      vkBytesCid === null ? null : requireNonEmptyString(vkBytesCid, `${context}.vk_bytes_cid`),
-    activation_height: activationHeight,
-    withdraw_height: withdrawHeight,
-    status: normalizeVerifyingKeyStatusValue(record.status, `${context}.status`),
-    inline_key: normalizeVerifyingKeyInline(inlinePayload, `${context}.inline_key`),
-  };
-}
-
-function normalizeVerifyingKeyInline(value, context) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const record = ensureRecord(value, context);
-  const backend = assertProductionVerifyBackendLabel(record.backend, `${context}.backend`);
-  const bytesValue = record.bytes_b64;
-  return {
-    backend,
-    bytes_b64: normalizeRequiredBase64Payload(bytesValue, `${context}.bytes_b64`),
-  };
-}
-
-function normalizeVerifyingKeyStatusValue(value, context, { optional = false } = {}) {
-  if (value === undefined || value === null || value === "") {
-    if (optional) {
-      return undefined;
-    }
-    throw new TypeError(`${context} must be a verifying key status`);
-  }
-  const normalized = requireNonEmptyString(String(value), context).toLowerCase();
-  const canonical = VERIFYING_KEY_STATUS_ALIASES.get(normalized);
-  if (!canonical) {
-    throw new TypeError(`${context} must be one of ${[...VERIFYING_KEY_STATUS_VALUES].join(", ")}`);
-  }
-  return canonical;
+        if (
+          !Object.isFrozen(client) ||
+          Object.keys(client).join(",") !==
+            "backend,detail,draft,id,list,listQuery,name,register,signingContext,update"
+        ) {
+          throw new TypeError(
+            "invalid verifying-key setup: expected frozen helper keys",
+          );
+        }
+        return client;
+      },
+    ));
 }
 
 const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
@@ -34608,16 +29991,6 @@ const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
   "stark/fri/poseidon2-goldilocks",
   "stark/fri/sha256_goldilocks.v1",
 ]);
-const STARK_VERIFY_BACKEND_LABELS_V1 = new Set([
-  "stark/fri",
-  "stark/fri/sha256-goldilocks",
-  "stark/fri/poseidon2-goldilocks",
-  "stark/fri/sha256_goldilocks.v1",
-]);
-
-function isProductionVerifyBackendLabel(value) {
-  return typeof value === "string" && PRODUCTION_VERIFY_BACKEND_LABELS_V1.has(value);
-}
 
 function assertProductionVerifyBackendLabel(value, context) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -34635,7 +30008,7 @@ function assertProductionVerifyBackendLabel(value, context) {
       context,
     );
   }
-  if (!isProductionVerifyBackendLabel(backend)) {
+  if (!PRODUCTION_VERIFY_BACKEND_LABELS_V1.has(backend)) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
       `${context} uses unsupported production verifier backend ${backend}`,
@@ -34661,45 +30034,6 @@ function normalizeVerifyingKeySigningChainId(value, context) {
   return chainId;
 }
 
-function requireVerifyingKeySigningContext(value, context) {
-  if (value === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} requires immutable ToriiClient options.localSigningContext`,
-      "ToriiClient.options.localSigningContext",
-    );
-  }
-  return value;
-}
-
-function normalizeVerifyingKeyHex32(value, context) {
-  const literal = requireExactNonEmptyString(value, context);
-  const normalized = /^0x/iu.test(literal) ? literal.slice(2) : literal;
-  if (normalized.length !== 64 || !/^[0-9a-fA-F]{64}$/u.test(normalized)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must contain exactly 32 bytes`,
-      context,
-    );
-  }
-  return normalized.toLowerCase();
-}
-
-const VERIFYING_KEY_PRIVATE_KEY_FIELDS = new Set([
-  "private_key",
-  "privateKey",
-  "private_key_hex",
-  "privateKeyHex",
-  "private_key_bytes",
-  "privateKeyBytes",
-  "private_key_seed",
-  "privateKeySeed",
-  "private_key_multihash",
-  "privateKeyMultihash",
-  "private_key_algorithm",
-  "privateKeyAlgorithm",
-]);
-
 function rejectVerifyingKeyPrivateKeyFields(record, context) {
   const fields = Object.keys(record).filter((key) =>
     VERIFYING_KEY_PRIVATE_KEY_FIELDS.has(key),
@@ -34712,194 +30046,6 @@ function rejectVerifyingKeyPrivateKeyFields(record, context) {
     `${context} does not accept private-key fields (${fields.join(", ")}); sign the returned transaction draft locally`,
     `${context}.private_key`,
   );
-}
-
-function normalizeVerifyingKeyRegisterPayload(input) {
-  const record = ensureRecord(input, "registerVerifyingKey payload");
-  rejectVerifyingKeyPrivateKeyFields(record, "registerVerifyingKey");
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "registerVerifyingKey.authority",
-    ),
-    backend: assertProductionVerifyBackendLabel(record.backend, "registerVerifyingKey.backend"),
-    name: normalizeVerifyingKeyName(record.name, "registerVerifyingKey.name"),
-    version: ToriiClient._normalizeUnsignedInteger(
-      record.version,
-      "registerVerifyingKey.version",
-      { allowZero: false },
-    ),
-    circuit_id: requireExactNonEmptyString(
-      record.circuit_id,
-      "registerVerifyingKey.circuitId",
-    ),
-    public_inputs_schema_hash_hex: normalizeVerifyingKeyHex32(
-      record.public_inputs_schema_hash_hex,
-      "registerVerifyingKey.publicInputsSchemaHashHex",
-    ),
-    gas_schedule_id: requireExactNonEmptyString(
-      record.gas_schedule_id,
-      "registerVerifyingKey.gasScheduleId",
-    ),
-  };
-  assignVerifyingKeyOptionalFields(record, payload, "registerVerifyingKey");
-  return payload;
-}
-
-function normalizeVerifyingKeyUpdatePayload(input) {
-  const record = ensureRecord(input, "updateVerifyingKey payload");
-  rejectVerifyingKeyPrivateKeyFields(record, "updateVerifyingKey");
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "updateVerifyingKey.authority",
-    ),
-    backend: assertProductionVerifyBackendLabel(record.backend, "updateVerifyingKey.backend"),
-    name: normalizeVerifyingKeyName(record.name, "updateVerifyingKey.name"),
-    version: ToriiClient._normalizeUnsignedInteger(
-      record.version,
-      "updateVerifyingKey.version",
-      { allowZero: false },
-    ),
-    circuit_id: requireExactNonEmptyString(
-      record.circuit_id,
-      "updateVerifyingKey.circuitId",
-    ),
-    public_inputs_schema_hash_hex: normalizeVerifyingKeyHex32(
-      record.public_inputs_schema_hash_hex,
-      "updateVerifyingKey.publicInputsSchemaHashHex",
-    ),
-  };
-  const gasSchedule = record.gas_schedule_id;
-  if (gasSchedule !== undefined && gasSchedule !== null) {
-    payload.gas_schedule_id = requireExactNonEmptyString(
-      gasSchedule,
-      "updateVerifyingKey.gasScheduleId",
-    );
-  }
-  assignVerifyingKeyOptionalFields(record, payload, "updateVerifyingKey");
-  return payload;
-}
-
-function normalizeVerifyingKeyTransactionDraft(
-  input,
-  context,
-  { chainId, operation, request },
-) {
-  const record = ensureRecord(input, context);
-  assertSupportedOptionKeys(
-    record,
-    new Set([
-      "submitted",
-      "transaction_payload_b64",
-      "signing_message_b64",
-    ]),
-    context,
-  );
-  if (requireExactBoolean(record.submitted, `${context}.submitted`) !== false) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.submitted must be false`,
-      `${context}.submitted`,
-    );
-  }
-  const transactionPayloadB64 = record.transaction_payload_b64;
-  const transactionPayload = decodeVerifyingKeyDraftBase64(
-    transactionPayloadB64,
-    `${context}.transaction_payload_b64`,
-    {
-      maxBytes: VERIFYING_KEY_TRANSACTION_PAYLOAD_MAX_BYTES,
-      limitLabel: "transaction payload",
-    },
-  );
-  const signingMessageB64 = record.signing_message_b64;
-  const signingMessage = decodeVerifyingKeyDraftBase64(
-    signingMessageB64,
-    `${context}.signing_message_b64`,
-    { exactBytes: 32 },
-  );
-  const expectedSigningMessage = irohaPrehash(transactionPayload);
-  if (!timingSafeEqual(signingMessage, expectedSigningMessage)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.signing_message_b64 must equal the canonical Iroha HashOf(transaction_payload_b64)`,
-      `${context}.signing_message_b64`,
-    );
-  }
-  let decodedInstruction;
-  try {
-    decodedInstruction = decodeCanonicalVerifyingKeyTransactionPayload(
-      transactionPayload,
-      {
-        expectedChainId: chainId,
-        expectedAuthority: request.authority,
-        operation,
-      },
-    );
-  } catch (error) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.transaction_payload_b64 is not the requested canonical verifying-key transaction: ${error.message}`,
-      `${context}.transaction_payload_b64`,
-    );
-  }
-  const expectedRecord = expectedVerifyingKeyRecord(request);
-  if (
-    decodedInstruction.id?.backend !== request.backend ||
-    decodedInstruction.id?.name !== request.name ||
-    !isDeepStrictEqual(decodedInstruction.record, expectedRecord)
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.transaction_payload_b64 does not contain the exact requested verifying-key registry record`,
-      `${context}.transaction_payload_b64`,
-    );
-  }
-  return {
-    submitted: false,
-    transaction_payload_b64: transactionPayloadB64,
-    signing_message_b64: signingMessageB64,
-  };
-}
-
-function expectedVerifyingKeyRecord(request) {
-  const keyBytes =
-    request.vk_bytes === undefined
-      ? null
-      : Buffer.from(request.vk_bytes, "base64");
-  const commitmentHex =
-    keyBytes === null
-      ? request.commitment_hex
-      : computeVerifyingKeyCommitmentHex(request.backend, request.vk_bytes);
-  return {
-    version: request.version,
-    circuit_id: request.circuit_id,
-    owner_manifest_id: null,
-    namespace: "core",
-    backend: STARK_VERIFY_BACKEND_LABELS_V1.has(request.backend)
-      ? "stark"
-      : "halo2-ipa-pasta",
-    curve: request.curve ?? "unknown",
-    public_inputs_schema_hash: Array.from(
-      Buffer.from(request.public_inputs_schema_hash_hex, "hex"),
-    ),
-    commitment: Array.from(Buffer.from(commitmentHex, "hex")),
-    vk_len: keyBytes === null ? request.vk_len : keyBytes.length,
-    max_proof_bytes: request.max_proof_bytes ?? 0,
-    gas_schedule_id: request.gas_schedule_id ?? null,
-    metadata_uri_cid: request.metadata_uri_cid ?? null,
-    vk_bytes_cid: request.vk_bytes_cid ?? null,
-    activation_height: request.activation_height ?? null,
-    withdraw_height: request.withdraw_height ?? null,
-    key:
-      keyBytes === null
-        ? null
-        : {
-            backend: request.backend,
-            bytes: Array.from(keyBytes),
-          },
-    status: request.status ?? "Active",
-  };
 }
 
 function decodeVerifyingKeyDraftBase64(
@@ -34965,188 +30111,6 @@ function decodeVerifyingKeyDraftBase64(
     );
   }
   return decoded;
-}
-
-function assignVerifyingKeyOptionalFields(record, payload, context) {
-  const curveValue = record.curve;
-  if (curveValue !== undefined && curveValue !== null) {
-    payload.curve = requireNonEmptyString(curveValue, `${context}.curve`);
-  }
-  const maxProofBytes = record.max_proof_bytes;
-  if (maxProofBytes !== undefined && maxProofBytes !== null) {
-    payload.max_proof_bytes = ToriiClient._normalizeUnsignedInteger(
-      maxProofBytes,
-      `${context}.maxProofBytes`,
-      { allowZero: true },
-    );
-  }
-  const metadataCid = record.metadata_uri_cid;
-  if (metadataCid !== undefined && metadataCid !== null) {
-    payload.metadata_uri_cid = requireNonEmptyString(
-      metadataCid,
-      `${context}.metadataUriCid`,
-    );
-  }
-  const vkBytesCid = record.vk_bytes_cid;
-  if (vkBytesCid !== undefined && vkBytesCid !== null) {
-    payload.vk_bytes_cid = requireNonEmptyString(
-      vkBytesCid,
-      `${context}.vkBytesCid`,
-    );
-  }
-  const activationHeight = record.activation_height;
-  if (activationHeight !== undefined && activationHeight !== null) {
-    payload.activation_height = ToriiClient._normalizeUnsignedInteger(
-      activationHeight,
-      `${context}.activationHeight`,
-      { allowZero: true },
-    );
-  }
-  const withdrawHeight = record.withdraw_height;
-  if (withdrawHeight !== undefined && withdrawHeight !== null) {
-    payload.withdraw_height = ToriiClient._normalizeUnsignedInteger(
-      withdrawHeight,
-      `${context}.withdrawHeight`,
-      { allowZero: true },
-    );
-  }
-  validateVerifyingKeyHeightRange(
-    payload.activation_height,
-    payload.withdraw_height,
-    context,
-  );
-  const commitmentValue = record.commitment_hex;
-  if (commitmentValue !== undefined && commitmentValue !== null) {
-    payload.commitment_hex = normalizeVerifyingKeyHex32(
-      commitmentValue,
-      `${context}.commitmentHex`,
-    );
-  }
-  const statusValue = normalizeVerifyingKeyStatusValue(
-    record.status,
-    `${context}.status`,
-    { optional: true },
-  );
-  if (statusValue) {
-    payload.status = statusValue;
-  }
-  const bytesValue =
-    record.vk_bytes ??
-    record.verifyingKeyBytes ??
-    record.bytes ??
-    record.inlineKeyBytes;
-  const lenValue = record.vk_len;
-  if (bytesValue !== undefined && bytesValue !== null) {
-    const { base64, length } = normalizeVerifyingKeyBytesValue(
-      bytesValue,
-      `${context}.vk_bytes`,
-    );
-    payload.vk_bytes = base64;
-    if (lenValue !== undefined && lenValue !== null) {
-      const normalizedLen = ToriiClient._normalizeUnsignedInteger(
-        lenValue,
-        `${context}.vkLen`,
-        { allowZero: false },
-      );
-      if (normalizedLen !== length) {
-        throw createValidationError(
-          ValidationErrorCode.INVALID_OBJECT,
-          `${context}.vk_len must match vk_bytes length (${length})`,
-          `${context}.vkLen`,
-        );
-      }
-      payload.vk_len = normalizedLen;
-    } else {
-      payload.vk_len = length;
-    }
-  } else if (lenValue !== undefined && lenValue !== null) {
-    payload.vk_len = ToriiClient._normalizeUnsignedInteger(
-      lenValue,
-      `${context}.vkLen`,
-      { allowZero: false },
-    );
-  }
-  if (payload.vk_bytes === undefined) {
-    if (payload.commitment_hex === undefined) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.commitment_hex is required when vk_bytes is omitted`,
-        `${context}.commitmentHex`,
-      );
-    }
-    if (payload.vk_len === undefined) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.vk_len is required when vk_bytes is omitted`,
-        `${context}.vkLen`,
-      );
-    }
-  }
-  if (payload.vk_bytes !== undefined && payload.commitment_hex !== undefined) {
-    const expectedCommitmentHex = computeVerifyingKeyCommitmentHex(
-      payload.backend,
-      payload.vk_bytes,
-    );
-    if (payload.commitment_hex !== expectedCommitmentHex) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.commitment_hex must match domain-separated SHA-256 of backend and vk_bytes`,
-        `${context}.commitmentHex`,
-      );
-    }
-  }
-}
-
-function normalizeVerifyingKeyName(value, context) {
-  const name = requireExactNonEmptyString(value, context);
-  if (name.includes(":")) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must not contain ':'`,
-      context,
-    );
-  }
-  return name;
-}
-
-function validateVerifyingKeyHeightRange(activationHeight, withdrawHeight, context) {
-  if (
-    activationHeight !== undefined &&
-    activationHeight !== null &&
-    withdrawHeight !== undefined &&
-    withdrawHeight !== null &&
-    withdrawHeight < activationHeight
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.withdraw_height must be >= activation_height`,
-      `${context}.withdrawHeight`,
-    );
-  }
-}
-
-function normalizeVerifyingKeyBytesValue(value, context) {
-  const base64 = normalizeRequiredBase64Payload(value, context);
-  const buffer = Buffer.from(base64, "base64");
-  return { base64, length: buffer.length };
-}
-
-function computeVerifyingKeyCommitmentHex(backend, base64Bytes) {
-  const backendBytes = Buffer.from(backend, "utf8");
-  const vkBytes = Buffer.from(base64Bytes, "base64");
-  return createHash("sha256")
-    .update(Buffer.from("iroha:zk:v1:vk", "utf8"))
-    .update(u64BeBuffer(backendBytes.length))
-    .update(backendBytes)
-    .update(u64BeBuffer(vkBytes.length))
-    .update(vkBytes)
-    .digest("hex");
-}
-
-function u64BeBuffer(value) {
-  const buffer = Buffer.alloc(8);
-  buffer.writeBigUInt64BE(BigInt(value));
-  return buffer;
 }
 
 function normalizeProverReportList(payload, filters, context) {
@@ -35270,77 +30234,149 @@ function normalizeSumeragiEvidenceListResponse(payload) {
   return { total, items };
 }
 
+function assertExactSumeragiEvidenceFields(
+  record,
+  context,
+  requiredVariantFields,
+  optionalVariantFields = [],
+) {
+  const required = new Set([...EVIDENCE_BASE_FIELDS, ...requiredVariantFields]);
+  const allowed = new Set([...required, ...optionalVariantFields]);
+  const missing = Array.from(required).filter(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  const unexpected = Object.keys(record).filter((field) => !allowed.has(field));
+  if (missing.length > 0 || unexpected.length > 0) {
+    const details = [];
+    if (missing.length > 0) details.push(`missing ${missing.join(", ")}`);
+    if (unexpected.length > 0) details.push(`unexpected ${unexpected.join(", ")}`);
+    throw new TypeError(`${context} must use the exact server fields (${details.join("; ")})`);
+  }
+}
+
+function requireSumeragiEvidenceUnsigned(value, context, maximum = Number.MAX_SAFE_INTEGER) {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value > maximum
+  ) {
+    throw new TypeError(`${context} must be a non-negative JSON safe integer`);
+  }
+  return value;
+}
+
+function requireSumeragiEvidenceHash(value, context) {
+  return requireExactLowerHex32String(value, context);
+}
+
 function normalizeSumeragiEvidenceRecord(value, context) {
   const record = ensureRecord(value, context);
-  const kind = requireNonEmptyString(record.kind, `${context}.kind`);
+  const kind = requireExactNonEmptyString(record.kind, `${context}.kind`);
+  if (!EVIDENCE_KIND_VALUES.has(kind)) {
+    throw new RangeError(
+      `${context}.kind must be one of ${Array.from(EVIDENCE_KIND_VALUES).join(", ")}`,
+    );
+  }
+  const consensusAdmittedHeight = record.consensus_admitted_height;
   const base = {
     kind,
-    recorded_height: requireNonNegativeIntegerLike(
+    recorded_height: requireSumeragiEvidenceUnsigned(
       record.recorded_height,
       `${context}.recorded_height`,
     ),
-    recorded_view: requireNonNegativeIntegerLike(
+    recorded_view: requireSumeragiEvidenceUnsigned(
       record.recorded_view,
       `${context}.recorded_view`,
     ),
-    recorded_ms: requireNonNegativeIntegerLike(
+    recorded_ms: requireSumeragiEvidenceUnsigned(
       record.recorded_ms,
       `${context}.recorded_ms`,
     ),
+    consensus_admitted_height:
+      consensusAdmittedHeight === null
+        ? null
+        : requireSumeragiEvidenceUnsigned(
+            consensusAdmittedHeight,
+            `${context}.consensus_admitted_height`,
+          ),
   };
   if (
     kind === "DoublePrepare" ||
     kind === "DoubleCommit"
   ) {
+    assertExactSumeragiEvidenceFields(record, context, [
+      "phase",
+      "height",
+      "view",
+      "epoch",
+      "signer",
+      "block_hash_1",
+      "block_hash_2",
+    ]);
     const phase = requireEvidencePhase(
-      pickOverride(record, "phase", "phase"),
+      record.phase,
       `${context}.phase`,
     );
+    const blockHash1 = requireSumeragiEvidenceHash(
+      record.block_hash_1,
+      `${context}.block_hash_1`,
+    );
+    const blockHash2 = requireSumeragiEvidenceHash(
+      record.block_hash_2,
+      `${context}.block_hash_2`,
+    );
+    if (blockHash1 === blockHash2) {
+      throw new RangeError(`${context} block hashes must identify distinct blocks`);
+    }
     return {
       ...base,
       phase,
-      height: requireNonNegativeIntegerLike(
+      height: requireSumeragiEvidenceUnsigned(
         record.height,
         `${context}.height`,
       ),
-      view: requireNonNegativeIntegerLike(
+      view: requireSumeragiEvidenceUnsigned(
         record.view,
         `${context}.view`,
       ),
-      epoch: requireNonNegativeIntegerLike(
+      epoch: requireSumeragiEvidenceUnsigned(
         record.epoch,
         `${context}.epoch`,
       ),
-      signer: requireNonEmptyString(
+      signer: requireSumeragiEvidenceUnsigned(
         record.signer,
         `${context}.signer`,
+        0xffffffff,
       ),
-      block_hash_1: requireHexString(
-        record.block_hash_1,
-        `${context}.block_hash_1`,
-      ),
-      block_hash_2: requireHexString(
-        record.block_hash_2,
-        `${context}.block_hash_2`,
-      ),
+      block_hash_1: blockHash1,
+      block_hash_2: blockHash2,
     };
   }
   if (kind === "InvalidQc") {
+    assertExactSumeragiEvidenceFields(record, context, [
+      "height",
+      "view",
+      "epoch",
+      "subject_block_hash",
+      "phase",
+      "reason",
+    ]);
     return {
       ...base,
-      height: requireNonNegativeIntegerLike(
+      height: requireSumeragiEvidenceUnsigned(
         record.height,
         `${context}.height`,
       ),
-      view: requireNonNegativeIntegerLike(
+      view: requireSumeragiEvidenceUnsigned(
         record.view,
         `${context}.view`,
       ),
-      epoch: requireNonNegativeIntegerLike(
+      epoch: requireSumeragiEvidenceUnsigned(
         record.epoch,
         `${context}.epoch`,
       ),
-      subject_block_hash: requireHexString(
+      subject_block_hash: requireSumeragiEvidenceHash(
         record.subject_block_hash,
         `${context}.subject_block_hash`,
       ),
@@ -35348,73 +30384,149 @@ function normalizeSumeragiEvidenceRecord(value, context) {
         record.phase,
         `${context}.phase`,
       ),
-      reason: requireNonEmptyString(
+      reason: requireExactNonEmptyString(
         record.reason,
         `${context}.reason`,
       ),
     };
   }
   if (kind === "InvalidProposal") {
+    assertExactSumeragiEvidenceFields(record, context, [
+      "height",
+      "view",
+      "epoch",
+      "subject_block_hash",
+      "payload_hash",
+      "reason",
+    ]);
     return {
       ...base,
-      height: requireNonNegativeIntegerLike(
+      height: requireSumeragiEvidenceUnsigned(
         record.height,
         `${context}.height`,
       ),
-      view: requireNonNegativeIntegerLike(
+      view: requireSumeragiEvidenceUnsigned(
         record.view,
         `${context}.view`,
       ),
-      epoch: requireNonNegativeIntegerLike(
+      epoch: requireSumeragiEvidenceUnsigned(
         record.epoch,
         `${context}.epoch`,
       ),
-      subject_block_hash: requireHexString(
+      subject_block_hash: requireSumeragiEvidenceHash(
         record.subject_block_hash,
         `${context}.subject_block_hash`,
       ),
-      payload_hash: requireHexString(
+      payload_hash: requireSumeragiEvidenceHash(
         record.payload_hash,
         `${context}.payload_hash`,
       ),
-      reason: requireNonEmptyString(
+      reason: requireExactNonEmptyString(
         record.reason,
         `${context}.reason`,
       ),
     };
   }
   if (kind === "Censorship") {
-    return {
+    assertExactSumeragiEvidenceFields(
+      record,
+      context,
+      ["tx_hash", "receipt_count", "signers"],
+      ["submitted_at_height_min", "submitted_at_height_max"],
+    );
+    const receiptCount = requireSumeragiEvidenceUnsigned(
+      record.receipt_count,
+      `${context}.receipt_count`,
+    );
+    const signers = requireStringArray(record.signers, `${context}.signers`).map(
+      (signer, index) => requireExactNonEmptyString(signer, `${context}.signers[${index}]`),
+    );
+    if (signers.length !== receiptCount) {
+      throw new RangeError(`${context}.receipt_count must equal signers.length`);
+    }
+    const hasMin = Object.prototype.hasOwnProperty.call(
+      record,
+      "submitted_at_height_min",
+    );
+    const hasMax = Object.prototype.hasOwnProperty.call(
+      record,
+      "submitted_at_height_max",
+    );
+    if (hasMin !== hasMax || (receiptCount > 0 && !hasMin) || (receiptCount === 0 && hasMin)) {
+      throw new TypeError(
+        `${context} must include both submitted_at_height bounds exactly when receipts are present`,
+      );
+    }
+    const result = {
       ...base,
-      tx_hash: requireHexString(
+      tx_hash: requireSumeragiEvidenceHash(
         record.tx_hash,
         `${context}.tx_hash`,
       ),
-      receipt_count: requireNonNegativeIntegerLike(
-        record.receipt_count,
-        `${context}.receipt_count`,
-      ),
-      min_height: requireNonNegativeIntegerLike(
-        record.min_height,
-        `${context}.min_height`,
-      ),
-      max_height: requireNonNegativeIntegerLike(
-        record.max_height,
-        `${context}.max_height`,
-      ),
-      signers: requireStringArray(
-        record.signers,
-        `${context}.signers`,
-      ),
+      receipt_count: receiptCount,
+      signers,
+    };
+    if (!hasMin) return result;
+    const submittedAtHeightMin = requireSumeragiEvidenceUnsigned(
+      record.submitted_at_height_min,
+      `${context}.submitted_at_height_min`,
+    );
+    const submittedAtHeightMax = requireSumeragiEvidenceUnsigned(
+      record.submitted_at_height_max,
+      `${context}.submitted_at_height_max`,
+    );
+    if (submittedAtHeightMin > submittedAtHeightMax) {
+      throw new RangeError(
+        `${context}.submitted_at_height_min must be <= submitted_at_height_max`,
+      );
+    }
+    return {
+      ...result,
+      submitted_at_height_min: submittedAtHeightMin,
+      submitted_at_height_max: submittedAtHeightMax,
     };
   }
-  const detailValue = record.detail;
-  if (detailValue === undefined || detailValue === null) {
-    return base;
+  assertExactSumeragiEvidenceFields(record, context, [
+    "class",
+    "height",
+    "view",
+    "epoch",
+    "signer",
+    "context_id",
+    "artifact_hash_1",
+    "artifact_hash_2",
+  ]);
+  const evidenceClass = requireExactNonEmptyString(record.class, `${context}.class`);
+  if (!EVIDENCE_EQUIVOCATION_CLASS_VALUES.has(evidenceClass)) {
+    throw new RangeError(
+      `${context}.class must be one of ${Array.from(EVIDENCE_EQUIVOCATION_CLASS_VALUES).join(", ")}`,
+    );
+  }
+  const artifactHash1 = requireSumeragiEvidenceHash(
+    record.artifact_hash_1,
+    `${context}.artifact_hash_1`,
+  );
+  const artifactHash2 = requireSumeragiEvidenceHash(
+    record.artifact_hash_2,
+    `${context}.artifact_hash_2`,
+  );
+  if (artifactHash1 === artifactHash2) {
+    throw new RangeError(`${context} artifact hashes must identify distinct artifacts`);
   }
   return {
     ...base,
-    detail: requireNonEmptyString(detailValue, `${context}.detail`),
+    class: evidenceClass,
+    height: requireSumeragiEvidenceUnsigned(record.height, `${context}.height`),
+    view: requireSumeragiEvidenceUnsigned(record.view, `${context}.view`),
+    epoch: requireSumeragiEvidenceUnsigned(record.epoch, `${context}.epoch`),
+    signer: requireSumeragiEvidenceUnsigned(
+      record.signer,
+      `${context}.signer`,
+      0xffffffff,
+    ),
+    context_id: requireSumeragiEvidenceHash(record.context_id, `${context}.context_id`),
+    artifact_hash_1: artifactHash1,
+    artifact_hash_2: artifactHash2,
   };
 }
 

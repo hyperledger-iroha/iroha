@@ -20,7 +20,7 @@ use iroha_data_model::{
     },
     block::{BlockHeader, BlockSignature, SignedBlock},
     bridge::{
-        BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeSccpDestinationProofV1,
+        BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeSccpDestinationProofV1,
         SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
         SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
         SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpEvmSourceEmitterV1,
@@ -300,7 +300,7 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
         verifier_address: [0x31; 20],
         verifier_code_hash: [0x41; 32],
         verifying_key,
-        verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(verifying_key)
+        verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(&verifying_key)
             .expect("exact SCCP test verification key is curve-valid"),
         outbound_proof_policy: outbound_policy(),
         route_address: [0x51; 20],
@@ -397,6 +397,16 @@ fn exact_fixture_executed_wire_hash(block: &SignedBlock) -> Hash {
         .expect("exact SCCP fixture executed block has canonical wire bytes")
 }
 
+fn exact_fixture_executed_wire_len(block: &SignedBlock) -> u64 {
+    u64::try_from(
+        block
+            .encode_wire()
+            .expect("exact SCCP fixture executed block has canonical wire bytes")
+            .len(),
+    )
+    .expect("exact SCCP fixture executed block wire length fits u64")
+}
+
 fn assert_exact_finalized_block_fixture(fixture: &SccpFinalizedBlockTestFixtureV1) {
     assert_eq!(fixture.proof.block_header, fixture.block.header());
     assert_eq!(
@@ -407,6 +417,16 @@ fn assert_exact_finalized_block_fixture(fixture: &SccpFinalizedBlockTestFixtureV
         fixture.proof.finality_artifact.subject.payload_hash,
         exact_fixture_proposal_wire_hash(&fixture.block),
         "the finality subject must bind the canonical resultless proposal wire image"
+    );
+    assert_eq!(
+        fixture
+            .proof
+            .finality_artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_len,
+        exact_fixture_executed_wire_len(&fixture.block),
+        "the execution commitment must bind the complete result-bearing block wire length"
     );
     assert_eq!(
         fixture
@@ -498,9 +518,9 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
-            TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::PrivateKaigi(_)
-            | TransactionEntrypoint::Time(_) => continue,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                continue;
+            }
         };
         let instructions: Vec<&InstructionBox> = match transaction.instructions() {
             Executable::Instructions(instructions) => instructions.iter().collect(),
@@ -597,13 +617,13 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
     });
     let roster = keypairs
         .iter()
-        .zip([40_u64, 30, 20, 10])
+        .zip([1_u64; 4])
         .map(|(keypair, power)| ValidatorPower {
             validator: PeerId::new(keypair.public_key().clone()),
             power,
         })
         .collect::<Vec<_>>();
-    let quorum = DualQuorum::from_roster(&roster).expect("valid powered SCCP fixture roster");
+    let quorum = DualQuorum::from_roster(&roster).expect("valid SCCP fixture roster");
     let validator_set_pops = keypairs
         .iter()
         .map(|keypair| {
@@ -611,12 +631,12 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         })
         .collect::<Vec<_>>();
     let da_layout = DataAvailabilityLayout {
-        encoding: PayloadEncoding::Plain,
+        encoding: PayloadEncoding::ReedSolomon16,
         chunk_size_bytes: 1024,
-        data_shards: 0,
-        parity_shards: 0,
+        data_shards: 1,
+        parity_shards: 1,
         max_payload_size_bytes: 4096,
-        max_chunk_count: 4,
+        max_chunk_count: 8,
     };
     let context = match (height, block_header.prev_block_hash(), parent) {
         (1, None, None) => HeightContext {
@@ -690,10 +710,11 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         proposal_round: round,
         phase: GlobalPhase::Commit,
         subject,
-        execution_commitment: ExecutionCommitment::without_topups(
+        execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"exact SCCP fixture parent state"),
             Hash::new(b"exact SCCP fixture post state"),
             Hash::new(b"exact SCCP fixture ordinary writes"),
+            exact_fixture_executed_wire_len(block),
             exact_fixture_executed_wire_hash(block),
         ),
         signers: vec![0, 1, 2],
@@ -728,7 +749,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
     let finalized = SccpFinalizedBlockTestFixtureV1 {
         block: block.clone(),
         proof: TairaBridgeFinalityProofV1 {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
             block_header,
             finality_artifact,
         },

@@ -388,7 +388,9 @@ mod tests {
             "isqrt",
             "info",
             "zk_vote_verify_ballot",
+            "zk_verify_transfer",
             "zk_verify_unshield",
+            "sc_execute_unshield",
             "build_submit_ballot_inline",
             "build_unshield_inline",
         ] {

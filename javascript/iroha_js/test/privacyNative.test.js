@@ -4,8 +4,8 @@ import test from "node:test";
 import * as cryptoSurface from "../src/crypto.js";
 import * as rootSurface from "../src/index.js";
 import {
-  PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
+  PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   isPrivacyNativeAvailable,
   privacyCompiledProfileCatalogV1,
@@ -25,7 +25,7 @@ function withNativeBinding(binding, fn) {
   }
 }
 
-function validCompiledCatalogArchive() {
+function validCompiledProfileCatalogArchive() {
   const frame = Buffer.alloc(43);
   frame.write("NRT0", 0, "ascii");
   frame.fill(0x50, 6, 22);
@@ -59,8 +59,8 @@ function crcValidOneByteFake() {
   return frame;
 }
 
-function compiledCatalogBinding(overrides = {}) {
-  const canonicalArchive = validCompiledCatalogArchive();
+function compiledProfileCatalogBinding(overrides = {}) {
+  const canonicalArchive = validCompiledProfileCatalogArchive();
   return {
     connectNoritoBridgeAbiVersion() {
       return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
@@ -99,15 +99,15 @@ test("privacy native surface contains only the local compiled-profile catalog br
 test("privacy native availability requires exact ABI plus the shared typed validator", () => {
   withNativeBinding({}, () => assert.equal(isPrivacyNativeAvailable(), false));
   withNativeBinding(
-    compiledCatalogBinding({ connectNoritoBridgeAbiVersion: undefined }),
+    compiledProfileCatalogBinding({ connectNoritoBridgeAbiVersion: undefined }),
     () => assert.equal(isPrivacyNativeAvailable(), false),
   );
   withNativeBinding(
-    compiledCatalogBinding({ privacyValidateCompiledProfileCatalogV1: undefined }),
+    compiledProfileCatalogBinding({ privacyValidateCompiledProfileCatalogV1: undefined }),
     () => assert.equal(isPrivacyNativeAvailable(), false),
   );
   withNativeBinding(
-    compiledCatalogBinding({
+    compiledProfileCatalogBinding({
       connectNoritoBridgeAbiVersion() {
         return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION - 1;
       },
@@ -115,64 +115,64 @@ test("privacy native availability requires exact ABI plus the shared typed valid
     () => assert.equal(isPrivacyNativeAvailable(), false),
   );
   withNativeBinding(
-    compiledCatalogBinding({
+    compiledProfileCatalogBinding({
       connectNoritoBridgeAbiVersion() {
         return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION + 1;
       },
     }),
     () => assert.equal(isPrivacyNativeAvailable(), false),
   );
-  withNativeBinding(compiledCatalogBinding(), () => {
+  withNativeBinding(compiledProfileCatalogBinding(), () => {
     assert.equal(isPrivacyNativeAvailable(), true);
   });
 });
 
 test("privacyCompiledProfileCatalogV1 returns a defensive copy of a valid Norito archive", () => {
-  const nativeArchive = validCompiledCatalogArchive();
+  const nativeArchive = validCompiledProfileCatalogArchive();
   withNativeBinding(
-    compiledCatalogBinding({
+    compiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         return nativeArchive;
       },
     }),
     () => {
       const returned = privacyCompiledProfileCatalogV1();
-      assert.deepEqual(returned, validCompiledCatalogArchive());
+      assert.deepEqual(returned, validCompiledProfileCatalogArchive());
       returned.fill(0);
-      assert.deepEqual(nativeArchive, validCompiledCatalogArchive());
+      assert.deepEqual(nativeArchive, validCompiledProfileCatalogArchive());
     },
   );
 });
 
-test("privacyCompiledProfileCatalogV1 rejects every output the exact local validator rejects", () => {
+test("privacyCompiledProfileCatalogV1 rejects every output the exact local typed validator rejects", () => {
   const malformed = [
     Buffer.alloc(0),
     Buffer.from([0x50]),
-    Buffer.from(validCompiledCatalogArchive()),
+    Buffer.from(validCompiledProfileCatalogArchive()),
   ];
   malformed[2][0] ^= 0xff;
 
   for (const archive of malformed) {
     withNativeBinding(
-      compiledCatalogBinding({ privacyCompiledProfileCatalogV1: () => archive }),
+      compiledProfileCatalogBinding({ privacyCompiledProfileCatalogV1: () => archive }),
       () => assert.throws(() => privacyCompiledProfileCatalogV1()),
     );
   }
 
-  const wrongSchema = validCompiledCatalogArchive();
+  const wrongSchema = validCompiledProfileCatalogArchive();
   wrongSchema.fill(0x42, 6, 22);
   withNativeBinding(
-    compiledCatalogBinding({ privacyCompiledProfileCatalogV1: () => wrongSchema }),
-    () => assert.throws(() => privacyCompiledProfileCatalogV1(), /invalid local compiled-profile catalog/),
+    compiledProfileCatalogBinding({ privacyCompiledProfileCatalogV1: () => wrongSchema }),
+    () => assert.throws(() => privacyCompiledProfileCatalogV1(), /invalid typed privacy compiled-profile catalog/),
   );
 
   withNativeBinding(
-    compiledCatalogBinding({ privacyCompiledProfileCatalogV1: () => crcValidOneByteFake() }),
-    () => assert.throws(() => privacyCompiledProfileCatalogV1(), /invalid local compiled-profile catalog/),
+    compiledProfileCatalogBinding({ privacyCompiledProfileCatalogV1: () => crcValidOneByteFake() }),
+    () => assert.throws(() => privacyCompiledProfileCatalogV1(), /invalid typed privacy compiled-profile catalog/),
   );
 
   withNativeBinding(
-    compiledCatalogBinding({
+    compiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1: () => Buffer.alloc(PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES + 1),
     }),
     () => assert.throws(() => privacyCompiledProfileCatalogV1(), /oversized output/),
@@ -181,7 +181,7 @@ test("privacyCompiledProfileCatalogV1 rejects every output the exact local valid
 
 test("privacyCompiledProfileCatalogV1 sanitizes native exceptions", () => {
   withNativeBinding(
-    compiledCatalogBinding({
+    compiledProfileCatalogBinding({
       privacyCompiledProfileCatalogV1() {
         throw new Error("secret native detail");
       },

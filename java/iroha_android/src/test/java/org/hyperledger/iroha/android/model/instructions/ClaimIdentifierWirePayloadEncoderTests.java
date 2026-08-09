@@ -15,6 +15,7 @@ import org.hyperledger.iroha.android.client.IdentifierResolutionReceipt;
 import org.hyperledger.iroha.android.client.RamLfeOutputOpening;
 import org.hyperledger.iroha.android.client.RamLfeOutputOpeningPayload;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.testing.FixtureGeneratorBuildCommand;
 import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
@@ -336,7 +337,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
     final File binary = new File(targetDir, "debug/kotlin-fixture-gen");
     if (!binary.exists()) {
       final ProcessBuilder build =
-          new ProcessBuilder("cargo", "build", "-p", "kotlin-fixture-gen")
+          new ProcessBuilder(FixtureGeneratorBuildCommand.command())
               .directory(repoRoot)
               .redirectErrorStream(true);
       build.environment().put("CARGO_TARGET_DIR", targetDir.getAbsolutePath());

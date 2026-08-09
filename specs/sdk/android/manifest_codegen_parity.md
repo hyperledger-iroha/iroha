@@ -14,7 +14,7 @@ builders can stay aligned with the Rust data model.
 
 ## 1. Inputs & Evidence
 
-- `target-codex/android_codegen/instruction_manifest.json` enumerates **98**
+- The generated Android manifest projection enumerates **110**
   `InstructionBox` entries with discriminants, schema hashes, enum layouts, and
   Rust type names exported by `norito_codegen_exporter`
   (`tools/norito_codegen_exporter/src/main.rs`). Each entry now carries a
@@ -35,10 +35,11 @@ builders can stay aligned with the Rust data model.
 
 ## 2. Instruction Coverage Snapshot
 
-- 98 discriminants span 16 modules (`InstructionBox` families) sourced from
-  `crates/iroha_data_model/src/isi/`. All modules have builder entries, and the
-  `iroha.revoke`, `iroha.set_key_value`, `iroha.remove_key_value`) still rely on
-  the boxed helper enums instead of the fully qualified module paths.
+- The 110 discriminants span 18 generator families sourced from
+  `crates/iroha_data_model/src/isi/`, and every discriminant has a builder
+  entry. The four boxed helpers use the short wire IDs `iroha.grant`,
+  `iroha.revoke`, `iroha.set_key_value`, and `iroha.remove_key_value` while
+  mapping to their fully qualified Rust types.
 - Every discriminant already has a Norito example file, so fixture generation is
   complete from Rust’s perspective. Android needs to bundle these examples into
   a signed manifest per release (see §4).
@@ -47,20 +48,27 @@ builders can stay aligned with the Rust data model.
 |---|---:|---|
 | `transparent` | 23 | iroha.custom, iroha.execute_trigger |
 | `register` | 16 | iroha.register, iroha.unregister |
-| `zk` | 10 | CancelConfidentialPolicyTransition, CreateElection |
-| `sorafs` | 9 | ApprovePinManifest, BindManifestAlias |
+| `zk` | 7 | CancelConfidentialPolicyTransition, CreateElection |
+| `sorafs` | 15 | ApprovePinManifest, BindManifestAlias |
+| `governance` | 6 | CastPlainBallot, ProposeDeployContract |
 | `kaigi` | 7 | CreateKaigi, EndKaigi |
+| `ministry` | 1 | SubmitAgendaProposal |
 | `mint_burn` | 6 | iroha.burn, iroha.mint |
 | `transfer` | 6 | iroha.transfer, iroha.transfer_batch |
-| `smart_contract_code` | 5 | ActivateContractInstance, DeactivateContractInstance |
+| `smart_contract_code` | 8 | ActivateContractInstance, UploadSmartContractCodeChunk |
 | `repo` | 3 | iroha.repo.initiate, iroha.repo.reverse |
 | `runtime_upgrade` | 3 | iroha.runtime_upgrade.activate, iroha.runtime_upgrade.cancel |
 | `settlement` | 3 | iroha.settlement.dvp, iroha.settlement.pvp |
-| `verifying_keys` | 3 | DeprecateVerifyingKey, RegisterVerifyingKey |
+| `verifying_keys` | 2 | RegisterVerifyingKey, UpdateVerifyingKey |
 | `GrantBox` | 1 | iroha.grant |
 | `RemoveKeyValueBox` | 1 | iroha.remove_key_value |
 | `RevokeBox` | 1 | iroha.revoke |
 | `SetKeyValueBox` | 1 | iroha.set_key_value |
+
+The first-release Android projection intentionally omits the generic shield,
+shielded-transfer, and unshield discriminants. Confidential movement remains on
+the typed Kagemusha top-up/redemption lifecycle; its proof artifacts are not
+generic transaction builders.
 
 ## 3. Fees, Manifest & Governance Payloads
 
@@ -169,11 +177,19 @@ builders can stay aligned with the Rust data model.
    `artifacts/android/codegen_fixtures/<timestamp>/instruction_examples.zip`,
    writes the SHA-256 sidecar, and records `metadata.json`. CI can call this
    helper before publishing SDK parity fixtures.
-4. **CI gate.** The `android-codegen-parity` workflow runs
-   `make android-codegen-verify` in CI so pull requests fail if
-   `instruction_manifest.json`, `builder_index.json`, or the generated docs fall
-   out of sync; the run uploads `artifacts/android/codegen_parity_summary.json`
-   for auditing.
+4. **CI gate.** The OpenAPI release-input workflow runs
+   `bash ci/check_android_codegen.sh`. The gate clones the exact clean commit
+   twice without hard links, seals both source mirrors read-only, assigns each
+   replay a fresh external `/private/tmp/.../target`, and routes both Cargo
+   invocations through the shared pinned no-interference policy. Generated docs
+   and parity summaries stay out of tree and must agree with each other and the
+   checked-in files byte-for-byte. Standalone runs create an all-or-none
+   authenticated artifact/cancellation channel pair; inherited runs must supply
+   both. The retained work root contains the raw stages, while the log,
+   deterministic archives, summaries, and final `COMPLETED.json` receipt remain
+   below the authenticated artifact root. Completion publication is bracketed
+   by cooperative cancellation checks that never interrupt an in-flight child.
+   The gate reports both authenticated channel paths before replay begins.
 5. **Recorded metadata.** `specs/sdk/android/generated/codegen_manifest_metadata.json`
    now stores the blessed SHA-256 digests and entry counts for the instruction
    manifest and builder index. The helper `scripts/check_android_codegen_parity.py`
@@ -184,6 +200,8 @@ builders can stay aligned with the Rust data model.
 
 Closed: the generator, fixtures, documentation, and CI gate are all in place.
 Future schema changes should follow the change-log workflow
-(`specs/sdk/android/norito_instruction_changes.md`) and rerun
-`make android-codegen-verify` to refresh the recorded hashes and regenerated
-docs.
+(`specs/sdk/android/norito_instruction_changes.md`). Generate reviewed candidate
+outputs out of tree first; update recorded hashes and docs only after the two
+independent sealed replays are byte-identical. The developer make targets use
+`scripts/sumeragi_v2_release_cargo_proxy.sh` and therefore require a fresh,
+owner-private external `CARGO_TARGET_DIR`.

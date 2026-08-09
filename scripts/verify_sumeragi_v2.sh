@@ -7,9 +7,23 @@ EXPECTED_VSTD_VERSION="0.0.0-2026-05-31-0205"
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCTION_CORE_DIR="$REPO_ROOT/crates/iroha_core/src/sumeragi/v2_core"
 EFFECTIVE_LOCK_VERUS="$REPO_ROOT/crates/iroha_sumeragi_core/src/effective_lock_verus_proofs.rs"
-VERUS_LOG="${REPO_ROOT}/target/formal/sumeragi_v2/verus.log"
-VERUS_EVIDENCE="${REPO_ROOT}/target/formal/sumeragi_v2/verus_evidence.json"
+FORMAL_EVIDENCE_DIR="${SUMERAGI_V2_FORMAL_EVIDENCE_DIR:?SUMERAGI_V2_FORMAL_EVIDENCE_DIR is required}"
+VERUS_LOG="${FORMAL_EVIDENCE_DIR}/verus.log"
+VERUS_EVIDENCE="${FORMAL_EVIDENCE_DIR}/verus_evidence.json"
 VERUS_EVIDENCE_HELPER="${REPO_ROOT}/scripts/formal/sumeragi_v2_verus_evidence.py"
+
+source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
+if [[ -z "${CARGO_TARGET_DIR:-}" \
+  || -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  || -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  echo "Verus verification must run through the external-target formal wrapper" >&2
+  exit 2
+fi
+require_external_cargo_target_dir "$REPO_ROOT"
+require_external_release_artifact_root "$REPO_ROOT"
+require_disjoint_release_roots "$REPO_ROOT"
+require_release_artifact_directory "$FORMAL_EVIDENCE_DIR"
+release_gate_boundary "verus:entry" || exit $?
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -140,11 +154,6 @@ mkdir -p "$(dirname -- "$VERUS_LOG")"
 cleanup_paths=()
 verus_log_tmp="${VERUS_LOG}.partial.$$"
 cleanup_paths+=("$verus_log_tmp")
-if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
-  CARGO_TARGET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-verus.XXXXXX")"
-  cleanup_paths+=("$CARGO_TARGET_DIR")
-  export CARGO_TARGET_DIR
-fi
 cleanup() {
   if ((${#cleanup_paths[@]})); then
     rm -rf -- "${cleanup_paths[@]}"
@@ -152,8 +161,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+release_gate_boundary "verus:before-unit-harness" || exit $?
 bash "$REPO_ROOT/scripts/formal/run_sumeragi_v2_harness.sh" --unit
+release_gate_boundary "verus:after-unit-harness" || exit $?
+release_gate_boundary "verus:before-network-harness" || exit $?
 bash "$REPO_ROOT/scripts/formal/run_sumeragi_v2_harness.sh" --fast-network
+release_gate_boundary "verus:after-network-harness" || exit $?
 
 verus_source_manifest_sha256="$(
   python3 scripts/compute_workspace_source_manifest.py --root "$REPO_ROOT"
@@ -168,6 +181,7 @@ printf '%s\n' \
   >"$verus_log_tmp"
 
 set +e
+release_gate_boundary "verus:before-proof-harness" || exit $?
 bash scripts/formal/run_sumeragi_v2_harness.sh --verus \
   2>&1 | tee -a "$verus_log_tmp"
 verus_pipeline_status=("${PIPESTATUS[@]}")
@@ -176,6 +190,7 @@ if ((verus_pipeline_status[0] != 0 || verus_pipeline_status[1] != 0)); then
   echo "Sumeragi v2 Verus verification failed (verifier=${verus_pipeline_status[0]}, tee=${verus_pipeline_status[1]})" >&2
   exit 1
 fi
+release_gate_boundary "verus:after-proof-harness-natural-completion" || exit $?
 
 verus_source_manifest_after="$(
   python3 scripts/compute_workspace_source_manifest.py --root "$REPO_ROOT"
@@ -187,6 +202,7 @@ fi
 printf '%s\n' \
   "Sumeragi v2 Verus evidence passed: nonce=${verus_evidence_nonce} source_manifest_sha256=${verus_source_manifest_sha256}" \
   >>"$verus_log_tmp"
+release_gate_boundary "verus:before-evidence-publication" || exit $?
 mv -- "$verus_log_tmp" "$VERUS_LOG"
 
 python3 "$VERUS_EVIDENCE_HELPER" write \
@@ -199,3 +215,4 @@ python3 "$VERUS_EVIDENCE_HELPER" write \
 python3 "$VERUS_EVIDENCE_HELPER" validate \
   --root "$REPO_ROOT" \
   --evidence "$VERUS_EVIDENCE"
+release_gate_boundary "verus:after-evidence-publication" || exit $?

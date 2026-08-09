@@ -314,7 +314,6 @@ TRANSCRIPT_DURATION_FIELDS = (
 )
 TRANSCRIPT_TRUE_FIELDS = (
     "physical_device_required",
-    "source_repo_dirty",
     "process_restart_observed",
     "init_succeeded",
     "two_hop_append_succeeded",
@@ -325,6 +324,7 @@ TRANSCRIPT_TRUE_FIELDS = (
 )
 TRANSCRIPT_FALSE_FIELDS = (
     "simulator_accepted",
+    "source_repo_dirty",
     "production_capability_observed",
 )
 TRANSCRIPT_FIELDS = frozenset(
@@ -1023,7 +1023,7 @@ def _validate_session(
     if session.get("schema") != SESSION_SCHEMA:
         errors.append(f"session schema must be {SESSION_SCHEMA}")
     _require_int(session, "version", "session", errors, exact=1)
-    _require_bool(session, "source_repo_dirty", True, "session", errors)
+    _require_bool(session, "source_repo_dirty", False, "session", errors)
     digest_bindings = {
         "candidate_record_sha256": "input/candidate-v4.norito",
         "candidate_manifest_sha256": "input/candidate-manifest-v4.norito",
@@ -1251,7 +1251,7 @@ def _validate_launch_receipt(
         errors,
         exact=RESOURCE_CEILING_BYTES,
     )
-    _require_bool(receipt, "source_repo_dirty", True, label, errors)
+    _require_bool(receipt, "source_repo_dirty", False, label, errors)
     _require_bool(receipt, "app_attest_used", False, label, errors)
     if receipt.get("network_monitor") != "NWPathMonitor":
         errors.append(f"{label} network_monitor must be NWPathMonitor")
@@ -1586,7 +1586,7 @@ def _validate_native_build_manifest(
         "architectures": ["arm64"],
         "simulator_slice_present": False,
         "minimum_ios_version": "15.0",
-        "source_repo_dirty": True,
+        "source_repo_dirty": False,
     }
     for key, expected in exact_values.items():
         if manifest.get(key) != expected:
@@ -1674,7 +1674,7 @@ def _validate_reviewed_source_closure(
             errors.append(f"{label} {key} must be a nonzero lowercase Git commit")
         if candidate != session.get("source_commit"):
             errors.append(f"{label} {key} must match session source_commit")
-    _require_bool(closure, "source_repo_dirty", True, label, errors)
+    _require_bool(closure, "source_repo_dirty", False, label, errors)
     source_tree = _require_digest(closure, "source_tree_sha256", label, errors)
     if source_tree is not None and source_tree != session.get("source_tree_sha256"):
         errors.append(f"{label} source_tree_sha256 must match session")
@@ -1704,8 +1704,8 @@ def _validate_reviewed_source_closure(
         errors,
         minimum=0,
     )
-    if count is not None and count > 100_000:
-        errors.append(f"{label} untracked_file_count exceeds 100000")
+    if count is not None and count != 0:
+        errors.append(f"{label} untracked_file_count must be 0")
     lock_size = _require_int(
         closure,
         "ignored_cargo_lock_size_bytes",
@@ -1796,8 +1796,12 @@ def _validate_reviewed_source_closure(
         errors.append(f"{label} untracked manifest SHA-256 is not self-consistent")
     if tracked_digest is not None and count is not None:
         derived_dirty = tracked_digest != EMPTY_SHA256 or count != 0
-        if not derived_dirty:
-            errors.append(f"{label} must describe a nonempty dirty source closure")
+        if tracked_digest != EMPTY_SHA256:
+            errors.append(f"{label} tracked_binary_diff_sha256 must identify an empty diff")
+        if derived_dirty:
+            errors.append(
+                f"{label} must have an empty tracked diff and no untracked files"
+            )
     if (
         tracked_digest is not None
         and manifest_digest is not None

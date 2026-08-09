@@ -8,7 +8,7 @@ readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b2
 readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 readonly TLC_RESULT_CONTRACT="${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 [[ -f "$TLC_RESULT_CONTRACT" ]] || {
@@ -62,6 +62,7 @@ run_dir="$(
 trap 'rm -rf -- "$run_dir"' EXIT
 
 models=(
+  SumeragiV2Revision4CertifiedFenceReservation.tla
   SumeragiV2LocalIngressSchedulerReservationMutation.tla
   SumeragiV2RestartTerminalDurabilityMutation.tla
   SumeragiV2ExactIngressTicketPriorityMutation.tla
@@ -124,14 +125,17 @@ assert_mutation_failure_contract() {
   local expected_status="$3"
   local expected_primary="$4"
   local diagnostic_count
+  local trace_header
   local whitespace_prefixed_count
   if [[ "$expected_status" -eq 12 ]]; then
+    trace_header="Error: The behavior up to this point is:"
     [[ "$expected_primary" =~ ^Error:\ Invariant\ .+\ is\ violated\.$ ]] || {
       sumeragi_v2_tlc_contract_fail \
         "$label" "$log" \
         "status-12 mutation expected a named invariant primary diagnostic"
     }
   elif [[ "$expected_status" -eq 13 ]]; then
+    trace_header="Error: The following behavior constitutes a counter-example:"
     [[ "$expected_primary" == "Error: Temporal properties were violated." ]] || {
       sumeragi_v2_tlc_contract_fail \
         "$label" "$log" \
@@ -145,7 +149,7 @@ assert_mutation_failure_contract() {
   sumeragi_v2_tlc_assert_exact_line \
     "$label" "$log" "$expected_primary"
   sumeragi_v2_tlc_assert_exact_line \
-    "$label" "$log" "Error: The behavior up to this point is:"
+    "$label" "$log" "$trace_header"
   diagnostic_count="$(
     grep -Ec \
       '^[[:space:]]*(Error:|Deadlock reached([.]|$)|Temporal properties were violated[.]$)' \
@@ -154,7 +158,7 @@ assert_mutation_failure_contract() {
   [[ "$diagnostic_count" == 2 ]] || {
     sumeragi_v2_tlc_contract_fail \
       "$label" "$log" \
-      "mutation TLC log must contain exactly its primary and behavior diagnostics; found ${diagnostic_count}"
+      "mutation TLC log must contain exactly its primary and trace diagnostics; found ${diagnostic_count}"
   }
   whitespace_prefixed_count="$(
     grep -Ec \
@@ -212,6 +216,7 @@ run_case() {
 }
 
 fixed_cases=(
+  "revision4-certified-fence-reservation|SumeragiV2Revision4CertifiedFenceReservation.tla|revision4_certified_fence_reservation_fixed.cfg"
   "local-ingress-scheduler-reservation|SumeragiV2LocalIngressSchedulerReservationMutation.tla|local_ingress_scheduler_reservation_fixed.cfg"
   "restart-terminal-durability|SumeragiV2RestartTerminalDurabilityMutation.tla|restart_terminal_durability_fixed.cfg"
   "exact-ingress-ticket-priority|SumeragiV2ExactIngressTicketPriorityMutation.tla|exact_ingress_ticket_priority_fixed.cfg"
@@ -250,6 +255,7 @@ for case_spec in "${fixed_cases[@]}"; do
 done
 
 mutation_cases=(
+  "revision4-certified-fence-arrival-order|SumeragiV2Revision4CertifiedFenceReservation.tla|revision4_certified_fence_reservation_arrival_order_bug.cfg|CertifiedFirstProgressCorridor"
   "local-ingress-scheduler-mutable-next|SumeragiV2LocalIngressSchedulerReservationMutation.tla|local_ingress_scheduler_reservation_mutable_next_bug.cfg|LaterLocalWorkCannotRewriteAcceptedOrdinal"
   "restart-volatile-terminal-suppression|SumeragiV2RestartTerminalDurabilityMutation.tla|restart_terminal_durability_blanket_terminal_bug.cfg|VolatileTerminalReopensExactWireIdentity"
   "exact-ingress-runtime-first|SumeragiV2ExactIngressTicketPriorityMutation.tla|exact_ingress_ticket_runtime_first_bug.cfg|ProvisionalTargetPrecedesRuntimeWork"
@@ -294,8 +300,6 @@ mutation_cases=(
   "external-continuation-missing-volatile|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_missing_volatile_bug.cfg|VolatileDepartureInstallsExactContinuation"
   "external-continuation-synthetic-carrier|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_synthetic_carrier_bug.cfg|ExternalMaterializationRequiresExactCarrier"
   "external-continuation-resurrection|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_resurrection_bug.cfg|TerminalIdentityCannotResurrect"
-  "external-continuation-missing-conditional-fairness|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_missing_conditional_fairness_bug.cfg|ExternalContinuationsReachTerminal"
-  "external-continuation-missing-volatile-fairness|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_missing_volatile_fairness_bug.cfg|ExternalContinuationsReachTerminal"
   "empty-producer-handoff-missing-reservation|SumeragiV2EmptyProducerHandoffMutation.tla|empty_producer_handoff_missing_reservation_bug.cfg|EmptyProducerDepartureNeverBecomesUnowned"
   "producer-origin-missing-owner|SumeragiV2ProducerOriginReservationMutation.tla|producer_origin_reservation_missing_owner_bug.cfg|ScheduledOriginHasBoundedReservation"
   "producer-origin-new-ordinal|SumeragiV2ProducerOriginReservationMutation.tla|producer_origin_reservation_new_ordinal_bug.cfg|DepartureContinuationReusesAdmissionOrdinal"
@@ -349,6 +353,9 @@ for case_spec in "${mutation_cases[@]}"; do
 done
 
 temporal_mutation_cases=(
+  "revision4-certified-fence-reservation-blocked|SumeragiV2Revision4CertifiedFenceReservation.tla|revision4_certified_fence_reservation_blocked_bug.cfg"
+  "external-continuation-missing-conditional-fairness|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_missing_conditional_fairness_bug.cfg"
+  "external-continuation-missing-volatile-fairness|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_missing_volatile_fairness_bug.cfg"
   "producer-replay-capacity-replenishment-lasso|SumeragiV2ProducerReplayCapacityMutation.tla|producer_replay_capacity_replenishment_lasso_bug.cfg"
 )
 

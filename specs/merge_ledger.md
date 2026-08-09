@@ -93,6 +93,17 @@ commitment/hash, lane tip, merge hint, lane/dataspace/incarnation, and first
 eligible height. Admission verifies the authoritative lane committee QC, DA and
 FastPQ material, settlement coordinates/totals, and the merge-hint reduction.
 
+Relay finality is effect finality, not merely header finality. The lane
+committee QC signs the canonical domain-separated `lane-finality:v1` statement:
+the header hash; lane, dataspace, incarnation, and lane-local height; exact DA,
+standalone descriptor, and manifest commitments; complete settlement effect and
+hash; and RBC accounting. The QC and FastPQ carriers themselves are excluded.
+FastPQ independently proves the QC parent/post state roots and uses that signed
+statement hash as its transaction-set root; a valid proof over a transporter-
+substituted settlement therefore cannot reuse the original committee authority.
+Verified records are unique by `(lane, dataspace, incarnation, height)`, and a
+different effect at those coordinates is rejected as a conflict.
+
 Honest merge validators also preflight all deterministic WSV settlement
 conditions before signing, including activation, duplicate receipt markers,
 canonical fee assets, aggregate arithmetic, and payer balances. A candidate
@@ -430,7 +441,8 @@ temporary/stable/partial-unlink prune crash stage.
 
 Those implementation and focused-test statements are not release evidence. All
 multilane gates remain open until the focused/adversarial, source-bound formal,
-cross-SDK, fresh unskipped four-peer, 10/10 twelve-peer corridor, two-hour fault
+cross-SDK, fresh unskipped four-peer, 10/10 13-peer global corridor (twelve
+lane validators), two-hour fault
 soak, pinned-hardware one-versus-four-lane scaling, and prescribed
 full-workspace build/test/strict-Clippy checks have passed and their artifacts
 have been archived.

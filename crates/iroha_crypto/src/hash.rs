@@ -70,6 +70,13 @@ pub fn sha256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
     Sha256::digest(bytes.as_ref()).into()
 }
 
+/// Compute raw BLAKE3-256 bytes without Iroha hash marker semantics.
+#[cfg(not(feature = "ffi_import"))]
+#[must_use]
+pub fn blake3_256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
+    *blake3::hash(bytes.as_ref()).as_bytes()
+}
+
 /// Compute raw SHA-256 bytes from a reader without buffering the complete input.
 ///
 /// The reader is rejected after at most one buffer beyond `max_bytes`. This makes
@@ -158,7 +165,7 @@ impl Hash {
 
         let mut writer = HashWriter::new();
         let mut total = 0_u64;
-        let mut buffer = [0_u8; BUFFER_BYTES];
+        let mut buffer = vec![0_u8; BUFFER_BYTES];
         loop {
             let read = std::io::Read::read(&mut reader, &mut buffer)?;
             if read == 0 {
@@ -571,6 +578,14 @@ mod tests {
         assert_eq!(
             sha256(b"abc"),
             hex_literal::hex!("BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD")
+        );
+    }
+
+    #[test]
+    fn blake3_256_returns_raw_digest_bytes() {
+        assert_eq!(
+            blake3_256(b""),
+            hex_literal::hex!("AF1349B9F5F9A1A6A0404DEA36DCC9499BCB25C9ADC112B7CC9A93CAE41F3262")
         );
     }
 

@@ -60,6 +60,7 @@ use crate::privacy_engines::transparent_stark::{
 pub(crate) const ZK_X509_SHA_FIXED_ALGEBRAIC_COMPILER_DESCRIPTOR_V1: &[u8] =
     b"zk-x509-sha-fixed-algebraic-compiler-v1-incompatible:public-shapes=disclosed-attributes0through4:four-independent-physical-log19-generic-children:child-widths=118,118,118,118:combined-width472:segment-major-column-order:each-child-generic-cap65536:typed-composite-digest-binds-disclosure-shape+profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:typed-zero-capacity-sha-word-circuit-topology:word-operation-and-execution-sorted-memory-walk:authoritative-local-row-event-order-replay:definition-writes-immediately-before-consuming-operation:operation-input-reads-then-output-write:eight-digest-reads-last:derived-execution-sort-must-equal-circuit-canonical-sorted-memory:execution-write-axis-key=typed-word-phase(initial|input|expansion3|round8|final):compute+execution+sorted-memory-call-axis-transpose-on-exact-maximal-contiguous-same-segment-same-geometry-runs-iff-calls-strictly-greater-than-blocks:block-row-axis-on-ties:boolean-topology-three-way-exact-atom-planner(block-or-call=2048*min(calls,blocks)|round=32*blocks*calls|block-gap=416*calls):strict-lower-only:old-then-round-wins-ties:block-gap-axis-one-stride14-hull+12-negative-stride1064-gap-residues-per-lane:operation-read-typed-block+phase(expansion6|round18|final2)+read-slot-axis-with-exact-per-call-cost44*blocks-2:operation-read-axis-transpose-iff-exact-cost-strictly-less-than-existing-block-or-call-axis:sorted-memory-typed-initial-or-block+word-phase(initial|input|expansion3|round8|final)+access-occurrence-axis:sorted-memory-phase-axis-on-every-exact-geometry-run-iff-phase-cost=298*blocks*calls-is-strictly-less-than-existing-axis-cost(call=4952*blocks+32|block=(4952+32)*calls):old-axis-wins-ties:call-axis-key=local-column+family+block(initial-or-sha-index)+word-position+occurrence:remaining-sorted-memory-nontransposed-series-maximal-across-ordered-calls:no-native-row-matrix:no-lde-matrix:no-artifact:no-merkle-root:no-proof-supplied-fixed-values:affine+repeated+sparse-atoms:generator-coset-log19-to-log25:call-role-slot-boundaries+compact-ca-selectors+field-native-rfc-events+physical-padding:exact-shape-derived-rfc-channel-offsets:all-six-formerly-reconstructed-word-columns-native:first-release";
 
+#[cfg(test)]
 const SHA_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:sha-fixed-algebraic-compiler:v1";
 const SHA_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
@@ -2838,6 +2839,7 @@ fn transpose_sorted_memory_to_phase_axis_v1(
 }
 
 /// Digest of the stable compiler algorithm descriptor.
+#[cfg(test)]
 pub(crate) fn zk_x509_sha_fixed_algebraic_compiler_descriptor_digest_v1()
 -> Result<[u8; 32], ZkX509ShaFixedAlgebraicErrorV1> {
     sha256_frame_v1(
@@ -2905,12 +2907,8 @@ impl ZkX509ShaFixedAlgebraicScheduleV1 {
         })
     }
 
-    /// Exact combined fixed width in physical segment order.
-    pub(crate) const fn width_v1(&self) -> u16 {
-        ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1 as u16
-    }
-
     /// Common algebraic domain shared by all four segments.
+    #[cfg(test)]
     pub(crate) fn domain_v1(&self) -> ZkX509FixedAlgebraicDomainV1 {
         self.children[0].domain_v1()
     }
@@ -2921,6 +2919,7 @@ impl ZkX509ShaFixedAlgebraicScheduleV1 {
     }
 
     /// Fail closed unless the compiled profile pins this exact composite.
+    #[cfg(test)]
     pub(crate) fn verify_descriptor_digest_v1(
         &self,
         expected: &[u8; 32],
@@ -2932,6 +2931,7 @@ impl ZkX509ShaFixedAlgebraicScheduleV1 {
     }
 
     /// Borrow the independently capped segment schedules in physical order.
+    #[cfg(test)]
     pub(crate) const fn children_v1(
         &self,
     ) -> &[ZkX509FixedAlgebraicScheduleV1; ZK_X509_SHA_SEGMENT_COUNT_V1] {
@@ -2939,6 +2939,7 @@ impl ZkX509ShaFixedAlgebraicScheduleV1 {
     }
 
     /// Exact total across the four independently capped atom collections.
+    #[cfg(test)]
     pub(crate) fn atom_count_v1(&self) -> usize {
         self.children
             .iter()
@@ -2947,6 +2948,7 @@ impl ZkX509ShaFixedAlgebraicScheduleV1 {
     }
 
     /// Evaluate one combined native row without constructing a native matrix.
+    #[cfg(test)]
     pub(crate) fn native_row_v1(
         &self,
         row: u64,
@@ -3236,6 +3238,7 @@ pub(crate) fn zk_x509_sha_fixed_algebraic_schedule_v1(
 
 /// Compile the exact ordered per-shape schedule digest set for disclosures
 /// `0, 1, 2, 3, 4`.
+#[cfg(test)]
 pub(crate) fn zk_x509_sha_fixed_algebraic_shape_digests_v1()
 -> Result<[[u8; 32]; 5], ZkX509ShaFixedAlgebraicErrorV1> {
     let mut digests = [[0_u8; 32]; 5];

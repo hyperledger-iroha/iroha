@@ -546,6 +546,12 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Use exact operators, named int/decimal/quantity conversions, or native `json { ... }` construction."
     ),
     explanation!(
+        "E_RETIRED_TRIGGER_ALIAS",
+        Parse,
+        "source calls a non-canonical trigger lifecycle operation",
+        "Use ledger::trigger::register or ledger::trigger::unregister; the diagnostic provides an exact replacement."
+    ),
+    explanation!(
         "E_DECIMAL_MALFORMED",
         Lex,
         "an exact decimal literal has invalid spelling",
@@ -580,12 +586,6 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         Semantic,
         "a value converted to quantity is negative",
         "Use decimal when the value may be negative, or prove the value non-negative before an explicit quantity conversion."
-    ),
-    explanation!(
-        "E_UNSHIELD_AMOUNT_RANGE",
-        Semantic,
-        "an unshield public amount is outside its protocol field domain",
-        "Use a whole-unit quantity with canonical scale 0 and value no greater than 2^128 - 1. This narrower bound belongs only to the V1 unshield proof scalar."
     ),
     explanation!(
         "E_QUORUM_RANGE",
@@ -812,8 +812,8 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     explanation!(
         "E_QUERY_OFFSET",
         Semantic,
-        "a typed query page offset is negative",
-        "Use a non-negative canonical-order offset."
+        "a typed query page window is outside the non-negative signed 64-bit range",
+        "Use an offset in 0..=i64::MAX and ensure offset plus limit fits i64."
     ),
     explanation!(
         "E_QUERY_LIMIT",
@@ -2216,7 +2216,6 @@ mod tests {
             "E_QUANTITY_UNDERFLOW",
             "E_QUANTITY_REMAINDER",
             "E_QUANTITY_NEGATION",
-            "E_UNSHIELD_AMOUNT_RANGE",
             "E_QUORUM_RANGE",
             "E_NUMERIC_ROUND_ARITY",
             "E_NUMERIC_ROUND_RECEIVER",

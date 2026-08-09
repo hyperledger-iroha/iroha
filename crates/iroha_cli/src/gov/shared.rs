@@ -11,6 +11,29 @@ use iroha_crypto::{
 };
 use norito::json::Value;
 
+/// Parse one canonical governance selector V1 for Clap.
+pub(crate) fn parse_governance_selector_v1(input: &str) -> Result<String, String> {
+    if iroha::data_model::governance::is_valid_governance_selector_v1(input) {
+        return Ok(input.to_owned());
+    }
+    Err(format!(
+        "must match canonical governance selector V1 `{}`",
+        iroha::data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN
+    ))
+}
+
+/// Parse one canonical lowercase 32-byte governance proposal identifier for Clap.
+pub(crate) fn parse_governance_proposal_id_v1(input: &str) -> Result<String, String> {
+    if input.len() == 64
+        && input
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Ok(input.to_owned());
+    }
+    Err("must be exactly 64 lowercase hexadecimal characters".to_owned())
+}
+
 /// Print a JSON payload or a summary line, depending on CLI output mode.
 pub fn print_with_summary<C: RunContext>(
     context: &mut C,
@@ -204,11 +227,43 @@ mod tests {
     }
 
     #[test]
+    fn governance_clap_parsers_enforce_exact_v1_grammars() {
+        for selector in ["a".to_owned(), "a".repeat(128)] {
+            assert_eq!(
+                parse_governance_selector_v1(&selector).expect("valid selector"),
+                selector
+            );
+        }
+        for selector in [
+            String::new(),
+            ".hidden".to_owned(),
+            "selector/alias".to_owned(),
+            "sélector".to_owned(),
+            "a".repeat(129),
+        ] {
+            parse_governance_selector_v1(&selector).expect_err("invalid selector");
+        }
+
+        let proposal_id = "ab".repeat(32);
+        assert_eq!(
+            parse_governance_proposal_id_v1(&proposal_id).expect("valid proposal id"),
+            proposal_id
+        );
+        for proposal_id in [
+            "ab".repeat(31),
+            "AB".repeat(32),
+            format!("0x{}", "ab".repeat(32)),
+        ] {
+            parse_governance_proposal_id_v1(&proposal_id).expect_err("invalid proposal id");
+        }
+    }
+
+    #[test]
     fn compute_proposal_id_matches_reference_logic() {
         use iroha_crypto::blake2::{Blake2b512, digest::Digest as _};
 
         let contract_address: iroha::data_model::smart_contract::ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address");
         let code = [0x11u8; 32];

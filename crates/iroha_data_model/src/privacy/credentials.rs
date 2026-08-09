@@ -19,23 +19,23 @@ pub const ZK_AMS_MAX_BATCH_SIZE_V1: u32 = 8;
 pub const ZK_AMS_RING_SIZES_V1: [u32; 3] = [16, 32, 64];
 /// Maximum admitted seed-key ring size in the first release.
 pub const ZK_AMS_MAX_RING_SIZE_V1: u32 = 64;
-/// Maximum polynomials in one Jindo batched univariate-opening statement.
+/// Exact polynomial count in one first-release Jindo batched univariate opening.
 pub const IROHA_JINDO_MAX_POLYNOMIALS_V1: u32 = 4;
 /// Exact canonical byte width of one Jindo coefficient-field element.
 pub const IROHA_JINDO_FIELD_ELEMENT_BYTES_V1: usize = 32;
 /// Canonical little-endian modulus of the first-release Jindo coefficient field.
 ///
-/// The field is `F_p` for `p = 60272^16 + 1`. Keeping the wire-order modulus
+/// The field is `F_p` for `p = 3611623616^8 + 1`. Keeping the wire-order modulus
 /// beside the public field-element width gives data-model validation and the
 /// native arithmetic engine one authoritative boundary constant.
 pub const IROHA_JINDO_FIELD_MODULUS_LE_V1: [u8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1] = [
-    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x81, 0x32, 0x37, 0x8c, 0xdc, 0x30, 0x96, 0x8e,
-    0x55, 0x65, 0xfb, 0xe6, 0xd9, 0x43, 0x56, 0xd6, 0xc2, 0xaf, 0x62, 0x6b, 0x99, 0x45, 0x0d, 0x43,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa1, 0xf9, 0x0e, 0x57, 0x64, 0x77, 0xbe, 0x54, 0xe8, 0x17,
+    0xec, 0xae, 0x55, 0x03, 0x13, 0x70, 0xde, 0xc1, 0x7c, 0x27, 0x71, 0xb8, 0x69, 0x09, 0x00, 0x40,
 ];
 /// Exact fixed-profile Jindo outer-commitment rank.
-pub const IROHA_JINDO_OUTER_COMMITMENT_RANK_V1: usize = 13;
+pub const IROHA_JINDO_OUTER_COMMITMENT_RANK_V1: usize = 3;
 /// Exact fixed-profile Jindo application-ring degree.
-pub const IROHA_JINDO_RING_DEGREE_V1: usize = 256;
+pub const IROHA_JINDO_RING_DEGREE_V1: usize = 1024;
 /// Exact signed coefficient width in the public rounded commitment wire.
 pub const IROHA_JINDO_COMMITMENT_COEFFICIENT_BYTES_V1: usize = 4;
 /// Exact canonical byte width of one fixed-profile Jindo lattice commitment.
@@ -45,14 +45,14 @@ pub const IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1: usize = IROHA_JINDO_OUTER_COM
 /// Minimum canonical rounded outer-commitment coefficient.
 ///
 /// This is the arithmetic-floor quotient of the smallest balanced residue
-/// modulo the fixed 95-bit outer modulus by `2^65`.
-pub const IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1: i32 = -268_435_457;
+/// modulo the fixed 71-bit outer modulus by `2^48`.
+pub const IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1: i32 = -4_194_303;
 /// Maximum canonical rounded outer-commitment coefficient.
 ///
 /// The one-value asymmetry relative to the minimum is required by the odd
 /// outer modulus and arithmetic-floor rounding; accepting a wider symmetric
 /// interval would admit encodings the commitment algorithm cannot produce.
-pub const IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1: i32 = 268_435_456;
+pub const IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1: i32 = 4_194_302;
 /// Exact direct 64-bit attribute count in the Bootle/Lantern credential profile.
 pub const BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1: usize = 8;
 /// Exact byte width of one direct Bootle/Lantern attribute.
@@ -137,6 +137,10 @@ pub const PQ_MASP_MAX_OUTPUTS_V1: u32 = 2;
 /// Maximum genesis commitments in one typed proof-managed pool bootstrap.
 pub const PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1: usize = 4_096;
 /// Maximum UTF-8 byte length admitted for a privacy transcript chain id.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "MAX_CHAIN_ID_BYTES is the compile-time constant 128 and therefore fits u32"
+)]
 pub const PRIVACY_MAX_CHAIN_ID_BYTES_V1: u32 = crate::id::MAX_CHAIN_ID_BYTES as u32;
 
 /// Explicit chain and governed-artifact binding shared by every statement.
@@ -856,6 +860,8 @@ pub struct ZkAcePqAuthorizationStatementV1 {
     pub destination: AccountId,
     /// Public transferred asset definition.
     pub asset_definition_id: AssetDefinitionId,
+    /// Exact transparent balance partition authorized by the proof.
+    pub public_balance_scope: AssetBalanceScope,
     /// Atomic transfer amount.
     pub amount: u128,
     /// Ledger epoch used by authorization policy checks.
@@ -2454,7 +2460,7 @@ pub struct PrivacyZkX509CrlRecordV1 {
     pub certificate_policy_id: PrivacyPolicyIdV1,
     /// Strictly increasing immutable revision epoch.
     pub record_epoch: u64,
-    /// Required RFC 5280 CRLNumber, monotonically increasing in this lineage.
+    /// Required RFC 5280 `CRLNumber`, monotonically increasing in this lineage.
     pub crl_number: u64,
     /// SHA-256 digest of the complete exact signed DER CRL.
     pub crl_der_digest: PrivacyX509CrlDerDigestV1,
@@ -2943,7 +2949,7 @@ pub enum PrivacyZkX509TransitionValidationErrorV1 {
     /// A signed-CRL successor did not advance `thisUpdate`.
     #[error("X.509 CRL successor thisUpdate must strictly increase")]
     CrlThisUpdateNotIncreasing,
-    /// A signed-CRL successor did not advance CRLNumber.
+    /// A signed-CRL successor did not advance `CRLNumber`.
     #[error("X.509 CRL successor CRLNumber must strictly increase")]
     CrlNumberNotIncreasing,
     /// A revocation successor must be terminal.

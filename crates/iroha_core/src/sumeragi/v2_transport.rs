@@ -245,12 +245,6 @@ impl AuthenticatedCertifiedBodyResponse {
     pub(crate) const fn response(&self) -> &wire::CertifiedBodyResponse {
         &self.response
     }
-
-    /// Consume the token and recover the authenticated response.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn into_inner(self) -> wire::CertifiedBodyResponse {
-        self.response
-    }
 }
 
 /// Commit-certificate request admitted through structural, outer-identity,
@@ -979,12 +973,12 @@ mod tests {
                 nexus_amx_context_hash: Hash::new(b"transport-test-nexus-amx-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::Plain,
+                    encoding: wire::PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 64,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 4096,
-                    max_chunk_count: 64,
+                    max_chunk_count: 128,
                 },
                 leader_seed: [0x47; 32],
             };
@@ -1059,12 +1053,14 @@ mod tests {
                     proposal_round: self.manifest.round,
                     phase: wire::GlobalPhase::Prepare,
                     subject: self.manifest.subject,
-                    execution_commitment: wire::ExecutionCommitment::without_topups(
-                        Hash::new(b"transport fixture parent state"),
-                        Hash::new(b"transport fixture post state"),
-                        Hash::new(b"transport fixture ordinary writes"),
-                        Hash::new(b"transport fixture executed block wire"),
-                    ),
+                    execution_commitment:
+                        wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                            Hash::new(b"transport fixture parent state"),
+                            Hash::new(b"transport fixture post state"),
+                            Hash::new(b"transport fixture ordinary writes"),
+                            1,
+                            Hash::new(b"transport fixture executed block wire"),
+                        ),
                     signers: vec![0, 1, 2],
                     aggregate_signature: vec![0xA5; 48],
                 },

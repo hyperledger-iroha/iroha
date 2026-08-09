@@ -210,6 +210,10 @@ of which policy a relay enforces.
 - **TTL enforcement.** Puzzle tickets reuse the existing `pow` `min_ticket_ttl_secs`
   and `max_future_skew_secs` bounds. Verification rejects expired tickets, TTLs that
   fall below the policy minimum, or expiry windows that exceed the allowed skew.
+  Minting re-anchors the expiry-bound challenge before every Argon2 candidate,
+  checks the clock and remaining lifetime after that candidate, and never extends
+  an expiry after solving. The target mint TTL must exceed the minimum remaining
+  TTL and stay within the maximum future-skew corridor.
 - **Issuance service.** The `tools/soranet-puzzle-service` daemon exposes Norito JSON
   endpoints at `/v1/puzzle/config` and `/v1/puzzle/mint`, allowing edge relays to delegate
   ticket minting. Config responses surface the active difficulty and TTL bounds, while
@@ -604,8 +608,9 @@ sequenceDiagram
 
     C->>R: HybridClientInit<br/>nonce_c, suite_list,<br/>X25519_static_c,<br/>ML-KEM public,<br/>capability TLVs[, resume_hash]
     R->>R: Select mutually supported suite/KEM/sig<br/>Validate capabilities
-    R->>C: HybridRelayResponse<br/>nonce_r, X25519_static_r,<br/>ML-KEM public,<br/>ML-KEM ciphertext,<br/>confirmation tag,<br/>transcript_hash,<br/>Dilithium + Ed25519 witnesses
+    R->>C: HybridRelayResponse<br/>nonce_r, X25519_static_r,<br/>ML-KEM public,<br/>ML-KEM ciphertext,<br/>confirmation tag,<br/>transcript_hash,<br/>directory Ed25519 identity + signature
     Note over C,R: transcript_hash = SHA3-256("soranet.transcript.v1" || H(descriptor_commit) || nonce_c || nonce_r || len(capabilities) || capability bytes || kem_id || sig_id || suite_id || resume_hash?)
+    Note over C,R: relay_auth = Ed25519(SigningKey_directory, H(LP(domain) || LP(version) || LP(suite_id) || LP(client_frame) || LP(relay_body) || LP(transcript_hash) || LP(relay_identity) || LP(ALPN) || LP(TLS_name)))
     Note over C: HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk2.session.v1"<br/>confirm info = "soranet.handshake.nk2.confirm.v1"<br/>key material = primary_shared || transcript_hash
 ```
 
@@ -623,8 +628,9 @@ sequenceDiagram
 
     C->>R: PqfsClientCommit<br/>nonce_c, suite_list,<br/>X25519_static_c,<br/>primary & forward ML-KEM publics,<br/>forward commitment,<br/>capability TLVs[, resume_hash]
     R->>R: Verify commitment & capabilities<br/>Select suite/KEM/sig
-    R->>C: PqfsRelayResponse<br/>nonce_r, X25519_static_r,<br/>ML-KEM public,<br/>primary & forward ciphertexts,<br/>confirmation tags, dual_mix,<br/>transcript_hash,<br/>Dilithium + Ed25519 witnesses
+    R->>C: PqfsRelayResponse<br/>nonce_r, X25519_static_r,<br/>ML-KEM public,<br/>primary & forward ciphertexts,<br/>confirmation tags, dual_mix,<br/>transcript_hash,<br/>directory Ed25519 identity + signature
     Note over C,R: transcript_hash = SHA3-256("soranet.transcript.v1" || H(descriptor_commit) || nonce_c || nonce_r || len(capabilities) || capability bytes || kem_id || sig_id || suite_id || resume_hash?)
+    Note over C,R: relay_auth binds the exact client frame, exact relay body, transcript hash, directory identity, QUIC ALPN, and TLS server name with length prefixes
     Note over C: dual_mix = HKDF-expand("soranet.kem.dual.mix.v1", primary_shared || forward_shared || transcript_hash)<br/>HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk3.session.v1"<br/>confirm info = "soranet.handshake.nk3.confirm.v1"
 ```
 
@@ -645,6 +651,13 @@ sequenceDiagram
 | `0x00`                 | Ed25519         | Classical baseline. |
 | `0x01`                 | Dilithium3      | Preferred PQ signature. |
 | `0x02`                 | Falcon-512      | Optional extension for constrained deployments. |
+
+The signature capability identifier remains transcript-bound negotiation
+metadata. It does not create synthetic client or relay signature fields. In the
+first-release wire protocol, relay authentication is one real Ed25519 signature
+under the exact identity selected from the authenticated directory; the client
+verifies that identity before KEM decapsulation and session-key acceptance.
+There is no decorative ML-DSA payload or unauthenticated client-signature slot.
 
 Governance maintains the canonical registry in
 `specs/soranet/capability_registry.md` and the directory service publishes
@@ -716,12 +729,16 @@ guarantee downgrade detection. The transcript hash feeds the labelled HKDF
 domains (`soranet.handshake.nk2.*.v1`, `soranet.handshake.nk3.*.v1`) so telemetry and session keys
 diverge across suites even when the same nonces circulate.
 
-`HybridClientInit` and `PqfsClientCommit` now emit deterministic Dilithium +
-Ed25519 witnesses that cover the handshake payload and transcript hash. Relay
-responses mirror the witnesses and surface the negotiated suite in their
-telemetry JSON (`handshake_suite` field) so downstream tooling can flag mixed
-mode sessions. The sequence diagrams above highlight the message flow, the
-transcript binding inputs, and the labelled HKDF domains each suite relies on.
+`HybridClientInit` and `PqfsClientCommit` carry key agreement and negotiation
+material only; they contain no inert signature bytes. Each relay response ends
+with the exact directory Ed25519 identity and a 64-byte Ed25519 signature. The
+signature covers length-delimited domain, version, and suite identifiers; the
+complete client frame; the complete relay response body preceding
+authentication; the transcript hash; the relay identity; the QUIC ALPN; and the
+TLS server name. Clients compare the embedded identity with the
+directory-selected public key and verify the signature before accepting the
+response. Relay responses also surface the negotiated suite in telemetry JSON
+(`handshake_suite` field) so downstream tooling can flag mixed-mode sessions.
 
 ### Parser sketch
 

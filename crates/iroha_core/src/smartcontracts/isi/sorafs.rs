@@ -11,6 +11,7 @@ use iroha_data_model::{
     },
     isi::error::{InstructionExecutionError, InvalidParameterError},
     metadata::Metadata,
+    musubi::{MusubiArchiveLocationKeyV1, MusubiProviderLocationKeyV1},
     name::Name,
     permission::{Permission, Permissions},
     query::{
@@ -70,7 +71,7 @@ use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ManifestValidationError, PinPolicy as ManifestPinPolicy,
     PinPolicyConstraints as ManifestPinPolicyConstraints, ProfileId,
     StorageClass as ManifestStorageClass,
-    alias_cache::decode_alias_proof,
+    alias_cache::decode_alias_proof_untrusted_signers,
     capacity::{
         CapacityDeclarationV1, CapacityDisputeKind, CapacityDisputeV1, CapacityMetadataEntry,
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
@@ -82,6 +83,33 @@ use sorafs_manifest::{
 
 use super::*;
 use crate::{smartcontracts::ValidSingularQuery, state::StateTransaction};
+
+fn next_musubi_location_for_provider(
+    provider: ProviderId,
+    after: Option<MusubiArchiveLocationKeyV1>,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Option<MusubiArchiveLocationKeyV1> {
+    let bounds = MusubiProviderLocationKeyV1::provider_range(provider);
+    let start = *bounds.start();
+    let end = *bounds.end();
+    match after {
+        None => state_transaction
+            .world
+            .musubi_locations_by_provider
+            .range(start..=end)
+            .next()
+            .map(|(key, ())| key.location),
+        Some(location) => state_transaction
+            .world
+            .musubi_locations_by_provider
+            .range((
+                std::ops::Bound::Excluded(MusubiProviderLocationKeyV1::new(provider, location)),
+                std::ops::Bound::Included(end),
+            ))
+            .next()
+            .map(|(key, ())| key.location),
+    }
+}
 
 /// Convert governance configuration into manifest validation constraints.
 pub fn manifest_pin_policy_constraints_from_config(
@@ -456,6 +484,14 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterProviderOwner {
             .insert(self.provider_id, self.owner.clone());
         grant_repair_worker_permission(state_transaction, &self.owner, self.provider_id);
 
+        let mut cursor = None;
+        while let Some(location) =
+            next_musubi_location_for_provider(self.provider_id, cursor, state_transaction)
+        {
+            super::musubi::refresh_musubi_locations(&[location], state_transaction)?;
+            cursor = Some(location);
+        }
+
         Ok(())
     }
 }
@@ -472,6 +508,18 @@ impl Execute for iroha_data_model::isi::sorafs::UnregisterProviderOwner {
             "CanUnregisterSorafsProviderOwner",
         )?;
 
+        let mut cursor = None;
+        while let Some(location) =
+            next_musubi_location_for_provider(self.provider_id, cursor, state_transaction)
+        {
+            super::musubi::ensure_provider_may_be_removed(
+                self.provider_id,
+                &[location],
+                state_transaction.world(),
+            )?;
+            cursor = Some(location);
+        }
+
         let removed = state_transaction
             .world
             .provider_owners
@@ -487,6 +535,14 @@ impl Execute for iroha_data_model::isi::sorafs::UnregisterProviderOwner {
             .world
             .provider_ingest_completion_authorities
             .remove(self.provider_id);
+
+        let mut cursor = None;
+        while let Some(location) =
+            next_musubi_location_for_provider(self.provider_id, cursor, state_transaction)
+        {
+            super::musubi::refresh_musubi_locations(&[location], state_transaction)?;
+            cursor = Some(location);
+        }
 
         Ok(())
     }
@@ -826,7 +882,6 @@ impl Execute for iroha_data_model::isi::sorafs::ApprovePinManifest {
                 format!("manifest {} not registered", manifest_hex(&self.digest)).into(),
             ));
         };
-
         if self.approved_epoch < record.submitted_epoch {
             return Err(invalid_parameter(format!(
                 "manifest {} approval epoch {} predates submission epoch {}",
@@ -1800,7 +1855,7 @@ fn validate_manifest_alias_binding(
         // proof admission or identity.
         let _canonical_flags =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        decode_alias_proof(&alias.proof)
+        decode_alias_proof_untrusted_signers(&alias.proof)
     }
     .map_err(|err| invalid_parameter(format!("alias proof failed verification: {err}")))?;
 
@@ -2003,6 +2058,12 @@ impl Execute for iroha_data_model::isi::sorafs::RetirePinManifest {
                 format!("manifest {} not registered", manifest_hex(&self.digest)).into(),
             ));
         };
+        let musubi_location = state_transaction
+            .world
+            .musubi_locations_by_pin
+            .get(&self.digest)
+            .filter(|reference| reference.active)
+            .map(|reference| reference.location);
 
         if self.retired_epoch < record.submitted_epoch {
             return Err(invalid_parameter(format!(
@@ -2049,6 +2110,13 @@ impl Execute for iroha_data_model::isi::sorafs::RetirePinManifest {
                 )
                 .into(),
             ));
+        }
+
+        if let Some(location) = musubi_location {
+            super::musubi::ensure_locations_may_be_invalidated(
+                &[location],
+                state_transaction.world(),
+            )?;
         }
 
         let pending_order_count = state_transaction
@@ -2117,6 +2185,10 @@ impl Execute for iroha_data_model::isi::sorafs::RetirePinManifest {
             .world
             .pin_manifests
             .insert(self.digest, record);
+
+        if let Some(location) = musubi_location {
+            super::musubi::refresh_musubi_locations(&[location], state_transaction)?;
+        }
 
         Ok(())
     }
@@ -3029,6 +3101,19 @@ impl Execute for iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignment
                     format!("replication order {order_label} not found").into(),
                 )
             })?;
+        if state_transaction
+            .world
+            .musubi_locations_by_replication_order
+            .get(&self.order_id)
+            .is_some_and(|reference| reference.active)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} is bound to an immutable Musubi archive location"
+                )
+                .into(),
+            ));
+        }
         if record.assignment_revision != self.expected_assignment_revision {
             return Err(invalid_parameter(format!(
                 "replication order {order_label} assignment revision compare-and-set mismatch"
@@ -3480,6 +3565,12 @@ impl Execute for iroha_data_model::isi::sorafs::ExpireReplicationOrder {
                     format!("replication order {order_label} not found").into(),
                 )
             })?;
+        let musubi_location = state_transaction
+            .world
+            .musubi_locations_by_replication_order
+            .get(&self.order_id)
+            .filter(|reference| reference.active)
+            .map(|reference| reference.location);
         validate_stored_replication_order(&record, &order_label)?;
 
         let manifest = state_transaction
@@ -3526,11 +3617,21 @@ impl Execute for iroha_data_model::isi::sorafs::ExpireReplicationOrder {
             )));
         }
 
+        if let Some(location) = musubi_location {
+            super::musubi::ensure_locations_may_be_invalidated(
+                &[location],
+                state_transaction.world(),
+            )?;
+        }
+
         record.expire(self.expiration_epoch);
         state_transaction
             .world
             .replication_orders
             .insert(self.order_id, record);
+        if let Some(location) = musubi_location {
+            super::musubi::refresh_musubi_locations(&[location], state_transaction)?;
+        }
         Ok(())
     }
 }
@@ -5947,6 +6048,7 @@ mod sorafs_tests {
             },
         },
         metadata::Metadata,
+        musubi::{ArchiveId, MusubiArchiveLocationIdV1},
         name::Name,
         permission::{Permission as AccountPermission, Permissions},
         prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain},
@@ -6180,174 +6282,7 @@ mod sorafs_tests {
         *tier = replacement;
     }
 
-    #[test]
-    fn xor_quantity_ratio_is_exact_checked_and_rounds_at_nano_boundaries() {
-        let zero = Quantity::zero();
-        let one_nano = xor_quantity_nanos(1);
-        let two_nanos = xor_quantity_nanos(2);
-
-        assert_eq!(
-            round_xor_quantity_ratio(&xor_quantity_nanos(8), 5_000, 10_000)
-                .expect("bounded exact ratio"),
-            xor_quantity_nanos(4)
-        );
-        assert_eq!(
-            round_xor_quantity_ratio(&one_nano, 1, 2).expect("half nano rounds away from zero"),
-            one_nano
-        );
-        assert_eq!(
-            round_xor_quantity_ratio(&two_nanos, 1, 3)
-                .expect("sub-nano result rounds to the XOR scale"),
-            xor_quantity_nanos(1)
-        );
-        assert_eq!(
-            round_xor_quantity_ratio(&xor_quantity_nanos(1), 1, 3)
-                .expect("sub-half-nano result rounds to zero"),
-            zero
-        );
-        assert_eq!(
-            round_xor_quantity_ratio(&Quantity::zero(), u128::MAX, 1)
-                .expect("zero remains zero for any bounded multiplier"),
-            Quantity::zero()
-        );
-
-        let fractional: Quantity = "1.234567891"
-            .parse()
-            .expect("canonical fractional Quantity");
-        assert_eq!(
-            round_xor_quantity_ratio(&fractional, 1, 2).expect("bounded fractional ratio"),
-            "0.617283946"
-                .parse::<Quantity>()
-                .expect("canonical rounded Quantity")
-        );
-        assert_eq!(
-            round_xor_quantity_ratio(&xor_quantity_nanos(1), 1, 0),
-            Err(NumericOperationError::DivisionByZero)
-        );
-        assert_eq!(
-            xor_quantity_nanos(1).checked_sub(&xor_quantity_nanos(2)),
-            Err(NumericOperationError::QuantityUnderflow)
-        );
-        assert_eq!(
-            round_xor_quantity_ratio(&max_positive_quantity(), 2, 1),
-            Err(NumericOperationError::MantissaOverflow)
-        );
-    }
-
-    #[test]
-    fn integer_ratio_helper_rejects_invalid_or_overflowing_economic_inputs() {
-        assert_eq!(checked_mul_div_round_u128(5, 1, 2), Ok(3));
-        assert_eq!(
-            checked_mul_div_round_u128(1, 1, 0),
-            Err(PricingComputationError::DivisionByZero(
-                "u128 multiply/divide"
-            ))
-        );
-        assert_eq!(
-            checked_mul_div_round_u128(u128::MAX, 2, 1),
-            Err(PricingComputationError::ArithmeticOverflow(
-                "u128 multiply/divide"
-            ))
-        );
-    }
-
-    #[test]
-    fn checked_keypair_helpers_preserve_requested_algorithm() {
-        assert_eq!(checked_keypair().algorithm(), Algorithm::default());
-        assert_eq!(checked_ed25519_keypair().algorithm(), Algorithm::Ed25519);
-    }
-
-    pub(super) fn block_header() -> iroha_data_model::block::BlockHeader {
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
-    }
-
-    fn capacity_dispute_block_header() -> iroha_data_model::block::BlockHeader {
-        iroha_data_model::block::BlockHeader::new(
-            nonzero!(1_u64),
-            None,
-            None,
-            None,
-            1_700_000_128_000,
-            0,
-        )
-    }
-
-    fn activate_reputation_policy(
-        stx: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-    ) -> [u8; 32] {
-        let policy = ReputationJournalAuthorityPolicyV1 {
-            version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
-            revision: 1,
-            predecessor_policy_digest: None,
-            por_recorder_authority: authority.clone(),
-            dispute_recorder_authority: authority.clone(),
-            token_recorder_authority: authority.clone(),
-            max_source_age_ms: 24 * 60 * 60 * 1_000,
-        };
-        let digest = policy.canonical_digest().expect("reputation policy digest");
-        SetSorafsReputationJournalAuthorityPolicy::new(policy)
-            .execute(authority, stx)
-            .expect("activate reputation recorder policy");
-        digest
-    }
-
-    fn repair_block_header(
-        height: u64,
-        creation_time_ms: u64,
-    ) -> iroha_data_model::block::BlockHeader {
-        iroha_data_model::block::BlockHeader::new(
-            std::num::NonZeroU64::new(height).expect("non-zero test block height"),
-            None,
-            None,
-            None,
-            creation_time_ms,
-            0,
-        )
-    }
-
-    fn transact_repair(
-        state: &mut State,
-        height: u64,
-        creation_time_ms: u64,
-        operation: impl FnOnce(
-            &mut crate::state::StateTransaction<'_, '_>,
-        ) -> Result<(), InstructionExecutionError>,
-    ) -> Result<(), InstructionExecutionError> {
-        let header = repair_block_header(height, creation_time_ms);
-        let block_hash = iroha_crypto::HashOf::new(&header);
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        operation(&mut transaction)?;
-        transaction.apply();
-        block.commit().expect("commit repair test block");
-        state.push_block_hash_for_testing(block_hash);
-        Ok(())
-    }
-
-    fn committed_repair_fixture(
-        ticket_id: &str,
-        source_identity: [u8; 32],
-        mutate: impl FnOnce(
-            &RepairReportV1,
-            &mut crate::state::StateTransaction<'_, '_>,
-        ) -> Result<(), InstructionExecutionError>,
-    ) -> State {
-        let mut state = make_state();
-        let provider = ProviderId::new([0xF1; 32]);
-        grant_repair_operator(&mut state, &alice(), provider);
-        let report = repair_report(ticket_id, provider, [0xF2; 32], &alice(), 4_000);
-        transact_repair(&mut state, 1, 4_000_000, |transaction| {
-            SubmitSorafsRepairTask::new(
-                source_identity,
-                to_bytes(&report).expect("encode repair fixture report"),
-            )
-            .execute(&alice(), transaction)?;
-            mutate(&report, transaction)
-        })
-        .expect("commit repair fixture");
-        state
-    }
+    include!("sorafs/core_ratio_and_repair_tests.rs");
 
     #[test]
     fn repair_committed_event_query_returns_anchored_empty_page_for_proven_empty_state() {
@@ -6485,6 +6420,48 @@ mod sorafs_tests {
         state
     }
 
+    #[test]
+    fn provider_reverse_index_iteration_is_exact_and_ordered() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut transaction = block.transaction();
+        let provider = ProviderId::new([0xD1; 32]);
+        let other_provider = ProviderId::new([0xD2; 32]);
+        let first = MusubiArchiveLocationKeyV1::new(
+            ArchiveId::new([1; 32]),
+            MusubiArchiveLocationIdV1::new([1; 32]),
+        );
+        let second = MusubiArchiveLocationKeyV1::new(
+            ArchiveId::new([2; 32]),
+            MusubiArchiveLocationIdV1::new([2; 32]),
+        );
+        transaction
+            .world
+            .musubi_locations_by_provider
+            .insert(MusubiProviderLocationKeyV1::new(provider, second), ());
+        transaction
+            .world
+            .musubi_locations_by_provider
+            .insert(MusubiProviderLocationKeyV1::new(other_provider, first), ());
+        transaction
+            .world
+            .musubi_locations_by_provider
+            .insert(MusubiProviderLocationKeyV1::new(provider, first), ());
+
+        assert_eq!(
+            next_musubi_location_for_provider(provider, None, &transaction),
+            Some(first)
+        );
+        assert_eq!(
+            next_musubi_location_for_provider(provider, Some(first), &transaction),
+            Some(second)
+        );
+        assert_eq!(
+            next_musubi_location_for_provider(provider, Some(second), &transaction),
+            None
+        );
+    }
+
     fn completion_anchor_hash() -> iroha_crypto::HashOf<iroha_data_model::block::BlockHeader> {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 42, 0);
@@ -6539,12 +6516,12 @@ mod sorafs_tests {
 
     fn seed_public_pin_fee_accounts(state: &mut State) {
         let fee_asset_id = state.gov.sorafs_pin_fee_asset_id.clone();
-        if let Some(domain_id) = fee_asset_id.try_domain().cloned() {
-            state
-                .world
-                .domains
-                .insert(domain_id.clone(), Domain::new(domain_id).build(&alice()));
-        }
+        let domain_id =
+            DomainId::try_new("universal", "universal").expect("SoraFS fee fixture owning domain");
+        state.world.domains.insert(
+            domain_id.clone(),
+            Domain::new(domain_id.clone()).build(&alice()),
+        );
         let (account_id, account_value) = Account::new(alice()).build(&alice()).into_key_value();
         state.world.accounts.insert(account_id, account_value);
         let (account_id, account_value) = Account::new(bob()).build(&alice()).into_key_value();
@@ -6553,20 +6530,21 @@ mod sorafs_tests {
         let (account_id, account_value) = Account::new(treasury).build(&alice()).into_key_value();
         state.world.accounts.insert(account_id, account_value);
 
-        let definition = AssetDefinition::numeric(fee_asset_id.clone())
-            .with_name(
-                fee_asset_id
-                    .try_name()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| "xor".to_owned()),
-            )
-            .build(&alice());
-        if let Some(domain_id) = fee_asset_id.try_domain().cloned() {
-            state
-                .world
-                .domain_asset_definitions
-                .insert(domain_id, BTreeSet::from([fee_asset_id.clone()]));
-        }
+        let definition = AssetDefinition::numeric(
+            fee_asset_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain_id.clone()),
+        )
+        .build(&alice());
+        state
+            .world
+            .asset_definition_domains
+            .insert(fee_asset_id.clone(), domain_id.clone());
+        state
+            .world
+            .domain_asset_definitions
+            .insert(domain_id, BTreeSet::from([fee_asset_id.clone()]));
         let owner = definition.owned_by().clone();
         state
             .world
@@ -7711,7 +7689,8 @@ mod sorafs_tests {
         }
 
         let mut alias = default_alias_binding();
-        let bundle = decode_alias_proof(&alias.proof).expect("decode canonical alias fixture");
+        let bundle = decode_alias_proof_untrusted_signers(&alias.proof)
+            .expect("decode canonical alias fixture integrity");
         alias.proof = {
             let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             norito::to_bytes(&bundle).expect("encode alternate-layout alias proof")
@@ -14566,15 +14545,7 @@ mod sorafs_tests {
         );
     }
 
-    #[test]
-    fn storage_class_metadata_defaults_when_missing() {
-        let metadata = Metadata::default();
-        let provider = ProviderId::new([0x11; 32]);
-        let class =
-            super::storage_class_from_declaration_metadata(provider, &metadata, StorageClass::Warm)
-                .expect("fallback must succeed");
-        assert_eq!(class, StorageClass::Warm);
-    }
+    include!("sorafs/storage_class_default_test.rs");
 
     #[test]
     fn storage_class_metadata_overrides_case_insensitively() {

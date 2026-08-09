@@ -12,18 +12,25 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State as CoreState, World, WorldReadOnly as _},
+    zk::{hash_vk, test_utils::halo2_fixture_envelope},
 };
 use iroha_data_model::prelude::*;
-use iroha_data_model::{isi::Grant, isi::verifying_keys, permission::Permission};
+use iroha_data_model::{
+    confidential::ConfidentialStatus,
+    isi::Grant,
+    isi::verifying_keys,
+    permission::Permission,
+    proof::{VerifyingKeyId, VerifyingKeyRecord},
+    zk::BackendTag,
+};
 use iroha_primitives::json::Json;
 use iroha_torii::{NoritoJson, ZkVoteGetTallyRequestDto, handle_v1_zk_vote_tally};
 use nonzero_ext::nonzero;
 
-#[path = "../../iroha_core/tests/zk_testkit.rs"]
-mod zk_testkit;
-
 const ACCOUNT_SIGNATORY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
+const TALLY_FIXTURE_BACKEND: &str = "halo2/ipa";
+const TALLY_FIXTURE_CIRCUIT_ID: &str = "halo2/ipa:tiny-add2inst-public";
 
 #[tokio::test]
 async fn vote_tally_handler_returns_finalized_tally() {
@@ -40,31 +47,38 @@ async fn vote_tally_handler_returns_finalized_tally() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let eid = "election-alpha".to_string();
-    let owner_domain: DomainId = DomainId::try_new("zkd", "universal").expect("domain");
-    let owner = AccountId::new(
-        &owner,
-        InstructionBox::from(Register::domain(Domain::new(owner_domain))),
-    )
-    .expect("register owner domain");
+    let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
     stx.world
         .executor()
         .clone()
         .execute_instruction(
             &mut stx,
             &owner,
-            InstructionBox::from(Register::account(NewAccount::new(owner.clone()))),
+            InstructionBox::from(Register::account(Account::new(owner.clone()))),
         )
         .expect("register owner account");
-    let bundle = zk_testkit::add2inst_public_bundle(7, 2);
-    let backend = bundle.backend;
-    let vk_id = bundle.vk_id.clone();
-    let proof_box =
-        iroha_data_model::proof::ProofBox::new(backend.into(), bundle.proof_bytes.clone());
-    let vk_box = bundle
-        .vk_record
-        .key
-        .clone()
-        .expect("vote tally bundle must include VK bytes");
+    let fixture_seed = halo2_fixture_envelope(TALLY_FIXTURE_CIRCUIT_ID, [0; 32]);
+    let vk_box = fixture_seed
+        .vk_box(TALLY_FIXTURE_BACKEND)
+        .expect("vote tally fixture must include VK bytes");
+    let vk_commitment = hash_vk(&vk_box);
+    let fixture = halo2_fixture_envelope(TALLY_FIXTURE_CIRCUIT_ID, vk_commitment);
+    let vk_id = VerifyingKeyId::new(TALLY_FIXTURE_BACKEND, "tally_current");
+    let mut vk_record = VerifyingKeyRecord::new(
+        1,
+        TALLY_FIXTURE_CIRCUIT_ID,
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        fixture.schema_hash,
+        vk_commitment,
+    );
+    vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("VK length fits u32");
+    vk_record.max_proof_bytes =
+        u32::try_from(fixture.proof_bytes.len()).expect("proof length fits u32");
+    vk_record.gas_schedule_id = Some("halo2_default".into());
+    vk_record.key = Some(vk_box.clone());
+    vk_record.status = ConfidentialStatus::Active;
+    let proof_box = fixture.proof_box(TALLY_FIXTURE_BACKEND);
     stx.world
         .executor()
         .clone()
@@ -95,7 +109,11 @@ async fn vote_tally_handler_returns_finalized_tally() {
             )),
         )
         .expect("grant CanEnactGovernance");
-    let report = iroha_core::zk::verify_backend_with_timing(backend, &proof_box, Some(&vk_box));
+    let report = iroha_core::zk::verify_backend_with_timing(
+        TALLY_FIXTURE_BACKEND,
+        &proof_box,
+        Some(&vk_box),
+    );
     assert!(report.ok, "vote tally proof must verify: {report:?}");
     stx.world
         .executor()
@@ -122,7 +140,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
             &owner,
             verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
-                record: bundle.vk_record.clone(),
+                record: vk_record,
             }
             .into(),
         )
@@ -144,9 +162,9 @@ async fn vote_tally_handler_returns_finalized_tally() {
         .unwrap();
     let finalize = iroha_data_model::isi::zk::FinalizeElection {
         election_id: eid.clone(),
-        tally: vec![7, 2],
+        tally: vec![5, 8],
         tally_proof: iroha_data_model::proof::ProofAttachment::new_ref(
-            backend.into(),
+            TALLY_FIXTURE_BACKEND.into(),
             proof_box,
             vk_id.clone(),
         ),
@@ -158,6 +176,14 @@ async fn vote_tally_handler_returns_finalized_tally() {
         .unwrap();
     stx.apply();
     block.commit().expect("commit block");
+
+    let expected_view = state.view();
+    let expected_height = u64::try_from(expected_view.height()).expect("height fits u64");
+    let expected_hash = expected_view
+        .latest_block_hash()
+        .map(|hash| hex::encode(hash.as_ref()))
+        .expect("committed block hash");
+    drop(expected_view);
 
     // Call Torii handler directly
     let req = ZkVoteGetTallyRequestDto {
@@ -179,11 +205,46 @@ async fn vote_tally_handler_returns_finalized_tally() {
         v.get("finalized").and_then(norito::json::Value::as_bool),
         Some(true)
     );
+    assert_eq!(
+        v.get("evaluated_block_height")
+            .and_then(norito::json::Value::as_u64),
+        Some(expected_height)
+    );
+    assert_eq!(
+        v.get("evaluated_block_hash")
+            .and_then(norito::json::Value::as_str),
+        Some(expected_hash.as_str())
+    );
     let tally = v
         .get("tally")
         .and_then(|x| x.as_array())
         .cloned()
         .unwrap_or_default();
     let ints: Vec<u64> = tally.into_iter().filter_map(|x| x.as_u64()).collect();
-    assert_eq!(ints, vec![7, 2]);
+    assert_eq!(ints, vec![5, 8]);
+
+    let norito_response = handle_v1_zk_vote_tally(
+        State(state),
+        Some(http::HeaderValue::from_static("application/x-norito")),
+        NoritoJson(ZkVoteGetTallyRequestDto { election_id: eid }),
+    )
+    .await
+    .expect("Norito handler response")
+    .into_response();
+    assert_eq!(
+        norito_response.headers().get(http::header::CONTENT_TYPE),
+        Some(&http::HeaderValue::from_static("application/x-norito"))
+    );
+    let bytes = norito_response
+        .into_body()
+        .collect()
+        .await
+        .expect("read Norito body")
+        .to_bytes();
+    let decoded: iroha_torii::ZkVoteGetTallyResponseDto =
+        norito::decode_from_bytes(&bytes).expect("decode Norito tally response");
+    assert_eq!(decoded.evaluated_block_height, expected_height);
+    assert_eq!(decoded.evaluated_block_hash, expected_hash);
+    assert!(decoded.finalized);
+    assert_eq!(decoded.tally, vec![5, 8]);
 }

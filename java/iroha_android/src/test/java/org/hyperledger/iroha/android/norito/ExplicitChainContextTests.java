@@ -25,9 +25,7 @@ import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstruction;
-import org.hyperledger.iroha.android.model.instructions.ShieldInstruction;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
-import org.hyperledger.iroha.android.model.instructions.UnshieldInstruction;
 import org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProver;
 import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
@@ -43,6 +41,25 @@ public final class ExplicitChainContextTests {
 
   private static final int TAIRA = SccpV1.TAIRA_I105_DISCRIMINANT_V1;
   private static final int OTHER = AccountAddress.DEFAULT_I105_DISCRIMINANT;
+
+  @Test
+  public void retiredGenericConfidentialSurfacesAreAbsent() {
+    final String packageName = "org.hyperledger.iroha.android.model.instructions.";
+    final String[][] variants = {{"Shi", "eld"}, {"Zk", "Transfer"}, {"Un", "shield"}};
+    for (final String[] parts : variants) {
+      final String variant = parts[0] + parts[1];
+      try {
+        Class.forName(packageName + variant + "Instruction");
+        fail("retired generic instruction class is still present: " + variant);
+      } catch (ClassNotFoundException expected) {
+        // Expected: ABI V1 exposes only typed Kagemusha movement flows.
+      }
+      for (final Method method : NativeSignerBridge.class.getDeclaredMethods()) {
+        assertFalse(method.getName().equals("encode" + variant + "SignedTransaction"));
+        assertFalse(method.getName().equals("nativeEncode" + variant + "SignedTransaction"));
+      }
+    }
+  }
 
   @Test
   public void adaptersRequireBoundedExplicitContextAndRejectMismatchedPrefixes() throws Exception {
@@ -184,15 +201,7 @@ public final class ExplicitChainContextTests {
   @Test
   public void nativeAccountEntryPointsExposeAnExplicitChainArgument() {
     assertAllMethodOverloadsHaveIntParameter(
-        NativeSignerBridge.class, "encodeShieldSignedTransaction", 2);
-    assertAllMethodOverloadsHaveIntParameter(
-        NativeSignerBridge.class, "encodeUnshieldSignedTransaction", 2);
-    assertAllMethodOverloadsHaveIntParameter(
         NativeSignerBridge.class, "encodeRegisterZkAssetSignedTransaction", 2);
-    assertMethodHasIntParameter(
-        NativeSignerBridge.class, "nativeEncodeShieldSignedTransaction", 2);
-    assertMethodHasIntParameter(
-        NativeSignerBridge.class, "nativeEncodeUnshieldSignedTransaction", 2);
     assertMethodHasIntParameter(
         NativeSignerBridge.class, "nativeEncodeRegisterZkAssetSignedTransaction", 2);
 
@@ -220,28 +229,6 @@ public final class ExplicitChainContextTests {
   @Test
   public void nativeSignerRejectsOutOfRangeChainBeforeNativeDispatch() {
     final FeePaymentIntent feePayment = FeePaymentIntent.authority(Collections.emptyList());
-    expectChainFailure(
-        () ->
-            NativeSignerBridge.encodeShieldSignedTransaction(
-                SigningAlgorithm.ED25519,
-                "chain",
-                -1,
-                "authority",
-                0L,
-                (ShieldInstruction) null,
-                new byte[] {1},
-                feePayment));
-    expectChainFailure(
-        () ->
-            NativeSignerBridge.encodeUnshieldSignedTransaction(
-                SigningAlgorithm.ED25519,
-                "chain",
-                0x1_0000,
-                "authority",
-                0L,
-                (UnshieldInstruction) null,
-                new byte[] {1},
-                feePayment));
     expectChainFailure(
         () ->
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
@@ -383,6 +370,16 @@ public final class ExplicitChainContextTests {
             .orElseThrow(() -> new AssertionError("missing method " + type.getName() + "." + name));
     assertTrue(method.getParameterCount() > parameterIndex);
     assertEquals(int.class, method.getParameterTypes()[parameterIndex]);
+  }
+
+  private static void assertMethodHasParameterCount(
+      final Class<?> type, final String name, final int parameterCount) {
+    final Method method =
+        Arrays.stream(type.getDeclaredMethods())
+            .filter(candidate -> candidate.getName().equals(name))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("missing method " + type.getName() + "." + name));
+    assertEquals(parameterCount, method.getParameterCount());
   }
 
   private static void await(final CountDownLatch latch) {

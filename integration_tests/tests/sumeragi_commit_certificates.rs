@@ -65,7 +65,7 @@ fn validator_account_id_for_index_uses_checked_seed_derivation() {
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
@@ -76,7 +76,7 @@ fn stake_asset_id_literal() -> String {
 }
 
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("universal", "universal").expect("fee asset domain"),
         "xor".parse().expect("fee asset name"),
     )
@@ -651,14 +651,24 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
 
     let definition = {
         let __asset_definition_id = stake_asset_id.clone();
-        AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-            .with_name(__asset_definition_id.name().to_string())
+        AssetDefinition::new(
+            __asset_definition_id.clone(),
+            "xor".to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     }
     .with_metadata(Metadata::default());
     let fee_definition = {
         let __asset_definition_id = fee_asset_id.clone();
-        AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-            .with_name(__asset_definition_id.name().to_string())
+        AssetDefinition::new(
+            __asset_definition_id.clone(),
+            "xor".to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     }
     .with_metadata(Metadata::default());
 

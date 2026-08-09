@@ -8,7 +8,8 @@
 //! Supported attributes:
 //! - `env = "VAR"` - load from an environment variable.
 //! - `default` or `default = "expr"` - fallback value.
-//! - `nested` - read nested struct under the field name namespace.
+//! - `nested` - read a nested struct under the field-name namespace unless `key` overrides it.
+//! - `key = "name"` - replace the Rust field name with a nonempty, unique configuration key.
 
 #![allow(unused)]
 #![allow(clippy::large_enum_variant)]
@@ -49,7 +50,10 @@ use crate::DarlingErrorWrapper;
 /// - `default` - fallback to default value (bound: `T: Default`)
 /// - `default = "<expr>"` - fallback to a default value specified as an expression
 /// - `nested` - delegates further reading (bound: `T: ReadConfig`).
-///   It uses the field name as a namespace. Conflicts with others.
+///   It uses the field name as a namespace unless `key` is supplied, and conflicts with
+///   `default` and `env`.
+/// - `key = "<configuration key>"` - replace the Rust field name with an explicit nonempty key.
+///   Effective keys must be unique within the struct.
 ///
 /// Supported field shapes (if `nested` is not specified):
 ///
@@ -139,7 +143,23 @@ mod ast {
                 .fields
                 .into_iter()
                 .map(|field| field.into_codegen(emitter))
-                .collect();
+                .collect::<Vec<_>>();
+
+            let mut effective_keys = HashSet::new();
+            for entry in &entries {
+                let key = entry
+                    .key
+                    .as_ref()
+                    .map_or_else(|| entry.ident.to_string(), syn::LitStr::value);
+                if !effective_keys.insert(key.clone()) {
+                    let span = entry
+                        .key
+                        .as_ref()
+                        .map_or_else(|| entry.ident.span(), syn::LitStr::span);
+                    emit!(emitter, span, "duplicate configuration key `{key}`");
+                    halt_codegen = true;
+                }
+            }
 
             if halt_codegen {
                 None
@@ -179,9 +199,9 @@ mod ast {
         fn into_codegen(self, emitter: &mut Emitter) -> codegen::Entry {
             let Field { ident, ty, attrs } = self;
 
-            let kind = match attrs {
-                Attrs::Nested => codegen::EntryKind::Nested,
-                Attrs::Parameter { default, env } => {
+            let (kind, key) = match attrs {
+                Attrs::Nested { key } => (codegen::EntryKind::Nested, key),
+                Attrs::Parameter { default, env, key } => {
                     let shape = ParameterTypeShape::analyze(&ty);
                     let evaluation = match (shape.option, default) {
                         (false, None) => codegen::Evaluation::Required,
@@ -200,24 +220,29 @@ mod ast {
                         }
                     };
 
-                    codegen::EntryKind::Parameter {
-                        env,
-                        evaluation,
-                        with_origin: shape.with_origin,
-                    }
+                    (
+                        codegen::EntryKind::Parameter {
+                            env,
+                            evaluation,
+                            with_origin: shape.with_origin,
+                        },
+                        key,
+                    )
                 }
             };
-
-            codegen::Entry { ident, kind }
+            codegen::Entry { ident, key, kind }
         }
     }
 
     #[derive(Debug)]
     enum Attrs {
-        Nested,
+        Nested {
+            key: Option<syn::LitStr>,
+        },
         Parameter {
             default: Option<AttrDefault>,
             env: Option<syn::LitStr>,
+            key: Option<syn::LitStr>,
         },
     }
 
@@ -226,6 +251,7 @@ mod ast {
             Self::Parameter {
                 default: <_>::default(),
                 env: <_>::default(),
+                key: <_>::default(),
             }
         }
     }
@@ -245,6 +271,7 @@ mod ast {
             struct Accumulator {
                 default: Option<AttrDefault>,
                 env: Option<(Span, syn::LitStr)>,
+                key: Option<(Span, syn::LitStr)>,
                 nested: Option<Span>,
             }
 
@@ -271,6 +298,9 @@ mod ast {
                     AttrItem::Env(span, value) => {
                         reject_duplicate(&mut acc.env, span, (span, value))?
                     }
+                    AttrItem::Key(span, value) => {
+                        reject_duplicate(&mut acc.key, span, (span, value))?
+                    }
                     AttrItem::Nested(span) => reject_duplicate(&mut acc.nested, span, span)?,
                 }
             }
@@ -280,18 +310,24 @@ mod ast {
                     nested: Some(_),
                     default: None,
                     env: None,
-                } => Self::Nested,
+                    key,
+                } => Self::Nested {
+                    key: key.map(|(_, lit)| lit),
+                },
                 Accumulator {
                     nested: Some(span), ..
                 } => {
                     return Err(syn::Error::new(
                         span,
-                        "attributes conflict: `nested` cannot be set with other attributes",
+                        "attributes conflict: `nested` cannot be set with `default` or `env`",
                     ));
                 }
-                Accumulator { default, env, .. } => Self::Parameter {
+                Accumulator {
+                    default, env, key, ..
+                } => Self::Parameter {
                     default,
                     env: env.map(|(_, lit)| lit),
+                    key: key.map(|(_, lit)| lit),
                 },
             };
 
@@ -304,6 +340,7 @@ mod ast {
     enum AttrItem {
         Default(Span, AttrDefault),
         Env(Span, syn::LitStr),
+        Key(Span, syn::LitStr),
         Nested(Span),
     }
 
@@ -311,7 +348,7 @@ mod ast {
         fn parse(input: ParseStream) -> syn::Result<Self> {
             input.step(|cursor| {
                 const EXPECTED_IDENT: &str =
-                    "unexpected token; expected `default`, `env`, or `nested`";
+                    "unexpected token; expected `default`, `env`, `key`, or `nested`";
 
                 let Some((ident, cursor)) = cursor.ident() else {
                     Err(syn::Error::new(cursor.span(), EXPECTED_IDENT))?
@@ -340,6 +377,18 @@ mod ast {
                         };
                         Ok((Self::Env(ident.span(), lit), cursor))
                     }
+                    "key" => {
+                        let (Some(lit), cursor) = expect_eq_with_lit_str(cursor)? else {
+                            return Err(syn::Error::new(
+                                ident.span(),
+                                "expected `key` to be set as `key = \"configuration_name\"`",
+                            ));
+                        };
+                        if lit.value().is_empty() {
+                            return Err(syn::Error::new(lit.span(), "configuration key cannot be empty"));
+                        }
+                        Ok((Self::Key(ident.span(), lit), cursor))
+                    }
                     other => Err(syn::Error::new(cursor.span(), EXPECTED_IDENT)),
                 }
             })
@@ -362,14 +411,9 @@ mod ast {
             None => Err(syn::Error::new(next.span(), EXPECTED_STR_LIT))?,
         };
 
-        let string = lit.to_string();
-        let trimmed = string.trim_matches('"');
-        if string == trimmed {
-            // not a string literal
-            Err(syn::Error::new(lit.span(), EXPECTED_STR_LIT))?;
-        }
-
-        let lit_str = syn::LitStr::new(trimmed, lit.span());
+        let mut lit_str = syn::parse_str::<syn::LitStr>(&lit.to_string())
+            .map_err(|_| syn::Error::new(lit.span(), EXPECTED_STR_LIT))?;
+        lit_str.set_span(lit.span());
         Ok((Some(lit_str), next))
     }
 
@@ -461,7 +505,8 @@ mod ast {
                 attrs,
                 Attrs::Parameter {
                     default: Some(AttrDefault::Flag),
-                    env: None
+                    env: None,
+                    key: None,
                 }
             ));
         }
@@ -474,7 +519,8 @@ mod ast {
                 attrs,
                 Attrs::Parameter {
                     default: Some(AttrDefault::Value(_)),
-                    env: None
+                    env: None,
+                    key: None,
                 }
             ));
         }
@@ -486,6 +532,7 @@ mod ast {
             let Attrs::Parameter {
                 default: Some(AttrDefault::Flag),
                 env: Some(var),
+                key: None,
             } = attrs
             else {
                 panic!("expectation failed")
@@ -494,8 +541,33 @@ mod ast {
         }
 
         #[test]
+        fn parse_explicit_key() {
+            let attrs: Attrs = syn::parse_quote!(default, key = "canonical_name");
+
+            let Attrs::Parameter {
+                default: Some(AttrDefault::Flag),
+                env: None,
+                key: Some(key),
+            } = attrs
+            else {
+                panic!("expectation failed")
+            };
+            assert_eq!(key.value(), "canonical_name");
+        }
+
+        #[test]
+        fn parse_nested_explicit_key() {
+            let attrs: Attrs = syn::parse_quote!(nested, key = "canonical_namespace");
+
+            let Attrs::Nested { key: Some(key) } = attrs else {
+                panic!("expectation failed")
+            };
+            assert_eq!(key.value(), "canonical_namespace");
+        }
+
+        #[test]
         #[should_panic(
-            expected = "attributes conflict: `nested` cannot be set with other attributes"
+            expected = "attributes conflict: `nested` cannot be set with `default` or `env`"
         )]
         fn conflict() {
             let _: Attrs = syn::parse_quote!(nested, default);
@@ -505,6 +577,30 @@ mod ast {
         #[should_panic(expected = "duplicate attribute")]
         fn duplicates() {
             let _: Attrs = syn::parse_quote!(default, default);
+        }
+
+        #[test]
+        #[should_panic(expected = "duplicate attribute")]
+        fn duplicate_explicit_keys() {
+            let _: Attrs = syn::parse_quote!(key = "first", key = "second");
+        }
+
+        #[test]
+        #[should_panic(expected = "expected `key` to be set as")]
+        fn key_requires_value() {
+            let _: Attrs = syn::parse_quote!(key);
+        }
+
+        #[test]
+        #[should_panic(expected = "configuration key cannot be empty")]
+        fn key_rejects_empty_value() {
+            let _: Attrs = syn::parse_quote!(key = "");
+        }
+
+        #[test]
+        #[should_panic(expected = "configuration key cannot be empty")]
+        fn key_rejects_empty_raw_string() {
+            let _: Attrs = syn::parse_quote!(key = r#""#);
         }
 
         #[test]
@@ -578,16 +674,18 @@ mod codegen {
 
     pub struct Entry {
         pub ident: syn::Ident,
+        pub key: Option<syn::LitStr>,
         pub kind: EntryKind,
     }
 
     impl Entry {
         fn generate(self) -> EntryParts {
-            let Self { kind, ident } = self;
+            let Self { kind, ident, key } = self;
+            let key = key.map_or_else(|| quote! { stringify!(#ident) }, |key| quote! { #key });
 
             let read = match kind {
                 EntryKind::Nested => {
-                    quote! { let #ident = __reader.read_nested(stringify!(#ident)); }
+                    quote! { let #ident = __reader.read_nested(#key); }
                 }
                 EntryKind::Parameter {
                     env,
@@ -595,7 +693,7 @@ mod codegen {
                     with_origin,
                 } => {
                     let mut read = quote! {
-                        let #ident = __reader.read_parameter([stringify!(#ident)])
+                        let #ident = __reader.read_parameter([#key])
                     };
                     if let Some(var) = env {
                         read.extend(quote! { .env(#var) })
@@ -654,6 +752,7 @@ mod codegen {
         fn entry_with_env_reading() {
             let entry = Entry {
                 ident: parse_quote!(test),
+                key: Some(parse_quote!("canonical_test")),
                 kind: EntryKind::Parameter {
                     env: Some(parse_quote!("TEST_ENV")),
                     evaluation: Evaluation::Required,
@@ -663,7 +762,38 @@ mod codegen {
 
             let actual = entry.generate().read.to_string();
 
-            expect![[r#"let test = __reader . read_parameter ([stringify ! (test)]) . env ("TEST_ENV") . value_required () . finish () ;"#]].assert_eq(&actual);
+            expect![[r#"let test = __reader . read_parameter (["canonical_test"]) . env ("TEST_ENV") . value_required () . finish () ;"#]].assert_eq(&actual);
+        }
+
+        #[test]
+        fn nested_entry_uses_explicit_key() {
+            let entry = Entry {
+                ident: parse_quote!(service),
+                key: Some(parse_quote!("governance_dag_service")),
+                kind: EntryKind::Nested,
+            };
+
+            let actual = entry.generate().read.to_string();
+
+            expect![[r#"let service = __reader . read_nested ("governance_dag_service") ;"#]]
+                .assert_eq(&actual);
+        }
+
+        #[test]
+        fn entry_without_explicit_key_preserves_field_name_codegen() {
+            let entry = Entry {
+                ident: parse_quote!(test),
+                key: None,
+                kind: EntryKind::Parameter {
+                    env: None,
+                    evaluation: Evaluation::Optional,
+                    with_origin: false,
+                },
+            };
+
+            let actual = entry.generate().read.to_string();
+
+            expect![[r#"let test = __reader . read_parameter ([stringify ! (test)]) . value_optional () . finish () ;"#]].assert_eq(&actual);
         }
     }
 }

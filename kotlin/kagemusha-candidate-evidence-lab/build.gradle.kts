@@ -126,6 +126,18 @@ fun decodeLowerHex(value: String): ByteArray {
     }
 }
 
+fun qualifiedCandidateSha256(candidateRecordSha256: String, qualificationReceiptSha256: String): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    digest.update(
+        "iroha:kagemusha:recursive-spend-qualified-candidate:v4"
+            .toByteArray(Charsets.US_ASCII),
+    )
+    digest.update(byteArrayOf(0))
+    digest.update(decodeLowerHex(candidateRecordSha256))
+    digest.update(decodeLowerHex(qualificationReceiptSha256))
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
 val candidateSha256 = requiredProperty("kagemushaCandidateSha256")
 if (!lowercaseSha256.matches(candidateSha256)) {
     throw GradleException("-PkagemushaCandidateSha256 must be one lowercase SHA-256")
@@ -151,7 +163,7 @@ if (evidenceRoot.name != candidateStageSha256 || evidenceRoot.parentFile.name !=
 }
 
 val candidateStageManifest =
-    evidenceRoot.resolve("candidate-stage-manifest-v1.json")
+    evidenceRoot.resolve("candidate-stage-manifest-v2.json")
         .requireWithin(evidenceRoot, "candidate stage manifest")
         .requireRegularFile("candidate stage manifest")
         .requireMode0600("candidate stage manifest")
@@ -170,6 +182,8 @@ val candidateStageManifestFields = setOf(
     "candidate_record_sha256",
     "candidate_manifest_sha256",
     "candidate_validation_report_sha256",
+    "qualification_receipt_sha256",
+    "qualified_candidate_sha256",
     "scenario_inventory_sha256",
     "source_commit",
     "source_tree_sha256",
@@ -181,15 +195,15 @@ val candidateStageManifestFields = setOf(
 )
 if (candidateStageManifestJson.keys != candidateStageManifestFields ||
     candidateStageManifestJson["schema"] !=
-    "iroha.kagemusha.android_candidate_stage_manifest.v1" ||
-    candidateStageManifestJson["version"] != 1 ||
+    "iroha.kagemusha.android_candidate_stage_manifest.v2" ||
+    candidateStageManifestJson["version"] != 2 ||
     candidateStageManifestJson["stage_manifest_path"] != candidateStageManifest.name ||
     candidateStageManifestJson["stage_manifest_mode"] != "0600" ||
     (candidateStageManifestJson["stage_manifest_size_bytes"] as? Number)?.toLong() !=
     candidateStageManifest.length() ||
     candidateStageManifestJson["candidate_record_sha256"] != candidateSha256 ||
     candidateStageManifestJson["source_repo_dirty"] != false ||
-    candidateStageManifestJson["entry_count"] != 44 ||
+    candidateStageManifestJson["entry_count"] != 45 ||
     candidateStageManifestJson["scenario_entry_count"] != 33
 ) {
     throw GradleException("candidate stage manifest top-level identity is not exact")
@@ -209,6 +223,18 @@ val candidateManifest =
 val candidateManifestSha256 = sha256(candidateManifest)
 if (candidateStageManifestJson["candidate_manifest_sha256"] != candidateManifestSha256) {
     throw GradleException("candidate stage manifest does not bind the exact inner manifest")
+}
+val qualificationReceipt =
+    evidenceRoot.resolve("evidence/candidate/recursive-step-two-qualification-v4.norito")
+        .requireWithin(evidenceRoot, "candidate qualification receipt")
+        .requireRegularFile("candidate qualification receipt")
+val qualificationReceiptSha256 = sha256(qualificationReceipt)
+val expectedQualifiedCandidateSha256 =
+    qualifiedCandidateSha256(candidateSha256, qualificationReceiptSha256)
+if (candidateStageManifestJson["qualification_receipt_sha256"] != qualificationReceiptSha256 ||
+    candidateStageManifestJson["qualified_candidate_sha256"] != expectedQualifiedCandidateSha256
+) {
+    throw GradleException("candidate stage manifest does not bind its qualification receipt")
 }
 
 val sourceCommit = requiredProperty("kagemushaCandidateSourceCommit")
@@ -310,29 +336,112 @@ scenarioFiles.forEach { name ->
 }
 
 val candidateValidationReport =
-    evidenceRoot.resolve("evidence/candidate/candidate-validation-v1.json")
+    evidenceRoot.resolve("evidence/candidate/candidate-validation-v2.json")
         .requireWithin(evidenceRoot, "candidate validation report")
         .requireRegularFile("candidate validation report")
+val candidateValidationJson =
+    JsonSlurper().parse(candidateValidationReport) as? Map<*, *>
+        ?: throw GradleException("candidate validation report must be one JSON object")
+val candidateValidationFields = setOf(
+    "schema", "candidate_record_sha256", "candidate_manifest_sha256",
+    "qualification_receipt_file_name", "qualification_receipt_sha256",
+    "qualified_candidate_sha256", "source_commit", "source_tree_sha256",
+    "source_repo_dirty", "generation", "generation_memory_limit_bytes",
+    "generation_memory_enforcement_profile", "bridge_abi_version", "artifact_count",
+    "artifacts", "topup_finality_roster_file_name", "topup_finality_roster_size_bytes",
+    "topup_finality_roster_sha256",
+)
+val generationMemoryLimitBytes =
+    (candidateValidationJson["generation_memory_limit_bytes"] as? Number)?.toLong()
+if (candidateValidationJson.keys != candidateValidationFields ||
+    candidateValidationJson["schema"] !=
+    "iroha.kagemusha.recursive_spend.candidate_validation.v2" ||
+    candidateValidationJson["candidate_record_sha256"] != candidateSha256 ||
+    candidateValidationJson["candidate_manifest_sha256"] != candidateManifestSha256 ||
+    candidateValidationJson["qualification_receipt_file_name"] !=
+    "recursive-step-two-qualification-v4.norito" ||
+    candidateValidationJson["qualification_receipt_sha256"] != qualificationReceiptSha256 ||
+    candidateValidationJson["qualified_candidate_sha256"] != expectedQualifiedCandidateSha256 ||
+    candidateValidationJson["source_commit"] != sourceCommit ||
+    candidateValidationJson["source_tree_sha256"] != sourceTreeSha256 ||
+    candidateValidationJson["source_repo_dirty"] != false ||
+    candidateValidationJson["generation"] != generation ||
+    generationMemoryLimitBytes == null ||
+    generationMemoryLimitBytes <= 0L ||
+    generationMemoryLimitBytes > 64L * 1024 * 1024 * 1024 ||
+    candidateValidationJson["generation_memory_enforcement_profile"] !=
+    "self-physical-footprint-v1" ||
+    candidateValidationJson["bridge_abi_version"] != 21 ||
+    candidateValidationJson["artifact_count"] != 8 ||
+    candidateValidationJson["topup_finality_roster_file_name"] !=
+    "topup-finality-roster-v4.norito"
+) {
+    throw GradleException("candidate validation report identity is not exact V2")
+}
+val artifactRoles = listOf(
+    "step_eq_params_ipa", "step_eq_proving_key", "step_eq_verifying_key",
+    "step_eq_bootstrap_witness", "step_ep_params_ipa", "step_ep_proving_key",
+    "step_ep_verifying_key", "step_ep_bootstrap_witness",
+)
+val candidateValidationArtifacts = candidateValidationJson["artifacts"] as? List<*>
+    ?: throw GradleException("candidate validation artifacts must be an array")
+if (candidateValidationArtifacts.size != artifactFiles.size) {
+    throw GradleException("candidate validation artifacts must contain exactly eight entries")
+}
+candidateValidationArtifacts.forEachIndexed { index, rawArtifact ->
+    val artifact = rawArtifact as? Map<*, *>
+        ?: throw GradleException("candidate validation artifact $index must be an object")
+    if (artifact.keys != setOf(
+            "role", "file_name", "framed_size_bytes", "framed_sha256",
+            "payload_size_bytes", "payload_sha256",
+        ) ||
+        artifact["role"] != artifactRoles[index] ||
+        artifact["file_name"] != artifactFiles[index]
+    ) {
+        throw GradleException("candidate validation artifact $index identity is not exact")
+    }
+    val artifactFile = evidenceRoot.resolve("evidence/candidate/artifacts/${artifactFiles[index]}")
+    val framedSize = (artifact["framed_size_bytes"] as? Number)?.toLong()
+    val payloadSize = (artifact["payload_size_bytes"] as? Number)?.toLong()
+    val framedDigest = artifact["framed_sha256"] as? String
+    val payloadDigest = artifact["payload_sha256"] as? String
+    if (framedSize != artifactFile.length() || framedSize <= 0L ||
+        payloadSize == null || payloadSize <= 0L || payloadSize >= framedSize ||
+        framedDigest == null || !lowercaseSha256.matches(framedDigest) ||
+        framedDigest != sha256(artifactFile) || payloadDigest == null ||
+        !lowercaseSha256.matches(payloadDigest) || payloadDigest == framedDigest
+    ) {
+        throw GradleException("candidate validation artifact $index measurement is invalid")
+    }
+}
+val rosterSize = (candidateValidationJson["topup_finality_roster_size_bytes"] as? Number)?.toLong()
+val rosterDigest = candidateValidationJson["topup_finality_roster_sha256"] as? String
+if (rosterSize == null || rosterSize <= 0L || rosterDigest == null ||
+    !lowercaseSha256.matches(rosterDigest) || rosterDigest == "0".repeat(64)
+) {
+    throw GradleException("candidate validation roster measurement is invalid")
+}
 val expectedStagePaths = (
     listOf(
         "evidence/candidate/candidate-v4.norito",
         "evidence/candidate/manifest-v4.norito",
-        "evidence/candidate/candidate-validation-v1.json",
+        "evidence/candidate/candidate-validation-v2.json",
+        "evidence/candidate/recursive-step-two-qualification-v4.norito",
     ) +
         artifactFiles.map { "evidence/candidate/artifacts/$it" } +
         scenarioFiles.map { "scenario/$it" }
 ).sorted()
 val stageEntries = candidateStageManifestJson["entries"] as? List<*>
     ?: throw GradleException("candidate stage manifest entries must be an array")
-if (stageEntries.size != 44) {
-    throw GradleException("candidate stage manifest must contain exactly 44 entries")
+if (stageEntries.size != 45) {
+    throw GradleException("candidate stage manifest must contain exactly 45 entries")
 }
 val measuredStageEntries = linkedMapOf<String, Pair<Long, String>>()
 stageEntries.forEachIndexed { index, rawEntry ->
     val entry = rawEntry as? Map<*, *>
         ?: throw GradleException("candidate stage entry $index must be an object")
     if (entry.keys != setOf("path", "mode", "size_bytes", "sha256")) {
-        throw GradleException("candidate stage entry $index must have exact V1 fields")
+        throw GradleException("candidate stage entry $index must have the exact fields")
     }
     val relative = entry["path"] as? String
         ?: throw GradleException("candidate stage entry $index path must be text")
@@ -469,7 +578,8 @@ val prepareCandidateLabAssets = tasks.register<CandidateLabSync>("prepareCandida
         include(
             "candidate-v4.norito",
             "manifest-v4.norito",
-            "candidate-validation-v1.json",
+            "candidate-validation-v2.json",
+            "recursive-step-two-qualification-v4.norito",
         )
     }
     from(evidenceRoot.resolve("scenario")) {

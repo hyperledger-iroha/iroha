@@ -1,3 +1,12 @@
+#[derive(Clone, Debug, Decode, Encode)]
+struct ConsensusMessage(u32);
+
+impl iroha_p2p::network::message::ClassifyTopic for ConsensusMessage {
+    fn topic(&self) -> iroha_p2p::network::message::Topic {
+        iroha_p2p::network::message::Topic::Consensus
+    }
+}
+
 fn setup_logger() {
     test_logger();
 }

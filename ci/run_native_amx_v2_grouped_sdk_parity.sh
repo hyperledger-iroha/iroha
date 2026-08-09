@@ -7,52 +7,9 @@ repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
 readonly repo_root
 readonly fixture_path="${repo_root}/fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 readonly gradle_init_path="${repo_root}/ci/native_amx_v2_grouped_gradle_init.gradle"
-readonly expected_negative_control_count=50
-readonly source_paths=(
-  ci/run_native_amx_v2_grouped_sdk_parity.sh
-  ci/native_amx_v2_grouped_gradle_init.gradle
-  crates/iroha_data_model/src/bin/native_amx_grouped.rs
-  pytests/scripts/native_amx_v2_grouped_fixture_test.py
-  python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py
-  python/iroha_python/src/iroha_python/client.py
-  python/iroha_python/src/iroha_python/__init__.py
-  python/iroha_torii_client/client.py
-  python/iroha_torii_client/native_amx.py
-  javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js
-  javascript/iroha_js/src/toriiClient.js
-  javascript/iroha_js/scripts/build-dist.mjs
-  javascript/iroha_js/index.d.ts
-  javascript/iroha_js/package.json
-  javascript/iroha_js/package-lock.json
-  IrohaSwift/Tests/IrohaSwiftTests/NativeAmxV2GroupedFixtureTests.swift
-  IrohaSwift/Sources/IrohaSwift/CanonicalNoritoEncoding.swift
-  IrohaSwift/Sources/IrohaSwift/Crypto.swift
-  IrohaSwift/Sources/IrohaSwift/NativeBridge.swift
-  IrohaSwift/Sources/IrohaSwift/Norito.swift
-  IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
-  IrohaSwift/Package.swift
-  IrohaSwift/Package.resolved
-  crates/connect_norito_bridge/include/connect_norito_bridge.h
-  crates/connect_norito_bridge/src/lib.rs
-  kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/NativeAmxV2GroupedFixtureTest.kt
-  kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/NativeAmxV2.kt
-  kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsModels.kt
-  kotlin/core-jvm/build.gradle.kts
-  kotlin/settings.gradle.kts
-  kotlin/gradlew
-  kotlin/gradle/wrapper/gradle-wrapper.jar
-  kotlin/gradle/wrapper/gradle-wrapper.properties
-  java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/NativeAmxV2GroupedFixtureTests.java
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/NativeAmxV2Models.java
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/SumeragiDiagnosticsModels.java
-  java/iroha_android/core/build.gradle.kts
-  java/iroha_android/settings.gradle.kts
-  java/iroha_android/gradlew
-  java/iroha_android/gradle/wrapper/gradle-wrapper.jar
-  java/iroha_android/gradle/wrapper/gradle-wrapper.properties
-  artifacts/openapi/torii.json
-  artifacts/openapi/versions/current/torii.json
-)
+readonly expected_negative_control_count=55
+readonly source_closure_resolver="${repo_root}/ci/resolve_sumeragi_v2_sdk_source_closure.py"
+readonly source_closure_manifest="${repo_root}/ci/sumeragi_v2_sdk_source_closure.json"
 
 usage() {
   echo "usage: $0 {openapi|python|javascript|swift|kotlin|java|--fixture-sha256|--suite-source-manifest-sha256}" >&2
@@ -76,9 +33,14 @@ require_regular_source() {
 }
 
 require_regular_source "$fixture_path"
-for relative_path in "${source_paths[@]}"; do
-  require_regular_source "${repo_root}/${relative_path}"
-done
+require_regular_source "$source_closure_resolver"
+require_regular_source "$source_closure_manifest"
+
+readonly python_bin="${PYTHON_BIN:-python3}"
+if [[ -z "$python_bin" ]] || ! command -v "$python_bin" >/dev/null 2>&1; then
+  echo "A valid Python 3 interpreter is required for grouped Native AMX V2 parity (PYTHON_BIN=${python_bin})" >&2
+  exit 1
+fi
 
 fixture_sha256="$(sha256_file "$fixture_path")"
 if [[ ! "$fixture_sha256" =~ ^[0-9a-f]{64}$ ]]; then
@@ -88,17 +50,11 @@ fi
 readonly fixture_sha256
 
 suite_source_manifest_sha256="$(
-  {
-    for relative_path in "${source_paths[@]}"; do
-      printf '%s\t%s\n' \
-        "$relative_path" \
-        "$(sha256_file "${repo_root}/${relative_path}")"
-    done
-  } | if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum | awk '{print $1}'
-  else
-    shasum -a 256 | awk '{print $1}'
-  fi
+  "$python_bin" "$source_closure_resolver" \
+    --root "$repo_root" \
+    --manifest "$source_closure_manifest" \
+    --suite "native-amx-v2-grouped" \
+    --manifest-sha256
 )"
 if [[ ! "$suite_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "grouped Native AMX V2 suite-source manifest digest is invalid" >&2
@@ -126,11 +82,6 @@ case "$surface" in
     ;;
 esac
 
-readonly python_bin="${PYTHON_BIN:-python3}"
-if [[ -z "$python_bin" ]] || ! command -v "$python_bin" >/dev/null 2>&1; then
-  echo "A valid Python 3 interpreter is required for grouped Native AMX V2 parity (PYTHON_BIN=${python_bin})" >&2
-  exit 1
-fi
 "$python_bin" - "$fixture_path" "$expected_negative_control_count" <<'PY'
 import json
 from pathlib import Path
@@ -275,11 +226,11 @@ case "$surface" in
     assert_pytest_count "$observed_test_count"
     ;;
   python)
-    observed_test_count=56
+    observed_test_count=62
     "$python_bin" -c \
       'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python Native AMX V2 parity requires Python >=3.10")'
     if [[ "${IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-}" == "1" ]]; then
-      readonly python_parity_path=""
+      readonly python_parity_path="${repo_root}/python/norito_py/src:${repo_root}/python"
     else
       readonly python_parity_path="${repo_root}/python/iroha_python/src:${repo_root}/python/norito_py/src:${repo_root}/python/iroha_torii_client:${repo_root}/python${PYTHONPATH:+:${PYTHONPATH}}"
     fi
@@ -292,7 +243,7 @@ case "$surface" in
     assert_pytest_count "$observed_test_count"
     ;;
   javascript)
-    observed_test_count=54
+    observed_test_count=60
     if ! command -v node >/dev/null 2>&1; then
       echo "Node.js is required for grouped Native AMX V2 JavaScript parity" >&2
       exit 1
@@ -301,6 +252,7 @@ case "$surface" in
     readonly javascript_source_root="${javascript_sdk_root}/src"
     readonly javascript_package_root="${temporary_root}/javascript-package"
     readonly javascript_staged_source_root="${javascript_package_root}/src"
+    readonly javascript_staged_scripts_root="${javascript_package_root}/scripts"
     readonly javascript_dist_root="${javascript_package_root}/dist"
     readonly javascript_dist_diff="${temporary_root}/javascript-dist.diff"
     if [[ -n "$(find "$javascript_source_root" -type l -print -quit)" ]]; then
@@ -312,8 +264,10 @@ case "$surface" in
       echo "grouped Native AMX V2 JavaScript parity requires a regular installed node_modules directory" >&2
       exit 1
     fi
-    mkdir -p -- "$javascript_staged_source_root"
+    mkdir -p -- "$javascript_staged_source_root" "$javascript_staged_scripts_root"
     cp "${javascript_sdk_root}/package.json" "${javascript_package_root}/package.json"
+    cp "${javascript_sdk_root}/scripts/native-build-provenance.mjs" \
+      "${javascript_staged_scripts_root}/native-build-provenance.mjs"
     ln -s "${javascript_sdk_root}/node_modules" "${javascript_package_root}/node_modules"
     cp -R "${javascript_source_root}/." "$javascript_staged_source_root/"
     env \
@@ -341,7 +295,7 @@ case "$surface" in
     fi
     ;;
   swift)
-    observed_test_count=3
+    observed_test_count=4
     if ! command -v swift >/dev/null 2>&1; then
       echo "Swift is required for grouped Native AMX V2 Swift parity" >&2
       exit 1

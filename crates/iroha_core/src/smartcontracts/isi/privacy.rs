@@ -27,7 +27,7 @@ use iroha_data_model::{
         },
     },
     permission::Permission,
-    prelude::{Account, AccountId, Quantity, Register, Transfer},
+    prelude::{Account, AccountId, Quantity, Register},
     privacy::{
         BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1, BootleLanternIssuerPolicyLifecycleV1,
         BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
@@ -110,50 +110,7 @@ use crate::{
     state::{StateTransaction, WorldReadOnly},
 };
 
-fn invalid_privacy_parameter(message: impl Into<String>) -> Error {
-    Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
-}
-
-fn has_exact_permission(
-    state_transaction: &StateTransaction<'_, '_>,
-    authority: &AccountId,
-    required: &Permission,
-) -> bool {
-    if state_transaction
-        .world
-        .account_permissions
-        .get(authority)
-        .is_some_and(|permissions| permissions.contains(required))
-    {
-        return true;
-    }
-
-    state_transaction
-        .world
-        .account_roles
-        .iter()
-        .filter_map(|(role_key, ())| {
-            if &role_key.account == authority {
-                state_transaction.world.roles.get(&role_key.id)
-            } else {
-                None
-            }
-        })
-        .any(|role| role.permissions().any(|permission| permission == required))
-}
-
-fn ensure_privacy_governance(
-    authority: &AccountId,
-    state_transaction: &StateTransaction<'_, '_>,
-) -> Result<(), Error> {
-    let required: Permission = CanEnactGovernance.into();
-    if !has_exact_permission(state_transaction, authority, &required) {
-        return Err(Error::InvariantViolation(
-            "not permitted: CanEnactGovernance".into(),
-        ));
-    }
-    Ok(())
-}
+include!("privacy/governance_authorization.rs");
 
 fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
     let message = format!("privacy proof admission rejected: {error}");
@@ -210,8 +167,9 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
         PrivacyVerificationErrorV1::ZkX509State(detail) => {
             detail.code == PrivacyZkX509StateFailureCodeV1::MissingTrustedState
         }
+        #[cfg(not(feature = "zk-stark"))]
+        PrivacyVerificationErrorV1::EngineUnavailable(_) => false,
         PrivacyVerificationErrorV1::Envelope(_)
-        | PrivacyVerificationErrorV1::EngineUnavailable(_)
         | PrivacyVerificationErrorV1::NativeVeRange(_)
         | PrivacyVerificationErrorV1::NativeVega(_)
         | PrivacyVerificationErrorV1::NativeJindo(_)
@@ -832,10 +790,12 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
             )));
         }
 
-        state_transaction
-            .world
-            .asset_definition(&self.bootstrap.asset_definition_id)
-            .map_err(Error::from)?;
+        super::asset::isi::validate_committed_public_balance_scope(
+            state_transaction,
+            &self.bootstrap.asset_definition_id,
+            self.bootstrap.public_balance_scope,
+            "Orchard pool bootstrap",
+        )?;
         if state_transaction
             .world
             .accounts
@@ -898,6 +858,7 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
         let pool_state = PrivacyOrchardPoolStateV1::bootstrap(
             bootstrap_digest,
             self.bootstrap.asset_definition_id.clone(),
+            self.bootstrap.public_balance_scope,
             self.bootstrap.reserve_account.clone(),
         )
         .map_err(invalid_privacy_parameter)?;
@@ -1026,6 +987,14 @@ impl Execute for BootstrapPrivacyProofManagedPoolV1 {
             .world
             .asset_definition(self.bootstrap.asset_definition_id())
             .map_err(Error::from)?;
+        if let Some(public_balance_scope) = self.bootstrap.public_balance_scope() {
+            super::asset::isi::validate_committed_public_balance_scope(
+                state_transaction,
+                self.bootstrap.asset_definition_id(),
+                public_balance_scope,
+                "private-IVM pool bootstrap",
+            )?;
+        }
         if let Some(reserve_account) = self.bootstrap.reserve_account()
             && state_transaction
                 .world
@@ -4733,6 +4702,8 @@ impl Execute for SubmitPrivacyProofV1 {
                     || effect.bootstrap_digest() != snapshot.bootstrap_digest()
                     || effect.asset_definition_id() != snapshot.state().asset_definition_id()
                     || effect.asset_definition_id() != &statement.asset_definition_id
+                    || effect.public_balance_scope() != snapshot.state().public_balance_scope()
+                    || effect.public_balance_scope() != statement.public_balance_scope
                     || effect.reserve_account() != snapshot.state().reserve_account()
                     || effect.anchor() != statement.anchor
                     || effect.anchor_epoch() != statement.anchor_epoch
@@ -4857,28 +4828,28 @@ impl Execute for SubmitPrivacyProofV1 {
                     let amount = Quantity::from(balance.amount);
                     match balance.direction {
                         PrivacyValueBalanceDirectionV1::IntoPool => {
-                            let source_asset_id =
-                                crate::smartcontracts::world::isi::privacy_public_asset_id(
-                                    state_transaction,
-                                    effect.asset_definition_id(),
-                                    authority,
-                                )?;
-                            Transfer::asset_quantity(
-                                source_asset_id,
+                            super::asset::isi::execute_verified_privacy_public_balance_transfer(
+                                state_transaction,
+                                authority,
+                                self.envelope.statement_digest,
+                                effect.asset_definition_id(),
+                                effect.public_balance_scope(),
+                                authority,
+                                effect.reserve_account(),
                                 amount,
-                                effect.reserve_account().clone(),
-                            )
-                            .execute(authority, state_transaction)?;
+                            )?;
                         }
                         PrivacyValueBalanceDirectionV1::OutOfPool => {
-                            let source_asset_id =
-                                crate::smartcontracts::world::isi::privacy_public_asset_id(
-                                    state_transaction,
-                                    effect.asset_definition_id(),
-                                    effect.reserve_account(),
-                                )?;
-                            Transfer::asset_quantity(source_asset_id, amount, authority.clone())
-                                .execute(effect.reserve_account(), state_transaction)?;
+                            super::asset::isi::execute_verified_privacy_public_balance_transfer(
+                                state_transaction,
+                                authority,
+                                self.envelope.statement_digest,
+                                effect.asset_definition_id(),
+                                effect.public_balance_scope(),
+                                effect.reserve_account(),
+                                authority,
+                                amount,
+                            )?;
                         }
                         PrivacyValueBalanceDirectionV1::Balanced => unreachable!(
                             "directional Orchard bridge checked before transfer dispatch"
@@ -4914,10 +4885,12 @@ impl Execute for SubmitPrivacyProofV1 {
                         "native proof-managed effect has no trusted pool snapshot".into(),
                     )
                 })?;
-                let (asset_definition_id, statement_anchor_is_valid, value_balance) = match &self
-                    .envelope
-                    .statement
-                {
+                let (
+                    asset_definition_id,
+                    statement_anchor_is_valid,
+                    value_balance,
+                    public_balance_scope,
+                ) = match &self.envelope.statement {
                     PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) => (
                         &statement.asset_definition_id,
                         snapshot.contains_retained_root(
@@ -4925,15 +4898,18 @@ impl Execute for SubmitPrivacyProofV1 {
                             statement.output_set_root.history_commitment(),
                         ),
                         None,
+                        None,
                     ),
                     PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => (
                         &statement.asset_definition_id,
                         snapshot.contains_retained_root(statement.root_epoch, statement.state_root),
                         Some(statement.value_balance),
+                        Some(statement.public_balance_scope),
                     ),
                     PrivacyStatementV1::PqMaspStarkV0(statement) => (
                         &statement.asset_definition_id,
                         snapshot.contains_retained_root(statement.anchor_epoch, statement.anchor),
+                        None,
                         None,
                     ),
                     _ => {
@@ -4955,6 +4931,8 @@ impl Execute for SubmitPrivacyProofV1 {
                         })?
                     || effect.next_root() == effect.current_root()
                     || effect.value_balance() != value_balance
+                    || effect.public_balance_scope() != public_balance_scope
+                    || effect.public_balance_scope() != snapshot.bootstrap().public_balance_scope()
                 {
                     return Err(Error::InvariantViolation(
                         "native proof-managed effect is inconsistent with trusted state or its statement"
@@ -5284,30 +5262,36 @@ impl Execute for SubmitPrivacyProofV1 {
                     && balance.direction != PrivacyValueBalanceDirectionV1::Balanced
                 {
                     let amount = Quantity::from(balance.amount);
+                    let public_balance_scope = effect.public_balance_scope().ok_or_else(|| {
+                        Error::InvariantViolation(
+                            "directional proof-managed bridge has no committed public balance scope"
+                                .into(),
+                        )
+                    })?;
                     match balance.direction {
                         PrivacyValueBalanceDirectionV1::IntoPool => {
-                            let source_asset_id =
-                                crate::smartcontracts::world::isi::privacy_public_asset_id(
-                                    state_transaction,
-                                    effect.asset_definition_id(),
-                                    authority,
-                                )?;
-                            Transfer::asset_quantity(
-                                source_asset_id,
+                            super::asset::isi::execute_verified_privacy_public_balance_transfer(
+                                state_transaction,
+                                authority,
+                                self.envelope.statement_digest,
+                                effect.asset_definition_id(),
+                                public_balance_scope,
+                                authority,
+                                reserve_account,
                                 amount,
-                                reserve_account.clone(),
-                            )
-                            .execute(authority, state_transaction)?;
+                            )?;
                         }
                         PrivacyValueBalanceDirectionV1::OutOfPool => {
-                            let source_asset_id =
-                                crate::smartcontracts::world::isi::privacy_public_asset_id(
-                                    state_transaction,
-                                    effect.asset_definition_id(),
-                                    reserve_account,
-                                )?;
-                            Transfer::asset_quantity(source_asset_id, amount, authority.clone())
-                                .execute(reserve_account, state_transaction)?;
+                            super::asset::isi::execute_verified_privacy_public_balance_transfer(
+                                state_transaction,
+                                authority,
+                                self.envelope.statement_digest,
+                                effect.asset_definition_id(),
+                                public_balance_scope,
+                                reserve_account,
+                                authority,
+                                amount,
+                            )?;
                         }
                         PrivacyValueBalanceDirectionV1::Balanced => unreachable!(
                             "directional proof-managed bridge checked before transfer dispatch"
@@ -5368,6 +5352,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     || effect.source != statement.source
                     || effect.destination != statement.destination
                     || effect.asset_definition_id != statement.asset_definition_id
+                    || effect.public_balance_scope != statement.public_balance_scope
                     || effect.amount != statement.amount
                     || effect.replay_nullifier != statement.replay_nullifier
                     || effect.policy_id != policy.policy_id
@@ -5415,17 +5400,20 @@ impl Execute for SubmitPrivacyProofV1 {
                     expected_action_index,
                 )
                 .map_err(invalid_privacy_parameter)?;
-                let source_asset_id = crate::smartcontracts::world::isi::privacy_public_asset_id(
-                    state_transaction,
-                    &effect.asset_definition_id,
-                    &effect.source,
-                )?;
                 let amount = Quantity::from(effect.amount);
 
                 state_transaction
                     .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
-                Transfer::asset_quantity(source_asset_id, amount, effect.destination)
-                    .execute(&effect.source, state_transaction)?;
+                super::asset::isi::execute_verified_privacy_public_balance_transfer(
+                    state_transaction,
+                    authority,
+                    self.envelope.statement_digest,
+                    &effect.asset_definition_id,
+                    effect.public_balance_scope,
+                    &effect.source,
+                    &effect.destination,
+                    amount,
+                )?;
                 state_transaction
                     .world
                     .privacy_nullifiers
@@ -6051,13 +6039,7 @@ mod tests {
         SecretScalarV1::from_bytes(bytes).expect("canonical non-zero scalar")
     }
 
-    fn active_lifecycle() -> PrivacyProtocolLifecycleV1 {
-        PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
-            activated_at_height: 2,
-            state_since_height: 2,
-        })
-    }
+    include!("privacy/active_lifecycle_helper.rs");
 
     fn valid_bootstrap_instruction() -> BootstrapPrivacyPgcAccountsV1 {
         static INSTRUCTION: OnceLock<BootstrapPrivacyPgcAccountsV1> = OnceLock::new();
@@ -6266,7 +6248,7 @@ mod tests {
                 let statement =
                     PrivacyStatementV1::AnonymousPgcKOutOfNV1(AnonymousPgcKOutOfNStatementV1 {
                         context,
-                        asset_definition_id: AssetDefinitionId::new(
+                        asset_definition_id: AssetDefinitionId::derive_from_components(
                             DomainId::try_new("privacy", "universal").expect("privacy domain"),
                             Name::from_str("pgc_cash").expect("asset name"),
                         ),
@@ -6398,7 +6380,7 @@ mod tests {
                 })
                 .collect(),
         });
-        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
             .expect("canonical degree-512 multiplication matrix")
     }
 
@@ -6581,7 +6563,7 @@ mod tests {
     }
 
     fn zk_ace_asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("asset").expect("asset name"),
         )
@@ -6722,8 +6704,13 @@ mod tests {
         let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let asset_definition =
-            AssetDefinition::numeric(zk_ace_asset_definition_id()).build(&ALICE_ID);
+        let asset_definition = AssetDefinition::numeric(
+            zk_ace_asset_definition_id(),
+            "asset".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
         let mut world = World::with([domain], [alice], [asset_definition]);
         world
             .privacy_activations
@@ -6763,8 +6750,13 @@ mod tests {
         let domain_id = DomainId::try_new("privacy", "universal").expect("privacy domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let asset_definition =
-            AssetDefinition::numeric(statement.asset_definition_id.clone()).build(&ALICE_ID);
+        let asset_definition = AssetDefinition::numeric(
+            statement.asset_definition_id.clone(),
+            "fcmp_asset".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
         let mut world = World::with([domain], [alice], [asset_definition]);
         world.privacy_activations.insert(
             PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1),
@@ -6969,260 +6961,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_state() {
-        let fixture = fcmp_runtime_fixture_for_test();
-        let state = state_with_fcmp_runtime_fixture(&fixture);
-        let namespace = fixture.snapshot.namespace();
-        let config_key = PrivacyCommitmentKeyV1::proof_managed_pool_config(namespace)
-            .expect("FCMP++ config key");
-        let PrivacyStatementV1::MoneroFcmpPlusPlusV1(valid_statement) = &fixture.envelope.statement
-        else {
-            unreachable!("FCMP++ runtime fixture")
-        };
-        let key_image = valid_statement.inputs[0].key_image;
-        let nullifier_count =
-            u32::try_from(valid_statement.inputs.len()).expect("FCMP++ key-image count");
-        let output_count =
-            u32::try_from(valid_statement.outputs.len()).expect("FCMP++ output count");
-
-        {
-            let mut block = state.block(fcmp_test_header(&fixture));
-            let mut transaction = block.transaction();
-            transaction.world.privacy_nullifiers.insert(
-                PrivacyNullifierKeyV1::fcmp_key_image(namespace, key_image)
-                    .expect("FCMP++ replay key"),
-                PrivacyStateItemRecordV1::proof_managed_pool_verified_nullifier(
-                    fixture.snapshot.bootstrap_digest(),
-                    PrivacyStatementDigestV1::new([0xE1; 32]),
-                    nullifier_count,
-                    output_count,
-                    fixture
-                        .current_height
-                        .checked_sub(1)
-                        .expect("FCMP++ fixture height follows genesis"),
-                    0,
-                )
-                .expect("FCMP++ replay record"),
-            );
-            assert_proof_managed_submit_rejection_is_atomic(
-                &mut transaction,
-                SubmitPrivacyProofV1::new(fixture.envelope.clone()),
-                config_key,
-                "FCMP++ key image was already consumed",
-            );
-        }
-
-        {
-            let mut foreign_bootstrap_digest = fixture.snapshot.bootstrap_digest();
-            foreign_bootstrap_digest.0[0] ^= 1;
-            assert_ne!(
-                foreign_bootstrap_digest,
-                fixture.snapshot.bootstrap_digest()
-            );
-            let mut block = state.block(fcmp_test_header(&fixture));
-            let mut transaction = block.transaction();
-            transaction.world.privacy_nullifiers.insert(
-                PrivacyNullifierKeyV1::fcmp_key_image(namespace, key_image)
-                    .expect("FCMP++ cross-bootstrap replay key"),
-                PrivacyStateItemRecordV1::proof_managed_pool_verified_nullifier(
-                    foreign_bootstrap_digest,
-                    PrivacyStatementDigestV1::new([0xE2; 32]),
-                    nullifier_count,
-                    output_count,
-                    fixture
-                        .current_height
-                        .checked_sub(1)
-                        .expect("FCMP++ fixture height follows genesis"),
-                    0,
-                )
-                .expect("FCMP++ cross-bootstrap replay record"),
-            );
-            assert_proof_managed_submit_rejection_is_atomic(
-                &mut transaction,
-                SubmitPrivacyProofV1::new(fixture.envelope.clone()),
-                config_key,
-                "persisted FCMP++ key image has cross-bootstrap provenance",
-            );
-        }
-
-        {
-            let mut foreign_bootstrap_digest = fixture.snapshot.bootstrap_digest();
-            foreign_bootstrap_digest.0[0] ^= 1;
-            assert_ne!(
-                foreign_bootstrap_digest,
-                fixture.snapshot.bootstrap_digest()
-            );
-            let mut block = state.block(fcmp_test_header(&fixture));
-            let mut transaction = block.transaction();
-            transaction.world.privacy_commitments.insert(
-                PrivacyCommitmentKeyV1::fcmp_output(namespace, fixture.initial_output.output_id())
-                    .expect("FCMP++ cross-bootstrap output key"),
-                PrivacyStateItemRecordV1::fcmp_bootstrap_output(
-                    foreign_bootstrap_digest,
-                    fixture.initial_output,
-                    0,
-                    fixture.snapshot.bootstrap_admitted_at_height(),
-                )
-                .expect("FCMP++ cross-bootstrap output record"),
-            );
-            assert_proof_managed_submit_rejection_is_atomic(
-                &mut transaction,
-                SubmitPrivacyProofV1::new(fixture.envelope.clone()),
-                config_key,
-                "FCMP++ output key or provenance differs from its complete tuple",
-            );
-        }
-
-        {
-            let mut duplicate_output = SubmitPrivacyProofV1::new(fixture.envelope.clone());
-            let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) =
-                &mut duplicate_output.envelope.statement
-            else {
-                unreachable!("FCMP++ runtime fixture")
-            };
-            statement.outputs[0] = fixture.initial_output;
-            duplicate_output.envelope.statement_digest = duplicate_output
-                .envelope
-                .statement
-                .digest()
-                .expect("modified FCMP++ statement digest");
-
-            let mut block = state.block(fcmp_test_header(&fixture));
-            let mut transaction = block.transaction();
-            assert_proof_managed_submit_rejection_is_atomic(
-                &mut transaction,
-                duplicate_output,
-                config_key,
-                "FCMP++ output already exists",
-            );
-        }
-
-        {
-            let wrong_typed_root = fixture
-                .snapshot
-                .derive_fcmp_successor(&valid_statement.outputs)
-                .expect("FCMP++ successor")
-                .root();
-            let mut wrong_root = SubmitPrivacyProofV1::new(fixture.envelope.clone());
-            let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) =
-                &mut wrong_root.envelope.statement
-            else {
-                unreachable!("FCMP++ runtime fixture")
-            };
-            statement.output_set_root = wrong_typed_root;
-            wrong_root.envelope.statement_digest = wrong_root
-                .envelope
-                .statement
-                .digest()
-                .expect("wrong-root FCMP++ statement digest");
-
-            let mut block = state.block(fcmp_test_header(&fixture));
-            let mut transaction = block.transaction();
-            assert_proof_managed_submit_rejection_is_atomic(
-                &mut transaction,
-                wrong_root,
-                config_key,
-                "anchor is not in the exact retained root window",
-            );
-        }
-
-        {
-            let successor = fixture
-                .snapshot
-                .derive_fcmp_successor(&valid_statement.outputs)
-                .expect("FCMP++ successor");
-            let mut block = state.block(fcmp_test_header(&fixture));
-            let mut transaction = block.transaction();
-            transaction.world.privacy_commitments.insert(
-                config_key,
-                PrivacyStateItemRecordV1::proof_managed_pool_state(
-                    fixture.snapshot.bootstrap().clone(),
-                    fixture.snapshot.bootstrap_digest(),
-                    fixture.snapshot.initial_root(),
-                    PrivacyProofManagedPoolAccumulatorStateV1::Fcmp(successor),
-                    fixture.snapshot.bootstrap_admitted_at_height(),
-                )
-                .expect("individually valid but uncommitted FCMP++ frontier"),
-            );
-            assert_proof_managed_submit_rejection_is_atomic(
-                &mut transaction,
-                SubmitPrivacyProofV1::new(fixture.envelope.clone()),
-                config_key,
-                "trusted proof-managed pool state failed validation",
-            );
-        }
-
-        let baseline;
-        {
-            let mut block = state.block(fcmp_test_header(&fixture));
-            {
-                let mut transaction = block.transaction();
-                baseline = proof_managed_state_snapshot(&transaction, config_key);
-                let valid = SubmitPrivacyProofV1::new(fixture.envelope.clone());
-                bind_submit_privacy_instruction(&mut transaction, &valid);
-                valid
-                    .execute(&ALICE_ID, &mut transaction)
-                    .expect("valid native FCMP++ submission");
-                let staged = proof_managed_state_snapshot(&transaction, config_key);
-                assert_ne!(
-                    staged, baseline,
-                    "valid FCMP++ execution must stage its complete successor"
-                );
-                assert_ne!(
-                    staged.config, baseline.config,
-                    "valid FCMP++ execution must stage its native frontier"
-                );
-                assert_eq!(staged.budget.0, baseline.budget.0 + 1);
-                assert_ne!(
-                    staged.roots, baseline.roots,
-                    "valid FCMP++ execution must stage its successor root"
-                );
-                assert_ne!(
-                    staged.root_heads, baseline.root_heads,
-                    "valid FCMP++ execution must stage its successor head"
-                );
-                assert!(
-                    staged.nullifiers.len() > baseline.nullifiers.len(),
-                    "valid FCMP++ execution must stage its key image"
-                );
-                assert!(
-                    staged.commitments.len() > baseline.commitments.len(),
-                    "valid FCMP++ execution must stage every output and successor frontier"
-                );
-                let late_error = SubmitPrivacyProofV1::new(fixture.envelope.clone())
-                    .execute(&ALICE_ID, &mut transaction)
-                    .expect_err("consumed direct submission must reject after staged writes");
-                assert!(
-                    format!("{late_error:?}")
-                        .contains("the signed privacy submission has already been consumed"),
-                    "unexpected late FCMP++ rejection: {late_error:?}"
-                );
-                assert_eq!(
-                    proof_managed_state_snapshot(&transaction, config_key),
-                    staged,
-                    "late one-shot conflict changed the already staged FCMP++ successor"
-                );
-                // The mutable overlay intentionally exposes no interleaving writer
-                // hook. This one-shot conflict is injected after the final production
-                // write, then the complete transaction is dropped below.
-            }
-            let transaction = block.transaction();
-            assert_eq!(
-                proof_managed_state_snapshot(&transaction, config_key),
-                baseline,
-                "dropping the successful FCMP++ transaction published staged state into its parent block"
-            );
-        }
-
-        let mut block = state.block(fcmp_test_header(&fixture));
-        let transaction = block.transaction();
-        assert_eq!(
-            proof_managed_state_snapshot(&transaction, config_key),
-            baseline,
-            "dropping the parent block changed committed FCMP++ state"
-        );
-    }
+    include!("privacy/core_state_tests.rs");
 
     #[test]
     fn private_note_apply_rejections_preserve_every_proof_managed_record() {
@@ -7231,6 +6970,7 @@ mod tests {
             PrivacyIvmPrivateNotePoolBootstrapV1 {
                 pool_id: statement.pool_id,
                 asset_definition_id: statement.asset_definition_id.clone(),
+                public_balance_scope: statement.public_balance_scope,
                 reserve_account: ALICE_ID.clone(),
                 program_id: statement.program_id,
                 initial_note_commitments: vec![input_commitment],
@@ -7256,8 +6996,13 @@ mod tests {
         let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let asset_definition =
-            AssetDefinition::numeric(statement.asset_definition_id.clone()).build(&ALICE_ID);
+        let asset_definition = AssetDefinition::numeric(
+            statement.asset_definition_id.clone(),
+            "ivmnote".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
         let world = World::with([domain], [alice], [asset_definition]);
         let mut state = State::new_with_chain_for_testing(
             world,
@@ -7344,6 +7089,7 @@ mod tests {
                     next_epoch: successor.epoch(),
                     transition: transition(),
                     value_balance: Some(statement.value_balance),
+                    public_balance_scope: Some(statement.public_balance_scope),
                 },
             )
         };
@@ -7457,6 +7203,7 @@ mod tests {
                     successor_state: pq_successor.clone(),
                 },
                 value_balance: None,
+                public_balance_scope: None,
             },
         );
         let pq_config_key =
@@ -8960,12 +8707,19 @@ mod tests {
         else {
             unreachable!("ZK-ACE runtime fixture")
         };
-        let domain = Domain::new(statement.asset_definition_id.domain().clone()).build(&ALICE_ID);
+        let domain =
+            Domain::new(DomainId::try_new("privacy", "universal").expect("privacy domain"))
+                .build(&ALICE_ID);
         let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let source = Account::new(statement.source.clone()).build(&ALICE_ID);
         let destination = Account::new(statement.destination.clone()).build(&ALICE_ID);
-        let asset_definition =
-            AssetDefinition::numeric(statement.asset_definition_id.clone()).build(&ALICE_ID);
+        let asset_definition = AssetDefinition::numeric(
+            statement.asset_definition_id.clone(),
+            "zkace_runtime".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID);
         let policy = PrivacyZkAcePolicyRecordV1::new(
             statement.policy_id,
             statement.identity_commitment,
@@ -9087,6 +8841,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "release gate: generates and verifies a full masked ZK-AMS batch proof"]
     fn zk_ams_submit_commits_batch_successor_then_provisions_once() {
         let fixture: ZkAmsRuntimeFixtureForTest = zk_ams_runtime_fixture_for_test();
         let namespace = fixture.bootstrap.namespace();
@@ -9201,6 +8956,8 @@ mod tests {
         let PrivacyZkAmsActionV1::BatchAdmission(batch) = &batch_statement.action else {
             unreachable!("ZK-AMS batch action")
         };
+        // ZK-AMS v1 binds every proof to the sole action index zero, so the
+        // ordered batch and provisioning actions belong to distinct transactions.
         let head_after_batch = transaction
             .world
             .privacy_root_heads
@@ -9229,13 +8986,9 @@ mod tests {
                     .is_some()
             );
         }
+        transaction.apply();
 
         let provision_instruction = SubmitPrivacyProofV1::new(fixture.provision_envelope.clone());
-        bind_submit_privacy_instruction(&mut transaction, &provision_instruction);
-        provision_instruction
-            .clone()
-            .execute(&ALICE_ID, &mut transaction)
-            .expect("native ZK-AMS provisioning transition");
         let PrivacyStatementV1::IrohaZkAmsV1(provision_statement) =
             &fixture.provision_envelope.statement
         else {
@@ -9244,6 +8997,28 @@ mod tests {
         let PrivacyZkAmsActionV1::ProvisionAccount(provision) = &provision_statement.action else {
             unreachable!("ZK-AMS provision action")
         };
+        let key_image_key = PrivacyNullifierKeyV1::zk_ams_key_image(namespace, provision.key_image)
+            .expect("ZK-AMS key-image key");
+        let mut transaction = block.transaction();
+        let committed_head = transaction
+            .world
+            .privacy_root_heads
+            .get(&head_key)
+            .copied()
+            .expect("committed ZK-AMS successor root head");
+        assert_eq!(
+            (committed_head.epoch(), committed_head.root()),
+            (
+                provision.account_registry_root_epoch,
+                provision.account_registry_root
+            ),
+            "provisioning transaction must inherit the admitted batch successor"
+        );
+        bind_submit_privacy_instruction(&mut transaction, &provision_instruction);
+        provision_instruction
+            .clone()
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("native ZK-AMS provisioning transition");
         assert!(
             transaction
                 .world
@@ -9252,8 +9027,6 @@ mod tests {
                 .is_some(),
             "ZK-AMS provisioning must create the proof-bound account"
         );
-        let key_image_key = PrivacyNullifierKeyV1::zk_ams_key_image(namespace, provision.key_image)
-            .expect("ZK-AMS key-image key");
         assert!(
             transaction
                 .world
@@ -9262,8 +9035,46 @@ mod tests {
                 .is_some(),
             "ZK-AMS provisioning must persist the replay key image"
         );
+        transaction.apply();
+        block
+            .commit()
+            .expect("commit ZK-AMS batch and provisioning transactions");
 
-        let budget_after_success = transaction.privacy_budget_for_testing();
+        let replay_height = fixture
+            .current_height
+            .checked_add(1)
+            .and_then(NonZeroU64::new)
+            .expect("next non-zero ZK-AMS height");
+        let replay_timestamp_ms = fixture
+            .block_timestamp_ms
+            .checked_add(1)
+            .expect("next ZK-AMS block timestamp");
+        let replay_header =
+            BlockHeader::new(replay_height, None, None, None, replay_timestamp_ms, 0);
+        let mut replay_block = state.block(replay_header);
+        let mut transaction = replay_block.transaction();
+        assert!(
+            transaction
+                .world
+                .accounts
+                .get(&provision.account_id)
+                .is_some(),
+            "ZK-AMS provisioning account must survive the block commit"
+        );
+        let budget_before_replay = transaction.privacy_budget_for_testing();
+        let account_count_before_replay = transaction.world.accounts.iter().count();
+        let key_image_before_replay = transaction
+            .world
+            .privacy_nullifiers
+            .get(&key_image_key)
+            .cloned()
+            .expect("committed ZK-AMS replay key image");
+        let head_before_replay = transaction
+            .world
+            .privacy_root_heads
+            .get(&head_key)
+            .copied()
+            .expect("committed ZK-AMS registry head");
         bind_submit_privacy_instruction(&mut transaction, &provision_instruction);
         let replay_error = provision_instruction
             .execute(&ALICE_ID, &mut transaction)
@@ -9274,8 +9085,23 @@ mod tests {
         );
         assert_eq!(
             transaction.privacy_budget_for_testing(),
-            budget_after_success,
+            budget_before_replay,
             "ZK-AMS replay rejection must not reserve budget"
+        );
+        assert_eq!(
+            transaction.world.accounts.iter().count(),
+            account_count_before_replay,
+            "ZK-AMS replay rejection must not create another account"
+        );
+        assert_eq!(
+            transaction.world.privacy_nullifiers.get(&key_image_key),
+            Some(&key_image_before_replay),
+            "ZK-AMS replay rejection must preserve key-image provenance"
+        );
+        assert_eq!(
+            transaction.world.privacy_root_heads.get(&head_key).copied(),
+            Some(head_before_replay),
+            "ZK-AMS replay rejection must preserve the registry head"
         );
     }
 
@@ -9827,376 +9653,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn payment_rejects_missing_stale_substituted_and_consumed_intent_before_effects() {
-        let bootstrap = valid_bootstrap_instruction();
-        let payment = valid_payment_instruction();
-        let state = state_with_activation(active_lifecycle());
-        let mut block = state.block(test_header());
-        {
-            let mut transaction = block.transaction();
-            grant_governance(&mut transaction);
-            bootstrap
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("complete native bootstrap");
-            transaction.apply();
-        }
-
-        let assert_unchanged =
-            |transaction: &StateTransaction<'_, '_>,
-             expected_maps: (usize, usize, usize, usize),
-             expected_budget: (u32, u64, u32, u64)| {
-                assert_eq!(privacy_map_counts(transaction), expected_maps);
-                assert_eq!(
-                    transaction.privacy_budget_for_testing(),
-                    expected_budget,
-                    "intent rejection must not reserve privacy budget"
-                );
-            };
-
-        {
-            let mut transaction = block.transaction();
-            let before = privacy_map_counts(&transaction);
-            let budget_before = transaction.privacy_budget_for_testing();
-            let error = payment
-                .clone()
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("contract, trigger, IVM, and ad-hoc paths have no direct binding");
-            assert!(
-                smart_contract_parameter_message(&error).contains("no bound direct"),
-                "{error:?}"
-            );
-            assert_unchanged(&transaction, before, budget_before);
-        }
-
-        {
-            let mut transaction = block.transaction();
-            let before = privacy_map_counts(&transaction);
-            let budget_before = transaction.privacy_budget_for_testing();
-            let submission_hash = crate::privacy::privacy_signed_submission_hash_v1(&payment)
-                .expect("payment submission hash");
-            transaction.bind_privacy_transaction_intent_v1(Some((
-                PrivacyTransactionIntentDigestV1::new([0xEE; 32]),
-                submission_hash,
-            )));
-            let error = payment
-                .clone()
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("stale signed-payload binding");
-            assert!(
-                smart_contract_parameter_message(&error).contains("digest differs"),
-                "{error:?}"
-            );
-            assert_unchanged(&transaction, before, budget_before);
-        }
-
-        {
-            let mut substituted = payment.clone();
-            substituted.envelope.proof.bytes_mut().bytes[0] ^= 1;
-            let mut transaction = block.transaction();
-            let before = privacy_map_counts(&transaction);
-            let budget_before = transaction.privacy_budget_for_testing();
-            bind_payment_instruction(&mut transaction, &payment);
-            let error = substituted
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("child overlay substituted another proof");
-            assert!(
-                smart_contract_parameter_message(&error).contains("differs from the exact direct"),
-                "{error:?}"
-            );
-            assert_unchanged(&transaction, before, budget_before);
-        }
-
-        {
-            let mut transaction = block.transaction();
-            let before = privacy_map_counts(&transaction);
-            let budget_before = transaction.privacy_budget_for_testing();
-            bind_payment_instruction(&mut transaction, &payment);
-            let digest = payment
-                .envelope
-                .statement
-                .context()
-                .transaction_intent_digest;
-            let submission_hash = crate::privacy::privacy_signed_submission_hash_v1(&payment)
-                .expect("payment submission hash");
-            transaction
-                .consume_privacy_transaction_intent_v1(digest, submission_hash)
-                .expect("simulate prior child consumption");
-            let error = payment
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("the exact submission cannot be replayed in a child overlay");
-            assert!(
-                smart_contract_parameter_message(&error).contains("already been consumed"),
-                "{error:?}"
-            );
-            assert_unchanged(&transaction, before, budget_before);
-        }
-    }
-
-    #[test]
-    fn tampered_pgc_payment_proof_preserves_every_state_map_and_budget() {
-        let bootstrap = valid_bootstrap_instruction();
-        let mut payment = valid_payment_instruction();
-        let PrivacyProofV1::AnonymousPgcKOutOfNV1(proof) = &mut payment.envelope.proof else {
-            unreachable!("Anonymous PGC payment fixture")
-        };
-        let middle = proof.bytes.len() / 2;
-        proof.bytes[middle] ^= 1;
-
-        let state = state_with_activation(active_lifecycle());
-        let mut block = state.block(test_header());
-        {
-            let mut transaction = block.transaction();
-            grant_governance(&mut transaction);
-            bootstrap
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("complete native bootstrap");
-            transaction.apply();
-        }
-
-        let mut transaction = block.transaction();
-        let invariants_before = transaction
-            .world
-            .privacy_pgc_pool_invariants
-            .iter()
-            .map(|(key, value)| (*key, *value))
-            .collect::<Vec<_>>();
-        let accounts_before = transaction
-            .world
-            .privacy_pgc_accounts
-            .iter()
-            .map(|(key, value)| (*key, *value))
-            .collect::<Vec<_>>();
-        let roots_before = transaction
-            .world
-            .privacy_roots
-            .iter()
-            .map(|(key, value)| (*key, *value))
-            .collect::<Vec<_>>();
-        let heads_before = transaction
-            .world
-            .privacy_root_heads
-            .iter()
-            .map(|(key, value)| (*key, *value))
-            .collect::<Vec<_>>();
-        let budget_before = transaction.privacy_budget_for_testing();
-
-        bind_payment_instruction(&mut transaction, &payment);
-        let error = payment
-            .execute(&ALICE_ID, &mut transaction)
-            .expect_err("one-bit proof mutation");
-        assert_eq!(
-            smart_contract_parameter_message(&error),
-            "privacy proof admission rejected: native Anonymous-PGC verification failed: \
-             Anonymous-PGC payment proof equation failed",
-            "unexpected typed proof rejection: {error:?}"
-        );
-        assert_eq!(
-            transaction
-                .world
-                .privacy_pgc_pool_invariants
-                .iter()
-                .map(|(key, value)| (*key, *value))
-                .collect::<Vec<_>>(),
-            invariants_before
-        );
-        assert_eq!(
-            transaction
-                .world
-                .privacy_pgc_accounts
-                .iter()
-                .map(|(key, value)| (*key, *value))
-                .collect::<Vec<_>>(),
-            accounts_before
-        );
-        assert_eq!(
-            transaction
-                .world
-                .privacy_roots
-                .iter()
-                .map(|(key, value)| (*key, *value))
-                .collect::<Vec<_>>(),
-            roots_before
-        );
-        assert_eq!(
-            transaction
-                .world
-                .privacy_root_heads
-                .iter()
-                .map(|(key, value)| (*key, *value))
-                .collect::<Vec<_>>(),
-            heads_before
-        );
-        assert_eq!(
-            transaction.privacy_budget_for_testing(),
-            budget_before,
-            "failed native verification cannot reserve transaction or block budget"
-        );
-    }
-
-    #[test]
-    fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() {
-        let bootstrap = valid_bootstrap_instruction();
-        let payment = valid_payment_instruction();
-        let payment_bytes = u64::try_from(
-            norito::to_bytes(&payment.envelope)
-                .expect("payment encoding")
-                .len(),
-        )
-        .expect("payment length");
-        let state = state_with_activation(active_lifecycle());
-        let header = test_header();
-        let header_hash = header.hash();
-        let mut block = state.block(header);
-
-        {
-            let mut transaction = block.transaction();
-            grant_governance(&mut transaction);
-            bootstrap
-                .clone()
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("complete native bootstrap");
-            transaction.apply();
-        }
-
-        {
-            let mut transaction = block.transaction();
-            let invariant_key = PrivacyPgcPoolInvariantKeyV1::new(bootstrap.bootstrap.namespace)
-                .expect("invariant key");
-            let invariant_before = *transaction
-                .world
-                .privacy_pgc_pool_invariants
-                .get(&invariant_key)
-                .expect("bootstrapped invariant");
-            let first_key = PrivacyPgcAccountKeyV1::new(
-                bootstrap.bootstrap.namespace,
-                bootstrap.bootstrap.accounts[0].public_key,
-            )
-            .expect("first account key");
-            let first_balance_before = transaction
-                .world
-                .privacy_pgc_accounts
-                .get(&first_key)
-                .expect("first account")
-                .encrypted_balance();
-
-            bind_payment_instruction(&mut transaction, &payment);
-            payment
-                .clone()
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("complete native payment");
-            assert_eq!(privacy_map_counts(&transaction), (1, 16, 2, 1));
-            assert_eq!(
-                transaction
-                    .world
-                    .privacy_pgc_pool_invariants
-                    .get(&invariant_key),
-                Some(&invariant_before),
-                "payments cannot replace bootstrap supply provenance"
-            );
-            assert_ne!(
-                transaction
-                    .world
-                    .privacy_pgc_accounts
-                    .get(&first_key)
-                    .expect("updated first account")
-                    .encrypted_balance(),
-                first_balance_before,
-                "the complete successor table must replace current ciphertexts"
-            );
-            let head_key = PrivacyRootHeadKeyV1::new(
-                bootstrap.bootstrap.namespace,
-                PrivacyRootRoleV1::PgcAccountState,
-            )
-            .expect("head key");
-            assert_eq!(
-                transaction
-                    .world
-                    .privacy_root_heads
-                    .get(&head_key)
-                    .expect("payment head")
-                    .epoch(),
-                2
-            );
-            let budget = transaction.privacy_budget_for_testing();
-            assert_eq!(budget.0, 1);
-            assert_eq!(budget.1, payment_bytes);
-            assert_eq!(budget.2, 2);
-            transaction.apply();
-        }
-
-        {
-            let mut transaction = block.transaction();
-            let mut next_limits = PrivacyConsensusLimitsV1::taira_default();
-            next_limits.retained_root_count = 1;
-            SchedulePrivacyConsensusPolicyTighteningV1::new(TEST_BLOCK_HEIGHT + 300, next_limits)
-                .execute(&ALICE_ID, &mut transaction)
-                .expect("schedule exact delayed PGC retention tightening");
-            transaction.apply();
-        }
-        block.commit().expect("commit bootstrap and payment block");
-
-        let next_header = BlockHeader::new(
-            NonZeroU64::new(TEST_BLOCK_HEIGHT + 300).expect("effective height"),
-            Some(header_hash),
-            None,
-            None,
-            1_800_000_000_001,
-            0,
-        );
-        let mut next_block = state.block(next_header);
-        let mut transaction = next_block.transaction();
-        assert_eq!(
-            privacy_map_counts(&transaction),
-            (1, 16, 1, 1),
-            "effective-height hook must prune PGC history to the tightened cap"
-        );
-        let head_key = PrivacyRootHeadKeyV1::new(
-            bootstrap.bootstrap.namespace,
-            PrivacyRootRoleV1::PgcAccountState,
-        )
-        .expect("PGC head key");
-        let head = transaction
-            .world
-            .privacy_root_heads
-            .get(&head_key)
-            .expect("pruned PGC head");
-        let anchor = head
-            .retention_anchor()
-            .expect("pruning must commit the removed prefix anchor");
-        assert_eq!(anchor.epoch(), bootstrap.bootstrap.initial_epoch);
-        assert_eq!(anchor.root(), bootstrap.bootstrap.initial_root);
-        assert_eq!(
-            transaction
-                .world
-                .privacy_consensus_policy
-                .get()
-                .current_limits
-                .retained_root_count,
-            1
-        );
-        assert_eq!(
-            transaction
-                .world
-                .privacy_consensus_policy
-                .get()
-                .pending_tightening,
-            None
-        );
-        let counts_before = privacy_map_counts(&transaction);
-        bind_payment_instruction(&mut transaction, &payment);
-        let error = payment
-            .execute(&ALICE_ID, &mut transaction)
-            .expect_err("stale payment replay");
-        assert!(
-            smart_contract_parameter_message(&error).contains("StaleHead"),
-            "unexpected replay rejection: {error:?}"
-        );
-        assert_eq!(privacy_map_counts(&transaction), counts_before);
-        assert_eq!(
-            transaction.privacy_budget_for_testing(),
-            (0, 0, 0, 0),
-            "failed replay must not consume the new block budget"
-        );
-    }
+    include!("privacy_pgc_payment_tests.rs");
 }

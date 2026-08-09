@@ -462,6 +462,7 @@ internal static class SccpSubmitValidation
     private const string SubmitBridgeProofWireName =
         "iroha_data_model::isi::bridge::SubmitBridgeProof";
     private const string TairaChainId = "fc56984b-2be7-431d-840e-21514d1883f0";
+    private const ulong DefaultTransactionTimeToLiveMilliseconds = 100_000;
     internal const int MaximumNativeArtifactBytes = 16 * 1024 * 1024;
     internal const int MaximumDestinationArtifactBytes = MaximumNativeArtifactBytes + 64 * 1024;
     internal const int MaximumArtifactBytes = MaximumDestinationArtifactBytes;
@@ -701,7 +702,7 @@ internal static class SccpSubmitValidation
                 "Detached SCCP transaction proof family does not match the submit endpoint.");
         }
 
-        RequireAbsentOption(timeToLive, "time_to_live_ms");
+        RequireDefaultTimeToLive(timeToLive);
         RequireAbsentOption(nonce, "nonce");
         RequireCanonicalFeePayment(feePayment, expectedFeePayment);
         RequireCanonicalMetadata(metadata);
@@ -1046,6 +1047,7 @@ internal static class SccpSubmitValidation
         var nonce = cursor.TakeField("nonce");
         var feePayment = cursor.TakeField("fee_payment");
         var metadata = cursor.TakeField("metadata");
+        var attachments = cursor.TakeField("attachments");
         if (!cursor.IsFinished
             || creation.Length != sizeof(ulong)
             || BinaryPrimitives.ReadUInt64LittleEndian(creation) != creationTimeMs)
@@ -1075,10 +1077,11 @@ internal static class SccpSubmitValidation
             rangeStartHeight,
             rangeEndHeight,
             expectedProof);
-        RequireAbsentOption(timeToLive, "time_to_live_ms");
+        RequireDefaultTimeToLive(timeToLive);
         RequireAbsentOption(nonce, "nonce");
         RequireCanonicalFeePayment(feePayment, expectedFeePayment);
         RequireCanonicalMetadata(metadata);
+        RequireAbsentOption(attachments, "attachments");
     }
 
     private static void RequireCanonicalChainId(ReadOnlySpan<byte> payload)
@@ -1590,6 +1593,26 @@ internal static class SccpSubmitValidation
         if (tag != 0 || !cursor.IsFinished)
         {
             throw new ArgumentException($"SCCP transaction {field} must use the exact None encoding.");
+        }
+    }
+
+    private static void RequireDefaultTimeToLive(ReadOnlySpan<byte> payload)
+    {
+        var option = new CompactTransactionCursor(payload);
+        if (option.TakeByte("time_to_live_ms.tag") != 1)
+        {
+            throw new ArgumentException(
+                "SCCP transaction time_to_live_ms must use the exact default Some encoding.");
+        }
+
+        var value = option.TakeField("time_to_live_ms.value");
+        if (!option.IsFinished
+            || value.Length != sizeof(ulong)
+            || BinaryPrimitives.ReadUInt64LittleEndian(value)
+                != DefaultTransactionTimeToLiveMilliseconds)
+        {
+            throw new ArgumentException(
+                "SCCP transaction time_to_live_ms must be exactly 100000 milliseconds.");
         }
     }
 

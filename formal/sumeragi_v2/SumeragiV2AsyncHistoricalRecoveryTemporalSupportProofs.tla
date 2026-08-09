@@ -338,8 +338,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
    Stage3CandidateSequenceIndexCharacterization,
    PrefixCardinalityAfterNonTargetRemoval,
    NonTargetRemovalPreservesShiftedTarget,
-   SelectedSameClassPrecedesTarget,
-   SelectedDifferentClassStrictlyAdvancesCursor,
+   SelectedOldestLifecycleBelongsToTargetPrefix,
    FifoRuntimeQueueCursorFacts, NextNodeCommandIndexFacts,
    FS_RemoveElement, Isa
    DEF HistoricalTemporalStage3RankExit,
@@ -351,7 +350,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ProtectedCandidateOwned, CandidateServiceRank,
        ServiceRankLess, SchedulerServiceRank,
        SchedulerClassPrefixIndices, SchedulerCandidateIndices,
-       ClassPrefixThrough, RemovalTargetIndex, FifoRuntimeStep,
+       ClassPrefixThrough, RemovalTargetIndex,
+       CommandClassDistance, NextCommandClass, AsyncCommandClasses,
+       FifoRuntimeStep,
        SerializedRunnerRuntimeStep, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        RemoveNextNodeCommand, NextNodeCommand, SequenceSet,
@@ -848,7 +849,7 @@ HistoricalTemporalStage4EpisodeOrdering ==
 HistoricalTemporalStage4EpisodeRank(candidate) ==
   <<HistoricalTemporalStage4Branch(candidate),
     <<Stage4CapacityRank(candidate.node),
-      ReadyRunAuxRank(candidate.node)>>>
+      ReadyRunAuxRank(candidate.node)>>>>
 
 HistoricalTemporalStage4BlockedAtRank(
     candidate, position, rank) ==
@@ -5974,6 +5975,13 @@ HistoricalCandidateProducerContinuationIngressCutFairAction(
          PostGstServiceHistoricalRecoveryIoWorker(node)
     [] OTHER -> FALSE
 
+HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner(
+    node, record, status, budget, physicalCut, episodeRank, ownerKind) ==
+  /\ HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank(
+       node, record, status, budget, physicalCut, episodeRank)
+  /\ HistoricalCandidateProducerContinuationIngressCutFairOwner(
+       node, record) = ownerKind
+
 THEOREM HistoricalCandidateProducerContinuationIngressCutRankIsFinite ==
   \A node \in ValidatorIds,
      record \in AsyncCandidateProducerContinuationRecordSet,
@@ -6360,7 +6368,7 @@ BY HistoricalCandidateProducerContinuationIngressCutPersistsTargetAndBudgetOrExi
        AsyncAllVars
 
 THEOREM HistoricalCandidateProducerContinuationIngressCutOwnerUsesAsyncFairness ==
-  \A initialContext,
+  \A initialContext \in ContextRecords,
      node \in Responsive,
      ownerKind \in
        HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds:
@@ -6372,6 +6380,71 @@ BY Isa
    DEF HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds,
        HistoricalCandidateProducerContinuationIngressCutFairAction,
        AsyncLiveSpecAt, AsyncSpecAt, AsyncFairnessAt
+
+THEOREM HistoricalCandidateProducerContinuationIngressCutFairOccurrenceReachesGoal ==
+  \A node \in ValidatorIds,
+     record \in AsyncCandidateProducerContinuationRecordSet,
+     status \in {"Reserved", "Materialized"},
+     budget \in
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier,
+     physicalCut \in Nat,
+     episodeRank \in
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier,
+     ownerKind \in
+       HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner(
+         node, record, status, budget, physicalCut, episodeRank, ownerKind)
+    /\ <<HistoricalCandidateProducerContinuationIngressCutFairAction(
+             node, ownerKind)>>_AsyncAllVars
+      => HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+           node, record, status, budget, physicalCut, episodeRank)'
+BY HistoricalCandidateProducerContinuationIngressCutSelectedActionConsumesCell,
+   AsyncIngressPhysicalHighWatermarkIsMonotone, IsaT(1800)
+   DEF HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeGoal,
+       HistoricalCandidateProducerContinuationIngressCutFairOwner,
+       HistoricalCandidateProducerContinuationFrozenPrefixRunnerEligible,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier,
+       SetLessThan, AsyncAllVars
+
+THEOREM HistoricalCandidateProducerContinuationIngressCutFixedOwnerStepPreservesOrProgresses ==
+  \A node \in ValidatorIds,
+     record \in AsyncCandidateProducerContinuationRecordSet,
+     status \in {"Reserved", "Materialized"},
+     budget \in
+       AsyncCandidateProducerContinuationFrozenPrefixRankCarrier,
+     physicalCut \in Nat,
+     episodeRank \in
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier,
+     ownerKind \in
+       HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner(
+         node, record, status, budget, physicalCut, episodeRank, ownerKind)
+    /\ [AsyncNext]_AsyncAllVars
+      => \/ HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+               node, record, status, budget, physicalCut, episodeRank)'
+         \/ HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner(
+              node, record, status, budget, physicalCut, episodeRank,
+              ownerKind)'
+BY HistoricalCandidateProducerContinuationIngressCutStepIsGoalDescentOrFrame,
+   HistoricalCandidateProducerContinuationIngressCutOwnerPersistsInCell,
+   AsyncIngressPhysicalHighWatermarkIsMonotone, IsaT(1800)
+   DEF HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeGoal,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankOrdering,
+       HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier,
+       SetLessThan, AsyncAllVars
 
 HistoricalCandidateProducerContinuationIngressCutEpisodeRankStepProperty(
     specification) ==
@@ -6393,28 +6466,151 @@ THEOREM AsyncLiveProvidesHistoricalCandidateProducerContinuationIngressCutRankSt
   \A initialContext:
     HistoricalCandidateProducerContinuationIngressCutEpisodeRankStepProperty(
       AsyncLiveSpecAt(initialContext))
-BY AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncSpecAlwaysProgressOwnershipInvariant,
-   AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
-   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
-   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
-   HistoricalCandidateProducerContinuationIngressCutRankIsFinite,
-   HistoricalCandidateProducerContinuationIngressCutSelectedOwnerIsEnabled,
-   HistoricalCandidateProducerContinuationIngressCutStepIsGoalDescentOrFrame,
-   HistoricalCandidateProducerContinuationIngressCutSelectedActionConsumesCell,
-   HistoricalCandidateProducerContinuationIngressCutOwnerPersistsInCell,
-   HistoricalCandidateProducerContinuationIngressCutOwnerUsesAsyncFairness,
-   AsyncLiveSpecProjectsAsyncSpec,
-   WF1, PTL, IsaT(2400)
-   DEF HistoricalCandidateProducerContinuationIngressCutEpisodeRankStepProperty,
-       HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank,
-       HistoricalCandidateProducerContinuationIngressCutEpisodeGoal,
-       HistoricalCandidateProducerContinuationIngressCutFairOwner,
-       HistoricalCandidateProducerContinuationIngressCutFairAction,
-       HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
-       HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
-       HistoricalCandidateProducerContinuationAtStatus,
-       AsyncLiveSpecAt
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncLiveSpecAt(initialContext)
+         PROVE \A node \in ValidatorIds,
+                   record \in AsyncCandidateProducerContinuationRecordSet,
+                   status \in {"Reserved", "Materialized"},
+                   budget \in
+                     AsyncCandidateProducerContinuationFrozenPrefixRankCarrier,
+                   physicalCut \in Nat,
+                   episodeRank \in
+                     HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier:
+                 HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank(
+                   node, record, status, budget, physicalCut, episodeRank)
+                   ~> HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+                        node, record, status, budget, physicalCut, episodeRank)
+    <2>1. [](/\ AsyncStrongTypeInvariant
+              /\ AsyncProgressOwnershipInvariant
+              /\ AsyncCandidateServiceLifecycleInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
+      BY <1>1, AsyncLiveSpecProjectsAsyncSpec,
+         AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysProgressOwnershipInvariant,
+         AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity, PTL
+         DEF AsyncCandidateServiceTombstoneLifecycleInvariant
+    <2>2. ASSUME NEW node \in ValidatorIds,
+                  NEW record
+                    \in AsyncCandidateProducerContinuationRecordSet,
+                  NEW status \in {"Reserved", "Materialized"},
+                  NEW budget \in
+                    AsyncCandidateProducerContinuationFrozenPrefixRankCarrier,
+                  NEW physicalCut \in Nat,
+                  NEW episodeRank \in
+                    HistoricalCandidateProducerContinuationIngressCutEpisodeRankCarrier
+           PROVE HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank(
+                   node, record, status, budget, physicalCut, episodeRank)
+                   ~> HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+                        node, record, status, budget, physicalCut, episodeRank)
+      <3>1. CASE node \in Responsive
+        <4>1. \A ownerKind
+                    \in
+                      HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds:
+                 HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner(
+                   node, record, status, budget, physicalCut, episodeRank,
+                   ownerKind)
+                   ~> HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+                        node, record, status, budget, physicalCut, episodeRank)
+          PROOF
+            <5>1. ASSUME NEW ownerKind
+                          \in
+                            HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds
+                   PROVE HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner(
+                           node, record, status, budget, physicalCut,
+                           episodeRank, ownerKind)
+                           ~> HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+                                node, record, status, budget, physicalCut,
+                                episodeRank)
+              <6>1. [](HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner(
+                          node, record, status, budget, physicalCut,
+                          episodeRank, ownerKind)
+                        /\ ~HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+                             node, record, status, budget, physicalCut,
+                             episodeRank)
+                       => ENABLED
+                            <<HistoricalCandidateProducerContinuationIngressCutFairAction(
+                                node, ownerKind)>>_AsyncAllVars)
+                BY <2>1,
+                   HistoricalCandidateProducerContinuationIngressCutSelectedOwnerIsEnabled,
+                   PTL
+                   DEF HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner,
+                       HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank
+              <6>2. (HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner(
+                          node, record, status, budget, physicalCut,
+                          episodeRank, ownerKind)
+                        /\ ~HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+                             node, record, status, budget, physicalCut,
+                             episodeRank)
+                        /\ <<HistoricalCandidateProducerContinuationIngressCutFairAction(
+                                 node, ownerKind)>>_AsyncAllVars
+                       => HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+                            node, record, status, budget, physicalCut,
+                            episodeRank)')
+                BY <2>1,
+                   HistoricalCandidateProducerContinuationIngressCutFairOccurrenceReachesGoal,
+                   PTL
+              <6>3. (HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner(
+                          node, record, status, budget, physicalCut,
+                          episodeRank, ownerKind)
+                        /\ ~HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+                             node, record, status, budget, physicalCut,
+                             episodeRank)
+                        /\ [AsyncNext]_AsyncAllVars
+                       => \/ HistoricalCandidateProducerContinuationIngressCutEpisodeGoal(
+                                node, record, status, budget, physicalCut,
+                                episodeRank)'
+                          \/ HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner(
+                               node, record, status, budget, physicalCut,
+                               episodeRank, ownerKind)')
+                BY <2>1,
+                   HistoricalCandidateProducerContinuationIngressCutFixedOwnerStepPreservesOrProgresses,
+                   PTL
+              <6>4. WF_AsyncAllVars(
+                       HistoricalCandidateProducerContinuationIngressCutFairAction(
+                         node, ownerKind))
+                BY <1>1, <3>1, <5>1,
+                   AsyncLiveSpecProjectsAsyncSpec
+                   DEF HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds,
+                       HistoricalCandidateProducerContinuationIngressCutFairAction,
+                       AsyncSpecAt, AsyncFairnessAt
+              <6>5. [][AsyncNext]_AsyncAllVars
+                BY <1>1, AsyncLiveSpecProjectsAsyncSpec DEF AsyncSpecAt
+              <6> QED BY <6>1, <6>2, <6>3, <6>4, <6>5, PTL
+            <5> QED BY <5>1
+        <4>2. [](HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank(
+                    node, record, status, budget, physicalCut, episodeRank)
+                 => \E ownerKind
+                          \in
+                            HistoricalCandidateProducerContinuationIngressCutFairOwnerKinds:
+                      HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner(
+                        node, record, status, budget, physicalCut, episodeRank,
+                        ownerKind))
+          BY <2>1,
+             HistoricalCandidateProducerContinuationIngressCutSelectedOwnerIsEnabled,
+             PTL
+             DEF HistoricalCandidateProducerContinuationIngressCutEpisodeAtRankForOwner,
+                 HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank
+        <4> QED BY <4>1, <4>2, PTL
+      <3>2. CASE node \notin Responsive
+        <4>1. []~HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank(
+                    node, record, status, budget, physicalCut, episodeRank)
+          BY <2>1, <3>2, AsyncStrongTypeProjectsAsyncType, PTL
+             DEF HistoricalCandidateProducerContinuationIngressCutEpisodeAtRank,
+                 HistoricalCandidateProducerContinuationFrozenPrefixIngressCutResidual,
+                 HistoricalCandidateProducerContinuationFrozenPrefixAtBudget,
+                 HistoricalCandidateProducerContinuationAtStatus,
+                 HistoricalRecoveryTarget,
+                 AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                 AsyncHistoricalRecoveryTypeInvariant
+        <4> QED BY <4>1, PTL
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>2
+  <1> QED BY <1>1
+     DEF HistoricalCandidateProducerContinuationIngressCutEpisodeRankStepProperty
 
 HistoricalCandidateProducerContinuationIngressCutRankedClosureAtPhysicalCutProperty(
     specification) ==
@@ -6537,11 +6733,11 @@ HistoricalTemporalCandidateIdentityBudgetBridgeProperty(specification) ==
                         carrier))
                       <= Cardinality(carrier)))
   /\ (specification
-        => [](\A candidate \in AsyncCandidateSet:
+        => [][(\A candidate \in AsyncCandidateSet:
                /\ AsyncCandidateServiceActiveTombstone(candidate)
                /\ [AsyncNext]_AsyncAllVars
                /\ ~AsyncCandidateServiceExitThisStep(candidate)
-               => AsyncCandidateServiceActiveTombstone(candidate)'))
+               => AsyncCandidateServiceActiveTombstone(candidate)')]_AsyncAllVars)
   /\ (specification
         => [](\A left, right \in AsyncCandidateSet:
                /\ left.node = right.node
@@ -6565,7 +6761,7 @@ HistoricalTemporalCandidateIdentityBudgetBridgeProperty(specification) ==
                => AsyncCandidateServiceIdentity(left)
                     = AsyncCandidateServiceIdentity(right)))
   /\ (specification
-        => [](\A identity \in AsyncCandidateAdmissionIdentitySet:
+        => [][(\A identity \in AsyncCandidateAdmissionIdentitySet:
                /\ AsyncCandidateAdmissionIdentityObsolete(identity)
                /\ identity
                     \notin AsyncScheduledCandidateAdmissionIdentities
@@ -6573,9 +6769,9 @@ HistoricalTemporalCandidateIdentityBudgetBridgeProperty(specification) ==
                /\ [AsyncNext]_AsyncAllVars
                => /\ AsyncCandidateAdmissionIdentityObsolete(identity)'
                   /\ identity
-                       \notin AsyncScheduledCandidateAdmissionIdentities'))
+                       \notin AsyncScheduledCandidateAdmissionIdentities')]_AsyncAllVars)
   /\ (specification
-        => [](\A identity \in AsyncCandidateAdmissionIdentitySet:
+        => [][(\A identity \in AsyncCandidateAdmissionIdentitySet:
                /\ identity.service.phase = "DeliverChunk"
                /\ AsyncCandidateAdmissionIdentityTerminallyCovered(identity)
                /\ identity
@@ -6585,9 +6781,9 @@ HistoricalTemporalCandidateIdentityBudgetBridgeProperty(specification) ==
                => /\ AsyncCandidateAdmissionIdentityTerminallyCovered(
                        identity)'
                   /\ identity
-                       \notin AsyncScheduledCandidateAdmissionIdentities'))
+                       \notin AsyncScheduledCandidateAdmissionIdentities')]_AsyncAllVars)
   /\ (specification
-        => [](\A identity \in AsyncCandidateAdmissionIdentitySet:
+        => [][(\A identity \in AsyncCandidateAdmissionIdentitySet:
                /\ identity.service.phase = "DeliverChunk"
                /\ identity \in AsyncScheduledCandidateAdmissionIdentities
                /\ gst
@@ -6595,7 +6791,7 @@ HistoricalTemporalCandidateIdentityBudgetBridgeProperty(specification) ==
                /\ identity
                     \notin AsyncScheduledCandidateAdmissionIdentities'
                => AsyncCandidateAdmissionIdentityLifecycleCovered(
-                    identity)'))
+                    identity)')]_AsyncAllVars)
 
 HistoricalTemporalServeReservationsInIdentityCarrier(carrier) ==
   {reservation \in asyncServeReservations:
@@ -6672,7 +6868,7 @@ HistoricalTemporalServeIdentityBudgetBridgeProperty(specification) ==
                          < asyncNextServeAdmissionOrdinal[node]))
   /\ (specification
         => [](\A node \in ValidatorIds,
-                   family \in AsyncServeLifecycleFamilies:
+                  family \in AsyncServeLifecycleFamilies:
                AsyncServeLifecycleFamilyOwned(node, family)
                  => /\ Cardinality(
                           AsyncServeFamilyAdmissionRecords(node, family)
@@ -6683,15 +6879,15 @@ HistoricalTemporalServeIdentityBudgetBridgeProperty(specification) ==
                     /\ AsyncServeFamilyHighWatermark(node, family)
                          \in Views))
   /\ (specification
-        => [](\A node \in ValidatorIds,
+        => [][(\A node \in ValidatorIds,
                    identity \in AsyncServeLogicalRequestIdentities:
                /\ AsyncServeJobQueued(node, identity)
                /\ gst
                /\ [AsyncNext]_AsyncAllVars
                /\ ~AsyncServeJobQueued(node, identity)'
-               => AsyncServeLifecycleTombstone(node, identity)'))
+               => AsyncServeLifecycleTombstone(node, identity)')]_AsyncAllVars)
   /\ (specification
-        => [](\A node \in ValidatorIds,
+        => [][(\A node \in ValidatorIds,
                    identity \in AsyncServeLogicalRequestIdentities:
                /\ AsyncServeLogicalIdentityRetiredOrSuperseded(
                     node, identity)
@@ -6699,12 +6895,12 @@ HistoricalTemporalServeIdentityBudgetBridgeProperty(specification) ==
                /\ [AsyncNext]_AsyncAllVars
                => /\ AsyncServeLogicalIdentityRetiredOrSuperseded(
                        node, identity)'
-                  /\ ~AsyncServeJobQueued(node, identity)'))
+                  /\ ~AsyncServeJobQueued(node, identity)')]_AsyncAllVars)
   /\ (specification
-        => [](\A node, candidate:
+        => [][(\A node, candidate:
                HistoricalTemporalServeExactRetryCoalescingAction(
                  node, candidate)
-                 => UNCHANGED asyncNextServeAdmissionOrdinal))
+                 => UNCHANGED asyncNextServeAdmissionOrdinal)]_AsyncAllVars)
   /\ (specification
         => [](\A node \in ValidatorIds,
                    left, right \in

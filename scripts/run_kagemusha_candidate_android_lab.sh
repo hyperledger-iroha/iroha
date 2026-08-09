@@ -14,7 +14,8 @@ Usage:
     --slot-id <device-lab-slot> \
     [--attestation-slot <slot-directory>] \
     [--trusted-signer-public-key <PEM>] \
-    [--apksigner <absolute-path> --apksigner-sha256 <hex>] \
+    [--java <absolute-path> --java-sha256 <hex>] \
+    [--apksigner-jar <absolute-path> --apksigner-jar-sha256 <hex>] \
     [--openssl <absolute-path> --openssl-sha256 <hex>] \
     [--android-attestation-trust-root <PEM> \
      --android-attestation-trust-root-sha256 <hex>]... \
@@ -53,8 +54,10 @@ GENERATION=""
 SLOT_ID=""
 ATTESTATION_SLOT=""
 TRUSTED_SIGNER_PUBLIC_KEY=""
-AUTHORITY_APKSIGNER=""
-AUTHORITY_APKSIGNER_SHA256=""
+AUTHORITY_JAVA=""
+AUTHORITY_JAVA_SHA256=""
+AUTHORITY_APKSIGNER_JAR=""
+AUTHORITY_APKSIGNER_JAR_SHA256=""
 AUTHORITY_OPENSSL=""
 AUTHORITY_OPENSSL_SHA256=""
 AUTHORITY_REVOCATION_STATUS=""
@@ -104,15 +107,27 @@ while [[ $# -gt 0 ]]; do
       TRUSTED_SIGNER_PUBLIC_KEY="${2:-}"
       shift 2
       ;;
-    --apksigner)
-      [[ -z "$AUTHORITY_APKSIGNER" ]] || fail "--apksigner may be provided exactly once"
-      AUTHORITY_APKSIGNER="${2:-}"
+    --java)
+      [[ -z "$AUTHORITY_JAVA" ]] || fail "--java may be provided exactly once"
+      AUTHORITY_JAVA="${2:-}"
       shift 2
       ;;
-    --apksigner-sha256)
-      [[ -z "$AUTHORITY_APKSIGNER_SHA256" ]] || fail \
-        "--apksigner-sha256 may be provided exactly once"
-      AUTHORITY_APKSIGNER_SHA256="${2:-}"
+    --java-sha256)
+      [[ -z "$AUTHORITY_JAVA_SHA256" ]] || fail \
+        "--java-sha256 may be provided exactly once"
+      AUTHORITY_JAVA_SHA256="${2:-}"
+      shift 2
+      ;;
+    --apksigner-jar)
+      [[ -z "$AUTHORITY_APKSIGNER_JAR" ]] || fail \
+        "--apksigner-jar may be provided exactly once"
+      AUTHORITY_APKSIGNER_JAR="${2:-}"
+      shift 2
+      ;;
+    --apksigner-jar-sha256)
+      [[ -z "$AUTHORITY_APKSIGNER_JAR_SHA256" ]] || fail \
+        "--apksigner-jar-sha256 may be provided exactly once"
+      AUTHORITY_APKSIGNER_JAR_SHA256="${2:-}"
       shift 2
       ;;
     --openssl)
@@ -183,8 +198,9 @@ fi
 if [[ "$BUILD_ONLY" == true && -n "$TRUSTED_SIGNER_PUBLIC_KEY" ]]; then
   fail "--build-only does not consume a trusted attestation-slot signer"
 fi
-if [[ "$BUILD_ONLY" == true && ( -n "$AUTHORITY_APKSIGNER" \
-    || -n "$AUTHORITY_APKSIGNER_SHA256" || -n "$AUTHORITY_OPENSSL" \
+if [[ "$BUILD_ONLY" == true && ( -n "$AUTHORITY_JAVA" \
+    || -n "$AUTHORITY_JAVA_SHA256" || -n "$AUTHORITY_APKSIGNER_JAR" \
+    || -n "$AUTHORITY_APKSIGNER_JAR_SHA256" || -n "$AUTHORITY_OPENSSL" \
     || -n "$AUTHORITY_OPENSSL_SHA256" || -n "$AUTHORITY_REVOCATION_STATUS" \
     || -n "$AUTHORITY_REVOCATION_STATUS_SHA256" \
     || ${#AUTHORITY_TRUST_ROOTS[@]} -ne 0 \
@@ -198,8 +214,11 @@ if [[ "$BUILD_ONLY" == false && -z "$TRUSTED_SIGNER_PUBLIC_KEY" ]]; then
   fail "the full run requires --trusted-signer-public-key"
 fi
 if [[ "$BUILD_ONLY" == false ]]; then
-  [[ -n "$AUTHORITY_APKSIGNER" && -n "$AUTHORITY_APKSIGNER_SHA256" ]] || fail \
-    "the full run requires --apksigner and --apksigner-sha256"
+  [[ -n "$AUTHORITY_JAVA" && -n "$AUTHORITY_JAVA_SHA256" ]] || fail \
+    "the full run requires --java and --java-sha256"
+  [[ -n "$AUTHORITY_APKSIGNER_JAR" \
+      && -n "$AUTHORITY_APKSIGNER_JAR_SHA256" ]] || fail \
+    "the full run requires --apksigner-jar and --apksigner-jar-sha256"
   [[ -n "$AUTHORITY_OPENSSL" && -n "$AUTHORITY_OPENSSL_SHA256" ]] || fail \
     "the full run requires --openssl and --openssl-sha256"
   [[ -n "$AUTHORITY_REVOCATION_STATUS" \
@@ -244,7 +263,8 @@ if [[ "$BUILD_ONLY" == false ]]; then
   [[ -f "$TRUSTED_SIGNER_PUBLIC_KEY" && ! -L "$TRUSTED_SIGNER_PUBLIC_KEY" ]] || fail \
     "--trusted-signer-public-key must be one regular PEM public key"
   for authority_path in \
-    "$AUTHORITY_APKSIGNER" \
+    "$AUTHORITY_JAVA" \
+    "$AUTHORITY_APKSIGNER_JAR" \
     "$AUTHORITY_OPENSSL" \
     "$AUTHORITY_REVOCATION_STATUS" \
     "${AUTHORITY_TRUST_ROOTS[@]}"; do
@@ -255,10 +275,11 @@ if [[ "$BUILD_ONLY" == false ]]; then
     [[ -f "$authority_path" && ! -L "$authority_path" ]] || fail \
       "attestation authority inputs must be regular non-symlink files"
   done
-  [[ -x "$AUTHORITY_APKSIGNER" && -x "$AUTHORITY_OPENSSL" ]] || fail \
-    "pinned apksigner and openssl authority tools must be executable"
+  [[ -x "$AUTHORITY_JAVA" && -x "$AUTHORITY_OPENSSL" ]] || fail \
+    "pinned Java and openssl authority tools must be executable"
   for authority_digest in \
-    "$AUTHORITY_APKSIGNER_SHA256" \
+    "$AUTHORITY_JAVA_SHA256" \
+    "$AUTHORITY_APKSIGNER_JAR_SHA256" \
     "$AUTHORITY_OPENSSL_SHA256" \
     "$AUTHORITY_REVOCATION_STATUS_SHA256" \
     "${AUTHORITY_TRUST_ROOT_SHA256[@]}"; do
@@ -269,7 +290,7 @@ if [[ "$BUILD_ONLY" == false ]]; then
 fi
 
 EVIDENCE_ROOT="$ROOT_DIR/artifacts/kagemusha-candidate-evidence/$CANDIDATE_SHA256/$STAGE_SHA256"
-STAGE_MANIFEST="$EVIDENCE_ROOT/candidate-stage-manifest-v1.json"
+STAGE_MANIFEST="$EVIDENCE_ROOT/candidate-stage-manifest-v2.json"
 NATIVE_LIBRARY="$EVIDENCE_ROOT/evidence/candidate/lib/arm64-v8a/libconnect_norito_bridge.so"
 LAB_APK="$EVIDENCE_ROOT/evidence/kagemusha-candidate-evidence-lab-DO-NOT-SHIP-$CANDIDATE_SHA256-debug.apk"
 TEST_APK="$EVIDENCE_ROOT/evidence/kagemusha-candidate-evidence-lab-DO-NOT-SHIP-$CANDIDATE_SHA256-debug-androidTest.apk"
@@ -298,7 +319,11 @@ verify_pinned_file() {
 
 verify_attestation_authority_inputs() {
   [[ "$BUILD_ONLY" == false ]] || return 0
-  verify_pinned_file "$AUTHORITY_APKSIGNER" "$AUTHORITY_APKSIGNER_SHA256" apksigner
+  verify_pinned_file "$AUTHORITY_JAVA" "$AUTHORITY_JAVA_SHA256" java
+  verify_pinned_file \
+    "$AUTHORITY_APKSIGNER_JAR" \
+    "$AUTHORITY_APKSIGNER_JAR_SHA256" \
+    apksigner.jar
   verify_pinned_file "$AUTHORITY_OPENSSL" "$AUTHORITY_OPENSSL_SHA256" openssl
   verify_pinned_file \
     "$AUTHORITY_REVOCATION_STATUS" \
@@ -339,9 +364,9 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
-from check_android_device_lab_slot import validate_kagemusha_candidate_stage_manifest_v1
+from check_android_device_lab_slot import validate_kagemusha_candidate_stage_manifest_v2
 
-validate_kagemusha_candidate_stage_manifest_v1(
+validate_kagemusha_candidate_stage_manifest_v2(
     Path(sys.argv[2]),
     candidate_sha256=sys.argv[3],
     stage_sha256=sys.argv[4],
@@ -430,16 +455,15 @@ for apk in "$LAB_APK" "$TEST_APK"; do
   [[ -f "$apk" && ! -L "$apk" ]] || fail "staged APK is absent or not regular: $apk"
 done
 
-find_apksigner() {
+find_apksigner_jar() {
   "$PYTHON3_BINARY" -I - "$ANDROID_SDK_RESOLVED" <<'PY'
 from pathlib import Path
-import os
 import sys
 
 candidates = sorted(
     candidate
-    for candidate in (Path(sys.argv[1]) / "build-tools").glob("*/apksigner")
-    if candidate.is_file() and os.access(candidate, os.X_OK)
+    for candidate in (Path(sys.argv[1]) / "build-tools").glob("*/lib/apksigner.jar")
+    if candidate.is_file()
 )
 if not candidates:
     raise SystemExit(1)
@@ -448,9 +472,12 @@ PY
 }
 
 if [[ "$BUILD_ONLY" == true ]]; then
-  APKSIGNER="$(find_apksigner)" || fail "Android build-tools apksigner is required"
+  APKSIGNER_JAVA="$JAVA_HOME_RESOLVED/bin/java"
+  APKSIGNER_JAR="$(find_apksigner_jar)" || fail \
+    "Android build-tools apksigner.jar is required"
 else
-  APKSIGNER="$AUTHORITY_APKSIGNER"
+  APKSIGNER_JAVA="$AUTHORITY_JAVA"
+  APKSIGNER_JAR="$AUTHORITY_APKSIGNER_JAR"
 fi
 
 write_toolchain_audit() {
@@ -465,7 +492,7 @@ write_toolchain_audit() {
     "$CARGO_BINARY" "$RUSTC_BINARY" "$cargo_ndk" "$ndk_properties" \
     "$ROOT_DIR/kotlin/gradle/wrapper/gradle-wrapper.jar" \
     "$ROOT_DIR/kotlin/gradle/wrapper/gradle-wrapper.properties" \
-    "$JAVA_HOME_RESOLVED/bin/java" "$APKSIGNER" "$ADB_BINARY" \
+    "$JAVA_HOME_RESOLVED/bin/java" "$APKSIGNER_JAVA" "$APKSIGNER_JAR" "$ADB_BINARY" \
     "$PYTHON3_BINARY" "$GIT_BINARY" "$SHASUM_BINARY" "$OPENSSL_BINARY" \
     "$LAB_APK_SHA256" "$TEST_APK_SHA256" \
     "$LAB_APK_CERT_SHA256" "$TEST_APK_CERT_SHA256" <<'PY'
@@ -534,21 +561,22 @@ payload = {
     ),
     "java_binary_sha256": digest(sys.argv[11]),
     "java_version": version([sys.argv[11], "-version"]),
-    "apksigner_binary_sha256": digest(sys.argv[12]),
-    "apksigner_version": version([sys.argv[12], "version"]),
-    "adb_binary_sha256": digest(sys.argv[13]),
-    "adb_version": version([sys.argv[13], "version"]),
-    "python_binary_sha256": digest(sys.argv[14]),
-    "python_version": version([sys.argv[14], "--version"]),
-    "git_binary_sha256": digest(sys.argv[15]),
-    "git_version": version([sys.argv[15], "--version"]),
-    "shasum_binary_sha256": digest(sys.argv[16]),
-    "openssl_binary_sha256": digest(sys.argv[17]),
-    "openssl_version": version([sys.argv[17], "version"]),
-    "candidate_lab_apk_sha256": sys.argv[18],
-    "candidate_lab_test_apk_sha256": sys.argv[19],
-    "candidate_lab_apk_signing_certificate_sha256": sys.argv[20],
-    "candidate_lab_test_apk_signing_certificate_sha256": sys.argv[21],
+    "apksigner_java_binary_sha256": digest(sys.argv[12]),
+    "apksigner_jar_sha256": digest(sys.argv[13]),
+    "apksigner_version": version([sys.argv[12], "-jar", sys.argv[13], "version"]),
+    "adb_binary_sha256": digest(sys.argv[14]),
+    "adb_version": version([sys.argv[14], "version"]),
+    "python_binary_sha256": digest(sys.argv[15]),
+    "python_version": version([sys.argv[15], "--version"]),
+    "git_binary_sha256": digest(sys.argv[16]),
+    "git_version": version([sys.argv[16], "--version"]),
+    "shasum_binary_sha256": digest(sys.argv[17]),
+    "openssl_binary_sha256": digest(sys.argv[18]),
+    "openssl_version": version([sys.argv[18], "version"]),
+    "candidate_lab_apk_sha256": sys.argv[19],
+    "candidate_lab_test_apk_sha256": sys.argv[20],
+    "candidate_lab_apk_signing_certificate_sha256": sys.argv[21],
+    "candidate_lab_test_apk_signing_certificate_sha256": sys.argv[22],
     "candidate_lab_apksigner_verified": True,
     "candidate_lab_test_apksigner_verified": True,
     "fresh_native_target": True,
@@ -624,16 +652,17 @@ write_run_receipt() {
   local app_certificate_sha256="${6:-}"
   local chain_sha256="${7:-}"
   local attestation_root="${8:-}"
-  local authority_apksigner_sha256="${9:-}"
-  local authority_openssl_sha256="${10:-}"
-  local authority_revocation_sha256="${11:-}"
-  local authority_trust_root_sha256_csv="${12:-}"
-  local confirmation_binding="${13:-}"
-  local confirmation_transcript="${14:-}"
-  local confirmation_report="${15:-}"
-  local confirmation_binding_sha256="${16:-}"
-  local confirmation_transcript_sha256="${17:-}"
-  local confirmation_report_sha256="${18:-}"
+  local authority_java_sha256="${9:-}"
+  local authority_apksigner_jar_sha256="${10:-}"
+  local authority_openssl_sha256="${11:-}"
+  local authority_revocation_sha256="${12:-}"
+  local authority_trust_root_sha256_csv="${13:-}"
+  local confirmation_binding="${14:-}"
+  local confirmation_transcript="${15:-}"
+  local confirmation_report="${16:-}"
+  local confirmation_binding_sha256="${17:-}"
+  local confirmation_transcript_sha256="${18:-}"
+  local confirmation_report_sha256="${19:-}"
   local output
   if [[ "$mode" == "build_only" ]]; then
     output="$EVIDENCE_ROOT/evidence/candidate-build-only-receipt-v1.json"
@@ -653,9 +682,11 @@ write_run_receipt() {
     "$trusted_summary" "$trusted_summary_sha256" \
     "$TRUSTED_SIGNER_PUBLIC_KEY" "$trusted_key_sha256" \
     "$signed_evidence_sha256" "$ANDROID_SDK_RESOLVED" \
-    "$ANDROID_NDK_RESOLVED" "$JAVA_HOME_RESOLVED/bin/java" "$APKSIGNER" \
+    "$ANDROID_NDK_RESOLVED" "$JAVA_HOME_RESOLVED/bin/java" \
+    "$APKSIGNER_JAVA" "$APKSIGNER_JAR" \
     "$attestation_root" "$PYTHON3_BINARY" \
-    "$authority_apksigner_sha256" "$authority_openssl_sha256" \
+    "$authority_java_sha256" "$authority_apksigner_jar_sha256" \
+    "$authority_openssl_sha256" \
     "$authority_revocation_sha256" "$authority_trust_root_sha256_csv" \
     "$confirmation_binding" "$confirmation_transcript" "$confirmation_report" \
     "$confirmation_binding_sha256" "$confirmation_transcript_sha256" \
@@ -676,8 +707,9 @@ import sys
     toolchain_path, toolchain_sha, challenge_hex, challenge_sha, adb_path, serial,
     app_cert, chain_sha, trusted_summary_path, trusted_summary_sha,
     trusted_key_path, trusted_key_sha, signed_evidence_sha, android_sdk, android_ndk,
-    java_path, apksigner_path, attestation_root, python_path,
-    authority_apksigner_sha, authority_openssl_sha, authority_revocation_sha,
+    java_path, apksigner_java_path, apksigner_jar_path, attestation_root,
+    python_path, authority_java_sha, authority_apksigner_jar_sha,
+    authority_openssl_sha, authority_revocation_sha,
     authority_trust_root_sha_csv,
     confirmation_binding_path, confirmation_transcript_path,
     confirmation_report_path,
@@ -830,8 +862,10 @@ if validated:
         "--require-slot",
         "--require-kagemusha-production-evidence",
         "--trusted-signer-public-key", "<trusted-signer-public-key>",
-        "--apksigner", "<pinned-apksigner>",
-        "--apksigner-sha256", authority_apksigner_sha,
+        "--java", "<pinned-java>",
+        "--java-sha256", authority_java_sha,
+        "--apksigner-jar", "<pinned-apksigner.jar>",
+        "--apksigner-jar-sha256", authority_apksigner_jar_sha,
         "--openssl", "<pinned-openssl>",
         "--openssl-sha256", authority_openssl_sha,
         "--android-attestation-revocation-status", "<pinned-revocation-status>",
@@ -850,8 +884,10 @@ if validated:
         "--confirmation-lifecycle", "<pulled-lifecycle-transcript>",
         "--confirmation-json-out", "<private-confirmation-report>",
         "--trusted-signer-public-key", "<trusted-signer-public-key>",
-        "--apksigner", "<pinned-apksigner>",
-        "--apksigner-sha256", authority_apksigner_sha,
+        "--java", "<pinned-java>",
+        "--java-sha256", authority_java_sha,
+        "--apksigner-jar", "<pinned-apksigner.jar>",
+        "--apksigner-jar-sha256", authority_apksigner_jar_sha,
         "--openssl", "<pinned-openssl>",
         "--openssl-sha256", authority_openssl_sha,
         "--android-attestation-revocation-status", "<pinned-revocation-status>",
@@ -901,7 +937,8 @@ payload = {
     "app_signing_certificate_sha256": app_cert or None,
     "attestation_certificate_chain_sha256": chain_sha or None,
     "authority_input_sha256": {
-        "apksigner": authority_apksigner_sha or None,
+        "java": authority_java_sha or None,
+        "apksigner_jar": authority_apksigner_jar_sha or None,
         "openssl": authority_openssl_sha or None,
         "android_attestation_revocation_status": authority_revocation_sha or None,
         "android_attestation_trust_roots": (
@@ -1000,8 +1037,8 @@ PY
 apk_signer_sha256() {
   local apk="$1"
   local output digests
-  output="$("$APKSIGNER" verify --print-certs "$apk")" || fail \
-    "apksigner rejected $apk"
+  output="$("$APKSIGNER_JAVA" -jar "$APKSIGNER_JAR" verify --print-certs "$apk")" \
+    || fail "apksigner.jar rejected $apk"
   digests="$(printf '%s\n' "$output" | awk -F': ' \
     '/^Signer #[0-9]+ certificate SHA-256 digest:/ {print tolower($2)}')"
   [[ "$(printf '%s\n' "$digests" | sed '/^$/d' | wc -l | tr -d ' ')" == "1" ]] || fail \
@@ -1093,10 +1130,12 @@ fi
 ATTESTATION_ROOT="${ATTESTATION_SLOT%/*}"
 [[ -n "$ATTESTATION_ROOT" ]] || ATTESTATION_ROOT="/"
 TRUSTED_SLOT_SUMMARY="$BUILD_TMP/trusted-attestation-slot-summary.json"
-VALIDATOR_SAFE_PATH="${PYTHON3_BINARY%/*}:${OPENSSL_BINARY%/*}:$JAVA_HOME_RESOLVED/bin:${APKSIGNER%/*}:/usr/bin:/bin"
+VALIDATOR_SAFE_PATH="/usr/bin:/bin"
 AUTHORITY_VALIDATOR_ARGS=(
-  --apksigner "$AUTHORITY_APKSIGNER"
-  --apksigner-sha256 "$AUTHORITY_APKSIGNER_SHA256"
+  --java "$AUTHORITY_JAVA"
+  --java-sha256 "$AUTHORITY_JAVA_SHA256"
+  --apksigner-jar "$AUTHORITY_APKSIGNER_JAR"
+  --apksigner-jar-sha256 "$AUTHORITY_APKSIGNER_JAR_SHA256"
   --openssl "$AUTHORITY_OPENSSL"
   --openssl-sha256 "$AUTHORITY_OPENSSL_SHA256"
   --android-attestation-revocation-status "$AUTHORITY_REVOCATION_STATUS"
@@ -1161,7 +1200,7 @@ expected = {
     "attestation_challenge_sha256": sys.argv[3],
     "candidate_record_sha256": sys.argv[4],
     "candidate_manifest_sha256": sys.argv[5],
-    "candidate_stage_manifest_path": "candidate-stage-manifest-v1.json",
+    "candidate_stage_manifest_path": "candidate-stage-manifest-v2.json",
     "candidate_stage_manifest_sha256": sys.argv[6],
     "candidate_lab_apk_sha256": sys.argv[7],
     "candidate_lab_test_apk_sha256": sys.argv[8],
@@ -1382,7 +1421,8 @@ verify_attestation_authority_inputs
 
 CONFIRMATION_VALUES="$("$PYTHON3_BINARY" -I - \
   "$CONFIRMATION_REPORT" "$BINDING" "$TRANSCRIPT" "$ATTESTATION_SLOT" \
-  "$AUTHORITY_APKSIGNER_SHA256" "$AUTHORITY_OPENSSL_SHA256" \
+  "$AUTHORITY_JAVA_SHA256" "$AUTHORITY_APKSIGNER_JAR_SHA256" \
+  "$AUTHORITY_OPENSSL_SHA256" \
   "$AUTHORITY_REVOCATION_STATUS_SHA256" \
   "$(IFS=,; printf '%s' "${AUTHORITY_TRUST_ROOT_SHA256[*]}")" <<'PY'
 from pathlib import Path
@@ -1397,7 +1437,8 @@ import sys
     binding_text,
     transcript_text,
     reference_slot_text,
-    apksigner_sha256,
+    java_sha256,
+    apksigner_jar_sha256,
     openssl_sha256,
     revocation_sha256,
     root_sha256_csv,
@@ -1507,7 +1548,8 @@ if report.get("comparison") != {
 }:
     raise SystemExit("candidate confirmation comparison policy/result is not exact")
 expected_authority = {
-    "apksigner_sha256": apksigner_sha256,
+    "java_sha256": java_sha256,
+    "apksigner_jar_sha256": apksigner_jar_sha256,
     "openssl_sha256": openssl_sha256,
     "attestation_trust_root_sha256": sorted(root_sha256_csv.split(",")),
     "attestation_revocation_status_sha256": revocation_sha256,
@@ -1591,7 +1633,8 @@ write_run_receipt \
   "$APP_SIGNING_CERTIFICATE_SHA256" \
   "$ATTESTATION_CERTIFICATE_CHAIN_SHA256" \
   "$ATTESTATION_ROOT" \
-  "$AUTHORITY_APKSIGNER_SHA256" \
+  "$AUTHORITY_JAVA_SHA256" \
+  "$AUTHORITY_APKSIGNER_JAR_SHA256" \
   "$AUTHORITY_OPENSSL_SHA256" \
   "$AUTHORITY_REVOCATION_STATUS_SHA256" \
   "$AUTHORITY_TRUST_ROOT_SHA256_CSV" \

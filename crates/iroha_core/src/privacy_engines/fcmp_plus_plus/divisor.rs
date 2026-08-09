@@ -29,10 +29,16 @@ pub(super) struct NormalizedDivisor<F: ProofScalar> {
 
 impl<F: ProofScalar> Zeroize for NormalizedDivisor<F> {
     fn zeroize(&mut self) {
-        self.y.zeroize();
-        self.yx.zeroize();
-        self.x.zeroize();
-        self.zero.zeroize();
+        self.y.clear_secret();
+        for coefficient in &mut self.yx {
+            coefficient.clear_secret();
+        }
+        for coefficient in &mut self.x {
+            coefficient.clear_secret();
+        }
+        self.yx.clear();
+        self.x.clear();
+        self.zero.clear_secret();
     }
 }
 
@@ -43,7 +49,7 @@ impl<F: ProofScalar> Drop for NormalizedDivisor<F> {
 }
 
 impl<F: ProofScalar> NormalizedDivisor<F> {
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(super) fn eval(&self, x: F, y: F) -> F {
         let mut result = self.zero + (self.y * y);
         let mut x_power = x;
@@ -294,7 +300,7 @@ struct ReducedPolynomial<F: ProofScalar> {
 impl<F: ProofScalar> Drop for ReducedPolynomial<F> {
     fn drop(&mut self) {
         for coefficient in self.terms.values_mut() {
-            coefficient.zeroize();
+            coefficient.clear_secret();
         }
         self.terms.clear();
     }

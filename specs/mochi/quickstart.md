@@ -48,11 +48,11 @@ Run the UI directly from cargo:
 cargo run -p mochi-ui --features gui --bin mochi
 ```
 
-By default MOCHI opens on the **Network** page with a single-peer preset rooted at the current
+By default MOCHI opens on the **Network** page with a four-validator BFT preset rooted at the current
 workspace:
 
 - Workspace root: the current working directory.
-- Sandbox root: `<workspace>/.mochi/sandbox/single-peer`.
+- Sandbox root: `<workspace>/.mochi/sandbox/four-peer-bft`.
 - Torii base port: `8080`.
 - P2P base port: `1337`.
 
@@ -102,8 +102,8 @@ The helper uses `python3` for path/JSON handling and detached process launch. Se
 `scripts/mochi_local_sandbox.sh down` can stop the sandbox cleanly with SIGTERM. By default the
 helper uses `<workspace>/.mochi/build-target` as its `CARGO_TARGET_DIR`, which keeps Mochi startup
 isolated from other builds happening in the repo; set `MOCHI_CARGO_TARGET_DIR` if you want a
-different cache location. Set `MOCHI_PROFILE=four-peer-bft` for the four-validator rehearsal or
-`MOCHI_WORKSPACE_ROOT=/path/to/app` when you are starting the sandbox for another workspace. The
+different cache location. Set `MOCHI_WORKSPACE_ROOT=/path/to/app` when you are starting the
+sandbox for another workspace. The
 repo-shared Codex guidance for this flow lives at
 `skills/mochi-local-sandbox/`; install or symlink it into
 `$CODEX_HOME/skills/mochi-local-sandbox` when you want Codex to use it.
@@ -116,7 +116,7 @@ The rendered local Torii config also enables `[torii.mcp]` with the curated writ
 
 After launch, use the **Devnet quickstart** card on the Network page for the normal local-dev flow:
 
-- Pick `Single Peer` or `Four Peer BFT`.
+- Use the `Four Peer BFT` topology.
 - Adjust the workspace, chain ID, and base ports.
 - Use **Start devnet**, **Restart devnet with this setup**, **Apply without starting**, or
   **Stop devnet**.
@@ -155,15 +155,20 @@ manual tweaks alongside MOCHI-managed values.
 The **Maintenance** controls expose the reset flows you use when iterating on a local network:
 
 - **Export snapshot** — copies peer storage/config/logs and the current genesis manifest into
-  `snapshots/<label>` under the active data root. Labels are sanitized automatically.
-- **Restore snapshot** — rehydrates integrity-checked peer storage (including snapshot roots), configs, logs, and the genesis
-  manifest from an existing bundle. `Supervisor::restore_snapshot` accepts either an absolute path or
-  the sanitised `snapshots/<label>` folder name; the UI mirrors this flow so Maintenance → Restore
-  can replay evidence bundles without touching files manually.
+  `snapshots/<label>` under the active data root and binds it to the selected immutable generation.
+  Labels are sanitized automatically.
+- **Restore snapshot** — verifies the selected generation plus the snapshot's config/genesis audit
+  copies, then rehydrates only integrity-checked peer storage (including snapshot roots) and logs.
+  It refuses snapshots from another generation and never overwrites published config or genesis
+  artifacts. `Supervisor::restore_snapshot` accepts either an absolute path or the sanitised
+  `snapshots/<label>` folder name; the UI mirrors this flow so Maintenance → Restore can replay
+  evidence bundles without touching files manually.
 - **Reset lane** — submits a signed retire/add lifecycle replacement for a configured Nexus lane;
   Kura owns the authenticated storage-incarnation transition.
-- **Wipe & re-genesis** — stops running peers, removes storage directories, regenerates genesis via
-  Kagami, and restarts peers when the wipe completes.
+- **Wipe & re-genesis** — prepares and validates a complete immutable config/genesis generation and
+  fresh generation-scoped storage while the current network remains usable, then briefly stops the
+  peers, atomically selects the new generation, and restarts them. Pre-commit failures preserve the
+  prior selection and storage; published generations remain available for audit.
 
 Both flows are covered by regression tests (`export_snapshot_captures_storage_and_metadata`,
 `wipe_and_regenerate_resets_storage_and_genesis`) to guarantee deterministic outputs.

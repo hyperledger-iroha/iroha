@@ -75,6 +75,29 @@ def test_reference_sdk_plan_does_not_reopen_native_orderbook_work() -> None:
         assert marker in normalized
 
 
+def test_fixture_readmes_do_not_claim_native_or_provider_qualification() -> None:
+    provider = " ".join(
+        read("fixtures/sorafs_manifest/provider_admission/README.md").split()
+    )
+    cookbook = " ".join(
+        read("fixtures/documentation/sorafs_reference_sdk/README.md").split()
+    )
+
+    assert "exercise chunk scheduling end-to-end" not in provider
+    assert (
+        "These fixtures do not provide or qualify authenticated multi-provider "
+        "transport, a governance-aware HSM/KMS completion signer, a sealed-CAS "
+        "retention backend, or four-validator deployment evidence."
+        in provider
+    )
+    assert (
+        "It is not evidence of clean ABI-21 builds for all five native release "
+        "targets, skip-free SDK parity, published packages, external-HSM signing, "
+        "a qualified provider deployment, or L1/L2 promotion."
+        in cookbook
+    )
+
+
 def test_gateway_tls_docs_require_withdrawal_and_runtime_adapter_recovery() -> None:
     handbook = read("specs/sorafs_gateway_deployment_handbook.md")
     automation = read("specs/sorafs_gateway_tls_automation.md")

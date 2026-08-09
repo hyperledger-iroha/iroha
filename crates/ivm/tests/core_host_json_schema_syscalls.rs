@@ -413,7 +413,7 @@ fn schema_decode_rejects_blob() {
 }
 
 #[test]
-fn schema_unknown_and_malformed_inputs_fail_closed_for_both_abis() {
+fn schema_unknown_and_malformed_inputs_fail_closed() {
     let generic_json = iroha_primitives::json::Json::from_str_norito(r#"{"value":1}"#)
         .expect("parse adversarial generic JSON");
     let generic_json_bytes =
@@ -422,62 +422,57 @@ fn schema_unknown_and_malformed_inputs_fail_closed_for_both_abis() {
         (&b"UnknownSchema"[..], generic_json_bytes.as_slice()),
         (&b"Order"[..], generic_json_bytes.as_slice()),
     ] {
-        for syscall in [
-            syscalls::SYSCALL_SCHEMA_DECODE,
-            syscalls::SYSCALL_SCHEMA_DECODE_DIRECT,
-        ] {
-            let mut vm = IVM::new(u64::MAX);
-            vm.set_host(CoreHost::new());
-            let p_schema = vm.alloc_input_tlv(&tlv(PointerType::Name, schema)).unwrap();
-            let p_bytes = vm
-                .alloc_input_tlv(&tlv(PointerType::NoritoBytes, payload))
-                .unwrap();
-            let dec = common::assemble(
-                &[
-                    encoding::wide::encode_sys(wide::system::SCALL, syscall as u8).to_le_bytes(),
-                    encoding::wide::encode_halt().to_le_bytes(),
-                ]
-                .concat(),
-            );
-            vm.set_register(10, p_schema);
-            vm.set_register(11, p_bytes);
-            vm.load_program(&dec).unwrap();
-            assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
-            assert_eq!(vm.register(10), p_schema);
-            assert_eq!(vm.register(11), p_bytes);
-        }
-    }
-
-    for syscall in [
-        syscalls::SYSCALL_SCHEMA_ENCODE,
-        syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT,
-    ] {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(CoreHost::new());
-        let p_schema = vm
-            .alloc_input_tlv(&tlv(PointerType::Name, b"UnknownSchema"))
+        let p_schema = vm.alloc_input_tlv(&tlv(PointerType::Name, schema)).unwrap();
+        let p_bytes = vm
+            .alloc_input_tlv(&tlv(PointerType::NoritoBytes, payload))
             .unwrap();
-        let p_json = vm
-            .alloc_input_tlv(&tlv(PointerType::Json, br#"{"value":1}"#))
-            .unwrap();
-        let enc = common::assemble(
+        let dec = common::assemble(
             &[
-                encoding::wide::encode_sys(wide::system::SCALL, syscall as u8).to_le_bytes(),
+                encoding::wide::encode_sys(
+                    wide::system::SCALL,
+                    syscalls::SYSCALL_SCHEMA_DECODE as u8,
+                )
+                .to_le_bytes(),
                 encoding::wide::encode_halt().to_le_bytes(),
             ]
             .concat(),
         );
         vm.set_register(10, p_schema);
-        vm.set_register(11, p_json);
-        vm.load_program(&enc).unwrap();
+        vm.set_register(11, p_bytes);
+        vm.load_program(&dec).unwrap();
         assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
         assert_eq!(vm.register(10), p_schema);
-        assert_eq!(vm.register(11), p_json);
+        assert_eq!(vm.register(11), p_bytes);
     }
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let p_schema = vm
+        .alloc_input_tlv(&tlv(PointerType::Name, b"UnknownSchema"))
+        .unwrap();
+    let p_json = vm
+        .alloc_input_tlv(&tlv(PointerType::Json, br#"{"value":1}"#))
+        .unwrap();
+    let enc = common::assemble(
+        &[
+            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_SCHEMA_ENCODE as u8)
+                .to_le_bytes(),
+            encoding::wide::encode_halt().to_le_bytes(),
+        ]
+        .concat(),
+    );
+    vm.set_register(10, p_schema);
+    vm.set_register(11, p_json);
+    vm.load_program(&enc).unwrap();
+    assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
+    assert_eq!(vm.register(10), p_schema);
+    assert_eq!(vm.register(11), p_json);
 }
 
 #[test]
-fn schema_info_resolves_only_explicit_families_for_both_abis() {
+fn schema_info_resolves_only_explicit_families() {
     let known = [
         ("Order", "OrderByTime", 2usize),
         ("OrderByTime", "OrderByTime", 2usize),
@@ -488,50 +483,45 @@ fn schema_info_resolves_only_explicit_families_for_both_abis() {
         ("QueryResponse", "QueryResponse", 1usize),
     ];
 
-    for syscall in [
-        syscalls::SYSCALL_SCHEMA_INFO,
-        syscalls::SYSCALL_SCHEMA_INFO_DIRECT,
-    ] {
-        for (schema, expected_current, expected_versions) in known {
-            let mut vm = IVM::new(u64::MAX);
-            vm.set_host(CoreHost::new());
-            let p_schema = vm
-                .alloc_input_tlv(&tlv(PointerType::Name, schema.as_bytes()))
-                .expect("allocate schema name");
-            let program = common::assemble_syscalls(&[syscall]);
-            vm.set_register(10, p_schema);
-            vm.load_program(&program).expect("load schema info program");
-            vm.run().expect("known schema info succeeds");
-            let output = vm
-                .memory
-                .validate_tlv(vm.register(10))
-                .expect("schema info output");
-            assert_eq!(output.type_id, PointerType::Json);
-            let value = common::json_from_payload(output.payload);
-            assert_eq!(
-                value["current"]["name"].as_str(),
-                Some(expected_current),
-                "current schema for {schema}"
-            );
-            assert_eq!(
-                value["versions"].as_array().map(Vec::len),
-                Some(expected_versions),
-                "version count for {schema}"
-            );
-        }
+    for (schema, expected_current, expected_versions) in known {
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(CoreHost::new());
+        let p_schema = vm
+            .alloc_input_tlv(&tlv(PointerType::Name, schema.as_bytes()))
+            .expect("allocate schema name");
+        let program = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_INFO]);
+        vm.set_register(10, p_schema);
+        vm.load_program(&program).expect("load schema info program");
+        vm.run().expect("known schema info succeeds");
+        let output = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("schema info output");
+        assert_eq!(output.type_id, PointerType::Json);
+        let value = common::json_from_payload(output.payload);
+        assert_eq!(
+            value["current"]["name"].as_str(),
+            Some(expected_current),
+            "current schema for {schema}"
+        );
+        assert_eq!(
+            value["versions"].as_array().map(Vec::len),
+            Some(expected_versions),
+            "version count for {schema}"
+        );
+    }
 
-        for schema in ["UnknownSchema", "OrderV2", "TradeV3", "Query"] {
-            let mut vm = IVM::new(u64::MAX);
-            vm.set_host(CoreHost::new());
-            let p_schema = vm
-                .alloc_input_tlv(&tlv(PointerType::Name, schema.as_bytes()))
-                .expect("allocate adversarial schema name");
-            let program = common::assemble_syscalls(&[syscall]);
-            vm.set_register(10, p_schema);
-            vm.load_program(&program).expect("load schema info program");
-            assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
-            assert_eq!(vm.register(10), p_schema);
-        }
+    for schema in ["UnknownSchema", "OrderV2", "TradeV3", "Query"] {
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(CoreHost::new());
+        let p_schema = vm
+            .alloc_input_tlv(&tlv(PointerType::Name, schema.as_bytes()))
+            .expect("allocate adversarial schema name");
+        let program = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_INFO]);
+        vm.set_register(10, p_schema);
+        vm.load_program(&program).expect("load schema info program");
+        assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
+        assert_eq!(vm.register(10), p_schema);
     }
 }
 
@@ -560,10 +550,10 @@ fn json_get_quantity_reads_canonical_decimal_strings() {
 }
 
 #[test]
-fn json_get_quantity_direct_accepts_input_heap_and_literal_pointers() {
+fn json_get_quantity_accepts_input_heap_and_literal_pointers() {
     let json_tlv = tlv(PointerType::Json, br#"{"amount":"0.00001"}"#);
     let key_tlv = tlv(PointerType::Name, b"amount");
-    let direct_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_QUANTITY_DIRECT]);
+    let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_QUANTITY]);
 
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
@@ -571,7 +561,7 @@ fn json_get_quantity_direct_accepts_input_heap_and_literal_pointers() {
     let p_key = vm.alloc_input_tlv(&key_tlv).expect("alloc input key");
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
-    vm.load_program(&direct_prog).unwrap();
+    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
     assert_eq!(tlv.type_id, PointerType::Quantity);
@@ -586,7 +576,7 @@ fn json_get_quantity_direct_accepts_input_heap_and_literal_pointers() {
     let p_key = alloc_heap_tlv(&mut vm, &key_tlv);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
-    vm.load_program(&direct_prog).unwrap();
+    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
     assert_eq!(tlv.type_id, PointerType::Quantity);
@@ -596,7 +586,7 @@ fn json_get_quantity_direct_accepts_input_heap_and_literal_pointers() {
     assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
 
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
-        &[syscalls::SYSCALL_JSON_GET_QUANTITY_DIRECT],
+        &[syscalls::SYSCALL_JSON_GET_QUANTITY],
         &[json_tlv.as_slice(), key_tlv.as_slice()],
     );
     let json_addr = literal_ptrs[0];
@@ -617,9 +607,9 @@ fn json_get_quantity_direct_accepts_input_heap_and_literal_pointers() {
 }
 
 #[test]
-fn schema_info_direct_accepts_input_heap_and_literal_pointers() {
+fn schema_info_accepts_input_heap_and_literal_pointers() {
     let schema_tlv = tlv(PointerType::Name, b"Order");
-    let direct_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_INFO_DIRECT as u8]);
+    let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_INFO as u8]);
 
     let decode_schema_info = |vm: &IVM| {
         let tlv = vm
@@ -639,7 +629,7 @@ fn schema_info_direct_accepts_input_heap_and_literal_pointers() {
     vm.set_host(CoreHost::new());
     let p_schema = vm.alloc_input_tlv(&schema_tlv).expect("alloc input schema");
     vm.set_register(10, p_schema);
-    vm.load_program(&direct_prog).unwrap();
+    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_schema_info(&vm);
 
@@ -647,12 +637,12 @@ fn schema_info_direct_accepts_input_heap_and_literal_pointers() {
     vm.set_host(CoreHost::new());
     let p_schema = alloc_heap_tlv(&mut vm, &schema_tlv);
     vm.set_register(10, p_schema);
-    vm.load_program(&direct_prog).unwrap();
+    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_schema_info(&vm);
 
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
-        &[syscalls::SYSCALL_SCHEMA_INFO_DIRECT as u8],
+        &[syscalls::SYSCALL_SCHEMA_INFO as u8],
         &[schema_tlv.as_slice()],
     );
     let schema_addr = literal_ptrs[0];
@@ -666,10 +656,10 @@ fn schema_info_direct_accepts_input_heap_and_literal_pointers() {
 }
 
 #[test]
-fn json_set_i64_direct_accepts_input_heap_and_literal_pointers() {
+fn json_set_i64_accepts_input_heap_and_literal_pointers() {
     let json_tlv = tlv(PointerType::Json, br#"{}"#);
     let key_tlv = tlv(PointerType::Name, b"bucket_id");
-    let direct_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_SET_I64_DIRECT as u8]);
+    let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_SET_I64 as u8]);
 
     let decode_bucket_id = |vm: &IVM| {
         let tlv = vm
@@ -692,7 +682,7 @@ fn json_set_i64_direct_accepts_input_heap_and_literal_pointers() {
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.set_register(12, 2);
-    vm.load_program(&direct_prog).unwrap();
+    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_bucket_id(&vm);
 
@@ -703,12 +693,12 @@ fn json_set_i64_direct_accepts_input_heap_and_literal_pointers() {
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.set_register(12, 2);
-    vm.load_program(&direct_prog).unwrap();
+    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_bucket_id(&vm);
 
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
-        &[syscalls::SYSCALL_JSON_SET_I64_DIRECT as u8],
+        &[syscalls::SYSCALL_JSON_SET_I64 as u8],
         &[json_tlv.as_slice(), key_tlv.as_slice()],
     );
     let json_addr = literal_ptrs[0];
@@ -725,7 +715,7 @@ fn json_set_i64_direct_accepts_input_heap_and_literal_pointers() {
 }
 
 #[test]
-fn json_set_account_id_direct_accepts_input_heap_and_literal_pointers() {
+fn json_set_account_id_accepts_input_heap_and_literal_pointers() {
     let owner_literal = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let expected_owner = AccountId::parse_encoded(owner_literal)
         .expect("valid canonical account id")
@@ -734,8 +724,7 @@ fn json_set_account_id_direct_accepts_input_heap_and_literal_pointers() {
     let json_tlv = tlv(PointerType::Json, br#"{}"#);
     let key_tlv = tlv(PointerType::Name, b"owner");
     let owner_tlv = tlv(PointerType::AccountId, owner_literal.as_bytes());
-    let direct_prog =
-        common::assemble_syscalls(&[syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT as u8]);
+    let canonical_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_SET_ACCOUNT_ID as u8]);
 
     let decode_owner = |vm: &IVM| {
         let tlv = vm
@@ -759,7 +748,7 @@ fn json_set_account_id_direct_accepts_input_heap_and_literal_pointers() {
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.set_register(12, p_owner);
-    vm.load_program(&direct_prog).unwrap();
+    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_owner(&vm);
 
@@ -771,12 +760,12 @@ fn json_set_account_id_direct_accepts_input_heap_and_literal_pointers() {
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.set_register(12, p_owner);
-    vm.load_program(&direct_prog).unwrap();
+    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_owner(&vm);
 
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
-        &[syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT as u8],
+        &[syscalls::SYSCALL_JSON_SET_ACCOUNT_ID as u8],
         &[
             json_tlv.as_slice(),
             key_tlv.as_slice(),
@@ -798,12 +787,12 @@ fn json_set_account_id_direct_accepts_input_heap_and_literal_pointers() {
 }
 
 #[test]
-fn build_path_key_norito_direct_accepts_input_heap_and_literal_pointers() {
+fn build_path_key_norito_accepts_input_heap_and_literal_pointers() {
     let base_tlv = tlv(PointerType::Name, b"entries");
     let key_payload = tlv(PointerType::Blob, b"canonical key bytes");
     let key_tlv = tlv(PointerType::NoritoBytes, &key_payload);
-    let direct_prog = assemble_state_map_syscall(
-        syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
+    let canonical_prog = assemble_state_map_syscall(
+        syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
         "entries",
         EmbeddedStateType::Bytes,
     );
@@ -826,7 +815,7 @@ fn build_path_key_norito_direct_accepts_input_heap_and_literal_pointers() {
     let p_key = vm.alloc_input_tlv(&key_tlv).expect("alloc input key");
     vm.set_register(10, p_base);
     vm.set_register(11, p_key);
-    vm.load_program(&direct_prog).unwrap();
+    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_path(&vm);
 
@@ -836,12 +825,12 @@ fn build_path_key_norito_direct_accepts_input_heap_and_literal_pointers() {
     let p_key = alloc_heap_tlv(&mut vm, &key_tlv);
     vm.set_register(10, p_base);
     vm.set_register(11, p_key);
-    vm.load_program(&direct_prog).unwrap();
+    vm.load_program(&canonical_prog).unwrap();
     vm.run().unwrap();
     decode_path(&vm);
 
     let (literal_prog, literal_ptrs) = assemble_state_map_syscall_with_literals(
-        syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
+        syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
         "entries",
         EmbeddedStateType::Bytes,
         &[base_tlv.as_slice(), key_tlv.as_slice()],
@@ -927,7 +916,7 @@ fn json_get_account_id_rejects_noncanonical_contract_address_literal() {
 
     let authority = checked_contract_authority_fixture();
     let contract_address = ContractAddress::derive(
-        iroha_data_model::account::address::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         &authority,
         3,
         DataSpaceId::UNIVERSAL,

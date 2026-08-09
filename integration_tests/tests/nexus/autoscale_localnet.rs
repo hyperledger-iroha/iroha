@@ -5309,7 +5309,7 @@ fn offline_kura_config(store_dir: PathBuf, blocks_in_memory: NonZeroUsize) -> Ku
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
-        eviction_required_replicas: defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
 

@@ -173,7 +173,7 @@ The CLI provides helpers for app‑facing ZK endpoints. For example, to fetch a 
 iroha app zk vote tally --election-id demo-election-1
 ```
 
-This posts to `/v1/zk/vote/tally` and prints the JSON response, e.g. `{ "finalized": true, "tally": [42, 58] }`.
+This posts to `/v1/zk/vote/tally` and prints the snapshot-bound JSON response, e.g. `{ "evaluated_block_height": 42, "evaluated_block_hash": "<64 lowercase hex characters>", "finalized": true, "tally": [42, 58] }`. An unknown election is an HTTP `404`; it is never represented as an empty tally.
 
 ### Governance helpers (app API convenience)
 
@@ -183,7 +183,7 @@ Build governance transaction skeletons and query governance state via Torii app 
 
 ```bash
 iroha app gov deploy propose \
-  --contract-address tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7 \
+  --contract-address irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw \
   --code-hash 0123...ABCD --abi-hash 0123...ABCD \
   --abi-version v1 --window-lower 12345 --window-upper 12400 \
   --mode Plain
@@ -194,7 +194,8 @@ Responds with `{ ok, proposal_id, tx_instructions: [{ wire_id, payload_hex }] }`
 - Submit a ballot (auto-detects referendum mode unless overridden):
 
 ```bash
-iroha app gov vote --referendum-id r1 --proof-b64 BASE64_PROOF \
+iroha app gov vote --referendum-id r1 --backend halo2/ipa \
+  --envelope-b64 BASE64_ENVELOPE \
   [--public public.json]
 ```
 
@@ -209,11 +210,13 @@ iroha app gov vote --referendum-id r1 --mode plain --owner <canonical-i105-owner
 
 ```bash
 curl -sS -X POST -H 'Content-Type: application/json' \
-  "$TORII/v1/gov/finalize" -d '{"referendum_id":"r1","proposal_id":"0123...ABCD"}' | jq .
+  "$TORII/v1/gov/finalize" \
+  -d '{"referendum_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","proposal_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}' | jq .
+```
 
 - Build an enactment transaction (for an approved proposal):
 
-  iroha app gov enact --proposal-id 0123...ABCD [--preimage-hash 00..00] [--window-lower H --window-upper H]
+  iroha app gov enact --proposal-id 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
 - Apply protected namespaces on the server (admin/testing):
 
@@ -221,11 +224,11 @@ curl -sS -X POST -H 'Content-Type: application/json' \
 
 - Build governance metadata for protected-namespace admission:
 
-  iroha app gov deploy meta --contract-address tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7
+  iroha app gov deploy meta --contract-address irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw
 
 - Audit a governed contract binding by canonical address or alias:
 
-  iroha app gov deploy audit --contract-address tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7
+  iroha app gov deploy audit --contract-address irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw
 
 - Combined manifest command (prints or saves when --out is provided):
 
@@ -336,140 +339,43 @@ iroha app zk attachments cleanup --content-type application/x-norito --older-tha
 # Delete all JSON attachments created before a timestamp
 iroha app zk attachments cleanup --content-type application/json --before-ms 1725500000000 --yes
 
-### Sample shield/unshield flows
-
-Shield public funds (append a shielded note commitment):
-
-```
-iroha app zk shield --asset <base58-asset-definition-id> --from <i105-account-id> \
-  --amount 1000 --note-commitment 0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD
 ```
 
-Structured envelopes can be supplied directly instead of pre-generated Norito
-bytes by passing the trio `--ephemeral-pubkey`, `--nonce-hex`, and
-`--ciphertext-b64` (base64, including the Poly1305 tag). When omitted, the CLI
-falls back to loading raw bytes via `--enc-payload`.
+### Confidential asset ingress
 
-To materialize memo bytes or inspect them without broadcasting a shield, use:
+The first-release CLI intentionally has no generic `zk shield` command. Public-to-confidential
+movement is admitted only by the proof-bound Kagemusha V4 top-up flow. In asset policy
+configuration, `allow_shield` and `vk_shield` refer exclusively to that authenticated top-up
+circuit; they do not enable an opaque caller-supplied commitment.
 
-```
+Encrypted memo envelopes remain available as a local wallet utility:
+
+```bash
 iroha app zk envelope --ephemeral-pubkey 0101... --nonce-hex 0202... \
   --ciphertext-b64 AQIDBA== --print-json --output memo.bin
 ```
 
-This writes the Norito-encoded envelope to `memo.bin` and prints both base64
-and JSON (when `--print-json` is set) for wallet tooling.
+### Register a ZK-capable asset
 
-Unshield with a proof attachment JSON:
-
-```
-cat > fuzz/attachments/zk/unshield_proof.sample.json <<'JSON'
-{
-  "backend": "halo2/ipa",
-  "proof_b64": "BASE64_PROOF_BYTES",
-  "vk_ref": { "backend": "halo2/ipa", "name": "vk_unshield" }
-}
-JSON
-
-iroha app zk unshield --asset <base58-asset-definition-id> --to <i105-account-id> --amount 1000 \
-  --inputs DEADBEEF...CAFE,0123ABCD...ABCD --proof-json fuzz/attachments/zk/unshield_proof.sample.json
-
-### Register a ZK-capable asset (Hybrid)
-
-```
+```bash
 iroha app zk register-asset --asset <base58-asset-definition-id> \
   --allow-shield true --allow-unshield true \
-  --vk-transfer halo2/ipa:vk_transfer --vk-unshield halo2/ipa:vk_unshield
+  --vk-unshield halo2/ipa:vk_unshield \
+  --vk-shield <canonical-kagemusha-top-up-vk>
 ```
 
-### Verifying Key lifecycle (register/update/get) → then bind via register-asset
+Register and inspect the referenced verifying keys with `iroha app zk vk register`,
+`iroha app zk vk update`, and `iroha app zk vk get`. The node rejects a `vk_shield`
+record that is not the canonical Kagemusha top-up circuit and schema. In the first-release
+surface, `vk_unshield` is the Kagemusha redemption verifier; no asset-bound private-transfer
+verifier or generic transfer/withdrawal ISI exists.
 
-1) Prepare VK JSONs. Samples live under `fuzz/attachments/zk/`:
+### ZK verify batch
 
-   - `vk_register.json` — fields: `backend`, `name`, `version`, one of:
-     - `vk_bytes` (base64) or `commitment_hex` (64-hex)
-   - `vk_unshield.sample.json` — minimal unshield VK sample (backend/name preset to `halo2/ipa:vk_unshield`)
-   - `vk_update.json` — same shape; `version` must increase
-
-2) Register verifying keys (transfer and unshield):
-
-```
-iroha app zk vk register --json fuzz/attachments/zk/vk_register.json
-iroha app zk vk register --json fuzz/attachments/zk/vk_register.json \
-  # adjust backend/name to create a second VK, e.g., vk_unshield
-```
-
-3) Inspect VKs:
-
-```
-iroha app zk vk get --backend halo2/ipa --name vk_transfer | jq .
-iroha app zk vk get --backend halo2/ipa --name vk_unshield | jq .
-
-### ZK Verify Batch (transparent Halo2 IPA)
-
-Verify multiple OpenVerify envelopes in one request and print per‑item statuses:
-
-```
-# Given a Norito-encoded vector of envelopes
+```bash
 iroha app zk verify-batch --norito ./batch.norito
-
-# Or a JSON array of base64-encoded Norito envelopes
-# Example: ["BASE64(norito(OpenVerifyEnvelope))", "BASE64(...)"]
+# Or pass a JSON array of base64-encoded Norito envelopes:
 iroha app zk verify-batch --json ./batch.json
-```
-```
-
-4) Update VK (version bump):
-
-```
-iroha app zk vk update --json fuzz/attachments/zk/vk_update.json
-```
-
-5) Bind VKs to an asset policy (Hybrid) using the new helper:
-
-```
-iroha app zk register-asset --asset <base58-asset-definition-id> \
-  --allow-shield true --allow-unshield true \
-  --vk-transfer halo2/ipa:vk_transfer --vk-unshield halo2/ipa:vk_unshield
-```
-
-Once registered and bound, you can run the shield/unshield examples above. For unshield, ensure your `--proof-json` refers to the matching backend and VK id.
-
-### End-to-end demo script
-
-A tiny end-to-end helper script is available (Bash and PowerShell):
-
-```
-fuzz/attachments/zk/demo_shield_unshield.sh
-fuzz/attachments/zk/demo_shield_unshield.ps1
-```
-
-It runs the following:
-1) VK register (transfer + unshield)
-2) `zk register-asset` (Hybrid, with VK bindings)
-3) `zk shield` with a placeholder commitment
-4) `zk unshield` (skipped by default; requires a real proof JSON)
-
-Environment variables you can set before running:
-- `CLI_CONFIG`: path to client config TOML
-- `BACKEND` (default `halo2/ipa`), `ASSET_ID` (default `<base58-asset-definition-id>`)
-- `FROM`, `TO`, `AMOUNT`, `NOTE_COMMITMENT_HEX`
-- `RUN_UNSHIELD=1`, `PROOF_JSON=/path/to/proof.json` to attempt unshield
-
-### Kotodama samples (non-consensus demos)
-
-Sample Kotodama programs illustrating pointer constructors, logging, and host syscalls. These are not required for the shield/unshield flow above but serve as references.
-
-```
-fuzz/attachments/zk/kotodama/zk_shield_example.ko
-fuzz/attachments/zk/kotodama/zk_unshield_verify_example.ko
-```
-
-Notes:
-- Compile to `.to` using the Kotodama compiler (see docs) and deploy/run as a contract if desired.
-- ZK verification in Kotodama is backend-gated; for practical flows use the CLI helpers above to submit ISIs and proof attachments.
-
-```
 ```
 
 List background prover reports and fetch one (non‑consensus):

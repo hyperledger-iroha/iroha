@@ -333,13 +333,13 @@ pub fn prepare_state(
         });
     }
 
-    let asset_quantity_id: AssetDefinitionId = AssetDefinitionId::new(
+    let asset_quantity_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         base_domain.clone(),
         "chaos_coin"
             .parse()
             .map_err(|_| eyre!("failed to parse numeric asset name"))?,
     );
-    let asset_nft_id: AssetDefinitionId = AssetDefinitionId::new(
+    let asset_nft_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         base_domain.clone(),
         "chaos_collectible"
             .parse()
@@ -476,24 +476,26 @@ pub fn prepare_state(
         nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
             ivm_domain.clone(),
         ))));
-        let needs_universal_domain = fee_asset
-            .try_domain()
-            .zip(stake_asset.try_domain())
-            .map_or(true, |(fee_domain, stake_domain)| {
-                fee_domain != stake_domain
-            });
-        if needs_universal_domain {
-            nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
-                universal_domain,
-            ))));
-        }
+        nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
+            universal_domain,
+        ))));
         nexus_genesis.push(InstructionBox::from(Register::account(gas_account)));
         nexus_genesis.push(InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(stake_asset.clone()).with_name("Nexus Stake".to_owned()),
+            AssetDefinition::numeric(
+                stake_asset.clone(),
+                "Nexus Stake".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ),
         )));
         if fee_asset != stake_asset {
             nexus_genesis.push(InstructionBox::from(Register::asset_definition(
-                AssetDefinition::numeric(fee_asset.clone()).with_name("Nexus Fee".to_owned()),
+                AssetDefinition::numeric(
+                    fee_asset.clone(),
+                    "Nexus Fee".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                ),
             )));
         }
 
@@ -550,12 +552,21 @@ pub fn prepare_state(
         base_domain.clone(),
     ))));
     genesis_tx.push(InstructionBox::from(Register::asset_definition(
-        AssetDefinition::numeric(asset_quantity_id.clone()).with_name("Numeric Asset".to_owned()),
+        AssetDefinition::numeric(
+            asset_quantity_id.clone(),
+            "Numeric Asset".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ),
     )));
     genesis_tx.push(InstructionBox::from(Register::asset_definition(
-        AssetDefinition::numeric(asset_nft_id.clone())
-            .with_name("NFT Asset".to_owned())
-            .mintable_once(),
+        AssetDefinition::numeric(
+            asset_nft_id.clone(),
+            "NFT Asset".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .mintable_once(),
     )));
 
     genesis_tx.push(InstructionBox::from(Register::account(
@@ -1454,9 +1465,13 @@ impl ChaosState {
             .parse()
             .map_err(|_| eyre!("failed to parse asset definition name"))?;
         let definition_id: AssetDefinitionId =
-            AssetDefinitionId::new(self.base_domain.clone(), definition_name);
-        let asset_definition = AssetDefinition::numeric(definition_id.clone())
-            .with_name(format!("chaos_asset_{suffix}"));
+            AssetDefinitionId::derive_from_components(self.base_domain.clone(), definition_name);
+        let asset_definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            format!("chaos_asset_{suffix}"),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        );
         self.asset_definitions.insert(definition_id.clone());
         self.asset_definitions_unclaimed
             .insert(definition_id.clone());
@@ -1490,7 +1505,7 @@ impl ChaosState {
             .parse()
             .expect("ghost asset definition name should parse");
         let fallback: AssetDefinitionId =
-            AssetDefinitionId::new(self.base_domain.clone(), fallback_name);
+            AssetDefinitionId::derive_from_components(self.base_domain.clone(), fallback_name);
         TransactionPlan {
             state_updates: Vec::new(),
             label: "unregister_asset_definition",
@@ -1723,7 +1738,7 @@ impl ChaosState {
             EventFilterBox::ExecuteTrigger(
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             ),
-        );
+        )?;
         instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
             trigger_id.clone(),
             action,
@@ -1766,7 +1781,7 @@ impl ChaosState {
             EventFilterBox::ExecuteTrigger(
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             ),
-        );
+        )?;
         instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
             trigger_id.clone(),
             action,
@@ -1815,7 +1830,7 @@ impl ChaosState {
                 EventFilterBox::ExecuteTrigger(
                     ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
                 ),
-            );
+            )?;
             instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
                 trigger_id.clone(),
                 action,
@@ -2036,7 +2051,7 @@ impl ChaosState {
             Repeats::Exactly(1),
             self.treasury.id.clone(),
             TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
-        );
+        )?;
         Ok(TransactionPlan {
             state_updates: Vec::new(),
             label: "register_time_trigger",
@@ -2063,7 +2078,7 @@ impl ChaosState {
             Repeats::Indefinitely,
             self.treasury.id.clone(),
             DataEventFilter::Account(filter),
-        );
+        )?;
         let state_updates = vec![PlanUpdate::RegisterTrigger(trigger_id.clone())];
         Ok(TransactionPlan {
             state_updates,
@@ -2088,7 +2103,7 @@ impl ChaosState {
             EventFilterBox::Pipeline(PipelineEventFilterBox::Transaction(
                 TransactionEventFilter::new(),
             )),
-        );
+        )?;
         let state_updates = vec![PlanUpdate::RegisterTrigger(trigger_id.clone())];
         Ok(TransactionPlan {
             state_updates,
@@ -2113,7 +2128,7 @@ impl ChaosState {
             EventFilterBox::ExecuteTrigger(
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             ),
-        );
+        )?;
         let trigger = Trigger::new(trigger_id.clone(), action);
         let state_updates = vec![
             PlanUpdate::RegisterTrigger(trigger_id.clone()),
@@ -2154,7 +2169,7 @@ impl ChaosState {
             Repeats::Exactly(1),
             self.treasury.id.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
-        );
+        )?;
         Ok(TransactionPlan {
             state_updates: Vec::new(),
             label: "deploy_ivm_contract",
@@ -2185,7 +2200,7 @@ impl ChaosState {
             Repeats::Indefinitely,
             self.treasury.id.clone(),
             DataEventFilter::Any,
-        );
+        )?;
         let state_updates = vec![PlanUpdate::RegisterTrigger(trigger_id.clone())];
         Ok(TransactionPlan {
             state_updates,
@@ -4977,34 +4992,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn revoke_manifest_without_entry_sets_failure() {
-        let PreparedChaos { mut state, .. } =
-            prepare_state(2, None, None, WorkloadProfile::Stable, false).expect("state prepared");
-        let mut rng = StdRng::seed_from_u64(3);
-        let plan = state
-            .plan_revoke_space_manifest(&mut rng)
-            .expect("revoke plan builds");
-        assert!(
-            !plan.expect_success,
-            "revocation without manifest should fail"
-        );
-    }
-
-    #[test]
-    fn domain_metadata_roundtrip_clears_tracking() {
-        let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
-        let set_plan = state.plan_set_domain_key().expect("set domain metadata");
-        assert_eq!(set_plan.label, "set_domain_kv");
-        assert!(
-            !state.domain_metadata.is_empty(),
-            "domain metadata should be tracked after setting"
-        );
-        let remove_plan = state
-            .plan_remove_domain_key()
-            .expect("remove domain metadata");
-        assert_eq!(remove_plan.label, "remove_domain_kv");
-        // Removal path may leave map empty or retain other keys, but it must not panic.
-    }
+    include!("instructions_tail_tests.rs");
 }

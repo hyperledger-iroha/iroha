@@ -24,6 +24,8 @@ use std::{
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
 
 use blake3::{Hash, Hasher};
 #[cfg(feature = "manifest")]
@@ -46,6 +48,19 @@ use sorafs_manifest::{
 };
 use thiserror::Error;
 
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const FILE_SHARE_READ: u32 = 0x1;
+#[cfg(windows)]
+const FILE_SHARE_WRITE: u32 = 0x2;
+#[cfg(windows)]
+const FILE_SHARE_DELETE: u32 = 0x4;
+
 pub mod bundle_archive;
 pub mod chunker_registry;
 mod chunker_registry_data;
@@ -55,6 +70,8 @@ pub mod fixtures;
 pub mod gateway;
 pub mod local_fetch;
 pub mod multi_fetch;
+#[cfg(feature = "manifest")]
+pub mod musubi;
 pub mod policy;
 #[cfg(feature = "manifest")]
 #[path = "proof_stream.rs"]
@@ -82,7 +99,7 @@ pub use trustless::{
     TrustlessVerifierConfig,
 };
 #[cfg(feature = "manifest")]
-pub use verifier::{CarVerificationReport, CarVerifier, CarVerifyError};
+pub use verifier::{CarVerificationReport, CarVerifier, CarVerifyError, VerifiedCanonicalCarV1};
 
 /// Compute the BLAKE3 digest of the provided payload.
 #[must_use]
@@ -297,12 +314,12 @@ pub trait PayloadSource {
     /// Reads exactly `buf.len()` bytes starting at `offset` into `buf`.
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError>;
 
-    /// Verify that the source contains exactly the planned payload length when knowable.
+    /// Verify that the source contains exactly the planned payload length.
     ///
-    /// Random-access sources with no cheap length operation may retain the default no-op.
-    fn ensure_exhausted(&mut self, _expected_len: u64) -> Result<(), ChunkStoreError> {
-        Ok(())
-    }
+    /// Implementations must fail closed when the exact source length cannot be
+    /// established; silently accepting an unknown or longer source would allow
+    /// trailing bytes to escape the canonical payload commitment.
+    fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError>;
 }
 
 /// Streaming payload backed by a sequential reader.
@@ -410,10 +427,9 @@ impl PayloadSource for InMemoryPayload<'_> {
     }
 }
 
-/// Payload source backed by a stable no-follow regular file on Unix.
+/// Payload source backed by a stable no-follow regular file on Unix or Windows.
 ///
-/// Other platforms fail closed with [`io::ErrorKind::Unsupported`] until equivalent file-identity
-/// and no-follow handle support is implemented.
+/// Other platforms fail closed with [`io::ErrorKind::Unsupported`].
 pub struct FilePayload {
     file: File,
     path: PathBuf,
@@ -423,24 +439,49 @@ pub struct FilePayload {
 impl FilePayload {
     /// Open a stable no-follow regular-file payload source.
     pub fn open(path: &Path) -> Result<Self, io::Error> {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = path;
             return Err(unsupported_secure_filesystem_error());
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             let linked = fs::symlink_metadata(path)?;
-            if linked.file_type().is_symlink() || !linked.is_file() || linked.nlink() != 1 {
+            validate_payload_metadata(&linked)?;
+            let mut options = OpenOptions::new();
+            options.read(true);
+            set_atomic_no_follow(&mut options);
+            #[cfg(windows)]
+            options.share_mode(FILE_SHARE_READ);
+            let file = options.open(path)?;
+            Self::from_open_file(path, file)
+        }
+    }
+
+    /// Adopt an already-open stable regular-file handle without reopening its path.
+    ///
+    /// This is used when a create-new writer becomes the reader after it has durably completed;
+    /// retaining the original handle closes the otherwise unavoidable namespace race.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the path is not a one-link regular file, the supplied handle does
+    /// not name that exact file, or either identity changes while it is being validated.
+    pub fn from_open_file(path: &Path, file: File) -> Result<Self, io::Error> {
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (path, file);
+            return Err(unsupported_secure_filesystem_error());
+        }
+        #[cfg(any(unix, windows))]
+        {
+            let linked = fs::symlink_metadata(path)?;
+            if !metadata_is_safe_payload_file(&linked) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "file payload must be a no-follow regular file with one hard link",
                 ));
             }
-            let mut options = OpenOptions::new();
-            options.read(true);
-            set_atomic_no_follow(&mut options);
-            let file = options.open(path)?;
             validate_payload_file_handle(path, &file, linked.len(), Some(&linked))?;
             let metadata = file.metadata()?;
             Ok(Self {
@@ -492,12 +533,83 @@ struct FileSpan {
     metadata: fs::Metadata,
 }
 
+#[cfg(windows)]
+struct WindowsDirectoryPin {
+    path: PathBuf,
+    handle: File,
+    metadata: fs::Metadata,
+}
+
+#[cfg(windows)]
+impl WindowsDirectoryPin {
+    fn open(path: &Path) -> io::Result<Self> {
+        let linked = fs::symlink_metadata(path)?;
+        validate_windows_directory_metadata(&linked)?;
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+        let handle = options.open(path)?;
+        let opened = handle.metadata()?;
+        let after = fs::symlink_metadata(path)?;
+        validate_windows_directory_metadata(&opened)?;
+        validate_windows_directory_metadata(&after)?;
+        if !metadata_identifies_same_file(&linked, &opened)
+            || !metadata_identifies_same_file(&opened, &after)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "directory payload ancestor changed while being pinned",
+            ));
+        }
+        Ok(Self {
+            path: path.to_path_buf(),
+            handle,
+            metadata: opened,
+        })
+    }
+
+    fn validate(&self) -> io::Result<()> {
+        let opened = self.handle.metadata()?;
+        let linked = fs::symlink_metadata(&self.path)?;
+        validate_windows_directory_metadata(&opened)?;
+        validate_windows_directory_metadata(&linked)?;
+        if !metadata_identifies_same_file(&self.metadata, &opened)
+            || !metadata_identifies_same_file(&opened, &linked)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "directory payload ancestor changed after validation",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn validate_windows_directory_metadata(metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata_is_link_or_reparse(metadata)
+        || !metadata.is_dir()
+        || metadata.volume_serial_number().is_none()
+        || metadata.file_index().is_none()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "directory payload ancestor is not a stable non-reparse directory",
+        ));
+    }
+    Ok(())
+}
+
 /// Payload source backed by multiple files described by a [`CarBuildPlan`].
 ///
-/// Secure file-backed operation is currently Unix-only; other platforms fail closed.
+/// Secure file-backed operation is available on Unix and Windows; other platforms fail closed.
 pub struct DirectoryPayload {
     canonical_root: PathBuf,
     root_metadata: fs::Metadata,
+    #[cfg(windows)]
+    directory_pins: Vec<WindowsDirectoryPin>,
     spans: Vec<FileSpan>,
     total_len: u64,
     cached_index: Option<usize>,
@@ -511,12 +623,12 @@ impl DirectoryPayload {
     /// non-regular files, root escapes, and actual sizes different from [`FilePlan::size`] are
     /// rejected before the source can be read.
     pub fn new(root: &Path, files: &[FilePlan]) -> Result<Self, io::Error> {
-        if !cfg!(unix) {
+        if !cfg!(any(unix, windows)) {
             let _ = (root, files);
             return Err(unsupported_secure_filesystem_error());
         }
         let root_metadata = fs::symlink_metadata(root)?;
-        if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        if metadata_is_link_or_reparse(&root_metadata) || !root_metadata.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "directory payload root must be a real directory",
@@ -529,6 +641,8 @@ impl DirectoryPayload {
                 "directory payload root changed during canonicalization",
             ));
         }
+        #[cfg(windows)]
+        let mut directory_pins = vec![WindowsDirectoryPin::open(&canonical_root)?];
         if files.len() > CAR_PLAN_MAX_FILES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -579,8 +693,15 @@ impl DirectoryPayload {
             previous_path = Some(&file.path);
 
             let mut path = canonical_root.clone();
-            for component in &file.path {
+            for (index, component) in file.path.iter().enumerate() {
                 path.push(component);
+                #[cfg(not(windows))]
+                let _ = index;
+                #[cfg(windows)]
+                if index + 1 < file.path.len() && !directory_pins.iter().any(|pin| pin.path == path)
+                {
+                    directory_pins.push(WindowsDirectoryPin::open(&path)?);
+                }
             }
             let end = offset.checked_add(file.size).ok_or_else(|| {
                 io::Error::new(
@@ -612,6 +733,8 @@ impl DirectoryPayload {
         Ok(Self {
             canonical_root,
             root_metadata: canonical_metadata,
+            #[cfg(windows)]
+            directory_pins,
             total_len: offset,
             spans,
             cached_index: None,
@@ -622,12 +745,16 @@ impl DirectoryPayload {
     fn validate_root(&self) -> Result<(), ChunkStoreError> {
         let current = fs::symlink_metadata(&self.canonical_root).map_err(ChunkStoreError::Io)?;
         if !current.is_dir()
-            || current.file_type().is_symlink()
+            || metadata_is_link_or_reparse(&current)
             || !metadata_snapshot_matches(&self.root_metadata, &current)
         {
             return Err(ChunkStoreError::Io(io::Error::other(
                 "directory payload root changed after validation",
             )));
+        }
+        #[cfg(windows)]
+        for pin in &self.directory_pins {
+            pin.validate().map_err(ChunkStoreError::Io)?;
         }
         Ok(())
     }
@@ -780,6 +907,8 @@ fn open_confined_payload_file(
     let mut options = OpenOptions::new();
     options.read(true);
     set_atomic_no_follow(&mut options);
+    #[cfg(windows)]
+    options.share_mode(FILE_SHARE_READ);
     let file = options.open(path)?;
     validate_payload_file_handle(path, &file, expected_len, captured)?;
     let canonical_path = fs::canonicalize(path)?;
@@ -792,7 +921,7 @@ fn open_confined_payload_file(
     Ok(file)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn validate_no_symlinks_below_root(canonical_root: &Path, path: &Path) -> io::Result<()> {
     let relative = path.strip_prefix(canonical_root).map_err(|_| {
         io::Error::new(
@@ -811,10 +940,10 @@ fn validate_no_symlinks_below_root(canonical_root: &Path, path: &Path) -> io::Re
         };
         current.push(value);
         let metadata = fs::symlink_metadata(&current)?;
-        if metadata.file_type().is_symlink() {
+        if metadata_is_link_or_reparse(&metadata) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "directory payload path contains a symbolic link",
+                "directory payload path contains a symbolic link or reparse point",
             ));
         }
         if components.peek().is_some() && !metadata.is_dir() {
@@ -827,7 +956,7 @@ fn validate_no_symlinks_below_root(canonical_root: &Path, path: &Path) -> io::Re
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn validate_no_symlinks_below_root(_canonical_root: &Path, _path: &Path) -> io::Result<()> {
     Err(unsupported_secure_filesystem_error())
 }
@@ -840,7 +969,7 @@ fn validate_payload_file_handle(
 ) -> io::Result<()> {
     let opened = file.metadata()?;
     let linked = fs::symlink_metadata(path)?;
-    if !opened.is_file() || linked.file_type().is_symlink() || !linked.is_file() {
+    if !metadata_is_safe_payload_file(&opened) || !metadata_is_safe_payload_file(&linked) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "directory payload entry must be a no-follow regular file",
@@ -849,13 +978,6 @@ fn validate_payload_file_handle(
     if !metadata_identifies_same_file(&opened, &linked) {
         return Err(io::Error::other(
             "directory payload entry changed while being opened",
-        ));
-    }
-    #[cfg(unix)]
-    if opened.nlink() != 1 || linked.nlink() != 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "directory payload entry must have exactly one hard link",
         ));
     }
     if opened.len() != expected_len || linked.len() != expected_len {
@@ -878,10 +1000,56 @@ fn validate_payload_file_handle(
     Ok(())
 }
 
+fn validate_payload_metadata(metadata: &fs::Metadata) -> io::Result<()> {
+    if !metadata_is_safe_payload_file(metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "file payload must be a non-reparse regular file with one hard link",
+        ));
+    }
+    Ok(())
+}
+
+fn metadata_is_safe_payload_file(metadata: &fs::Metadata) -> bool {
+    metadata.is_file()
+        && !metadata_is_link_or_reparse(metadata)
+        && metadata_has_one_hard_link(metadata)
+}
+
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink() || metadata_is_windows_reparse_point(metadata)
+}
+
+#[cfg(windows)]
+fn metadata_is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn metadata_is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+fn metadata_has_one_hard_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        metadata.nlink() == 1
+    }
+    #[cfg(windows)]
+    {
+        metadata.number_of_links() == Some(1)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
 fn unsupported_secure_filesystem_error() -> io::Error {
     io::Error::new(
         io::ErrorKind::Unsupported,
-        "secure SoraFS file-backed payload and directory publication require Unix file identities and no-follow opens",
+        "secure SoraFS file-backed payloads require Unix or Windows file identities and no-follow opens",
     )
 }
 
@@ -2030,8 +2198,8 @@ fn validate_directory_metadata(
 fn validate_atomic_destination_absent(path: &Path) -> Result<(), ChunkStoreError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
-            let kind = if metadata.file_type().is_symlink() {
-                "symlink"
+            let kind = if metadata_is_link_or_reparse(&metadata) {
+                "symlink or reparse point"
             } else if metadata.is_dir() {
                 "directory"
             } else {
@@ -2041,7 +2209,13 @@ fn validate_atomic_destination_absent(path: &Path) -> Result<(), ChunkStoreError
                 } else {
                     "file"
                 }
-                #[cfg(not(unix))]
+                #[cfg(windows)]
+                if metadata.number_of_links() != Some(1) {
+                    "hard-linked file"
+                } else {
+                    "file"
+                }
+                #[cfg(not(any(unix, windows)))]
                 {
                     "file"
                 }
@@ -2062,7 +2236,7 @@ fn validate_atomic_destination_absent(path: &Path) -> Result<(), ChunkStoreError
 fn validate_atomic_temp(path: &Path, file: &File) -> Result<(), ChunkStoreError> {
     let opened = file.metadata().map_err(ChunkStoreError::Io)?;
     let linked = fs::symlink_metadata(path).map_err(ChunkStoreError::Io)?;
-    if !opened.is_file() || linked.file_type().is_symlink() || !linked.is_file() {
+    if !metadata_is_safe_payload_file(&opened) || !metadata_is_safe_payload_file(&linked) {
         return Err(ChunkStoreError::Io(io::Error::other(format!(
             "atomic chunk temporary `{}` is not a regular file",
             path.display()
@@ -2074,20 +2248,20 @@ fn validate_atomic_temp(path: &Path, file: &File) -> Result<(), ChunkStoreError>
             path.display()
         ))));
     }
-    #[cfg(unix)]
-    if opened.nlink() != 1 || linked.nlink() != 1 {
-        return Err(ChunkStoreError::Io(io::Error::other(format!(
-            "atomic chunk temporary `{}` has {} hard links",
-            path.display(),
-            opened.nlink().max(linked.nlink())
-        ))));
-    }
     Ok(())
 }
 
 #[cfg(unix)]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(windows)]
+fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
 }
 
 #[cfg(unix)]
@@ -2102,14 +2276,26 @@ fn metadata_snapshot_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool 
         && left.nlink() == right.nlink()
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn metadata_snapshot_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    metadata_identifies_same_file(left, right)
+        && left.file_type() == right.file_type()
+        && left.file_attributes() == right.file_attributes()
+        && left.file_size() == right.file_size()
+        && left.creation_time() == right.creation_time()
+        && left.last_write_time() == right.last_write_time()
+        && left.number_of_links() == Some(1)
+        && right.number_of_links() == Some(1)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.file_type() == right.file_type()
         && left.len() == right.len()
         && left.modified().ok() == right.modified().ok()
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn metadata_snapshot_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     metadata_identifies_same_file(left, right) && left.created().ok() == right.created().ok()
 }
@@ -2131,10 +2317,40 @@ fn sync_directory(path: &Path) -> io::Result<()> {
     {
         File::open(path)?.sync_all()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let linked = fs::symlink_metadata(path)?;
+        validate_windows_directory_metadata(&linked)?;
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+        let directory = options.open(path)?;
+        let opened = directory.metadata()?;
+        validate_windows_directory_metadata(&opened)?;
+        if !metadata_identifies_same_file(&linked, &opened) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "directory changed while opening its durability handle",
+            ));
+        }
+        directory.sync_all()?;
+        let after = fs::symlink_metadata(path)?;
+        validate_windows_directory_metadata(&after)?;
+        if !metadata_identifies_same_file(&opened, &after) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "directory changed while it was synchronized",
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
-        Ok(())
+        Err(unsupported_secure_filesystem_error())
     }
 }
 
@@ -2143,7 +2359,12 @@ fn set_atomic_no_follow(options: &mut OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn set_atomic_no_follow(options: &mut OpenOptions) {
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
 fn set_atomic_no_follow(_options: &mut OpenOptions) {}
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -3650,18 +3871,6 @@ impl PorMerkleTree {
     ) -> Result<Option<PorProof>, ChunkStoreError> {
         let mut source = InMemoryPayload::new(payload);
         self.prove_leaf_with(chunk_index, segment_index, leaf_index, &mut source)
-    }
-
-    /// Alias for [`Self::try_prove_leaf`] retained while callers migrate to explicit `try_`
-    /// proof construction.
-    pub fn prove_leaf(
-        &self,
-        chunk_index: usize,
-        segment_index: usize,
-        leaf_index: usize,
-        payload: &[u8],
-    ) -> Result<Option<PorProof>, ChunkStoreError> {
-        self.try_prove_leaf(chunk_index, segment_index, leaf_index, payload)
     }
 
     pub fn prove_leaf_with<P: PayloadSource>(
@@ -6973,6 +7182,12 @@ mod tests {
                 "probe source must not be read",
             )))
         }
+
+        fn ensure_exhausted(&mut self, _expected_len: u64) -> Result<(), ChunkStoreError> {
+            Err(ChunkStoreError::Io(io::Error::other(
+                "probe source length must not be queried",
+            )))
+        }
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -9147,12 +9362,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_input_rejected() {
-        let err = CarBuildPlan::single_file(&[]).unwrap_err();
-        assert!(matches!(err, CarPlanError::EmptyInput));
-    }
-
-    #[test]
     fn plan_building_rejects_invalid_chunk_profile_without_panicking() {
         let invalid_profile = ChunkProfile {
             min_size: 4096,
@@ -9903,6 +10112,7 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 
+    #[cfg(unix)]
     #[test]
     fn directory_payload_detects_mutation_before_read_and_final_recheck() {
         let temp = tempdir().expect("tempdir");
@@ -9941,7 +10151,7 @@ mod tests {
         ));
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     #[test]
     fn secure_file_backed_apis_fail_closed_on_unsupported_platforms() {
         let file_error = FilePayload::open(Path::new("payload"))
@@ -9961,298 +10171,73 @@ mod tests {
         ));
     }
 
+    #[cfg(windows)]
     #[test]
-    fn chunk_fetch_specs_reflect_plan() {
-        let input = sample_input();
-        let plan = CarBuildPlan::single_file(&input).expect("plan");
-        let specs = plan.try_chunk_fetch_specs().expect("fetch specs");
-        assert_eq!(specs.len(), plan.chunks.len());
-        for (idx, spec) in specs.iter().enumerate() {
-            let chunk = &plan.chunks[idx];
-            assert_eq!(spec.chunk_index, idx);
-            assert_eq!(spec.offset, chunk.offset);
-            assert_eq!(spec.length, chunk.length);
-            assert_eq!(spec.digest, chunk.digest);
+    fn windows_file_payload_rejects_reparse_hardlink_and_mutation() {
+        use std::os::windows::fs::symlink_file;
+
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("payload");
+        fs::write(&path, b"payload").expect("payload");
+        let hardlink = temp.path().join("hardlink");
+        fs::hard_link(&path, &hardlink).expect("hardlink");
+        assert!(FilePayload::open(&path).is_err());
+        fs::remove_file(&hardlink).expect("remove hardlink");
+
+        let link = temp.path().join("link");
+        if symlink_file(&path, &link).is_ok() {
+            assert!(FilePayload::open(&link).is_err());
         }
+
+        let mut source = FilePayload::open(&path).expect("stable Windows payload");
+        let mut bytes = [0u8; 7];
+        source.read_exact(0, &mut bytes).expect("read payload");
+        assert_eq!(&bytes, b"payload");
+        assert!(
+            OpenOptions::new().write(true).open(&path).is_err(),
+            "the retained read handle must deny concurrent mutation"
+        );
+        assert!(
+            fs::remove_file(&path).is_err(),
+            "the retained read handle must deny namespace substitution"
+        );
     }
 
+    #[cfg(windows)]
     #[test]
-    fn try_chunk_fetch_specs_rejects_invalid_plan_instead_of_returning_empty() {
-        let input = sample_input();
-        let mut plan = CarBuildPlan::single_file(&input).expect("plan");
-        plan.chunks[0].offset = 1;
-        assert!(matches!(
-            plan.try_chunk_fetch_specs(),
-            Err(CarPlanError::InvalidPlan(
-                CarPlanValidationError::NonContiguousChunk { chunk_index: 0, .. }
-            ))
-        ));
-    }
-
-    #[test]
-    fn directory_car_emits_directory_root() {
-        use std::io::Cursor;
-
-        let files = vec![
-            FileEntry {
-                path: vec!["docs".to_string(), "index.html".to_string()],
-                data: b"<html></html>".to_vec(),
-            },
-            FileEntry {
-                path: vec!["docs".to_string(), "style.css".to_string()],
-                data: b"body { background: #fff; }".to_vec(),
-            },
-        ];
-
-        let (plan, payload) = CarBuildPlan::from_files(files).expect("plan");
-        assert_eq!(plan.files.len(), 2);
-        assert_eq!(
-            plan.files[0].path,
-            vec!["docs".to_string(), "index.html".to_string()]
+    fn windows_directory_payload_pins_ancestors_and_rejects_hardlinks() {
+        let temp = tempdir().expect("tempdir");
+        let nested = temp.path().join("nested");
+        fs::create_dir(&nested).expect("nested directory");
+        let path = nested.join("payload");
+        fs::write(&path, b"payload").expect("payload");
+        let files = [FilePlan {
+            path: vec!["nested".to_owned(), "payload".to_owned()],
+            first_chunk: 0,
+            chunk_count: 1,
+            size: 7,
+        }];
+        let mut source = DirectoryPayload::new(temp.path(), &files).expect("directory payload");
+        assert!(
+            fs::rename(&nested, temp.path().join("substituted")).is_err(),
+            "retained directory handles must deny ancestor substitution"
         );
-        assert_eq!(
-            plan.files[1].path,
-            vec!["docs".to_string(), "style.css".to_string()]
-        );
+        let mut bytes = [0u8; 7];
+        source.read_exact(0, &mut bytes).expect("read payload");
+        assert_eq!(&bytes, b"payload");
+        drop(source);
 
-        let writer = CarWriter::new(&plan, &payload).expect("writer");
-        let mut buffer = Cursor::new(Vec::new());
-        let stats = writer.write_to(&mut buffer).expect("write directory car");
-        assert_eq!(stats.root_cids.len(), 1);
-
-        let bytes = buffer.into_inner();
-
-        let header_offset = PRAGMA.len() + HEADER_LEN;
-        let data_offset = u64::from_le_bytes(
-            bytes[PRAGMA.len() + 16..PRAGMA.len() + 24]
-                .try_into()
-                .unwrap(),
-        );
-        let data_size = u64::from_le_bytes(
-            bytes[PRAGMA.len() + 24..PRAGMA.len() + 32]
-                .try_into()
-                .unwrap(),
-        );
-        assert_eq!(data_offset as usize, header_offset);
-
-        let mut section_cid_map: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
-        let mut cursor = header_offset;
-        let (header_len, header_len_bytes) = decode_uleb128(&bytes[cursor..]);
-        cursor += header_len_bytes + header_len as usize;
-        let data_end = data_offset + data_size;
-        while (cursor as u64) < data_end {
-            let (section_len, len_bytes) = decode_uleb128(&bytes[cursor..]);
-            cursor += len_bytes;
-            let (cid_len, _) = decode_cid(&bytes[cursor..]);
-            let cid_bytes = bytes[cursor..cursor + cid_len].to_vec();
-            cursor += cid_len;
-            let data_len = section_len as usize - cid_len;
-            let data_slice = bytes[cursor..cursor + data_len].to_vec();
-            cursor += data_len;
-            section_cid_map.insert(cid_bytes, data_slice);
-        }
-        assert_eq!(cursor as u64, data_end);
-
-        let root_cid = stats.root_cids[0].clone();
-        let root_data = section_cid_map
-            .get(&root_cid)
-            .expect("root directory node present");
-
-        let (root_entries, root_size) = parse_directory_node(root_data);
-        assert_eq!(root_entries.len(), 1);
-        assert_eq!(root_size as usize, payload.len());
-        let docs_entry = &root_entries[0];
-        assert_eq!(docs_entry.name, "docs");
-        assert!(matches!(docs_entry.kind, DirectoryEntryKind::Directory));
-
-        let docs_data = section_cid_map
-            .get(&docs_entry.cid)
-            .expect("docs directory node present");
-        let (docs_entries, docs_size) = parse_directory_node(docs_data);
-        assert_eq!(docs_entries.len(), 2);
-        assert_eq!(
-            docs_size as usize,
-            plan.files.iter().map(|f| f.size as usize).sum::<usize>()
-        );
-
-        let mut names: Vec<_> = docs_entries.iter().map(|e| e.name.as_str()).collect();
-        names.sort();
-        assert_eq!(names, vec!["index.html", "style.css"]);
-        for entry in docs_entries {
-            assert!(matches!(entry.kind, DirectoryEntryKind::File));
-            let size = plan
-                .files
-                .iter()
-                .find(|f| f.path.last().unwrap() == &entry.name)
-                .map(|f| f.size)
-                .expect("matching file plan");
-            assert_eq!(entry.size, size);
-        }
+        let hardlink = nested.join("hardlink");
+        fs::hard_link(&path, &hardlink).expect("hardlink");
+        let linked = [FilePlan {
+            path: vec!["nested".to_owned(), "hardlink".to_owned()],
+            first_chunk: 0,
+            chunk_count: 1,
+            size: 7,
+        }];
+        assert!(DirectoryPayload::new(temp.path(), &linked).is_err());
     }
 
-    fn decode_cid(data: &[u8]) -> (usize, u64) {
-        let (version, consumed_version) = decode_uleb128(data);
-        assert_eq!(version, 1, "expected CIDv1");
-        let (codec, consumed_codec) = decode_uleb128(&data[consumed_version..]);
-        let (mh_code, consumed_mh) = decode_uleb128(&data[consumed_version + consumed_codec..]);
-        assert_eq!(mh_code, BLAKE3_256_MULTIHASH_CODE);
-        let (digest_len, consumed_len) =
-            decode_uleb128(&data[consumed_version + consumed_codec + consumed_mh..]);
-        let total_len =
-            consumed_version + consumed_codec + consumed_mh + consumed_len + digest_len as usize;
-        (total_len, codec)
-    }
-
-    fn decode_cbor_len(expected_major: u8, data: &[u8]) -> (u64, usize) {
-        assert!(!data.is_empty(), "insufficient CBOR data");
-        let first = data[0];
-        assert_eq!(first >> 5, expected_major, "unexpected CBOR major type");
-        let additional = first & 0x1f;
-        match additional {
-            v @ 0..=23 => (v as u64, 1),
-            24 => (data[1] as u64, 2),
-            25 => (u16::from_be_bytes([data[1], data[2]]) as u64, 3),
-            26 => (
-                u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as u64,
-                5,
-            ),
-            27 => (
-                u64::from_be_bytes([
-                    data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
-                ]),
-                9,
-            ),
-            31 => panic!("indefinite length CBOR not supported in tests"),
-            _ => unreachable!("invalid CBOR additional info"),
-        }
-    }
-
-    fn decode_cbor_map_len(data: &[u8]) -> (u64, usize) {
-        decode_cbor_len(5, data)
-    }
-
-    fn decode_cbor_array_len(data: &[u8]) -> (u64, usize) {
-        decode_cbor_len(4, data)
-    }
-
-    fn decode_cbor_uint(data: &[u8]) -> (u64, usize) {
-        decode_cbor_len(0, data)
-    }
-
-    fn decode_cbor_text(data: &[u8]) -> (String, usize) {
-        let (len, consumed) = decode_cbor_len(3, data);
-        let start = consumed;
-        let end = start + len as usize;
-        let text = String::from_utf8(data[start..end].to_vec()).expect("valid UTF-8");
-        (text, consumed + len as usize)
-    }
-
-    fn decode_cbor_bytes(data: &[u8]) -> (Vec<u8>, usize) {
-        let (len, consumed) = decode_cbor_len(2, data);
-        let start = consumed;
-        let end = start + len as usize;
-        (data[start..end].to_vec(), consumed + len as usize)
-    }
-
-    #[derive(Debug, Clone)]
-    struct DirEntryView {
-        name: String,
-        kind: DirectoryEntryKind,
-        cid: Vec<u8>,
-        size: u64,
-    }
-
-    fn parse_directory_node(data: &[u8]) -> (Vec<DirEntryView>, u64) {
-        let mut idx = 0usize;
-        let (map_len, consumed) = decode_cbor_map_len(&data[idx..]);
-        assert_eq!(map_len, 4);
-        idx += consumed;
-
-        let (key_entries, consumed) = decode_cbor_text(&data[idx..]);
-        assert_eq!(key_entries, "entries");
-        idx += consumed;
-        let (entries_len, consumed) = decode_cbor_array_len(&data[idx..]);
-        idx += consumed;
-
-        let mut entries = Vec::with_capacity(entries_len as usize);
-        for _ in 0..entries_len {
-            let (entry_map_len, consumed) = decode_cbor_map_len(&data[idx..]);
-            assert_eq!(entry_map_len, 4);
-            idx += consumed;
-
-            let (name_key, consumed) = decode_cbor_text(&data[idx..]);
-            assert_eq!(name_key, "name");
-            idx += consumed;
-            let (name_value, consumed) = decode_cbor_text(&data[idx..]);
-            idx += consumed;
-
-            let (cid_key, consumed) = decode_cbor_text(&data[idx..]);
-            assert_eq!(cid_key, "cid");
-            idx += consumed;
-            let (cid_value, consumed) = decode_cbor_bytes(&data[idx..]);
-            idx += consumed;
-
-            let (kind_key, consumed) = decode_cbor_text(&data[idx..]);
-            assert_eq!(kind_key, "kind");
-            idx += consumed;
-            let (kind_value, consumed) = decode_cbor_text(&data[idx..]);
-            idx += consumed;
-            let kind = match kind_value.as_str() {
-                "file" => DirectoryEntryKind::File,
-                "dir" => DirectoryEntryKind::Directory,
-                other => panic!("unexpected directory entry kind {other}"),
-            };
-
-            let (size_key, consumed) = decode_cbor_text(&data[idx..]);
-            assert_eq!(size_key, "size");
-            idx += consumed;
-            let (size_value, consumed) = decode_cbor_uint(&data[idx..]);
-            idx += consumed;
-
-            entries.push(DirEntryView {
-                name: name_value,
-                kind,
-                cid: cid_value,
-                size: size_value,
-            });
-        }
-
-        let (key_size, consumed) = decode_cbor_text(&data[idx..]);
-        assert_eq!(key_size, "size");
-        idx += consumed;
-        let (dir_size, consumed) = decode_cbor_uint(&data[idx..]);
-        idx += consumed;
-
-        let (key_type, consumed) = decode_cbor_text(&data[idx..]);
-        assert_eq!(key_type, "type");
-        idx += consumed;
-        let (type_value, consumed) = decode_cbor_text(&data[idx..]);
-        assert_eq!(type_value, DIR_NODE_TYPE);
-        idx += consumed;
-
-        let (key_version, consumed) = decode_cbor_text(&data[idx..]);
-        assert_eq!(key_version, "version");
-        idx += consumed;
-        let (version_value, consumed) = decode_cbor_uint(&data[idx..]);
-        assert_eq!(version_value, DAG_NODE_VERSION);
-        idx += consumed;
-
-        assert_eq!(idx, data.len());
-
-        (entries, dir_size)
-    }
-
-    fn decode_uleb128(data: &[u8]) -> (u64, usize) {
-        let mut value = 0u64;
-        let mut shift = 0;
-        for (idx, byte) in data.iter().enumerate() {
-            let slice = (byte & 0x7F) as u64;
-            value |= slice << shift;
-            if byte & 0x80 == 0 {
-                return (value, idx + 1);
-            }
-            shift += 7;
-        }
-        (value, data.len())
-    }
+    #[cfg(windows)]
+    include!("lib/directory_car_tests.rs");
 }

@@ -169,31 +169,34 @@ MERGE_RUNTIME_CONFIG_FIELDS = (
 )
 
 ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
-# The retained-lock vocabulary moved below the shard chain to remove the
-# debt-to-proof-leaf cycle.  Its exact provider and bodies are independently
-# pinned by ``_acyclic_liveness_debt_topology_errors`` before this reviewed
-# mechanical shard seal is accepted.
+# This digest binds the current logical pre-split body reconstructed by removing
+# every exact shard header/footer in order.  The retained-lock vocabulary lives
+# below the shard chain to avoid the debt-to-proof-leaf cycle; its provider and
+# bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
+# before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "58304eaddaf96ca5b5053c96b6c48603110d3b2b6570b1e05d765db03e7f19dc"
+    "946223a56f68896ae0484ec2d46acc7d3337e17beeb1409f3167d39ab294a52a"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
 ASYNC_LIVENESS_SHARD_MAX_THEOREMS = 150
-# These two shards carry the reviewed exact-ingress and producer-continuation
-# proof seams.  Keep their narrow, source-current ceilings explicit so one
-# additional line or theorem still fails instead of silently raising the
-# limit for every release shard.
+# These shards carry the reviewed exact-ingress, producer-continuation, and
+# causal-work rank proof seams.  Keep their narrow, source-current ceilings
+# explicit so one additional line or theorem still fails instead of silently
+# raising the limit for every release shard.
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_LINES = {
-    "SumeragiV2AsyncInstallRunnerProofs": 5_775,
+    "SumeragiV2AsyncInstallRunnerProofs": 5_879,
     "SumeragiV2AsyncProgressOwnershipProofs": 5_662,
+    "SumeragiV2AsyncTemporalRankProofs": 5_514,
 }
 ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS = {
-    "SumeragiV2AsyncInstallRunnerProofs": 156,
+    "SumeragiV2AsyncInstallRunnerProofs": 159,
 }
 ASYNC_LIVENESS_THEOREM_MAX_LINES = 600
 ASYNC_LIVENESS_THEOREM_MAX_STEPS = 256
 ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateServiceStageCarrierHasExactlyElevenClasses",
+    "AsyncCandidateServiceStageOrdinalIsBounded",
     "AsyncCandidateServiceTrackedKindProjectionIsCovered",
     "AsyncCandidateLifecycleCapacityDerivesFromReviewedOwners",
     "AsyncCandidateServiceRecordCapacityMatchesConfiguredGeometry",
@@ -204,20 +207,33 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateServiceRecordsInjectIntoLifecycleStageOwners",
     "AsyncCandidateProducerContinuationsInjectIntoLifecycleStageOwners",
     "AsyncControlServiceTableCardinalityIsSlotBounded",
-    "AsyncCandidateSchedulerCoverageExposesBoundedProducerOrigin",
-    "AsyncNextNodeCommandOwnsOldestLifecycleOrdinal",
+    "RetainedServeAttemptCannotReserveOrAdvanceExactLifecycle",
+    "AsyncInternalCertificateSuccessorsCannotRetainFenceCredit",
     "CommandSuccessorsRetainCausalOrigin",
     "AsyncCandidateProducerSemanticHandoffUsesInheritedLifecycle",
+    "AsyncCandidateProducerContinuationActiveLogicalOrdinalIsUnique",
+    "AsyncCandidateProducerContinuationPostCutSourceIsGloballyIneligible",
+    "AsyncCandidateProducerContinuationEligibleSourcesAreMutuallyPreCut",
+    "AsyncCandidateProducerContinuationPostCutSourceCannotPrecede",
+    "AsyncCandidateProducerContinuationFrozenOwnerPrecedesPostCutReplay",
+    "AsyncCandidateProducerContinuationPreCutLogicalOrderIsRetained",
+    "AsyncCandidateProducerContinuationEarliestPhysicalSourceIsEligible",
+    "AsyncCandidateProducerContinuationPhysicalEligibilityPoolIsFiniteAndNonempty",
+    "AsyncCandidateProducerContinuationLogicalOccurrenceRankIsNatural",
+    "AsyncCandidateProducerContinuationLogicalPredecessorStrictlyLowersOccurrenceRank",
+    "AsyncCandidateProducerContinuationResolutionSelectionIsLogicalMinimum",
+    "AsyncCandidateProducerContinuationRuntimeSelectionIsLogicalMinimum",
+    "AsyncCandidateProducerContinuationPostCutReplayCannotReserveAhead",
     "AsyncCandidateProducerContinuationSelectedLocalReplayHasReservedCapacity",
     "CandidateProducerContinuationResolutionSplitsReviewedSourceClass",
     "ValidQcIntersectsResponsiveSignerSet",
     "RemoteResponsiveQcSignerIsInFrozenArchiveFanout",
     "PacketForItemExactRetryRetainsRouteIdentity",
+    "ReplyRelayPacketPreservesCanonicalSemanticSender",
+    "CommitCertificateReplySemanticBindsCanonicalRequester",
     "PersistDecisionConvertsIncompatibleResponseBeforeRetryOrdinal",
     "PersistDecisionPreservesPreFenceResponseUntilCheckedDrain",
     "SignProposalAtomicallyHandsProducerToSourceFanout",
-    "AsyncNextDeferredCommandOwnsOldestLifecycleWithoutHandoff",
-    "AsyncDeferredHandoffRetainsExactSelectedLifecycle",
     "AsyncLeaderWireLifecycleSlotUniverseIsFinite",
     "AsyncLeaderWireLifecycleSlotUniverseIsRosterBounded",
     "DormantLeaderWireOwnsNoIngressSchedulerBarrier",
@@ -236,28 +252,49 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "ExactNegativeRetryConsumesNoServeOrPhysicalOrdinal",
     "NonAdvancingServeFamilyRetryConsumesNoFreshOrdinal",
     "SupersededResponseRetryConvertsBeforeFreshOrdinal",
+    "AsyncProducerFirstDistinctEpisodeStrictlyConsumesFiniteRank",
+    "AsyncProducerFirstDistinctEpisodeForStrictlyConsumesFiniteRank",
+    "AsyncProducerExactRetransmissionIsJournalStutter",
+    "AsyncProducerExactRetransmissionPreservesTargetIngressRank",
     "CoalescedDueLeaderWireLifecycleRetryPreservesFrozenOwner",
     "AtomicLeaderWireAdmissionFreezesPrefixBeforeAppend",
     "DirectCommitQcCandidateHasExactImportLineage",
     "CommitCertificateResponseCandidateHasExactImportLineage",
     "CommitImportCausalSuccessorRetainsExactLineage",
+    "AsyncSelectedOrdinaryPhysicalCarrierDefinesIngressScheduler",
     "AsyncCandidateProducerContinuationLaterOrdinalCannotOwnRunnerTurn",
+    "AsyncCandidateProducerContinuationScheduledPredecessorOwnsRunnerFirst",
+    "AsyncCandidateProducerContinuationLaterThanTimeoutCannotOwnRunnerTurn",
+    "AsyncCandidateProducerContinuationPostTimeoutCutCannotOwnRunnerTurn",
+    "AsyncCandidateProducerContinuationLaterThanRetransmitCannotOwnRunnerTurn",
+    "AsyncCandidateProducerContinuationPostRetransmitCutCannotOwnRunnerTurn",
+    "AsyncCandidateProducerContinuationPostCutIngressCannotBlockRunnerTurn",
+    "AsyncCandidateProducerContinuationOnlyPreCutIngressCanBlockRunnerTurn",
+    "AsyncCandidateProducerContinuationPostCutOrdinaryIngressCannotBlockRunnerTurn",
+    "AsyncCandidateProducerContinuationBlockingOrdinaryIngressIsPreCut",
     "AsyncCandidateProducerContinuationRunnerSelectionRespectsIngressCut",
-    "AsyncCandidateProducerContinuationRunnerSelectionIsGlobalMinimum",
+    "AsyncCandidateProducerContinuationRunnerSelectionIsTwoStageLogicalMinimum",
+    "AsyncCandidateProducerContinuationRunnerSelectionIsPairwisePhysicalMinimum",
+    "AsyncOrdinaryIngressPhysicalOwnerExcludesDifferentCarrier",
     "DormantLeaderWireOwnsNoPhysicalIngressPredecessor",
     "AdmitDormantLeaderWireAppendsAfterExistingServeCarrier",
     "InterruptedTipServeCarrierTerminalizesBeforePhysicalRemoval",
     "InterruptedTipLeaderWireCarrierPublishesTypedRetirement",
     "LeaderWireIngressDrainNeverInventsRuntimeOwner",
+    "LeaderWireIngressDrainFreezesContinuationPhysicalCut",
     "ServeWorkerDecisionSupersessionClosesWithoutStaleResponse",
     "DeferredRetransmitConsumesDriveProgramCounter",
     "AsyncServeIngressTicketExcludesLaterLocalWork",
     "AsyncLeaderWireIngressTicketExcludesLaterLocalWork",
+    "AsyncOrdinaryIngressTicketExcludesLaterLocalWork",
     "AsyncSelectedLeaderWirePhysicalCarrierDefinesIngressScheduler",
     "AsyncCandidateProducerContinuationExactLocalReplayPublishesStoredCarrier",
     "AsyncCandidateProducerContinuationStoredCarrierMakesSelectedRecordReady",
     "AsyncCandidateProducerContinuationReplayDispatchesOnlyExactIdentity",
     "AsyncOlderCandidateLifecyclePreventsDueTimeoutOvertake",
+    "AsyncOlderRetransmitLifecycleCannotAloneBlockDueTimeout",
+    "AsyncOlderCandidateLifecyclePreventsDueRetransmitOvertake",
+    "AsyncPostRetransmitCutCandidateCannotBlockDueRetransmit",
     "AsyncEarlierIngressLifecyclePreventsDueTimeoutOvertake",
     "LocalAdmissionAdvanceSelectsAtomicWork",
     "SerializedLocalPrecedesServeIngressExactFrame",
@@ -288,9 +325,6 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "RetireLeaderWireLifecycleRetainsTerminalTombstone",
     "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
     "AsyncRetainedCommitQcRetransmissionCreatesExactPacket",
-    "AsyncRetainedCommitQcPacketAdmissionCreatesExactIngressOwner",
-    "AsyncRetainedCommitQcIngressCreatesExactDeliverQcOwner",
-    "AsyncRetainedCommitQcDeliveryRecordsExactReceipt",
     "AsyncCandidateProducerContinuationResetPreservesExactReservation",
     "AsyncCandidateProducerContinuationUnresetOwnerPreserved",
     "AsyncCandidateProducerContinuationRestartStableTerminalPreserved",
@@ -303,6 +337,8 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateDeferredHandoffRetainsSameOwner",
     "AsyncCandidateDiscardIsNotSemanticService",
     "ImportedCertificateTailCannotRetireOnLocalIncarnationChange",
+    "AsyncCandidateProducerContinuationStepPreservesPhysicalCut",
+    "AsyncCandidateProducerContinuationHighWatermarkAdvanceCannotRefreshPhysicalCut",
     "AsyncCandidateProducerContinuationRunnerResolutionRequiresReadyEvidence",
     "AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation",
     "AsyncCandidateProducerContinuationRunnerResolutionConsumesExactStage",
@@ -312,11 +348,29 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateProducerSemanticHandoffRetirementRequiresAck",
     "AsyncCandidateProducerContinuationDecisionReclamationClearsNode",
     "AsyncCandidateLifecycleProducerContinuationCoverageUsesInheritedToken",
+    "OrdinaryIngressPreDequeueCarrierHasNoContinuationCut",
+    "OrdinaryIngressDrainFreezesContinuationPhysicalCut",
+    "OrdinaryIngressLogicalRebasePreservesContinuationPhysicalOwnership",
     "LeaderWireIgnoredOrServicedLastConsumerTerminalizesAtomically",
     "AsyncCandidateProducerContinuationKindPartition",
     "AsyncCandidateProducerContinuationRemovedReplayClassification",
+    "AsyncCandidateProducerContinuationZeroSourceMeansNoIngressCarrier",
+    "AsyncCandidateProducerContinuationReservationFreezesPhysicalCut",
+    "AsyncCandidateProducerContinuationSourcePhysicalOrdinalIsBeforeCut",
+    "AsyncCandidateCausalSuccessorInheritsContinuationPhysicalOwnership",
     "LeaderWireDeliveryCandidateInheritsAdmissionSchedulerOrdinal",
+    "OrdinaryIngressDeliveryCandidateInheritsCheckedDequeuePhysicalCut",
+    "FreshNonIngressCandidateRootSnapshotsCurrentPhysicalCut",
     "AsyncDormantLeaderWireReactivationConsumesPhysicalNotLifecycleOrdinal",
+    "AsyncRetransmitFreshEpisodeConsumesSharedLifecycleOrdinal",
+    "AsyncRetransmitFreshEpisodeAdvancesSharedHighWatermark",
+    "AsyncRetransmitCompletedEpisodeClearsActiveOwner",
+    "AsyncRetransmitCompletedOwnedEpisodeDefersFreshAcquisition",
+    "AsyncRetransmitFreshEpisodeCannotReuseDrainedPosition",
+    "AsyncRetransmitFreshLiveEpisodeRetainsSharedLifecycleOrdinal",
+    "AsyncRetransmitFreshLiveEpisodeFreezesIngressPhysicalCut",
+    "AsyncRetransmitLiveEpisodeRetainsIngressPhysicalCut",
+    "AsyncFreshServeReservationPrecedesSameStepRetransmitAllocation",
     "AsyncTargetNeutralLifecycleOwnerCarrierIsFinite",
     "AsyncTargetNeutralLifecycleEpisodeBudgetIsFiniteAndCoalesced",
     "AsyncTargetNeutralLifecycleDiscoveryStrictlyConsumesBudget",
@@ -372,8 +426,10 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncSharedSchedulerHighWatermarkIsMonotone",
     "AsyncSameHeightRestartRetainsSharedSchedulerHighWatermark",
     "AsyncIgnoredIngressEpisodeCannotConsumeLifecycleCapacity",
-    "AsyncNextPreservesCandidateProducerContinuationScheduledExclusion",
+    "AsyncCandidateSchedulerCoverageExposesBoundedProducerOrigin",
     "AsyncCandidateServiceIdentityIgnoresConsumerIncarnation",
+    "AsyncCandidateServiceIdentityDeterminesSemanticStatement",
+    "AsyncCandidateCarrierVariantsCoalesceServiceIdentity",
     "AsyncCandidateServiceIdentityIgnoresSchedulerClass",
     "AsyncCandidateLifecycleAndServiceIdentityIgnoreSchedulerClass",
     "AsyncCandidateServiceRouteNeutralResponseRetryIsStable",
@@ -411,10 +467,7 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncControlServiceTombstoneCannotReactivate",
     "AsyncControlServiceSameHeightRecoveryRetiresVolatileOwners",
     "CertifiedResponseClaimAdmissionAllocatesExactOrdinal",
-    "CertifiedResponseClaimAdmissionMatchesPostStateLifecycleCarrier",
-    "CertifiedResponseClaimAdmissionFreezesCompletePredecessorSources",
     "CertifiedResponseExactRetryKeepsOneClaimOrdinal",
-    "CertifiedResponseLiveClaimCannotBeReplacedAtGst",
     "CertifiedResponseCompetingResponderCannotDoubleChargeFamily",
     "CertifiedResponseConsumedFamilyCannotRetainClaim",
     "CertifiedResponseSameHeightRecoveryReopensDurableFamily",
@@ -425,15 +478,23 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "LeaderWireLastConsumerRefinesLifecycleTransition",
     "LeaderWireTerminalRetirementRefinesLifecycleTransition",
     "LeaderWireRestartReopenRefinesLifecycleTransition",
+    "AsyncNextProjectsMonotoneProducerJournal",
     "AsyncIngressPhysicalHighWatermarkIsMonotone",
     "AsyncServeAdmissionHighWatermarkIsMonotone",
-    "AsyncNextPreservesLeaderWireContinuationSharedOrdinalNoCollision",
     "AsyncFixedCorridorDeadlineActionErasureIsExact",
     "AsyncOriginalStepHasFixedCorridorDeadlineReceiptExtension",
     "AsyncServiceActivationActionsRefineAsyncNext",
-    "AsyncTimeoutLifecycleDueTransitionMintsBeforeLaterAdmissions",
+    "AsyncTickDoesNotFreezeClockLifecycles",
+    "AsyncTickDoesNotAcquireFreshClockOwnership",
+    "AsyncOrdinaryIngressDoesNotFreezeClockLifecycles",
+    "AsyncNonAdmittingIngressBranchesDoNotFreezeClockLifecycles",
+    "AsyncIngressPacketFreezesOnlyAtFreshExactServeReservation",
+    "AsyncTimeoutLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
     "AsyncTimeoutLifecycleOrdinalPersistsUntilEndpoint",
     "AsyncTimeoutLifecycleOrdinalClearsOnlyAtEndpoint",
+    "AsyncRetransmitLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
+    "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",
+    "AsyncRetransmitLifecycleOwnerAndPhysicalCutClearAtEndpoint",
     "AsyncTimeoutLifecycleNewOwnershipUsesRecordedOrFreshOrdinal",
     "AsyncNextNeverSchedulesAnUnownedCandidateLifecycle",
     "AsyncServeQueuedIdentityDepartureInstallsTombstone",
@@ -449,7 +510,6 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateAdmissionIdentityObsolescenceIsMonotoneAtGst",
     "AsyncCandidateObsoleteAdmissionIdentityCannotReappearAtGst",
     "AsyncCandidateTerminalIdentityCannotReactivateAtGst",
-    "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
     "AsyncCandidateSameGenerationServicedIdentityCannotReactivateAtGst",
     "AsyncCandidateSameGenerationSuccessfulServiceIdentityPersistsUntilStrictExit",
     "AsyncCandidateServicedIdentityCannotReactivate",
@@ -474,12 +534,26 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncServeIngressSchedulerOrdinalIsTyped",
     "AsyncServeIngressSharedSchedulerInitIsEmptyAndInjected",
     "AsyncRetransmitProgramCounterIsBounded",
-    "CertifiedResponseClaimNewTimeoutSourceIsExcludedOrAboveFrozenCeiling",
+    "CertifiedResponseClaimFrozenLifecycleSourceIsPhysicallyPreCut",
     "CertifiedResponseClaimsShareOutstandingRequestCharge",
     "CertifiedResponseFamilyLocalClaimsRemainPhysicallySerialized",
+    "LeaderWirePreDequeueCarrierHasNoContinuationCut",
     "DormantLeaderWireReactivationPublishesOneFreshPhysicalCarrier",
     "AsyncLeaderWirePotentialPredecessorUniverseIsFinite",
     "AsyncProoflessChunkEpisodeBudgetIsFiniteAndCoalesced",
+    "AsyncNextNodeCommandOwnsOldestLifecycleOrdinal",
+    "AsyncNextDeferredCommandOwnsOldestLifecycleWithoutHandoff",
+    "AsyncDeferredHandoffRetainsExactSelectedLifecycle",
+    "AsyncRetainedCommitQcPacketAdmissionCreatesExactIngressOwner",
+    "AsyncRetainedCommitQcIngressCreatesExactDeliverQcOwner",
+    "AsyncRetainedCommitQcDeliveryRecordsExactReceipt",
+    "AsyncNextPreservesCandidateProducerContinuationScheduledExclusion",
+    "CertifiedResponseClaimAdmissionMatchesPostStateLifecycleCarrier",
+    "CertifiedResponseClaimAdmissionFreezesCompletePredecessorSources",
+    "CertifiedResponseLiveClaimCannotBeReplacedAtGst",
+    "AsyncNextPreservesLeaderWireContinuationSharedOrdinalNoCollision",
+    "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
+    "CertifiedResponseClaimNewTimeoutSourceIsExcludedOrAboveFrozenCeiling",
 )
 ASYNC_LIVENESS_SHARDS = (
     ("SumeragiV2AsyncRankAndInitProofs", "ModelResponsiveValidators"),
@@ -523,11 +597,60 @@ ASYNC_LIVENESS_SHARDS = (
 # the immediately preceding chain shard; every other non-root shard imports
 # its chain predecessor.
 ASYNC_LIVENESS_EXTENDS_OVERRIDES = {
+    "SumeragiV2AsyncTemporalRankProofs": (
+        "SumeragiV2AsyncRecoveryProgressWitnessProofs",
+        "SumeragiV2AsyncCausalWorkBudgetProofs",
+    ),
     "SumeragiV2AsyncDeadlockProofs": (
         "SumeragiV2AsyncFiniteRunnerEpisodeProofs",
         "SumeragiV2AsyncCandidateProducerContinuationProofs",
     ),
 }
+
+
+def _async_liveness_shard_source_prefix(module: str, index: int) -> str:
+    """Return the exact reviewed header/import prefix for one proof shard."""
+
+    header = f"---- MODULE {module} ----\n"
+    if index == 0:
+        return header
+    dependencies = ASYNC_LIVENESS_EXTENDS_OVERRIDES.get(
+        module, (ASYNC_LIVENESS_SHARDS[index - 1][0],)
+    )
+    if module == "SumeragiV2AsyncTemporalRankProofs":
+        return header + "EXTENDS " + ",\n        ".join(dependencies) + "\n\n"
+    return header + f"EXTENDS {', '.join(dependencies)}\n\n"
+
+
+def _async_liveness_shard_bodies(
+    sources: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    """Strip exact reviewed shard framing, failing closed on any drift."""
+
+    bodies: list[str] = []
+    errors: list[str] = []
+    footer = "=============================================================================\n"
+    for index, (module, _) in enumerate(ASYNC_LIVENESS_SHARDS):
+        source = sources.get(module)
+        if source is None:
+            errors.append(f"missing required async liveness shard {module}.tla")
+            continue
+        prefix = _async_liveness_shard_source_prefix(module, index)
+        prefix_matches = source.startswith(prefix)
+        footer_matches = source.endswith(footer)
+        if not prefix_matches:
+            errors.append(
+                f"{module}.tla must start with its exact reviewed async liveness shard prefix"
+            )
+        if not footer_matches:
+            errors.append(
+                f"{module}.tla must end with its exact reviewed async liveness shard footer"
+            )
+        if prefix_matches and footer_matches:
+            bodies.append(source[len(prefix) : -len(footer)])
+    return bodies, errors
+
+
 ASYNC_LIVENESS_DEBT_SHARD = "SumeragiV2AsyncOutstandingLivenessDebt"
 ASYNC_LIVENESS_PROOF_SHARDS = tuple(
     module for module, _ in ASYNC_LIVENESS_SHARDS if module != ASYNC_LIVENESS_DEBT_SHARD
@@ -581,7 +704,7 @@ ADEQUATE_LEADER_CONTINUATION_PROOF_MODULES = (
 )
 ADEQUATE_LEADER_RETAINED_PRODUCER_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AdequateLeaderRetainedProducerClosureProofs.tla": (
-        "74b800bb99f1c5acb2d625c18c1787db0101186249a559caea14a07cb2079399"
+        "00d100b5d15a29984794367d88c0de070207276168cd980c22faa92b91029a8e"
     ),
 }
 
@@ -590,6 +713,10 @@ ADEQUATE_LEADER_RETAINED_PRODUCER_RELEASE_SOURCE_SHA256 = {
 # expose a repaired transition or liveness rank, but never promote a bounded
 # model-checking result to deductive proof status.
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
+    "SumeragiV2Revision4CertifiedFenceReservation.tla",
+    "revision4_certified_fence_reservation_fixed.cfg",
+    "revision4_certified_fence_reservation_blocked_bug.cfg",
+    "revision4_certified_fence_reservation_arrival_order_bug.cfg",
     "SumeragiV2LocalIngressSchedulerReservationMutation.tla",
     "SumeragiV2RestartTerminalDurabilityMutation.tla",
     "SumeragiV2ExactIngressTicketPriorityMutation.tla",
@@ -969,6 +1096,12 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_SHA256 = {
 }
 SERVE_SCHEDULER_ORDINAL_RUNNER_SECTION_SHA256 = (
     (
+        "configuration and shared result-contract binding",
+        'readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"',
+        "if (($#)); then",
+        "babab96e058fa452cd5e03cd38be6318e8af3d20e1aad2486b2093d1a853ca54",
+    ),
+    (
         "preflight and SANY execution",
         "if (($#)); then",
         "run_tlc() {",
@@ -993,7 +1126,62 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "ddb06b1b1659b8e9b18a0c59e01293f99ac945df1f06dbd32bc217bc611cee12"
+        "48e5be5235b5d745391e4b89b034976f79c830185c84e32d57327f2e73107c5e"
+    ),
+}
+PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_FORMAL_ARTIFACTS = (
+    "SumeragiV2ProducerContinuationPhysicalCutMutation.tla",
+    "current_ingress_physical_cut_fixed.cfg",
+    "current_ingress_replenishment_churn_bug.cfg",
+    "producer_continuation_physical_cut_fixed.cfg",
+    "producer_continuation_logical_only_replay_bug.cfg",
+    "producer_continuation_timeout_cut_fixed.cfg",
+    "producer_continuation_timeout_cut_logical_minimum_bug.cfg",
+    "SumeragiV2AdequateLeaderPeriodicPrefixMutation.tla",
+    "adequate_leader_periodic_prefix_fixed.cfg",
+    "adequate_leader_periodic_hidden_prefix_bug.cfg",
+    "adequate_leader_periodic_replenishment_bug.cfg",
+)
+PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER = (
+    "scripts/formal/"
+    "run_sumeragi_v2_producer_continuation_physical_cut_mutations.sh"
+)
+PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_SHA256 = {
+    "SumeragiV2ProducerContinuationPhysicalCutMutation.tla": (
+        "dc59e10845828599650fed19b864f56b6ce63546709e1101284c2abe30760eba"
+    ),
+    "current_ingress_physical_cut_fixed.cfg": (
+        "48d9c8247cfa9b92a74738326f2cfac62b03b08d296b438b038c58606565f960"
+    ),
+    "current_ingress_replenishment_churn_bug.cfg": (
+        "39a99eceacb2949f0db838824f5264183dbb270035a710c07ee30782029e2a4e"
+    ),
+    "producer_continuation_physical_cut_fixed.cfg": (
+        "c9c23bca0dd6812c2e48429845ddb47be1283548e392d46f2a3dab71a66bc19d"
+    ),
+    "producer_continuation_logical_only_replay_bug.cfg": (
+        "1721de0fa881994fa5cfd125310ed9d0a0ab2481719990c0b7f1be6507bffbbe"
+    ),
+    "producer_continuation_timeout_cut_fixed.cfg": (
+        "08619e5e2a8cca04fb1b9d07677a6da5bfdc8a4e53529acc394fdea077a3b3d4"
+    ),
+    "producer_continuation_timeout_cut_logical_minimum_bug.cfg": (
+        "bac68e669638812332bb9ed2eec054e4d8eeef399c1d537e83a07f0d9991342e"
+    ),
+    "SumeragiV2AdequateLeaderPeriodicPrefixMutation.tla": (
+        "099ee25e46fa1a20dff86d046c4140fe8df0b54c6ddaad1c2134365b49582cb9"
+    ),
+    "adequate_leader_periodic_prefix_fixed.cfg": (
+        "c367ff9409884904f28dd93ca742d7098d9e002f8b0f017d057b27af1c54d0b6"
+    ),
+    "adequate_leader_periodic_hidden_prefix_bug.cfg": (
+        "5c9e99f59a0ee4ec06afbe8945462642776ae1708b1ee0cbc3c96923811fee4a"
+    ),
+    "adequate_leader_periodic_replenishment_bug.cfg": (
+        "0185e5ec0fe0de3b927bfdee57db59cc598b3b288d0e84df21658e78d71eac10"
+    ),
+    PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER: (
+        "454a44541d5b4c1a5eaaf5b23e34053c111f76eadab75521683713bf773a56bb"
     ),
 }
 COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_ARTIFACTS = (
@@ -1033,10 +1221,10 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "ddb06b1b1659b8e9b18a0c59e01293f99ac945df1f06dbd32bc217bc611cee12"
+        "48e5be5235b5d745391e4b89b034976f79c830185c84e32d57327f2e73107c5e"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
-        "7bbc3620ad8bb0dc7bc3e3288e01c254563d54fce7b271bd05e393d938b924c0"
+        "8c657bd5ded3504285b50e7b726ab343f7f27643ba609daf1483a90b32b06c0e"
     ),
 }
 _FORMAL_CI_NEW_MUTATION_RUNNER_INVOCATIONS = (
@@ -1073,6 +1261,7 @@ SHARED_TLC_RESULT_CONTRACT_CALLERS = (
     "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh",
     "scripts/formal/run_sumeragi_v2_persist_install_validation_mutation.sh",
     "scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh",
+    PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER,
     "scripts/formal/run_sumeragi_v2_productive_mutation.sh",
     "scripts/formal/run_sumeragi_v2_progress_mutations.sh",
     "scripts/formal/run_sumeragi_v2_replay_locked_body_carrier_mutation.sh",
@@ -1097,10 +1286,10 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "ccdae44c2fc9d12dfe7a1239988de036a3181aea7f76c522a83ce4809f300118"
     ),
     "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh": (
-        "b81171eb4105b8aa8a66c840b3123b8a0cddc8c7515fec23c1a5c0c6ff7541d4"
+        "186029d410db73878ae7af83c39db20cb0bce0fbafbca701a5dcfe767271f9bc"
     ),
     "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
-        "77368edad02e9ff8a03d1da3c6bb019f0a5d466db6801b30d106fc1b89c5c953"
+        "dd49c24d04c5a35444a7ff59e47419ada1eb7d61387cf46e761b17a38a96d1b3"
     ),
     "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh": (
         "a9bad39fa0caa6761cf7fa5aee259cba9e932234a79e4401ccecc380ca072200"
@@ -1130,7 +1319,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "c12af944bccd6587374576ecc0abf6779a468ac0162d59b3c6762ab09aab9017"
     ),
     "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
-        "cb393225ef5b6b793367f05fd66f807b55ab06f31db94784be238c4261a7c161"
+        "52cb68a489a0309fabd6e52d16077a4cc05276088072636c4420cb55fc0b016a"
     ),
     "scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh": (
         "2ab6aa430893197888a69b4ec56a120556e44e7465893dc5155a3941d236519e"
@@ -1139,7 +1328,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "88c03a575317b85ec59660d4a8e7164798d0ce11b59c8e8da5809f4d5b8132af"
     ),
     "scripts/formal/run_sumeragi_v2_inflight_first_release.sh": (
-        "25b658d7dd2866f04caf679fca9b3274091ce202f96c9f269d5e5d136ba1c466"
+        "d08247dcd3ce4b55f510723df478de6aca657eb67fa6c8fa3c8d5b9719dc907d"
     ),
     "scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh": (
         "7aaac40fa9cb9fd603f8809baba4152d8266ae19adad6a967aa04290e2a2af6b"
@@ -1148,10 +1337,10 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "4bf965e65183469fc3434cdf96c486c921aa5f270a192580761ab6a0e7f6d7f8"
     ),
     "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh": (
-        "3f3738a6351e7f7fe78ac3f6a4a4e738f8b6fd2b098d7466674197c783783d25"
+        "ff397f9c7360900ea85c35a1889309ca082b04ec3fc1c0aeca2c327789157e56"
     ),
     "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
-        "267220790e6ac52ef6872319185e2de987e3757af9d1b7323ec2179e4eace49b"
+        "c4a3939977809ecb955e22e1a92aa40db4c260eb224fe17b6aa2715ac67b25f2"
     ),
     "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh": (
         "fc841bb679feaf1ded305f1ab0e39ba388e49876bcbc1e3cb39436b09be74a78"
@@ -1161,6 +1350,9 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
     ),
     "scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh": (
         "9e8a9f07e50230929712a84d01abf4a75f134727a254a0fd21b57e19c93a4e8b"
+    ),
+    PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER: (
+        "454a44541d5b4c1a5eaaf5b23e34053c111f76eadab75521683713bf773a56bb"
     ),
     "scripts/formal/run_sumeragi_v2_productive_mutation.sh": (
         "5cffb84945d844b38e8d5cc492ef1381519111750592c96a412ddcf170dde072"
@@ -1184,10 +1376,10 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "e20a740c92cc9edb951699f8e3247b61d0c92701fcde39fca60baad493bb4796"
     ),
     "scripts/formal/run_sumeragi_v2_tlc.sh": (
-        "bceb90990f6ca635bf9d48ad23d140f1a9088954f5bf81952646ec756d517424"
+        "f24023b1d68c85057315fedc7a9347d05777c4cbb989e09c9a3bb253ff85385a"
     ),
     "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh": (
-        "e1ac1e03c10f2667eb4254b99fa9cd60955417fc39540b7697f8721364313340"
+        "9421b6db11cf3df8b6d5fb38790fd4eab2d5e8398335fbb603afe0837a37ff1e"
     ),
 }
 SHARED_TLC_RESULT_BRANCH_PROFILES = {
@@ -1312,10 +1504,10 @@ SHARED_TLC_RESULT_BRANCH_PROFILES = {
         2,
     ),
     "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh": (
-        30,
-        73,
+        31,
+        89,
         0,
-        1,
+        4,
         0,
     ),
     "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
@@ -1346,6 +1538,7 @@ SHARED_TLC_RESULT_BRANCH_PROFILES = {
         0,
         0,
     ),
+    PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER: (3, 1, 0, 2, 0),
     "scripts/formal/run_sumeragi_v2_productive_mutation.sh": (
         3,
         2,
@@ -1410,6 +1603,13 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES = {
 }
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     {
+        "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
+            1,
+            1,
+            1,
+            1,
+            1,
+        ),
         "scripts/formal/check_sumeragi_v2_replay_trace.sh": (0, 0, 0, 0, 0),
         "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
             1,
@@ -1446,6 +1646,13 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
             1,
             1,
         ),
+        PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER: (
+            1,
+            1,
+            5,
+            1,
+            4,
+        ),
         "scripts/formal/run_sumeragi_v2_productive_mutation.sh": (
             3,
             1,
@@ -1478,56 +1685,68 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     }
 )
 SHARED_TLC_RESULT_BRANCH_PROFILES_SHA256 = (
-    "2c055aedf7762816eb44b420d972e0f40d18e9e53f27f2a2d592f1fea183f007"
+    "46293c847caed684dce380f362780cc0ea8ff9ed0145dd00399dbd2b8470e527"
 )
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
-    "812920890b22735c973ab3affa189e98e9e46c8d0af15f14b25586332981901a"
+    "483e384582b49f4c514036a744865b24d97f2973ce3dd10b14fdf66982a53c68"
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
+    "SumeragiV2Revision4CertifiedFenceReservation.tla": (
+        "bcbd50bb32221a14d1c0a2f3a60d86ebb5287aa57a40b7959df1a637e4936719"
+    ),
+    "revision4_certified_fence_reservation_fixed.cfg": (
+        "c68d79877e268f761bbe2d173ab6e8cd672cb5aa8d7b713c631f959f1ef8d3c4"
+    ),
+    "revision4_certified_fence_reservation_blocked_bug.cfg": (
+        "8e204663a764ca03afdee20dad96060bda28d16d372ce8c8dd5eb7e61034944e"
+    ),
+    "revision4_certified_fence_reservation_arrival_order_bug.cfg": (
+        "0f1408e6ecee28eae2765394cef118755a0a4e3ba94017fb250b28477a573657"
+    ),
     "SumeragiV2LocalIngressSchedulerReservationMutation.tla": (
-        "d5083b4dcd0e1fbd3b55a22b98a7ea41b6b20b646a717fc36beb41fae7788ab5"
+        "678d739d45ebb6b6d5dee70a56f8396e7d75ed954f03faf49252d112f5f4a194"
     ),
     "SumeragiV2RestartTerminalDurabilityMutation.tla": (
-        "7eae8edd73c78803cf5829c056ee29ee1e1f39cd1622d775df5c7ab90845d30b"
+        "fee6d70c01d87567b150fd8aee76d2e764cb4b58ab400390a3b7e6a0e5ea765a"
     ),
     "SumeragiV2ExactIngressTicketPriorityMutation.tla": (
-        "5a318e82bc083a462840278c90ea78d7db755f3d78502f2df992e99dc98af969"
+        "8a68a5945ac65ea7d57bcbca90cac552bfb9a073eb26b6cd7b3bc328d566c376"
     ),
     "SumeragiV2ExactServeRestartTombstoneMutation.tla": (
-        "d5d145bf3b8080484a0309ac60de67bcb7b015e61e50ff891906329969182cac"
+        "d42e74fd85d0c64193b1afb474cc55f826ad01182fe59763d2edae43db7cd4a0"
     ),
     "SumeragiV2ExactResponseClaimLifecycleMutation.tla": (
-        "7404185ead32a48757956da2c852c40f641e90ff1707a1ada87d8b33f145492f"
+        "6ad54d19000f76931935cc103b509c7073b9a82c2dc6ebe8f31b664c269240b2"
     ),
     "SumeragiV2ExactServeFrozenPredecessorMutation.tla": (
-        "9d20b3f129e9bf3ad2b9cd39eabbf2f4200f411aca64d548c042081e4570cc1a"
+        "794ae1da2fa36db865c756180bad6e1e1c06ccdaa778ff067ece7e9a4ee38ada"
     ),
     "SumeragiV2ExactInstalledTcRetentionMutation.tla": (
         "6a67f962a092c40159e0be2e8a07f47661aecbfe05c9ba2827e55a7e93394389"
     ),
     "SumeragiV2ControlLivePredecessorMutation.tla": (
-        "a41b96b82eb8998a988745a0a6c103a6e7f97d0d012c4765796304ee1f25f328"
+        "b0f119d1649abeb44e0f8ae0448438fedaac800a8a335230d1130964cca271bc"
     ),
     "SumeragiV2ImportedCertificateTailMutation.tla": (
-        "1d570d5e21fa0ea61c03eeab0087b98dd4d2c358e8cc72ac414f2be54cf928f0"
+        "752b4cd4165e56f02637bfe1afdda95d308089532221825c909ae82ee71e2d41"
     ),
     "SumeragiV2ImportedTcTailMutation.tla": (
-        "a02de16f8f1538fb965b176ce6f8d8b9f56d08d90215c140b3daea379f5223d5"
+        "04ca7d6f4f1ffec5cac9f15acb610ba69d98675efc062eab5d026ba6c3b49a1a"
     ),
     "SumeragiV2TimeoutLifecycleStageClassifierMutation.tla": (
-        "ea064f1e0075da903140c740bbc1ffb803a67b9c0c41b32997f5293125517be4"
+        "7df40c886944928cdee86778a297f47ef8499748b8469087e383631f7a1eeac8"
     ),
     "SumeragiV2PersistInstallTimeoutTagMutation.tla": (
-        "3fdc3d63a9ab6afd2a284bdbfa776e07664cd39b442479aeba4d748c6a1b3bef"
+        "13fc590b72d0b97bac3dbabb1ba1b66ca105d1ed8fa4d01e66186d0aca19aa8a"
     ),
     "SumeragiV2PersistInstallTimeoutRootRetirementMutation.tla": (
-        "82f16d90647b5061be3d40444aabe68d91cdb4cb9a76adaec713bf4cfbd9efa3"
+        "df108ce5b3de705cb7ded1b27fd8fa778cc8987895f3be7cf4349ada0df549de"
     ),
     "SumeragiV2AdequateLeaderWireTombstoneMutation.tla": (
-        "f009b5bfe9ac7a98c3fbdfea1348b699e0be08419388949aa53a0d06819aff60"
+        "d8e07f8473672e7600ca8081abe94376bb9f52acdbd42ef484f893bd23bab4be"
     ),
     "SumeragiV2AdequateLeaderCandidateTombstoneMutation.tla": (
-        "ee8c810d32b03e1469fb15a4a7f421ff0ade25abbb2863c7f38a9993391fc42a"
+        "75213093f15e29e35ccada58bc543e90ff1240c7ca172e54884516bac6750f17"
     ),
     "exact_ingress_ticket_priority_fixed.cfg": (
         "2529761511261f8028f0843232f7bd342025718fefc553634b38fcfb53faeed6"
@@ -1575,37 +1794,37 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "8d6fe07f6f5089376222bae54b8b334c91c45cd16a1d7ea5239eb56f4aed14a0"
     ),
     "imported_certificate_tail_fixed.cfg": (
-        "9a580cb30bbe382fc1395082adf91c039de922efddb34d676cbf542852a860e0"
+        "6d0fce697a044d8acf984ae395f64c4bfb78f532e5258589803fdf7d310fa8f3"
     ),
     "imported_certificate_tail_bug.cfg": (
-        "4fc37a5d837e7a866cf93c8209ee8865f73833e5b6a1fe5ccd899c3182f75e89"
+        "cb2f1d16487b030556dc197c72bed912e28b1a8a13462f14e3db54be163ea87b"
     ),
     "imported_tc_tail_fixed.cfg": (
-        "921f83621de53f5afb271e899e58da4808038159e49eddf06c716a80360cac96"
+        "d464df4ba82163bce917ebb5ca9c1d84fa61c529be73115570ea3c9ba7ba16ea"
     ),
     "imported_tc_tail_bug.cfg": (
-        "350667c819a07f1914a297d78d46c8006774b44efeaa22a824b8850920a266a6"
+        "305c09791e706de8f7068822e30f527b43789e15971df234068cecc99ad46b46"
     ),
     "timeout_lifecycle_stage_classifier_fixed.cfg": (
-        "b323c813ce084bc6c85c64f594bf7bd55ae6ebdcbe1be3c408b830e5014f9035"
+        "5a1008c92a2015bdf39cedb566064cc4b28bd0e6da01059d8c3e2d8540f45aaa"
     ),
     "timeout_lifecycle_stage_classifier_bug.cfg": (
         "9e34e285ced97f50410472ad286c45204da06d7d8799c13253e2283a6f786f27"
     ),
     "persist_install_timeout_tag_fixed.cfg": (
-        "c1e7de9502836c9788734813e23349fd1797090bda2b01eb5cc4983a4d11ae2e"
+        "18c0be476f6f037732ce8f7836651babb30d93f3e6e41401fede8828589b4f9e"
     ),
     "persist_install_timeout_tag_bug.cfg": (
         "2fba91cff8430b97696d74363185f7a998638be3600ba9f02b991df01b2b65c1"
     ),
     "persist_install_timeout_root_retirement_fixed.cfg": (
-        "6043662a4f107115e9c9924b4bda1580a1641e4169473309aaabaf8bf4dcd243"
+        "6e7f1531fba78d78b3c9b8ead4f5c4686ff355e87d18be3303310282a4d16222"
     ),
     "persist_install_timeout_root_retirement_bug.cfg": (
         "5b6cecf701049e6e23ee2c92f13395625fe12ae5de1316b620581d81448eb2f7"
     ),
     "local_ingress_scheduler_reservation_fixed.cfg": (
-        "b8e4fe52c9d7484f429962e638f104af23015f9b6ee48d9469021cfe0a0d4ff4"
+        "963b6db59f7731b4d70b316592277d25676944dab4c5acb233f851411692cdb6"
     ),
     "local_ingress_scheduler_reservation_mutable_next_bug.cfg": (
         "385f27f3b9d9f4f74d4110dfba0d8d17c721f99ca44abaaa85f367a5e84de5e6"
@@ -1692,10 +1911,10 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "cb537e05878351e50108268cb8a462f1856e66c931f2dadc4d306da89afcca63"
     ),
     "SumeragiV2ExternalProducerContinuationMutation.tla": (
-        "894cc8016042071da3811025955be63bbf6c3a63c3a89db94399cd80e1519a32"
+        "24ef6f0e080c4e64fd19d4263ce82fe369d42c3e4cd43da9c0aab3517ceaddce"
     ),
     "SumeragiV2EmptyProducerHandoffMutation.tla": (
-        "ab46b7e8a0aa0ad162185e067647264bc252371090dda133a44e4dc7694cb5f6"
+        "b03fa34b133d69b33e4885c479ac8e6f44fd30382f451f15ab3d11ca721cde7b"
     ),
     "SumeragiV2ProducerOriginReservationMutation.tla": (
         "3a0c8fc62c67b4bad96692fcbe4c75c2b2a3f9f7b3b95a2a502e28ecb081fd19"
@@ -1704,7 +1923,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "cdf86251806c6fec7583293fe80d2e6da723421ef7fb477f54d5f7ebf7e385ae"
     ),
     "SumeragiV2RepresentativeLiveScopeMutation.tla": (
-        "77f33922981965ab4de19bdf5e5ef7a88fbd820474482c6a95f55f2580d5b0ed"
+        "edead4bb5d0d9801eb7d3e9c4fb96a0cd3fb2daf3c5adec1fccecd36d1aa086a"
     ),
     "SumeragiV2FixedCorridorPhysicalBudgetMutation.tla": (
         "474364c3251ab2b24838d1e7034c3d4f6a28928581ada184c7b2a7479ef69860"
@@ -1713,7 +1932,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "c209e7f2ce212d3f7ea8620f7458c79d1a932e32d0b2b4c2ef1b5831979c5f71"
     ),
     "SumeragiV2ProposalPipelineBudgetMutation.tla": (
-        "76c174b34dc721ce5874e2190270372f74e931532783b13f0991c3e2b592b77f"
+        "33f478e137dccb253c2569b7856af27ae3bab54dffda6d10a7c9ddd38d27e8bf"
     ),
     "adequate_leader_wire_terminal_identity_bug.cfg": (
         "ff7cc8d7cf34fc43a858aeb4acd3c0edd142f4aa69bec0f5d4e9c9f88953587f"
@@ -1785,34 +2004,34 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "4459bd5c261edcb289d18e01f662232b34dc95279757ad4f1a836ee81a767a53"
     ),
     "fixed_corridor_physical_budget_fixed.cfg": (
-        "64d5bede198e93095ac4ebd78e95bb67492f2ba56bd510078095201eac7cfbbf"
+        "a1f4aaf0190357a03d1cb1644b07bff17a5004bc8e1d116e99294ff7713a45a4"
     ),
     "fixed_corridor_physical_budget_omitted_lane_cursor_bug.cfg": (
         "c96633d9cb41fa777f6e4e05513b182f4a5018af81756e20851feffc69b9eb10"
     ),
     "fixed_corridor_action_credit_fixed.cfg": (
-        "2818f636e9ee68c67022179e05ec82da942772336d2f3eba312f4e1838507ee2"
+        "fdd5c5fa275f1dcbe34c28241fd2f1ebc4d301d1b57a7b64deb3d91ebc4007da"
     ),
     "fixed_corridor_action_credit_per_child_recharge_bug.cfg": (
         "cc0dbf42553c4a08b7db2965aebed4fd18c4fc99ca2488c1f4a306c133340f60"
     ),
     "proposal_pipeline_budget_fixed.cfg": (
-        "a51fa680a285fe56fcd81ede0b4eaf42390b9dcc75dead6101a34cf8910aa4c4"
+        "662cd733ed2b92b14d8a24c8a773eff16cc02462ebe038261ac6289a3b7ded75"
     ),
     "proposal_pipeline_budget_additive_bug.cfg": (
         "49b0376d1a46952ce3b4564a4020189808ce3cc4af89761b0b180f877a7ca17b"
     ),
     "SumeragiV2AuthorityDeadlineCarryMutation.tla": (
-        "f574dc972bd94a8d780c908b0f6e2e4d6db633f5dc871304556f42bedfa9c674"
+        "52d39ae42f519e145fc099021d362472bbed903c5d971eac58707189e5a5c507"
     ),
     "SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla": (
-        "c2a17bc53f7cfa52cfb40bc4d4c97b59b8615fcf363c01ec1a4b0788785e0e6f"
+        "2299cc4fdde3e1aa9567e7d3636c31afdec3d92815d61df5905040325febf7a1"
     ),
     "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla": (
-        "b812e0d3a0cbdb3300979e12c1e2a63198bf092f9d20c817e83587a268853ae7"
+        "625e00ff55020a907d82754b5a92224de23bb83caa66a581359cde331d908392"
     ),
     "authority_deadline_carry_fixed.cfg": (
-        "2b01485673bfed56d68a82fab2d4856051a68ef44eb754cae71e003b753a8973"
+        "2bb0f19785f4c0466417a70fc225d4b1e17ee53d065959d4f96adbbc931e23ff"
     ),
     "authority_deadline_carry_expired_receipt_bug.cfg": (
         "5b5306c35f7691270ea2e8340d55787770caaeb868c814f8344031014c0d1a09"
@@ -1833,10 +2052,10 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "f1829446aa850f90a5958f2df2c311cd10b512ec2267b1984e8d08844febc7d8"
     ),
     "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla": (
-        "20808fe38c7b518cf50f3fdc70544be91debc1c27b631ac9aa94567eb5890115"
+        "4c49378074b10908a8dca290ebbb4565e8e87443741450c4556c150512940878"
     ),
     "fixed_corridor_receipt_acquisition_fixed.cfg": (
-        "9e1279aff050d6f4fdd8403b71cb471f50030e1041e939cd2b3ef5871ea750c3"
+        "d3aff24a1305203debfc0ab9f70525efb42662063581b5989d9fe36c88a38e13"
     ),
     "fixed_corridor_receipt_acquisition_prestate_only_bug.cfg": (
         "adb35799b58cd2bb8ec621f44595ccd4d8bdba097508c48a3b78cce47ac0691d"
@@ -1857,7 +2076,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "14f5911140e645af8371cc282006fea6b879968845839389b550c057e8df0cda"
     ),
     "SumeragiV2ServeRestartTerminalDischargeMutation.tla": (
-        "15502349b0214b15c96dbc0eb6c8b62f8e43d2059b0ca11974ffa7ceabb24a4e"
+        "c0172b14b0f8e4061bf416d41920af477aea5c0432de13e897ba70697ff03191"
     ),
     "serve_restart_terminal_discharge_body_fail_open_bug.cfg": (
         "c4ed94aa1890354d4f262da0ec9b6ea51cbb606d8527f9419c266e7ee2c21691"
@@ -1938,10 +2157,12 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "d842c8552094eff841e3c9c159399d680a50edbd63ff2c1b96ad6a3330a8f644"
     ),
     LIVENESS_OWNERSHIP_MUTATION_RUNNER: (
-        "3f3738a6351e7f7fe78ac3f6a4a4e738f8b6fd2b098d7466674197c783783d25"
+        "ff397f9c7360900ea85c35a1889309ca082b04ec3fc1c0aeca2c327789157e56"
     ),
 }
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
+    "SumeragiV2Revision4CertifiedFenceReservation*.tla",
+    "revision4_certified_fence_reservation_*.cfg",
     "SumeragiV2LocalIngressSchedulerReservation*.tla",
     "SumeragiV2RestartTerminalDurability*.tla",
     "SumeragiV2ExactIngressTicketPriority*.tla",
@@ -2066,7 +2287,7 @@ HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_SHA256 = {
         "bdd9613583893b49e8f5762ea3342a50f5cc289689b225ef8b55c2aac0e8c49d"
     ),
     HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_RUNNER: (
-        "cb393225ef5b6b793367f05fd66f807b55ab06f31db94784be238c4261a7c161"
+        "52cb68a489a0309fabd6e52d16077a4cc05276088072636c4420cb55fc0b016a"
     ),
 }
 HISTORICAL_DISCOVERY_OCCURRENCE_RANK_MUTATION_FORMAL_GLOBS = (
@@ -2175,13 +2396,13 @@ REPLENISHMENT_REGRESSION_MUTATION_SHA256 = {
         "7e8fb414bea25a44bb89319b4609b62746f315240293d7ba47c90d338c93f837"
     ),
     "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh": (
-        "b81171eb4105b8aa8a66c840b3123b8a0cddc8c7515fec23c1a5c0c6ff7541d4"
+        "186029d410db73878ae7af83c39db20cb0bce0fbafbca701a5dcfe767271f9bc"
     ),
     "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh": (
         "e20a740c92cc9edb951699f8e3247b61d0c92701fcde39fca60baad493bb4796"
     ),
     "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
-        "cb393225ef5b6b793367f05fd66f807b55ab06f31db94784be238c4261a7c161"
+        "52cb68a489a0309fabd6e52d16077a4cc05276088072636c4420cb55fc0b016a"
     ),
 }
 REPLENISHMENT_REGRESSION_MUTATION_FORMAL_GLOBS = (
@@ -2382,3 +2603,1535 @@ EFFECT_CAPACITY_MUTATION_FORMAL_GLOBS = (
 )
 
 # Load the bounded admission and recovery mutation source contracts by path.
+
+
+def _revision4_model_contract_errors(
+    formal_dir: Path,
+    root_dir: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the executable revision-4 routing and conditional-progress surface."""
+
+    errors: list[str] = []
+    module_path = formal_dir / "SumeragiV2Revision4.tla"
+    if not module_path.is_file() or module_path.is_symlink():
+        return [f"{module_path}: revision-4 model must be a regular file"]
+    source = module_path.read_text(encoding="utf-8")
+
+    required_operator_tokens = {
+        "Views": ("0..(N - 1)",),
+        "ConstantOK": (
+            "N = 3 * F + 1",
+            "Cardinality(Faulty) <= F",
+            "\\E candidateView \\in Views : UsableView(candidateView)",
+        ),
+        "Init": ("ConstantOK",),
+        "Propose": (
+            "manifestTargets' = Validators",
+            "bodyTargets' = SetA(view)",
+        ),
+        "EnterFallback": (
+            "fallback' = TRUE",
+            "bodyTargets' = Validators",
+        ),
+        "ChangeView": (
+            "view < N - 1",
+            "fallback' = FALSE",
+            "prepareVoteRoutes' = {}",
+            "commitVoteRoutes' = {}",
+            "timeoutVoteRoutes' = {}",
+        ),
+        "ManifestCommitteeFanout": (
+            "manifestTargets = Validators",
+        ),
+        "FastPathAndFallbackBodyFanout": (
+            "IF fallback THEN Validators ELSE SetA(view)",
+        ),
+        "PrepareVotesRouteToProxyTail": (
+            "Validators \\X {ProxyTail(view)}",
+            "VoteSigners(prepareVotes)",
+        ),
+        "CommitVotesRouteToProxyTail": (
+            "Validators \\X {ProxyTail(view)}",
+            "VoteSigners(commitVotes)",
+        ),
+        "TimeoutVotesBypassProxyTail": (
+            "RouteSources(timeoutVoteRoutes) = timeoutVotes",
+            "= Validators",
+        ),
+        "PostGSTSendTimeout": (
+            "~UsableView(view)",
+            "SendTimeout(validator)",
+        ),
+        "ConditionalPostGSTProgress": (
+            "decisions /= {}",
+            "applied",
+            "successorActive",
+        ),
+        "FinalizedOutputDebtDoesNotBlockSuccessor": (
+            "applied",
+            "finalizedOutputDebt",
+            "~> successorActive",
+        ),
+    }
+    for operator, required in required_operator_tokens.items():
+        extracted = _top_level_operator_body(
+            source,
+            operator,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module_path}: missing revision-4 operator {operator}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: revision-4 operator {operator} is "
+                f"missing {missing}"
+            )
+
+    fairness = _top_level_operator_body(source, "PostGSTFairness")
+    if fairness is None:
+        errors.append(f"{module_path}: missing revision-4 PostGSTFairness")
+    else:
+        body, line = fairness
+        normalized = " ".join(body.split())
+        required_fair_actions = (
+            "HonestLeaderProposes",
+            "HonestBodyService",
+            "EnterFallback",
+            "HonestPrepareService",
+            "HonestTailPrepareQCService",
+            "HonestCommitService",
+            "HonestTailDecisionService",
+            "HonestTimeoutService",
+            "ChangeView",
+            "LocalDecisionBodyRecovery",
+            "LocalDecisionApplication",
+            "ActivateSuccessor",
+        )
+        missing = [
+            action
+            for action in required_fair_actions
+            if f"WF_vars({action})" not in normalized
+        ]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: PostGSTFairness is missing weakly fair "
+                f"services {missing}"
+            )
+        if "WF_vars(RepairFinalizedOutput)" in normalized:
+            errors.append(
+                f"{module_path}:{line}: finalized-output repair may not be a "
+                "revision-4 successor-progress fairness prerequisite"
+            )
+
+    config_contracts = {
+        "SumeragiV2Revision4.cfg": (
+            "SPECIFICATION Spec",
+            "INVARIANT ManifestCommitteeFanout",
+            "INVARIANT FastPathAndFallbackBodyFanout",
+            "INVARIANT PrepareVotesRouteToProxyTail",
+            "INVARIANT CommitVotesRouteToProxyTail",
+            "INVARIANT TimeoutVotesBypassProxyTail",
+            "INVARIANT NonblockingSuccessorActivation",
+        ),
+        "SumeragiV2Revision4Liveness.cfg": (
+            "SPECIFICATION PostGSTSpec",
+            "PROPERTY ConditionalPostGSTProgress",
+            "PROPERTY FinalizedOutputDebtDoesNotBlockSuccessor",
+        ),
+    }
+    for filename, required in config_contracts.items():
+        path = formal_dir / filename
+        if not path.is_file() or path.is_symlink():
+            errors.append(f"{path}: revision-4 TLC config must be a regular file")
+            continue
+        config_source = path.read_text(encoding="utf-8")
+        missing = [token for token in required if token not in config_source]
+        if missing:
+            errors.append(
+                f"{path}: revision-4 TLC configuration is missing {missing}"
+            )
+
+    runner_path = root_dir / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh"
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(f"{runner_path}: revision-4 TLC runner must be a regular file")
+    else:
+        runner_source = runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "revision4_safety",
+            "revision4_liveness",
+            'revision4_safety) cfg="SumeragiV2Revision4.cfg"',
+            'revision4_liveness) cfg="SumeragiV2Revision4Liveness.cfg"',
+            "revision4_safety|revision4_liveness)",
+            "SumeragiV2Revision4.tla",
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{runner_path}: focused revision-4 TLC runner is missing {missing}"
+            )
+    return errors
+
+
+def _revision4_adversarial_safety_contract_errors(
+    formal_dir: Path,
+    root_dir: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the non-vacuous four-validator/two-body adversarial safety search."""
+
+    errors: list[str] = []
+    module_path = formal_dir / "SumeragiV2Revision4AdversarialSafety.tla"
+    if not module_path.is_file() or module_path.is_symlink():
+        return [
+            f"{module_path}: revision-4 adversarial safety model must be a "
+            "regular file"
+        ]
+    source = module_path.read_text(encoding="utf-8")
+
+    required_operator_tokens = {
+        "ConstantOK": (
+            "N = 4",
+            "F = 1",
+            "Q = 3",
+            "Cardinality(Faulty) = 1",
+            "Cardinality(Bodies) = 2",
+        ),
+        "HonestCommitVote": (
+            "validator \\in Honest",
+            "<<validator, body>> \\in fullBodies",
+            "VoteBodies(validator) = {}",
+            "commitVotes' = commitVotes \\cup {<<validator, body>>}",
+        ),
+        "ByzantineCommitVote": (
+            "validator \\in Faulty",
+            "<<validator, body>> \\notin commitVotes",
+            "commitVotes' = commitVotes \\cup {<<validator, body>>}",
+        ),
+        "FormCommitQC": (
+            "body \\notin commitQCs",
+            "VoteCount(body) >= Q",
+            "commitQCs' = commitQCs \\cup {body}",
+        ),
+        "Decide": (
+            "body \\in commitQCs",
+            "body \\notin decisions",
+            "decisions' = decisions \\cup {body}",
+        ),
+        "Next": (
+            "DeliverFullBody(validator, body)",
+            "HonestCommitVote(validator, body)",
+            "ByzantineCommitVote(validator, body)",
+            "FormCommitQC(body)",
+            "Decide(body)",
+        ),
+        "FixedAdversarialGeometry": (
+            "Cardinality(Validators) = 4",
+            "Cardinality(Honest) = 3",
+            "Cardinality(Faulty) = 1",
+            "Q = 3",
+        ),
+        "HonestSignOncePerRound": (
+            "validator \\in Honest",
+            "Cardinality(VoteBodies(validator)) <= 1",
+        ),
+        "ByzantineEquivocationRemainsEnabled": (
+            "validator \\in Faulty",
+            "<<validator, body>> \\notin commitVotes",
+            "ENABLED ByzantineCommitVote(validator, body)",
+        ),
+        "CommitQCsHaveQuorum": (
+            "body \\in commitQCs",
+            "VoteCount(body) >= Q",
+        ),
+        "DecisionsHaveCommitQC": ("decisions \\subseteq commitQCs",),
+        "PostQCExecutionRemainsOpen": (
+            "commitQCs /= {}",
+            "ENABLED DeliverFullBody(validator, body)",
+            "ENABLED HonestCommitVote(validator, body)",
+            "ENABLED ByzantineCommitVote(validator, body)",
+            "ENABLED FormCommitQC(body)",
+            "ENABLED Decide(body)",
+        ),
+        "ConflictingCommitQCsImpossible": (
+            "Cardinality(commitQCs) <= 1",
+        ),
+        "DecisionAgreement": ("Cardinality(decisions) <= 1",),
+    }
+    operator_bodies: dict[str, tuple[str, int]] = {}
+    for operator, required in required_operator_tokens.items():
+        extracted = _top_level_operator_body(
+            source,
+            operator,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module_path}: missing revision-4 adversarial operator "
+                f"{operator}"
+            )
+            continue
+        operator_bodies[operator] = extracted
+        body, line = extracted
+        normalized = " ".join(body.split())
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: revision-4 adversarial operator "
+                f"{operator} is missing {missing}"
+            )
+
+    byzantine_body = operator_bodies.get("ByzantineCommitVote")
+    if byzantine_body is not None:
+        body, line = byzantine_body
+        normalized = " ".join(body.split())
+        if "VoteBodies(" in normalized:
+            errors.append(
+                f"{module_path}:{line}: ByzantineCommitVote must permit the "
+                "faulty validator to vote for both bodies"
+            )
+
+    for operator in (
+        "DeliverFullBody",
+        "HonestCommitVote",
+        "ByzantineCommitVote",
+        "FormCommitQC",
+        "Decide",
+    ):
+        extracted = operator_bodies.get(operator)
+        if extracted is None:
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        forbidden = (
+            "commitQCs = {}",
+            "decisions = {}",
+            "Cardinality(commitQCs) = 0",
+            "Cardinality(decisions) = 0",
+        )
+        present = [token for token in forbidden if token in normalized]
+        if present:
+            errors.append(
+                f"{module_path}:{line}: {operator} must remain enabled after "
+                f"the first QC or decision; found global stop guards {present}"
+            )
+
+    config_path = formal_dir / "SumeragiV2Revision4AdversarialSafety.cfg"
+    if not config_path.is_file() or config_path.is_symlink():
+        errors.append(
+            f"{config_path}: revision-4 adversarial TLC config must be a "
+            "regular file"
+        )
+    else:
+        config_source = config_path.read_text(encoding="utf-8")
+        required_config_tokens = (
+            "SPECIFICATION Spec",
+            "Validators = {v1, v2, v3, v4}",
+            "Faulty = {v4}",
+            "Bodies = {b1, b2}",
+            "INVARIANT FixedAdversarialGeometry",
+            "INVARIANT HonestSignOncePerRound",
+            "INVARIANT ByzantineEquivocationRemainsEnabled",
+            "INVARIANT CommitQCsHaveQuorum",
+            "INVARIANT DecisionsHaveCommitQC",
+            "INVARIANT PostQCExecutionRemainsOpen",
+            "INVARIANT ConflictingCommitQCsImpossible",
+            "INVARIANT DecisionAgreement",
+        )
+        missing = [
+            token
+            for token in required_config_tokens
+            if token not in config_source
+        ]
+        if missing:
+            errors.append(
+                f"{config_path}: revision-4 adversarial TLC configuration is "
+                f"missing {missing}"
+            )
+
+    runner_path = root_dir / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh"
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(
+            f"{runner_path}: revision-4 adversarial TLC runner must be a "
+            "regular file"
+        )
+    else:
+        runner_source = runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "revision4_adversarial_safety",
+            (
+                'revision4_adversarial_safety) cfg='
+                '"SumeragiV2Revision4AdversarialSafety.cfg"'
+            ),
+            "SumeragiV2Revision4AdversarialSafety.tla",
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{runner_path}: focused revision-4 adversarial TLC runner is "
+                f"missing {missing}"
+            )
+    return errors
+
+
+def _revision4_certified_fence_reservation_contract_errors(
+    formal_dir: Path,
+    root_dir: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the bounded revision-4 certified-fence reservation kernel."""
+
+    errors: list[str] = []
+    module_path = formal_dir / "SumeragiV2Revision4CertifiedFenceReservation.tla"
+    if not module_path.is_file() or module_path.is_symlink():
+        return [
+            f"{module_path}: revision-4 certified-fence reservation model "
+            "must be a regular file"
+        ]
+    source = module_path.read_text(encoding="utf-8")
+
+    required_operator_tokens = {
+        "BarrierKinds": ('{"Serve", "LeaderWire"}',),
+        "CertifiedKinds": (
+            '{"TimeoutCertificate", "CommitQC", '
+            '"CommitCertificateResponse"}',
+        ),
+        "IneligibleKinds": ('{"PrepareQC", "TimeoutVote"}',),
+        "IngressKinds": ("CertifiedKinds \\cup IneligibleKinds",),
+        "CommandClasses": ('{"Normal", "Progress", "Completion"}',),
+        "Stages": ('{"Ingress", "Runtime", "TrustedTail", "Handled"}',),
+        "RuntimeCapacity": ("4",),
+        "NormalLimit": ("1",),
+        "ProgressLimit": ("2",),
+        "OrdinaryCompletionLimit": ("3",),
+        "CompletionReserve": (
+            "OrdinaryCompletionLimit - ProgressLimit",
+        ),
+        "OrdinaryRuntimePrefix": (
+            '<<"Progress", "Progress", "Completion">>',
+        ),
+        "QueueClassCount": (
+            "Cardinality(",
+            "queue[index] = commandClass",
+        ),
+        "QueueCertifiedCount": (
+            "CertifiedFenceEscapeKind(queue[index])",
+        ),
+        "QueueCertifiedCredit": (
+            "QueueCertifiedCount(queue) = 0",
+            "THEN 0 ELSE 1",
+        ),
+        "QueueNoncompletionCount": (
+            'queue[index] # "Completion"',
+        ),
+        "ExternalOwnerCount": (
+            "unpublishedBodyAvailable",
+            "conflictingProposalQueued",
+        ),
+        "OwnedRuntimeDepth": (
+            "Len(queue) + ExternalOwnerCount",
+        ),
+        "OwnedClassCount": (
+            'commandClass = "Progress"',
+            'QueueClassCount(queue, "Progress") + QueueCertifiedCount(queue)',
+            "QueueClassCount(queue, commandClass)",
+            'commandClass = "Completion" /\\ unpublishedBodyAvailable',
+            'commandClass = "Normal" /\\ conflictingProposalQueued',
+        ),
+        "OwnedNoncompletionCount": (
+            'OwnedClassCount(queue, "Normal")',
+            'OwnedClassCount(queue, "Progress")',
+        ),
+        "CertifiedCreditIn": (
+            "incomingCertified",
+            "RetainedCertifiedCreditEnabled",
+            "QueueCertifiedCount(queue) > 0",
+        ),
+        "CanAppendClass": (
+            "CertifiedCreditIn(queue, incomingCertified)",
+            "OwnedRuntimeDepth(queue) < RuntimeCapacity",
+            "OwnedRuntimeDepth(queue) + 1",
+            "<= OrdinaryCompletionLimit + credit",
+            "normalAfter <= NormalLimit",
+            "noncompletionAfter <= ProgressLimit + credit",
+        ),
+        "Init": (
+            "ownerIdentity \\in OwnerIdentities",
+            "ownerSnapshot = ownerIdentity",
+            "ownerRetained = TRUE",
+            "offeredKind \\in IngressKinds",
+            "authenticated \\in BOOLEAN",
+            'stage = "Ingress"',
+            "runtimeQueue = OrdinaryRuntimePrefix",
+            "runtimeQueue = <<>>",
+            "pendingProgress = 0",
+            "pendingProgress = 2",
+            "pendingProgress = 1",
+            "pendingCompletion = 0",
+            "pendingCompletion = 1",
+            "pendingCertified =",
+            "CertifiedKinds \\ {offeredKind}",
+            'runtimeQueue = <<"Progress">>',
+            "conflictingProposalQueued",
+            'escapePhase = "Fresh"',
+        ),
+        "CertifiedFenceEscapeKind": ("kind \\in CertifiedKinds",),
+        "OfferAdvancesRetainedOwner": (
+            "OfferContext = ownerIdentity.context",
+            "OfferHeight = ownerIdentity.height",
+            "OfferView >= ownerIdentity.view",
+        ),
+        "CanUseCertifiedFinalSlot": (
+            "CertifiedFenceEscapeEnabled",
+            "OwnedRuntimeDepth(runtimeQueue) = RuntimeCapacity - 1",
+            "OwnedRuntimeDepth(runtimeQueue) < RuntimeCapacity",
+            'CanAppendClass(runtimeQueue, offeredKind, "Progress", TRUE)',
+        ),
+        "CanUseCertifiedEarlySlot": (
+            "CertifiedFenceEscapeEnabled",
+            "OwnedRuntimeDepth(runtimeQueue) < RuntimeCapacity - 1",
+            'CanAppendClass(runtimeQueue, offeredKind, "Progress", TRUE)',
+        ),
+        "AdmitCertifiedEscape": (
+            'stage = "Ingress"',
+            "ownerRetained",
+            "authenticated",
+            "CertifiedFenceEscapeKind(offeredKind)",
+            'escapePhase = "Fresh"',
+            "OfferAdvancesRetainedOwner",
+            "CanUseCertifiedFinalSlot",
+            'stage\' = "Runtime"',
+            "runtimeQueue' = Append(runtimeQueue, offeredKind)",
+            'escapePhase\' = "Charged"',
+            "UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained",
+        ),
+        "AdmitCertifiedEscapeEarly": (
+            'stage = "Ingress"',
+            "CertifiedFenceEscapeKind(offeredKind)",
+            'escapePhase = "Fresh"',
+            "CanUseCertifiedEarlySlot",
+            'stage\' = "Runtime"',
+            "runtimeQueue' = Append(runtimeQueue, offeredKind)",
+            'escapePhase\' = "Charged"',
+        ),
+        "AdmitOrdinaryProgress": (
+            "pendingProgress > 0",
+            'CanAppendClass(runtimeQueue, "Progress", "Progress", FALSE)',
+            'runtimeQueue\' = Append(runtimeQueue, "Progress")',
+            "pendingProgress' = pendingProgress - 1",
+        ),
+        "AdmitOrdinaryCompletion": (
+            "pendingCompletion > 0",
+            'CanAppendClass(runtimeQueue, "Completion", "Completion", FALSE)',
+            'runtimeQueue\' = Append(runtimeQueue, "Completion")',
+            "pendingCompletion' = pendingCompletion - 1",
+        ),
+        "AdmitAdditionalCertified": (
+            'stage = "Runtime"',
+            'escapePhase = "Fresh"',
+            "kind \\in pendingCertified",
+            'CanAppendClass(runtimeQueue, kind, "Progress", TRUE)',
+            "runtimeQueue' = Append(runtimeQueue, kind)",
+            "pendingCertified' = pendingCertified \\ {kind}",
+            'escapePhase\' = "Charged"',
+        ),
+        "ReserveUnpublishedBodyAvailable": (
+            "conflictingProposalQueued",
+            "~unpublishedBodyAvailable",
+            "unpublishedBodyAvailable' = TRUE",
+            "conflictingProposalQueued' = FALSE",
+        ),
+        "DispatchCertifiedEscape": (
+            'stage = "Runtime"',
+            "ownerRetained",
+            "CertifiedFenceEscapeEnabled",
+            "OwnedRuntimeDepth(runtimeQueue) = RuntimeCapacity",
+            "FirstCertifiedQueueIndex = Len(runtimeQueue)",
+            "runtimeQueue[FirstCertifiedQueueIndex] = offeredKind",
+            "CertifiedFenceEscapeKind(offeredKind)",
+            'stage\' = "TrustedTail"',
+            "runtimeQueue' = SubSeq(runtimeQueue, 1, Len(runtimeQueue) - 1)",
+            'THEN "Spent"',
+            "UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained",
+        ),
+        "DispatchEarlyCertifiedEscape": (
+            'stage = "Runtime"',
+            "CertifiedQueueIndices # {}",
+            "FirstCertifiedQueueIndex # Len(runtimeQueue)",
+            "runtimeQueue' = RemoveAt(runtimeQueue, FirstCertifiedQueueIndex)",
+            'THEN "Spent"',
+        ),
+        "RunCertifiedTrustedTail": (
+            'stage = "TrustedTail"',
+            "ownerRetained",
+            "CertifiedFenceEscapeEnabled",
+            "CertifiedFenceEscapeKind(offeredKind)",
+            'stage\' = "Handled"',
+            "ownerRetained' = FALSE",
+            'installedTC\' = (offeredKind = "TimeoutCertificate")',
+            'decided\' = (offeredKind \\in '
+            '{"CommitQC", "CommitCertificateResponse"})',
+            'escapePhase\' = "Fresh"',
+            "UNCHANGED <<ownerIdentity, ownerSnapshot, offeredKind",
+        ),
+        "Next": (
+            "AdmitCertifiedEscape",
+            "AdmitCertifiedEscapeEarly",
+            "AdmitOrdinaryProgress",
+            "AdmitOrdinaryCompletion",
+            "AdmitAdditionalCertified(kind)",
+            "ReserveUnpublishedBodyAvailable",
+            "DispatchCertifiedEscape",
+            "DispatchEarlyCertifiedEscape",
+            "RunCertifiedTrustedTail",
+        ),
+        "Spec": (
+            "Init",
+            "[][Next]_vars",
+            "WF_vars(AdmitCertifiedEscape)",
+            "WF_vars(AdmitCertifiedEscapeEarly)",
+            "WF_vars(AdmitOrdinaryProgress)",
+            "WF_vars(AdmitOrdinaryCompletion)",
+            "WF_vars(ReserveUnpublishedBodyAvailable)",
+            "WF_vars(AdmitAdditionalCertified(kind))",
+            "WF_vars(DispatchCertifiedEscape)",
+            "WF_vars(DispatchEarlyCertifiedEscape)",
+            "WF_vars(RunCertifiedTrustedTail)",
+        ),
+        "OwnerIdentityNeverReplaced": ("ownerIdentity = ownerSnapshot",),
+        "OwnerRetainedAcrossEscape": (
+            'stage \\in {"Runtime", "TrustedTail"} '
+            "=> ownerRetained",
+        ),
+        "NoOrdinaryRuntimeDisplacement": (
+            "QueueCertifiedCredit(runtimeQueue)",
+            'OwnedClassCount(runtimeQueue, "Normal") <= NormalLimit',
+            "OwnedNoncompletionCount(runtimeQueue) - credit <= ProgressLimit",
+            'OwnedClassCount(runtimeQueue, "Completion") <= CompletionReserve',
+        ),
+        "ReservedSlotOnlyCertified": (
+            "OwnedRuntimeDepth(runtimeQueue) = RuntimeCapacity",
+            "authenticated",
+            "QueueCertifiedCount(runtimeQueue) >= 1",
+            "CertifiedFenceEscapeKind(offeredKind)",
+        ),
+        "SingleCertifiedCredit": (
+            "QueueCertifiedCredit(runtimeQueue) \\in {0, 1}",
+            "QueueCertifiedCount(runtimeQueue) > 0",
+            "<=> QueueCertifiedCredit(runtimeQueue) = 1",
+        ),
+        "OrdinaryCapacityGeometry": (
+            "CompletionReserve = 1",
+            "OwnedRuntimeDepth(runtimeQueue) - credit <= OrdinaryCompletionLimit",
+            "OwnedNoncompletionCount(runtimeQueue) - credit <= ProgressLimit",
+        ),
+        "CertifiedFirstCompletionCorridor": (
+            'stage = "Runtime"',
+            "QueueCertifiedCount(runtimeQueue) >= 1",
+            "pendingCompletion = 1",
+            "OwnedNoncompletionCount(runtimeQueue) - 1 = ProgressLimit",
+            "OwnedRuntimeDepth(runtimeQueue) < RuntimeCapacity",
+            'CanAppendClass(runtimeQueue, "Completion", "Completion", FALSE)',
+        ),
+        "CertifiedFirstProgressCorridor": (
+            'stage = "Runtime"',
+            "QueueCertifiedCount(runtimeQueue) >= 1",
+            "pendingProgress > 0",
+            "OwnedNoncompletionCount(runtimeQueue) - 1 < ProgressLimit",
+            "OwnedRuntimeDepth(runtimeQueue) < RuntimeCapacity",
+            'CanAppendClass(runtimeQueue, "Progress", "Progress", FALSE)',
+        ),
+        "PrepareQcCannotUseEscape": (
+            'offeredKind = "PrepareQC" => stage = "Ingress"',
+        ),
+        "RawTimeoutVoteCannotUseEscape": (
+            'offeredKind = "TimeoutVote" => stage = "Ingress"',
+        ),
+        "AuthenticationRequiredForEscape": (
+            'stage \\in {"Runtime", "TrustedTail", "Handled"} '
+            "=> authenticated",
+        ),
+        "HandledOutcomeExact": (
+            'stage = "Handled"',
+            'offeredKind = "TimeoutCertificate"',
+            "installedTC /\\ ~decided",
+            "~installedTC /\\ decided",
+        ),
+        "CertifiedEscapeEpisodeIsOneShot": (
+            'escapePhase \\in {"Fresh", "Charged", "Spent"}',
+            'escapePhase \\in {"Charged", "Spent"}',
+            "~ENABLED AdmitCertifiedEscape",
+            "~ENABLED AdmitCertifiedEscapeEarly",
+            "~ENABLED (\\E kind \\in CertifiedKinds:",
+            'stage = "Handled"',
+            "~ownerRetained",
+            'escapePhase = "Fresh"',
+        ),
+        "UnpublishedBodyAvailableOwnsOrdinaryCompletion": (
+            "~(unpublishedBodyAvailable /\\ conflictingProposalQueued)",
+            'OwnedClassCount(runtimeQueue, "Completion") >= 1',
+            'OwnedClassCount(runtimeQueue, "Normal") >= 1',
+        ),
+        "CertifiedEscapeEventuallyHandled": (
+            "authenticated",
+            "CertifiedFenceEscapeKind(offeredKind)",
+            "ownerRetained",
+            '~> (stage = "Handled")',
+        ),
+    }
+    operator_bodies: dict[str, tuple[str, int]] = {}
+    for operator, required in required_operator_tokens.items():
+        extracted = _top_level_operator_body(
+            source,
+            operator,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{module_path}: missing revision-4 certified-fence operator "
+                f"{operator}"
+            )
+            continue
+        operator_bodies[operator] = extracted
+        body, line = extracted
+        normalized = " ".join(body.split())
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: revision-4 certified-fence operator "
+                f"{operator} is missing {missing}"
+            )
+
+    exact_kind_bodies = {
+        "CertifiedKinds": (
+            '{"TimeoutCertificate", "CommitQC", '
+            '"CommitCertificateResponse"}'
+        ),
+        "IneligibleKinds": '{"PrepareQC", "TimeoutVote"}',
+        "CommandClasses": '{"Normal", "Progress", "Completion"}',
+        "CertifiedFenceEscapeKind": "kind \\in CertifiedKinds",
+    }
+    for operator, expected in exact_kind_bodies.items():
+        extracted = operator_bodies.get(operator)
+        if extracted is None:
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{module_path}:{line}: revision-4 certified-fence operator "
+                f"{operator} must equal only {expected!r}; found "
+                f"{normalized!r}"
+            )
+
+    exact_numeric_bodies = {
+        "RuntimeCapacity": "4",
+        "NormalLimit": "1",
+        "ProgressLimit": "2",
+        "OrdinaryCompletionLimit": "3",
+        "CompletionReserve": "OrdinaryCompletionLimit - ProgressLimit",
+        "QueueCertifiedCredit": (
+            "IF QueueCertifiedCount(queue) = 0 THEN 0 ELSE 1"
+        ),
+    }
+    for operator, expected in exact_numeric_bodies.items():
+        extracted = operator_bodies.get(operator)
+        if extracted is None:
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{module_path}:{line}: revision-4 certified-fence operator "
+                f"{operator} must equal only {expected!r}; found "
+                f"{normalized!r}"
+            )
+
+    atomic_replacement = _top_level_theorem_body(
+        source,
+        "BodyAvailableReservationAtomicallyReplacesConflict",
+        preserve_string_contents=True,
+    )
+    if atomic_replacement is None:
+        errors.append(
+            f"{module_path}: missing atomic unpublished BodyAvailable replacement theorem"
+        )
+    else:
+        body, line = atomic_replacement
+        normalized = " ".join(body.split())
+        required = (
+            "ReserveUnpublishedBodyAvailable",
+            "unpublishedBodyAvailable'",
+            "~conflictingProposalQueued'",
+            "OwnedRuntimeDepth(runtimeQueue') = OwnedRuntimeDepth(runtimeQueue)",
+            "BY DEF ReserveUnpublishedBodyAvailable",
+            "OwnedRuntimeDepth",
+            "ExternalOwnerCount",
+        )
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: atomic BodyAvailable replacement theorem "
+                f"is missing {missing!r}"
+            )
+
+    config_contracts = {
+        "revision4_certified_fence_reservation_fixed.cfg": (
+            "SPECIFICATION Spec",
+            "CONSTANTS",
+            "CertifiedFenceEscapeEnabled = TRUE",
+            "RetainedCertifiedCreditEnabled = TRUE",
+            "INVARIANT TypeOK",
+            "INVARIANT OwnerIdentityNeverReplaced",
+            "INVARIANT OwnerRetainedAcrossEscape",
+            "INVARIANT NoOrdinaryRuntimeDisplacement",
+            "INVARIANT ReservedSlotOnlyCertified",
+            "INVARIANT SingleCertifiedCredit",
+            "INVARIANT OrdinaryCapacityGeometry",
+            "INVARIANT CertifiedFirstCompletionCorridor",
+            "INVARIANT CertifiedFirstProgressCorridor",
+            "INVARIANT PrepareQcCannotUseEscape",
+            "INVARIANT RawTimeoutVoteCannotUseEscape",
+            "INVARIANT AuthenticationRequiredForEscape",
+            "INVARIANT HandledOutcomeExact",
+            "INVARIANT CertifiedEscapeEpisodeIsOneShot",
+            "INVARIANT UnpublishedBodyAvailableOwnsOrdinaryCompletion",
+            "PROPERTY CertifiedEscapeEventuallyHandled",
+            "CHECK_DEADLOCK FALSE",
+        ),
+        "revision4_certified_fence_reservation_blocked_bug.cfg": (
+            "SPECIFICATION Spec",
+            "CONSTANTS",
+            "CertifiedFenceEscapeEnabled = FALSE",
+            "RetainedCertifiedCreditEnabled = TRUE",
+            "INVARIANT TypeOK",
+            "INVARIANT OwnerIdentityNeverReplaced",
+            "INVARIANT NoOrdinaryRuntimeDisplacement",
+            "INVARIANT PrepareQcCannotUseEscape",
+            "INVARIANT RawTimeoutVoteCannotUseEscape",
+            "PROPERTY CertifiedEscapeEventuallyHandled",
+            "CHECK_DEADLOCK FALSE",
+        ),
+        "revision4_certified_fence_reservation_arrival_order_bug.cfg": (
+            "SPECIFICATION Spec",
+            "CONSTANTS",
+            "CertifiedFenceEscapeEnabled = TRUE",
+            "RetainedCertifiedCreditEnabled = FALSE",
+            "INVARIANT TypeOK",
+            "INVARIANT CertifiedFirstProgressCorridor",
+            "CHECK_DEADLOCK FALSE",
+        ),
+    }
+    for filename, required in config_contracts.items():
+        config_path = formal_dir / filename
+        if not config_path.is_file() or config_path.is_symlink():
+            errors.append(
+                f"{config_path}: revision-4 certified-fence TLC config must "
+                "be a regular file"
+            )
+            continue
+        config_source = config_path.read_text(encoding="utf-8")
+        missing = [token for token in required if token not in config_source]
+        if missing:
+            errors.append(
+                f"{config_path}: revision-4 certified-fence TLC "
+                f"configuration is missing {missing}"
+            )
+
+    runner_path = root_dir / "scripts" / "formal" / "run_sumeragi_v2_tlc.sh"
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(
+            f"{runner_path}: revision-4 certified-fence TLC runner must be a "
+            "regular file"
+        )
+    else:
+        runner_source = runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "revision4_certified_fence_reservation",
+            (
+                'revision4_certified_fence_reservation) cfg='
+                '"revision4_certified_fence_reservation_fixed.cfg"'
+            ),
+            "SumeragiV2Revision4CertifiedFenceReservation.tla",
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{runner_path}: focused revision-4 certified-fence TLC "
+                f"runner is missing {missing}"
+            )
+
+    mutation_runner_path = (
+        root_dir
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_liveness_ownership_mutations.sh"
+    )
+    if not mutation_runner_path.is_file() or mutation_runner_path.is_symlink():
+        errors.append(
+            f"{mutation_runner_path}: certified-fence mutation runner must be "
+            "a regular file"
+        )
+    else:
+        runner_source = mutation_runner_path.read_text(encoding="utf-8")
+        required_runner_tokens = (
+            "SumeragiV2Revision4CertifiedFenceReservation.tla",
+            (
+                "revision4-certified-fence-reservation|"
+                "SumeragiV2Revision4CertifiedFenceReservation.tla|"
+                "revision4_certified_fence_reservation_fixed.cfg"
+            ),
+            (
+                "revision4-certified-fence-reservation-blocked|"
+                "SumeragiV2Revision4CertifiedFenceReservation.tla|"
+                "revision4_certified_fence_reservation_blocked_bug.cfg"
+            ),
+            (
+                "revision4-certified-fence-arrival-order|"
+                "SumeragiV2Revision4CertifiedFenceReservation.tla|"
+                "revision4_certified_fence_reservation_arrival_order_bug.cfg|"
+                "CertifiedFirstProgressCorridor"
+            ),
+        )
+        missing = [
+            token for token in required_runner_tokens if token not in runner_source
+        ]
+        if missing:
+            errors.append(
+                f"{mutation_runner_path}: certified-fence mutation runner is "
+                f"missing {missing}"
+            )
+
+    documentation_contracts = {
+        formal_dir / "README.md": (
+            "its escape episode is explicitly\n"
+            "`Fresh`, `Charged`, or `Spent`:",
+            "direct TC, CommitQC, or `CommitCertificateResponse` carrying a CommitQC root;",
+            "The claimed-response rank counts\n"
+            "the exact frozen direct roots plus the strictly decreasing trusted causal tail,\n"
+            "so pacemaker priority cannot be replenished indefinitely.",
+            "The\nstandalone revision-4 kernel also charges an unpublished `BodyAvailable` token\n"
+            "as an ordinary Completion owner and replaces its conflicting proposal owner in\n"
+            "one atomic transition, preserving physical occupancy throughout the swap.",
+        ),
+        formal_dir / "PROOF.md": (
+            "its escape episode is explicitly `Fresh`,\n"
+            "`Charged`, or `Spent`:",
+            "direct TC, CommitQC, or\n"
+            "`CommitCertificateResponse` carrying a CommitQC root;",
+            "The claimed-response rank counts the exact frozen direct\n"
+            "roots and their strictly decreasing trusted causal tail, so pacemaker priority\n"
+            "cannot be replenished indefinitely.",
+            "The standalone revision-4 kernel charges\n"
+            "an unpublished `BodyAvailable` token as an ordinary Completion owner and\n"
+            "atomically replaces its conflicting proposal owner without changing physical\n"
+            "occupancy.",
+        ),
+    }
+    for documentation_path, claims in documentation_contracts.items():
+        if not documentation_path.is_file() or documentation_path.is_symlink():
+            errors.append(
+                f"{documentation_path}: revision-4 latch documentation must be regular"
+            )
+            continue
+        documentation = documentation_path.read_text(encoding="utf-8")
+        for claim in claims:
+            if documentation.count(claim) != 1:
+                errors.append(
+                    f"{documentation_path}: revision-4 latch documentation must "
+                    f"contain exact claim {claim!r}"
+                )
+    return errors
+
+
+def _runtime_certified_fence_capacity_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin production's retained one-credit C/P/K runtime admission."""
+
+    errors: list[str] = []
+    runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    if not runtime_path.is_file() or runtime_path.is_symlink():
+        return [
+            f"{runtime_path}: certified-fence runtime capacity source must "
+            "be a regular file"
+        ]
+    try:
+        source = runtime_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return [f"{runtime_path}: cannot read runtime capacity source: {error}"]
+
+    config_items: dict[str, RustItem | None] = {}
+    for item_name in (
+        "validate",
+        "normal_limit",
+        "progress_limit",
+        "ordinary_total_limit",
+    ):
+        item = _require_qualified_rust_item(
+            runtime_path,
+            source,
+            "RuntimeQueueConfig",
+            item_name,
+            errors,
+            f"RuntimeQueueConfig::{item_name} C/P/K geometry",
+        )
+        config_items[item_name] = item
+        _require_rust_item_token_sha256(
+            runtime_path,
+            item,
+            _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[
+                f"RuntimeQueueConfig::{item_name}"
+            ],
+            f"RuntimeQueueConfig::{item_name} C/P/K geometry",
+            errors,
+        )
+
+    _require_exact_rust_tokens(
+        runtime_path,
+        config_items.get("normal_limit"),
+        """
+const fn normal_limit(self) -> usize {
+    self.capacity - self.progress_reserve - self.completion_reserve - 1
+}
+""",
+        "normal limit must equal C-P-K-1",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        runtime_path,
+        config_items.get("progress_limit"),
+        """
+const fn progress_limit(self) -> usize {
+    self.capacity - self.completion_reserve - 1
+}
+""",
+        "ordinary noncompletion limit must equal C-K-1",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        runtime_path,
+        config_items.get("ordinary_total_limit"),
+        """
+const fn ordinary_total_limit(self) -> usize {
+    self.capacity - 1
+}
+""",
+        "ordinary total limit must equal C-1",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        config_items.get("validate"),
+        """
+self.progress_reserve
+    .checked_add(self.completion_reserve)
+    .and_then(|reserved| reserved.checked_add(1))
+    .is_none_or(|reserved| reserved >= self.capacity)
+""",
+        "queue validation must reserve P+K+1 strictly below C",
+        errors,
+    )
+
+    bounded_context = (
+        (
+            "impl",
+            "<",
+            "C",
+            ":",
+            "ExactRuntimeCommandIdentity",
+            ">",
+            "BoundedIngress",
+            "<",
+            "C",
+            ">",
+        ),
+    )
+    bounded_items: dict[str, RustItem | None] = {}
+    for item_name in (
+        "certified_fence_escape_credit",
+        "check_capacity_change_inner",
+        "remaining_capacity",
+    ):
+        item = _require_rust_item(runtime_path, source, item_name, errors)
+        bounded_items[item_name] = item
+        _require_rust_item_context(
+            runtime_path,
+            item,
+            bounded_context,
+            f"BoundedIngress::{item_name} retained-credit admission",
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            item,
+            _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[
+                f"BoundedIngress::{item_name}"
+            ],
+            f"BoundedIngress::{item_name} retained-credit admission",
+            errors,
+        )
+
+    _require_exact_rust_tokens(
+        runtime_path,
+        bounded_items.get("certified_fence_escape_credit"),
+        """
+fn certified_fence_escape_credit(&self) -> usize {
+    usize::from(
+        self.commands
+            .iter()
+            .any(|queued| queued.command.is_certified_fence_escape()),
+    )
+}
+""",
+        "queued immutable certificate roots must retain exactly one credit",
+        errors,
+    )
+    capacity_change = bounded_items.get("check_capacity_change_inner")
+    for required, description in (
+        (
+            """
+if certified_fence_escape
+    && (class != CommandClass::Progress
+        || additions != 1
+        || dormant_replacements != 0)
+{
+    return Err(EnqueueError::FailClosed);
+}
+""",
+            "certified credit is restricted to one exact Progress addition",
+        ),
+        (
+            """
+let (normal_before, progress_before, retained_certified) =
+    self.commands.iter().try_fold(
+        (0usize, 0usize, false),
+        |(normal, progress, certified), queued| {
+            let normal = normal
+                .checked_add(usize::from(queued.class == CommandClass::Normal))
+                .ok_or(EnqueueError::FailClosed)?;
+            let progress = progress
+                .checked_add(usize::from(queued.class == CommandClass::Progress))
+                .ok_or(EnqueueError::FailClosed)?;
+            Ok::<_, EnqueueError>((
+                normal,
+                progress,
+                certified || queued.command.is_certified_fence_escape(),
+            ))
+        },
+    )?;
+let certified_credit = usize::from(retained_certified || certified_fence_escape);
+""",
+            "one scan derives class occupancy and retained certificate credit",
+        ),
+        (
+            """
+let ordinary_occupied_after = occupied_after
+    .checked_sub(certified_credit)
+    .ok_or(EnqueueError::FailClosed)?;
+if ordinary_occupied_after > self.config.ordinary_total_limit() {
+    return Err(EnqueueError::Full);
+}
+""",
+            "ordinary total occupancy excludes the one retained credit",
+        ),
+        (
+            """
+let ordinary_noncompletion_after = noncompletion_after
+    .checked_sub(certified_credit)
+    .ok_or(EnqueueError::FailClosed)?;
+if normal_after > self.config.normal_limit()
+    || ordinary_noncompletion_after > self.config.progress_limit()
+{
+    return Err(EnqueueError::ReservedCapacity);
+}
+""",
+            "normal and noncompletion limits retain disjoint P/K capacity",
+        ),
+    ):
+        _require_rust_token_sequence(
+            runtime_path,
+            capacity_change,
+            required,
+            description,
+            errors,
+        )
+    _require_exact_rust_tokens(
+        runtime_path,
+        bounded_items.get("remaining_capacity"),
+        """
+fn remaining_capacity(&self) -> usize {
+    let ordinary_occupied = self
+        .occupied_with_dormant_reservations()
+        .unwrap_or(usize::MAX)
+        .saturating_sub(self.certified_fence_escape_credit());
+    self.config
+        .ordinary_total_limit()
+        .saturating_sub(ordinary_occupied)
+}
+""",
+        "remaining ordinary capacity must retain queued certificate credit",
+        errors,
+    )
+
+    classifier = _require_rust_item(
+        runtime_path,
+        source,
+        "wire_payload_is_certified_fence_escape",
+        errors,
+    )
+    _require_rust_item_context(
+        runtime_path,
+        classifier,
+        (),
+        "closed runtime wire-payload certified-fence classifier",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        runtime_path,
+        classifier,
+        _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[
+            "wire_payload_is_certified_fence_escape"
+        ],
+        "closed runtime wire-payload certified-fence classifier",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        runtime_path,
+        classifier,
+        """
+pub(crate) const fn wire_payload_is_certified_fence_escape(
+    payload: &wire::ConsensusMessageV2Payload,
+) -> bool {
+    matches!(
+        payload,
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+            | wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
+                phase: wire::GlobalPhase::Commit,
+                ..
+            })
+            | wire::ConsensusMessageV2Payload::CommitCertificateResponse(
+                wire::CommitCertificateResponse {
+                    certificate: wire::QuorumCertificate {
+                        phase: wire::GlobalPhase::Commit,
+                        ..
+                    },
+                    ..
+                }
+            )
+    )
+}
+""",
+        "only TC, direct CommitQC, and CommitQC recovery response receive credit",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        runtime_path,
+        source,
+        """
+mod exact_runtime_command_identity_sealed {
+    pub trait Sealed {}
+}
+
+pub(crate) trait ExactRuntimeCommandIdentity:
+    exact_runtime_command_identity_sealed::Sealed
+{
+""",
+        "certified-credit classifier must remain module sealed",
+        errors,
+    )
+    sealed_impl_prefix = rust_code_tokens(
+        "impl exact_runtime_command_identity_sealed::Sealed for"
+    )
+    sealed_impl_count = _token_sequence_count(
+        rust_code_tokens(source), sealed_impl_prefix
+    )
+    if sealed_impl_count != 3:
+        errors.append(
+            f"{runtime_path}: exact runtime command identity must retain "
+            "exactly the authenticated, adapter, and test-only sealed "
+            f"implementations; found {sealed_impl_count}"
+        )
+    for command_type in (
+        "AuthenticatedConsensusMessage",
+        "AdapterCommand",
+        "FakeCommand",
+    ):
+        _require_rust_source_token_sequence(
+            runtime_path,
+            source,
+            (
+                "impl exact_runtime_command_identity_sealed::Sealed for "
+                f"{command_type} {{}}"
+            ),
+            f"sealed exact runtime identity implementation for {command_type}",
+            errors,
+        )
+    _require_rust_source_token_sequence(
+        runtime_path,
+        source,
+        """
+impl ExactRuntimeCommandIdentity for AuthenticatedConsensusMessage {
+    fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
+""",
+        "authenticated runtime identity implementation",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        runtime_path,
+        source,
+        """
+fn is_certified_fence_escape(&self) -> bool {
+    wire_payload_is_certified_fence_escape(self.payload())
+}
+""",
+        "authenticated commands derive credit from exact wire payload",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        runtime_path,
+        source,
+        """
+fn is_certified_fence_escape(&self) -> bool {
+    matches!(self, Self::Authenticated(message) if message.is_certified_fence_escape())
+}
+""",
+        "adapter commands cannot assert certificate credit independently",
+        errors,
+    )
+
+    runtime_credit = _require_rust_item(
+        runtime_path,
+        source,
+        "has_certified_fence_escape_credit",
+        errors,
+    )
+    _require_rust_item_context(
+        runtime_path,
+        runtime_credit,
+        (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+        "serialized runtime certified-fence credit observation",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        runtime_path,
+        runtime_credit,
+        _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[
+            "SerializedV2Runtime::has_certified_fence_escape_credit"
+        ],
+        "serialized runtime certified-fence credit observation",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        runtime_path,
+        runtime_credit,
+        """
+pub(crate) fn has_certified_fence_escape_credit(&self) -> bool {
+    self.ingress.certified_fence_escape_credit() == 1
+}
+""",
+        "runtime credit observation must expose only the exact retained credit",
+        errors,
+    )
+
+    tests = (
+        "certified_commit_uses_physical_slot_reserved_from_completions",
+        "certified_commit_arriving_first_preserves_every_ordinary_reserve",
+        "distinct_certificates_share_exactly_one_physical_credit",
+        "invalid_configuration_is_rejected",
+        "queue_configuration_excludes_one_certified_credit_from_ordinary_limits",
+        "prepare_qc_cannot_spend_the_certified_physical_credit",
+        "retiring_the_sole_certificate_does_not_fake_completion_headroom",
+        "unpublished_body_replacement_cannot_overbook_the_certified_slot",
+    )
+    test_context = (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),)
+    test_items: dict[str, RustItem | None] = {}
+    for item_name in tests:
+        item = _require_rust_item(runtime_path, source, item_name, errors)
+        test_items[item_name] = item
+        _require_rust_item_context(
+            runtime_path,
+            item,
+            test_context,
+            f"certified-fence capacity regression {item_name}",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            runtime_path,
+            item,
+            _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[
+                f"test::{item_name}"
+            ],
+            f"certified-fence capacity regression {item_name}",
+            errors,
+        )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get(
+            "certified_commit_arriving_first_preserves_every_ordinary_reserve"
+        ),
+        """
+assert_eq!(
+    runtime.remaining_completion_capacity(),
+    7,
+    "charging the CommitQC to its own slot leaves every ordinary position free"
+);
+""",
+        "certificate-first regression preserves every ordinary slot",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get("distinct_certificates_share_exactly_one_physical_credit"),
+        """
+assert!(matches!(
+    runtime.enqueue_network(commit(0xC3)),
+    Err(NetworkIngressError::Backpressure(
+        EnqueueError::ReservedCapacity
+    ))
+));
+""",
+        "distinct certificate roots cannot mint a second physical credit",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get("invalid_configuration_is_rejected"),
+        "RuntimeQueueConfig::new(3, 1, 1).validate()",
+        "P+K+1 equal to C must fail closed",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get(
+            "queue_configuration_excludes_one_certified_credit_from_ordinary_limits"
+        ),
+        """
+assert_eq!(config.normal_limit(), 3);
+assert_eq!(config.progress_limit(), 5);
+assert_eq!(config.ordinary_total_limit(), 7);
+assert_eq!(
+    config.normal_limit() + config.progress_reserve + config.completion_reserve + 1,
+    config.capacity
+);
+""",
+        "C=8/P=2/K=2 must expose C-P-K-1, C-K-1, C-1, and one credit",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get("prepare_qc_cannot_spend_the_certified_physical_credit"),
+        """
+assert!(matches!(
+    runtime.enqueue_network(certificate(0xB2, wire::GlobalPhase::Prepare)),
+    Err(NetworkIngressError::Backpressure(
+        EnqueueError::ReservedCapacity
+    ))
+));
+
+runtime
+    .enqueue_network(certificate(0xB3, wire::GlobalPhase::Commit))
+    .expect("only the CommitQC receives the certified physical credit");
+""",
+        "PrepareQC cannot spend the exact CommitQC/TC physical credit",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get(
+            "retiring_the_sole_certificate_does_not_fake_completion_headroom"
+        ),
+        """
+assert_eq!(
+    runtime.remaining_completion_capacity(),
+    0,
+    "retiring the only certificate also retires its physical credit"
+);
+""",
+        "sole-certificate retirement must not invent Completion headroom",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        test_items.get(
+            "unpublished_body_replacement_cannot_overbook_the_certified_slot"
+        ),
+        """
+let reservation = runtime
+    .ingress
+    .reserve_canonical_body_available(owner_tag, canonical)
+    .expect("the unpublished body atomically replaces its conflicting proposal");
+assert_eq!(
+    runtime.queued_commands(),
+    2,
+    "the conflicting proposal must retire before the reservation becomes live"
+);
+assert_eq!(runtime.remaining_completion_capacity(), 0);
+""",
+        "unpublished BodyAvailable must atomically replace its conflict",
+        errors,
+    )
+
+    reserve_body = _require_rust_item(
+        runtime_path,
+        source,
+        "reserve_canonical_body_available_internal",
+        errors,
+    )
+    commit_body = _require_rust_item(
+        runtime_path,
+        source,
+        "commit_canonical_body_available",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runtime_path,
+        reserve_body,
+        """
+ingress.discard_proposals_conflicting_with(reservation.manifest());
+ingress.reserved_body_available = Some(reservation.clone());
+""",
+        "reservation publication must atomically retire the conflicting proposal first",
+        errors,
+    )
+    if commit_body is not None and _token_sequence_count(
+        rust_code_tokens(commit_body.source),
+        rust_code_tokens("self.discard_proposals_conflicting_with(reservation.manifest())"),
+    ):
+        errors.append(
+            f"{runtime_path}:{commit_body.line}: BodyAvailable materialization "
+            "must not defer conflicting-proposal retirement past reservation publication"
+        )
+    expected_capacity_seal_keys = {
+        "RuntimeQueueConfig::validate",
+        "RuntimeQueueConfig::normal_limit",
+        "RuntimeQueueConfig::progress_limit",
+        "RuntimeQueueConfig::ordinary_total_limit",
+        "BoundedIngress::certified_fence_escape_credit",
+        "BoundedIngress::check_capacity_change_inner",
+        "BoundedIngress::remaining_capacity",
+        "wire_payload_is_certified_fence_escape",
+        "SerializedV2Runtime::has_certified_fence_escape_credit",
+        *(f"test::{item_name}" for item_name in tests),
+    }
+    observed_capacity_seal_keys = set(
+        _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256
+    )
+    if observed_capacity_seal_keys != expected_capacity_seal_keys:
+        errors.append(
+            "runtime certified-fence source-seal inventory must contain "
+            "exactly nine production items and eight regressions; "
+            f"missing={sorted(expected_capacity_seal_keys - observed_capacity_seal_keys)}, "
+            f"extra={sorted(observed_capacity_seal_keys - expected_capacity_seal_keys)}"
+        )
+    return errors

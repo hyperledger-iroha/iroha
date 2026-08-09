@@ -1945,6 +1945,7 @@ impl From<CarVerifyError> for GatewayError {
             | CarVerifyError::ChunkDigestMismatch { .. }
             | CarVerifyError::ChunkOffsetMismatch { .. }
             | CarVerifyError::ChunkSizeExceeded { .. }
+            | CarVerifyError::PlanRootMismatch
             | CarVerifyError::PlanChunkCountMismatch { .. }
             | CarVerifyError::PlanContentLengthMismatch { .. }
             | CarVerifyError::InvalidPlanChunkLength { .. }

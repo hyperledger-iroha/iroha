@@ -14,6 +14,7 @@ use iroha_data_model::{
             LaneBlockVoteBodyV1, LanePayloadAvailabilityBodyV1, LanePayloadAvailabilityQcV1,
             NativeAmxReceipt, SumeragiLanePayloadOwnership,
         },
+        consensus_v2::HeightContextId,
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     merge::{
@@ -31,6 +32,7 @@ use thiserror::Error;
 
 use crate::{
     json_macros::{JsonDeserialize, JsonSerialize},
+    kura::LaneReadyAuthorization,
     queue::{LaneQueueReservationKeyV2, RouteLegRole, RoutingPlan},
     tx::AcceptedTransaction,
 };
@@ -94,6 +96,24 @@ const AUTONOMOUS_LANE_PAYLOAD_DECODE_LIMITS: norito::DecodeLimits = norito::Deco
 /// Version two removes the advisory global block hint from both authenticated
 /// preimages. Version one and unknown versions fail closed.
 pub(crate) const LANE_EXECUTABLE_PAYLOAD_VERSION_V2: u8 = 2;
+
+/// Return the unique height-rotated author for an autonomous lane block.
+///
+/// Autonomous authorship is independent of the global carrier view. A zero
+/// lane height or empty committee has no valid author and therefore fails
+/// closed at every caller.
+pub(crate) fn deterministic_lane_author(
+    validator_set: &[PeerId],
+    lane_block_height: u64,
+) -> Option<&PeerId> {
+    let author_offset = lane_block_height.checked_sub(1)?;
+    let validator_count = u64::try_from(validator_set.len()).ok()?;
+    if validator_count == 0 {
+        return None;
+    }
+    let author_index = usize::try_from(author_offset % validator_count).ok()?;
+    validator_set.get(author_index)
+}
 
 /// Maximum authenticated view transitions retained for one lane height.
 pub(crate) const MAX_LANE_NEW_VIEW_CERTIFICATES: usize = 256;
@@ -621,6 +641,9 @@ pub(crate) enum LaneAutonomousArtifactError {
     /// Payload producer is not a member of the lane committee.
     #[error("autonomous lane payload producer is not in committee")]
     ProducerNotInCommittee,
+    /// Payload producer is not the height-rotated lane author.
+    #[error("autonomous lane payload producer is not the deterministic lane author")]
+    ProducerNotDeterministicAuthor,
     /// Payload producer is not a BLS-normal consensus identity.
     #[error("autonomous lane payload producer is not BLS-normal")]
     ProducerNotBlsNormal,
@@ -708,6 +731,9 @@ pub(crate) enum LaneAutonomousArtifactError {
     /// READY aggregate signature construction or verification failed.
     #[error("lane payload availability aggregate signature is invalid")]
     InvalidAvailabilityAggregate,
+    /// Move-only durable-input authority does not match the READY signing request.
+    #[error("lane payload availability durable authorization does not match signing request")]
+    AvailabilityAuthorizationMismatch,
     /// Availability certificate is not a valid aggregate prepare QC.
     #[error("lane payload availability certificate is invalid")]
     InvalidAvailabilityCertificate,
@@ -749,11 +775,11 @@ impl LaneExecutablePayloadV1 {
             producer_signature: Vec::new(),
         };
         payload.payload_hash = payload.computed_payload_hash()?;
-        payload.producer_signature =
-            Signature::try_new(private_key, &payload.producer_signature_preimage())
-                .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)?
-                .payload()
-                .to_vec();
+        let producer_signature_preimage = payload.producer_signature_preimage()?;
+        payload.producer_signature = Signature::try_new(private_key, &producer_signature_preimage)
+            .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)?
+            .payload()
+            .to_vec();
         payload.validate(chain_id_hash, epoch)?;
         Ok(payload)
     }
@@ -772,7 +798,7 @@ impl LaneExecutablePayloadV1 {
         )
     }
 
-    fn producer_signature_preimage(&self) -> Vec<u8> {
+    fn producer_signature_preimage(&self) -> Result<Vec<u8>, LaneAutonomousArtifactError> {
         let descriptor = &self.origin_proposal.descriptor;
         norito::encode_canonical(&LaneExecutablePayloadSignaturePreimage {
             purpose: "nexus:lane-executable-payload-signature:v2".to_owned(),
@@ -785,7 +811,7 @@ impl LaneExecutablePayloadV1 {
             payload_hash: self.payload_hash,
             producer: self.producer.clone(),
         })
-        .expect("lane executable payload signature preimage must encode")
+        .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)
     }
 
     /// Validate shape, chain/epoch binding, transaction hashes, producer
@@ -817,15 +843,20 @@ impl LaneExecutablePayloadV1 {
         {
             return Err(LaneAutonomousArtifactError::ProducerNotInCommittee);
         }
+        if deterministic_lane_author(
+            &self.origin_proposal.descriptor.validator_set,
+            self.origin_proposal.descriptor.lane_block_height,
+        ) != Some(&self.producer)
+        {
+            return Err(LaneAutonomousArtifactError::ProducerNotDeterministicAuthor);
+        }
         if !peer_uses_bls_normal(&self.producer) {
             return Err(LaneAutonomousArtifactError::ProducerNotBlsNormal);
         }
+        let producer_signature_preimage = self.producer_signature_preimage()?;
         Signature::try_from_bytes(&self.producer_signature)
             .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)?
-            .verify(
-                self.producer.public_key(),
-                &self.producer_signature_preimage(),
-            )
+            .verify(self.producer.public_key(), &producer_signature_preimage)
             .map_err(|_| LaneAutonomousArtifactError::InvalidProducerSignature)
     }
 
@@ -1164,7 +1195,34 @@ fn availability_body_matches_lane_vote_body(
 }
 
 impl LanePayloadAvailabilityVoteV1 {
-    /// Construct a READY vote after the caller has durably retained the exact payload.
+    /// Consume Kura's exact durable-input authority and construct one READY vote.
+    pub(crate) fn new_signed_with_authorization(
+        authorization: LaneReadyAuthorization,
+        proposal: &LaneBlockProposalV1,
+        body: LanePayloadAvailabilityBodyV1,
+        signer: PeerId,
+        validator_set_pops: Vec<Vec<u8>>,
+        private_key: &PrivateKey,
+        height_context_id: HeightContextId,
+    ) -> Result<Self, LaneAutonomousArtifactError> {
+        if !authorization.consume_signing_request(proposal, &body, &signer, height_context_id) {
+            return Err(LaneAutonomousArtifactError::AvailabilityAuthorizationMismatch);
+        }
+        validate_lane_payload_availability_body_shape(&body)?;
+        let signature = Signature::try_new(private_key, &body.signature_preimage())
+            .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilitySignature)?;
+        let vote = Self {
+            body,
+            signer,
+            validator_set_pops,
+            bls_signature: signature.payload().to_vec(),
+        };
+        vote.validate_against_validator_set(&proposal.descriptor.validator_set)?;
+        Ok(vote)
+    }
+
+    /// Construct a READY vote for a test fixture without a physical Kura boundary.
+    #[cfg(test)]
     pub(crate) fn new_signed(
         body: LanePayloadAvailabilityBodyV1,
         signer: PeerId,
@@ -2445,6 +2503,13 @@ impl LaneBlockNewViewVoteCache {
         }
     }
 
+    /// Retain only vote collections whose exact transition body survives.
+    pub(crate) fn retain(&mut self, mut retain: impl FnMut(&LaneBlockNewViewBodyV1) -> bool) {
+        self.votes.retain(|_, (body, _)| retain(body));
+        let votes = &self.votes;
+        self.order.retain(|key| votes.contains_key(key));
+    }
+
     /// Insert a signed vote and return a certificate once quorum is reached.
     pub(crate) fn insert_and_maybe_seal(
         &mut self,
@@ -2542,6 +2607,14 @@ impl LaneBlockNewViewCertificateCache {
             certificates: BTreeMap::new(),
             order: VecDeque::new(),
         }
+    }
+
+    /// Retain only certificates whose exact transition body survives.
+    pub(crate) fn retain(&mut self, mut retain: impl FnMut(&LaneBlockNewViewBodyV1) -> bool) {
+        self.certificates
+            .retain(|_, certificate| retain(&certificate.body));
+        let certificates = &self.certificates;
+        self.order.retain(|key| certificates.contains_key(key));
     }
 
     /// Insert a certificate after full aggregate validation.
@@ -2801,9 +2874,45 @@ impl LaneBlockSessionCache {
     }
 
     /// Number of cached sessions.
-    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.sessions.len()
+    }
+
+    /// Return the unique lane-local slots represented by retained replay or
+    /// commit-lock evidence.
+    ///
+    /// Global-height rollover uses this bounded projection to resolve each
+    /// slot against its exact canonical Kura proposal before moving the cache
+    /// into the successor. Payload bytes and votes remain private to the
+    /// cache; callers receive only the lookup coordinates needed for that
+    /// validation.
+    pub(crate) fn rollover_slots(&self) -> BTreeSet<(LaneId, u64)> {
+        self.sessions
+            .keys()
+            .map(|key| (key.lane_id, key.lane_block_height))
+            .chain(
+                self.commit_vote_locks
+                    .keys()
+                    .map(|(slot, _)| (slot.lane_id, slot.lane_block_height)),
+            )
+            .collect()
+    }
+
+    /// Return proposal hashes that still have replay ownership in the cache.
+    pub(crate) fn rollover_proposal_hashes(&self) -> BTreeSet<Hash> {
+        self.sessions
+            .values()
+            .filter_map(|session| {
+                (!session.committed_session_drained)
+                    .then(|| {
+                        session
+                            .proposal
+                            .as_ref()
+                            .map(|proposal| proposal.proposal_hash)
+                    })
+                    .flatten()
+            })
+            .collect()
     }
 
     /// Return true when no sessions are cached.
@@ -2882,7 +2991,6 @@ impl LaneBlockSessionCache {
     }
 
     /// Return whether the exact proposal artifact is already cached.
-    #[cfg(test)]
     pub(crate) fn contains_proposal(&self, proposal: &LaneBlockProposalV1) -> bool {
         let key = LaneBlockSessionKey::from_proposal(proposal);
         self.sessions
@@ -2921,6 +3029,14 @@ impl LaneBlockSessionCache {
         self.sessions
             .get(key)
             .and_then(|session| session.proposal.clone())
+    }
+
+    /// Return the proposal bound to an exact Prepare/Commit vote body.
+    pub(crate) fn proposal_for_vote_body(
+        &self,
+        body: &LaneBlockVoteBodyV1,
+    ) -> Option<LaneBlockProposalV1> {
+        self.proposal_for_key(&LaneBlockSessionKey::from_vote_body(body))
     }
 
     /// Return whether an exact lane incarnation retains work that has not yet
@@ -3015,7 +3131,6 @@ impl LaneBlockSessionCache {
     }
 
     /// Return whether this validator still needs to synthesize a prepare vote for a proposal.
-    #[cfg(test)]
     pub(crate) fn local_prepare_vote_needed_for(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -3137,17 +3252,25 @@ impl LaneBlockSessionCache {
             .collect()
     }
 
-    /// Drain QCs sealed locally from cached votes and mark them as handed to transport.
-    pub(crate) fn drain_newly_sealed_qcs(&mut self) -> Vec<LaneBlockQcV1> {
+    fn drain_newly_sealed_qcs_where(
+        &mut self,
+        mut may_drain: impl FnMut(&LaneBlockQcV1) -> bool,
+    ) -> Vec<LaneBlockQcV1> {
         let mut sealed = Vec::new();
         for session in self.sessions.values_mut() {
-            if session.pending_prepare_qc_broadcast {
+            if session.pending_prepare_qc_broadcast
+                && let Some(qc) = session.prepare_qc.as_ref()
+                && may_drain(qc)
+            {
                 if let Some(qc) = session.prepare_qc.clone() {
                     sealed.push(qc);
                 }
                 session.pending_prepare_qc_broadcast = false;
             }
-            if session.pending_commit_qc_broadcast {
+            if session.pending_commit_qc_broadcast
+                && let Some(qc) = session.commit_qc.as_ref()
+                && may_drain(qc)
+            {
                 if let Some(qc) = session.commit_qc.clone() {
                     sealed.push(qc);
                 }
@@ -3155,6 +3278,23 @@ impl LaneBlockSessionCache {
             }
         }
         sealed
+    }
+
+    /// Drain QCs sealed locally from cached votes and mark them as handed to transport.
+    #[cfg(test)]
+    pub(crate) fn drain_newly_sealed_qcs(&mut self) -> Vec<LaneBlockQcV1> {
+        self.drain_newly_sealed_qcs_where(|_| true)
+    }
+
+    /// Drain only locally sealed QCs admitted by the caller's current protocol gate.
+    ///
+    /// A rejected QC retains its pending-broadcast bit so a later monotone
+    /// authority transition can publish the same immutable evidence.
+    pub(crate) fn drain_newly_sealed_qcs_matching(
+        &mut self,
+        admitted: &BTreeSet<HashOf<LaneBlockQcV1>>,
+    ) -> Vec<LaneBlockQcV1> {
+        self.drain_newly_sealed_qcs_where(|qc| admitted.contains(&HashOf::new(qc)))
     }
 
     /// Drain sessions that have a proposal and prepare QC and still need the
@@ -3192,12 +3332,13 @@ impl LaneBlockSessionCache {
 
     /// Drain up to `limit` sessions whose proposal, prepare QC, and commit QC are all cached.
     ///
-    /// This is intentionally separate from [`Self::drain_newly_sealed_qcs`]:
+    /// This is intentionally separate from [`Self::drain_newly_sealed_qcs_matching`]:
     /// inbound QCs are not transport work, but they can still make a session
     /// executable once the matching proposal and opposite phase QC are present.
-    pub(crate) fn drain_committed_sessions_up_to(
+    fn drain_committed_sessions_up_to_where(
         &mut self,
         limit: usize,
+        mut may_drain: impl FnMut(&LaneBlockProposalV1) -> bool,
     ) -> Vec<CommittedLaneBlockSession> {
         if limit == 0 {
             return Vec::new();
@@ -3210,7 +3351,6 @@ impl LaneBlockSessionCache {
             if !session.pending_committed_session_drain {
                 continue;
             }
-            session.pending_committed_session_drain = false;
             let (Some(proposal), Some(prepare_qc), Some(commit_qc)) = (
                 session.proposal.clone(),
                 session.prepare_qc.clone(),
@@ -3218,6 +3358,10 @@ impl LaneBlockSessionCache {
             ) else {
                 continue;
             };
+            if !may_drain(&proposal) {
+                continue;
+            }
+            session.pending_committed_session_drain = false;
             session.committed_session_drained = true;
             committed.push(CommittedLaneBlockSession {
                 proposal,
@@ -3230,6 +3374,29 @@ impl LaneBlockSessionCache {
         // independent signer commit locks continue to enforce equivocation safety.
         self.evict();
         committed
+    }
+
+    /// Drain up to `limit` complete sessions without an additional protocol gate.
+    #[cfg(test)]
+    pub(crate) fn drain_committed_sessions_up_to(
+        &mut self,
+        limit: usize,
+    ) -> Vec<CommittedLaneBlockSession> {
+        self.drain_committed_sessions_up_to_where(limit, |_| true)
+    }
+
+    /// Drain only complete sessions admitted by the caller's current protocol gate.
+    ///
+    /// Rejected sessions retain their pending-drain state and all quorum
+    /// evidence so a later monotone authority transition can consume them.
+    pub(crate) fn drain_committed_sessions_up_to_matching(
+        &mut self,
+        limit: usize,
+        admitted: &BTreeSet<Hash>,
+    ) -> Vec<CommittedLaneBlockSession> {
+        self.drain_committed_sessions_up_to_where(limit, |proposal| {
+            admitted.contains(&proposal.proposal_hash)
+        })
     }
 
     /// Drain all sessions whose proposal, prepare QC, and commit QC are all cached.
@@ -3268,14 +3435,16 @@ impl LaneBlockSessionCache {
     /// retransmission for the losing carrier.
     pub(crate) fn retire_uncommitted_global_anchor(
         &mut self,
+        active_global_height: u64,
         global_block_hash: HashOf<BlockHeader>,
     ) -> usize {
         let before = self.sessions.len();
         self.sessions.retain(|_, session| {
             let tied_to_anchor = session.proposal.as_ref().is_some_and(|proposal| {
-                proposal
-                    .payload_block_hint
-                    .is_some_and(|hint| hint.proposal_block_hash == global_block_hash)
+                proposal.descriptor.proposal_height == active_global_height
+                    && proposal
+                        .payload_block_hint
+                        .is_some_and(|hint| hint.proposal_block_hash == global_block_hash)
             });
             !tied_to_anchor
                 || session_is_eviction_protected(session)
@@ -3293,14 +3462,16 @@ impl LaneBlockSessionCache {
     /// conflict from exact locked-body validation.
     pub(crate) fn retire_uncommitted_global_anchors_except(
         &mut self,
+        active_global_height: u64,
         retained_global_block_hash: HashOf<BlockHeader>,
     ) -> usize {
         let before = self.sessions.len();
         self.sessions.retain(|_, session| {
             let losing_anchor = session.proposal.as_ref().is_some_and(|proposal| {
-                proposal
-                    .payload_block_hint
-                    .is_some_and(|hint| hint.proposal_block_hash != retained_global_block_hash)
+                proposal.descriptor.proposal_height == active_global_height
+                    && proposal
+                        .payload_block_hint
+                        .is_some_and(|hint| hint.proposal_block_hash != retained_global_block_hash)
             });
             !losing_anchor
                 || session_is_eviction_protected(session)
@@ -3323,7 +3494,6 @@ impl LaneBlockSessionCache {
     ///
     /// Returns [`LaneBlockSessionError::ConflictingProposal`] if retained quorum
     /// evidence certifies a different identity for a canonical lane-local slot.
-    #[cfg(test)]
     pub(crate) fn retain_canonical_rollover_evidence(
         &mut self,
         capacity: usize,
@@ -4412,7 +4582,6 @@ fn qc_signers(qc: &LaneBlockQcV1) -> Vec<PeerId> {
     signers
 }
 
-#[cfg(test)]
 fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
     session
         .proposal
@@ -6162,7 +6331,10 @@ mod tests {
         proposal.proposal_hash = proposal.computed_proposal_hash();
         let chain_id_hash = Hash::new(b"lane-autonomous-chain");
         let epoch = 4;
-        let producer = validator_set[0].clone();
+        let producer =
+            deterministic_lane_author(&validator_set, proposal.descriptor.lane_block_height)
+                .cloned()
+                .expect("fixture has a deterministic lane author");
         let producer_key = keypairs
             .iter()
             .find(|keypair| keypair.public_key() == producer.public_key())
@@ -6276,6 +6448,59 @@ mod tests {
     }
 
     #[test]
+    fn autonomous_payload_requires_height_rotated_committee_author() {
+        let keypairs = [
+            checked_bls_keypair(74),
+            checked_bls_keypair(75),
+            checked_bls_keypair(76),
+        ];
+        let (chain_id_hash, epoch, payload) = autonomous_payload_fixture(&keypairs);
+        let descriptor = &payload.origin_proposal.descriptor;
+        assert_eq!(
+            deterministic_lane_author(&descriptor.validator_set, descriptor.lane_block_height),
+            Some(&payload.producer),
+            "the positive fixture must rotate to the exact lane-height author",
+        );
+
+        let wrong_key = keypairs
+            .iter()
+            .find(|keypair| keypair.public_key() != payload.producer.public_key())
+            .expect("fixture contains another committee signer");
+        let mut wrong_author = payload.clone();
+        wrong_author.producer = peer(wrong_key);
+        let preimage = wrong_author
+            .producer_signature_preimage()
+            .expect("canonical preimage");
+        wrong_author.producer_signature = Signature::try_new(wrong_key.private_key(), &preimage)
+            .expect("wrong lane author can still make a cryptographically valid signature")
+            .payload()
+            .to_vec();
+        assert_eq!(
+            wrong_author.validate(chain_id_hash, epoch),
+            Err(LaneAutonomousArtifactError::ProducerNotDeterministicAuthor),
+            "committee membership and a valid signature must not confer slot authorship",
+        );
+
+        let mut hint_free = payload.clone();
+        hint_free.origin_proposal.payload_block_hint = None;
+        let attached = hint_free
+            .attach_global_hint_exact(
+                LaneBlockProposalPayloadHintV1 {
+                    proposal_height: descriptor.proposal_height,
+                    proposal_view: 91,
+                    proposal_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                        b"lane-author-independent-global-view",
+                    )),
+                },
+                chain_id_hash,
+                epoch,
+            )
+            .expect("global carrier view must not change autonomous authorship");
+        assert_eq!(attached.producer, payload.producer);
+        assert_eq!(attached.producer_signature, payload.producer_signature);
+    }
+
+    #[test]
     fn autonomous_payload_envelope_is_exact_bounded_and_fail_closed() {
         let keypairs = [
             checked_bls_keypair(81),
@@ -6297,7 +6522,9 @@ mod tests {
         let payload_hash = payload
             .computed_payload_hash()
             .expect("compute canonical payload identity");
-        let producer_preimage = payload.producer_signature_preimage();
+        let producer_preimage = payload
+            .producer_signature_preimage()
+            .expect("producer signature preimage encodes canonically");
         {
             let alternate_flags =
                 norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -6320,7 +6547,9 @@ mod tests {
                 payload_hash
             );
             assert_eq!(
-                payload.producer_signature_preimage(),
+                payload
+                    .producer_signature_preimage()
+                    .expect("producer signature preimage encodes under alternate ambient layout"),
                 producer_preimage,
                 "producer signature identity must ignore the caller's ambient Norito layout"
             );
@@ -7997,6 +8226,12 @@ mod tests {
         validate_lane_block_qc_aggregate(commit_qc, &pops)
             .expect("sealed commit QC aggregate verifies");
 
+        assert!(
+            cache
+                .drain_newly_sealed_qcs_matching(&BTreeSet::new())
+                .is_empty(),
+            "a closed protocol gate must leave sealed QC fanout pending"
+        );
         let sealed = cache.drain_newly_sealed_qcs();
         assert_eq!(
             sealed.len(),
@@ -8051,6 +8286,12 @@ mod tests {
             Ok(LaneBlockSessionInsertOutcome::Inserted)
         );
 
+        assert!(
+            cache
+                .drain_committed_sessions_up_to_matching(usize::MAX, &BTreeSet::new())
+                .is_empty(),
+            "a closed protocol gate must retain the complete session"
+        );
         let committed = cache.drain_committed_sessions();
         assert_eq!(committed.len(), 1);
         assert_eq!(committed[0].proposal, proposal);
@@ -9831,15 +10072,31 @@ mod tests {
             proposal_view: 0,
             proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(label)),
         };
+        let at_global_height = |mut proposal: LaneBlockProposalV1| {
+            proposal.descriptor.proposal_height = 13;
+            proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+            proposal.proposal_hash = proposal.computed_proposal_hash();
+            proposal
+        };
         let retained = lane_block_proposal_at_height(&validator_set, 13)
             .with_payload_block_hint(anchor(b"first-lock-retained-anchor"));
-        let losing = lane_block_proposal_at_height(&validator_set, 14)
+        let losing = at_global_height(lane_block_proposal_at_height(&validator_set, 14))
             .with_payload_block_hint(anchor(b"first-lock-losing-anchor"));
-        let protected = lane_block_proposal_at_height(&validator_set, 15)
+        let protected = at_global_height(lane_block_proposal_at_height(&validator_set, 15))
             .with_payload_block_hint(anchor(b"first-lock-protected-anchor"));
+        let historical = lane_block_proposal_at_height(&validator_set, 12).with_payload_block_hint(
+            LaneBlockProposalPayloadHintV1 {
+                proposal_height: 12,
+                proposal_view: 0,
+                proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"historical-canonical-anchor",
+                )),
+            },
+        );
         let retained_key = LaneBlockSessionKey::from_proposal(&retained);
         let losing_key = LaneBlockSessionKey::from_proposal(&losing);
         let protected_key = LaneBlockSessionKey::from_proposal(&protected);
+        let historical_key = LaneBlockSessionKey::from_proposal(&historical);
         let mut cache = LaneBlockSessionCache::new(8);
         cache
             .insert_proposal(retained.clone())
@@ -9850,6 +10107,9 @@ mod tests {
         cache
             .insert_proposal(protected.clone())
             .expect("insert commit-protected losing carrier");
+        cache
+            .insert_proposal(historical)
+            .expect("insert historical canonical carrier");
         for key in &keys {
             let prepare_vote = signed_vote(&protected.vote_body(CertPhase::Prepare), key);
             cache
@@ -9863,6 +10123,7 @@ mod tests {
 
         assert_eq!(
             cache.retire_uncommitted_global_anchors_except(
+                retained.descriptor.proposal_height,
                 retained
                     .payload_block_hint
                     .as_ref()
@@ -9875,6 +10136,7 @@ mod tests {
         assert!(cache.get(&retained_key).is_some());
         assert!(cache.get(&losing_key).is_none());
         assert!(cache.get(&protected_key).is_some());
+        assert!(cache.get(&historical_key).is_some());
         assert!(cache.contains_vote(&commit_vote));
     }
 
@@ -10385,284 +10647,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn lane_block_session_capacity_and_pruning_preserve_commit_locks() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
-        let base = lane_block_proposal_at_height(&validator_set, 13);
-        let protected = lane_block_proposal_at_view(&base, 0, 0x40);
-        let protected_key = LaneBlockSessionKey::from_proposal(&protected);
-        let commit_vote = signed_vote(&protected.vote_body(CertPhase::Commit), &keys[0]);
-        let mut cache = LaneBlockSessionCache::new(1);
-        assert_eq!(
-            cache.insert_proposal(protected.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        for signer in &keys {
-            let prepare_vote = signed_vote(&protected.vote_body(CertPhase::Prepare), signer);
-            assert_eq!(
-                cache.insert_vote(prepare_vote.clone(), Some(&prepare_vote.signer)),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-        }
-        assert_eq!(
-            cache.insert_vote(commit_vote.clone(), Some(&commit_vote.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        for view in 1_u64..32 {
-            assert_eq!(
-                cache.insert_proposal(lane_block_proposal_at_view(
-                    &base,
-                    view,
-                    u8::try_from(view).expect("fixture view fits u8"),
-                )),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-        }
-        assert!(
-            cache.get(&protected_key).is_some(),
-            "ordinary capacity eviction must never discard commit evidence"
-        );
-        assert!(
-            cache.len() <= 2,
-            "only one ordinary replay session may remain"
-        );
+    include!("lane_consensus/session_capacity_tests.rs");
 
-        assert!(
-            cache.retain_sessions_for_admissible_lanes(|_, _, _, _, _| false) > 0,
-            "inactive-route pruning should remove replay state"
-        );
-        assert!(cache.is_empty());
-        let conflicting = lane_block_proposal_at_view(&base, 40, 0xE0);
-        assert_eq!(
-            cache.insert_proposal(conflicting.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        for signer in &keys {
-            let prepare_vote = signed_vote(&conflicting.vote_body(CertPhase::Prepare), signer);
-            assert_eq!(
-                cache.insert_vote(prepare_vote.clone(), Some(&prepare_vote.signer)),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-        }
-        let conflicting_vote = signed_vote(&conflicting.vote_body(CertPhase::Commit), &keys[0]);
-        assert_eq!(
-            cache.insert_vote(conflicting_vote, None),
-            Err(LaneBlockSessionError::ConflictingVote),
-            "the signer commit lock must outlive pruned session state"
-        );
-    }
-
-    #[test]
-    fn drained_committed_sessions_retire_under_capacity_but_keep_signer_lock() {
-        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
-        let pops = signer_pops(&keys);
-        let mut cache = LaneBlockSessionCache::new(1);
-        let first = lane_block_proposal_at_height(&validator_set, 13);
-        let first_key = LaneBlockSessionKey::from_proposal(&first);
-
-        for lane_height in 13_u64..45 {
-            let proposal = lane_block_proposal_at_height(&validator_set, lane_height);
-            assert_eq!(
-                cache.insert_proposal(proposal.clone()),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-            for phase in [CertPhase::Prepare, CertPhase::Commit] {
-                let body = proposal.vote_body(phase);
-                let votes = [signed_vote(&body, &keys[0]), signed_vote(&body, &keys[1])];
-                let qc = aggregate_lane_block_votes_to_qc(body, validator_set.clone(), &votes)
-                    .expect("lane block QC");
-                assert_eq!(
-                    cache.insert_qc_with_pops(qc, &pops),
-                    Ok(LaneBlockSessionInsertOutcome::Inserted)
-                );
-            }
-            assert_eq!(
-                cache.drain_committed_sessions_up_to(1).len(),
-                1,
-                "each certified lane session should hand off once"
-            );
-            assert!(
-                cache.len() <= 1,
-                "drained commit evidence must return under the ordinary cache bound"
-            );
-        }
-        assert!(
-            cache.get(&first_key).is_none(),
-            "the oldest drained session should be retired under sustained progress"
-        );
-
-        let conflicting = lane_block_proposal_at_view(&first, 99, 0xF0);
-        assert_eq!(
-            cache.insert_proposal(conflicting.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        for signer in &keys[..2] {
-            let prepare_vote = signed_vote(&conflicting.vote_body(CertPhase::Prepare), signer);
-            assert_eq!(
-                cache.insert_vote(prepare_vote.clone(), Some(&prepare_vote.signer)),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-        }
-        let conflicting_vote = signed_vote(&conflicting.vote_body(CertPhase::Commit), &keys[0]);
-        assert_eq!(
-            cache.insert_vote(conflicting_vote, None),
-            Err(LaneBlockSessionError::ConflictingVote),
-            "retiring drained replay state must not retire the signer commit lock"
-        );
-        assert!(cache.commit_vote_lock_len() > 0);
-        assert!(
-            cache.prune_sessions_and_commit_vote_locks_for_finalized_slots(
-                |lane_id, dataspace_id, _lane_incarnation, lane_block_height| {
-                    lane_id == first.descriptor.lane_id
-                        && dataspace_id == first.descriptor.dataspace_id
-                        && lane_block_height <= 44
-                },
-            ) > 0
-        );
-        assert!(cache.is_empty());
-        assert_eq!(
-            cache.commit_vote_lock_len(),
-            0,
-            "only an explicit durable boundary should retire historical signer locks"
-        );
-    }
-
-    #[test]
-    fn durable_slot_retirement_covers_only_finalized_lane_heights() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
-        let mut cache = LaneBlockSessionCache::new(8);
-        for lane_height in 13_u64..=15 {
-            let proposal = lane_block_proposal_at_height(&validator_set, lane_height);
-            assert_eq!(
-                cache.insert_proposal(proposal.clone()),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-            for signer in &keys {
-                let prepare_vote = signed_vote(&proposal.vote_body(CertPhase::Prepare), signer);
-                assert_eq!(
-                    cache.insert_vote(prepare_vote.clone(), Some(&prepare_vote.signer)),
-                    Ok(LaneBlockSessionInsertOutcome::Inserted)
-                );
-            }
-            let vote = signed_vote(&proposal.vote_body(CertPhase::Commit), &keys[0]);
-            assert_eq!(
-                cache.insert_vote(vote.clone(), Some(&vote.signer)),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-        }
-        assert_eq!(cache.commit_vote_lock_slots().len(), 3);
-
-        assert_eq!(
-            cache.prune_sessions_and_commit_vote_locks_for_finalized_slots(
-                |lane_id, dataspace_id, _lane_incarnation, lane_block_height| {
-                    lane_id == LaneId::new(7)
-                        && dataspace_id == DataSpaceId::new(11)
-                        && lane_block_height <= 14
-                },
-            ),
-            4,
-            "two sessions and their two signer locks should retire atomically"
-        );
-        assert_eq!(cache.len(), 1);
-        assert_eq!(
-            cache.commit_vote_lock_slots(),
-            BTreeSet::from([(
-                LaneId::new(7),
-                DataSpaceId::new(11),
-                lane_block_proposal_at_height(&validator_set, 15)
-                    .descriptor
-                    .lane_incarnation,
-                15,
-            )]),
-            "the higher unfinalized slot must remain protected"
-        );
-    }
-
-    #[test]
-    fn commit_vote_locks_are_namespaced_by_lane_incarnation() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
-        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
-        validator_set.sort();
-        let mut cache = LaneBlockSessionCache::new(8);
-
-        let original = lane_block_proposal_at_height(&validator_set, 13);
-        assert_eq!(
-            cache.insert_proposal(original.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-        for signer in &keys {
-            let prepare = signed_vote(&original.vote_body(CertPhase::Prepare), signer);
-            assert_eq!(
-                cache.insert_vote(prepare.clone(), Some(&prepare.signer)),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-        }
-        let original_commit = signed_vote(&original.vote_body(CertPhase::Commit), &keys[0]);
-        assert_eq!(
-            cache.insert_vote(original_commit.clone(), Some(&original_commit.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted)
-        );
-
-        let recreated_incarnation = Hash::new(b"recreated-commit-lock-incarnation");
-        let mut recreated = retag_lane_block_proposal_payload(original, 0xD7);
-        recreated.descriptor.lane_incarnation = recreated_incarnation;
-        recreated.descriptor.descriptor_hash = recreated.descriptor.computed_descriptor_hash();
-        recreated.proposal_hash = recreated.computed_proposal_hash();
-        assert_eq!(
-            cache.insert_proposal(recreated.clone()),
-            Ok(LaneBlockSessionInsertOutcome::Inserted),
-            "a recreated lane must own a distinct local-height namespace"
-        );
-        for signer in &keys {
-            let prepare = signed_vote(&recreated.vote_body(CertPhase::Prepare), signer);
-            assert_eq!(
-                cache.insert_vote(prepare.clone(), Some(&prepare.signer)),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-        }
-        let recreated_commit = signed_vote(&recreated.vote_body(CertPhase::Commit), &keys[0]);
-        assert_eq!(
-            cache.insert_vote(recreated_commit.clone(), Some(&recreated_commit.signer)),
-            Ok(LaneBlockSessionInsertOutcome::Inserted),
-            "an old-incarnation signer lock must not block the recreated lane"
-        );
-        assert_eq!(cache.commit_vote_lock_len(), 2);
-
-        assert_eq!(
-            cache.prune_commit_vote_locks_for_inactive_incarnations(
-                |_lane_id, _dataspace_id, incarnation| incarnation == recreated_incarnation,
-            ),
-            1,
-            "retiring an incarnation should remove only its obsolete signer lock"
-        );
-        assert_eq!(
-            cache.commit_vote_lock_slots(),
-            BTreeSet::from([(
-                recreated.descriptor.lane_id,
-                recreated.descriptor.dataspace_id,
-                recreated_incarnation,
-                recreated.descriptor.lane_block_height,
-            )])
-        );
-    }
+    include!("lane_consensus/commit_vote_lock_incarnation_test.rs");
 
     #[test]
     fn lane_block_session_cache_reports_undrained_committed_admissible_lanes() {

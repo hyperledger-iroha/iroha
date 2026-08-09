@@ -148,7 +148,76 @@ fn bounded_scope_is_removed_after_an_error() {
     assert_sequence_limit(error, 3, 2);
 
     let decoded: Vec<u8> = norito::decode_from_bytes(&bytes)
-        .expect("ordinary decode remains unbounded after scoped failure");
+        .expect("default decode budget is restored after scoped failure");
+    assert_eq!(decoded, value);
+}
+
+#[test]
+fn default_framed_decoders_reject_forged_sequence_lengths_before_allocation() {
+    let bare = u64::MAX.to_le_bytes();
+    let bytes = norito::core::frame_bare_with_header_flags::<Vec<u32>>(&bare, 0)
+        .expect("frame adversarial payload");
+
+    for error in [
+        norito::decode_from_bytes::<Vec<u32>>(&bytes)
+            .expect_err("root default must derive a resource budget"),
+        norito::core::decode_from_bytes::<Vec<u32>>(&bytes)
+            .expect_err("core default must derive a resource budget"),
+    ] {
+        assert!(
+            matches!(
+                error,
+                Error::SequenceLengthExceeded { .. }
+                    | Error::TotalElementsExceeded { .. }
+                    | Error::TotalAllocationExceeded { .. }
+            ),
+            "forged sequence length must fail at a decode budget: {error:?}"
+        );
+    }
+}
+
+#[cfg(feature = "compression")]
+#[test]
+fn default_decode_rejects_tiny_frame_with_huge_declared_payload() {
+    const FORGED_PAYLOAD_LEN: u64 = 1024 * 1024;
+
+    let mut bytes =
+        norito::to_compressed_bytes(&vec![1_u8], Some(norito::CompressionConfig::default()))
+            .expect("encode compressed fixture");
+    let length_offset =
+        norito::core::Header::SIZE - 2 * core::mem::size_of::<u64>() - core::mem::size_of::<u8>();
+    bytes[length_offset..length_offset + core::mem::size_of::<u64>()]
+        .copy_from_slice(&FORGED_PAYLOAD_LEN.to_le_bytes());
+    let expected_limit =
+        u64::try_from(norito::canonical_decode_limits(bytes.len()).max_total_allocated_bytes())
+            .expect("default allocation limit fits u64");
+
+    assert!(
+        matches!(
+            norito::decode_from_bytes::<Vec<u8>>(&bytes),
+            Err(Error::TotalAllocationExceeded {
+                attempted: FORGED_PAYLOAD_LEN,
+                limit,
+            }) if limit == expected_limit
+        ),
+        "the declared expansion must be charged before allocation or decompression"
+    );
+}
+
+#[cfg(feature = "compression")]
+#[test]
+fn explicit_limits_support_trusted_high_compression_without_default_recursion() {
+    let value = vec![0_u8; 256 * 1024];
+    let bytes = norito::to_compressed_bytes(&value, Some(norito::CompressionConfig::default()))
+        .expect("encode high-compression fixture");
+    assert!(
+        norito::decode_from_bytes::<Vec<u8>>(&bytes).is_err(),
+        "payload-derived default must reject excessive decompression amplification"
+    );
+
+    let limits = DecodeLimits::new(value.len(), value.len(), value.len(), value.len() * 8, 64);
+    let decoded = norito::decode_from_bytes_with_limits::<Vec<u8>>(&bytes, limits)
+        .expect("an explicit finite budget must support trusted compressed data");
     assert_eq!(decoded, value);
 }
 

@@ -2,7 +2,7 @@
 
 [relay]
 descriptor_seed_hex = "0771AE2885FBF14AD10AD571CA3FDB6A40305726F59615002F1710E1D50D4D02"
-admin_metrics_bind = "0.0.0.0:9642"
+admin_metrics_bind = "127.0.0.1:9642"
 entry_listen = "0.0.0.0:443"
 middle_listen = "0.0.0.0:9443"
 exit_listen = "0.0.0.0:10443"
@@ -15,7 +15,7 @@ max_clients_per_guard = 1024
 pinning_initial_weight = 0.65
 
 [relay.telemetry]
-prometheus_bind = "0.0.0.0:9898"
+prometheus_bind = "127.0.0.1:9898"
 privacy_bucket_secs = 60
 privacy_min_contributors = 5
 

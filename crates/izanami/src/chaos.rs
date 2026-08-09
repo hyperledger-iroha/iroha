@@ -2554,7 +2554,7 @@ fn make_network_builder(
                 ]),
             )
             .write(
-                ["torii", "api_allow_cidrs"],
+                ["torii", "api_rate_limit_bypass_cidrs"],
                 TomlValue::Array(vec![
                     TomlValue::String("127.0.0.0/8".into()),
                     TomlValue::String("::1/128".into()),
@@ -3825,7 +3825,7 @@ impl IzanamiRunner {
                         ),
                         metadata,
                     );
-                    let payload = client.prepare_transaction_payload(&transaction);
+                    let payload = Client::prepare_transaction_payload(&transaction);
                     let next_index = built_count.fetch_add(1, Ordering::Relaxed);
                     if next_index >= buffer_capacity as u64 {
                         break;
@@ -9221,7 +9221,7 @@ mod tests {
             uaid: None,
         };
         let asset = AssetId::new(
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::parse_fully_qualified("chaosnet.universal").expect("domain id"),
                 "chaos_coin".parse().expect("asset name"),
             ),
@@ -11067,7 +11067,7 @@ mod tests {
 
         let config = ChaosConfig {
             allow_net: true,
-            peer_count: 2,
+            peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(4),
             pipeline_time: Some(Duration::from_millis(250)),
@@ -11158,7 +11158,7 @@ mod tests {
 
         let config = ChaosConfig {
             allow_net: true,
-            peer_count: 2,
+            peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(4),
             pipeline_time: Some(Duration::from_millis(250)),
@@ -11256,7 +11256,7 @@ mod tests {
 
         let config = ChaosConfig {
             allow_net: true,
-            peer_count: 2,
+            peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(4),
             pipeline_time: Some(Duration::from_millis(250)),
@@ -11376,7 +11376,7 @@ mod tests {
     async fn allow_net_false_rejects_runner() {
         let config = ChaosConfig {
             allow_net: false,
-            peer_count: 1,
+            peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -11434,8 +11434,8 @@ mod tests {
         let mut rng_a = StdRng::seed_from_u64(5);
         let mut rng_b = StdRng::seed_from_u64(5);
 
-        let first = select_fault_targets(6, 2, &mut rng_a);
-        let second = select_fault_targets(6, 2, &mut rng_b);
+        let first = select_fault_targets(7, 2, &mut rng_a);
+        let second = select_fault_targets(7, 2, &mut rng_b);
 
         assert_eq!(first, second, "same seed must yield same targets");
         assert_eq!(first.len(), 2);
@@ -11468,7 +11468,7 @@ mod tests {
     fn sumeragi_leader_targeting_does_not_capture_packet_loss_profile() {
         let mut args = IzanamiArgs::defaults();
         args.allow_net = true;
-        args.peers = 6;
+        args.peers = 7;
         args.faulty = 2;
         args.faults = FaultArgs {
             crash_restart: false,
@@ -11647,7 +11647,7 @@ mod tests {
     #[test]
     fn sumeragi_status_digest_tracks_v2_progress_and_lane_local_execution() {
         let start_json = norito::json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "height": 10,
             "view": 1,
             "phase": "Prepare",
@@ -11660,7 +11660,7 @@ mod tests {
             "last_committed_height": 9
         });
         let end_json = norito::json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "height": 13,
             "view": 4,
             "phase": "Commit",
@@ -11691,7 +11691,7 @@ mod tests {
         end.apply_json_extras(&end_json);
         let delta = end.delta_from(start);
 
-        assert_eq!(delta.protocol_version, 3);
+        assert_eq!(delta.protocol_version, 4);
         assert_eq!(delta.persisted_height, 13);
         assert_eq!(delta.persisted_view, 4);
         assert_eq!(delta.leader, 3);
@@ -12437,7 +12437,7 @@ mod tests {
         let _env_guard = EnvGuard::set("RUST_LOG", "iroha_p2p=debug,iroha_core=debug");
         let config = ChaosConfig {
             allow_net: true,
-            peer_count: 2,
+            peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -12525,7 +12525,7 @@ mod tests {
         let profile = crate::config::NexusProfile::sora_defaults()?;
         let config = ChaosConfig {
             allow_net: true,
-            peer_count: 2,
+            peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -12573,7 +12573,7 @@ mod tests {
         let profile = crate::config::NexusProfile::sora_defaults()?;
         let config = ChaosConfig {
             allow_net: true,
-            peer_count: 2,
+            peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -12759,7 +12759,7 @@ mod tests {
         init_instruction_registry();
         let config = ChaosConfig {
             allow_net: true,
-            peer_count: 2,
+            peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -12827,7 +12827,7 @@ mod tests {
 
         let config = ChaosConfig {
             allow_net: true,
-            peer_count: 2,
+            peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,

@@ -5,9 +5,9 @@ final class ContractAddressV1Tests: XCTestCase {
     func testSubjectDerivationMatchesLockedRustValidationFeeVector() throws {
         XCTAssertEqual(
             try ContractAddressV1.subjectAccountId(
-                "sorac1qyqqqqqqqqqqqqz6putm9wv6wkf4r22v02ktg4af7n3n7egq20h5l"
+                "irohac1qyqqqqqqqqqqqqz6putm9wv6wkf4r22v02ktg4af7n3n7egd607g2"
             ),
-            "sorauﾛ1PjﾏｶﾏrfDWヱKmDRgH8ﾗﾐsｼﾓｼqSヰcpAKjGﾊﾇD8ﾁpAGH6E4T"
+            "sorauﾛ1PULｦnUPﾀZ7ﾘﾕｻ2oｿSTfKｷﾋﾌﾀnTwEZヱVﾏｱﾐLZﾒZｾNVE5DS"
         )
     }
 
@@ -15,6 +15,11 @@ final class ContractAddressV1Tests: XCTestCase {
         XCTAssertThrowsError(try ContractAddressV1.subjectAccountId("not-a-contract")) { error in
             XCTAssertEqual(error as? ContractAddressV1Error, .invalidLiteral)
         }
+        XCTAssertFalse(
+            ContractAddressV1.isCanonical(
+                "sorac1qyqqqqqqqqqqqqz6putm9wv6wkf4r22v02ktg4af7n3n7egq20h5l"
+            )
+        )
     }
 
     func testCompactCanonicalPrimitivesRejectNoncanonicalDecimalSpellings() throws {

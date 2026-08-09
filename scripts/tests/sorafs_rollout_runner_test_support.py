@@ -43,7 +43,7 @@ def write_topology_qualification(
         "storage_provider_count": 2,
         "gateway_count": 2,
         "governance_dag_instance_count": 2,
-        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_handle_kinds": ["monitoring", "external_signer", "kms", "webauthn"],
         "runtime_material_policy_valid": True,
         "signed_model_artifact_count": 1,
         "required_lane_slots": list(CANONICAL_READINESS_LANES),
@@ -78,11 +78,15 @@ class TopologyBoundChecker:
         self._temporary_directory = tempfile.TemporaryDirectory(
             prefix=f"sorafs-{name}-topology-"
         )
-        self.topology_path = write_topology_qualification(
-            Path(self._temporary_directory.name).resolve() / "qualification.json",
-            deployment_id=deployment_id,
-            environment=environment,
-        )
+        try:
+            self.topology_path = write_topology_qualification(
+                Path(self._temporary_directory.name).resolve() / "qualification.json",
+                deployment_id=deployment_id,
+                environment=environment,
+            )
+        except BaseException:
+            self._temporary_directory.cleanup()
+            raise
 
     def __call__(self, arguments: Sequence[str]) -> int:
         """Run the checker with the exact topology fixture when not supplied."""
@@ -96,3 +100,8 @@ class TopologyBoundChecker:
                 ]
             )
         return self._checker_main(values)
+
+    def close(self) -> None:
+        """Remove the private topology fixture deterministically."""
+
+        self._temporary_directory.cleanup()

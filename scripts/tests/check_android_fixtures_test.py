@@ -106,7 +106,7 @@ def _payload_entry(name: str = "alpha") -> dict:
         "name": name,
         "payload_base64": base64.b64encode(f"{name}-payload".encode()).decode(),
         "chain": "00000002",
-        "authority": "sorau-example",
+        "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "time_to_live_ms": 100_000,
         "nonce": None,
@@ -157,7 +157,7 @@ def test_payload_loader_requires_one_executable_variant_and_accepts_direct_call(
     direct_document = json.loads(direct_path.read_text(encoding="utf-8"))
     direct_document[0]["payload"]["executable"] = {
         "ContractCall": {
-            "contract_address": "tairac1example",
+            "contract_address": "irohac1example",
             "expected_code_hash": "hash:example",
             "entrypoint": "main",
             "arguments": [],
@@ -185,7 +185,7 @@ def test_payload_loader_validates_exact_executable_variant_bodies() -> None:
         "payload_base64": "AQ==",
     }
     contract_call = {
-        "contract_address": "tairac1example",
+        "contract_address": "irohac1example",
         "expected_code_hash": "hash:example",
         "entrypoint": "main",
         "arguments": [0, 255],
@@ -274,7 +274,7 @@ def test_manifest_requires_exact_schema_and_canonical_encoded_file(
         b"signed",
         1,
         "00000002",
-        "sorau-example",
+        "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         100_000,
         None,
     )
@@ -339,7 +339,7 @@ def test_payload_loader_rejects_nonce_outside_nonzero_u32_range(
         "name": "invalid-nonce",
         "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
-        "authority": "sorau-example",
+        "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "time_to_live_ms": 100_000,
         "nonce": nonce,
@@ -362,7 +362,7 @@ def test_payload_loader_rejects_non_positive_integer_ttl(
         "name": "invalid-ttl",
         "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
-        "authority": "sorau-example",
+        "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "time_to_live_ms": ttl,
         "nonce": None,
@@ -378,7 +378,7 @@ def test_payload_loader_rejects_missing_ttl(tmp_path: Path) -> None:
         "name": "missing-ttl",
         "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
-        "authority": "sorau-example",
+        "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "nonce": None,
     }
@@ -395,7 +395,7 @@ def test_payload_loader_rejects_retired_encoded_alias(tmp_path: Path) -> None:
         "payload_base64": payload_base64,
         "encoded": payload_base64,
         "chain": "00000002",
-        "authority": "sorau-example",
+        "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "time_to_live_ms": 100_000,
         "nonce": None,
@@ -411,7 +411,7 @@ def test_payload_loader_rejects_duplicate_fixture_names(tmp_path: Path) -> None:
         "name": "duplicate",
         "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
-        "authority": "sorau-example",
+        "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "time_to_live_ms": 100_000,
         "nonce": None,
@@ -427,7 +427,7 @@ def test_payload_loader_rejects_renamed_cloned_payloads(tmp_path: Path) -> None:
         "name": "first",
         "payload_base64": base64.b64encode(b"payload").decode(),
         "chain": "00000002",
-        "authority": "sorau-example",
+        "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "time_to_live_ms": 100_000,
         "nonce": None,
@@ -447,7 +447,7 @@ def test_manifest_checker_rejects_duplicate_names_and_files(tmp_path: Path) -> N
         b"signed",
         1,
         "00000002",
-        "sorau-example",
+        "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         100_000,
         None,
     )
@@ -466,7 +466,7 @@ def test_manifest_checker_rejects_renamed_cloned_payloads(tmp_path: Path) -> Non
         b"signed",
         1,
         "00000002",
-        "sorau-example",
+        "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         100_000,
         None,
     )
@@ -492,7 +492,7 @@ def test_manifest_checker_rejects_nonce_outside_nonzero_u32_range(
         b"signed",
         1,
         "00000002",
-        "sorau-example",
+        "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         100_000,
         nonce,  # type: ignore[arg-type]
     )
@@ -517,7 +517,7 @@ def test_manifest_checker_rejects_non_positive_integer_ttl(
         b"signed",
         1,
         "00000002",
-        "sorau-example",
+        "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         100_000,
         None,
     )
@@ -538,7 +538,7 @@ def test_manifest_checker_rejects_missing_ttl(tmp_path: Path) -> None:
         b"signed",
         1,
         "00000002",
-        "sorau-example",
+        "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         100_000,
         None,
     )

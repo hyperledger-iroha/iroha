@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "configs" / "soranexus" / "taira" / "check_mcp_rollout.sh"
+DPN_COMMIT = "d" * 40
 
 
 def _embedded_checker_source(function: str, invocation: str) -> str:
@@ -31,7 +32,7 @@ def _sumeragi_snapshot_checker_source() -> str:
 def _status_snapshot_checker_source() -> str:
     return _embedded_checker_source(
         "check_status_snapshot",
-        'python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" <<\'PY\'',
+        'python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" <<\'PY\'',
     )
 
 
@@ -89,6 +90,7 @@ def _fleet_record(label: str, node: str) -> dict[str, object]:
             sort_keys=True,
             separators=(",", ":"),
         ),
+        "dpn_validator_release_commit": DPN_COMMIT,
     }
 
 
@@ -152,6 +154,7 @@ def _run_status_checker(
     payload: dict[str, object],
     *,
     expected_git_sha: str = "",
+    expected_dpn_commit: str = "",
     require_exact: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     payload_path = tmp_path / "status.json"
@@ -166,6 +169,7 @@ def _run_status_checker(
             "0",
             expected_git_sha,
             "1" if require_exact else "0",
+            expected_dpn_commit,
         ],
         input=_status_snapshot_checker_source(),
         text=True,
@@ -180,7 +184,7 @@ def _healthy_base_payload() -> dict[str, object]:
         "payload_hash": "hash:" + "F" * 64,
     }
     return {
-        "protocol_version": 3,
+        "protocol_version": 4,
         "restart_required": False,
         "node_fingerprint": "hash:" + "A" * 64,
         "build_fingerprint": "hash:" + "B" * 64,
@@ -457,7 +461,7 @@ def test_sumeragi_checker_rejects_legacy_rbc_status(tmp_path: Path) -> None:
 
 def test_sumeragi_checker_rejects_wrong_protocol_version(tmp_path: Path) -> None:
     payload = _healthy_base_payload()
-    payload["protocol_version"] = 1
+    payload["protocol_version"] = 3
 
     result = _run_checker(tmp_path, payload)
 
@@ -567,8 +571,16 @@ def test_release_status_checker_requires_full_exact_git_sha(tmp_path: Path) -> N
     expected = "490dacc287f00d490dacc287f00d490dacc287f0"
     exact = _run_status_checker(
         tmp_path,
-        {"build": {"git_commit_sha": expected}, "blocks": 42, "queue_size": 0},
+        {
+            "build": {
+                "dpn_validator_release_commit": DPN_COMMIT,
+                "git_commit_sha": expected,
+            },
+            "blocks": 42,
+            "queue_size": 0,
+        },
         expected_git_sha=expected,
+        expected_dpn_commit=DPN_COMMIT,
         require_exact=True,
     )
     assert exact.returncode == 0, exact.stderr
@@ -576,15 +588,41 @@ def test_release_status_checker_requires_full_exact_git_sha(tmp_path: Path) -> N
     shortened = _run_status_checker(
         tmp_path,
         {
-            "build": {"git_commit_sha": expected[:12]},
+            "build": {
+                "dpn_validator_release_commit": DPN_COMMIT,
+                "git_commit_sha": expected[:12],
+            },
             "blocks": 42,
             "queue_size": 0,
         },
         expected_git_sha=expected,
+        expected_dpn_commit=DPN_COMMIT,
         require_exact=True,
     )
     assert shortened.returncode == 1
     assert "does not exactly match release commit" in shortened.stderr
+
+
+def test_release_status_checker_rejects_dpn_only_mismatch(tmp_path: Path) -> None:
+    expected_git = "490dacc287f00d490dacc287f00d490dacc287f0"
+    mismatch = _run_status_checker(
+        tmp_path,
+        {
+            "build": {
+                "dpn_validator_release_commit": "e" * 40,
+                "git_commit_sha": expected_git,
+            },
+            "blocks": 42,
+            "queue_size": 0,
+        },
+        expected_git_sha=expected_git,
+        expected_dpn_commit=DPN_COMMIT,
+        require_exact=True,
+    )
+
+    assert mismatch.returncode == 1
+    assert "DPN validator release commit" in mismatch.stderr
+    assert "does not exactly match" in mismatch.stderr
 
 
 def test_status_checker_rejects_missing_or_mismatched_git_sha(tmp_path: Path) -> None:

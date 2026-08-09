@@ -75,7 +75,7 @@ pub struct IrohaZkX509StarkP256StatementV1 {
 
 /// Canonical little-endian element of the fixed Jindo coefficient field.
 ///
-/// The compiled modulus is `60272^16 + 1`. Fixed width at the type boundary
+/// The compiled modulus is `3611623616^8 + 1`. Fixed width at the type boundary
 /// eliminates ambiguous byte order, truncation, and alternate field regimes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -104,7 +104,7 @@ impl PrivacyJindoFieldElementV1 {
 
 /// Canonical public outer commitment in the fixed Jindo lattice profile.
 ///
-/// The byte string contains 13 × 256 signed little-endian `i32`
+/// The byte string contains 3 × 1024 signed little-endian `i32`
 /// coefficients. Native verification additionally enforces the compiled
 /// rounded-coefficient bound.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -231,7 +231,7 @@ impl BootleLanternIssuerPublicMatrixV1 {
     /// Rejects a first-column block with the wrong degree or a coefficient
     /// outside the canonical `0..12289` residue range.
     pub fn from_r512_first_column_blocks_v1(
-        first_column: [BootleLanternPolynomialV1; BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1],
+        first_column: &[BootleLanternPolynomialV1; BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1],
     ) -> Result<Self, BootleLanternIssuerPolicyValidationErrorV1> {
         for (row, polynomial) in first_column.iter().enumerate() {
             if polynomial.coefficients.len() != BOOTLE_LANTERN_RING_DEGREE_V1 {
@@ -266,7 +266,7 @@ impl BootleLanternIssuerPublicMatrixV1 {
         let mut entries = Vec::with_capacity(
             BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
         );
-        for row in 0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 {
+        for row in 0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 - 1 {
             for column in 0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 {
                 if row >= column {
                     entries.push(first_column[row - column].clone());
@@ -286,25 +286,17 @@ impl BootleLanternIssuerPublicMatrixV1 {
                 }
             }
         }
+        // The final row is the reversed first column. Clone it directly rather
+        // than reconstructing the same polynomials coefficient by coefficient.
+        entries.extend(first_column.iter().rev().cloned());
         Ok(Self { entries })
     }
 
-    /// Validate the exact degree-512-to-eight-degree-64 negacyclic
-    /// multiplication-block structure and conservative public-key density.
-    ///
-    /// This method validates entry counts, coefficient counts, canonical
-    /// residues, and the all-zero sentinel before indexing any matrix entry,
-    /// so it is safe to call directly on untrusted decoded values.
-    ///
-    /// # Errors
-    ///
-    /// Rejects a non-Toeplitz block, an incorrect negacyclic `Y` shift, or a
-    /// public key whose eight first-column blocks are too sparse.
-    pub fn validate_r512_multiplication_structure_v1(
+    fn validate_matrix_entries_v1(
         &self,
+        dimension: usize,
+        degree: usize,
     ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
-        let dimension = BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1;
-        let degree = BOOTLE_LANTERN_RING_DEGREE_V1;
         let expected_entries = dimension * dimension;
         if self.entries.len() != expected_entries {
             return Err(
@@ -354,6 +346,26 @@ impl BootleLanternIssuerPublicMatrixV1 {
         if matrix_is_zero {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::AllZeroIssuerMatrix);
         }
+        Ok(())
+    }
+
+    /// Validate the exact degree-512-to-eight-degree-64 negacyclic
+    /// multiplication-block structure and conservative public-key density.
+    ///
+    /// This method validates entry counts, coefficient counts, canonical
+    /// residues, and the all-zero sentinel before indexing any matrix entry,
+    /// so it is safe to call directly on untrusted decoded values.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-Toeplitz block, an incorrect negacyclic `Y` shift, or a
+    /// public key whose eight first-column blocks are too sparse.
+    pub fn validate_r512_multiplication_structure_v1(
+        &self,
+    ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
+        let dimension = BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1;
+        let degree = BOOTLE_LANTERN_RING_DEGREE_V1;
+        self.validate_matrix_entries_v1(dimension, degree)?;
 
         for row in 0..dimension {
             for column in 0..dimension {
@@ -1081,6 +1093,8 @@ pub struct OrchardHalo2ActionsStatementV1 {
     pub context: PrivacyStatementContextV1,
     /// Asset represented by the Orchard action.
     pub asset_definition_id: AssetDefinitionId,
+    /// Exact transparent reserve partition used by directional value bridges.
+    pub public_balance_scope: AssetBalanceScope,
     /// Orchard pool namespace.
     pub pool_id: PrivacyPoolIdV1,
     /// Admitted note-commitment tree anchor.
@@ -1141,6 +1155,8 @@ pub struct IrohaIvmPrivateNoteStarkStatementV1 {
     pub context: PrivacyStatementContextV1,
     /// Asset manipulated by the private program.
     pub asset_definition_id: AssetDefinitionId,
+    /// Exact transparent reserve partition used by directional value bridges.
+    pub public_balance_scope: AssetBalanceScope,
     /// Private-note pool namespace.
     pub pool_id: PrivacyPoolIdV1,
     /// Exact private IVM program identifier.
@@ -1432,6 +1448,7 @@ impl PrivacyStatementV1 {
 fn validate_zk_ace(
     statement: &ZkAcePqAuthorizationStatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
+    validate_public_balance_scope(statement.public_balance_scope)?;
     require_commitment(statement.identity_commitment, 0)?;
     require_nonzero_id(statement.policy_id.is_zero(), PrivacyTypedFieldV1::PolicyId)?;
     require_nonzero_id(
@@ -1911,12 +1928,23 @@ fn validate_jindo(
     limits: &PrivacyConsensusLimitsV1,
 ) -> Result<(), PrivacyStatementValidationError> {
     let polynomial_count = u32_len(statement.polynomial_commitments.len())?;
-    let polynomial_max = IROHA_JINDO_MAX_POLYNOMIALS_V1.min(limits.max_commitments_per_action);
-    if polynomial_count == 0 || polynomial_count > polynomial_max {
-        return Err(PrivacyStatementValidationError::InvalidBatchSize {
-            count: polynomial_count,
-            max: polynomial_max,
-        });
+    // The frozen revised-Jindo parameter search and proof shape are exact
+    // batch=4. Smaller batches are not padded and have no alternate transcript.
+    if polynomial_count != IROHA_JINDO_MAX_POLYNOMIALS_V1 {
+        return Err(
+            PrivacyStatementValidationError::InvalidJindoPolynomialCount {
+                count: polynomial_count,
+                expected: IROHA_JINDO_MAX_POLYNOMIALS_V1,
+            },
+        );
+    }
+    if limits.max_commitments_per_action < IROHA_JINDO_MAX_POLYNOMIALS_V1 {
+        return Err(
+            PrivacyStatementValidationError::InsufficientJindoCommitmentCapacity {
+                maximum: limits.max_commitments_per_action,
+                required: IROHA_JINDO_MAX_POLYNOMIALS_V1,
+            },
+        );
     }
     for (index, commitment) in statement.polynomial_commitments.iter().enumerate() {
         let bytes = u32_len(commitment.encoding.len())?;
@@ -2045,6 +2073,7 @@ fn validate_orchard(
     statement: &OrchardHalo2ActionsStatementV1,
     limits: &PrivacyConsensusLimitsV1,
 ) -> Result<(), PrivacyStatementValidationError> {
+    validate_public_balance_scope(statement.public_balance_scope)?;
     require_nonzero_id(statement.pool_id.is_zero(), PrivacyTypedFieldV1::PoolId)?;
     require_nonzero_id(statement.anchor.is_zero(), PrivacyTypedFieldV1::Root)?;
     require_epoch(statement.anchor_epoch, PrivacyEpochFieldV1::Root)?;
@@ -2236,6 +2265,7 @@ fn validate_ivm_private_note(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     limits: &PrivacyConsensusLimitsV1,
 ) -> Result<(), PrivacyStatementValidationError> {
+    validate_public_balance_scope(statement.public_balance_scope)?;
     require_nonzero_id(statement.pool_id.is_zero(), PrivacyTypedFieldV1::PoolId)?;
     require_nonzero_id(
         statement.program_id.is_zero(),
@@ -2279,6 +2309,18 @@ fn validate_ivm_private_note(
         limits,
     )?;
     validate_ivm_private_encrypted_outputs(&statement.encrypted_outputs)
+}
+
+fn validate_public_balance_scope(
+    scope: AssetBalanceScope,
+) -> Result<(), PrivacyStatementValidationError> {
+    if matches!(
+        scope,
+        AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL)
+    ) {
+        return Err(PrivacyStatementValidationError::UniversalPublicBalanceScope);
+    }
+    Ok(())
 }
 
 fn validate_pq_masp(

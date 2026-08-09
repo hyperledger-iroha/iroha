@@ -402,31 +402,16 @@ consume the same fixture to guarantee codec parity across SDKs and Torii admissi
 ### 3. Globally unique domains & normalization
 
 See also: [`references/address_norm_v1.md`](references/address_norm_v1.md)
-for the canonical Norm v1 pipeline used across Torii, the data model, and SDKs.
-
-Redefine `DomainId` as a tagged tuple:
-
-```
-DomainId {
-    name: Name,
-    authority: GlobalDomainAuthority, // new enum
-}
-
-enum GlobalDomainAuthority {
-    LocalChain,                  // default for the local chain
-    External { chain_discriminant: u16 },
-}
-```
-
-`LocalChain` wraps the existing Name for domains managed by the current chain.
-When a domain is registered through the global registry, we persist the owning
-chain’s discriminant. Display / parsing stays unchanged for now, but the
-expanded structure allows routing decisions.
+for the canonical boundary between universal accounts and explicit domain
+records. `AccountId` and `AccountAddress` are domainless. A complete `DomainId`
+is stored anywhere routing, alias ownership, or domain ownership requires
+domain context; no account-address selector or configured default-domain value
+participates in World state.
 
 #### 3.1 Normalization & spoofing defenses
 
-Norm v1 defines the canonical pipeline every component must use before a domain
-name is persisted or embedded into an `AccountAddress`. The full walkthrough
+Norm v1 defines the canonical pipeline every component must use before an
+explicit domain or alias label is persisted. The full walkthrough
 lives in [`references/address_norm_v1.md`](references/address_norm_v1.md);
 the summary below captures the steps that wallets, Torii, SDKs, and governance
 tools must implement.
@@ -450,12 +435,10 @@ tools must implement.
    Norm v2; operators can enable them early, but failing the check must abort
    processing.
 
-If every stage succeeds, the lower-case A-label string is cached and used for
-address encoding, configuration, manifests, and registry lookups. Local digest
-selectors derive their 12-byte value as `blake2s_mac(key = "SORA-LOCAL-K:v1",
-canonical_label)[0..12]` using the step 3 output. All other attempts (mixed
-case, upper-case, raw Unicode input) are rejected with structured
-`ParseError`s at the boundary where the name was supplied.
+If every stage succeeds, the lower-case A-label string is stored as part of the
+explicit domain or alias record. It is never embedded into an account address
+or compressed through a process-local default. Invalid input is rejected with
+structured `ParseError`s at the boundary where the name was supplied.
 
 Canonical fixtures demonstrating these rules — including punycode round-trips
 and invalid STD3 sequences — are listed in
@@ -605,7 +588,7 @@ their change tickets.
 - **Discriminant configuration:** The configured `u16` value is authoritative;
   no external registry lookup is part of V1 parsing or admission.
 - **Domain policy:** Runtime `Name` parsing validates input and applies NFC.
-  Low-level explicit domain selectors additionally use
+  Explicit domain and alias constructors additionally use
   `name::canonicalize_domain_label` for UTS-46 and lowercase ASCII output.
 - **Textual helpers:** Rust, TypeScript/JavaScript, Python, and Kotlin codecs use
   the shared I105 test vectors.
@@ -666,7 +649,7 @@ messages, plus recommended remediation guidance.
 
 | Code | Failure | Recommended Remediation |
 |------|---------|-------------------------|
-| `ERR_DOMAIN_MISMATCH` | Domain selector does not match the expected domain. | Use an address issued for the intended domain or update the expectation. |
+| `ERR_DOMAIN_MISMATCH` | A noncanonical in-memory selector fixture conflicts with an explicit domain context. Canonical V1 addresses are universal and never emit this error. | Reject selector-bearing material and use a canonical I105 address plus an explicit `DomainId` or alias record. |
 | `ERR_INVALID_DOMAIN_LABEL` | Domain label failed normalisation checks. | Canonicalise the domain using UTS-46 non-transitional processing before encoding. |
 | `ERR_UNEXPECTED_NETWORK_PREFIX` | Decoded I105 network prefix differs from the configured value. | Switch to an address from the target chain or adjust the expected discriminant/prefix. |
 | `ERR_UNKNOWN_ADDRESS_CLASS` | Address class bits are not recognised. | Use V1 class `0` (single key) or `1` (multisig). |

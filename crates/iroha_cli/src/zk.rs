@@ -44,10 +44,6 @@ pub enum Command {
     Attachments(AttachmentsCommand),
     /// Register a ZK-capable asset (Hybrid mode) with policy and VK ids
     RegisterAsset(ZkRegisterAssetArgs),
-    /// Shield public funds into a shielded ledger (demo flow)
-    Shield(ShieldArgs),
-    /// Unshield funds from shielded ledger to public (demo flow)
-    Unshield(UnshieldArgs),
     /// Verifying-key registry lifecycle (register/update/get)
     #[command(subcommand)]
     Vk(VkCommand),
@@ -85,8 +81,6 @@ impl Run for Command {
             Command::SchemaHash(args) => args.run(context),
             Command::Attachments(args) => args.run(context),
             Command::RegisterAsset(args) => args.run(context),
-            Command::Shield(args) => args.run(context),
-            Command::Unshield(args) => args.run(context),
             Command::Vk(args) => args.run(context),
             Command::Proofs(args) => args.run(context),
             Command::Prover(args) => args.run(context),
@@ -1046,7 +1040,11 @@ impl Run for VoteCommand {
 #[derive(clap::Args, Debug)]
 pub struct VoteTallyArgs {
     /// Election identifier
-    #[arg(long, value_name = "ELECTION_ID")]
+    #[arg(
+        long,
+        value_name = "ELECTION_ID",
+        value_parser = crate::gov::parse_governance_selector_v1
+    )]
     election_id: String,
 }
 
@@ -1363,47 +1361,7 @@ mod attachments_cleanup_tests {
     }
 }
 
-// ---------------- Shield / Unshield demo flows ----------------
-
-#[derive(clap::Args, Debug)]
-pub struct ShieldArgs {
-    /// Canonical unprefixed Base58 `AssetDefinitionId`
-    #[arg(long, value_name = "ASSET_ID")]
-    asset: String,
-    /// Account identifier to debit (canonical I105 account literal)
-    #[arg(long, value_name = "ACCOUNT_ID")]
-    from: String,
-    /// Public amount to debit
-    #[arg(long, value_name = "AMOUNT")]
-    amount: String,
-    /// Output note commitment (hex, 64 chars)
-    #[arg(long, value_name = "HEX32")]
-    note_commitment: String,
-    /// Encrypted recipient payload envelope (Norito bytes). Optional; empty if not provided.
-    #[arg(long, value_name = "PATH")]
-    enc_payload: Option<std::path::PathBuf>,
-    /// Ephemeral public key for encrypted payload (hex, 64 chars).
-    #[arg(
-        long,
-        value_name = "HEX32",
-        requires_all = ["nonce_hex", "ciphertext_b64"]
-    )]
-    ephemeral_pubkey: Option<String>,
-    /// XChaCha20-Poly1305 nonce for encrypted payload (hex, 48 chars).
-    #[arg(
-        long,
-        value_name = "HEX24",
-        requires_all = ["ephemeral_pubkey", "ciphertext_b64"]
-    )]
-    nonce_hex: Option<String>,
-    /// Ciphertext payload (base64). Includes Poly1305 authentication tag.
-    #[arg(
-        long,
-        value_name = "BASE64",
-        requires_all = ["ephemeral_pubkey", "nonce_hex"]
-    )]
-    ciphertext_b64: Option<String>,
-}
+// ---------------- Confidential envelope helpers ----------------
 
 #[derive(clap::Args, Debug)]
 pub struct EnvelopeArgs {
@@ -1428,16 +1386,6 @@ pub struct EnvelopeArgs {
     /// Print JSON representation of the envelope.
     #[arg(long, default_value_t = false)]
     print_json: bool,
-}
-
-fn parse_hex32(s: &str) -> eyre::Result<[u8; 32]> {
-    let bytes = hex::decode(s).map_err(|e| eyre::eyre!("invalid hex: {e}"))?;
-    if bytes.len() != 32 {
-        return Err(eyre::eyre!("expected 32 bytes, got {}", bytes.len()));
-    }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
 }
 
 fn parse_hex_array<const N: usize>(s: &str) -> eyre::Result<[u8; N]> {
@@ -1489,49 +1437,6 @@ fn encode_encrypted_payload(
     Ok((payload, bytes))
 }
 
-impl Run for ShieldArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> eyre::Result<()> {
-        use iroha::data_model::{
-            confidential::ConfidentialEncryptedPayload,
-            prelude::{AccountId, AssetDefinitionId, InstructionBox},
-        };
-        let asset = AssetDefinitionId::parse_address_literal(&self.asset)?;
-        let from =
-            crate::resolve_account_id(context, &self.from).wrap_err("failed to resolve --from")?;
-        let note_commitment = parse_hex32(&self.note_commitment)?;
-        let enc_payload = if let (Some(ephemeral_hex), Some(nonce_hex), Some(ciphertext_b64)) = (
-            &self.ephemeral_pubkey,
-            &self.nonce_hex,
-            &self.ciphertext_b64,
-        ) {
-            build_encrypted_payload(ephemeral_hex, nonce_hex, ciphertext_b64)?
-        } else {
-            match &self.enc_payload {
-                Some(p) => {
-                    let bytes = std::fs::read(p)?;
-                    let payload = norito::decode_from_bytes::<ConfidentialEncryptedPayload>(&bytes)
-                        .map_err(|e| eyre::eyre!("failed to decode encrypted payload: {e}"))?;
-                    validate_encrypted_payload(payload)?
-                }
-                None => {
-                    return Err(eyre::eyre!(
-                        "encrypted payload requires ephemeral_pubkey, nonce_hex, and ciphertext_b64 or an encoded envelope file"
-                    ));
-                }
-            }
-        };
-        let ib: InstructionBox = iroha::data_model::isi::zk::Shield::new(
-            asset,
-            from,
-            parse_public_quantity(&self.amount, "--amount")?,
-            note_commitment,
-            enc_payload,
-        )
-        .into();
-        context.finish(vec![ib])
-    }
-}
-
 impl Run for EnvelopeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> eyre::Result<()> {
         let (payload, bytes) = encode_encrypted_payload(
@@ -1563,50 +1468,6 @@ impl Run for EnvelopeArgs {
     }
 }
 
-#[derive(clap::Args, Debug)]
-pub struct UnshieldArgs {
-    /// Canonical unprefixed Base58 `AssetDefinitionId`
-    #[arg(long, value_name = "ASSET_ID")]
-    asset: String,
-    /// Recipient account identifier to credit (canonical I105 account literal)
-    #[arg(long, value_name = "ACCOUNT_ID")]
-    to: String,
-    /// Public amount to credit
-    #[arg(long, value_name = "AMOUNT")]
-    amount: String,
-    /// Spent nullifiers (comma-separated list of 64-hex strings)
-    #[arg(long, value_name = "HEX32[,HEX32,...]")]
-    inputs: String,
-    /// Proof attachment JSON file describing { backend, `proof_b64`, `vk_ref{backend,name}`, optional `vk_commitment_hex` }
-    #[arg(long, value_name = "PATH")]
-    proof_json: std::path::PathBuf,
-    /// Optional Merkle root hint (hex, 64 chars)
-    #[arg(long, value_name = "HEX32")]
-    root_hint: Option<String>,
-}
-
-fn parse_inputs_csv(s: &str) -> eyre::Result<Vec<[u8; 32]>> {
-    s.split(',')
-        .filter(|x| !x.is_empty())
-        .map(|h| parse_hex32(h.trim()))
-        .collect()
-}
-
-fn parse_public_quantity(
-    value: &str,
-    flag: &str,
-) -> eyre::Result<iroha::data_model::prelude::Quantity> {
-    let parsed = value
-        .parse::<iroha::data_model::prelude::Quantity>()
-        .map_err(|err| eyre::eyre!("{flag} must be a non-negative V1 quantity: {err}"))?;
-    if parsed.to_string() != value {
-        return Err(eyre::eyre!(
-            "{flag} must use canonical quantity spelling `{parsed}`"
-        ));
-    }
-    Ok(parsed)
-}
-
 fn parse_hex_string(hex_str: &str) -> eyre::Result<Vec<u8>> {
     let trimmed = hex_str.trim();
     let without_prefix = trimmed.strip_prefix("0x").unwrap_or(trimmed);
@@ -1629,93 +1490,6 @@ fn parse_hex32_lower(value: &str, field: &str) -> Result<String> {
     Ok(hex::encode(bytes))
 }
 
-fn parse_exact_lower_hex32(value: &str, field: &str) -> Result<[u8; 32]> {
-    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        eyre::bail!("{field} must be exactly 32 lowercase hex bytes");
-    }
-    if value.bytes().any(|byte| byte.is_ascii_uppercase()) {
-        eyre::bail!("{field} must be exactly 32 lowercase hex bytes");
-    }
-    let bytes = hex::decode(value).wrap_err_with(|| format!("invalid {field}"))?;
-    let mut out = [0_u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
-
-fn build_proof_attachment_from_json(
-    v: &norito::json::Value,
-) -> eyre::Result<iroha::data_model::proof::ProofAttachment> {
-    use iroha::data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
-    let object = v
-        .as_object()
-        .ok_or_else(|| eyre::eyre!("proof attachment JSON must be an object"))?;
-    for field in object.keys() {
-        match field.as_str() {
-            "backend" | "proof_b64" | "vk_ref" | "vk_commitment_hex" | "envelope_hash_hex" => {}
-            "vk_inline" | "vkInline" | "verifyingKeyInline" | "verifying_key_inline" => {
-                return Err(eyre::eyre!(
-                    "legacy inline verifying-key field `{field}` is not supported; use vk_ref"
-                ));
-            }
-            other => return Err(eyre::eyre!("unknown proof attachment field `{other}`")),
-        }
-    }
-    let backend = v
-        .get("backend")
-        .and_then(|x| x.as_str())
-        .ok_or_else(|| eyre::eyre!("missing backend"))?;
-    let backend = ensure_verifier_backend_registry_label_v1(backend, "backend")?;
-    let proof_b64 = v
-        .get("proof_b64")
-        .and_then(|x| x.as_str())
-        .ok_or_else(|| eyre::eyre!("missing proof_b64"))?;
-    let proof_bytes = base64::engine::general_purpose::STANDARD
-        .decode(proof_b64)
-        .map_err(|e| eyre::eyre!("invalid proof_b64: {e}"))?;
-    let proof = ProofBox::new(backend.into(), proof_bytes);
-    let vk_ref = v.get("vk_ref").and_then(|x| x.as_object());
-    let mut att = if let Some(obj) = vk_ref {
-        for field in obj.keys() {
-            match field.as_str() {
-                "backend" | "name" => {}
-                other => return Err(eyre::eyre!("unknown vk_ref field `{other}`")),
-            }
-        }
-        let b = obj
-            .get("backend")
-            .and_then(|x| x.as_str())
-            .ok_or_else(|| eyre::eyre!("vk_ref.backend missing"))?;
-        ensure_verifier_backend_registry_label_v1(b, "vk_ref.backend")?;
-        if b != backend {
-            return Err(eyre::eyre!("vk_ref.backend must match backend"));
-        }
-        let name = obj
-            .get("name")
-            .and_then(|x| x.as_str())
-            .ok_or_else(|| eyre::eyre!("vk_ref.name missing"))?;
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(eyre::eyre!("vk_ref.name must be non-empty"));
-        }
-        let id = VerifyingKeyId::new(b, name);
-        ProofAttachment::new_ref(backend.into(), proof, id)
-    } else {
-        return Err(eyre::eyre!("vk_ref must be provided"));
-    };
-    if let Some(hex) = v.get("vk_commitment_hex").and_then(|x| x.as_str()) {
-        att.vk_commitment = Some(parse_exact_lower_hex32(hex, "vk_commitment_hex")?);
-    }
-    let envelope_hash = v
-        .get("envelope_hash_hex")
-        .and_then(|x| x.as_str())
-        .ok_or_else(|| eyre::eyre!("envelope_hash_hex must be provided"))?;
-    att.envelope_hash = Some(parse_exact_lower_hex32(envelope_hash, "envelope_hash_hex")?);
-    if let Some((field, message)) = att.structural_error() {
-        return Err(eyre::eyre!("{field} {message}"));
-    }
-    Ok(att)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1734,314 +1508,6 @@ mod tests {
             .expect("ZK fixture key advertises a valid algorithm");
 
         assert_eq!(actual, iroha_crypto::Algorithm::Ed25519);
-    }
-
-    fn proof_bytes_hash_hex(bytes: &[u8]) -> String {
-        let hash: [u8; 32] = CryptoHash::new(bytes).into();
-        hex::encode(hash)
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_vk_ref() {
-        // proof_b64 = "Hello" in base64
-        let proof_b64 = "SGVsbG8=";
-        let envelope_hash_hex = proof_bytes_hash_hex(b"Hello");
-        let json = format!(
-            r#"{{
-                "backend": "halo2/ipa",
-                "proof_b64": "{proof_b64}",
-                "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_transfer" }},
-                "vk_commitment_hex": "1111111111111111111111111111111111111111111111111111111111111111",
-                "envelope_hash_hex": "{envelope_hash_hex}"
-            }}"#
-        );
-        let v = norito::json::from_str(&json).expect("vk_ref json");
-        let att = build_proof_attachment_from_json(&v).expect("ok");
-        assert_eq!(att.backend.as_str(), "halo2/ipa");
-        assert_eq!(att.proof.backend.as_str(), "halo2/ipa");
-        assert_eq!(att.proof.bytes, b"Hello");
-        assert_eq!(att.vk_ref.name.as_str(), "vk_transfer");
-        assert_eq!(att.vk_commitment.unwrap(), [0x11u8; 32]);
-        let expected_hash: [u8; 32] = CryptoHash::new(b"Hello").into();
-        assert_eq!(att.envelope_hash.unwrap(), expected_hash);
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_legacy_inline_vk_field() {
-        for field in [
-            "vk_inline",
-            "vkInline",
-            "verifyingKeyInline",
-            "verifying_key_inline",
-        ] {
-            let json = format!(
-                r#"{{
-                    "backend": "halo2/ipa",
-                    "proof_b64": "AA==",
-                    "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_transfer" }},
-                    "{field}": {{ "backend": "halo2/ipa", "bytes_b64": "AQID" }}
-                }}"#
-            );
-            let v = norito::json::from_str(&json).expect("legacy inline json");
-            let err = build_proof_attachment_from_json(&v).expect_err("legacy inline vk rejected");
-            assert!(format!("{err}").contains("legacy inline verifying-key field"));
-        }
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_short_vk_commitment() {
-        let json = r#"{
-            "backend": "halo2/ipa",
-            "proof_b64": "AA==",
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" },
-            "vk_commitment_hex": "abcd"
-        }"#;
-        let v = norito::json::from_str(json).expect("short commitment json");
-        let err = build_proof_attachment_from_json(&v).expect_err("short commitment rejected");
-        assert!(format!("{err}").contains("32 lowercase hex bytes"));
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_zero_vk_commitment() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0]);
-        let json = format!(
-            r#"{{
-                "backend": "halo2/ipa",
-                "proof_b64": "AA==",
-                "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_transfer" }},
-                "vk_commitment_hex": "0000000000000000000000000000000000000000000000000000000000000000",
-                "envelope_hash_hex": "{envelope_hash_hex}"
-            }}"#
-        );
-        let v = norito::json::from_str(&json).expect("zero commitment json");
-        let err = build_proof_attachment_from_json(&v).expect_err("zero commitment rejected");
-        assert!(format!("{err}").contains("vk_commitment must be non-zero"));
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_missing_envelope_hash() {
-        let json = r#"{
-            "backend": "halo2/ipa",
-            "proof_b64": "AA==",
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" }
-        }"#;
-        let v = norito::json::from_str(json).expect("missing envelope hash json");
-        let err =
-            build_proof_attachment_from_json(&v).expect_err("missing envelope_hash_hex rejected");
-        assert!(format!("{err}").contains("envelope_hash_hex must be provided"));
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_forged_envelope_hash() {
-        let json = r#"{
-            "backend": "halo2/ipa",
-            "proof_b64": "AA==",
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" },
-            "envelope_hash_hex": "1111111111111111111111111111111111111111111111111111111111111111"
-        }"#;
-        let v = norito::json::from_str(json).expect("forged envelope hash json");
-        let err =
-            build_proof_attachment_from_json(&v).expect_err("forged envelope_hash_hex rejected");
-        assert!(format!("{err}").contains("envelope_hash must match proof bytes"));
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_noncanonical_envelope_hash_hex() {
-        let uppercase_hash = proof_bytes_hash_hex(&[0]).to_uppercase();
-        let prefixed_hash = format!("0x{}", proof_bytes_hash_hex(&[0]));
-        for envelope_hash_hex in [uppercase_hash, prefixed_hash] {
-            let json = format!(
-                r#"{{
-                    "backend": "halo2/ipa",
-                    "proof_b64": "AA==",
-                    "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_transfer" }},
-                    "envelope_hash_hex": "{envelope_hash_hex}"
-                }}"#
-            );
-            let v = norito::json::from_str(&json).expect("noncanonical envelope hash json");
-            let err = build_proof_attachment_from_json(&v)
-                .expect_err("noncanonical envelope_hash_hex rejected");
-            assert!(
-                format!("{err}")
-                    .contains("envelope_hash_hex must be exactly 32 lowercase hex bytes"),
-                "unexpected noncanonical hash error: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_empty_proof_bytes() {
-        let empty_hash_hex = proof_bytes_hash_hex(&[]);
-        let json = format!(
-            r#"{{
-                "backend": "halo2/ipa",
-                "proof_b64": "",
-                "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_transfer" }},
-                "envelope_hash_hex": "{empty_hash_hex}"
-            }}"#
-        );
-        let v = norito::json::from_str(&json).expect("empty proof json");
-        let err = build_proof_attachment_from_json(&v).expect_err("empty proof rejected");
-        assert!(format!("{err}").contains("proof.bytes must be non-empty"));
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_non_object_vk_ref() {
-        let json = r#"{
-            "backend": "halo2/ipa",
-            "proof_b64": "AA==",
-            "vk_ref": "halo2/ipa:vk_transfer"
-        }"#;
-        let v = norito::json::from_str(json).expect("string vk_ref json");
-        let err = build_proof_attachment_from_json(&v).expect_err("string vk_ref rejected");
-        assert!(format!("{err}").contains("vk_ref must be provided"));
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_vk_ref_backend_mismatch() {
-        let json = r#"{
-            "backend": "halo2/ipa",
-            "proof_b64": "AA==",
-            "vk_ref": { "backend": "stark/fri", "name": "vk_transfer" }
-        }"#;
-        let v = norito::json::from_str(json).expect("vk backend mismatch json");
-        let err = build_proof_attachment_from_json(&v).expect_err("vk backend mismatch rejected");
-        assert!(format!("{err}").contains("vk_ref.backend must match backend"));
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_vk_reference_shadow_field() {
-        let json = r#"{
-            "backend": "halo2/ipa",
-            "proof_b64": "AA==",
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" },
-            "vk_reference": { "backend": "halo2/ipa", "name": "vk_shadow" }
-        }"#;
-        let v = norito::json::from_str(json).expect("vk_reference shadow json");
-        let err = build_proof_attachment_from_json(&v).expect_err("shadow alias rejected");
-        assert!(format!("{err}").contains("unknown proof attachment field `vk_reference`"));
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_bridge_only_proof_backend_shadow() {
-        let json = r#"{
-            "backend": "halo2/ipa",
-            "proof_backend": "stark/fri",
-            "proof_b64": "AA==",
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" }
-        }"#;
-        let v = norito::json::from_str(json).expect("proof_backend shadow json");
-        let err = build_proof_attachment_from_json(&v).expect_err("proof_backend shadow rejected");
-        assert!(format!("{err}").contains("unknown proof attachment field `proof_backend`"));
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_nested_vk_ref_shadow_field() {
-        let json = r#"{
-            "backend": "halo2/ipa",
-            "proof_b64": "AA==",
-            "vk_ref": {
-                "backend": "halo2/ipa",
-                "name": "vk_transfer",
-                "vk_reference": "shadow"
-            }
-        }"#;
-        let v = norito::json::from_str(json).expect("nested vk_ref shadow json");
-        let err = build_proof_attachment_from_json(&v).expect_err("nested shadow rejected");
-        assert!(format!("{err}").contains("unknown vk_ref field `vk_reference`"));
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_blank_vk_ref_name() {
-        let json = r#"{
-            "backend": "halo2/ipa",
-            "proof_b64": "AA==",
-            "vk_ref": { "backend": "halo2/ipa", "name": "   " }
-        }"#;
-        let v = norito::json::from_str(json).expect("blank vk_ref name json");
-        let err = build_proof_attachment_from_json(&v).expect_err("blank vk_ref name rejected");
-        assert!(format!("{err}").contains("vk_ref.name must be non-empty"));
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_blank_backend_fields() {
-        for (json, expected) in [
-            (
-                r#"{
-                    "backend": "   ",
-                    "proof_b64": "AA==",
-                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" }
-                }"#,
-                "unsupported verifier-registry label",
-            ),
-            (
-                r#"{
-                    "backend": "halo2/ipa",
-                    "proof_b64": "AA==",
-                    "vk_ref": { "backend": "   ", "name": "vk_transfer" }
-                }"#,
-                "unsupported verifier-registry label",
-            ),
-        ] {
-            let v = norito::json::from_str(json).expect("blank backend json");
-            let err =
-                build_proof_attachment_from_json(&v).expect_err("blank backend field rejected");
-            assert!(
-                format!("{err}").contains(expected),
-                "expected error to mention {expected}, got {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn build_proof_attachment_from_json_rejects_unsupported_production_backends() {
-        for backend in [
-            " halo2/ipa",
-            "halo2/ipa ",
-            "HALO2/IPA",
-            "stark/FRI",
-            "halo2/ipa::ivm-execution-v1",
-            "halo2//ipa",
-            "halo2/ipa:",
-            "halo2/ipa.",
-            "halo2/ipa/.ivm-execution-v1",
-            "halo2/ipa:ivm..execution-v1",
-            "halo2/ipa/orchard",
-            "halo2/kzg",
-            "groth16/bls12-377",
-            "mock/dev",
-            "stark/fri/miden",
-            "stark/fri/latest",
-            "stark/fri/random-profile",
-            "stark/fri/sha512-goldilocks",
-            "stark/fri/boi-audited",
-            "stark/fri/external-security-review",
-            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
-            "halo2/ipa:release-ready",
-            "halo2/ipa:certified-mainnet",
-            "halo2/ipa:third-party-audited",
-            "halo2/pasta/tiny-add",
-            "halo2/ipa:tiny-add",
-            "halo2/pasta/anon-transfer-2x2",
-            "halo2/ipa:anon-transfer-2x2",
-            "halo2/pasta/vote-bool-commit",
-            "halo2/ipa:vote-bool-commit",
-        ] {
-            let json = format!(
-                r#"{{
-                    "backend": "{backend}",
-                    "proof_b64": "AA==",
-                    "vk_ref": {{ "backend": "{backend}", "name": "vk_transfer" }}
-                }}"#
-            );
-            let v = norito::json::from_str(&json).expect("unsupported backend json");
-            let err = build_proof_attachment_from_json(&v)
-                .expect_err("unsupported registry backend rejected");
-            assert!(
-                format!("{err}").contains("unsupported verifier-registry label"),
-                "expected unsupported backend error for {backend:?}, got {err}"
-            );
-        }
     }
 
     #[test]
@@ -2080,7 +1546,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_vk_id_pair_rejects_unsupported_backend_labels_and_preserves_colon_aliases() {
+    fn parse_vk_id_pair_rejects_unsupported_backend_aliases_and_accepts_registry_labels() {
         for literal in [
             " halo2/ipa:vk_transfer",
             "halo2/ipa :vk_transfer",
@@ -2096,6 +1562,7 @@ mod tests {
             "stark/fri/boi-audited:vk_transfer",
             "halo2/ipa:release-ready:vk_transfer",
             "halo2/ipa:tiny-add:vk_transfer",
+            "halo2/ipa:ivm-execution-v1:vk_ivm",
             "mock/dev:vk_transfer",
             "halo2/ipa:",
             "halo2/ipa:vk:shadow",
@@ -2106,9 +1573,9 @@ mod tests {
             );
         }
 
-        let parsed =
-            parse_vk_id_pair("halo2/ipa:ivm-execution-v1:vk_ivm").expect("colon alias vk id");
-        assert_eq!(parsed.backend.as_str(), "halo2/ipa:ivm-execution-v1");
+        let parsed = parse_vk_id_pair("halo2/pasta/ivm-execution-v1:vk_ivm")
+            .expect("canonical IVM execution vk id");
+        assert_eq!(parsed.backend.as_str(), "halo2/pasta/ivm-execution-v1");
         assert_eq!(parsed.name.as_str(), "vk_ivm");
 
         let parsed =
@@ -2316,32 +1783,6 @@ mod tests {
     }
 }
 
-impl Run for UnshieldArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> eyre::Result<()> {
-        use iroha::data_model::prelude::{AccountId, AssetDefinitionId, InstructionBox};
-        let asset = AssetDefinitionId::parse_address_literal(&self.asset)?;
-        let to = crate::resolve_account_id(context, &self.to).wrap_err("failed to resolve --to")?;
-        let inputs = parse_inputs_csv(&self.inputs)?;
-        let proof_json_str = std::fs::read_to_string(&self.proof_json)?;
-        let v: norito::json::Value = norito::json::from_str(&proof_json_str)?;
-        let proof_att = build_proof_attachment_from_json(&v)?;
-        let root_hint = match self.root_hint {
-            Some(h) => Some(parse_hex32(&h)?),
-            None => None,
-        };
-        let ib: InstructionBox = iroha::data_model::isi::zk::Unshield::new(
-            asset,
-            to,
-            parse_public_quantity(&self.amount, "--amount")?,
-            inputs,
-            proof_att,
-            root_hint,
-        )
-        .into();
-        context.finish(vec![ib])
-    }
-}
-
 // --------------- Register ZK Asset (Hybrid) ---------------
 
 #[derive(clap::Args, Debug)]
@@ -2349,19 +1790,16 @@ pub struct ZkRegisterAssetArgs {
     /// Canonical unprefixed Base58 `AssetDefinitionId`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
-    /// Allow shielding from public to shielded (default: true)
+    /// Allow proof-authenticated Kagemusha public-to-confidential top-ups (default: true)
     #[arg(long, default_value_t = true)]
     allow_shield: bool,
     /// Allow unshielding from shielded to public (default: true)
     #[arg(long, default_value_t = true)]
     allow_unshield: bool,
-    /// Verifying key id for private transfers (format: `<backend>:<name>`, e.g., `halo2/ipa:vk_transfer`)
-    #[arg(long, value_name = "BACKEND:NAME")]
-    vk_transfer: Option<String>,
     /// Verifying key id for unshield proofs (format: `<backend>:<name>`)
     #[arg(long, value_name = "BACKEND:NAME")]
     vk_unshield: Option<String>,
-    /// Verifying key id for shield proofs (optional; format: `<backend>:<name>`)
+    /// Canonical Kagemusha top-up shield verifying key id (format: `<backend>:<name>`)
     #[arg(long, value_name = "BACKEND:NAME")]
     vk_shield: Option<String>,
 }
@@ -2388,10 +1826,6 @@ impl Run for ZkRegisterAssetArgs {
         use iroha::data_model::prelude::{AssetDefinitionId, InstructionBox};
 
         let asset = AssetDefinitionId::parse_address_literal(&self.asset)?;
-        let vk_transfer = match self.vk_transfer {
-            Some(s) => Some(parse_vk_id_pair(&s)?),
-            None => None,
-        };
         let vk_unshield = match self.vk_unshield {
             Some(s) => Some(parse_vk_id_pair(&s)?),
             None => None,
@@ -2405,7 +1839,6 @@ impl Run for ZkRegisterAssetArgs {
             ZkAssetMode::Hybrid,
             self.allow_shield,
             self.allow_unshield,
-            vk_transfer,
             vk_unshield,
             vk_shield,
         )

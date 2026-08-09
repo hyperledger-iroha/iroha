@@ -1,0 +1,5 @@
+error: duplicate configuration key `canonical`
+ --> tests/config_base_ui_fail/duplicate_effective_key.rs:6:20
+  |
+6 |     #[config(key = "canonical")]
+  |                    ^^^^^^^^^^^

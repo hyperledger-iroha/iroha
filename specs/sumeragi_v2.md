@@ -3,7 +3,7 @@
 Sumeragi v2 is the only live consensus protocol accepted by this release. It is a breaking
 network revision: validators using another protocol version or consensus fingerprint are rejected
 during admission, and an existing chain must restart from a fresh genesis rather than mix protocol
-versions at one height. The first-release decoder accepts only the canonical revision-3 Norito
+versions at one height. The first-release decoder accepts only the canonical revision-4 Norito
 shape; it does not infer a missing proposal origin or fall back to a legacy vote, QC, status, or
 finality layout.
 
@@ -19,16 +19,17 @@ Every global consensus message is bound to a `HeightContextId`. The hashed conte
 
 - chain and protocol identifiers;
 - height, epoch, and the previous height's CommitQC;
-- the ordered voting roster and every validator's voting power;
+- the ordered equal-vote committee;
 - the complete Nexus/AMX consensus context, V1 process-local execution-policy identity, and DA
   layout, including the canonical active-lane lifecycle map of
   `(lane_id, incarnation, activation_height)` tuples sorted by lane id;
 - the epoch leader seed and quorum policy.
 
-The frozen voting roster is capped by protocol at 128 validators. This is not a local tuning knob:
-the same bound limits proofs of possession, authenticated vote/equivocation retention, certificate
-work, and per-view memory on every peer. A larger context is structurally invalid before consensus
-opens.
+The frozen voting committee has exact `n = 3f + 1` geometry for `1 <= f <= 10`:
+4, 7, 10, …, 31 validators. This is not a local tuning knob. The same bound
+limits proofs of possession, authenticated vote/equivocation retention,
+certificate work, and per-view memory on every peer. A smaller, larger, or
+non-`3f + 1` context is structurally invalid before consensus opens.
 
 The context for height `h` is derived only from the finalized state at `h - 1`. A reconfiguration
 committed at `h` may activate at `h + 1`; certificates from the old context cannot act in the new
@@ -92,10 +93,11 @@ The public Nexus sample remains intentionally non-deployable until an operator s
 canonical Nexus XOR asset-definition ID. Generation fails closed without
 `--nexus-xor-asset-definition-id`; the Taira XOR identity must never be reused as a substitute.
 
-Permissioned mode assigns power one to every voter. NPoS freezes the finalized stake snapshot for
-the epoch. In both modes, a certificate must contain at least `floor(2n/3) + 1` distinct validators
-and strictly more than two-thirds of total voting power. Observers are never members of either
-quorum.
+Permissioned and NPoS modes both assign one consensus vote to every committee
+member. NPoS stake selects and backs the finalized committee; it never weights
+Prepare, Commit, timeout, or certificate votes. A certificate contains at
+least `2f + 1` distinct validators. Observers are never committee members and
+do not contribute to quorum.
 
 Leadership rotates through the entire frozen roster:
 
@@ -104,7 +106,30 @@ start        = H(epoch_seed, height) mod roster_len
 leader(view) = roster[(start + view) mod roster_len]
 ```
 
-Stake controls NPoS admission and voting power, not leader frequency.
+Stake controls NPoS eligibility and backed committee seats, not vote weight or
+leader frequency. The remaining seats use the finalized epoch seed's
+deterministic PRF order.
+
+NPoS epochs contain exactly the configured `3,600` finalized consensus heights.
+Ordinary proposal production remains workload-driven and therefore contributes
+a non-empty block only when user, internal, or autonomous work exists. An
+explicitly armed recovery heartbeat may instead finalize one truly empty block;
+it advances the consensus and epoch height while leaving the non-empty-block
+counter unchanged. Generic block validation accepts that canonical carrier,
+while the local proposal-work gate is responsible for never manufacturing it
+from a clean idle height.
+The old committee authenticates the complete next-epoch roster, proofs of
+possession, equal-vote quorum, seed, and end height in the terminal height
+context before the successor committee can activate. A configured validator
+which is absent from that successor roster participates in the new global
+height only as an observer and cannot sign successor-global consensus traffic.
+Lane authority is independent: the node may sign bounded unfinished
+predecessor sessions and current-height Nexus lane sessions only when that
+session's exact frozen descriptor names its key. A current lane committee need
+not be a subset of the successor global roster. This lets old lane quorums
+finish and independently pinned lane committees keep producing across an epoch
+boundary without granting removed validators successor-global votes or
+requiring global-roster overlap.
 
 ## Shared runtime configuration
 
@@ -136,11 +161,17 @@ caches, and telemetry are also local-only. The DA encoding, chunk geometry, maxi
 and Nexus/AMX commitment are already signed into the `HeightContext`; mutable RBC configuration is
 not a second source of those values.
 
-The signed DA layout must describe every payload up to its advertised maximum. Plain layouts use
-no data or parity shards. RS16 layouts require non-zero data and parity shard counts, an even chunk
-size, and a total stripe width that fits the canonical `u16` representation. `max_chunk_count` must
-accommodate the complete encoded stripe count for `max_payload_size_bytes`. Genesis and every
-derived height context apply the same checked geometry validation, so an unusable layout is rejected
+The signed DA layout must describe every payload up to its advertised maximum.
+Revision 4 requires RS16 with non-zero data and parity shard counts and an even
+chunk size; `Plain` is structurally invalid. `max_chunk_count` must accommodate
+the complete encoded stripe count for `max_payload_size_bytes`. Protocol
+admission caps the signed layout at 16 data shards, 16 parity shards, 32 total
+shards, 256 KiB per chunk, 16 MiB per canonical payload, and 1,024 encoded
+chunks. The complete encoded maximum, including parity, is capped at 32 MiB;
+pre-manifest orphan acquisition uses the same byte ceiling. These bounds keep
+RS16 matrix work and acquisition memory finite even for adversarial but
+arithmetically valid wire values. Genesis and every derived height context
+apply the same checked geometry validation, so an unusable layout is rejected
 before height one rather than stalling proposal production.
 
 A native AMX route plan is capped at 256 total legs including its single coordinator, so a receipt
@@ -152,8 +183,9 @@ For authoritative NPoS validity, `sumeragi_npos_parameters` must exist in commit
 Genesis builders emit it for NPoS chains. VRF scheduling, evidence attribution, and slashing delay
 are read from that committed snapshot; customized node-local fallback values cannot change a
 candidate or follower result. The reserved parameter ID rejects malformed payloads, zero-length
-epochs or VRF windows, windows that do not fit within the epoch, and zero evidence, activation, or
-slashing bounds. An NPoS v2 node that cannot load the committed snapshot fails closed.
+epochs or VRF windows, windows that reach or exceed the epoch boundary, and zero evidence,
+activation, or slashing bounds. At least one finalized pre-boundary block is therefore reserved
+after the reveal cutoff. An NPoS v2 node that cannot load the committed snapshot fails closed.
 
 ### Authenticated NPoS VRF records
 
@@ -164,6 +196,13 @@ domain-separated `VrfCommit`/`VrfReveal` preimage and verifies it against the si
 in the frozen `HeightContext` roster.  A summary value without its matching proof, a proof replayed
 from another chain/epoch/index, a commitment/reveal mismatch, duplicate signer, or non-canonical
 ordering makes the candidate invalid.
+
+At an epoch boundary, context construction requires the exact authenticated current-epoch record
+already present in finalized pre-state. It revalidates the epoch, frozen seed, roster, window
+geometry, canonical participant order, signatures, VRF proofs, and observation heights before
+mixing the canonically signer-ordered on-time reveals into the immediate successor seed. Missing or
+inconsistent pre-state fails context construction. Boundary-height and late reveals remain useful
+for penalty accounting but cannot alter the already frozen successor seed.
 
 The recorded first-observation height is not covered by the validator signature.  It is therefore
 validated as monotonic admission metadata: a proof absent from committed pre-state must first
@@ -212,22 +251,24 @@ separate reserved progress queue. Thus a valid old-view flood cannot consume the
 needed to form the current QC or TC.
 
 At the local P2P scheduler, authoritative v2 proposals, votes, QCs, timeout votes/certificates,
-and commit-certificate responses use `ConsensusSafety`. This tag is derived after decode and is
-not part of the wire format. It has independent bounded network-actor, per-peer, encrypted-frame,
-deferred-send, inbound-dispatch, and relay-subscriber queues. Auxiliary lane/VRF and retired
-consensus traffic stays on `Consensus`; Torii proxy and genesis bootstrap traffic stays on
-`Control`. An auxiliary or control-plane flood therefore cannot consume safety admission, while
-bounded burst scheduling still gives repair traffic a turn.
+commit-certificate responses, and VRF commit/reveal messages use `ConsensusSafety`. This tag is
+derived after decode and is not part of the wire format. It has independent bounded network-actor,
+per-peer, encrypted-frame, deferred-send, inbound-dispatch, and relay-subscriber queues. Auxiliary
+lane traffic uses `Consensus`; Torii proxy and streaming-control traffic use `Control`. Genesis is
+a local trust-root input and has no peer request/response route. An auxiliary or control-plane flood
+therefore cannot consume safety admission, while bounded burst scheduling still gives repair
+traffic a turn.
 
 The final Sumeragi handoff repeats that source isolation instead of collapsing authenticated
 traffic into one FIFO. Each frozen-roster validator has a bounded ingress lane, authenticated
 non-validator sources receive on-demand lanes capped by
 `sumeragi.queues.authenticated_non_validator_sources = H`, and anonymous traffic retains its own
-persistent lane. Each validator owns an ordinary first-message slot, a non-timeout Progress slot,
-a distinct signer-bounded TimeoutVote slot, and a TransportCompletion slot. Each materialized
-authenticated non-validator lane owns a generic slot and a TransportCompletion slot; the anonymous
-lane owns the same pair for a non-empty roster. Configuration must therefore provide at least
-`4 * roster_len + 2 * H + 2` slots, or `2 * H + 1` for the no-roster diagnostic geometry, and body
+persistent lane. Each validator owns an ordinary first-message slot, an ordinary Progress slot,
+a certified-fence-escape slot, a distinct signer-bounded TimeoutVote slot, and a
+TransportCompletion slot. Each materialized authenticated non-validator lane owns a generic slot,
+a certified-fence-escape slot, and a TransportCompletion slot; the anonymous
+lane owns only the generic and TransportCompletion pair for a non-empty roster. Configuration must therefore provide at least
+`5 * roster_len + 3 * H + 2` slots, or `3 * H + 1` for the no-roster diagnostic geometry, and body
 bytes must isolate `(roster_len + H + 1) * body_source_bytes`. A semantic duplicate carrying an
 alternate authenticated reply route attaches to its existing request before the new-lane `H` gate
 is evaluated. Exact-output route capacity remains the independent effective
@@ -240,11 +281,20 @@ successor roster, and reopens only after WAL replay. A Byzantine validator or a 
 non-roster identities therefore cannot indefinitely exclude an honest retransmission at the
 production ingress boundary.
 
+A proof-carrying `LaneHistoricalRecoveryResponse` is the only completion whose
+semantic origin may belong solely to a predecessor roster. It consumes that
+authenticated hop's bounded `H` TransportCompletion owner and bytes; the lane
+adapter accepts it only for an outstanding exact request and a responder named
+by the frozen historical CommitQC or READY certificate. Other DA completions
+still require a current-roster semantic origin.
+
 Removal from that fair ingress is conditional on the exact next queue. A reducer-directed head
 remains in its source lane unless the single runtime FIFO has room in that payload's Normal or
 Progress prefix. TimeoutVote, Commit votes, QCs, TCs, payload chunks, certified-body requests and
-responses, and Commit-certificate requests and responses all receive outer Progress ownership;
-TimeoutVote keeps its distinct signer-bounded reservation. A commit-certificate response is also
+responses, and Commit-certificate requests and responses all receive outer Progress ownership.
+TC, direct CommitQC, and a Commit-certificate response carrying CommitQC additionally use the
+isolated certified-fence-escape count and byte owner; TimeoutVote keeps its distinct signer-bounded
+reservation. A commit-certificate response is also
 charged to runtime Progress because successful authentication unwraps it into a CommitQC. A
 current-height certified-body request remains queued until the ordered I/O FIFO has room in its
 authenticated service prefix. One dequeue attempt examines at most one head from every ready
@@ -253,6 +303,99 @@ message, so a blocked Normal head cannot hide later progress that still fits its
 full unsuccessful scan restores the ready order. The capacity check, fair rotation, and removal
 occur under the ingress lock, and the runner is the sole downstream producer, so an admitted head
 cannot become a pop-then-drop race between queues.
+
+Restart keeps a productive leader-wire lifecycle's immutable logical token but not its volatile
+queue position. Its exact retransmission therefore receives a fresh physical carrier after the
+restored admission high-water mark. Equality between token admission and carrier admission
+identifies a fresh lifecycle and receives no recovery authority. A direct authenticated TC or
+CommitQC whose token is strictly older than its carrier may enter the isolated certified prefix;
+the already-frozen absolute timeout still executes first. A Commit-certificate response has no
+productive leader-wire token of its own and follows its ordinary authenticated projected-CommitQC
+path.
+
+TimeoutVote service uses a separate finite producer episode. The absolute timeout first persists
+and dispatches its exact `BeginTimeout` owner `T`, freezing one TimeoutVote slot for every
+authenticated roster source. Every restart-dormant token is restored into the shared ordinal source
+before `T`. A pre-cut owner below `T` is rank descent: its original carrier has token admission equal
+to physical admission and strictly below the frozen physical cut; a restored token remains below
+that cut while its new carrier is at or above it. A first post-cut token above `T` may instead
+increase the collected-vote count once for its frozen source slot; its equal token/carrier admission
+is at or above the cut. This replenishment is not itself protocol progress. Runtime admission
+projects those cases as exact `0→1` first admission, `1→1` same-owner coalescence, or `0→0`
+non-candidate service, and rejects a different token or carrier for an occupied slot before reducer
+refinement. A best-effort retransmit already frozen below `T` is atomically superseded by the
+successful timeout transition. Fresh post-timeout retransmits remain enabled above `T` but cannot
+take precedence over the finite vote episode. TimeoutVotes stay in ordinary Progress capacity,
+receive no certified-fence credit or signature-fence authority, and retained terminals prevent
+resurrection. The inclusive `<= T` completion prefix separately admits the timeout signer's callback
+while an older transport response is retained; completions from fresh roots above `T` remain
+excluded.
+
+The serialized runtime FIFO has physical capacity `C`, Progress reserve `P`, and Completion reserve
+`K`. Ordinary Normal work is bounded by `C-P-K-1`, ordinary non-Completion work by `C-K-1`, and all
+ordinary work by `C-1`. The remaining physical slot is credited to at most one queued authenticated
+TC, CommitQC, or `CommitCertificateResponse` carrying a CommitQC root; additional certificates consume ordinary Progress capacity. The credit is
+derived from the immutable queued command, so a certificate which arrives before ordinary work
+cannot make later Completion work lose any of the `K` reserved positions. The same accounting is
+used by direct Completion admission and by the reserved `BodyAvailable` handoff. Publishing an
+unmaterialized `BodyAvailable` reservation atomically retires every queued Proposal which conflicts
+with that canonical body; capacity is never computed against the post-retirement queue while the
+conflicting commands remain live.
+
+If a process stops after the stage-7 `BodyAvailable` producer reservation is durable but before its
+runtime handoff, restart restores the same logical lifecycle key and first-admission ordinal without
+claiming a dormant FIFO position: the body bytes are still volatile. A fresh exact `FetchBody`
+reconstruction reacquires those bytes, and its `BodyAvailable` completion spends exactly one new
+physical Completion position. An exact retry reuses that unpublished position, and the completed
+handoff removes the durable stage-7 record so a later restart cannot resurrect the consumed stage.
+Specifically, claiming the restored reservation marks the pending handoff as volatile: it neither
+stores a durable producer terminal nor advertises durable terminal evidence. Acknowledgement keeps
+the exact process-local terminal, persists removal of the durable producer reservation, and only
+then clears the restored-handoff metadata. A second same-height restart therefore has no stage-7
+producer record to reopen.
+
+Terminal supersession before reducer service uses the same persistence boundary. Before an
+unpublished or materialized restored `BodyAvailable` owner can be removed, the runtime extracts
+one exact `(causal lifecycle key, first-admission ordinal, producer stage 7)` tuple from the sole
+serialized owner. The adapter accepts only the matching Reserved, volatile-body record which is
+present in its process, durable, and restart-dormant indexes and has no deferred or pending-handoff
+alias. It removes all three records and persists the new producer table before the runtime releases
+the Completion token or queued command. A persistence failure restores all three in-memory records
+and leaves the volatile runtime owner intact while the runtime fails closed. This ordering applies
+to exact `BodyAvailable` retirement and whole body-pipeline retirement. The same transaction covers
+producer reservations attached to Busy-deferred work: every exact process and durable alias is
+validated, the complete producer-release batch is persisted, and only then may the deferred queues
+lose their owners. Duplicate addresses, a missing Busy owner, or a failed store leaves both the
+queue and all producer maps unchanged. None of those paths can leave a crash window in which the
+runtime owner is gone but a second restart resurrects its producer.
+
+A restored `FetchBody` may also become terminal before it has bytes with which to reserve a
+`BodyAvailable` token. Restart deliberately gives that Fetch a fresh physical runtime lifecycle, so
+its volatile ownership cannot claim the old producer key. After the runtime proves the exact Fetch
+effect binding, the adapter resolves its persisted route-neutral `(context, height, round, subject)`
+coordinates; a supplied manifest must reproduce the complete serviced-candidate identity, while a
+manifest-less fetch may select only one unique dormant stage-7 record. The adapter persists that
+record's retirement before the pending Fetch or certified-request owner is released. The absence of
+an unpublished Completion token is therefore not permission to leave its restart-dormant parent
+behind.
+
+Restart performs an additional producer-frontier reconciliation after safety-WAL replay and before
+runtime capacity is installed. Current-view Reserved producers remain eligible. Older-view Reserved
+records are persistently pruned unless they are one of the four exact body-pipeline stages
+(`LocalProposalReady`, `BodyAvailable`, `BodyStored`, or `ValidationCompleted`) for the durable
+protected lock's proposal view and subject. Future-view Reserved records or inexact
+process/durable/dormant aliases fail closed. This cut is restart-only: a live `EnterView` cannot
+erase an older producer while its process owner may still be completing the explicit handoff.
+
+A certified-body response retained after retryable backpressure owns one finite certificate-escape
+episode. The episode starts `Fresh`, or `Charged` when a certificate already owns the physical
+credit. `Fresh` may admit one new authenticated TC/CommitQC root (including the exact response
+wrapper); `Charged` drains the already-owned
+certificate prefix without admitting a replacement, and becomes `Spent` when the last credit
+disappears while Completion admission remains closed. `Spent` cannot reset until the exact response
+retires. The runner still services one already-owned pacemaker root on every retry, but fresh
+network certificates cannot replenish the same physical credit forever and starve the retained
+Completion handoff.
 
 Trusted completion admission has a matching finite invariant. The shared configuration bounds
 outstanding asynchronous effect work by the runtime completion reserve. The ordered I/O worker has
@@ -349,7 +492,7 @@ broadcast does not loop back to the sender.
 
 A TimeoutCertificate contains individually verifiable votes, optionally aggregated in groups that
 reported the same high QC. Groups are canonically sorted, their signer sets are disjoint, and their
-union satisfies both quorums. The deterministic maximum valid PrepareQC is selected across every
+union contains at least `2f + 1` committee members. The deterministic maximum valid PrepareQC is selected across every
 group. A TC is persisted before entering the next view and any validator may form and rebroadcast
 it; there is no correctness-critical collector.
 
@@ -399,19 +542,51 @@ on a correctness-critical collector.
 ## Payload availability
 
 PrepareQC replaces global RBC READY and DELIVER as the consensus availability certificate. INIT,
-deterministic erasure chunks, repair, the persistent payload store, certified body fetch, and block
-sync remain transport mechanisms. Chunk signatures bind epoch, height, view, context, parent,
-subject, payload root, encoding, chunk index, and total chunk count, preventing replay or mixed
+deterministic erasure chunks, repair, certified body fetch, and block sync remain transport
+mechanisms. Authenticated partial shards are retained only in bounded memory and are reacquired
+after restart; once reconstruction succeeds, the exact canonical body crosses the durable body-store
+boundary before validation or voting. This avoids a durability barrier per shard without weakening
+the full-body voting gate. Chunk signatures bind epoch, height, view, context, parent, subject,
+payload root, encoding, chunk index, and total chunk count, preventing replay or mixed
 reconstruction.
 
-Lane-local work is released only after the reducer installs a PrepareQC lock for one exact global
-body. Validators reconstruct the lane proposals from that durable body and then form lane
-Prepare/Commit certificates asynchronously; a losing or merely advertised global proposal cannot
-advance a lane. Global application therefore does not wait for the lane CommitQC. Before the next
-lane-local height becomes eligible, Kura must durably hold the exact lane certificate and either an
-application receipt bound to the canonical global block and its transaction results while those
-results are retained, or the exact hash-only snapshot anchor after compaction. Restart repairs the
-narrow full-body certificate-before-receipt crash boundary from those canonical artifacts.
+A checksummed validation-marker file is never restart authority by itself. Startup quarantines all
+recovered markers, reloads their exact signed bodies, and reproduces each execution commitment with
+the production deterministic validator before the serialized runtime can restore Prepare or Commit
+authority. Reproposal aliases of one exact body share one execution pass but retain independently
+checked round-local bindings. If Kura already crossed the commit boundary, its cryptographically
+verified finality artifact authenticates the exact subject and execution commitment instead of
+replaying the candidate against an advanced world state. A substituted marker, mismatched
+commitment, missing semantic dependency, or caller that skips this preflight fails closed before
+network ingress.
+
+The view projection partitions the bounded committee into Set A (`2f + 1`
+members, with the leader first and proxy tail last) and Set B (`f` members).
+Proposal control reaches the full committee, while the initial RS16 chunk
+fanout targets Set A. Prepare and Commit votes reach the full committee, so any
+validator can aggregate and broadcast the QC without making one projected
+collector a liveness dependency. If the fast path does not complete,
+retransmission expands chunks to Set B; any `2f + 1` equal votes form the QC.
+Committee-wide timeout votes form a TC and cyclically rotate all roles. Every
+voter must reconstruct, durably store, and deterministically validate the full
+exact body before Prepare.
+
+The reducer may bind and durably reconstruct lane proposals after a PrepareQC
+locks one exact global body, but no current-height lane Prepare, Commit, QC, or
+NewView signature is admitted or emitted until the reducer installs the exact
+global Decision. This prevents a lane certificate for a locally locked carrier
+from conflicting with a later higher-view global Decision. After Decision,
+validators form the winning lane certificates asynchronously; a losing or
+merely advertised global proposal cannot advance a lane. Global application
+and successor activation do not wait for the lane CommitQC. Exact unfinished
+sessions, safety locks, payload cursors, recovery ownership, and bounded
+retransmission state move once into the successor and continue there as
+historical work. Before a later block may consume the next lane-local height,
+Kura must durably hold the exact lane certificate and either an application
+receipt bound to the canonical global block and its transaction results while
+those results are retained, or the exact hash-only snapshot anchor after
+compaction. Restart repairs the narrow full-body
+certificate-before-receipt crash boundary from those canonical artifacts.
 
 Native AMX gives every participant leg a genuine lane-local finality object. Planning groups all
 AMX sources touching the same active lane slot into one canonical, non-empty participant proposal;
@@ -480,6 +655,16 @@ remains available until that evidence is durable. After body pruning, validation
 QC-authenticated manifest root and proof; old hash-only evidence remains blocked unless the
 canonical wire is recovered from authenticated storage or QC signers.
 
+Every revision-4 execution commitment also carries the mandatory `merge_carrier` option. Ordinary
+blocks encode it explicitly as JSON `null` (and as the canonical absent Option tag in Norito).
+A merge carrier encodes the closed V1 object `{version: 1, entry_hash}`, where `entry_hash` is the
+canonical hash of the complete merge-ledger entry. Missing options, unsupported versions,
+malformed hashes, and unknown object fields are rejected; there is no revision-3 omission fallback.
+Immediately after that option, the commitment carries mandatory non-zero
+`executed_block_wire_len: u64` followed by `executed_block_wire_hash`. Validators reject a missing
+or zero length; the pair binds the exact byte length and digest of the canonical result-bearing
+block wire, with no implicit legacy default.
+
 The standalone manifest and receipt histories use the configured Kura sidecar-retention count and
 the existing shared Native sidecar aggregate-byte budget, with one bounded transient publication
 slot. Compaction first fsyncs a versioned prune intent bound to lane, dataspace, incarnation, and
@@ -513,8 +698,11 @@ producer or different payload for the same slot is rejected.
 
 Hint-free means “awaiting its carrier,” not independently executable. The global leader may include
 the exact autonomous envelope in its candidate; until the resulting global lock supplies that
-anchor, validators keep the payload in the bounded pending set and release no READY vote. After the
-lock, Kura persists the same payload and execution input before READY/Prepare/Commit can advance.
+anchor, validators keep the payload in the bounded pending set. The lock lets
+Kura persist the exact payload and execution input, but READY, lane
+Prepare/Commit, and autonomous NewView remain quiescent until the same carrier
+has the exact global Decision. After Decision those phases use only the
+persisted bytes and immutable origin proposal.
 If the scheduled author is unavailable, the runner waits only for the configured bounded interval
 and then permits ordinary carrier execution; it does not let another committee member replace the
 author or reservation claim. The separate globally planned compatibility path carries no autonomous
@@ -561,8 +749,9 @@ identity that conflicts with the canonical recovered proposal stops rollover bef
 successor reapplies its configured ordinary-session bound without evicting protected commit evidence.
 Ephemeral NewView votes and timeout markers do not cross that boundary; the successor fully
 revalidates the durable cursor chain and latest certificate from Kura. Historical shared-lane
-evidence is authenticated with the immutable V2 height-context roster and PoPs stored for its
-original proposal height, never the successor's mutable roster.
+evidence is authenticated with the cryptographically verified V2 finality artifact, roster, and
+PoPs for its original proposal height, never the structural context-recovery store or the
+successor's mutable roster.
 
 Startup enumerates validated autonomous artifacts before reconstructing missing payloads from
 committed global anchors. It filters finalized and inactive work before applying the global session
@@ -581,8 +770,17 @@ lane body and ownership sidecars but WSV commit did not finish, restart does not
 planning. Recovery verifies the canonical block hash, exact ownership sidecars, active route and
 incarnation, QC tag, committee, expected global leader, replay material, and applied-or-snapshot
 predecessor, then still runs the normal complete block validator. Any drift fails closed. Missing
-lane or AMX work is fetched or requeued, and an honest leader can still propose an empty heartbeat
-when no transaction work is ready.
+lane or AMX work is fetched or requeued, and after bounded deferral an honest leader can still
+propose an explicitly armed empty recovery heartbeat.
+
+Fresh global proposal production is workload-driven. The signed block cadence is the earliest
+view-zero proposal time, not an instruction to manufacture a body at every idle height. A leader
+defers before signing or encoding when the bounded queue snapshot, autonomous provider, and
+internal attachments contain no work. Internal work includes enabled, still-reachable time
+triggers which require ledger-clock progress, DA and pin material, previous-roster audit evidence,
+NPoS effects, SCCP commitments, certified merge work, and autonomous lane payloads. An empty body
+therefore remains valid and available only when that internal work requires a carrier or the local
+recovery state explicitly arms a heartbeat after a bounded work deferral or candidate rejection.
 
 Merge-committee certificates are likewise not applied out of band. A complete certificate is
 stored as a hash-addressed Kura sidecar bound to one global height, parent, and view. The matching
@@ -650,10 +848,17 @@ timestamp plus one millisecond. Zero, fractional-millisecond, or overflowing cad
 closed. This hash-only-parent profile is one-shot: after that block finalizes, every later context
 must carry the ordinary parent CommitQC and a snapshot anchor is rejected. A crash before the first
 finality sidecar can reopen only from the original anchor-height snapshot and the exact persisted
-context, safety-WAL decision, body receipt, and validation receipt; it never fetches, signs,
-broadcasts, changes view, or executes an inferred context during recovery. A later snapshot is
-written only after complete commit evidence exists and is not accepted as a recovery root for that
-pre-finality window.
+context, safety-WAL decision, body receipt, and semantically replayed validation
+receipt; it never fetches, signs, broadcasts, changes view, or executes an
+inferred context during recovery. A checksummed marker cannot select itself for
+semantic replay: the authenticated WAL frontier names only the durable
+lock/decision and the adapter's bounded first replay batch. Markers from older
+views retain no restart vote authority and cannot force unbounded synchronous
+execution. If one selected marker needs a certified merge sidecar, startup
+retires that marker authority while retaining the exact body; only later live
+reducer work may enter the existing bounded sidecar-fetch and validation retry
+path. A later snapshot is written only after complete commit evidence exists
+and is not accepted as a recovery root for that pre-finality window.
 
 Before replay mutates WSV, startup preflights the entire requested height range. Every executable
 height must have a locally retrievable canonical body; ordinary finalized body eviction remains
@@ -666,7 +871,7 @@ the exact work identifier is retained rather than converted into a permanent rej
 requests fixed-boundary, hash-addressed chunks only from the merge QC's authenticated signer set,
 validates the canonical full entry against the compact reference and current global order, persists
 it in Kura, and retries the same durable work. Before allocating a fetch, compact-QC preflight
-requires the exact frozen roster, chain digest, hard count/byte caps, dual quorum, canonical signer
+requires the exact frozen roster, chain digest, hard count/byte caps, equal-vote quorum, canonical signer
 PoPs, and a valid aggregate signature. Inbound sessions are keyed by both entry hash and the full
 reference digest, so attacker-first conflicting length or execution metadata cannot poison an
 honest decided body with the same claimed hash. Ordinary validation traffic leaves global and
@@ -802,12 +1007,44 @@ auxiliary proposal origin. Begin, acknowledgement, requested capability, and ind
 reconstructed grant must agree on both origins. Mutating both sides to a different origin is still
 rejected because the pending WAL record remains the authoritative identity.
 
-Height-local I/O retirement uses one bounded control deadline covering queue drain and terminal
-acknowledgement. Cooperative workers are joined immediately; a worker still blocked in an
-OS/HSM/fsync call after the deadline remains owned by the runner's cleanup supervisor and is reaped
-after it finishes. If the worker is still wedged when the runner itself shuts down, its join handle
-is detached instead of blocking shutdown. Finalized height-local files are retained for restart
-reconciliation instead of blocking successor construction or racing cleanup.
+Height-local I/O retirement is a nonblocking control handoff. After the typed
+Kura finality receipt is validated, the context worker consumes its body-store
+owner and tries once to enqueue a combined body/chunk retirement job to one
+bounded runner-lifetime janitor. The consensus thread never joins a running
+context worker or performs recursive filesystem deletion. A full or
+disconnected janitor queue retains the files for startup reconciliation and
+reports a typed warning; it cannot delay successor construction or create an
+unbounded cleanup-thread pool. Finalized-height network output does not enter a detached
+repair domain. Before the successor opens, the serialized runner retries
+responsive targets, proves every remaining fanout reconstructible from Kura and
+the typed finality artifact, atomically seals the exact-output corridor, and
+moves the sole merge-sidecar journal owner into the successor. Backpressured
+autonomous payload and NewView output is discarded only after exact durable
+reconstruction and local retransmit authority are verified. No predecessor
+thread or second journal writer survives the handoff. Finalized height-local
+files are retained for restart reconciliation when cleanup cannot complete,
+and that post-application file cleanup does not delay successor progress.
+The successor responder reserves every current-roster stream plus one complete
+31-validator immediate-predecessor committee. An identity absent from the
+current roster must belong to Kura's exact durable predecessor context before
+it can allocate in that corridor, so arbitrary older identities cannot starve
+predecessor recovery or consume a live-roster slot. Structural, stale-generation,
+duplicate, and per-source rate admission precedes expensive carrier lookup.
+The durable requester-fair materialization scheduler then proves the exact
+finalized carrier and requester membership before emitting bytes; a predecessor
+member may request an older carrier only when it also belongs to that carrier's
+frozen context. On restart, an older same-roster V3 lifecycle snapshot may
+expand monotonically from `N` responder streams to `N + 31`; the persisted
+generation and all stream/gate ownership remain unchanged, while shrinkage is
+rejected. Kura extracts the carrier's compact merge reference while the
+signed body is present and retains it with the canonical header and proposal/
+executed-wire hashes. Local body eviction therefore cannot remove bounded
+serving authority. The retained reference is not standalone consensus
+evidence: the recipient still verifies the exact reference and merge QC against
+its own canonical carrier. Kura continues to decode canonical version-2
+retained records. Such a record never invents the field it predates; when its
+exact body is still local, the mandatory pre-eviction persistence path
+atomically upgrades it to version 3 before any body bytes can be discarded.
 
 Runtime-ingress and Busy-deferred body completions share one exact ownership
 domain. Deferred work retains its full manifest and durable/validated receipt,
@@ -826,18 +1063,53 @@ commitment-bearing evidence is rejected before serialized runtime ownership.
 Body-availability rebind requires the reducer's installed destination tag and
 preflights both source and destination ownership before mutation. One exact
 source moves to an empty destination or coalesces into one exact destination
-owner. An uninstalled destination tag is a recoverable caller-contract
-rejection with no mutation; conflicting or duplicate ownership fails closed
-without a partial move. Body-pipeline and Decision retirement likewise
+owner. Coalescence first classifies persistent producer backing on both sides.
+If only the source is persistent, the ordinary destination is retired and the
+persistent source is retagged; if only the destination is persistent, source
+ownership is validated against the already-persistent destination before the
+ordinary volatile source disappears. Two
+independent persistent roots fail closed before either side changes. Thus one
+persistent root always survives a successful coalescence. An uninstalled
+destination tag is a recoverable caller-contract rejection with no mutation;
+conflicting or duplicate ownership fails closed without a partial move. If a
+certified response has already reserved an
+unpublished `BodyAvailable` position when its service handoff returns typed
+`Retryable`, a protecting `EnterView` retags that same physical token together
+with its `PendingFetch`. The token keeps its admission ordinal, lifecycle
+owner, exact manifest, and restart backing; a later retry can publish exactly
+once at the installed incarnation instead of colliding with its old-view
+owner. That exact retry reclaims the already charged token before consulting
+the reducer's new-view admission projection, which may legitimately differ
+after `EnterView` but has no authority to remint the physical slot.
+Body-pipeline and Decision retirement likewise
 preflight all ingress and Busy-deferred owners transactionally before removing
-any of them.
+any of them. Retiring a pending fetch also retires its exact unpublished
+`BodyAvailable` token before releasing the request and pipeline owner; a TC
+which protects another body or carries no body lock therefore cannot leave an
+old-view Completion slot permanently occupied. If that token or a queued
+completion replaces a restart-restored stage-7 producer, any required durable
+producer removal is persisted before its runtime lane is changed. A failed
+store rolls the producer maps and dormant index back and therefore cannot
+partially coalesce or partially retire a body pipeline.
+
+The generic productive leader-wire lifecycle gate advances from the same
+durable safety frontier. After a certified `EnterView`, and again after the
+first durable Decision, the service derives a monotone process-local recovery
+authority. While holding the fair-ingress mirror lock it asks the persistent
+gate to remove exactly the obsolete restart-dormant slots, publishes that
+snapshot first, and only then removes the same mirror records. Persistence
+failure restores the prior gate state and leaves the mirror untouched. Live
+Ingress and Runtime owners are never pruned by this cut, admission rejects an
+identity below the durable view (or every identity after Decision), and both
+admission-ordinal high-watermarks survive retirement so the freed slot cannot
+resurrect an old identity or reuse an ordinal.
 At the transport boundary, a locally conflicting certified-body request is a
 nonfatal remote rejection, while a conflicting Commit-certificate response
 leaves discovery outstanding and retryable through another authenticated peer.
 
-The production `SumeragiWorker` dispatches Sumeragi-v2 wire revision 3 directly
+The production `SumeragiWorker` dispatches Sumeragi-v2 wire revision 4 directly
 to the serialized height runner; it never executes the legacy actor under a
-revision-3 handshake. For every height the runner replays context and WAL state before
+revision-4 handshake. For every height the runner replays context and WAL state before
 opening ingress, drains all tagged effects, validates the typed Kura receipt
 against the exact finality artifact, and only then builds the successor
 context. WAL, body, chunk, or cleanup-worker retirement after that durability
@@ -848,7 +1120,7 @@ prevent successor-height progress.
 ## Correctness claim and trusted boundary
 
 Safety assumes authenticated signatures, collision-resistant hashes, deterministic validation,
-fewer than one-third Byzantine validators by count and voting power, and faithful durable-write
+at most `f` Byzantine validators in the `3f + 1` committee, and faithful durable-write
 acknowledgements. The safety properties are agreement, chain-prefix finality, external validity,
 vote uniqueness, crash/restart lock preservation, epoch isolation, and durable availability of a
 decided body.
@@ -856,7 +1128,7 @@ decided body.
 Liveness is a conditional target because an asynchronous network cannot guarantee termination. The
 paper argument assumes that, after GST:
 
-- more than two-thirds by count and power are correct and responsive;
+- at least `q = 2f + 1` frozen committee members are correct and responsive;
 - authenticated per-source messages and retransmissions are serviced within the declared transport
   bound;
 - the monotonic clock and serialized run loop continue, with timeout priority, FIFO debt, and
@@ -865,16 +1137,25 @@ paper argument assumes that, after GST:
   ticks coalesce and an untrusted normal-message flood cannot discard an already emitted timeout;
 - body transfer, reconstruction, validation, signing, certificate formation, application, and
   fsync terminate within the declared service bounds;
+- an honest leader can construct a deterministically valid non-empty proposal
+  from available user or internal work, or an empty carrier from explicitly
+  armed recovery-heartbeat work;
 - correct nodes eventually recover with intact WAL state;
-- an honest leader recurs within one roster rotation; and
-- honest Prepare signers continue serving their durable bodies.
+- an honest leader recurs within one roster rotation;
+- honest Prepare signers continue serving their durable bodies; and
+- enough honest members of every unfinished predecessor lane committee remain
+  running and responsive to satisfy that descriptor's frozen threshold until
+  its exact lane evidence is durable, even when those members are absent from
+  the successor global roster.
 
 Under those assumptions, the paper argument derives that failed views lead to a TC, rotation
 reaches an honest leader, and a safe round forms PrepareQC and CommitQC. Every responsive correct
 node independently persists the exact decision, fetches and validates the certified body, applies
 it, and advances its local certified prefix; no global all-node application barrier is required.
 FLP is the reason these post-GST premises are explicit. This targets consensus-height progress,
-including a valid empty heartbeat, not transaction-inclusion fairness or censorship resistance.
+when a valid non-empty proposal or armed recovery-heartbeat carrier is
+available, not idle-height production, transaction-inclusion fairness, or
+censorship resistance.
 
 Ten arbitrary-context Core safety wrappers are TLAPS-proved. This includes historical TC-lock
 Commit authorization, the dependent direct-or-installed-authorization timeout wrapper, and the
@@ -900,11 +1181,12 @@ The production paths described above are implemented behavior, not a release
 attestation. The multilane gates remain open until fresh artifacts pass for
 focused/adversarial unit coverage; source-bound TLC and Apalache positives plus
 every expected mutation; unskipped four-peer DA/RBC lifecycle suites; 10/10
-twelve-peer corridor seeds and the two-hour fault soak; cross-SDK parity;
+13-peer global corridor seeds (twelve lane validators) and the two-hour fault
+soak; cross-SDK parity;
 five paired pinned-hardware one-versus-four-lane scaling runs; and the
 prescribed locked/offline full-workspace build, test, strict Clippy,
 formatting, and legacy-codec checks. This document makes no claim that those
-four-peer, twelve-peer, soak, scaling, or full-workspace runs have passed.
+four-peer, 13-peer global, soak, scaling, or full-workspace runs have passed.
 
 ## Taira profile
 

@@ -4,7 +4,7 @@ use ivm::{IVMHost, syscalls};
 fn build_env(public_input_len: usize) -> Vec<u8> {
     let envelope = OpenVerifyEnvelope::new(
         BackendTag::Halo2IpaPasta,
-        ivm::host::LABEL_TRANSFER,
+        ivm::host::LABEL_VOTE_BALLOT,
         [1; 32],
         vec![1; public_input_len],
         vec![2, 3, 4],
@@ -37,7 +37,7 @@ fn default_host_fails_closed_for_canonical_input_size_matrix() {
         let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
         vm.set_register(10, ptr);
         let _ = host
-            .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
+            .syscall(syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
             .expect("syscall ok");
         assert_eq!(vm.register(10), 0);
         assert_eq!(

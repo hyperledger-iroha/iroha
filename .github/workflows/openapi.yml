@@ -5,6 +5,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - ".cargo/config.toml"
       - ".github/workflows/openapi.yml"
       - "Cargo.lock"
       - "Cargo.toml"
@@ -42,6 +43,7 @@ on:
   push:
     branches: [main]
     paths:
+      - ".cargo/config.toml"
       - ".github/workflows/openapi.yml"
       - "Cargo.lock"
       - "Cargo.toml"
@@ -82,13 +84,30 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  binding-parity:
+    name: Complete Norito binding parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - name: Run Python, Java, and Kotlin parity with no capability skips
+        run: bash ci/check_norito_bindings_sync.sh
+
   metadata:
     name: OpenAPI metadata and release tooling
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -98,10 +117,6 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: tools/openapi/package-lock.json
-      - name: Provision the pinned ignored OpenAPI Cargo lock
-        run: node tools/openapi/scripts/provision-openapi-cargo-lock.mjs
-      - name: Verify Cargo lock provisioning keeps the checkout clean
-        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - name: Install the deterministic OpenAPI dependency graph
         working-directory: tools/openapi
         run: npm ci --ignore-scripts --no-audit --no-fund
@@ -118,6 +133,7 @@ jobs:
           node --test
           tools/openapi/scripts/__tests__/sync-openapi.test.mjs
           tools/openapi/scripts/__tests__/verify-openapi-versions.test.mjs
+          tools/openapi/scripts/__tests__/verify-musubi-v1-contract.test.mjs
           tools/openapi/scripts/__tests__/check-openapi-signatures.test.mjs
           tools/openapi/scripts/__tests__/openapi-manifest-v2.test.mjs
           tools/openapi/scripts/__tests__/openapi-release-inputs.test.mjs
@@ -139,10 +155,8 @@ jobs:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: always
-      CARGO_TARGET_DIR: target/openapi-ci
       NORITO_SKIP_BINDINGS_SYNC: "1"
       OPENAPI_REQUIRE_SIGNED: "0"
     steps:
@@ -152,13 +166,20 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "24"
-      - name: Provision the pinned ignored OpenAPI Cargo lock
-        run: node tools/openapi/scripts/provision-openapi-cargo-lock.mjs
-      - name: Verify Cargo lock provisioning keeps the checkout clean
+          cache: npm
+          cache-dependency-path: tools/openapi/package-lock.json
+      - name: Validate the pre-existing pinned OpenAPI Cargo lock
+        run: |
+          repo_root="$(pwd -P)"
+          node tools/openapi/scripts/provision-openapi-cargo-lock.mjs pin \
+            --source="${repo_root}/Cargo.lock" \
+            --check="${repo_root}/release/openapi-cargo-lock-v1.txt"
+      - name: Verify Cargo lock validation keeps the checkout clean
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          cache-on-failure: "true"
-          shared-key: torii-openapi
+      - name: Install the deterministic OpenAPI dependency graph
+        working-directory: tools/openapi
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Regenerate and verify canonical OpenAPI artifacts
         run: bash ci/check_openapi_spec.sh
+      - name: Regenerate Android bindings twice from the pinned commit
+        run: bash ci/check_android_codegen.sh

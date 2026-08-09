@@ -75,8 +75,8 @@ def complete_args(tmp_path: Path) -> list[str]:
         str(write_payload(payload_dir / "dashboard-api.json")),
         "--observability-evidence",
         str(write_payload(payload_dir / "observability.json")),
-        "--ipfs-ipns-e2e-evidence",
-        str(write_payload(payload_dir / "ipfs-ipns-e2e.json")),
+        "--publication-e2e-evidence",
+        str(write_payload(payload_dir / "publication-e2e.json")),
         "--governance-approval-evidence",
         str(write_payload(payload_dir / "governance-approval.json")),
     ]
@@ -129,24 +129,43 @@ def test_dry_run_prints_complete_governance_dag_rollout_plan(
     assert plan["evidence_contract"]["publisher_service"]["schema"] == (
         "sorafs.governance_dag.publisher_service_canary.v1"
     )
-    assert (
-        "ipfs_cluster_pinning_enabled"
-        in plan["evidence_contract"]["publisher_service"]["required_payload_fields"]
-    )
+    publisher_fields = plan["evidence_contract"]["publisher_service"][
+        "required_payload_fields"
+    ]
+    assert "kubo_unixfs_profile" in publisher_fields
+    assert "strong_single_etag_verified" in publisher_fields
+    assert "ingress_enforcement" in publisher_fields
+    assert "replay_posture" in publisher_fields
     assert (
         "policy_digest_hex"
         in plan["evidence_contract"]["publisher_service"]["required_payload_fields"]
     )
     assert (
-        "rocksdb_ipld_enabled"
+        "sealed_typed_store_enabled"
         in plan["evidence_contract"]["mirror_datastore"]["required_payload_fields"]
     )
     assert (
-        "public_head_resolved"
-        in plan["evidence_contract"]["ipfs_ipns_e2e"]["required_payload_fields"]
+        "retention_max_entries"
+        in plan["evidence_contract"]["mirror_datastore"]["required_payload_fields"]
+    )
+    assert (
+        "fresh_checkpoint_coherent_reads_verified"
+        in plan["evidence_contract"]["dashboard_api"]["required_payload_fields"]
+    )
+    assert (
+        "audit_max_bytes_per_poll"
+        in plan["evidence_contract"]["observability"]["required_payload_fields"]
+    )
+    assert (
+        "signed_http_head_resolved"
+        in plan["evidence_contract"]["publication_e2e"]["required_payload_fields"]
     )
     assert (
         "iroha_config_bound"
+        in plan["evidence_contract"]["governance_approval"]["required_payload_fields"]
+    )
+    assert (
+        "replay_namespace_digest_hex"
         in plan["evidence_contract"]["governance_approval"]["required_payload_fields"]
     )
     assert [step["label"] for step in plan["steps"]] == ["rollout_evidence_gate"]
@@ -158,6 +177,41 @@ def test_dry_run_prints_complete_governance_dag_rollout_plan(
     assert verifier.count("--require-kind") == len(MODULE.DEFAULT_REQUIRED_KINDS)
     assert "--max-pin-lag-secs" in verifier
     assert "--now-unix" in verifier
+
+
+def test_retired_ipns_kind_and_flag_are_rejected(tmp_path: Path, capsys) -> None:
+    assert (
+        MODULE.main(
+            [
+                "--out-dir",
+                str(tmp_path / "evidence-kind"),
+                *topology_args(tmp_path),
+                "--require-kind",
+                "ipfs_ipns_e2e",
+                "--dry-run",
+            ]
+        )
+        == 2
+    )
+    assert "unknown required evidence kind" in capsys.readouterr().err
+
+    retired = write_payload(tmp_path / "retired-ipns.json")
+    assert (
+        MODULE.main(
+            [
+                "--out-dir",
+                str(tmp_path / "evidence-flag"),
+                *topology_args(tmp_path),
+                "--require-kind",
+                "publication_e2e",
+                "--ipfs-ipns-e2e-evidence",
+                str(retired),
+                "--dry-run",
+            ]
+        )
+        == 2
+    )
+    assert "unrecognized arguments" in capsys.readouterr().err
 
 
 def test_plan_json_shape_is_validated(tmp_path: Path) -> None:

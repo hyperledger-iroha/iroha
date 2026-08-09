@@ -3299,11 +3299,13 @@ impl<'a> CstAstLowerer<'a> {
             result
         } else if self.peek(TokenKind::LParen) {
             if let Some(message) = removed_free_helper_message(&name) {
-                return Err(self.coded_error(
-                    ident_token,
-                    removed_free_helper_code(&name),
-                    message,
-                ));
+                let mut error =
+                    self.coded_error(ident_token, removed_free_helper_code(&name), message);
+                if let Some(replacement) = retired_trigger_alias_replacement(&name) {
+                    error.range = name_range;
+                    error.fix = Some(replacement.to_owned());
+                }
+                return Err(error);
             }
             self.bump();
             let parameter_names = self.call_parameter_names(&name, false);
@@ -4585,6 +4587,12 @@ fn removed_method_helper_code(name: &str) -> &'static str {
 
 fn removed_free_helper_message(name: &str) -> Option<&'static str> {
     match name {
+        "ledger::trigger::create" => Some(
+            "`ledger::trigger::create` is not part of Kotodama V1; use `ledger::trigger::register`",
+        ),
+        "ledger::trigger::remove" => Some(
+            "`ledger::trigger::remove` is not part of Kotodama V1; use `ledger::trigger::unregister`",
+        ),
         "json::set_i64" | "json::set_int" => Some(
             "scalar JSON setters are not part of Kotodama V1; use native `json { key: value }` construction so adaptive-width int values remain exact",
         ),
@@ -4656,7 +4664,9 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
 }
 
 fn removed_free_helper_code(name: &str) -> &'static str {
-    if matches!(
+    if retired_trigger_alias_replacement(name).is_some() {
+        "E_RETIRED_TRIGGER_ALIAS"
+    } else if matches!(
         name,
         "json::set_i64"
             | "json::set_int"
@@ -4694,6 +4704,14 @@ fn removed_free_helper_code(name: &str) -> &'static str {
         "E_LEGACY_JSON_GETTER"
     } else {
         "K1001"
+    }
+}
+
+fn retired_trigger_alias_replacement(name: &str) -> Option<&'static str> {
+    match name {
+        "ledger::trigger::create" => Some("ledger::trigger::register"),
+        "ledger::trigger::remove" => Some("ledger::trigger::unregister"),
+        _ => None,
     }
 }
 
@@ -5552,6 +5570,32 @@ mod tests {
         ] {
             let error = parse(source).expect_err("retired numeric helper must fail closed");
             assert!(error.contains("E_RETIRED_NUMERIC_HELPER"), "{error}");
+        }
+    }
+
+    #[test]
+    fn retired_trigger_aliases_have_exact_canonical_fixes() {
+        for (retired, replacement) in [
+            ("ledger::trigger::create", "ledger::trigger::register"),
+            ("ledger::trigger::remove", "ledger::trigger::unregister"),
+        ] {
+            let text = format!("fn main(Json value) {{ {retired}(value); }}");
+            let source = SourceFile::new(SourceId(7), "retired-trigger.ko", &text);
+            let bundle = parse_source(&source, FrontendBudget::v1())
+                .expect_err("retired trigger alias must fail closed");
+            let diagnostic = bundle
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "E_RETIRED_TRIGGER_ALIAS")
+                .expect("retired trigger alias diagnostic");
+            let fix = diagnostic.fix.as_ref().expect("machine-applicable fix");
+            let range = fix.span.byte_range.expect("exact source range");
+            assert_eq!(&text[range.start as usize..range.end as usize], retired);
+            assert_eq!(fix.replacement, replacement);
+
+            let mut repaired = text.clone();
+            repaired.replace_range(range.start as usize..range.end as usize, &fix.replacement);
+            parse(&repaired).expect("canonical replacement must parse");
         }
     }
 
@@ -6452,7 +6496,7 @@ mod tests {
     }
 
     fn sample_asset_definition_literal() -> String {
-        iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         )
@@ -6496,167 +6540,7 @@ mod tests {
         assert_eq!(filter.matchers[0].value, asset_definition);
     }
 
-    #[test]
-    fn parse_trigger_decl_with_structured_data_filters_for_core_families() {
-        let account = sample_account_literal();
-        let peer =
-            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D".to_string();
-        let domain = "wonderland".to_string();
-        let asset_definition = sample_asset_definition_literal();
-        let nft = "n0$wonderland.universal".to_string();
-        let rwa = format!(
-            "{}$wonderland.universal",
-            iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
-        );
-        let trigger = "wake".to_string();
-        let role = "auditor".to_string();
-        let asset = {
-            let account_id = iroha_data_model::account::AccountId::parse_encoded(&account)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .expect("account");
-            let definition_id: iroha_data_model::asset::AssetDefinitionId =
-                asset_definition.parse().expect("asset definition");
-            iroha_data_model::asset::AssetId::new(definition_id, account_id).canonical_literal()
-        };
-
-        let cases = vec![
-            (
-                TriggerDataFamily::Peer,
-                "added",
-                vec![("peer".to_string(), peer)],
-            ),
-            (
-                TriggerDataFamily::Domain,
-                "created",
-                vec![("domain".to_string(), domain)],
-            ),
-            (
-                TriggerDataFamily::Account,
-                "created",
-                vec![("account".to_string(), account.clone())],
-            ),
-            (
-                TriggerDataFamily::Asset,
-                "added",
-                vec![
-                    ("asset".to_string(), asset),
-                    ("asset_definition".to_string(), asset_definition.clone()),
-                ],
-            ),
-            (
-                TriggerDataFamily::AssetDefinition,
-                "created",
-                vec![("asset_definition".to_string(), asset_definition)],
-            ),
-            (
-                TriggerDataFamily::Nft,
-                "created",
-                vec![("nft".to_string(), nft)],
-            ),
-            (
-                TriggerDataFamily::Rwa,
-                "created",
-                vec![("rwa".to_string(), rwa)],
-            ),
-            (
-                TriggerDataFamily::Trigger,
-                "created",
-                vec![("trigger".to_string(), trigger)],
-            ),
-            (
-                TriggerDataFamily::Role,
-                "created",
-                vec![("role".to_string(), role)],
-            ),
-            (TriggerDataFamily::Configuration, "changed", vec![]),
-            (TriggerDataFamily::Executor, "upgraded", vec![]),
-        ];
-
-        for (family, event, expected_matchers) in cases {
-            let family_literal = match family {
-                TriggerDataFamily::Peer => "peer",
-                TriggerDataFamily::Domain => "domain",
-                TriggerDataFamily::Account => "account",
-                TriggerDataFamily::Asset => "asset",
-                TriggerDataFamily::AssetDefinition => "asset_definition",
-                TriggerDataFamily::Nft => "nft",
-                TriggerDataFamily::Rwa => "rwa",
-                TriggerDataFamily::Trigger => "trigger",
-                TriggerDataFamily::Role => "role",
-                TriggerDataFamily::Configuration => "configuration",
-                TriggerDataFamily::Executor => "executor",
-            };
-            let matcher_block = expected_matchers
-                .iter()
-                .map(|(key, value)| format!("                    {key} \"{value}\";\n"))
-                .collect::<String>();
-            let src = format!(
-                r#"
-                seiyaku C {{
-                    kotoage fn run() authorize("Run") {{}}
-                    trigger wake -> run {{
-                        on data {family_literal} {event} {{
-{matcher_block}                        }}
-                    }}
-                }}
-                "#
-            );
-            let prog = parse(&src).expect("parse trigger decl");
-            let trigger = prog
-                .items
-                .iter()
-                .find_map(|item| match item {
-                    Item::Trigger(t) => Some(t),
-                    _ => None,
-                })
-                .expect("trigger present");
-            let TriggerFilter::Data(TriggerDataFilter::Structured(filter)) = &trigger.filter else {
-                panic!("expected structured data filter");
-            };
-            assert_eq!(filter.family, family);
-            assert_eq!(filter.event, TriggerDataEventKind::Named(event.to_string()));
-            let actual_matchers = filter
-                .matchers
-                .iter()
-                .map(|matcher| (matcher.key.clone(), matcher.value.clone()))
-                .collect::<Vec<_>>();
-            assert_eq!(actual_matchers, expected_matchers);
-        }
-    }
-
-    #[test]
-    fn parse_trigger_decl_with_pipeline_filter() {
-        for (source_filter, expected_filter) in [
-            ("transaction", TriggerPipelineFilter::TransactionApproved),
-            (
-                "transaction approved",
-                TriggerPipelineFilter::TransactionApproved,
-            ),
-            ("block", TriggerPipelineFilter::BlockApproved),
-            ("block approved", TriggerPipelineFilter::BlockApproved),
-        ] {
-            let src = format!(
-                r#"
-            seiyaku C {{
-                kotoage fn run() authorize("Run") {{}}
-                trigger wake -> run {{
-                    on pipeline {source_filter};
-                }}
-            }}
-            "#
-            );
-            let prog = parse(&src).expect("parse trigger decl");
-            let trigger = prog
-                .items
-                .iter()
-                .find_map(|item| match item {
-                    Item::Trigger(t) => Some(t),
-                    _ => None,
-                })
-                .expect("trigger present");
-            assert_eq!(trigger.filter, TriggerFilter::Pipeline(expected_filter));
-        }
-    }
+    include!("parser/tests/trigger_filter_core_families.rs");
 
     #[test]
     fn parse_trigger_decl_rejects_nondeterministic_pipeline_filter() {
@@ -6672,73 +6556,5 @@ mod tests {
         assert!(err.contains("transaction [approved]"));
     }
 
-    #[test]
-    fn parse_koto_test_target_fixture_and_test_binding() {
-        let src = r#"
-        module ContractTests {
-            koto_test { target: "contracts/demo.ko" }
-
-            fixture seeded {
-                caller(AccountId::parse("alice@wonderland"));
-                grant_permission("register_domain");
-            }
-
-            #[test(fixture="seeded")]
-            fn smoke() {}
-        }
-        "#;
-        let prog = parse(src).expect("parse koto_test program");
-        assert_eq!(
-            prog.test_target
-                .as_ref()
-                .map(|target| target.target.as_str()),
-            Some("contracts/demo.ko")
-        );
-        assert_eq!(prog.fixtures.len(), 1);
-        assert_eq!(prog.fixtures[0].name, "seeded");
-        assert_eq!(prog.fixtures[0].actions.len(), 2);
-
-        let func = prog
-            .items
-            .iter()
-            .find_map(|item| match item {
-                Item::Function(f) => Some(f),
-                _ => None,
-            })
-            .expect("function present");
-        assert!(func.modifiers.is_test);
-        assert_eq!(func.modifiers.test_fixture.as_deref(), Some("seeded"));
-    }
-
-    #[test]
-    fn fixture_actions_accept_formatter_trailing_commas() {
-        let src = r#"
-            module FixtureTrailingComma {
-                koto_test { target: "target.ko" }
-                fixture actors {
-                    actor(
-                        "issuer",
-                        AccountId::parse("issuer"),
-                        "0x00",
-                    );
-                }
-            }
-        "#;
-        let program = parse(src).expect("fixture action with a trailing comma must parse");
-        assert_eq!(program.fixtures.len(), 1);
-        assert_eq!(program.fixtures[0].actions.len(), 1);
-        assert_eq!(program.fixtures[0].actions[0].args.len(), 3);
-    }
-
-    #[test]
-    fn rejects_unregistered_unicode_attributes() {
-        let src = r#"
-        module ContractTests {
-            #[テスト]
-            fn smoke() {}
-        }
-        "#;
-        let error = parse(src).expect_err("unregistered Unicode attributes are invalid");
-        assert!(error.contains("non-ASCII"), "{error}");
-    }
+    include!("parser/tests/tail_fixtures.rs");
 }

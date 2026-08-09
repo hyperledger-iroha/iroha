@@ -8,18 +8,21 @@ use iroha_data_model::{
         Header as BlockHeader,
         consensus::{
             LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneSettlementReceipt,
-            NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2, NativeAmxLegRecordV2,
-            NativeAmxPhase, NativeAmxReceipt, SumeragiDiagnosticsStatus,
-            SumeragiNativeAmxParticipantApplication, SumeragiNativeAmxParticipantApplicationState,
-            SumeragiPipelineExecutionStatus,
+            NATIVE_AMX_BLS_PROOF_BYTES, NATIVE_AMX_GROUP_SOURCES_MAX,
+            NATIVE_AMX_PARTICIPANT_LEGS_MAX, NATIVE_AMX_VALIDATORS_MAX, NativeAmxAttestationBodyV2,
+            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+            SumeragiDiagnosticsStatus, SumeragiNativeAmxParticipantApplication,
+            SumeragiNativeAmxParticipantApplicationState, SumeragiPipelineExecutionStatus,
         },
         consensus_v2::{
             ConsensusRound, ExecutionCommitment, HeightContext, HeightContextId,
+            MERGE_CARRIER_COMMITMENT_VERSION_V1, MergeCarrierCommitmentV1,
             NATIVE_AMX_APPLICATION_MANIFEST_VERSION, NativeAmxApplicationManifestLeafV1,
             NativeAmxApplicationManifestMemberV1,
         },
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    merge::MergeLedgerEntry,
     nexus::{DataSpaceId, LaneId, compute_settlement_hash},
     peer::PeerId,
     transaction::{TransactionEntrypoint, TransactionResult},
@@ -30,11 +33,10 @@ use norito::json::{self, Value};
 pub const FIXTURE_BASENAME: &str = "native_amx_v2_grouped.json";
 
 const GROUP_SOURCE_COUNT: usize = 2;
-const GROUP_SOURCE_LIMIT: usize = 4_096;
 const VALIDATOR_COUNT: usize = 4;
-const MIN_QUORUM: usize = 3;
-const BLS_PROOF_BYTES: usize = 96;
+const MIN_QUORUM: usize = VALIDATOR_COUNT - (VALIDATOR_COUNT - 1) / 3;
 const APPLICATION_MANIFEST_LEAF_COUNT: u32 = 1;
+const EXECUTED_BLOCK_WIRE_FIXTURE: &[u8] = b"native-amx-v2-grouped-fixture-executed-block-wire";
 
 #[derive(Clone)]
 struct ParticipantFixture {
@@ -320,6 +322,104 @@ fn qc(
     )?)
 }
 
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "the rebuilt attestation body is consumed directly by the isolated control QC"
+)]
+fn control_qc(
+    context: &FixtureContext,
+    body: NativeAmxAttestationBodyV2,
+    validator_set: Vec<PeerId>,
+    validator_set_pops: Vec<Vec<u8>>,
+    signer_keys: &[(usize, usize)],
+) -> Result<NativeAmxAttestationQcV2, Box<dyn Error>> {
+    let signatures = signer_keys
+        .iter()
+        .map(|(_, key_index)| -> Result<Signature, Box<dyn Error>> {
+            let keypair = context
+                .keypairs
+                .get(*key_index)
+                .ok_or("Native AMX control signer key index is out of bounds")?;
+            Ok(Signature::try_new(
+                keypair.private_key(),
+                &body.signature_preimage(),
+            )?)
+        })
+        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+    let signature_payloads = signatures
+        .iter()
+        .map(Signature::payload)
+        .collect::<Vec<_>>();
+    let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_payloads)?;
+    let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
+    for (validator_index, _) in signer_keys {
+        if *validator_index >= validator_set.len() {
+            return Err("Native AMX control signer index is out of bounds".into());
+        }
+        signers_bitmap[*validator_index / 8] |= 1_u8 << (*validator_index % 8);
+    }
+    let validator_set_hash = HashOf::new(&validator_set);
+    Ok(NativeAmxAttestationQcV2::try_new(
+        body,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash,
+        validator_set,
+        validator_set_pops,
+        signers_bitmap,
+        aggregate_signature,
+    )?)
+}
+
+fn rebuild_control_leg_committee(
+    context: &FixtureContext,
+    source: &NativeAmxLegRecordV2,
+    validator_set: Vec<PeerId>,
+    validator_set_pops: Vec<Vec<u8>>,
+    min_quorum: usize,
+    signer_keys: &[(usize, usize)],
+) -> Result<NativeAmxLegRecordV2, Box<dyn Error>> {
+    let validator_count = u32::try_from(validator_set.len())?;
+    let min_quorum = u32::try_from(min_quorum)?;
+    let validator_set_hash = HashOf::new(&validator_set);
+    let mut leg = source.clone();
+    leg.participant_proposal.descriptor.validator_set_hash = validator_set_hash;
+    leg.participant_proposal.descriptor.validator_set = validator_set.clone();
+    leg.participant_proposal.descriptor.validator_count = validator_count;
+    leg.participant_proposal.descriptor.min_quorum = min_quorum;
+    leg.participant_proposal.descriptor.descriptor_hash = leg
+        .participant_proposal
+        .descriptor
+        .computed_descriptor_hash();
+    leg.participant_proposal.proposal_hash = leg.participant_proposal.computed_proposal_hash();
+
+    let proposal_hash = leg.participant_proposal.proposal_hash;
+    let mut prepare_body = leg.prepare_qc.body;
+    prepare_body.participant_validator_set_hash = validator_set_hash;
+    prepare_body.participant_validator_count = validator_count;
+    prepare_body.participant_min_quorum = min_quorum;
+    prepare_body.participant_proposal_hash = proposal_hash;
+    let mut commit_body = leg.commit_qc.body;
+    commit_body.participant_validator_set_hash = validator_set_hash;
+    commit_body.participant_validator_count = validator_count;
+    commit_body.participant_min_quorum = min_quorum;
+    commit_body.participant_proposal_hash = proposal_hash;
+    leg.prepare_qc = control_qc(
+        context,
+        prepare_body,
+        validator_set.clone(),
+        validator_set_pops.clone(),
+        signer_keys,
+    )?;
+    leg.commit_qc = control_qc(
+        context,
+        commit_body,
+        validator_set,
+        validator_set_pops,
+        signer_keys,
+    )?;
+    Ok(leg)
+}
+
 fn leg(
     context: &FixtureContext,
     participant: &ParticipantFixture,
@@ -403,7 +503,6 @@ fn diagnostics(
     commitment: LaneBlockCommitment,
     remote: &ParticipantFixture,
 ) -> SumeragiDiagnosticsStatus {
-    let descriptor = &remote.proposal.descriptor;
     SumeragiDiagnosticsStatus {
         pipeline_execution: SumeragiPipelineExecutionStatus::default(),
         tx_queue_depth: 0,
@@ -426,24 +525,35 @@ fn diagnostics(
         lane_governance_sealed_total: 0,
         lane_governance_sealed_aliases: Vec::new(),
         lane_governance: Vec::new(),
-        native_amx_participant_applications: vec![SumeragiNativeAmxParticipantApplication {
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            participant_height: descriptor.lane_block_height,
-            participant_view: descriptor.lane_block_view,
-            predecessor_height: descriptor.previous_lane_block_height,
-            predecessor_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
-            descriptor_hash: descriptor.descriptor_hash,
-            proposal_hash: remote.proposal.proposal_hash,
-            settlement_hash: remote.settlement_hash,
-            source_count: GROUP_SOURCE_COUNT as u64,
-            application_block_height: Some(42),
-            application_block_hash: Some(application_block_hash()),
-            state: SumeragiNativeAmxParticipantApplicationState::DurablyApplied,
-        }],
+        native_amx_participant_applications: vec![participant_application(remote)],
         autonomous_lane_executions: Vec::new(),
     }
+}
+
+fn participant_application(remote: &ParticipantFixture) -> SumeragiNativeAmxParticipantApplication {
+    let descriptor = &remote.proposal.descriptor;
+    SumeragiNativeAmxParticipantApplication {
+        lane_id: descriptor.lane_id,
+        dataspace_id: descriptor.dataspace_id,
+        lane_incarnation: descriptor.lane_incarnation,
+        participant_height: descriptor.lane_block_height,
+        participant_view: descriptor.lane_block_view,
+        predecessor_height: descriptor.previous_lane_block_height,
+        predecessor_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
+        descriptor_hash: descriptor.descriptor_hash,
+        proposal_hash: remote.proposal.proposal_hash,
+        settlement_hash: remote.settlement_hash,
+        source_count: GROUP_SOURCE_COUNT as u64,
+        application_block_height: Some(42),
+        application_block_hash: Some(application_block_hash()),
+        state: SumeragiNativeAmxParticipantApplicationState::DurablyApplied,
+    }
+}
+
+fn same_participant_fixture(left: &ParticipantFixture, right: &ParticipantFixture) -> bool {
+    left.proposal == right.proposal
+        && left.settlement == right.settlement
+        && left.settlement_hash == right.settlement_hash
 }
 
 fn application_block_hash() -> HashOf<BlockHeader> {
@@ -453,7 +563,11 @@ fn application_block_hash() -> HashOf<BlockHeader> {
 }
 
 fn executed_block_wire_hash() -> Hash {
-    Hash::new(b"native-amx-v2-grouped-fixture-executed-block-wire")
+    Hash::new(EXECUTED_BLOCK_WIRE_FIXTURE)
+}
+
+fn executed_block_wire_len() -> u64 {
+    u64::try_from(EXECUTED_BLOCK_WIRE_FIXTURE.len()).expect("grouped fixture wire length fits u64")
 }
 
 fn application_evidence(
@@ -502,30 +616,37 @@ fn application_evidence(
     leaf.validate()?;
     let leaf_hash = HashOf::new(&leaf);
     let tree = [leaf_hash].into_iter().collect::<MerkleTree<_>>();
-    let typed_root = tree
-        .root()
-        .ok_or("singleton Native AMX manifest must have a root")?;
-    let manifest_root = Hash::from(typed_root);
+    let manifest_commitment = tree
+        .commitment()
+        .ok_or("singleton Native AMX manifest must have a commitment")?;
+    if manifest_commitment.leaf_count().get() != u64::from(APPLICATION_MANIFEST_LEAF_COUNT) {
+        return Err("Native AMX manifest tree count differs from the execution commitment".into());
+    }
+    let manifest_root = Hash::from(*manifest_commitment.root());
     let proof = tree
         .get_proof(0)
         .ok_or("singleton Native AMX manifest must have a proof")?;
-    if !proof
-        .clone()
-        .verify(&leaf_hash, &typed_root, usize::BITS as usize - 1)
-    {
+    if !proof.verify(&leaf_hash, &manifest_commitment) {
         return Err("generated Native AMX manifest proof does not verify".into());
     }
-    let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest(
-        Hash::new(b"native-amx-v2-grouped-fixture-parent-state"),
-        Hash::new(b"native-amx-v2-grouped-fixture-post-state"),
-        Hash::new(b"native-amx-v2-grouped-fixture-ordinary-writes"),
-        None,
-        0,
-        NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-        manifest_root,
-        APPLICATION_MANIFEST_LEAF_COUNT,
-        executed_block_wire_hash(),
-    )?;
+    let execution_commitment =
+        ExecutionCommitment::new_with_native_amx_application_manifest_and_merge_carrier(
+            Hash::new(b"native-amx-v2-grouped-fixture-parent-state"),
+            Hash::new(b"native-amx-v2-grouped-fixture-post-state"),
+            Hash::new(b"native-amx-v2-grouped-fixture-ordinary-writes"),
+            None,
+            0,
+            NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            manifest_root,
+            APPLICATION_MANIFEST_LEAF_COUNT,
+            Some(MergeCarrierCommitmentV1::new(
+                HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(
+                    b"native-amx-v2-grouped-fixture-merge-carrier",
+                )),
+            )),
+            executed_block_wire_len(),
+            executed_block_wire_hash(),
+        )?;
     let carrier_entrypoint_hashes = context
         .entrypoints
         .iter()
@@ -590,6 +711,185 @@ fn control(id: &str, mutation: Value) -> Value {
 
 fn evidence_control(id: &str, mutations: Vec<Value>) -> Value {
     controls(id, "application_evidence", mutations)
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "both coherent committee controls rebuild every grouped source and evidence projection together"
+)]
+fn committee_consistency_controls(
+    context: &FixtureContext,
+    commitment: &LaneBlockCommitment,
+) -> Result<Vec<Value>, Box<dyn Error>> {
+    let first_receipt = commitment
+        .native_amx_receipts
+        .first()
+        .ok_or("Native AMX committee controls require a grouped receipt")?;
+    let mut first_remote_legs = first_receipt.legs.iter().filter(|leg| {
+        leg.lane_id != commitment.lane_id || leg.dataspace_id != commitment.dataspace_id
+    });
+    let first_remote_leg = first_remote_legs
+        .next()
+        .ok_or("Native AMX committee controls require a remote participant leg")?;
+    if first_remote_legs.next().is_some() {
+        return Err("Native AMX committee controls require one remote participant route".into());
+    }
+    let remote_route = (first_remote_leg.lane_id, first_remote_leg.dataspace_id);
+    let canonical_validators = first_remote_leg.prepare_qc.validator_set().to_vec();
+    let canonical_pops = first_remote_leg.prepare_qc.validator_set_pops().to_vec();
+    if canonical_validators.len() != VALIDATOR_COUNT || canonical_pops.len() != VALIDATOR_COUNT {
+        return Err("Native AMX committee-control fixture geometry changed".into());
+    }
+
+    let mut duplicate_validators = canonical_validators.clone();
+    duplicate_validators[1] = duplicate_validators[0].clone();
+    let mut duplicate_pops = canonical_pops.clone();
+    duplicate_pops[1] = duplicate_pops[0].clone();
+    let duplicate_signer_keys = (0..MIN_QUORUM)
+        .map(|validator_index| {
+            let key_index = if validator_index == 1 {
+                0
+            } else {
+                validator_index
+            };
+            (validator_index, key_index)
+        })
+        .collect::<Vec<_>>();
+    let over_quorum_signer_keys = (0..VALIDATOR_COUNT)
+        .map(|index| (index, index))
+        .collect::<Vec<_>>();
+    let mut duplicate_mutations = Vec::with_capacity(commitment.native_amx_receipts.len() + 2);
+    let mut over_quorum_mutations = Vec::with_capacity(commitment.native_amx_receipts.len() + 2);
+    let mut duplicate_commitment = commitment.clone();
+    let mut over_quorum_commitment = commitment.clone();
+    let mut duplicate_remote: Option<ParticipantFixture> = None;
+    let mut over_quorum_remote: Option<ParticipantFixture> = None;
+
+    for (receipt_index, receipt) in commitment.native_amx_receipts.iter().enumerate() {
+        let mut matching_legs = receipt
+            .legs
+            .iter()
+            .enumerate()
+            .filter(|(_, leg)| (leg.lane_id, leg.dataspace_id) == remote_route);
+        let (leg_index, remote_leg) = matching_legs
+            .next()
+            .ok_or("Native AMX grouped receipt is missing the remote participant leg")?;
+        if matching_legs.next().is_some() {
+            return Err("Native AMX grouped receipt repeats the remote participant leg".into());
+        }
+        if remote_leg.prepare_qc.body.source_id != receipt.source_id
+            || remote_leg.commit_qc.body.source_id != receipt.source_id
+            || remote_leg.prepare_qc.validator_set() != canonical_validators.as_slice()
+            || remote_leg.commit_qc.validator_set() != canonical_validators.as_slice()
+            || remote_leg.prepare_qc.validator_set_pops() != canonical_pops.as_slice()
+            || remote_leg.commit_qc.validator_set_pops() != canonical_pops.as_slice()
+        {
+            return Err("Native AMX grouped remote committee is not source-coherent".into());
+        }
+
+        let duplicate_leg = rebuild_control_leg_committee(
+            context,
+            remote_leg,
+            duplicate_validators.clone(),
+            duplicate_pops.clone(),
+            MIN_QUORUM,
+            &duplicate_signer_keys,
+        )?;
+        let over_quorum_leg = rebuild_control_leg_committee(
+            context,
+            remote_leg,
+            canonical_validators.clone(),
+            canonical_pops.clone(),
+            MIN_QUORUM + 1,
+            &over_quorum_signer_keys,
+        )?;
+        let duplicate_participant = ParticipantFixture {
+            proposal: duplicate_leg.participant_proposal.clone(),
+            settlement: duplicate_leg.participant_settlement.clone(),
+            settlement_hash: duplicate_leg.participant_settlement_hash,
+        };
+        let over_quorum_participant = ParticipantFixture {
+            proposal: over_quorum_leg.participant_proposal.clone(),
+            settlement: over_quorum_leg.participant_settlement.clone(),
+            settlement_hash: over_quorum_leg.participant_settlement_hash,
+        };
+        if duplicate_remote
+            .as_ref()
+            .is_some_and(|expected| !same_participant_fixture(expected, &duplicate_participant))
+            || over_quorum_remote.as_ref().is_some_and(|expected| {
+                !same_participant_fixture(expected, &over_quorum_participant)
+            })
+        {
+            return Err("Native AMX committee control diverged across grouped sources".into());
+        }
+        if duplicate_remote.is_none() {
+            duplicate_remote = Some(duplicate_participant);
+        }
+        if over_quorum_remote.is_none() {
+            over_quorum_remote = Some(over_quorum_participant);
+        }
+        duplicate_commitment.native_amx_receipts[receipt_index].legs[leg_index] =
+            duplicate_leg.clone();
+        over_quorum_commitment.native_amx_receipts[receipt_index].legs[leg_index] =
+            over_quorum_leg.clone();
+
+        let remote_leg_path =
+            format!("/golden/receipt_group/native_amx_receipts/{receipt_index}/legs/{leg_index}");
+        duplicate_mutations.push(mutation(
+            "replace",
+            &remote_leg_path,
+            Some(json::to_value(&duplicate_leg)?),
+        ));
+        over_quorum_mutations.push(mutation(
+            "replace",
+            &remote_leg_path,
+            Some(json::to_value(&over_quorum_leg)?),
+        ));
+    }
+
+    let duplicate_remote =
+        duplicate_remote.ok_or("Native AMX duplicate-committee control has no participant")?;
+    let over_quorum_remote =
+        over_quorum_remote.ok_or("Native AMX over-quorum control has no participant")?;
+    duplicate_mutations.push(mutation(
+        "replace",
+        "/golden/application_evidence",
+        Some(application_evidence(context, &duplicate_remote)?),
+    ));
+    duplicate_mutations.push(mutation(
+        "replace",
+        "/golden/expected_diagnostics",
+        Some(json::to_value(&diagnostics(
+            duplicate_commitment,
+            &duplicate_remote,
+        ))?),
+    ));
+    over_quorum_mutations.push(mutation(
+        "replace",
+        "/golden/application_evidence",
+        Some(application_evidence(context, &over_quorum_remote)?),
+    ));
+    over_quorum_mutations.push(mutation(
+        "replace",
+        "/golden/expected_diagnostics",
+        Some(json::to_value(&diagnostics(
+            over_quorum_commitment,
+            &over_quorum_remote,
+        ))?),
+    ));
+
+    Ok(vec![
+        controls(
+            "coherent_duplicate_validator_set",
+            "receipt_group",
+            duplicate_mutations,
+        ),
+        controls(
+            "coherent_over_quorum_requirement",
+            "receipt_group",
+            over_quorum_mutations,
+        ),
+    ])
 }
 
 #[expect(
@@ -892,7 +1192,10 @@ fn hash_consistency_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
     clippy::too_many_lines,
     reason = "the compact negative-control corpus is easier to audit as one ordered list"
 )]
-fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
+fn negative_controls(
+    context: &FixtureContext,
+    commitment: &LaneBlockCommitment,
+) -> Result<Vec<Value>, Box<dyn Error>> {
     let receipt = "/golden/receipt_group/native_amx_receipts";
     let first = format!("{receipt}/0");
     let second = format!("{receipt}/1");
@@ -1012,7 +1315,10 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
             mutation(
                 "replace",
                 &format!("{prepare}/validator_set_pops/0"),
-                Some(norito::json!(vec![0x5A_u64; BLS_PROOF_BYTES - 1])),
+                Some(norito::json!(vec![
+                    0x5A_u64;
+                    NATIVE_AMX_BLS_PROOF_BYTES - 1
+                ])),
             ),
         ),
         controls(
@@ -1029,7 +1335,7 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
                     &format!("{prepare}/validator_set_pops/0"),
                     Some(norito::json!({
                         "source_index": 0,
-                        "count": (BLS_PROOF_BYTES)
+                        "count": (NATIVE_AMX_BLS_PROOF_BYTES)
                     })),
                 ),
             ],
@@ -1041,7 +1347,7 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
                 &format!("{prepare}/validator_set_pops/0"),
                 Some(norito::json!({
                     "source_index": 0,
-                    "count": (BLS_PROOF_BYTES + 1)
+                    "count": (NATIVE_AMX_BLS_PROOF_BYTES + 1)
                 })),
             ),
         ),
@@ -1050,7 +1356,10 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
             mutation(
                 "replace",
                 &format!("{prepare}/bls_aggregate_signature"),
-                Some(norito::json!(vec![0x5A_u64; BLS_PROOF_BYTES - 1])),
+                Some(norito::json!(vec![
+                    0x5A_u64;
+                    NATIVE_AMX_BLS_PROOF_BYTES - 1
+                ])),
             ),
         ),
         control(
@@ -1058,7 +1367,7 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
             mutation(
                 "replace",
                 &format!("{prepare}/bls_aggregate_signature"),
-                Some(norito::json!(vec![0_u64; BLS_PROOF_BYTES])),
+                Some(norito::json!(vec![0_u64; NATIVE_AMX_BLS_PROOF_BYTES])),
             ),
         ),
         control(
@@ -1068,7 +1377,7 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
                 &format!("{prepare}/bls_aggregate_signature"),
                 Some(norito::json!({
                     "source_index": 0,
-                    "count": (BLS_PROOF_BYTES + 1)
+                    "count": (NATIVE_AMX_BLS_PROOF_BYTES + 1)
                 })),
             ),
         ),
@@ -1089,7 +1398,10 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
             mutation(
                 "repeat",
                 &format!("{first}/legs"),
-                Some(norito::json!({"source_index": 0, "count": 256})),
+                Some(norito::json!({
+                    "source_index": 0,
+                    "count": (NATIVE_AMX_PARTICIPANT_LEGS_MAX + 1)
+                })),
             ),
         ),
         control(
@@ -1123,7 +1435,10 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
             mutation(
                 "repeat",
                 &format!("{settlement}/receipts"),
-                Some(norito::json!({"source_index": 0, "count": 4097})),
+                Some(norito::json!({
+                    "source_index": 0,
+                    "count": (NATIVE_AMX_GROUP_SOURCES_MAX + 1)
+                })),
             ),
         ),
         control(
@@ -1363,6 +1678,24 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
             ),
         ),
         evidence_control(
+            "execution_commitment_merge_carrier_wrong_version",
+            vec![mutation(
+                "replace",
+                "/golden/application_evidence/execution_commitment/merge_carrier/version",
+                Some(norito::json!(
+                    MERGE_CARRIER_COMMITMENT_VERSION_V1.saturating_add(1)
+                )),
+            )],
+        ),
+        evidence_control(
+            "execution_commitment_missing_merge_carrier_field",
+            vec![mutation(
+                "remove",
+                "/golden/application_evidence/execution_commitment/merge_carrier",
+                None,
+            )],
+        ),
+        evidence_control(
             "stale_participant_application_incarnation",
             vec![mutation(
                 "replace",
@@ -1407,6 +1740,14 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
             )],
         ),
         evidence_control(
+            "manifest_leaf_hash_tampering",
+            vec![mutation(
+                "replace",
+                "/golden/application_evidence/manifest_artifacts/0/leaf_hash",
+                Some(forged_hash.clone()),
+            )],
+        ),
+        evidence_control(
             "manifest_proof_path_tampering",
             vec![mutation(
                 "replace",
@@ -1432,7 +1773,8 @@ fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
         ),
     ];
     controls.extend(hash_consistency_controls(commitment));
-    controls
+    controls.extend(committee_consistency_controls(context, commitment)?);
+    Ok(controls)
 }
 
 fn validate_golden(diagnostics: &SumeragiDiagnosticsStatus) -> Result<(), Box<dyn Error>> {
@@ -1480,7 +1822,7 @@ fn validate_golden(diagnostics: &SumeragiDiagnosticsStatus) -> Result<(), Box<dy
                 .map(|settlement_receipt| settlement_receipt.source_id)
                 .collect::<Vec<_>>();
             if settlement_sources != expected_sources
-                || settlement_sources.len() > GROUP_SOURCE_LIMIT
+                || settlement_sources.len() > NATIVE_AMX_GROUP_SOURCES_MAX
                 || settlement_sources
                     .iter()
                     .filter(|source| **source == receipt.source_id)
@@ -1497,8 +1839,8 @@ fn validate_golden(diagnostics: &SumeragiDiagnosticsStatus) -> Result<(), Box<dy
                     || qc
                         .validator_set_pops()
                         .iter()
-                        .any(|pop| pop.len() != BLS_PROOF_BYTES)
-                    || qc.bls_aggregate_signature.len() != BLS_PROOF_BYTES
+                        .any(|pop| pop.len() != NATIVE_AMX_BLS_PROOF_BYTES)
+                    || qc.bls_aggregate_signature.len() != NATIVE_AMX_BLS_PROOF_BYTES
                 {
                     return Err("Native AMX QC proof geometry is malformed".into());
                 }
@@ -1514,7 +1856,7 @@ fn document() -> Result<Value, Box<dyn Error>> {
     let diagnostics = diagnostics(commitment.clone(), &remote);
     validate_golden(&diagnostics)?;
     let application_evidence = application_evidence(&context, &remote)?;
-    let controls = negative_controls(&commitment);
+    let controls = negative_controls(&context, &commitment)?;
     let mut ids = BTreeSet::new();
     for control in &controls {
         let Some(id) = control
@@ -1541,10 +1883,11 @@ fn document() -> Result<Value, Box<dyn Error>> {
         "rust_owner": "iroha_data_model::block::consensus",
         "bounds": {
             "group_sources_min": 1,
-            "group_sources_max": (GROUP_SOURCE_LIMIT as u64),
-            "participant_legs_max": 255,
-            "validator_pop_bytes": (BLS_PROOF_BYTES as u64),
-            "aggregate_signature_bytes": (BLS_PROOF_BYTES as u64),
+            "group_sources_max": (NATIVE_AMX_GROUP_SOURCES_MAX as u64),
+            "participant_legs_max": (NATIVE_AMX_PARTICIPANT_LEGS_MAX as u64),
+            "validators_max": (NATIVE_AMX_VALIDATORS_MAX as u64),
+            "validator_pop_bytes": (NATIVE_AMX_BLS_PROOF_BYTES as u64),
+            "aggregate_signature_bytes": (NATIVE_AMX_BLS_PROOF_BYTES as u64),
         },
         "golden": {
             "ordered_source_ids": (ordered_source_ids),

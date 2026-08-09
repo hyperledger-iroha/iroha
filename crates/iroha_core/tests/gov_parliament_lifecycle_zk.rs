@@ -70,7 +70,7 @@ fn proposal_contract_address(
     authority: &iroha_data_model::account::AccountId,
 ) -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
-        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
         authority,
         0,
         iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -91,11 +91,18 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
 
     let domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&proposer_id);
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("sora", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
-    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&proposer_id);
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("sora", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+    let asset_def = AssetDefinition::numeric(
+        asset_def_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&proposer_id);
 
     let proposer_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), proposer_id.clone()),

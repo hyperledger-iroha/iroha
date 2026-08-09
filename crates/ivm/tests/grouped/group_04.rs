@@ -48,8 +48,6 @@ mod kotodama_role_builtins;
 mod kotodama_role_cleanup;
 #[path = "../kotodama_roles_wsvhost.rs"]
 mod kotodama_roles_wsvhost;
-#[path = "../kotodama_sample_zk_vote_unshield.rs"]
-mod kotodama_sample_zk_vote_unshield;
 #[path = "../kotodama_schema_encode.rs"]
 mod kotodama_schema_encode;
 #[path = "../kotodama_sm_syscalls.rs"]

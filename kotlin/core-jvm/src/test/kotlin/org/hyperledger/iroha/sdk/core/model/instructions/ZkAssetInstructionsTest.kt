@@ -201,84 +201,16 @@ class ZkAssetInstructionsTest {
     }
 
     @Test
-    fun shieldInstructionValidatesCanonicalFieldsAndCopiesBytes() {
-        val commitment = fill(0x7a, 32)
-        val instruction = ShieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setFrom("alice")
-            .setAmount("340282366920938463463374607431768211456.25")
-            .setNoteCommitment(commitment)
-            .setEncryptedPayload(samplePayload())
-            .build()
-
-        commitment[0] = 0
-        assertEquals("Shield", instruction.arguments["action"])
-        assertEquals("340282366920938463463374607431768211456.25", instruction.amount)
-        assertEquals(0x7a, instruction.noteCommitment[0].toInt())
-        val exposed = instruction.noteCommitment
-        exposed[0] = 0
-        assertEquals(0x7a, instruction.noteCommitment[0].toInt())
-
-        assertFailsWith<IllegalArgumentException> {
-            ShieldInstruction.builder().setAmount("01")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            ShieldInstruction.builder().setAmount("-1")
-        }
-        assertFailsWith<IllegalArgumentException> { ShieldInstruction.builder().setAmount("1.0") }
-        assertFailsWith<IllegalArgumentException> {
-            ShieldInstruction.builder().setNoteCommitment(ByteArray(32))
-        }
-    }
-
-    @Test
-    fun unshieldInstructionValidatesInputsOutputsAndProof() {
-        val input = fill(0x20, 32)
-        val output = fill(0x21, 32)
-        val root = fill(0x22, 32)
-        val instruction = UnshieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setTo("bob")
-            .setPublicAmount("0.25")
-            .addInput(input)
-            .addOutput(output)
-            .setProof(sampleProof())
-            .setRootHint(root)
-            .build()
-
-        input[0] = 0
-        output[0] = 0
-        root[0] = 0
-        assertEquals("Unshield", instruction.arguments["action"])
-        assertEquals("0.25", instruction.publicAmount)
-        assertFailsWith<IllegalArgumentException> {
-            UnshieldInstruction.builder().setPublicAmount("00.25")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            UnshieldInstruction.builder().setPublicAmount("-0.25")
-        }
-        assertEquals(1, instruction.inputs.size)
-        assertEquals(1, instruction.outputs.size)
-        assertEquals(0x20, instruction.inputs[0][0].toInt())
-        assertEquals(0x21, instruction.outputs[0][0].toInt())
-        assertEquals(0x22, instruction.rootHint!![0].toInt())
-
-        assertFailsWith<IllegalStateException> {
-            UnshieldInstruction.builder()
-                .setAsset("rose#wonderland")
-                .setTo("bob")
-                .setPublicAmount("1")
-                .setProof(sampleProof())
-                .build()
-        }
-        assertFailsWith<IllegalArgumentException> {
-            UnshieldInstruction.builder().addInput(ByteArray(32))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            UnshieldInstruction.builder().addOutput(fill(1, 31))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            UnshieldInstruction.builder().setRootHint(fill(1, 31))
+    fun retiredGenericConfidentialSurfacesAreAbsent() {
+        val packageName = "org.hyperledger.iroha.sdk.core.model.instructions."
+        val methods = NativeSignerBridge::class.java.declaredMethods.map { it.name }.toSet()
+        for (parts in listOf(listOf("Shi", "eld"), listOf("Zk", "Transfer"), listOf("Un", "shield"))) {
+            val variant = parts.joinToString("")
+            assertFailsWith<ClassNotFoundException> {
+                Class.forName(packageName + variant + "Instruction")
+            }
+            assertFalse(methods.contains("encode" + variant + "SignedTransaction"))
+            assertFalse(methods.contains("nativeEncode" + variant + "SignedTransaction"))
         }
     }
 
@@ -289,68 +221,24 @@ class ZkAssetInstructionsTest {
             .setMode(ZkAssetMode.HYBRID)
             .setAllowShield(true)
             .setAllowUnshield(false)
-            .setTransferVerifyingKey("halo2/ipa:transfer-v2")
             .build()
 
         assertEquals(InstructionKind.REGISTER, instruction.kind)
         assertEquals("Hybrid", instruction.arguments["mode"])
         assertEquals("false", instruction.arguments["allow_unshield"])
 
-        assertEquals(ZkAssetMode.ZK_NATIVE, ZkAssetMode.fromWireName("ZkNative"))
+        assertEquals(0, ZkAssetMode.HYBRID.bridgeCode)
         assertFailsWith<IllegalArgumentException> {
-            ZkAssetMode.fromWireName("zk-native")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            RegisterZkAssetInstruction.builder().setTransferVerifyingKey("halo2/ipa")
+            ZkAssetMode.fromWireName("ZkNative")
         }
     }
 
     @Test
-    fun nativeSignerZkMethodsRejectBadInputsBeforeNativeDispatch() {
-        val shield = ShieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setFrom("alice")
-            .setAmount("1")
-            .setNoteCommitment(fill(1, 32))
-            .setEncryptedPayload(samplePayload())
-            .build()
-        val unshield = UnshieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setTo("bob")
-            .setPublicAmount("1")
-            .addInput(fill(2, 32))
-            .setProof(sampleProof())
-            .build()
+    fun nativeSignerRegisterZkAssetRejectsBadInputsBeforeNativeDispatch() {
         val register = RegisterZkAssetInstruction.builder()
             .setAsset("rose#wonderland")
             .build()
 
-        assertFailsWith<IllegalArgumentException> {
-                NativeSignerBridge.encodeShieldSignedTransaction(
-                    SigningAlgorithm.ED25519,
-                    "chain",
-                    AccountAddress.DEFAULT_I105_DISCRIMINANT,
-                    "alice",
-                -1,
-                null,
-                shield,
-                byteArrayOf(1),
-                noFeePayment(),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-                NativeSignerBridge.encodeUnshieldSignedTransaction(
-                    SigningAlgorithm.ED25519,
-                    " chain ",
-                    AccountAddress.DEFAULT_I105_DISCRIMINANT,
-                    "alice",
-                0,
-                null,
-                unshield,
-                byteArrayOf(1),
-                noFeePayment(),
-            )
-        }
         assertFailsWith<IllegalArgumentException> {
                 NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                     SigningAlgorithm.ED25519,
@@ -361,19 +249,6 @@ class ZkAssetInstructionsTest {
                 0L,
                 register,
                 byteArrayOf(1),
-                noFeePayment(),
-            )
-        }
-        assertFailsWith<IllegalArgumentException> {
-                NativeSignerBridge.encodeShieldSignedTransaction(
-                    SigningAlgorithm.ED25519,
-                    "chain",
-                    AccountAddress.DEFAULT_I105_DISCRIMINANT,
-                    "alice",
-                0,
-                null,
-                shield,
-                ByteArray(0),
                 noFeePayment(),
             )
         }
@@ -422,12 +297,12 @@ class ZkAssetInstructionsTest {
     }
 
     @Test
-    fun nativeSignerZkMethodsBindFeePaymentWhenBridgeAvailable() {
+    fun nativeSignerRegisterZkAssetBindsFeePaymentWhenBridgeAvailable() {
         assertEquals(21, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
-        assertEquals(1, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION)
+        assertEquals(3, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION)
         assertTrue(
             NativeSignerBridge.isNativeAvailable(),
-            "connect_norito_bridge ABI 21 native-signer contract revision 1 is required",
+            "connect_norito_bridge ABI 21 native-signer contract revision 3 is required",
         )
 
         val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
@@ -463,49 +338,6 @@ class ZkAssetInstructionsTest {
             feePayment,
         )
 
-        val shield = ShieldInstruction.builder()
-            .setAsset(gasAssetId)
-            .setFrom(authority)
-            .setAmount("1")
-            .setNoteCommitment(fill(3, 32))
-            .setEncryptedPayload(samplePayload())
-            .build()
-        assertNativeFeePayment(
-            NativeSignerBridge.encodeShieldSignedTransaction(
-                algorithm = SigningAlgorithm.ED25519,
-                chainId = "00000042",
-                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
-                authority = authority,
-                creationTimeMs = 1_736_000_000_001,
-                ttlMs = null,
-                instruction = shield,
-                privateKey = privateKey,
-                feePayment = feePayment,
-            ),
-            feePayment,
-        )
-
-        val unshield = UnshieldInstruction.builder()
-            .setAsset(gasAssetId)
-            .setTo(authority)
-            .setPublicAmount("1")
-            .addInput(fill(4, 32))
-            .setProof(sampleProof())
-            .build()
-        assertNativeFeePayment(
-            NativeSignerBridge.encodeUnshieldSignedTransaction(
-                algorithm = SigningAlgorithm.ED25519,
-                chainId = "00000042",
-                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
-                authority = authority,
-                creationTimeMs = 1_736_000_000_002,
-                ttlMs = null,
-                instruction = unshield,
-                privateKey = privateKey,
-                feePayment = feePayment,
-            ),
-            feePayment,
-        )
     }
 
     @Test
@@ -515,7 +347,6 @@ class ZkAssetInstructionsTest {
             .setMode(ZkAssetMode.HYBRID)
             .setAllowShield(true)
             .setAllowUnshield(false)
-            .setTransferVerifyingKey("halo2/ipa:transfer-v2")
             .setUnshieldVerifyingKey("halo2/ipa:unshield-v3")
             .build()
 
@@ -525,7 +356,6 @@ class ZkAssetInstructionsTest {
         assertEquals(original.mode, restored.mode)
         assertEquals(original.allowShield, restored.allowShield)
         assertEquals(original.allowUnshield, restored.allowUnshield)
-        assertEquals(original.transferVerifyingKey, restored.transferVerifyingKey)
         assertEquals(original.unshieldVerifyingKey, restored.unshieldVerifyingKey)
         assertEquals(original.shieldVerifyingKey, restored.shieldVerifyingKey)
         assertEquals(original.arguments, restored.arguments)
@@ -535,12 +365,11 @@ class ZkAssetInstructionsTest {
     fun registerZkAssetFromArgumentsOmitsBlankVerifyingKeys() {
         val original = RegisterZkAssetInstruction.builder()
             .setAsset("rose#wonderland")
-            .setMode(ZkAssetMode.ZK_NATIVE)
+            .setMode(ZkAssetMode.HYBRID)
             .build()
 
         val restored = RegisterZkAssetInstruction.fromArguments(original.arguments)
 
-        assertEquals(null, restored.transferVerifyingKey)
         assertEquals(null, restored.unshieldVerifyingKey)
         assertEquals(null, restored.shieldVerifyingKey)
         assertEquals(original.arguments, restored.arguments)
@@ -574,25 +403,11 @@ class ZkAssetInstructionsTest {
     }
 
     @Test
-    fun registerZkAssetFromArgumentsRejectsMalformedVerifyingKey() {
+    fun registerZkAssetFromArgumentsRejectsRetiredTransferVerifierField() {
         val arguments = validRegisterArguments().toMutableMap()
-        arguments["vk_transfer"] = "no-separator"
+        arguments["vk_transfer"] = "halo2/ipa:transfer-v2"
         assertFailsWith<IllegalArgumentException> {
             RegisterZkAssetInstruction.fromArguments(arguments)
-        }
-    }
-
-    @Test
-    fun shieldFromArgumentsIsUnsupported() {
-        assertFailsWith<UnsupportedOperationException> {
-            ShieldInstruction.fromArguments(emptyMap())
-        }
-    }
-
-    @Test
-    fun unshieldFromArgumentsIsUnsupported() {
-        assertFailsWith<UnsupportedOperationException> {
-            UnshieldInstruction.fromArguments(emptyMap())
         }
     }
 
@@ -623,14 +438,6 @@ class ZkAssetInstructionsTest {
             ephemeralPublicKey = fill(0x11, 32),
             nonce = fill(0x22, 24),
             ciphertext = byteArrayOf(0x33, 0x34),
-        )
-
-    private fun sampleProof(): ProofAttachment =
-        ProofAttachment(
-            backend = "halo2/ipa",
-            proofBytes = byteArrayOf(0x44),
-            verifyingKeyRef = ProofVerifierKeyRef("halo2/ipa", "unshield-v3"),
-            verifyingKeyCommitment = fill(0x55, 32),
         )
 
     private fun fill(value: Int, size: Int): ByteArray = ByteArray(size) { value.toByte() }

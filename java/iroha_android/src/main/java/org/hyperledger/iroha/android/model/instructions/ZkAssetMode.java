@@ -2,8 +2,7 @@ package org.hyperledger.iroha.android.model.instructions;
 
 /** Shielded asset registration mode accepted by {@code zk::RegisterZkAsset}. */
 public enum ZkAssetMode {
-  ZK_NATIVE(0, "ZkNative"),
-  HYBRID(1, "Hybrid");
+  HYBRID(0, "Hybrid");
 
   private final int bridgeCode;
   private final String wireName;
@@ -28,6 +27,6 @@ public enum ZkAssetMode {
         return mode;
       }
     }
-    throw new IllegalArgumentException("mode must be ZkNative or Hybrid");
+    throw new IllegalArgumentException("mode must be Hybrid");
   }
 }

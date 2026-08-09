@@ -19,9 +19,8 @@ use iroha_crypto::Signature;
 use iroha_data_model::{
     DomainId,
     asset::AssetDefinitionId,
-    transaction::{FeePaymentIntent, SignedTransaction},
+    transaction::{FeePaymentIntent, TransactionBuilder},
 };
-use iroha_version::codec::DecodeVersioned as _;
 use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use mv::storage::StorageReadOnly;
 use norito::json;
@@ -605,7 +604,6 @@ async fn contracts_call_enqueues_transaction() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -803,10 +801,18 @@ async fn contracts_call_enqueues_transaction() {
     );
     assert!(
         draft_json
-            .get("signed_transaction_b64")
+            .get("transaction_payload_b64")
             .and_then(json::Value::as_str)
             .is_some(),
-        "expected contract call draft scaffold when private_key is omitted"
+        "expected canonical unsigned contract-call payload when signing material is omitted"
+    );
+    assert!(draft_json.get("transaction_scaffold_b64").is_none());
+    assert!(draft_json.get("signed_transaction_b64").is_none());
+    assert!(
+        draft_json.get("entrypoint_hash_hex").is_none()
+            || draft_json
+                .get("entrypoint_hash_hex")
+                .is_some_and(json::Value::is_null)
     );
     assert_eq!(
         draft_json
@@ -834,25 +840,28 @@ async fn contracts_call_enqueues_transaction() {
     );
     assert!(!draft_receipt.contains_key("private_key"));
     assert!(!draft_receipt.contains_key("payload"));
-    let transaction_scaffold_b64 = draft_json
-        .get("transaction_scaffold_b64")
+    let transaction_payload_b64 = draft_json
+        .get("transaction_payload_b64")
         .and_then(json::Value::as_str)
-        .expect("transaction_scaffold_b64 present");
-    let transaction_scaffold_bytes = base64::engine::general_purpose::STANDARD
-        .decode(transaction_scaffold_b64)
-        .expect("decode transaction scaffold");
-    let transaction_scaffold = SignedTransaction::decode_all_versioned(&transaction_scaffold_bytes)
-        .expect("decode exact versioned transaction scaffold");
+        .expect("transaction_payload_b64 present");
+    let transaction_payload_bytes = base64::engine::general_purpose::STANDARD
+        .decode(transaction_payload_b64)
+        .expect("decode transaction payload");
     assert_eq!(
-        transaction_scaffold.time_to_live(),
+        base64::engine::general_purpose::STANDARD.encode(&transaction_payload_bytes),
+        transaction_payload_b64,
+        "draft payload must use canonical padded base64"
+    );
+    let transaction_builder = TransactionBuilder::decode_payload(&transaction_payload_bytes)
+        .expect("strictly decode exact canonical transaction payload");
+    assert_eq!(
+        transaction_builder.payload().time_to_live(),
         Some(Duration::from_millis(transaction_ttl_ms))
     );
     assert_eq!(
-        draft_json
-            .get("signed_transaction_b64")
-            .and_then(json::Value::as_str)
-            .expect("signed_transaction_b64 present"),
-        transaction_scaffold_b64
+        transaction_builder.encode_payload(),
+        transaction_payload_bytes,
+        "draft payload must round-trip byte-for-byte"
     );
     let signing_message_b64 = draft_json
         .get("signing_message_b64")
@@ -865,6 +874,16 @@ async fn contracts_call_enqueues_transaction() {
     let signing_message = base64::engine::general_purpose::STANDARD
         .decode(signing_message_b64)
         .expect("decode signing message");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(&signing_message),
+        signing_message_b64,
+        "signing message must use canonical padded base64"
+    );
+    assert_eq!(
+        signing_message,
+        transaction_builder.payload_hash_bytes(),
+        "signing message must be the exact unsigned payload hash"
+    );
     let detached_signature =
         Signature::try_new(&creds.private_key.0, &signing_message).expect("sign detached call");
     let detached_submit_body = iroha_torii::json_object(vec![
@@ -919,6 +938,15 @@ async fn contracts_call_enqueues_transaction() {
         .and_then(json::Value::as_str)
         .expect("detached submit tx hash present");
     assert_eq!(detached_submit_hash.len(), 64);
+    for field in ["transaction_payload_b64", "signing_message_b64"] {
+        assert!(
+            detached_submit_json.get(field).is_none()
+                || detached_submit_json
+                    .get(field)
+                    .is_some_and(json::Value::is_null),
+            "submitted response must not contain unsigned draft field {field}"
+        );
+    }
     let detached_receipt = detached_submit_json
         .get("operation_receipt")
         .and_then(json::Value::as_object)
@@ -998,7 +1026,6 @@ async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1081,7 +1108,6 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1200,7 +1226,6 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1345,7 +1370,6 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1472,7 +1496,6 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1599,7 +1622,6 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1735,7 +1757,6 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1817,7 +1838,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
 
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "minted".parse().expect("asset definition name"),
     );
@@ -1831,8 +1852,12 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     ));
     let mut seed_tx = seed_block.transaction();
     iroha_data_model::prelude::Register::asset_definition(
-        iroha_data_model::asset::AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name(asset_definition_id.name().to_string()),
+        iroha_data_model::asset::AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "minted".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ),
     )
     .execute(&creds.account, &mut seed_tx)
     .expect("register asset definition");
@@ -1861,7 +1886,6 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -1947,7 +1971,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
 
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "n3x_like".parse().expect("asset definition name"),
     );
@@ -1961,8 +1985,12 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     ));
     let mut seed_tx = seed_block.transaction();
     iroha_data_model::prelude::Register::asset_definition(
-        iroha_data_model::asset::AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name(asset_definition_id.name().to_string()),
+        iroha_data_model::asset::AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "n3x_like".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ),
     )
     .execute(&creds.account, &mut seed_tx)
     .expect("register asset definition");
@@ -1991,7 +2019,6 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
@@ -2104,7 +2131,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
 
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
         "n3x_burn".parse().expect("asset definition name"),
     );
@@ -2118,8 +2145,12 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     ));
     let mut seed_tx = seed_block.transaction();
     iroha_data_model::prelude::Register::asset_definition(
-        iroha_data_model::asset::AssetDefinition::numeric(asset_definition_id.clone())
-            .with_name(asset_definition_id.name().to_string()),
+        iroha_data_model::asset::AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "n3x_burn".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ),
     )
     .execute(&creds.account, &mut seed_tx)
     .expect("register asset definition");
@@ -2148,7 +2179,6 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
             &state,
             &queue,
-            &chain_id,
             &creds.account,
             &creds.private_key,
             &program,

@@ -1,6 +1,6 @@
 //! User configuration view.
 
-use std::{path::PathBuf, time::Duration};
+use std::{fmt, path::PathBuf, time::Duration};
 
 use error_stack::{Report, ResultExt};
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
@@ -55,6 +55,9 @@ pub struct Root {
     #[config(nested)]
     /// Soracloud-specific client behavior.
     pub soracloud: Soracloud,
+    #[config(nested)]
+    /// Optional Musubi production-publication platform bindings.
+    pub musubi: Musubi,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -138,8 +141,22 @@ impl Root {
     ///
     /// # Errors
     /// If a set of validity errors occurs.
-    #[allow(clippy::too_many_lines)]
     pub fn parse(self) -> ReportResult<super::Config, ParseError> {
+        self.parse_with_musubi_sections()
+            .map(|(configuration, _publication, _fetch)| configuration)
+    }
+
+    pub(crate) fn parse_with_musubi(
+        self,
+    ) -> ReportResult<(super::Config, MusubiPublication), ParseError> {
+        self.parse_with_musubi_sections()
+            .map(|(configuration, publication, _fetch)| (configuration, publication))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn parse_with_musubi_sections(
+        self,
+    ) -> ReportResult<(super::Config, MusubiPublication, MusubiFetch), ParseError> {
         let Self {
             chain: chain_id,
             torii_url,
@@ -162,6 +179,11 @@ impl Root {
             connect: Connect { queue_root },
             sorafs,
             soracloud,
+            musubi:
+                Musubi {
+                    publication: musubi_publication,
+                    fetch: musubi_fetch,
+                },
         } = self;
 
         let mut emitter = Emitter::new();
@@ -322,23 +344,27 @@ impl Root {
 
         emitter.into_result()?;
 
-        Ok(super::Config {
-            chain: chain_id,
-            account: account_id,
-            account_chain_discriminant: chain_discriminant.into_value(),
-            key_pair: key_pair.unwrap(),
-            torii_api_url,
-            basic_auth,
-            torii_request_timeout: torii_request_timeout_ms.into_value().get(),
-            transaction_ttl: tx_ttl.into_value().get(),
-            transaction_status_timeout: tx_timeout.into_value().get(),
-            transaction_add_nonce: tx_add_nonce,
-            connect_queue_root: queue_root_path,
-            soracloud_http_witness_file: http_witness_file,
-            sorafs_alias_cache: alias_policy,
-            sorafs_anonymity_policy: default_anonymity_policy,
-            sorafs_rollout_phase: rollout_phase_value,
-        })
+        Ok((
+            super::Config {
+                chain: chain_id,
+                account: account_id,
+                account_chain_discriminant: chain_discriminant.into_value(),
+                key_pair: key_pair.unwrap(),
+                torii_api_url,
+                basic_auth,
+                torii_request_timeout: torii_request_timeout_ms.into_value().get(),
+                transaction_ttl: tx_ttl.into_value().get(),
+                transaction_status_timeout: tx_timeout.into_value().get(),
+                transaction_add_nonce: tx_add_nonce,
+                connect_queue_root: queue_root_path,
+                soracloud_http_witness_file: http_witness_file,
+                sorafs_alias_cache: alias_policy,
+                sorafs_anonymity_policy: default_anonymity_policy,
+                sorafs_rollout_phase: rollout_phase_value,
+            },
+            musubi_publication,
+            musubi_fetch,
+        ))
     }
 }
 
@@ -400,6 +426,124 @@ impl Default for Connect {
 pub struct Soracloud {
     /// Optional path to a JSON canonical request witness used for multisig Soracloud HTTP.
     pub http_witness_file: Option<PathBuf>,
+}
+
+/// Musubi-specific platform client configuration.
+#[derive(Clone, Debug, Default, ReadConfig)]
+pub struct Musubi {
+    #[config(nested)]
+    /// Optional production-publication service and public request bindings.
+    pub publication: MusubiPublication,
+    #[config(nested)]
+    /// Optional authenticated `SoraFS` archive-fetch bindings.
+    pub fetch: MusubiFetch,
+}
+
+/// Raw authenticated archive-fetch values admitted from `[musubi.fetch]`.
+///
+/// These fields have no environment mappings. API credentials are named only by
+/// platform-owned files and are never embedded in this configuration value.
+#[derive(Clone, Default, ReadConfig)]
+pub struct MusubiFetch {
+    /// Stable, non-secret client label sent to `SoraFS` token issuers.
+    pub client_id: Option<String>,
+    /// Optional bounded request timeout in milliseconds.
+    pub request_timeout_ms: Option<u64>,
+    /// Exact provider-specific HTTPS origins and credential-file bindings.
+    #[config(default)]
+    pub provider_gateways: Vec<MusubiFetchProviderGateway>,
+}
+
+impl fmt::Debug for MusubiFetch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MusubiFetch")
+            .field("configured", &!self.provider_gateways.is_empty())
+            .field("provider_gateway_count", &self.provider_gateways.len())
+            .field("request_timeout_ms", &self.request_timeout_ms)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One trusted provider identity, HTTPS origin, and runtime-only API-token file.
+#[derive(Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct MusubiFetchProviderGateway {
+    /// Lowercase hexadecimal public `SoraFS` provider identifier.
+    pub provider_id: String,
+    /// Provider-specific `SoraFS` HTTPS origin.
+    pub url: String,
+    /// Platform-owned file containing the provider's Torii API token.
+    pub api_token_file: String,
+}
+
+impl fmt::Debug for MusubiFetchProviderGateway {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MusubiFetchProviderGateway")
+            .field("provider_id", &self.provider_id)
+            .field("api_token_configured", &!self.api_token_file.is_empty())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Raw production-publication values admitted from `[musubi.publication]`.
+///
+/// These fields deliberately have no environment mappings. The Musubi runtime performs the
+/// security-sensitive semantic validation and keeps service URLs out of diagnostics.
+#[derive(Clone, Default, ReadConfig)]
+pub struct MusubiPublication {
+    /// Private authenticated seed-ingress HTTPS base URL.
+    pub seed_ingress_url: Option<String>,
+    /// Private permanent-pin and replication-coordinator HTTPS base URL.
+    pub storage_coordinator_url: Option<String>,
+    /// Public I105 account of the admitted seed-ingress broker.
+    pub ingress_broker: Option<String>,
+    /// Lowercase hexadecimal public `SoraFS` seed-provider identifier.
+    pub seed_provider: Option<String>,
+    /// Exact registry admission-policy revision expected by the publication.
+    pub expected_policy_revision: Option<u64>,
+    /// Optional bounded request timeout in milliseconds.
+    pub request_timeout_ms: Option<u64>,
+    /// Exact provider-specific readback origins.
+    #[config(default)]
+    pub provider_gateways: Vec<MusubiPublicationProviderGateway>,
+    /// Optional path to a canonical public namespace-delegation proof.
+    pub namespace_delegation_file: Option<String>,
+}
+
+impl fmt::Debug for MusubiPublication {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MusubiPublication")
+            .field("configured", &self.seed_ingress_url.is_some())
+            .field("provider_gateway_count", &self.provider_gateways.len())
+            .field("request_timeout_ms", &self.request_timeout_ms)
+            .field(
+                "namespace_delegation_configured",
+                &self.namespace_delegation_file.is_some(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+/// One public provider identity and private provider-specific readback HTTPS base.
+#[derive(Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct MusubiPublicationProviderGateway {
+    /// Lowercase hexadecimal public `SoraFS` provider identifier.
+    pub provider_id: String,
+    /// Provider-specific authenticated readback HTTPS base URL.
+    pub url: String,
+}
+
+impl fmt::Debug for MusubiPublicationProviderGateway {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MusubiPublicationProviderGateway")
+            .field("provider_id", &self.provider_id)
+            .finish_non_exhaustive()
+    }
 }
 
 /// SoraFS-specific configuration.
@@ -526,6 +670,7 @@ mod tests {
             connect: Connect::default(),
             sorafs: Sorafs::default(),
             soracloud: Soracloud::default(),
+            musubi: Musubi::default(),
         }
     }
 

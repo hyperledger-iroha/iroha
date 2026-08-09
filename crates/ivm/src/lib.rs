@@ -82,6 +82,7 @@ pub mod segmented_memory;
 mod sha3;
 pub mod signature;
 pub mod simple_instruction;
+pub mod stack_policy;
 mod state_overlay;
 #[path = "state_value.rs"]
 mod state_value_runtime;
@@ -92,14 +93,9 @@ mod vector;
 pub mod zk;
 mod zk_poseidon;
 pub mod zk_verify;
-use std::sync::{
-    Mutex, OnceLock,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Mutex, OnceLock};
 
-use iroha_telemetry::metrics::{
-    StackSettingsSnapshot, record_stack_gas_multiplier, record_stack_limits,
-};
+use iroha_telemetry::metrics::{StackSettingsSnapshot, record_stack_limits};
 // Deterministic parallel execution utilities.
 pub mod parallel;
 /// Canonical host-independent builders for generated executor fixtures.
@@ -113,6 +109,7 @@ pub mod predecoder_fixtures;
 pub use crate::core_host::CoreHost;
 #[cfg(test)]
 pub use crate::field_dispatch::{clear_field_impl_for_tests, set_field_impl_for_tests};
+pub use crate::stack_policy::IvmStackPolicy;
 // Publicly expose gas schedule helper for tests and tooling.
 pub use crate::argument_record::{
     PreparedArgumentRecord, argument_record_decode_count, argument_record_from_json,
@@ -496,56 +493,26 @@ pub fn acceleration_runtime_errors() -> AccelerationErrorStatus {
     }
 }
 
-/// Default gas→stack multiplier (bytes of stack available per unit of gas).
-const DEFAULT_GAS_TO_STACK_MULTIPLIER: u64 = 4;
-
-/// Global gas→stack multiplier applied when deriving guest stack limits from gas.
-static GAS_TO_STACK_MULTIPLIER: AtomicU64 = AtomicU64::new(DEFAULT_GAS_TO_STACK_MULTIPLIER);
-
-/// Minimum stack size applied to scheduler/prover workers and guest stacks.
+/// Minimum native stack size applied to scheduler and prover workers.
 pub const MIN_STACK_BYTES: usize = 64 * 1024;
-/// Maximum stack size applied to scheduler/prover workers and guest stacks.
+/// Maximum native stack size applied to scheduler and prover workers.
 pub const MAX_STACK_BYTES: usize = 1024 * 1024 * 1024;
 
-/// Outcome of applying stack size configuration, including clamping flags.
+/// Outcome of applying native worker stack configuration, including clamping flags.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StackSizeOutcome {
     /// Requested scheduler stack size (bytes).
     pub requested_scheduler_bytes: usize,
     /// Requested prover stack size (bytes).
     pub requested_prover_bytes: usize,
-    /// Requested guest stack size (bytes).
-    pub requested_guest_bytes: u64,
-    /// Requested guest stack budget cap (bytes).
-    pub requested_budget_bytes: u64,
     /// Applied scheduler stack size (bytes) after clamping.
     pub scheduler_bytes: usize,
     /// Applied prover stack size (bytes) after clamping.
     pub prover_bytes: usize,
-    /// Applied guest stack size (bytes) after clamping.
-    pub guest_bytes: u64,
-    /// Applied guest stack budget cap (bytes) after clamping.
-    pub budget_bytes: u64,
     /// Whether the scheduler stack request was clamped.
     pub scheduler_clamped: bool,
     /// Whether the prover stack request was clamped.
     pub prover_clamped: bool,
-    /// Whether the guest stack request was clamped.
-    pub guest_clamped: bool,
-    /// Whether the guest stack budget cap was clamped.
-    pub budget_clamped: bool,
-}
-
-/// Current gas→stack multiplier (bytes of stack permitted per unit of gas).
-#[must_use]
-pub fn gas_to_stack_multiplier() -> u64 {
-    GAS_TO_STACK_MULTIPLIER.load(Ordering::Relaxed).max(1)
-}
-
-/// Override the gas→stack multiplier (bytes of stack permitted per unit of gas).
-pub fn set_gas_to_stack_multiplier(multiplier: u64) {
-    GAS_TO_STACK_MULTIPLIER.store(multiplier.max(1), Ordering::Relaxed);
-    record_stack_gas_multiplier(gas_to_stack_multiplier());
 }
 
 /// Configure the default scheduler thread limits used by `IVM::new`.
@@ -558,62 +525,37 @@ pub fn set_scheduler_thread_limits(min_threads: Option<usize>, max_threads: Opti
     crate::parallel::set_default_scheduler_limits(min_threads, max_threads);
 }
 
-/// Override the default guest stack limit applied to new VMs.
-pub fn set_guest_stack_limit(bytes: u64) {
-    crate::memory::Memory::set_default_stack_limit(bytes);
-}
-
-/// Current default guest stack limit in bytes.
-pub fn guest_stack_limit() -> u64 {
-    crate::memory::Memory::default_stack_limit()
-}
-
-/// Validate and apply stack size knobs for scheduler/prover pools and guest stack budgets.
-pub fn apply_stack_sizes(
-    scheduler_bytes: usize,
-    prover_bytes: usize,
-    guest_bytes: u64,
-    budget_bytes: u64,
-) -> StackSizeOutcome {
+/// Validate and apply native stack sizes for scheduler and prover pools.
+///
+/// Guest stack geometry is fixed by [`IvmStackPolicy::V1`] and is deliberately
+/// not accepted by this operational configuration API.
+pub fn apply_stack_sizes(scheduler_bytes: usize, prover_bytes: usize) -> StackSizeOutcome {
     let sched = scheduler_bytes.clamp(MIN_STACK_BYTES, MAX_STACK_BYTES);
     let prover = prover_bytes.clamp(MIN_STACK_BYTES, MAX_STACK_BYTES);
-    let guest = crate::memory::Memory::align_stack_bytes(
-        guest_bytes.clamp(MIN_STACK_BYTES as u64, MAX_STACK_BYTES as u64),
-    );
-    let budget = crate::memory::Memory::align_stack_bytes(
-        budget_bytes.clamp(MIN_STACK_BYTES as u64, MAX_STACK_BYTES as u64),
-    );
     let outcome = StackSizeOutcome {
         requested_scheduler_bytes: scheduler_bytes,
         requested_prover_bytes: prover_bytes,
-        requested_guest_bytes: guest_bytes,
-        requested_budget_bytes: budget_bytes,
         scheduler_bytes: sched,
         prover_bytes: prover,
-        guest_bytes: guest,
-        budget_bytes: budget,
         scheduler_clamped: sched != scheduler_bytes,
         prover_clamped: prover != prover_bytes,
-        guest_clamped: guest != guest_bytes,
-        budget_clamped: budget != budget_bytes,
     };
     set_scheduler_stack_size(sched);
     set_prover_stack_size(prover);
-    set_guest_stack_limit(guest);
-    crate::memory::Memory::set_stack_budget_limit(budget);
+    let guest_policy = IvmStackPolicy::V1;
     record_stack_limits(StackSettingsSnapshot {
         requested_scheduler_bytes: outcome.requested_scheduler_bytes as u64,
         requested_prover_bytes: outcome.requested_prover_bytes as u64,
-        requested_guest_bytes: outcome.requested_guest_bytes,
+        requested_guest_bytes: guest_policy.maximum_stack_bytes(),
         scheduler_bytes: outcome.scheduler_bytes as u64,
         prover_bytes: outcome.prover_bytes as u64,
-        guest_bytes: outcome.guest_bytes,
+        guest_bytes: guest_policy.maximum_stack_bytes(),
         scheduler_clamped: outcome.scheduler_clamped,
         prover_clamped: outcome.prover_clamped,
-        guest_clamped: outcome.guest_clamped,
+        guest_clamped: false,
         pool_fallback_total: 0,
         budget_hit_total: 0,
-        gas_to_stack_multiplier: gas_to_stack_multiplier(),
+        gas_to_stack_multiplier: guest_policy.bytes_per_gas(),
     });
     outcome
 }
@@ -690,11 +632,9 @@ mod tests {
 
     #[test]
     fn apply_stack_sizes_clamps_and_records_snapshot() {
-        let prev_multiplier = gas_to_stack_multiplier();
         record_stack_limits(StackSettingsSnapshot::default());
-        record_stack_gas_multiplier(prev_multiplier);
 
-        let outcome = apply_stack_sizes(1, usize::MAX, u64::MAX, u64::MAX);
+        let outcome = apply_stack_sizes(1, usize::MAX);
         assert!(
             outcome.scheduler_clamped,
             "scheduler stack should clamp low values"
@@ -702,14 +642,6 @@ mod tests {
         assert!(
             outcome.prover_clamped,
             "prover stack should clamp high values"
-        );
-        assert!(
-            outcome.guest_clamped,
-            "guest stack should clamp high values"
-        );
-        assert!(
-            outcome.budget_clamped,
-            "guest stack budget should clamp high values"
         );
 
         let snapshot = iroha_telemetry::metrics::stack_settings_snapshot();
@@ -722,27 +654,17 @@ mod tests {
             "prover stack should clamp to maximum"
         );
         assert_eq!(
-            snapshot.guest_bytes, MAX_STACK_BYTES as u64,
-            "guest stack should clamp to maximum"
-        );
-        assert_eq!(
-            crate::memory::Memory::stack_budget_limit(),
-            MAX_STACK_BYTES as u64,
-            "stack budget limit should clamp to maximum"
+            snapshot.guest_bytes,
+            IvmStackPolicy::V1.maximum_stack_bytes(),
+            "telemetry must expose the fixed V1 guest-stack ceiling"
         );
         assert_eq!(
             snapshot.gas_to_stack_multiplier,
-            prev_multiplier.max(1),
-            "stack snapshot should carry gas multiplier"
+            IvmStackPolicy::V1.bytes_per_gas(),
+            "telemetry must expose the fixed V1 gas policy"
         );
 
-        let _ = apply_stack_sizes(
-            32 * 1024 * 1024,
-            32 * 1024 * 1024,
-            crate::memory::Memory::STACK_SIZE,
-            crate::memory::Memory::STACK_SIZE,
-        );
-        set_gas_to_stack_multiplier(prev_multiplier);
+        let _ = apply_stack_sizes(32 * 1024 * 1024, 32 * 1024 * 1024);
     }
 
     #[test]
@@ -762,50 +684,15 @@ mod tests {
     }
 
     #[test]
-    fn guest_stack_limit_propagates_to_vm() {
-        let prev = guest_stack_limit();
-        let prev_budget = crate::memory::Memory::stack_budget_limit();
-        let target = 128 * 1024_u64;
-        set_guest_stack_limit(target);
-        crate::memory::Memory::set_stack_budget_limit(target);
-        // Use a gas limit large enough that the gas-derived ceiling does not clamp the stack.
-        let vm = IVM::new(100_000);
-        assert_eq!(vm.memory.stack_limit(), target);
-        set_guest_stack_limit(prev);
-        crate::memory::Memory::set_stack_budget_limit(prev_budget);
-    }
+    fn native_stack_settings_cannot_change_guest_policy() {
+        let gas_limit = 100_000;
+        let expected = IvmStackPolicy::V1.stack_limit_for_gas(gas_limit);
 
-    #[test]
-    fn apply_stack_sizes_aligns_guest_and_budget_limits() {
-        let prev_guest = guest_stack_limit();
-        let prev_budget = crate::memory::Memory::stack_budget_limit();
-        let outcome = apply_stack_sizes(32 * 1024 * 1024, 32 * 1024 * 1024, 0x60a04, 0x60a04);
+        let _ = apply_stack_sizes(MIN_STACK_BYTES, MAX_STACK_BYTES);
+        assert_eq!(IvmStackPolicy::V1.stack_limit_for_gas(gas_limit), expected);
 
-        assert_eq!(
-            outcome.guest_bytes % crate::memory::Memory::STACK_ALIGNMENT,
-            0
-        );
-        assert_eq!(
-            outcome.budget_bytes % crate::memory::Memory::STACK_ALIGNMENT,
-            0
-        );
-        assert_eq!(guest_stack_limit(), outcome.guest_bytes);
-        assert_eq!(
-            crate::memory::Memory::stack_budget_limit(),
-            outcome.budget_bytes
-        );
-
-        set_guest_stack_limit(prev_guest);
-        crate::memory::Memory::set_stack_budget_limit(prev_budget);
-    }
-
-    #[test]
-    fn stack_limits_are_clamped() {
-        apply_stack_sizes(1, usize::MAX, u64::MAX, u64::MAX);
-        assert!(guest_stack_limit() <= 1024 * 1024 * 1024);
-        assert!(guest_stack_limit() >= 64 * 1024);
-        assert!(crate::memory::Memory::stack_budget_limit() <= 1024 * 1024 * 1024);
-        assert!(crate::memory::Memory::stack_budget_limit() >= 64 * 1024);
+        let _ = apply_stack_sizes(MAX_STACK_BYTES, MIN_STACK_BYTES);
+        assert_eq!(IvmStackPolicy::V1.stack_limit_for_gas(gas_limit), expected);
     }
 
     #[test]

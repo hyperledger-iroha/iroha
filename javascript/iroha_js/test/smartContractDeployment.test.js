@@ -5,6 +5,7 @@ import test from "node:test";
 import { ed25519 } from "@noble/curves/ed25519";
 
 import { AccountAddress } from "../src/address.js";
+import { parseCanonicalContractAddress } from "../src/contractAddress.js";
 import {
   buildCancelSmartContractCodeUploadInstruction,
   buildCommitContractDeploymentInstruction,
@@ -21,7 +22,6 @@ import {
   deriveContractAddress,
   prepareBrowserContractArtifact,
 } from "../src/smartContractDeployment.js";
-import { createStaticArtifactAdmissionVerifier } from "./helpers/artifactAdmissionWasm.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
 import {
   browserTransactionPayloadHashHex,
@@ -30,14 +30,16 @@ import {
   finalizeBrowserInstructionTransaction,
   validateBrowserInstructionTransactionSignable,
 } from "../src/transactionCodec.js";
+import { parseStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
 
-const CURRENT_ARTIFACT_FIXTURE = JSON.parse(
+const CURRENT_ARTIFACT_FIXTURE = parseStrictLosslessIntegerJson(
   readFileSync(
     new URL("./fixtures/current_rust_contract_artifact.json", import.meta.url),
     "utf8",
   ),
+  "current Rust contract artifact fixture",
 );
-const ABI_HASH = CURRENT_ARTIFACT_FIXTURE.rust_verifier.abi_hash_hex;
+const ABI_HASH = CURRENT_ARTIFACT_FIXTURE.artifact_semantics.abi_hash_hex;
 const PRIVATE_KEY = Buffer.from(
   "CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53",
   "hex",
@@ -53,17 +55,17 @@ const AUTHORITY_FEE_PAYMENT = Object.freeze({
 });
 const ARTIFACT_ADMISSION_VERIFIER = await createStaticArtifactAdmissionVerifier({
   ok: true,
-  code_hash_hex: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_hash_hex,
-  abi_hash_hex: CURRENT_ARTIFACT_FIXTURE.rust_verifier.abi_hash_hex,
-  header_len: CURRENT_ARTIFACT_FIXTURE.rust_verifier.header_len,
-  code_offset: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_offset,
-  entrypoint_count: CURRENT_ARTIFACT_FIXTURE.rust_verifier.entrypoint_count,
+  code_hash_hex: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_hash_hex,
+  abi_hash_hex: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.abi_hash_hex,
+  header_len: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.header_len,
+  code_offset: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
+  entrypoint_count: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.entrypoint_count,
   manifest: CURRENT_ARTIFACT_FIXTURE.manifest,
 });
 function deploymentFixture() {
   return {
     artifactBytes: Buffer.from(CURRENT_ARTIFACT_FIXTURE.artifact_base64, "base64"),
-    codeHashHex: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_hash_hex,
+    codeHashHex: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_hash_hex,
     manifest: structuredClone(CURRENT_ARTIFACT_FIXTURE.manifest),
   };
 }
@@ -117,7 +119,7 @@ test("current smart-contract deployment instructions round-trip through Norito",
     buildCancelSmartContractCodeUploadInstruction({ codeHash: codeHashHex }),
     buildCommitContractDeploymentInstruction({
       expectedDeployNonce: 7,
-      contractAddress: "sorac1qyqqqqqqqqqqqq9rdnnncuwseflztqwhmppl0fyvc37w8gqgs6g62",
+      contractAddress: "irohac1qyqqqqqqqqqqqqzr5t8frxcyg9020s5gfwugwtu7vmc8zdgmgza38",
       codeHash: codeHashHex,
       contractAlias: "demo::universal",
       leaseExpiryMs: 123_456,
@@ -171,12 +173,36 @@ test("artifact preparation verifies the authenticated CNTR envelope before uploa
 test("contract-address derivation matches the pinned current-Rust V1 vector", () => {
   assert.equal(
     deriveContractAddress({
+      chainId: "pk3",
       chainDiscriminant: 753,
       authority: AUTHORITY,
       deployNonce: 7,
       dataspaceId: 0,
     }),
-    "sorac1qyqqqqqqqqqqqq9rdnnncuwseflztqwhmppl0fyvc37w8gqgs6g62",
+    "irohac1qyqqqqqqqqqqqqzr5t8frxcyg9020s5gfwugwtu7vmc8zdgmgza38",
+  );
+});
+
+test("contract-address derivation commits the exact full chain identity", () => {
+  const common = {
+    chainDiscriminant: 753,
+    authority: AUTHORITY,
+    deployNonce: 7,
+    dataspaceId: 0,
+  };
+  assert.notEqual(
+    deriveContractAddress({ ...common, chainId: "pk3-alpha" }),
+    deriveContractAddress({ ...common, chainId: "pk3-beta" }),
+  );
+});
+
+test("contract-address parsing rejects a checksum-valid legacy HRP", () => {
+  assert.throws(
+    () =>
+      parseCanonicalContractAddress(
+        "sorac1qyqqqqqqqqqqqq9rdnnncuwseflztqwhmppl0fyvc37w8gqgs6g62",
+      ),
+    /canonical irohac prefix/u,
   );
 });
 
@@ -245,7 +271,6 @@ test("browser deployment retains the existing key locally and commits every step
   const submissions = [];
   let stateReads = 0;
   const result = await deploySmartContractBrowser({
-    artifactAdmissionVerifier: ARTIFACT_ADMISSION_VERIFIER,
     artifactBytes: fixture.artifactBytes,
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
@@ -313,7 +338,7 @@ test("browser deployment retains the existing key locally and commits every step
   assert.match(registeredManifest.provenance.signature, /^[0-9A-F]{128}$/u);
   assert.equal(
     result.contractAddress,
-    "sorac1qyqqqqqqqqqqqq9rdnnncuwseflztqwhmppl0fyvc37w8gqgs6g62",
+    "irohac1qyqqqqqqqqqqqqzr5t8frxcyg9020s5gfwugwtu7vmc8zdgmgza38",
   );
   assert.equal(result.observedBlockHeight, "10");
   assert.equal(result.observedBlockHash, hashLiteral("ab".repeat(32)));
@@ -321,14 +346,14 @@ test("browser deployment retains the existing key locally and commits every step
   assert.equal(result.ledgerTimeMs, "123456");
   assert.deepEqual(result.artifactAdmission, {
     verifierSha256Hex: ARTIFACT_ADMISSION_VERIFIER.verifierSha256Hex,
-    headerLength: CURRENT_ARTIFACT_FIXTURE.rust_verifier.header_len,
-    codeOffset: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_offset,
-    entrypointCount: CURRENT_ARTIFACT_FIXTURE.rust_verifier.entrypoint_count,
+    headerLength: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.header_len,
+    codeOffset: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
+    entrypointCount: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.entrypoint_count,
   });
   assert.equal(result.transactions.length, 4);
 });
 
-test("browser deployment fails closed without authentic shared artifact admission", async () => {
+test("browser deployment rejects retired pre-release options before callbacks", async () => {
   const fixture = deploymentFixture();
   let externalCalls = 0;
   const options = {
@@ -362,17 +387,11 @@ test("browser deployment fails closed without authentic shared artifact admissio
       throw new Error("must not submit transaction");
     },
   };
-  await assert.rejects(
-    deploySmartContractBrowser(options),
-    /must come from instantiateIvmArtifactAdmissionWasm/u,
-  );
+  const retiredVerifierOption = "artifactAdmission" + "Verifier";
   await assert.rejects(
     deploySmartContractBrowser({
       ...options,
-      artifactAdmissionVerifier: {
-        verifierSha256Hex: "00".repeat(32),
-        verify: () => ({ ok: true }),
-      },
+      [retiredVerifierOption]: {},
     }),
     /must come from instantiateIvmArtifactAdmissionWasm/u,
   );
@@ -383,7 +402,7 @@ test("browser deployment fails closed without authentic shared artifact admissio
   const forbiddenArtifact = Buffer.from(fixture.artifactBytes);
   forbiddenArtifact.set(
     [0x00, 0x00, 0xfe, 0x62],
-    CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_offset,
+    CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
   );
   const forbiddenCodeHash =
     computeIvmArtifactHashes(forbiddenArtifact).codeHashHex;
@@ -405,7 +424,6 @@ test("browser deployment fails closed without authentic shared artifact admissio
 test("browser deployment stops without exact persisted Applied finality and authoritative state", async () => {
   const fixture = deploymentFixture();
   const base = {
-    artifactAdmissionVerifier: ARTIFACT_ADMISSION_VERIFIER,
     artifactBytes: fixture.artifactBytes,
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
@@ -467,7 +485,6 @@ test("browser deployment stops without exact persisted Applied finality and auth
 test("deployment rejects incompatible node bytes and invalid manifest provenance before upload", async () => {
   const fixture = deploymentFixture();
   const base = {
-    artifactAdmissionVerifier: ARTIFACT_ADMISSION_VERIFIER,
     artifactBytes: fixture.artifactBytes,
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
@@ -520,7 +537,6 @@ test("deployment rejects non-Rust aliases and state/address disagreement before 
   const fixture = deploymentFixture();
   let signCalls = 0;
   const base = {
-    artifactAdmissionVerifier: ARTIFACT_ADMISSION_VERIFIER,
     artifactBytes: fixture.artifactBytes,
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
@@ -557,6 +573,7 @@ test("deployment rejects non-Rust aliases and state/address disagreement before 
   );
 
   const wrongDataspaceAddress = deriveContractAddress({
+    chainId: "pk3",
     chainDiscriminant: 753,
     authority: AUTHORITY,
     deployNonce: 6,

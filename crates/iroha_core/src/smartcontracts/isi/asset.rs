@@ -23,6 +23,7 @@ pub mod isi {
         sync::LazyLock,
     };
 
+    use iroha_crypto::Hash;
     use iroha_data_model::{
         asset::{
             ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, ASSET_TRANSFER_CONTROL_METADATA_KEY,
@@ -42,6 +43,7 @@ pub mod isi {
             error::MintabilityError,
         },
         nexus::{CapabilityRequest, DataSpaceCatalog, DataSpaceId, ManifestVerdict},
+        privacy::PrivacyStatementDigestV1,
     };
     use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::{
@@ -59,11 +61,7 @@ pub mod isi {
     impl WorldTransaction<'_, '_> {
         /// Decrease a numeric asset balance; removes the asset entry if it reaches zero.
         /// Does not emit events; callers remain responsible for event emission.
-        pub(crate) fn withdraw_numeric_asset(
-            &mut self,
-            id: &AssetId,
-            amount: &Quantity,
-        ) -> Result<(), Error> {
+        fn withdraw_numeric_asset(&mut self, id: &AssetId, amount: &Quantity) -> Result<(), Error> {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
             let spec = self.asset_definition(resolved_id.definition())?.spec();
             assert_numeric_spec_with(amount.as_numeric(), spec)?;
@@ -275,7 +273,7 @@ pub mod isi {
         /// precomputed value. It does not emit an `Added` event; callers remain responsible for
         /// balance-change event emission.
         #[cfg_attr(not(test), allow(dead_code))]
-        pub(crate) fn deposit_numeric_asset_exact(
+        fn deposit_numeric_asset_exact(
             &mut self,
             id: &AssetId,
             amount: &Quantity,
@@ -289,43 +287,9 @@ pub mod isi {
         /// The balance id is canonicalized for the current scope before applying the exact
         /// checked credit. This does not emit an `Added` event; callers remain responsible for
         /// balance-change event emission.
-        pub(crate) fn deposit_numeric_asset(
-            &mut self,
-            id: &AssetId,
-            amount: &Quantity,
-        ) -> Result<(), Error> {
+        fn deposit_numeric_asset(&mut self, id: &AssetId, amount: &Quantity) -> Result<(), Error> {
             let (resolved_id, candidate) = self.precheck_numeric_asset_credit(id, amount)?;
             self.apply_prechecked_numeric_asset_credit_exact(&resolved_id, candidate)
-        }
-
-        /// Atomically move an exact numeric amount without emitting transfer events.
-        ///
-        /// The complete source and destination state is prevalidated before either
-        /// balance changes, so callers cannot observe a partial debit or credit.
-        pub(crate) fn transfer_numeric_asset_exact(
-            &mut self,
-            source_id: &AssetId,
-            destination_id: &AssetId,
-            amount: &Quantity,
-        ) -> Result<(), Error> {
-            let source_id = self.resolve_asset_id_for_current_scope(source_id)?;
-            let destination_id = self.resolve_asset_id_for_current_scope(destination_id)?;
-            if sccp_registry_references_custody_asset(self.sccp_registry.get(), &source_id) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "SCCP custody can only be debited by verified native inbound settlement".into(),
-                )
-                .into());
-            }
-            let delta = self.precheck_numeric_asset_transfer_delta_exact(
-                &source_id,
-                &destination_id,
-                amount,
-            )?;
-            self.apply_prechecked_numeric_asset_transfer_delta_exact(
-                &source_id,
-                &destination_id,
-                &delta,
-            )
         }
 
         fn ensure_numeric_asset_holding_limit(
@@ -398,6 +362,91 @@ pub mod isi {
             };
             Err(InstructionExecutionError::AssetTransferAdmission(admission).into())
         }
+    }
+
+    /// Credit a balance directly for focused state-fixture construction.
+    #[cfg(test)]
+    pub(crate) fn seed_numeric_asset_balance_for_test(
+        world: &mut WorldTransaction<'_, '_>,
+        id: &AssetId,
+        amount: &Quantity,
+    ) -> Result<(), Error> {
+        world.deposit_numeric_asset(id, amount)
+    }
+
+    /// Credit an already-canonicalized balance id for focused state-fixture construction.
+    #[cfg(test)]
+    pub(super) fn seed_numeric_asset_balance_exact_for_test(
+        world: &mut WorldTransaction<'_, '_>,
+        id: &AssetId,
+        amount: &Quantity,
+    ) -> Result<(), Error> {
+        world.deposit_numeric_asset_exact(id, amount)
+    }
+
+    /// Debit a balance directly for focused state-fixture construction.
+    #[cfg(test)]
+    pub(crate) fn debit_numeric_asset_balance_for_test(
+        world: &mut WorldTransaction<'_, '_>,
+        id: &AssetId,
+        amount: &Quantity,
+    ) -> Result<(), Error> {
+        world.withdraw_numeric_asset(id, amount)
+    }
+
+    /// Exercise prepared-transfer freshness without exposing the private movement plan.
+    #[cfg(test)]
+    pub(super) fn apply_prepared_numeric_transfer_after_source_credit_for_test(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+        intervening_credit: Quantity,
+    ) -> Result<(), Error> {
+        let plan = PreparedNumericTransferPlan::prepare_user(
+            state_transaction,
+            authority,
+            source_id.clone(),
+            destination_id,
+            amount,
+        )?;
+        state_transaction
+            .world
+            .deposit_numeric_asset(&source_id, &intervening_credit)?;
+        plan.apply(state_transaction).map(|_| ())
+    }
+
+    /// Resolve the typed social-send transcript identity through the private authorization type.
+    #[cfg(test)]
+    pub(super) fn resolve_social_send_movement_identity_for_test(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        legs: &[(AssetId, AssetId, Quantity)],
+        binding: Vec<u8>,
+    ) -> Result<iroha_crypto::Hash, Error> {
+        NumericAssetMovementAuthorization::embedded_user(
+            authority,
+            EmbeddedNumericAssetMovementPurpose::SocialSend(binding),
+        )
+        .resolve_transcript_identity(state_transaction, legs)
+    }
+
+    /// Validate the user transfer route without exposing the internal policy enum.
+    #[cfg(test)]
+    pub(super) fn validate_user_numeric_asset_transfer_policies_for_test(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        source_id: &AssetId,
+        destination_id: &AssetId,
+        amount: &Quantity,
+    ) -> Result<(AssetId, AssetId), Error> {
+        ensure_numeric_asset_transfer_policies(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetTransferSourcePolicy::User,
+        )
     }
 
     #[derive(Clone, Copy)]
@@ -1212,121 +1261,26 @@ pub mod isi {
         Ok(hint.or(route_dataspace))
     }
 
-    fn dataspace_id_for_alias_segment(
-        catalog: &DataSpaceCatalog,
-        dataspace_alias: &str,
-    ) -> Option<DataSpaceId> {
-        if dataspace_alias.eq_ignore_ascii_case("universal") {
-            return Some(DataSpaceId::UNIVERSAL);
-        }
-        catalog.by_alias(dataspace_alias).map(|entry| entry.id)
-    }
+    include!("asset/public_balance_scope.rs");
 
-    fn asset_definition_home_dataspace_id(
-        state_transaction: &StateTransaction<'_, '_>,
-        definition: &AssetDefinition,
-    ) -> Option<DataSpaceId> {
-        let dataspace_alias = state_transaction
-            .world
-            .asset_definition_alias_bindings
-            .get(definition.id())
-            .map(|binding| binding.alias.dataspace_segment().to_owned())
-            .or_else(|| {
-                definition
-                    .alias()
-                    .as_ref()
-                    .map(|alias| alias.dataspace_segment().to_owned())
-            })
-            .or_else(|| {
-                definition
-                    .id()
-                    .try_domain()
-                    .map(|domain| domain.dataspace().as_ref().to_owned())
-            });
-
-        match dataspace_alias {
-            Some(alias) => {
-                dataspace_id_for_alias_segment(&state_transaction.nexus.dataspace_catalog, &alias)
-            }
-            None if definition.balance_scope_policy() == AssetBalancePolicy::Global => {
-                Some(DataSpaceId::UNIVERSAL)
-            }
-            None => None,
-        }
-    }
-
-    fn bare_restricted_asset_home_dataspace_hint(
-        state_transaction: &StateTransaction<'_, '_>,
-        asset_id: &AssetId,
-    ) -> Result<Option<DataSpaceId>, Error> {
-        if !matches!(
-            asset_id.scope(),
-            iroha_data_model::asset::AssetBalanceScope::Global
-        ) {
-            return Ok(None);
-        }
-
-        let definition = state_transaction
-            .world
-            .asset_definition(asset_id.definition())
-            .map_err(Error::from)?;
-        if definition.balance_scope_policy() != AssetBalancePolicy::DataspaceRestricted {
-            return Ok(None);
-        }
-
-        Ok(
-            asset_definition_home_dataspace_id(state_transaction, &definition)
-                .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL),
-        )
-    }
-
-    fn ensure_global_asset_write_on_authoritative_route(
-        state_transaction: &StateTransaction<'_, '_>,
-        definition_id: &AssetDefinitionId,
-        operation: &str,
-    ) -> Result<(), Error> {
-        let definition = state_transaction
-            .world
-            .asset_definition(definition_id)
-            .map_err(Error::from)?;
-        if definition.balance_scope_policy() != AssetBalancePolicy::Global {
-            return Ok(());
-        }
-
-        let home_dataspace = asset_definition_home_dataspace_id(state_transaction, &definition)
-            .unwrap_or(DataSpaceId::UNIVERSAL);
-        let route_dataspace = state_transaction
-            .current_dataspace_id
-            .or(state_transaction.world.current_dataspace_id);
-
-        if let Some(route_dataspace) = route_dataspace
-            && route_dataspace != home_dataspace
-            && route_dataspace != DataSpaceId::UNIVERSAL
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "global asset {definition_id} {operation} must execute on authoritative dataspace {} or the universal AMX coordinator; current route is {}",
-                    home_dataspace.as_u64(),
-                    route_dataspace.as_u64()
-                )
-                .into(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Source-account guard to apply when validating a transparent numeric transfer.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) enum NumericAssetTransferSourcePolicy {
-        /// Apply the same source guards as a user-submitted asset transfer.
+    enum NumericAssetTransferSourcePolicy {
         User,
-        /// Permit debiting a recorded native escrow custody balance from escrow instructions.
         NativeEscrowCustody,
-        /// Permit exactly one verified SCCP native inbound release from governed custody.
         SccpInboundSettlement,
-        /// Permit a protocol-authorized debit from the isolated fee-sponsor custody account.
         FeeSponsorCustody,
+        OfflineEscrowCustody,
+        OracleReward,
+        OraclePenalty,
+        OracleDisputeResolution,
+        SocialReward,
+        SocialEscrow,
+        StakingUnbond,
+        StakingSlash,
+        GovernanceSlash,
+        GovernanceRestitution,
+        GovernanceUnlock,
+        CitizenshipRelease,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1339,6 +1293,26 @@ pub mod isi {
     enum NumericAssetTransferAuthorityPolicy {
         UserSource,
         ProtocolAuthorized,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum NumericAssetTransferControlPolicy {
+        Enforce,
+        OfflineRedemption,
+        OraclePenalty,
+        OracleDisputeResolution,
+        StakingUnbond,
+        StakingSlash,
+        GovernanceSlash,
+        GovernanceRestitution,
+        GovernanceUnlock,
+        CitizenshipRelease,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum NumericAssetDestinationAdmissionPolicy {
+        ImplicitReceive,
+        ExistingAccount,
     }
 
     fn ensure_user_numeric_asset_source_authority(
@@ -1456,12 +1430,2092 @@ pub mod isi {
         Ok(())
     }
 
+    #[derive(Debug)]
+    enum NumericMovementDebitAuthorization {
+        ExactUser(AccountId),
+        GenesisStake(AccountId),
+        Protocol,
+    }
+
+    #[derive(Debug)]
+    enum NumericMovementTranscriptRequirement {
+        TransactionRequired(&'static str),
+        TransactionOrTypedPurpose { tag: &'static str, binding: Vec<u8> },
+    }
+
+    /// Closed set of voluntary embedded numeric movement purposes.
+    #[derive(Debug)]
+    enum EmbeddedNumericAssetMovementPurpose {
+        /// Charge the payer while admitting an implicit account.
+        AccountAdmissionFee(Vec<u8>),
+        /// Reserve an authenticated Kagemusha top-up in offline custody.
+        OfflineTopUp {
+            /// Authority whose signature authorizes the source debit.
+            source_authority: AccountId,
+            /// Exact operation binding.
+            binding: Vec<u8>,
+        },
+        /// Reserve an Oracle dispute bond.
+        OracleDisputeBond(Vec<u8>),
+        /// Send value through the social incentive flow.
+        SocialSend(Vec<u8>),
+        /// Bond stake for a public-lane validator or delegator.
+        StakingBond {
+            /// Exact stake owner.
+            source_authority: AccountId,
+            /// Whether this is the genesis validator bootstrap exception.
+            genesis: bool,
+            /// Exact lane/validator/staker binding.
+            binding: Vec<u8>,
+        },
+        /// Lock a governance voting bond.
+        GovernanceBond(Vec<u8>),
+        /// Lock a citizenship bond.
+        CitizenshipBond(Vec<u8>),
+        /// Fund a native escrow retained record.
+        NativeEscrow(Vec<u8>),
+        /// Fund a VPN lease retained record.
+        VpnLease(Vec<u8>),
+        /// Charge one exact SNS auto-renewal quote.
+        SnsAutoRenewal(Vec<u8>),
+    }
+
+    /// Closed set of retained-state protocol movement purposes.
+    #[derive(Debug)]
+    enum RetainedNumericAssetMovementPurpose {
+        /// Release authenticated offline escrow.
+        OfflineRedemption(Vec<u8>),
+        /// Pay an Oracle reward from the configured pool.
+        OracleReward(Vec<u8>),
+        /// Apply a mandatory Oracle penalty.
+        OraclePenalty(Vec<u8>),
+        /// Resolve the exact retained Oracle dispute.
+        OracleDisputeResolution(Vec<u8>),
+        /// Pay a social reward from the configured pool.
+        SocialReward(Vec<u8>),
+        /// Release or refund a retained social escrow.
+        SocialEscrow(Vec<u8>),
+        /// Release a matured staking unbond.
+        StakingUnbond(Vec<u8>),
+        /// Apply a mandatory retained staking slash.
+        StakingSlash(Vec<u8>),
+        /// Slash a retained governance lock.
+        GovernanceSlash(Vec<u8>),
+        /// Restitute a retained governance slash.
+        GovernanceRestitution(Vec<u8>),
+        /// Unlock a retained governance bond.
+        GovernanceUnlock(Vec<u8>),
+        /// Release a retained citizenship bond.
+        CitizenshipRelease(Vec<u8>),
+        /// Move value according to an exact native escrow record.
+        NativeEscrow(Vec<u8>),
+        /// Move value according to an exact VPN lease record.
+        VpnLease(Vec<u8>),
+        /// Move value from verified fee-sponsor custody.
+        FeeSponsor(Vec<u8>),
+        /// Move one exact transparent balance effect authorized by a native privacy proof.
+        PrivacyPublicBridge(Vec<u8>),
+    }
+
+    /// One-shot authorization and deterministic execution context for a numeric movement.
+    ///
+    /// This value is intentionally neither [`Clone`] nor [`Copy`]. Callers must choose one of
+    /// the closed typed purposes above; there is no caller-selectable `skip_controls` flag.
+    #[derive(Debug)]
+    struct NumericAssetMovementAuthorization {
+        debit: NumericMovementDebitAuthorization,
+        transcript_authority: AccountId,
+        transcript: NumericMovementTranscriptRequirement,
+        source_policy: NumericAssetTransferSourcePolicy,
+        control_policy: NumericAssetTransferControlPolicy,
+        destination_admission: NumericAssetDestinationAdmissionPolicy,
+    }
+
+    impl NumericAssetMovementAuthorization {
+        fn transaction_user(authority: &AccountId, context: &'static str) -> Self {
+            Self {
+                debit: NumericMovementDebitAuthorization::ExactUser(authority.clone()),
+                transcript_authority: authority.clone(),
+                transcript: NumericMovementTranscriptRequirement::TransactionRequired(context),
+                source_policy: NumericAssetTransferSourcePolicy::User,
+                control_policy: NumericAssetTransferControlPolicy::Enforce,
+                destination_admission: NumericAssetDestinationAdmissionPolicy::ImplicitReceive,
+            }
+        }
+
+        /// Bind an embedded voluntary debit to an exact user or genesis stake authority.
+        fn embedded_user(
+            submitting_authority: &AccountId,
+            purpose: EmbeddedNumericAssetMovementPurpose,
+        ) -> Self {
+            let (debit, tag, binding) = match purpose {
+                EmbeddedNumericAssetMovementPurpose::AccountAdmissionFee(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "account-admission-fee",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::OfflineTopUp {
+                    source_authority,
+                    binding,
+                } => (
+                    NumericMovementDebitAuthorization::ExactUser(source_authority),
+                    "offline-top-up",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::OracleDisputeBond(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "oracle-dispute-bond",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::SocialSend(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "social-send",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::StakingBond {
+                    source_authority,
+                    genesis,
+                    binding,
+                } => (
+                    if genesis {
+                        NumericMovementDebitAuthorization::GenesisStake(source_authority)
+                    } else {
+                        NumericMovementDebitAuthorization::ExactUser(source_authority)
+                    },
+                    "staking-bond",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::GovernanceBond(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "governance-bond",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::CitizenshipBond(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "citizenship-bond",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::NativeEscrow(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "native-escrow-funding",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::VpnLease(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "vpn-lease-funding",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::SnsAutoRenewal(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "sns-auto-renewal",
+                    binding,
+                ),
+            };
+            Self {
+                debit,
+                transcript_authority: submitting_authority.clone(),
+                transcript: NumericMovementTranscriptRequirement::TransactionOrTypedPurpose {
+                    tag,
+                    binding,
+                },
+                source_policy: NumericAssetTransferSourcePolicy::User,
+                control_policy: NumericAssetTransferControlPolicy::Enforce,
+                destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+            }
+        }
+
+        /// Bind a protocol debit to an exact retained-state purpose.
+        fn retained(
+            transcript_authority: &AccountId,
+            purpose: RetainedNumericAssetMovementPurpose,
+        ) -> Self {
+            let (tag, binding, source_policy, control_policy) = match purpose {
+                RetainedNumericAssetMovementPurpose::OfflineRedemption(binding) => (
+                    "offline-redemption",
+                    binding,
+                    NumericAssetTransferSourcePolicy::OfflineEscrowCustody,
+                    NumericAssetTransferControlPolicy::OfflineRedemption,
+                ),
+                RetainedNumericAssetMovementPurpose::OracleReward(binding) => (
+                    "oracle-reward",
+                    binding,
+                    NumericAssetTransferSourcePolicy::OracleReward,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+                RetainedNumericAssetMovementPurpose::OraclePenalty(binding) => (
+                    "oracle-penalty",
+                    binding,
+                    NumericAssetTransferSourcePolicy::OraclePenalty,
+                    NumericAssetTransferControlPolicy::OraclePenalty,
+                ),
+                RetainedNumericAssetMovementPurpose::OracleDisputeResolution(binding) => (
+                    "oracle-dispute-resolution",
+                    binding,
+                    NumericAssetTransferSourcePolicy::OracleDisputeResolution,
+                    NumericAssetTransferControlPolicy::OracleDisputeResolution,
+                ),
+                RetainedNumericAssetMovementPurpose::SocialReward(binding) => (
+                    "social-reward",
+                    binding,
+                    NumericAssetTransferSourcePolicy::SocialReward,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+                RetainedNumericAssetMovementPurpose::SocialEscrow(binding) => (
+                    "social-escrow",
+                    binding,
+                    NumericAssetTransferSourcePolicy::SocialEscrow,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+                RetainedNumericAssetMovementPurpose::StakingUnbond(binding) => (
+                    "staking-unbond",
+                    binding,
+                    NumericAssetTransferSourcePolicy::StakingUnbond,
+                    NumericAssetTransferControlPolicy::StakingUnbond,
+                ),
+                RetainedNumericAssetMovementPurpose::StakingSlash(binding) => (
+                    "staking-slash",
+                    binding,
+                    NumericAssetTransferSourcePolicy::StakingSlash,
+                    NumericAssetTransferControlPolicy::StakingSlash,
+                ),
+                RetainedNumericAssetMovementPurpose::GovernanceSlash(binding) => (
+                    "governance-slash",
+                    binding,
+                    NumericAssetTransferSourcePolicy::GovernanceSlash,
+                    NumericAssetTransferControlPolicy::GovernanceSlash,
+                ),
+                RetainedNumericAssetMovementPurpose::GovernanceRestitution(binding) => (
+                    "governance-restitution",
+                    binding,
+                    NumericAssetTransferSourcePolicy::GovernanceRestitution,
+                    NumericAssetTransferControlPolicy::GovernanceRestitution,
+                ),
+                RetainedNumericAssetMovementPurpose::GovernanceUnlock(binding) => (
+                    "governance-unlock",
+                    binding,
+                    NumericAssetTransferSourcePolicy::GovernanceUnlock,
+                    NumericAssetTransferControlPolicy::GovernanceUnlock,
+                ),
+                RetainedNumericAssetMovementPurpose::CitizenshipRelease(binding) => (
+                    "citizenship-release",
+                    binding,
+                    NumericAssetTransferSourcePolicy::CitizenshipRelease,
+                    NumericAssetTransferControlPolicy::CitizenshipRelease,
+                ),
+                RetainedNumericAssetMovementPurpose::NativeEscrow(binding) => (
+                    "native-escrow-retained",
+                    binding,
+                    NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+                RetainedNumericAssetMovementPurpose::VpnLease(binding) => (
+                    "vpn-lease-retained",
+                    binding,
+                    NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+                RetainedNumericAssetMovementPurpose::FeeSponsor(binding) => (
+                    "fee-sponsor-custody",
+                    binding,
+                    NumericAssetTransferSourcePolicy::FeeSponsorCustody,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+                RetainedNumericAssetMovementPurpose::PrivacyPublicBridge(binding) => (
+                    "privacy-public-bridge",
+                    binding,
+                    NumericAssetTransferSourcePolicy::User,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+            };
+            Self {
+                debit: NumericMovementDebitAuthorization::Protocol,
+                transcript_authority: transcript_authority.clone(),
+                transcript: NumericMovementTranscriptRequirement::TransactionOrTypedPurpose {
+                    tag,
+                    binding,
+                },
+                source_policy,
+                control_policy,
+                destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+            }
+        }
+
+        fn bilateral(
+            transcript_authority: &AccountId,
+            tag: &'static str,
+            binding: Vec<u8>,
+        ) -> Self {
+            Self {
+                debit: NumericMovementDebitAuthorization::Protocol,
+                transcript_authority: transcript_authority.clone(),
+                transcript: NumericMovementTranscriptRequirement::TransactionOrTypedPurpose {
+                    tag,
+                    binding,
+                },
+                source_policy: NumericAssetTransferSourcePolicy::User,
+                control_policy: NumericAssetTransferControlPolicy::Enforce,
+                destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+            }
+        }
+
+        fn authority_policy(
+            &self,
+            state_transaction: &StateTransaction<'_, '_>,
+            source_id: &AssetId,
+        ) -> Result<NumericAssetTransferAuthorityPolicy, Error> {
+            match &self.debit {
+                NumericMovementDebitAuthorization::ExactUser(authority) => {
+                    ensure_user_numeric_asset_source_authority(
+                        state_transaction,
+                        authority,
+                        source_id,
+                    )?;
+                    Ok(NumericAssetTransferAuthorityPolicy::ProtocolAuthorized)
+                }
+                NumericMovementDebitAuthorization::GenesisStake(source_authority) => {
+                    if !state_transaction._curr_block.is_genesis()
+                        || !state_transaction.block_hashes.is_empty()
+                        || source_id.account() != source_authority
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "genesis stake debit requires the exact stake owner during genesis bootstrap"
+                                .into(),
+                        ));
+                    }
+                    Ok(NumericAssetTransferAuthorityPolicy::ProtocolAuthorized)
+                }
+                NumericMovementDebitAuthorization::Protocol => {
+                    Ok(NumericAssetTransferAuthorityPolicy::ProtocolAuthorized)
+                }
+            }
+        }
+
+        fn resolve_transcript_identity(
+            &self,
+            state_transaction: &StateTransaction<'_, '_>,
+            legs: &[(AssetId, AssetId, Quantity)],
+        ) -> Result<iroha_crypto::Hash, Error> {
+            if matches!(
+                &self.transcript,
+                NumericMovementTranscriptRequirement::TransactionOrTypedPurpose {
+                    binding,
+                    ..
+                } if binding.is_empty()
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "typed numeric movement purpose binding must not be empty".into(),
+                ));
+            }
+            if let Some(call_hash) = state_transaction.tx_call_hash {
+                return Ok(call_hash);
+            }
+            let NumericMovementTranscriptRequirement::TransactionOrTypedPurpose { tag, binding } =
+                &self.transcript
+            else {
+                let NumericMovementTranscriptRequirement::TransactionRequired(context) =
+                    &self.transcript
+                else {
+                    unreachable!("numeric movement transcript requirement is exhaustive")
+                };
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "{context} requires a transaction call_hash before balance or transcript mutation"
+                    )
+                    .into(),
+                ));
+            };
+            let direct_identity =
+                state_transaction
+                    .direct_execution_identity()
+                    .map_err(|error| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "failed to derive numeric movement execution identity: {error}"
+                            )
+                            .into(),
+                        )
+                    })?;
+            let authority =
+                norito::encode_canonical(&self.transcript_authority).map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("failed to encode numeric movement authority: {error}").into(),
+                    )
+                })?;
+            let legs = norito::encode_canonical(&legs.to_vec()).map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("failed to encode numeric movement binding: {error}").into(),
+                )
+            })?;
+            let mut preimage = Vec::from(&b"iroha:numeric-movement-context:v1\0"[..]);
+            preimage.extend_from_slice(direct_identity.as_ref());
+            for part in [
+                tag.as_bytes(),
+                binding.as_slice(),
+                authority.as_slice(),
+                legs.as_slice(),
+            ] {
+                preimage.extend_from_slice(
+                    &u64::try_from(part.len()).unwrap_or(u64::MAX).to_le_bytes(),
+                );
+                preimage.extend_from_slice(part);
+            }
+            Ok(iroha_crypto::Hash::new(preimage))
+        }
+    }
+
+    /// Fully prepared, non-reusable numeric movement capability.
+    #[must_use]
+    struct PreparedNumericAssetMovement {
+        plan: PreparedNumericTransferPlan,
+        authorization: NumericAssetMovementAuthorization,
+    }
+
+    impl PreparedNumericAssetMovement {
+        /// Prepare one exact numeric movement through the central authorization and policy path.
+        fn prepare(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            source_id: AssetId,
+            destination_id: AssetId,
+            amount: Quantity,
+            authorization: NumericAssetMovementAuthorization,
+        ) -> Result<Self, Error> {
+            Self::prepare_with_scope(
+                state_transaction,
+                source_id,
+                destination_id,
+                amount,
+                authorization,
+                NumericAssetTransferScopePolicy::Ambient,
+            )
+        }
+
+        fn prepare_with_scope(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            source_id: AssetId,
+            destination_id: AssetId,
+            amount: Quantity,
+            authorization: NumericAssetMovementAuthorization,
+            scope_policy: NumericAssetTransferScopePolicy,
+        ) -> Result<Self, Error> {
+            let resolved_source = state_transaction
+                .world
+                .resolve_asset_id_for_current_scope(&source_id)?;
+            let authority_policy =
+                authorization.authority_policy(state_transaction, &resolved_source)?;
+            let plan = PreparedNumericTransferPlan::prepare(
+                state_transaction,
+                &authorization.transcript_authority,
+                source_id,
+                destination_id,
+                amount,
+                scope_policy,
+                authority_policy,
+                authorization.source_policy,
+                authorization.control_policy,
+                authorization.destination_admission,
+            )?;
+            Ok(Self {
+                plan,
+                authorization,
+            })
+        }
+
+        /// Apply the prepared movement, transcript and canonical events as one consumed action.
+        fn apply(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
+            let bindings = vec![(
+                self.plan.source_id.clone(),
+                self.plan.destination_id.clone(),
+                self.plan.amount.clone(),
+            )];
+            let transcript_identity = self
+                .authorization
+                .resolve_transcript_identity(state_transaction, &bindings)?;
+            let applied = self.plan.apply(state_transaction)?;
+            state_transaction.record_transfer_transcripts_with_batch_hash(
+                &self.authorization.transcript_authority,
+                transcript_identity,
+                vec![applied.delta],
+            );
+            #[allow(clippy::float_arithmetic)]
+            #[cfg(feature = "telemetry")]
+            state_transaction
+                .telemetry
+                .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
+            emit_numeric_asset_transfer_events(
+                state_transaction,
+                applied.source_id,
+                applied.destination_id,
+                applied.amount,
+            );
+            Ok(())
+        }
+    }
+
+    /// Prepare and atomically apply one typed numeric asset movement.
+    fn execute_numeric_asset_movement(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+        authorization: NumericAssetMovementAuthorization,
+    ) -> Result<(), Error> {
+        PreparedNumericAssetMovement::prepare(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            authorization,
+        )?
+        .apply(state_transaction)
+    }
+
+    /// Apply one exact transparent balance mutation authorized by a verified
+    /// native privacy statement.
+    pub(crate) fn execute_verified_privacy_public_balance_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        statement_digest: PrivacyStatementDigestV1,
+        definition_id: &AssetDefinitionId,
+        public_balance_scope: AssetBalanceScope,
+        source_account: &AccountId,
+        destination_account: &AccountId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        validate_committed_public_balance_scope(
+            state_transaction,
+            definition_id,
+            public_balance_scope,
+            "privacy bridge transfer",
+        )?;
+        if source_account == destination_account {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "privacy public bridge source and destination must differ".into(),
+            ));
+        }
+        let source_id = AssetId::with_scope(
+            definition_id.clone(),
+            source_account.clone(),
+            public_balance_scope,
+        );
+        let destination_id = AssetId::with_scope(
+            definition_id.clone(),
+            destination_account.clone(),
+            public_balance_scope,
+        );
+        let binding = canonical_numeric_movement_binding(&(
+            statement_digest,
+            definition_id.clone(),
+            public_balance_scope,
+            source_account.clone(),
+            destination_account.clone(),
+            amount.clone(),
+        ))?;
+        PreparedNumericAssetMovement::prepare_with_scope(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                submitting_authority,
+                RetainedNumericAssetMovementPurpose::PrivacyPublicBridge(binding),
+            ),
+            NumericAssetTransferScopePolicy::ExplicitBilateral,
+        )?
+        .apply(state_transaction)
+    }
+
+    fn canonical_numeric_movement_binding<T: norito::codec::Encode>(
+        value: &T,
+    ) -> Result<Vec<u8>, Error> {
+        norito::encode_canonical(value).map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to encode typed numeric movement purpose: {error}").into(),
+            )
+        })
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum NumericAssetBurnSourcePolicy {
+        AccountAdmissionFee,
+        FeeSponsorCustody,
+    }
+
+    /// Apply one fully prechecked numeric supply burn through the central policy path.
+    fn execute_checked_numeric_asset_burn(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: Option<&AccountId>,
+        source_id: AssetId,
+        amount: Quantity,
+        source_policy: NumericAssetBurnSourcePolicy,
+    ) -> Result<(), Error> {
+        ensure_global_asset_write_on_authoritative_route(
+            state_transaction,
+            source_id.definition(),
+            "burn",
+        )?;
+        let source_id = state_transaction
+            .world
+            .resolve_asset_id_for_current_scope(&source_id)?;
+        match source_policy {
+            NumericAssetBurnSourcePolicy::AccountAdmissionFee => {
+                let authority = authority.ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "account-admission fee burn requires an exact authority".into(),
+                    )
+                })?;
+                ensure_user_numeric_asset_source_authority(
+                    state_transaction,
+                    authority,
+                    &source_id,
+                )?;
+                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
+                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
+            }
+            NumericAssetBurnSourcePolicy::FeeSponsorCustody => {
+                if source_id.account()
+                    != &state_transaction
+                        .nexus
+                        .fees
+                        .sponsor_vault_custody_account_id
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "fee sponsor burn source does not match configured custody".into(),
+                    ));
+                }
+                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
+                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
+            }
+        }
+
+        let spec = state_transaction
+            .numeric_spec_for(source_id.definition())
+            .map_err(Error::from)?;
+        assert_numeric_spec_with(amount.as_numeric(), spec)?;
+        ensure_transparent_allowed(
+            state_transaction,
+            source_id.definition(),
+            "transparent burn not permitted by policy",
+        )?;
+        ensure_usage_policy_for_accounts(
+            state_transaction,
+            source_id.definition(),
+            [(
+                source_id.account(),
+                asset_id_dataspace_hint(state_transaction, &source_id),
+            )],
+            Some(&amount),
+        )?;
+        let (control_before, control_update) = match source_policy {
+            NumericAssetBurnSourcePolicy::AccountAdmissionFee => {
+                if !amount.is_zero() {
+                    state_transaction
+                        .world
+                        .ensure_numeric_asset_transfer_availability(
+                            &source_id,
+                            amount.clone(),
+                            AssetTransferDirection::Outgoing,
+                        )?;
+                }
+                (
+                    Some(active_control_record(
+                        state_transaction,
+                        source_id.account(),
+                        source_id.definition(),
+                    )?),
+                    prepare_outbound_asset_transfer_control_update(
+                        state_transaction,
+                        &source_id,
+                        &amount,
+                    )?,
+                )
+            }
+            NumericAssetBurnSourcePolicy::FeeSponsorCustody => (None, None),
+        };
+        let source_before = state_transaction
+            .world
+            .assets
+            .get(&source_id)
+            .ok_or_else(|| FindError::Asset(source_id.clone().into()))?
+            .as_ref()
+            .clone();
+        let source_after = source_before
+            .checked_sub(&amount)
+            .map_err(|_| MathError::NotEnoughQuantity)?;
+        assert_numeric_spec_with(source_after.as_numeric(), spec)?;
+        let total_before = state_transaction
+            .world
+            .asset_definition(source_id.definition())?
+            .total_quantity()
+            .clone();
+        let _total_after = total_before
+            .checked_sub(&amount)
+            .map_err(|_| MathError::NotEnoughQuantity)?;
+        let current_source = state_transaction
+            .world
+            .assets
+            .get(&source_id)
+            .map(|value| value.as_ref().clone());
+        let current_total = state_transaction
+            .world
+            .asset_definition(source_id.definition())?
+            .total_quantity()
+            .clone();
+        let controls_changed = if let Some(expected) = &control_before {
+            active_control_record(
+                state_transaction,
+                source_id.account(),
+                source_id.definition(),
+            )? != *expected
+        } else {
+            false
+        };
+        if current_source.as_ref() != Some(&source_before)
+            || current_total != total_before
+            || controls_changed
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "numeric burn state changed between preparation and apply".into(),
+            ));
+        }
+
+        state_transaction
+            .world
+            .withdraw_numeric_asset(&source_id, &amount)?;
+        state_transaction
+            .world
+            .decrease_asset_total_amount(source_id.definition(), &amount)?;
+        if let Some(record) = control_update {
+            update_control_record(state_transaction, source_id.account(), record)?;
+        }
+        state_transaction
+            .world
+            .emit_asset_event(AssetEvent::Removed(AssetChanged {
+                asset: source_id,
+                amount,
+            }));
+        Ok(())
+    }
+
+    /// Charge an exact user while admitting `created_account`.
+    pub(crate) fn execute_account_admission_fee_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        created_account: &AccountId,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        let binding = canonical_numeric_movement_binding(&(
+            created_account.clone(),
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                authority,
+                EmbeddedNumericAssetMovementPurpose::AccountAdmissionFee(binding),
+            ),
+        )
+    }
+
+    /// Burn an exact user's account-admission fee through the central burn policy path.
+    pub(crate) fn execute_account_admission_fee_burn(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        _created_account: &AccountId,
+        source_id: AssetId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        execute_checked_numeric_asset_burn(
+            state_transaction,
+            Some(authority),
+            source_id,
+            amount,
+            NumericAssetBurnSourcePolicy::AccountAdmissionFee,
+        )
+    }
+
+    /// Reserve an exact user's Oracle dispute bond.
+    pub(crate) fn execute_oracle_dispute_bond_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        dispute_id: &iroha_data_model::oracle::OracleDisputeId,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        if source_id.account() != authority
+            || source_id.definition() != &state_transaction.oracle.economics.dispute_bond_asset
+            || destination_id.account() != &state_transaction.oracle.economics.slash_receiver
+            || destination_id.definition() != &state_transaction.oracle.economics.dispute_bond_asset
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Oracle dispute bond movement does not match configured custody".into(),
+            ));
+        }
+        let binding = canonical_numeric_movement_binding(dispute_id)?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                authority,
+                EmbeddedNumericAssetMovementPurpose::OracleDisputeBond(binding),
+            ),
+        )
+    }
+
+    /// Move an exact user's social send into its verified recipient or configured escrow.
+    pub(crate) fn execute_social_send_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        binding_digest: Hash,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        let config = &state_transaction.gov.viral_incentives;
+        if source_id.account() != authority
+            || source_id.definition() != &config.reward_asset_definition_id
+            || destination_id.definition() != &config.reward_asset_definition_id
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "social send movement does not match its exact authority and configured asset"
+                    .into(),
+            ));
+        }
+        let binding = canonical_numeric_movement_binding(&binding_digest)?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                authority,
+                EmbeddedNumericAssetMovementPurpose::SocialSend(binding),
+            ),
+        )
+    }
+
+    /// Pay a configured social reward from the incentive pool for an exact binding.
+    pub(crate) fn execute_social_reward_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        binding_digest: Hash,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        let config = &state_transaction.gov.viral_incentives;
+        let expected_source = AssetId::new(
+            config.reward_asset_definition_id.clone(),
+            config.incentive_pool_account.clone(),
+        );
+        if source_id != expected_source
+            || destination_id.definition() != &config.reward_asset_definition_id
+            || state_transaction
+                .world
+                .twitter_bindings
+                .get(&binding_digest)
+                .is_none()
+            || (amount != config.follow_reward_amount && amount != config.sender_bonus_amount)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "social reward movement does not match the configured pool, binding, and reward"
+                    .into(),
+            ));
+        }
+        let transcript_authority = source_id.account().clone();
+        let binding = canonical_numeric_movement_binding(&(
+            binding_digest,
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                &transcript_authority,
+                RetainedNumericAssetMovementPurpose::SocialReward(binding),
+            ),
+        )
+    }
+
+    /// Release or refund one exact retained social escrow record.
+    pub(crate) fn execute_social_escrow_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        binding_digest: Hash,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        let config = &state_transaction.gov.viral_incentives;
+        let Some(record) = state_transaction.world.viral_escrows.get(&binding_digest) else {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "social escrow movement requires an exact retained escrow record".into(),
+            ));
+        };
+        let expected_source = AssetId::new(
+            config.reward_asset_definition_id.clone(),
+            config.escrow_account.clone(),
+        );
+        let bound_recipient = state_transaction
+            .world
+            .twitter_bindings
+            .get(&binding_digest)
+            .and_then(|binding| {
+                state_transaction
+                    .world
+                    .uaid_accounts
+                    .get(&binding.attestation.uaid)
+            });
+        let destination_is_authorized = destination_id.account() == &record.sender
+            || bound_recipient.is_some_and(|recipient| destination_id.account() == recipient);
+        if source_id != expected_source
+            || destination_id.definition() != &config.reward_asset_definition_id
+            || amount != record.amount
+            || !destination_is_authorized
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "social escrow movement does not match its retained record".into(),
+            ));
+        }
+        let transcript_authority = record.sender.clone();
+        let binding = canonical_numeric_movement_binding(&(
+            binding_digest,
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                &transcript_authority,
+                RetainedNumericAssetMovementPurpose::SocialEscrow(binding),
+            ),
+        )
+    }
+
+    /// Consume a one-shot, signed and proof-verified offline top-up debit.
+    pub(in crate::smartcontracts::isi) fn execute_verified_offline_top_up_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::offline::VerifiedKagemushaTopUpDebit,
+    ) -> Result<(), Error> {
+        let (source_authority, operation_id, source_id, destination_id, amount) =
+            authorization.into_parts();
+        if source_id.account() != &source_authority
+            || !crate::smartcontracts::isi::offline::is_offline_escrow_source_asset(
+                state_transaction,
+                &destination_id,
+            )?
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "offline top-up capability does not match its signed source and configured custody"
+                    .into(),
+            ));
+        }
+        let binding = canonical_numeric_movement_binding(&(
+            operation_id,
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                &source_authority,
+                EmbeddedNumericAssetMovementPurpose::OfflineTopUp {
+                    source_authority: source_authority.clone(),
+                    binding,
+                },
+            ),
+        )
+    }
+
+    /// Consume a one-shot, recursive-proof-verified offline redemption debit.
+    pub(in crate::smartcontracts::isi) fn execute_verified_offline_redemption_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::offline::VerifiedKagemushaRedemptionDebit,
+    ) -> Result<(), Error> {
+        let (operation_id, source_id, destination_id, amount) = authorization.into_parts();
+        if !crate::smartcontracts::isi::offline::is_offline_escrow_source_asset(
+            state_transaction,
+            &source_id,
+        )? {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "offline redemption capability source is not configured offline custody".into(),
+            ));
+        }
+        let transcript_authority = destination_id.account().clone();
+        let binding = canonical_numeric_movement_binding(&(
+            operation_id,
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                &transcript_authority,
+                RetainedNumericAssetMovementPurpose::OfflineRedemption(binding),
+            ),
+        )
+    }
+
+    /// Consume one exact Oracle movement capability created after Oracle admission.
+    pub(in crate::smartcontracts::isi) fn execute_verified_oracle_numeric_movement(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::oracle::VerifiedOracleNumericMovement,
+    ) -> Result<(), Error> {
+        use crate::smartcontracts::isi::oracle::VerifiedOracleNumericPurpose;
+
+        let (purpose, source_id, destination_id, amount) = authorization.into_parts();
+        let economics = &state_transaction.oracle.economics;
+        let (transcript_authority, retained_purpose) = match purpose {
+            VerifiedOracleNumericPurpose::Reward {
+                feed_id,
+                feed_config_version,
+                slot,
+                request_hash,
+                provider,
+            } => {
+                let expected_source = AssetId::new(
+                    economics.reward_asset.clone(),
+                    economics.reward_pool.clone(),
+                );
+                let expected_destination =
+                    AssetId::new(economics.reward_asset.clone(), provider.clone());
+                let feed_matches = state_transaction
+                    .world
+                    .oracle_feeds
+                    .get(&feed_id)
+                    .is_some_and(|feed| feed.feed_config_version == feed_config_version);
+                if source_id != expected_source
+                    || destination_id != expected_destination
+                    || amount != economics.reward_amount
+                    || !feed_matches
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Oracle reward capability does not match live economics and feed state"
+                            .into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    feed_id,
+                    feed_config_version,
+                    slot,
+                    request_hash,
+                    provider,
+                    amount.clone(),
+                ))?;
+                (
+                    source_id.account().clone(),
+                    RetainedNumericAssetMovementPurpose::OracleReward(binding),
+                )
+            }
+            VerifiedOracleNumericPurpose::Penalty {
+                feed_id,
+                feed_config_version,
+                slot,
+                request_hash,
+                provider,
+                kind,
+            } => {
+                let expected_source = AssetId::new(economics.slash_asset.clone(), provider.clone());
+                let expected_destination = AssetId::new(
+                    economics.slash_asset.clone(),
+                    economics.slash_receiver.clone(),
+                );
+                let expected_amount = match kind {
+                    iroha_data_model::oracle::OraclePenaltyKind::Outlier
+                    | iroha_data_model::oracle::OraclePenaltyKind::Dispute => {
+                        &economics.slash_outlier_amount
+                    }
+                    iroha_data_model::oracle::OraclePenaltyKind::Error
+                    | iroha_data_model::oracle::OraclePenaltyKind::BadSignature => {
+                        &economics.slash_error_amount
+                    }
+                    iroha_data_model::oracle::OraclePenaltyKind::NoShow => {
+                        &economics.slash_no_show_amount
+                    }
+                };
+                let feed_matches = state_transaction
+                    .world
+                    .oracle_feeds
+                    .get(&feed_id)
+                    .is_some_and(|feed| feed.feed_config_version == feed_config_version);
+                if source_id != expected_source
+                    || destination_id != expected_destination
+                    || &amount != expected_amount
+                    || !feed_matches
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Oracle penalty capability does not match live economics and feed state"
+                            .into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    feed_id,
+                    feed_config_version,
+                    slot,
+                    request_hash,
+                    provider.clone(),
+                    kind,
+                    amount.clone(),
+                ))?;
+                (
+                    provider,
+                    RetainedNumericAssetMovementPurpose::OraclePenalty(binding),
+                )
+            }
+            VerifiedOracleNumericPurpose::DisputeEscrow { dispute_id } => {
+                let dispute = state_transaction
+                    .world
+                    .oracle_disputes
+                    .get(&dispute_id)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "Oracle dispute movement has no retained dispute".into(),
+                        )
+                    })?;
+                if !matches!(
+                    dispute.status,
+                    iroha_data_model::oracle::OracleDisputeStatus::Open
+                ) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Oracle dispute movement requires an open retained dispute".into(),
+                    ));
+                }
+                let expected_source = AssetId::new(
+                    economics.dispute_bond_asset.clone(),
+                    economics.slash_receiver.clone(),
+                );
+                let challenger = AssetId::new(
+                    economics.dispute_bond_asset.clone(),
+                    dispute.challenger.clone(),
+                );
+                let target =
+                    AssetId::new(economics.dispute_bond_asset.clone(), dispute.target.clone());
+                let allowed = (destination_id == challenger
+                    && (amount == dispute.bond || amount == economics.dispute_reward_amount))
+                    || (destination_id == target && amount == economics.frivolous_slash_amount);
+                if source_id != expected_source || !allowed {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Oracle dispute movement does not match its retained dispute and economics"
+                            .into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    dispute_id,
+                    source_id.clone(),
+                    destination_id.clone(),
+                    amount.clone(),
+                ))?;
+                (
+                    dispute.challenger.clone(),
+                    RetainedNumericAssetMovementPurpose::OracleDisputeResolution(binding),
+                )
+            }
+        };
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(&transcript_authority, retained_purpose),
+        )
+    }
+
+    /// Bond an exact user's stake, with one explicitly checked genesis bootstrap exception.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_staking_bond_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        lane_id: iroha_data_model::nexus::LaneId,
+        validator: &AccountId,
+        staker: &AccountId,
+        genesis: bool,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        if source_id.account() != staker {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "staking bond source does not match the exact staker".into(),
+            ));
+        }
+        let binding = canonical_numeric_movement_binding(&(
+            lane_id,
+            validator.clone(),
+            staker.clone(),
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                submitting_authority,
+                EmbeddedNumericAssetMovementPurpose::StakingBond {
+                    source_authority: staker.clone(),
+                    genesis,
+                    binding,
+                },
+            ),
+        )
+    }
+
+    /// Release one exact matured public-lane unbonding record.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_staking_unbond_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        lane_id: iroha_data_model::nexus::LaneId,
+        validator: &AccountId,
+        staker: &AccountId,
+        request_id: iroha_crypto::Hash,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        let key = (lane_id, validator.clone(), staker.clone());
+        let pending_matches = state_transaction
+            .world
+            .public_lane_stake_shares
+            .get(&key)
+            .and_then(|share| share.pending_unbonds.get(&request_id))
+            .is_some_and(|pending| {
+                pending.amount == amount
+                    && pending.release_at_ms <= state_transaction.block_unix_timestamp_ms()
+            });
+        if authority != staker
+            || !crate::smartcontracts::isi::staking::is_configured_staking_unbond_movement(
+                state_transaction,
+                staker,
+                &source_id,
+                &destination_id,
+            )?
+            || !pending_matches
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "staking unbond movement does not match its exact matured retained record".into(),
+            ));
+        }
+        let binding = canonical_numeric_movement_binding(&(
+            lane_id,
+            validator.clone(),
+            staker.clone(),
+            request_id,
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                authority,
+                RetainedNumericAssetMovementPurpose::StakingUnbond(binding),
+            ),
+        )
+    }
+
+    /// Consume an exact retained public-lane slash capability.
+    pub(in crate::smartcontracts::isi) fn execute_verified_staking_slash_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::staking::VerifiedStakingSlashDebit,
+    ) -> Result<(), Error> {
+        let (lane_id, validator, slash_id, source_id, destination_id, amount) =
+            authorization.into_parts();
+        let key = (lane_id, validator.clone());
+        let record = state_transaction
+            .world
+            .public_lane_validators
+            .get(&key)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "staking slash capability has no retained validator record".into(),
+                )
+            })?;
+        if record.total_stake < amount
+            || !crate::smartcontracts::isi::staking::is_configured_staking_slash_movement(
+                state_transaction,
+                &record.stake_account,
+                &source_id,
+                &destination_id,
+            )?
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "staking slash capability does not match retained stake and configured custody"
+                    .into(),
+            ));
+        }
+        let binding = canonical_numeric_movement_binding(&(
+            lane_id,
+            validator.clone(),
+            slash_id,
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+            record.total_stake.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                &validator,
+                RetainedNumericAssetMovementPurpose::StakingSlash(binding),
+            ),
+        )
+    }
+
+    /// Consume one exact governance movement capability created after retained-state checks.
+    pub(in crate::smartcontracts::isi) fn execute_verified_governance_numeric_movement(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::world::isi::VerifiedGovernanceNumericMovement,
+    ) -> Result<(), Error> {
+        use crate::smartcontracts::isi::world::isi::VerifiedGovernanceNumericPurpose;
+
+        let (purpose, source_id, destination_id, amount) = authorization.into_parts();
+        let (transcript_authority, retained_purpose) = match purpose {
+            VerifiedGovernanceNumericPurpose::LockSlash {
+                referendum_id,
+                owner,
+                reason,
+            } => {
+                let record = state_transaction
+                    .world
+                    .governance_locks
+                    .get(&referendum_id)
+                    .and_then(|locks| locks.locks.get(&owner))
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "governance slash capability has no retained lock".into(),
+                        )
+                    })?;
+                let custody = record.custody.as_ref().ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "governance slash requires immutable retained custody".into(),
+                    )
+                })?;
+                let expected_source = AssetId::new(
+                    custody.asset_definition_id.clone(),
+                    custody.bond_escrow_account.clone(),
+                );
+                let expected_destination = AssetId::new(
+                    custody.asset_definition_id.clone(),
+                    custody.slash_receiver_account.clone(),
+                );
+                if !custody.escrowed
+                    || source_id != expected_source
+                    || destination_id != expected_destination
+                    || amount > record.amount
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance slash capability does not match its retained lock custody"
+                            .into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    referendum_id,
+                    owner.clone(),
+                    reason,
+                    source_id.clone(),
+                    destination_id.clone(),
+                    amount.clone(),
+                    record.amount.clone(),
+                    record.slashed.clone(),
+                ))?;
+                (
+                    owner,
+                    RetainedNumericAssetMovementPurpose::GovernanceSlash(binding),
+                )
+            }
+            VerifiedGovernanceNumericPurpose::LockRestitution {
+                referendum_id,
+                owner,
+                reason,
+            } => {
+                let record = state_transaction
+                    .world
+                    .governance_locks
+                    .get(&referendum_id)
+                    .and_then(|locks| locks.locks.get(&owner))
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "governance restitution capability has no retained lock".into(),
+                        )
+                    })?;
+                let custody = record.custody.as_ref().ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "governance restitution requires immutable retained custody".into(),
+                    )
+                })?;
+                let expected_source = AssetId::new(
+                    custody.asset_definition_id.clone(),
+                    custody.slash_receiver_account.clone(),
+                );
+                let expected_destination = AssetId::new(
+                    custody.asset_definition_id.clone(),
+                    custody.bond_escrow_account.clone(),
+                );
+                let ledger_available = state_transaction
+                    .world
+                    .governance_slashes
+                    .get(&referendum_id)
+                    .and_then(|ledger| ledger.slashes.get(&owner))
+                    .and_then(|entry| {
+                        entry
+                            .total_slashed
+                            .checked_sub(&entry.total_restituted)
+                            .ok()
+                    });
+                if !custody.escrowed
+                    || source_id != expected_source
+                    || destination_id != expected_destination
+                    || amount > record.slashed
+                    || ledger_available.is_none_or(|available| amount > available)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance restitution capability does not match its lock and slash ledger"
+                            .into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    referendum_id,
+                    owner.clone(),
+                    reason,
+                    source_id.clone(),
+                    destination_id.clone(),
+                    amount.clone(),
+                    record.amount.clone(),
+                    record.slashed.clone(),
+                ))?;
+                (
+                    owner,
+                    RetainedNumericAssetMovementPurpose::GovernanceRestitution(binding),
+                )
+            }
+            VerifiedGovernanceNumericPurpose::CitizenshipSlash { owner, slash_bps } => {
+                let record = state_transaction
+                    .world
+                    .citizens
+                    .get(&owner)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "citizenship slash capability has no retained citizenship record"
+                                .into(),
+                        )
+                    })?;
+                let expected_source = AssetId::new(
+                    state_transaction.gov.citizenship_asset_id.clone(),
+                    state_transaction.gov.citizenship_escrow_account.clone(),
+                );
+                let expected_destination = AssetId::new(
+                    state_transaction.gov.citizenship_asset_id.clone(),
+                    state_transaction.gov.slash_receiver_account.clone(),
+                );
+                let expected_amount = record
+                    .amount
+                    .try_mul_decimal(&Numeric::new(u32::from(slash_bps), 4))
+                    .map_err(|_| MathError::Overflow)?;
+                if source_id != expected_source
+                    || destination_id != expected_destination
+                    || amount != expected_amount
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "citizenship slash capability does not match its retained bond".into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    owner.clone(),
+                    slash_bps,
+                    amount.clone(),
+                    record.amount.clone(),
+                ))?;
+                (
+                    owner,
+                    RetainedNumericAssetMovementPurpose::GovernanceSlash(binding),
+                )
+            }
+            VerifiedGovernanceNumericPurpose::CitizenshipRelease { owner } => {
+                let record = state_transaction
+                    .world
+                    .citizens
+                    .get(&owner)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "citizenship release capability has no retained citizenship record"
+                                .into(),
+                        )
+                    })?;
+                let expected_source = AssetId::new(
+                    state_transaction.gov.citizenship_asset_id.clone(),
+                    state_transaction.gov.citizenship_escrow_account.clone(),
+                );
+                let expected_destination = AssetId::new(
+                    state_transaction.gov.citizenship_asset_id.clone(),
+                    owner.clone(),
+                );
+                if source_id != expected_source
+                    || destination_id != expected_destination
+                    || amount != record.amount
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "citizenship release capability does not match its retained bond".into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    owner.clone(),
+                    amount.clone(),
+                    record.bonded_height,
+                ))?;
+                (
+                    owner,
+                    RetainedNumericAssetMovementPurpose::CitizenshipRelease(binding),
+                )
+            }
+        };
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(&transcript_authority, retained_purpose),
+        )
+    }
+
+    /// Consume one exact expired-governance-lock capability produced by the block-start sweep.
+    pub(crate) fn execute_verified_governance_unlock(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::state::VerifiedGovernanceUnlock,
+    ) -> Result<(), Error> {
+        let (referendum_id, owner, source_id, destination_id, amount) = authorization.into_parts();
+        let record = state_transaction
+            .world
+            .governance_locks
+            .get(&referendum_id)
+            .and_then(|locks| locks.locks.get(&owner))
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "governance unlock capability has no retained lock".into(),
+                )
+            })?;
+        let custody = record.custody.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "governance unlock requires immutable retained custody".into(),
+            )
+        })?;
+        let expected_source = AssetId::new(
+            custody.asset_definition_id.clone(),
+            custody.bond_escrow_account.clone(),
+        );
+        let expected_destination = AssetId::new(custody.asset_definition_id.clone(), owner.clone());
+        if !custody.escrowed
+            || record.expiry_height >= state_transaction.block_height()
+            || source_id != expected_source
+            || destination_id != expected_destination
+            || amount != record.amount
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance unlock capability does not match its expired retained lock".into(),
+            ));
+        }
+        let binding = canonical_numeric_movement_binding(&(
+            referendum_id,
+            owner.clone(),
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+            record.expiry_height,
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                &owner,
+                RetainedNumericAssetMovementPurpose::GovernanceUnlock(binding),
+            ),
+        )
+    }
+
+    /// Consume one exact native-escrow movement capability.
+    pub(in crate::smartcontracts::isi) fn execute_verified_native_escrow_movement(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::escrow::VerifiedNativeEscrowMovement,
+    ) -> Result<(), Error> {
+        use crate::smartcontracts::isi::escrow::VerifiedNativeEscrowPurpose;
+
+        let (purpose, source_id, destination_id, amount) = authorization.into_parts();
+        let movement_authorization = match purpose {
+            VerifiedNativeEscrowPurpose::Funding {
+                escrow_id,
+                authority,
+            } => {
+                let expected_custody =
+                    crate::smartcontracts::isi::escrow::escrow_custody_account_id(
+                        state_transaction.chain_id(),
+                        &escrow_id,
+                        source_id.definition(),
+                    )?;
+                if source_id.account() != &authority
+                    || destination_id.definition() != source_id.definition()
+                    || destination_id.account() != &expected_custody
+                    || state_transaction
+                        .world
+                        .asset_escrows
+                        .get(&escrow_id)
+                        .is_some()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native escrow funding capability does not match its authority and deterministic custody"
+                            .into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    escrow_id,
+                    source_id.clone(),
+                    destination_id.clone(),
+                    amount.clone(),
+                ))?;
+                NumericAssetMovementAuthorization::embedded_user(
+                    &authority,
+                    EmbeddedNumericAssetMovementPurpose::NativeEscrow(binding),
+                )
+            }
+            VerifiedNativeEscrowPurpose::Retained { escrow_id } => {
+                let record = state_transaction
+                    .world
+                    .asset_escrows
+                    .get(&escrow_id)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "native escrow release capability has no retained record".into(),
+                        )
+                    })?;
+                let expected_source =
+                    AssetId::new(record.asset_definition.clone(), record.custody.clone());
+                let destination_is_party = destination_id.account() == &record.seller
+                    || record
+                        .buyer
+                        .as_ref()
+                        .is_some_and(|buyer| destination_id.account() == buyer);
+                if source_id != expected_source
+                    || destination_id.definition() != &record.asset_definition
+                    || !destination_is_party
+                    || amount > record.remaining_amount
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native escrow release capability does not match its retained record"
+                            .into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    escrow_id,
+                    source_id.clone(),
+                    destination_id.clone(),
+                    amount.clone(),
+                    record.remaining_amount.clone(),
+                    record.status,
+                ))?;
+                NumericAssetMovementAuthorization::retained(
+                    &record.seller,
+                    RetainedNumericAssetMovementPurpose::NativeEscrow(binding),
+                )
+            }
+            VerifiedNativeEscrowPurpose::CustodyPartition {
+                parent_id,
+                child_id,
+            } => {
+                let parent = state_transaction
+                    .world
+                    .asset_escrows
+                    .get(&parent_id)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "native escrow partition capability has no retained parent".into(),
+                        )
+                    })?;
+                let expected_source =
+                    AssetId::new(parent.asset_definition.clone(), parent.custody.clone());
+                let child_custody = crate::smartcontracts::isi::escrow::escrow_custody_account_id(
+                    state_transaction.chain_id(),
+                    &child_id,
+                    &parent.asset_definition,
+                )?;
+                let expected_destination =
+                    AssetId::new(parent.asset_definition.clone(), child_custody);
+                if source_id != expected_source
+                    || destination_id != expected_destination
+                    || amount > parent.remaining_amount
+                    || state_transaction
+                        .world
+                        .asset_escrows
+                        .get(&child_id)
+                        .is_some()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "native escrow partition capability does not match its retained parent and child custody"
+                            .into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    parent_id,
+                    child_id,
+                    source_id.clone(),
+                    destination_id.clone(),
+                    amount.clone(),
+                    parent.remaining_amount.clone(),
+                ))?;
+                NumericAssetMovementAuthorization::retained(
+                    &parent.seller,
+                    RetainedNumericAssetMovementPurpose::NativeEscrow(binding),
+                )
+            }
+        };
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            movement_authorization,
+        )
+    }
+
+    /// Consume an exact multi-recipient native escrow settlement capability atomically.
+    pub(in crate::smartcontracts::isi) fn execute_verified_native_escrow_batch(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::escrow::VerifiedNativeEscrowBatch,
+    ) -> Result<(), Error> {
+        let (escrow_id, authority, legs) = authorization.into_parts();
+        let record = state_transaction
+            .world
+            .asset_escrows
+            .get(&escrow_id)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "native escrow batch has no retained lock".into(),
+                )
+            })?;
+        let expected_source = AssetId::new(record.asset_definition.clone(), record.custody.clone());
+        let mut total = Quantity::zero();
+        for (source, destination, amount) in &legs {
+            if source != &expected_source
+                || destination.definition() != &record.asset_definition
+                || destination.account() == &record.custody
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "native escrow batch leg does not match retained custody".into(),
+                ));
+            }
+            total = total.checked_add(amount).map_err(|_| MathError::Overflow)?;
+        }
+        if total > record.remaining_amount || record.release_authority.as_ref() != Some(&authority)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native escrow batch exceeds its retained lock or has the wrong authority".into(),
+            ));
+        }
+        let binding = canonical_numeric_movement_binding(&(
+            escrow_id,
+            authority.clone(),
+            legs.clone(),
+            record.remaining_amount.clone(),
+            record.status,
+        ))?;
+        let movement_authorization = NumericAssetMovementAuthorization::retained(
+            &authority,
+            RetainedNumericAssetMovementPurpose::NativeEscrow(binding),
+        );
+        let applied = PreparedNumericAssetMovementBatch::prepare_with_authorization(
+            state_transaction,
+            &legs,
+            movement_authorization,
+        )?
+        .apply(state_transaction)?;
+        for movement in applied {
+            #[allow(clippy::float_arithmetic)]
+            #[cfg(feature = "telemetry")]
+            state_transaction
+                .telemetry
+                .observe_tx_amount(movement.amount.as_numeric().clone().to_f64_lossy());
+            emit_numeric_asset_transfer_events(
+                state_transaction,
+                movement.source_id,
+                movement.destination_id,
+                movement.amount,
+            );
+        }
+        Ok(())
+    }
+
+    /// Consume an exact VPN funding, settlement, or refund capability atomically.
+    pub(in crate::smartcontracts::isi) fn execute_verified_vpn_numeric_batch(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::vpn::VerifiedVpnNumericBatch,
+    ) -> Result<(), Error> {
+        use crate::smartcontracts::isi::vpn::VerifiedVpnNumericPurpose;
+
+        let (purpose, legs) = authorization.into_parts();
+        let movement_authorization = match purpose {
+            VerifiedVpnNumericPurpose::Funding {
+                lease_id,
+                authority,
+            } => {
+                if legs.len() != 1 || state_transaction.world.vpn_leases.get(&lease_id).is_some() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "VPN funding capability must contain one fresh lease leg".into(),
+                    ));
+                }
+                let (source, destination, amount) = &legs[0];
+                let expected_custody =
+                    crate::smartcontracts::isi::vpn::vpn_lease_custody_account_id(
+                        state_transaction.chain_id(),
+                        &lease_id,
+                        source.definition(),
+                    )?;
+                if source.account() != &authority
+                    || destination.definition() != source.definition()
+                    || destination.account() != &expected_custody
+                    || amount.is_zero()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "VPN funding capability does not match its authority and deterministic custody"
+                            .into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    lease_id,
+                    source.clone(),
+                    destination.clone(),
+                    amount.clone(),
+                ))?;
+                let movement = NumericAssetMovementAuthorization::embedded_user(
+                    &authority,
+                    EmbeddedNumericAssetMovementPurpose::VpnLease(binding),
+                );
+                movement
+            }
+            VerifiedVpnNumericPurpose::Settlement {
+                lease_id,
+                authority,
+            } => {
+                let record = state_transaction
+                    .world
+                    .vpn_leases
+                    .get(&lease_id)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "VPN settlement capability has no retained lease".into(),
+                        )
+                    })?;
+                let expected_source = AssetId::new(
+                    record.asset_definition.clone(),
+                    record.custody_account_id.clone(),
+                );
+                let mut total = Quantity::zero();
+                for (source, destination, amount) in &legs {
+                    let destination_is_party = destination.account() == &record.operator_account_id
+                        || destination.account() == &record.client_account_id;
+                    if source != &expected_source
+                        || destination.definition() != &record.asset_definition
+                        || !destination_is_party
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "VPN settlement leg does not match retained lease custody and parties"
+                                .into(),
+                        ));
+                    }
+                    total = total.checked_add(amount).map_err(|_| MathError::Overflow)?;
+                }
+                if authority != record.operator_account_id
+                    || total != record.lease_fee
+                    || record.status != iroha_data_model::soranet::vpn::VpnLeaseStatusV1::Active
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "VPN settlement capability does not match the active retained lease".into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    lease_id,
+                    authority.clone(),
+                    legs.clone(),
+                    record.lease_fee.clone(),
+                    record.status,
+                ))?;
+                let movement = NumericAssetMovementAuthorization::retained(
+                    &authority,
+                    RetainedNumericAssetMovementPurpose::VpnLease(binding),
+                );
+                movement
+            }
+            VerifiedVpnNumericPurpose::Refund {
+                lease_id,
+                authority,
+            } => {
+                let record = state_transaction
+                    .world
+                    .vpn_leases
+                    .get(&lease_id)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "VPN refund capability has no retained lease".into(),
+                        )
+                    })?;
+                let expected_source = AssetId::new(
+                    record.asset_definition.clone(),
+                    record.custody_account_id.clone(),
+                );
+                let expected_destination = AssetId::new(
+                    record.asset_definition.clone(),
+                    record.client_account_id.clone(),
+                );
+                let exact_leg = legs.as_slice()
+                    == [(
+                        expected_source,
+                        expected_destination,
+                        record.lease_fee.clone(),
+                    )];
+                if !exact_leg
+                    || record.status != iroha_data_model::soranet::vpn::VpnLeaseStatusV1::Active
+                    || state_transaction.block_unix_timestamp_ms() < record.refund_available_at_ms()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "VPN refund capability does not match the expired retained lease".into(),
+                    ));
+                }
+                let binding = canonical_numeric_movement_binding(&(
+                    lease_id,
+                    authority.clone(),
+                    legs.clone(),
+                    record.refund_available_at_ms(),
+                ))?;
+                let movement = NumericAssetMovementAuthorization::retained(
+                    &authority,
+                    RetainedNumericAssetMovementPurpose::VpnLease(binding),
+                );
+                movement
+            }
+        };
+        let applied = PreparedNumericAssetMovementBatch::prepare_with_authorization(
+            state_transaction,
+            &legs,
+            movement_authorization,
+        )?
+        .apply(state_transaction)?;
+        for movement in applied {
+            #[allow(clippy::float_arithmetic)]
+            #[cfg(feature = "telemetry")]
+            state_transaction
+                .telemetry
+                .observe_tx_amount(movement.amount.as_numeric().clone().to_f64_lossy());
+            emit_numeric_asset_transfer_events(
+                state_transaction,
+                movement.source_id,
+                movement.destination_id,
+                movement.amount,
+            );
+        }
+        Ok(())
+    }
+
+    /// Lock an exact user's governance voting bond.
+    pub(crate) fn execute_governance_bond_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        referendum_id: &str,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        if source_id.account() != authority {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance bond source does not match its exact authority".into(),
+            ));
+        }
+        let binding = canonical_numeric_movement_binding(&(
+            referendum_id.to_owned(),
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                authority,
+                EmbeddedNumericAssetMovementPurpose::GovernanceBond(binding),
+            ),
+        )
+    }
+
+    /// Lock an exact user's citizenship bond in configured custody.
+    pub(crate) fn execute_citizenship_bond_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        owner: &AccountId,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        if authority != owner
+            || source_id.account() != owner
+            || source_id.definition() != &state_transaction.gov.citizenship_asset_id
+            || destination_id.account() != &state_transaction.gov.citizenship_escrow_account
+            || destination_id.definition() != &state_transaction.gov.citizenship_asset_id
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "citizenship bond movement does not match configured custody".into(),
+            ));
+        }
+        let binding = canonical_numeric_movement_binding(&(owner.clone(), amount.clone()))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                authority,
+                EmbeddedNumericAssetMovementPurpose::CitizenshipBond(binding),
+            ),
+        )
+    }
+
     struct PreparedNumericTransferPlan {
         source_id: AssetId,
         destination_id: AssetId,
         event_source_id: AssetId,
         event_destination_id: AssetId,
         amount: Quantity,
+        control_before: Option<Option<AssetTransferControlRecord>>,
         control_update: Option<AssetTransferControlRecord>,
         numeric_spec: NumericSpec,
         normalized_scale: u32,
@@ -1492,6 +3546,9 @@ pub mod isi {
                 amount,
                 NumericAssetTransferScopePolicy::Ambient,
                 NumericAssetTransferAuthorityPolicy::UserSource,
+                NumericAssetTransferSourcePolicy::User,
+                NumericAssetTransferControlPolicy::Enforce,
+                NumericAssetDestinationAdmissionPolicy::ImplicitReceive,
             )
         }
 
@@ -1510,6 +3567,9 @@ pub mod isi {
                 amount,
                 NumericAssetTransferScopePolicy::ExplicitBilateral,
                 NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
+                NumericAssetTransferSourcePolicy::User,
+                NumericAssetTransferControlPolicy::Enforce,
+                NumericAssetDestinationAdmissionPolicy::ExistingAccount,
             )
         }
 
@@ -1521,6 +3581,9 @@ pub mod isi {
             amount: Quantity,
             scope_policy: NumericAssetTransferScopePolicy,
             authority_policy: NumericAssetTransferAuthorityPolicy,
+            source_policy: NumericAssetTransferSourcePolicy,
+            control_policy: NumericAssetTransferControlPolicy,
+            destination_admission: NumericAssetDestinationAdmissionPolicy,
         ) -> Result<Self, Error> {
             // Reject no-op transfers before account admission, control usage, transcripts,
             // balances, or events can be staged.
@@ -1545,23 +3608,50 @@ pub mod isi {
                     &resolved_source_id,
                 )?;
             }
-            let control_update = prepare_outbound_asset_transfer_control_update(
-                state_transaction,
-                &event_source_id,
-                &amount,
-            )?;
-            let _created = ensure_receiving_account(
-                authority,
-                event_destination_id.account(),
-                Some((event_destination_id.definition(), &amount)),
-                state_transaction,
-            )?;
+            let (control_before, control_update) = match control_policy {
+                NumericAssetTransferControlPolicy::Enforce => (
+                    Some(active_control_record(
+                        state_transaction,
+                        event_source_id.account(),
+                        event_source_id.definition(),
+                    )?),
+                    prepare_outbound_asset_transfer_control_update(
+                        state_transaction,
+                        &event_source_id,
+                        &amount,
+                    )?,
+                ),
+                NumericAssetTransferControlPolicy::OfflineRedemption
+                | NumericAssetTransferControlPolicy::OraclePenalty
+                | NumericAssetTransferControlPolicy::OracleDisputeResolution
+                | NumericAssetTransferControlPolicy::StakingUnbond
+                | NumericAssetTransferControlPolicy::StakingSlash
+                | NumericAssetTransferControlPolicy::GovernanceSlash
+                | NumericAssetTransferControlPolicy::GovernanceRestitution
+                | NumericAssetTransferControlPolicy::GovernanceUnlock
+                | NumericAssetTransferControlPolicy::CitizenshipRelease => (None, None),
+            };
+            match destination_admission {
+                NumericAssetDestinationAdmissionPolicy::ImplicitReceive => {
+                    let _created = ensure_receiving_account(
+                        authority,
+                        event_destination_id.account(),
+                        Some((event_destination_id.definition(), &amount)),
+                        state_transaction,
+                    )?;
+                }
+                NumericAssetDestinationAdmissionPolicy::ExistingAccount => {
+                    state_transaction
+                        .world
+                        .account(event_destination_id.account())?;
+                }
+            }
             let (source_id, destination_id) = ensure_numeric_asset_transfer_policies_with_scope(
                 state_transaction,
                 &event_source_id,
                 &event_destination_id,
                 &amount,
-                NumericAssetTransferSourcePolicy::User,
+                source_policy,
                 scope_policy,
             )?;
             let numeric_spec = state_transaction
@@ -1590,6 +3680,7 @@ pub mod isi {
                 event_source_id,
                 event_destination_id,
                 amount,
+                control_before,
                 control_update,
                 numeric_spec,
                 normalized_scale,
@@ -1602,6 +3693,7 @@ pub mod isi {
             self,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<AppliedNumericTransfer, Error> {
+            self.ensure_current(state_transaction)?;
             debug_assert!(
                 self.numeric_spec.check(self.amount.as_numeric()).is_ok(),
                 "prepared numeric transfer amount must still satisfy cached spec",
@@ -1629,13 +3721,13 @@ pub mod isi {
             })
         }
 
-        fn apply_uncontrolled(
+        fn apply_after_batch_preflight(
             self,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<AppliedNumericTransfer, Error> {
             debug_assert!(
                 self.control_update.is_none(),
-                "batch transfer fast path does not persist transfer-control usage updates",
+                "batch control usage is persisted by the aggregate batch plan",
             );
             debug_assert!(
                 self.numeric_spec.check(self.amount.as_numeric()).is_ok(),
@@ -1659,6 +3751,294 @@ pub mod isi {
                 amount: self.amount,
                 delta: self.prechecked_delta,
             })
+        }
+
+        fn ensure_current(
+            &self,
+            state_transaction: &StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let source_balance = state_transaction
+                .world
+                .assets
+                .get(&self.source_id)
+                .map(|value| value.as_ref().clone())
+                .ok_or_else(|| FindError::Asset(self.source_id.clone().into()))?;
+            if source_balance != self.prechecked_delta.from_balance_before {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "prepared numeric movement source balance changed before apply: {}",
+                        self.source_id
+                    )
+                    .into(),
+                ));
+            }
+            if self.source_id != self.destination_id {
+                let destination_balance = state_transaction
+                    .world
+                    .assets
+                    .get(&self.destination_id)
+                    .map(|value| value.as_ref().clone())
+                    .unwrap_or_else(Quantity::zero);
+                if destination_balance != self.prechecked_delta.to_balance_before {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "prepared numeric movement destination balance changed before apply: {}",
+                            self.destination_id
+                        )
+                        .into(),
+                    ));
+                }
+            }
+            if let Some(control_before) = &self.control_before {
+                let control = active_control_record(
+                    state_transaction,
+                    self.source_id.account(),
+                    self.source_id.definition(),
+                )?;
+                if &control != control_before {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "prepared numeric movement transfer controls changed before apply: {}",
+                            self.source_id
+                        )
+                        .into(),
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    struct PreparedNumericAssetMovementBatch {
+        plans: Vec<PreparedNumericTransferPlan>,
+        initial_balances: BTreeMap<AssetId, Quantity>,
+        control_updates: Vec<(
+            AccountId,
+            AssetDefinitionId,
+            Option<AssetTransferControlRecord>,
+            Option<AssetTransferControlRecord>,
+        )>,
+        authorization: NumericAssetMovementAuthorization,
+    }
+
+    impl PreparedNumericAssetMovementBatch {
+        fn prepare_user(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+            entries: &[(AssetId, AssetId, Quantity)],
+        ) -> Result<Self, Error> {
+            let mut plans = Vec::with_capacity(entries.len());
+            for (source, destination, amount) in entries {
+                plans.push(PreparedNumericTransferPlan::prepare_user(
+                    state_transaction,
+                    authority,
+                    source.clone(),
+                    destination.clone(),
+                    amount.clone(),
+                )?);
+            }
+            Self::aggregate(
+                state_transaction,
+                plans,
+                NumericAssetMovementAuthorization::transaction_user(
+                    authority,
+                    "atomic asset transfer batch",
+                ),
+            )
+        }
+
+        fn prepare_with_authorization(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            entries: &[(AssetId, AssetId, Quantity)],
+            authorization: NumericAssetMovementAuthorization,
+        ) -> Result<Self, Error> {
+            let mut plans = Vec::with_capacity(entries.len());
+            for (source, destination, amount) in entries {
+                let resolved_source = state_transaction
+                    .world
+                    .resolve_asset_id_for_current_scope(source)?;
+                let authority_policy =
+                    authorization.authority_policy(state_transaction, &resolved_source)?;
+                plans.push(PreparedNumericTransferPlan::prepare(
+                    state_transaction,
+                    &authorization.transcript_authority,
+                    source.clone(),
+                    destination.clone(),
+                    amount.clone(),
+                    NumericAssetTransferScopePolicy::Ambient,
+                    authority_policy,
+                    authorization.source_policy,
+                    authorization.control_policy,
+                    authorization.destination_admission,
+                )?);
+            }
+            Self::aggregate(state_transaction, plans, authorization)
+        }
+
+        fn aggregate(
+            state_transaction: &StateTransaction<'_, '_>,
+            mut plans: Vec<PreparedNumericTransferPlan>,
+            authorization: NumericAssetMovementAuthorization,
+        ) -> Result<Self, Error> {
+            let mut initial_balances = BTreeMap::<AssetId, Quantity>::new();
+            for plan in &plans {
+                for id in [&plan.source_id, &plan.destination_id] {
+                    initial_balances.entry(id.clone()).or_insert_with(|| {
+                        state_transaction
+                            .world
+                            .assets
+                            .get(id)
+                            .map(|value| value.as_ref().clone())
+                            .unwrap_or_else(Quantity::zero)
+                    });
+                }
+            }
+
+            let mut virtual_balances = initial_balances.clone();
+            for plan in &mut plans {
+                let source_before = virtual_balances
+                    .get(&plan.source_id)
+                    .cloned()
+                    .unwrap_or_else(Quantity::zero);
+                let source_after = source_before
+                    .checked_sub(&plan.amount)
+                    .map_err(|_| MathError::NotEnoughQuantity)?;
+                let (destination_before, destination_after) =
+                    if plan.source_id == plan.destination_id {
+                        (source_after.clone(), source_before.clone())
+                    } else {
+                        let destination_before = virtual_balances
+                            .get(&plan.destination_id)
+                            .cloned()
+                            .unwrap_or_else(Quantity::zero);
+                        let destination_after = destination_before
+                            .checked_add(&plan.amount)
+                            .map_err(|_| MathError::Overflow)?;
+                        (destination_before, destination_after)
+                    };
+                assert_numeric_spec_with(source_before.as_numeric(), plan.numeric_spec)?;
+                assert_numeric_spec_with(source_after.as_numeric(), plan.numeric_spec)?;
+                assert_numeric_spec_with(destination_before.as_numeric(), plan.numeric_spec)?;
+                assert_numeric_spec_with(destination_after.as_numeric(), plan.numeric_spec)?;
+                state_transaction
+                    .world
+                    .ensure_numeric_asset_holding_limit(&plan.destination_id, &destination_after)?;
+                if plan.source_id != plan.destination_id {
+                    virtual_balances.insert(plan.source_id.clone(), source_after.clone());
+                    virtual_balances.insert(plan.destination_id.clone(), destination_after.clone());
+                }
+                plan.prechecked_delta = TransferDeltaTranscript {
+                    from_account: plan.source_id.account().clone(),
+                    to_account: plan.destination_id.account().clone(),
+                    asset_definition: plan.source_id.definition().clone(),
+                    amount: plan.amount.clone(),
+                    from_balance_before: source_before,
+                    from_balance_after: source_after,
+                    to_balance_before: destination_before,
+                    to_balance_after: destination_after,
+                    from_smt_witness: TransferSmtWitness::default(),
+                    to_smt_witness: TransferSmtWitness::default(),
+                };
+            }
+
+            let mut aggregate_outbound =
+                BTreeMap::<(AccountId, AssetDefinitionId), (AssetId, Quantity)>::new();
+            for plan in &plans {
+                let key = (
+                    plan.source_id.account().clone(),
+                    plan.source_id.definition().clone(),
+                );
+                let entry = aggregate_outbound
+                    .entry(key)
+                    .or_insert_with(|| (plan.source_id.clone(), Quantity::zero()));
+                entry.1 = entry
+                    .1
+                    .checked_add(&plan.amount)
+                    .map_err(|_| MathError::Overflow)?;
+            }
+            let mut control_updates = Vec::with_capacity(aggregate_outbound.len());
+            for ((account, definition), (source, amount)) in aggregate_outbound {
+                let before = active_control_record(state_transaction, &account, &definition)?;
+                let after = prepare_outbound_asset_transfer_control_update(
+                    state_transaction,
+                    &source,
+                    &amount,
+                )?;
+                control_updates.push((account, definition, before, after));
+            }
+            for plan in &mut plans {
+                plan.control_before = None;
+                plan.control_update = None;
+            }
+            Ok(Self {
+                plans,
+                initial_balances,
+                control_updates,
+                authorization,
+            })
+        }
+
+        fn apply(
+            self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<Vec<AppliedNumericTransfer>, Error> {
+            let bindings = self
+                .plans
+                .iter()
+                .map(|plan| {
+                    (
+                        plan.source_id.clone(),
+                        plan.destination_id.clone(),
+                        plan.amount.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let transcript_identity = self
+                .authorization
+                .resolve_transcript_identity(state_transaction, &bindings)?;
+            for (id, expected) in &self.initial_balances {
+                let actual = state_transaction
+                    .world
+                    .assets
+                    .get(id)
+                    .map(|value| value.as_ref().clone())
+                    .unwrap_or_else(Quantity::zero);
+                if &actual != expected {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!("atomic numeric movement balance changed before apply: {id}")
+                            .into(),
+                    ));
+                }
+            }
+            for (account, definition, before, _) in &self.control_updates {
+                if active_control_record(state_transaction, account, definition)? != *before {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "atomic numeric movement controls changed before apply: {account} {definition}"
+                        )
+                        .into(),
+                    ));
+                }
+            }
+
+            let mut applied = Vec::with_capacity(self.plans.len());
+            for plan in self.plans {
+                applied.push(plan.apply_after_batch_preflight(state_transaction)?);
+            }
+            for (account, _, _, after) in self.control_updates {
+                if let Some(record) = after {
+                    update_control_record(state_transaction, &account, record)?;
+                }
+            }
+            state_transaction.record_transfer_transcripts_with_batch_hash(
+                &self.authorization.transcript_authority,
+                transcript_identity,
+                applied
+                    .iter()
+                    .map(|movement| movement.delta.clone())
+                    .collect(),
+            );
+            Ok(applied)
         }
     }
 
@@ -1769,15 +4149,13 @@ pub mod isi {
         Ok(())
     }
 
-    /// Atomically apply two explicitly authorized bilateral legs through the
-    /// ordinary transfer policy, transfer-control, transcript, and event pipeline.
-    ///
-    /// Both legs are fully prepared before either balance changes. Distinct
-    /// asset definitions make the two prechecked deltas independent.
+    /// Apply two opaque-consent-authorized bilateral legs atomically.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn execute_authorized_numeric_asset_pair(
+    fn execute_verified_bilateral_numeric_asset_pair(
         state_transaction: &mut StateTransaction<'_, '_>,
         submitting_authority: &AccountId,
+        tag: &'static str,
+        binding: Vec<u8>,
         first_source_id: AssetId,
         first_destination_id: AssetId,
         first_amount: Quantity,
@@ -1785,7 +4163,6 @@ pub mod isi {
         second_destination_id: AssetId,
         second_amount: Quantity,
     ) -> Result<(), Error> {
-        state_transaction.require_transfer_transcript_identity("bilateral settlement transfer")?;
         let prepared = prepare_authorized_numeric_asset_pair(
             state_transaction,
             submitting_authority,
@@ -1796,24 +4173,63 @@ pub mod isi {
             second_destination_id,
             second_amount,
         )?;
-
-        let first = prepared.source.apply(state_transaction)?;
-        let second = prepared.destination.apply(state_transaction)?;
-        state_transaction
-            .record_transfer_transcripts(submitting_authority, vec![first.delta, second.delta])?;
-        emit_numeric_asset_transfer_events(
+        let authorization =
+            NumericAssetMovementAuthorization::bilateral(submitting_authority, tag, binding);
+        let applied = PreparedNumericAssetMovementBatch::aggregate(
             state_transaction,
-            first.source_id,
-            first.destination_id,
-            first.amount,
-        );
-        emit_numeric_asset_transfer_events(
-            state_transaction,
-            second.source_id,
-            second.destination_id,
-            second.amount,
-        );
+            vec![prepared.source, prepared.destination],
+            authorization,
+        )?
+        .apply(state_transaction)?;
+        for movement in applied {
+            emit_numeric_asset_transfer_events(
+                state_transaction,
+                movement.source_id,
+                movement.destination_id,
+                movement.amount,
+            );
+        }
         Ok(())
+    }
+
+    /// Consume repo's one-shot exact bilateral-consent capability.
+    pub(in crate::smartcontracts::isi) fn execute_verified_repo_numeric_pair(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::repo::VerifiedRepoNumericPair,
+    ) -> Result<(), Error> {
+        let (authority, binding, [first, second]) = authorization.into_parts();
+        execute_verified_bilateral_numeric_asset_pair(
+            state_transaction,
+            &authority,
+            "repo-bilateral",
+            binding,
+            first.0,
+            first.1,
+            first.2,
+            second.0,
+            second.1,
+            second.2,
+        )
+    }
+
+    /// Consume settlement's one-shot exact bilateral-consent capability.
+    pub(in crate::smartcontracts::isi) fn execute_verified_settlement_numeric_pair(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::settlement::VerifiedSettlementNumericPair,
+    ) -> Result<(), Error> {
+        let (authority, binding, [first, second]) = authorization.into_parts();
+        execute_verified_bilateral_numeric_asset_pair(
+            state_transaction,
+            &authority,
+            "settlement-bilateral",
+            binding,
+            first.0,
+            first.1,
+            first.2,
+            second.0,
+            second.1,
+            second.2,
+        )
     }
 
     /// Validate both native FX legs through the ordinary transparent-transfer pipeline without
@@ -1908,25 +4324,39 @@ pub mod isi {
         destination: AssetId,
         amount: Quantity,
     ) {
+        let domain = state_transaction
+            .world
+            .asset_definition_domains
+            .get(source.definition())
+            .cloned();
         state_transaction.world.emit_events([
-            AssetEvent::Removed(AssetChanged {
-                asset: source.clone(),
-                amount: amount.clone(),
-            }),
-            AssetEvent::Added(AssetChanged {
-                asset: destination.clone(),
-                amount: amount.clone(),
-            }),
-            AssetEvent::Transferred(AssetTransferred {
-                source,
-                destination,
-                amount,
-            }),
+            DataEvent::asset(
+                AssetEvent::Removed(AssetChanged {
+                    asset: source.clone(),
+                    amount: amount.clone(),
+                }),
+                domain.clone(),
+            ),
+            DataEvent::asset(
+                AssetEvent::Added(AssetChanged {
+                    asset: destination.clone(),
+                    amount: amount.clone(),
+                }),
+                domain.clone(),
+            ),
+            DataEvent::asset(
+                AssetEvent::Transferred(AssetTransferred {
+                    source,
+                    destination,
+                    amount,
+                }),
+                domain,
+            ),
         ]);
     }
 
     /// Validate policy gates for a transparent numeric asset balance movement.
-    pub(crate) fn ensure_numeric_asset_transfer_policies(
+    fn ensure_numeric_asset_transfer_policies(
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: &AssetId,
         destination_id: &AssetId,
@@ -1990,6 +4420,17 @@ pub mod isi {
                 (source_id, destination_id)
             }
             NumericAssetTransferScopePolicy::ExplicitBilateral => {
+                if source_id.scope() != destination_id.scope() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "explicit bilateral transfer must preserve one exact balance scope".into(),
+                    ));
+                }
+                validate_committed_public_balance_scope(
+                    state_transaction,
+                    source_id.definition(),
+                    *source_id.scope(),
+                    "explicit bilateral transfer",
+                )?;
                 let definition = state_transaction
                     .world
                     .asset_definition(source_id.definition())
@@ -2104,100 +4545,45 @@ pub mod isi {
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
             }
+            NumericAssetTransferSourcePolicy::OracleReward
+            | NumericAssetTransferSourcePolicy::OraclePenalty
+            | NumericAssetTransferSourcePolicy::OracleDisputeResolution
+            | NumericAssetTransferSourcePolicy::SocialReward
+            | NumericAssetTransferSourcePolicy::SocialEscrow
+            | NumericAssetTransferSourcePolicy::StakingUnbond
+            | NumericAssetTransferSourcePolicy::StakingSlash
+            | NumericAssetTransferSourcePolicy::GovernanceSlash
+            | NumericAssetTransferSourcePolicy::GovernanceRestitution
+            | NumericAssetTransferSourcePolicy::GovernanceUnlock
+            | NumericAssetTransferSourcePolicy::CitizenshipRelease => {
+                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
+                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
+            }
+            NumericAssetTransferSourcePolicy::OfflineEscrowCustody => {
+                if !crate::smartcontracts::isi::offline::is_offline_escrow_source_asset(
+                    state_transaction,
+                    &source_id,
+                )? {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "offline redemption source is not configured offline custody".into(),
+                    ));
+                }
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
+                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
+            }
         }
 
         Ok((source_id, destination_id))
     }
 
-    pub(crate) fn apply_resolved_numeric_asset_transfer_delta(
+    /// Consume one exact fee-sponsor charge capability produced after sponsor debit admission.
+    pub(crate) fn execute_verified_fee_sponsor_charge(
         state_transaction: &mut StateTransaction<'_, '_>,
-        source_id: &AssetId,
-        destination_id: &AssetId,
-        amount: &Quantity,
-    ) -> Result<TransferDeltaTranscript, Error> {
-        let delta = state_transaction
-            .world
-            .precheck_numeric_asset_transfer_delta_exact(source_id, destination_id, amount)?;
-        state_transaction
-            .world
-            .apply_prechecked_numeric_asset_transfer_delta_exact(
-                source_id,
-                destination_id,
-                &delta,
-            )?;
-        Ok(delta)
-    }
-
-    /// Apply a validated transparent numeric balance movement and return the transcript delta.
-    pub(crate) fn apply_numeric_asset_transfer_delta(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        source_id: &AssetId,
-        destination_id: &AssetId,
-        amount: &Quantity,
-        source_policy: NumericAssetTransferSourcePolicy,
-    ) -> Result<(AssetId, AssetId, TransferDeltaTranscript), Error> {
-        let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
-            state_transaction,
-            source_id,
-            destination_id,
-            amount,
-            source_policy,
-        )?;
-
-        let delta = apply_resolved_numeric_asset_transfer_delta(
-            state_transaction,
-            &source_id,
-            &destination_id,
-            amount,
-        )?;
-        Ok((source_id, destination_id, delta))
-    }
-
-    /// Move assets out of the protocol fee-sponsor custody account after the
-    /// calling sponsor-program operation has performed its own authorization.
-    ///
-    /// This path deliberately does not require a custody signing key. It still
-    /// applies the ordinary deterministic asset policy, balance, scope, event,
-    /// and transfer-transcript invariants.
-    pub(crate) fn execute_fee_sponsor_custody_transfer(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        submitting_authority: &AccountId,
-        source_id: AssetId,
-        destination: AccountId,
-        amount: Quantity,
+        authorization: crate::executor::VerifiedFeeSponsorCharge,
     ) -> Result<(), Error> {
-        state_transaction.require_transfer_transcript_identity("fee sponsor custody transfer")?;
-        let destination_id = AssetId::with_scope(
-            source_id.definition().clone(),
-            destination,
-            source_id.scope().clone(),
-        );
-        let (source_id, destination_id, delta) = apply_numeric_asset_transfer_delta(
-            state_transaction,
-            &source_id,
-            &destination_id,
-            &amount,
-            NumericAssetTransferSourcePolicy::FeeSponsorCustody,
-        )?;
-        state_transaction.record_transfer_transcript(submitting_authority, delta)?;
-        emit_numeric_asset_transfer_events(state_transaction, source_id, destination_id, amount);
-        Ok(())
-    }
-
-    /// Burn a charged amount from the isolated fee-sponsor custody account.
-    pub(crate) fn execute_fee_sponsor_custody_burn(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        source_id: AssetId,
-        amount: Quantity,
-    ) -> Result<(), Error> {
-        ensure_global_asset_write_on_authoritative_route(
-            state_transaction,
-            source_id.definition(),
-            "fee sponsor burn",
-        )?;
-        let source_id = state_transaction
-            .world
-            .resolve_asset_id_for_current_scope(&source_id)?;
+        let (submitting_authority, program_id, kind, source_id, destination, amount) =
+            authorization.into_parts();
         if source_id.account()
             != &state_transaction
                 .nexus
@@ -2205,44 +4591,176 @@ pub mod isi {
                 .sponsor_vault_custody_account_id
         {
             return Err(InstructionExecutionError::InvariantViolation(
-                "fee sponsor burn source does not match configured custody".into(),
-            )
-            .into());
+                "verified fee sponsor charge source does not match configured custody".into(),
+            ));
         }
-        let spec = state_transaction
-            .numeric_spec_for(source_id.definition())
-            .map_err(Error::from)?;
-        assert_numeric_spec_with(amount.as_numeric(), spec)?;
-        ensure_transparent_allowed(
+        let binding = canonical_numeric_movement_binding(&(
+            program_id,
+            kind,
+            source_id.clone(),
+            destination.clone(),
+            amount.clone(),
+        ))?;
+        match (kind, destination) {
+            (iroha_data_model::transaction::FeeChargeKind::PipelineGas, Some(destination)) => {
+                let destination_id = AssetId::with_scope(
+                    source_id.definition().clone(),
+                    destination,
+                    source_id.scope().clone(),
+                );
+                execute_numeric_asset_movement(
+                    state_transaction,
+                    source_id,
+                    destination_id,
+                    amount,
+                    NumericAssetMovementAuthorization::retained(
+                        &submitting_authority,
+                        RetainedNumericAssetMovementPurpose::FeeSponsor(binding),
+                    ),
+                )
+            }
+            (iroha_data_model::transaction::FeeChargeKind::Nexus, None) => {
+                execute_checked_numeric_asset_burn(
+                    state_transaction,
+                    None,
+                    source_id,
+                    amount,
+                    NumericAssetBurnSourcePolicy::FeeSponsorCustody,
+                )
+            }
+            _ => Err(InstructionExecutionError::InvariantViolation(
+                "verified fee sponsor charge kind does not match transfer/burn destination".into(),
+            )),
+        }
+    }
+
+    /// Consume one exact aggregate Nexus fee burn admitted by merge settlement.
+    pub(crate) fn execute_verified_nexus_fee_burn(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::state::VerifiedNexusFeeBurn,
+    ) -> Result<(), Error> {
+        let (source_id, amount) = authorization.into_parts();
+        let expected_definition = crate::block::parse_asset_definition_literal_with_world(
+            &state_transaction.world,
+            &state_transaction.nexus.fees.fee_asset_id,
+            0,
+        )
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "verified Nexus fee burn has an invalid configured fee asset".into(),
+            )
+        })?;
+        if state_transaction.nexus.fees.settlement_mode
+            != iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
+            || source_id.definition() != &expected_definition
+            || source_id.account()
+                != &state_transaction
+                    .nexus
+                    .fees
+                    .sponsor_vault_custody_account_id
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "verified Nexus fee burn does not match live fee custody configuration".into(),
+            ));
+        }
+        execute_checked_numeric_asset_burn(
             state_transaction,
-            source_id.definition(),
-            "transparent fee sponsor burn not permitted by policy",
-        )?;
-        ensure_usage_policy_for_accounts(
-            state_transaction,
-            source_id.definition(),
-            [(
-                source_id.account(),
-                asset_id_dataspace_hint(state_transaction, &source_id),
-            )],
-            Some(&amount),
-        )?;
-        ensure_not_offline_escrow_source(state_transaction, &source_id)?;
-        ensure_not_native_escrow_source(state_transaction, &source_id)?;
-        ensure_not_sccp_custody_source(state_transaction, &source_id)?;
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&source_id, &amount)?;
-        state_transaction
-            .world
-            .decrease_asset_total_amount(source_id.definition(), &amount)?;
-        state_transaction
-            .world
-            .emit_events(Some(AssetEvent::Removed(AssetChanged {
-                asset: source_id,
-                amount,
-            })));
+            None,
+            source_id,
+            amount,
+            NumericAssetBurnSourcePolicy::FeeSponsorCustody,
+        )
+    }
+
+    /// Apply a test-only aggregate Nexus fee burn to a standalone world overlay.
+    #[cfg(test)]
+    pub(crate) fn apply_verified_nexus_fee_burn_to_world_for_test(
+        world: &mut WorldTransaction<'_, '_>,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        authorization: crate::state::VerifiedNexusFeeBurn,
+    ) -> Result<(), Error> {
+        let (source_id, amount) = authorization.into_parts();
+        let expected_definition = crate::block::parse_asset_definition_literal_with_world(
+            world,
+            &nexus.fees.fee_asset_id,
+            0,
+        )
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "verified Nexus fee burn has an invalid configured fee asset".into(),
+            )
+        })?;
+        if nexus.fees.settlement_mode
+            != iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
+            || source_id.definition() != &expected_definition
+            || source_id.account() != &nexus.fees.sponsor_vault_custody_account_id
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "verified Nexus fee burn does not match live fee custody configuration".into(),
+            ));
+        }
+        world.withdraw_numeric_asset(&source_id, &amount)?;
+        world.decrease_asset_total_amount(source_id.definition(), &amount)?;
+        world.emit_asset_event(AssetEvent::Removed(AssetChanged {
+            asset: source_id,
+            amount,
+        }));
         Ok(())
+    }
+
+    /// Consume one exact, permission-checked fee-sponsor vault withdrawal.
+    pub(in crate::smartcontracts::isi) fn execute_verified_fee_sponsor_vault_withdrawal(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::world::isi::VerifiedFeeSponsorVaultWithdrawal,
+    ) -> Result<(), Error> {
+        let (authority, program_id, source_id, destination, amount) = authorization.into_parts();
+        let key = iroha_data_model::nexus::FeeSponsorVaultKey {
+            program_id: program_id.clone(),
+            asset_definition_id: source_id.definition().clone(),
+        };
+        let vault = state_transaction
+            .world
+            .fee_sponsor_vaults
+            .get(&key)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "fee sponsor withdrawal has no retained vault".into(),
+                )
+            })?;
+        if source_id.account()
+            != &state_transaction
+                .nexus
+                .fees
+                .sponsor_vault_custody_account_id
+            || amount > vault.balance
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "fee sponsor withdrawal does not match retained vault custody and balance".into(),
+            ));
+        }
+        let destination_id = AssetId::with_scope(
+            source_id.definition().clone(),
+            destination,
+            source_id.scope().clone(),
+        );
+        let binding = canonical_numeric_movement_binding(&(
+            program_id,
+            authority.clone(),
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+            vault.balance.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                &authority,
+                RetainedNumericAssetMovementPurpose::FeeSponsor(binding),
+            ),
+        )
     }
 
     impl Execute for Mint<Quantity, Asset> {
@@ -2312,13 +4830,13 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(AssetEvent::Added(AssetChanged {
+                .emit_asset_event(AssetEvent::Added(AssetChanged {
                     asset: asset_id.clone(),
                     amount: quantity.clone(),
-                })));
+                }));
 
             if flipped {
-                state_transaction.world.emit_events([DataEvent::from(
+                state_transaction.world.emit_asset_definition_event(
                     AssetDefinitionEvent::MintabilityChangedDetailed(
                         AssetDefinitionMintabilityChanged {
                             asset_definition: asset_id.definition().clone(),
@@ -2326,7 +4844,7 @@ pub mod isi {
                             authority: authority.clone(),
                         },
                     ),
-                )]);
+                );
             }
 
             Ok(())
@@ -2384,10 +4902,10 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(AssetEvent::Removed(AssetChanged {
+                .emit_asset_event(AssetEvent::Removed(AssetChanged {
                     asset: asset_id.clone(),
                     amount: quantity,
-                })));
+                }));
 
             Ok(())
         }
@@ -2418,76 +4936,74 @@ pub mod isi {
         amount: Quantity,
     ) -> Result<(), Error> {
         let destination_id = AssetId::new(source_id.definition().clone(), destination);
-        let plan = PreparedNumericTransferPlan::prepare_user(
+        execute_numeric_asset_movement(
             state_transaction,
-            authority,
             source_id,
             destination_id,
             amount,
-        )?;
-        let applied = plan.apply(state_transaction)?;
-        state_transaction.record_transfer_transcript(authority, applied.delta)?;
-
-        #[allow(clippy::float_arithmetic)]
-        #[cfg(feature = "telemetry")]
-        state_transaction
-            .telemetry
-            .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
-
-        let amount = applied.amount;
-        emit_numeric_asset_transfer_events(
-            state_transaction,
-            applied.source_id,
-            applied.destination_id,
-            amount,
-        );
-
-        Ok(())
+            NumericAssetMovementAuthorization::transaction_user(authority, "asset transfer"),
+        )
     }
 
-    /// Apply a native owner-authorized numeric transfer without a transaction transcript.
-    ///
-    /// Deterministic block maintenance has no signed-transaction `call_hash`, so it cannot
-    /// produce a FASTPQ transaction transcript. The balance move still goes through the same
-    /// account, routing, transfer-control, asset-policy, and exact-delta validation as a user
-    /// transfer and emits the same asset events.
-    pub(crate) fn execute_native_authorized_numeric_asset_transfer(
+    /// Consume one exact SNS renewal charge capability produced by the maintenance sweep.
+    pub(crate) fn execute_verified_sns_auto_renewal_charge(
         state_transaction: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-        source_id: AssetId,
-        destination: AccountId,
-        amount: Quantity,
+        authorization: crate::sns::VerifiedSnsAutoRenewalCharge,
     ) -> Result<(), Error> {
-        if source_id.account() != authority {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "native authorized transfer source must belong to its authority".into(),
+        let (selector, owner, current_expiry_ms, target_expiry_ms, source_id, destination, amount) =
+            authorization.into_parts();
+        let now_ms = state_transaction.block_unix_timestamp_ms();
+        let record =
+            crate::sns::get_name_record_by_selector(&state_transaction.world, &selector, now_ms)
+                .map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("verified SNS renewal record is no longer valid: {error}").into(),
+                    )
+                })?;
+        let quote = crate::sns::quote_resolved_name_renewal(
+            &state_transaction.world,
+            selector.clone(),
+            current_expiry_ms,
+            target_expiry_ms,
+            now_ms,
+        )
+        .map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("verified SNS renewal quote is no longer valid: {error}").into(),
             )
-            .into());
+        })?;
+        if record.owner != owner
+            || record.expires_at_ms != current_expiry_ms
+            || source_id.account() != &owner
+            || source_id.definition() != &quote.payment_asset_definition_id
+            || destination != quote.collector_account
+            || amount != quote.charge_amount
+            || quote.expires_at_ms != target_expiry_ms
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "verified SNS renewal charge does not match live record and quote state".into(),
+            ));
         }
         let destination_id = AssetId::new(source_id.definition().clone(), destination);
-        let plan = PreparedNumericTransferPlan::prepare_user(
+        let binding = canonical_numeric_movement_binding(&(
+            selector,
+            owner.clone(),
+            current_expiry_ms,
+            target_expiry_ms,
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
             state_transaction,
-            authority,
             source_id,
             destination_id,
             amount,
-        )?;
-        let applied = plan.apply(state_transaction)?;
-
-        #[allow(clippy::float_arithmetic)]
-        #[cfg(feature = "telemetry")]
-        state_transaction
-            .telemetry
-            .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
-
-        let amount = applied.amount;
-        emit_numeric_asset_transfer_events(
-            state_transaction,
-            applied.source_id,
-            applied.destination_id,
-            amount,
-        );
-        Ok(())
+            NumericAssetMovementAuthorization::embedded_user(
+                &owner,
+                EmbeddedNumericAssetMovementPurpose::SnsAutoRenewal(binding),
+            ),
+        )
     }
 
     /// A fully validated, one-shot SCCP custody release whose balance mutation cannot fail.
@@ -2572,7 +5088,7 @@ pub mod isi {
     /// Apply a user-authorized transparent numeric transfer on the simple batch path.
     ///
     /// Returns `Ok(false)` when the transfer needs the full per-transaction merge path.
-    pub(crate) fn execute_user_numeric_asset_transfer_uncontrolled_batch(
+    pub(crate) fn execute_batch_merge_eligible_user_numeric_asset_transfer(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         source_id: AssetId,
@@ -2594,7 +5110,7 @@ pub mod isi {
         if plan.control_update.is_some() {
             return Ok(false);
         }
-        let applied = plan.apply_uncontrolled(state_transaction)?;
+        let applied = plan.apply(state_transaction)?;
         state_transaction.record_transfer_transcript(authority, applied.delta)?;
 
         #[allow(clippy::float_arithmetic)]
@@ -2830,6 +5346,59 @@ pub mod isi {
                 }
             }
 
+            if self.mode() == &BatchMode::Atomic {
+                let entries = self
+                    .entries()
+                    .iter()
+                    .map(|entry| {
+                        (
+                            AssetId::new(entry.asset_definition().clone(), entry.from().clone()),
+                            AssetId::new(entry.asset_definition().clone(), entry.to().clone()),
+                            entry.amount().clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let applied = PreparedNumericAssetMovementBatch::prepare_user(
+                    state_transaction,
+                    authority,
+                    &entries,
+                )?
+                .apply(state_transaction)?;
+                for (index, (entry, movement)) in self.entries().iter().zip(applied).enumerate() {
+                    #[allow(clippy::float_arithmetic)]
+                    #[cfg(feature = "telemetry")]
+                    state_transaction
+                        .telemetry
+                        .observe_tx_amount(movement.amount.as_numeric().clone().to_f64_lossy());
+                    emit_numeric_asset_transfer_events(
+                        state_transaction,
+                        movement.source_id,
+                        movement.destination_id,
+                        movement.amount,
+                    );
+                    let outcome = AssetBatchTransferOutcome {
+                        leg_index: u32::try_from(index).map_err(|_| {
+                            InstructionExecutionError::InvariantViolation(
+                                "transfer asset batch contains too many legs".into(),
+                            )
+                        })?,
+                        leg_id: entry.leg_id().clone(),
+                        asset: entries[index].0.clone(),
+                        destination: entry.to().clone(),
+                        amount: entry.amount().clone(),
+                        status: AssetBatchTransferLegStatus::Applied,
+                    };
+                    state_transaction.record_batch_transfer_outcome(outcome.clone());
+                    state_transaction
+                        .world
+                        .emit_asset_event(AssetEvent::BatchTransferOutcome(outcome));
+                }
+                return Ok(());
+            }
+
+            state_transaction
+                .require_transfer_transcript_identity("independent asset transfer batch")?;
+
             let mut deltas = Vec::with_capacity(self.entries().len());
             for (index, entry) in self.entries().iter().enumerate() {
                 let source_id =
@@ -2880,7 +5449,7 @@ pub mod isi {
                         state_transaction.record_batch_transfer_outcome(outcome.clone());
                         state_transaction
                             .world
-                            .emit_events(Some(AssetEvent::BatchTransferOutcome(outcome)));
+                            .emit_asset_event(AssetEvent::BatchTransferOutcome(outcome));
                         continue;
                     }
                     Err(error) => return Err(error),
@@ -2914,7 +5483,7 @@ pub mod isi {
                 state_transaction.record_batch_transfer_outcome(outcome.clone());
                 state_transaction
                     .world
-                    .emit_events(Some(AssetEvent::BatchTransferOutcome(outcome)));
+                    .emit_asset_event(AssetEvent::BatchTransferOutcome(outcome));
             }
             state_transaction.record_transfer_transcripts(authority, deltas)?;
             Ok(())
@@ -2975,13 +5544,11 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(AccountEvent::Asset(AssetEvent::MetadataInserted(
-                    MetadataChanged {
-                        target: asset,
-                        key,
-                        value,
-                    },
-                ))));
+                .emit_asset_event(AssetEvent::MetadataInserted(MetadataChanged {
+                    target: asset,
+                    key,
+                    value,
+                }));
 
             Ok(())
         }
@@ -3002,13 +5569,11 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(AccountEvent::Asset(AssetEvent::MetadataRemoved(
-                    MetadataChanged {
-                        target: asset,
-                        key,
-                        value: removed,
-                    },
-                ))));
+                .emit_asset_event(AssetEvent::MetadataRemoved(MetadataChanged {
+                    target: asset,
+                    key,
+                    value: removed,
+                }));
 
             Ok(())
         }
@@ -3181,9 +5746,6 @@ pub mod query {
                     if let Ok(asset_id) = raw.parse::<AssetId>() {
                         self.subjects.insert(asset_id.account().subject_id());
                         self.definitions.insert(asset_id.definition().clone());
-                        if let Some(domain_id) = asset_id.definition().try_domain() {
-                            self.domains.insert(domain_id.clone());
-                        }
                         self.ids.insert(asset_id);
                     }
                 }
@@ -3245,7 +5807,7 @@ pub mod query {
             AssetQueryPlan::Full
         }
 
-        fn matches(&self, asset: &Asset) -> bool {
+        fn matches(&self, world: &impl WorldReadOnly, asset: &Asset) -> bool {
             if !self.ids.is_empty() && !self.ids.contains(asset.id()) {
                 return false;
             }
@@ -3258,11 +5820,8 @@ pub mod query {
                 return false;
             }
             if !self.domains.is_empty()
-                && !asset
-                    .id()
-                    .definition()
-                    .try_domain()
-                    .is_some_and(|domain| self.domains.contains(domain))
+                && !asset_definition_domain(world, asset.id().definition())
+                    .is_some_and(|domain| self.domains.contains(&domain))
             {
                 return false;
             }
@@ -3317,9 +5876,6 @@ pub mod query {
                 | "asset_definition_id"
                 | "definition_id" => {
                     if let Ok(definition_id) = raw.parse::<AssetDefinitionId>() {
-                        if let Some(domain_id) = definition_id.try_domain() {
-                            self.domains.insert(domain_id.clone());
-                        }
                         self.ids.insert(definition_id);
                     }
                 }
@@ -3404,7 +5960,14 @@ pub mod query {
             .or_else(|| DomainId::try_new(raw, "universal").ok())
     }
 
-    fn asset_alias_values(asset: &Asset, field: &str) -> Vec<String> {
+    fn asset_definition_domain(
+        world: &impl WorldReadOnly,
+        definition_id: &AssetDefinitionId,
+    ) -> Option<DomainId> {
+        world.asset_definition_domains().get(definition_id).cloned()
+    }
+
+    fn asset_alias_values(world: &impl WorldReadOnly, asset: &Asset, field: &str) -> Vec<String> {
         match field {
             "id" => vec![asset.id().to_string()],
             "account" | "account_id" | "owner" | "id.account" => {
@@ -3415,20 +5978,19 @@ pub mod query {
             | "asset_definition_id"
             | "definition_id"
             | "id.definition" => vec![asset.id().definition().to_string()],
-            "domain" | "definition.domain" | "id.definition.domain" => asset
-                .id()
-                .definition()
-                .try_domain()
-                .map(|domain| {
-                    let canonical = domain.to_string();
-                    let shorthand = domain.name().to_string();
-                    if canonical == shorthand {
-                        vec![canonical]
-                    } else {
-                        vec![canonical, shorthand]
-                    }
-                })
-                .unwrap_or_default(),
+            "domain" | "definition.domain" | "id.definition.domain" => {
+                asset_definition_domain(world, asset.id().definition())
+                    .map(|domain| {
+                        let canonical = domain.to_string();
+                        let shorthand = domain.name().to_string();
+                        if canonical == shorthand {
+                            vec![canonical]
+                        } else {
+                            vec![canonical, shorthand]
+                        }
+                    })
+                    .unwrap_or_default()
+            }
             _ => Vec::new(),
         }
     }
@@ -3572,11 +6134,15 @@ pub mod query {
         total_assets != 0 && selected_asset_count.saturating_mul(8) >= total_assets
     }
 
-    fn predicate_matches_asset(predicate: &PredicateJson, asset: &Asset) -> bool {
+    fn predicate_matches_asset(
+        world: &impl WorldReadOnly,
+        predicate: &PredicateJson,
+        asset: &Asset,
+    ) -> bool {
         let mut asset_json = None;
 
         for cond in &predicate.equals {
-            let aliases = asset_alias_values(asset, &cond.field);
+            let aliases = asset_alias_values(world, asset, &cond.field);
             if !aliases.is_empty() {
                 if !aliases
                     .iter()
@@ -3598,7 +6164,7 @@ pub mod query {
         }
 
         for cond in &predicate.r#in {
-            let aliases = asset_alias_values(asset, &cond.field);
+            let aliases = asset_alias_values(world, asset, &cond.field);
             if !aliases.is_empty() {
                 if !aliases
                     .iter()
@@ -3620,7 +6186,7 @@ pub mod query {
         }
 
         for field in &predicate.exists {
-            if !asset_alias_values(asset, field).is_empty() {
+            if !asset_alias_values(world, asset, field).is_empty() {
                 continue;
             }
             let Some(value) = asset_json_value(&mut asset_json, asset) else {
@@ -3638,6 +6204,7 @@ pub mod query {
     }
 
     fn asset_definition_alias_values(
+        world: &impl WorldReadOnly,
         asset_definition: &AssetDefinition,
         field: &str,
     ) -> Vec<String> {
@@ -3648,9 +6215,7 @@ pub mod query {
             "owner" | "owned_by" | "account" | "account_id" => {
                 vec![asset_definition.owned_by().to_string()]
             }
-            "domain" | "id.domain" => asset_definition
-                .id()
-                .try_domain()
+            "domain" | "id.domain" => asset_definition_domain(world, asset_definition.id())
                 .map(|domain| {
                     let canonical = domain.to_string();
                     let shorthand = domain.name().to_string();
@@ -3676,13 +6241,14 @@ pub mod query {
     }
 
     fn predicate_matches_asset_definition(
+        world: &impl WorldReadOnly,
         predicate: &PredicateJson,
         asset_definition: &AssetDefinition,
     ) -> bool {
         let mut definition_json = None;
 
         for cond in &predicate.equals {
-            let aliases = asset_definition_alias_values(asset_definition, &cond.field);
+            let aliases = asset_definition_alias_values(world, asset_definition, &cond.field);
             if !aliases.is_empty() {
                 if !aliases
                     .iter()
@@ -3705,7 +6271,7 @@ pub mod query {
         }
 
         for cond in &predicate.r#in {
-            let aliases = asset_definition_alias_values(asset_definition, &cond.field);
+            let aliases = asset_definition_alias_values(world, asset_definition, &cond.field);
             if !aliases.is_empty() {
                 if !aliases
                     .iter()
@@ -3728,7 +6294,7 @@ pub mod query {
         }
 
         for field in &predicate.exists {
-            if !asset_definition_alias_values(asset_definition, field).is_empty() {
+            if !asset_definition_alias_values(world, asset_definition, field).is_empty() {
                 continue;
             }
             let Some(value) = asset_definition_json_value(&mut definition_json, asset_definition)
@@ -3827,11 +6393,8 @@ pub mod query {
                                 world
                                     .assets_iter()
                                     .filter(move |entry| {
-                                        entry
-                                            .id()
-                                            .definition()
-                                            .try_domain()
-                                            .is_some_and(|domain| domains.contains(domain))
+                                        asset_definition_domain(world, entry.id().definition())
+                                            .is_some_and(|domain| domains.contains(&domain))
                                     })
                                     .map(entry_to_asset),
                             )
@@ -3890,9 +6453,8 @@ pub mod query {
                                 definitions
                                     .iter()
                                     .filter(|definition| {
-                                        definition
-                                            .try_domain()
-                                            .is_some_and(|domain| domains.contains(domain))
+                                        asset_definition_domain(world, definition)
+                                            .is_some_and(|domain| domains.contains(&domain))
                                     })
                                     .cloned()
                                     .collect::<BTreeSet<_>>(),
@@ -3920,11 +6482,8 @@ pub mod query {
                                 .assets_in_account_iter(&subject)
                                 .filter(move |entry| {
                                     domains.as_ref().is_none_or(|domains| {
-                                        entry
-                                            .id()
-                                            .definition()
-                                            .try_domain()
-                                            .is_some_and(|domain| domains.contains(domain))
+                                        asset_definition_domain(world, entry.id().definition())
+                                            .is_some_and(|domain| domains.contains(&domain))
                                     })
                                 })
                                 .map(|entry| entry.id().clone())
@@ -3944,9 +6503,8 @@ pub mod query {
                         Some(definitions) => definitions
                             .into_iter()
                             .filter(|definition| {
-                                definition
-                                    .try_domain()
-                                    .is_some_and(|domain| domains.contains(domain))
+                                asset_definition_domain(world, definition)
+                                    .is_some_and(|domain| domains.contains(&domain))
                             })
                             .collect(),
                         None => {
@@ -3982,11 +6540,11 @@ pub mod query {
             };
 
             let iter: Box<dyn Iterator<Item = Asset> + '_> = Box::new(iter.filter(move |asset| {
-                if !predicate_view.matches(asset) {
+                if !predicate_view.matches(world, asset) {
                     return false;
                 }
                 if let Some(predicate) = predicate_json.as_ref() {
-                    return predicate_matches_asset(predicate, asset);
+                    return predicate_matches_asset(world, predicate, asset);
                 }
                 filter.applies(asset)
             }));
@@ -4009,15 +6567,24 @@ pub mod query {
             }
 
             let account_id = self.account_id().clone();
-            state_ro.world().account(&account_id)?;
+            let world = state_ro.world();
+            world.account(&account_id)?;
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str(raw).ok())
+                .and_then(AssetPredicateView::parse_predicate_value);
 
-            Ok(state_ro
-                .world()
+            Ok(world
                 .assets_in_account_iter(&account_id)
                 .collect::<Vec<_>>()
                 .into_iter()
                 .map(entry_to_asset)
-                .filter(move |asset| filter.applies(asset)))
+                .filter(move |asset| {
+                    predicate_json.as_ref().map_or_else(
+                        || filter.applies(asset),
+                        |predicate| predicate_matches_asset(world, predicate, asset),
+                    )
+                }))
         }
     }
 
@@ -4072,9 +6639,8 @@ pub mod query {
                             .flat_map(BTreeSet::iter)
                             .filter(move |definition_id| {
                                 domains.as_ref().is_none_or(|domains| {
-                                    definition_id
-                                        .try_domain()
-                                        .is_some_and(|domain| domains.contains(domain))
+                                    asset_definition_domain(world, definition_id)
+                                        .is_some_and(|domain| domains.contains(&domain))
                                 })
                             })
                             .filter_map(|definition_id| world.asset_definition(definition_id).ok())
@@ -4102,7 +6668,7 @@ pub mod query {
 
             Ok(iter.filter(move |asset_definition| {
                 if let Some(predicate) = predicate_json.as_ref() {
-                    predicate_matches_asset_definition(predicate, asset_definition)
+                    predicate_matches_asset_definition(world, predicate, asset_definition)
                 } else {
                     filter.applies(asset_definition)
                 }
@@ -4143,12 +6709,7 @@ pub mod query {
         use crate::{
             kura::Kura,
             query::store::LiveQueryStore,
-            smartcontracts::{
-                ValidQuery,
-                asset::isi::{
-                    NumericAssetTransferSourcePolicy, ensure_numeric_asset_transfer_policies,
-                },
-            },
+            smartcontracts::ValidQuery,
             state::{State, StateTransaction, World},
         };
 
@@ -4158,2638 +6719,39 @@ pub mod query {
 
         fn build_numeric_asset_definition(
             asset_definition_id: &AssetDefinitionId,
+            name: &str,
             owner: &AccountId,
         ) -> AssetDefinition {
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-                .build(owner)
+            AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                name.to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(owner)
         }
 
         fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
             state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
         }
 
-        fn seed_test_account_alias_lease(
-            state_transaction: &mut StateTransaction<'_, '_>,
-            owner: &AccountId,
-            alias: &AccountAlias,
+        fn collect_rust_sources(
+            directory: &std::path::Path,
+            sources: &mut Vec<std::path::PathBuf>,
         ) {
-            let selector = crate::sns::active_account_alias_selector(
-                state_transaction.world(),
-                &state_transaction.nexus.dataspace_catalog,
-                alias,
-                state_transaction.block_unix_timestamp_ms(),
-            )
-            .expect("account alias selector");
-            let address = iroha_data_model::account::AccountAddress::from_account_id(owner)
-                .expect("account address");
-            let record = iroha_data_model::sns::NameRecordV1::new(
-                selector.clone(),
-                owner.clone(),
-                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-                0,
-                0,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                Metadata::default(),
-            );
-            state_transaction.world.smart_contract_state.insert(
-                crate::sns::record_storage_key(&selector),
-                norito::codec::Encode::encode(&record),
-            );
-        }
-
-        fn seed_test_account_alias_binding(
-            state_transaction: &mut StateTransaction<'_, '_>,
-            owner: &AccountId,
-            alias: &AccountAlias,
-        ) {
-            state_transaction
-                .world
-                .account_mut(owner)
-                .expect("canonical account exists")
-                .set_label(Some(alias.clone()));
-            state_transaction
-                .world
-                .insert_account_alias_binding(alias.clone(), owner.clone());
-            state_transaction.world.account_rekey_records.insert(
-                alias.clone(),
-                AccountRekeyRecord::new(alias.clone(), owner.clone()),
-            );
-        }
-
-        fn fee_sponsor_custody_state() -> (State, AccountId, AssetDefinitionId, AssetId) {
-            let custody_key = KeyPair::try_from_seed(vec![0xC5; 32], Algorithm::Ed25519)
-                .expect("custody fixture key");
-            let custody = AccountId::new(custody_key.public_key().clone());
-            drop(custody_key);
-            let domain_id = DomainId::try_new("fees", "universal").expect("fee domain");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let definition_id =
-                AssetDefinitionId::new(domain_id, "xor".parse().expect("asset name"));
-            let definition = build_numeric_asset_definition(&definition_id, &ALICE_ID);
-            let source_id = AssetId::new(definition_id.clone(), custody.clone());
-            let world = World::with_assets(
-                [domain],
-                [
-                    Account::new(ALICE_ID.clone()).build(&ALICE_ID),
-                    Account::new(BOB_ID.clone()).build(&ALICE_ID),
-                    Account::new(custody.clone()).build(&ALICE_ID),
-                ],
-                [definition],
-                [Asset::new(source_id.clone(), Quantity::from(10_u32))],
-                [],
-            );
-            let mut state = State::new(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            state.nexus.get_mut().fees.sponsor_vault_custody_account_id = custody.clone();
-            (state, custody, definition_id, source_id)
-        }
-
-        #[test]
-        fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance() {
-            let (state, custody, definition_id, source_id) = fee_sponsor_custody_state();
-            assert_ne!(custody, *ALICE_ID, "submitting authority is not custody");
-            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xC5);
-
-            super::isi::execute_fee_sponsor_custody_transfer(
-                &mut stx,
-                &ALICE_ID,
-                source_id.clone(),
-                BOB_ID.clone(),
-                Quantity::from(4_u32),
-            )
-            .expect("protocol custody transfer does not require custody authorization");
-
-            let destination_id = AssetId::new(definition_id, BOB_ID.clone());
-            assert_eq!(
-                stx.world.assets.get(&source_id).map(|value| value.as_ref()),
-                Some(&Quantity::from(6_u32))
-            );
-            assert_eq!(
-                stx.world
-                    .assets
-                    .get(&destination_id)
-                    .map(|value| value.as_ref()),
-                Some(&Quantity::from(4_u32))
-            );
-            assert!(stx.world.internal_event_buf.iter().any(|event| matches!(
-                event.as_ref(),
-                DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
-                    AssetEvent::Transferred(transfer)
-                ))) if transfer.source() == &source_id
-                    && transfer.destination() == &destination_id
-                    && transfer.amount() == &Quantity::from(4_u32)
-            )));
-        }
-
-        #[test]
-        fn fee_sponsor_custody_burn_reduces_balance_and_total_supply_together() {
-            let (state, _custody, definition_id, source_id) = fee_sponsor_custody_state();
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            stx.world
-                .increase_asset_total_amount(&definition_id, &Quantity::from(10_u32))
-                .expect("seed aggregate supply");
-            stx.world.internal_event_buf.clear();
-
-            super::isi::execute_fee_sponsor_custody_burn(
-                &mut stx,
-                source_id.clone(),
-                Quantity::from(2_u32),
-            )
-            .expect("protocol custody burn does not require custody authorization");
-
-            assert_eq!(
-                stx.world.assets.get(&source_id).map(|value| value.as_ref()),
-                Some(&Quantity::from(8_u32))
-            );
-            assert_eq!(
-                stx.world
-                    .asset_definition(&definition_id)
-                    .expect("asset definition")
-                    .total_quantity(),
-                &Quantity::from(8_u32)
-            );
-            assert!(
-                stx.world.internal_event_buf.iter().all(|event| !matches!(
-                    event.as_ref(),
-                    DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
-                        AssetEvent::Transferred(_)
-                    )))
-                )),
-                "burn must never be represented as an account-to-account transfer"
-            );
-        }
-
-        fn build_asset_transfer_control_test_state(
-            source_balance: u32,
-        ) -> (State, AssetDefinitionId, AssetId) {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-            let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_definition_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::new(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                );
-            let asset_definition = build_numeric_asset_definition(&asset_definition_id, &ALICE_ID);
-            let source_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(source_balance));
-
-            let world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [asset_definition],
-                [source_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-
-            (state, asset_definition_id, source_asset_id)
-        }
-
-        #[test]
-        fn user_transfer_rejects_third_party_source_before_mutation() {
-            let (state, asset_definition_id, source_asset_id) =
-                build_asset_transfer_control_test_state(10);
-            let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xA1);
-            let event_count = stx.world.internal_event_buf.len();
-
-            let error = execute_user_numeric_asset_transfer(
-                &mut stx,
-                &BOB_ID,
-                source_asset_id.clone(),
-                BOB_ID.clone(),
-                Quantity::one(),
-            )
-            .expect_err("an authority without an exact grant must not debit another account");
-
-            assert!(
-                error
-                    .to_string()
-                    .contains("lacks authority to transfer source asset"),
-                "unexpected authorization error: {error}"
-            );
-            assert_eq!(
-                asset_balance_or_zero(&stx, &source_asset_id),
-                Quantity::from(10_u32)
-            );
-            assert_eq!(
-                asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::zero()
-            );
-            assert_eq!(
-                stx.world.internal_event_buf.len(),
-                event_count,
-                "authorization denial must precede event staging"
-            );
-        }
-
-        #[test]
-        fn user_transfer_accepts_exact_direct_asset_permission() {
-            let (state, asset_definition_id, source_asset_id) =
-                build_asset_transfer_control_test_state(10);
-            let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xA2);
-            stx.world.add_account_permission(
-                &BOB_ID,
-                Permission::from(
-                    iroha_executor_data_model::permission::asset::CanTransferAsset {
-                        asset: source_asset_id.clone(),
-                    },
-                ),
-            );
-
-            execute_user_numeric_asset_transfer(
-                &mut stx,
-                &BOB_ID,
-                source_asset_id.clone(),
-                BOB_ID.clone(),
-                Quantity::from(3_u32),
-            )
-            .expect("the exact direct asset permission must authorize the debit");
-
-            assert_eq!(
-                asset_balance_or_zero(&stx, &source_asset_id),
-                Quantity::from(7_u32)
-            );
-            assert_eq!(
-                asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::from(3_u32)
-            );
-        }
-
-        #[test]
-        fn user_transfer_accepts_exact_definition_permission_from_assigned_role() {
-            let (state, asset_definition_id, source_asset_id) =
-                build_asset_transfer_control_test_state(10);
-            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xA3);
-            let role_id: RoleId = "asset_transfer_delegate".parse().expect("valid role id");
-            let role = Role::new(role_id.clone(), BOB_ID.clone())
-                .add_permission(Permission::from(
-                    iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
-                        asset_definition: asset_definition_id,
-                    },
-                ))
-                .build(&BOB_ID);
-            stx.world.roles.insert(role_id.clone(), role);
-            stx.world.account_roles.insert(
-                crate::role::RoleIdWithOwner::new(BOB_ID.clone(), role_id),
-                (),
-            );
-
-            execute_user_numeric_asset_transfer(
-                &mut stx,
-                &BOB_ID,
-                source_asset_id.clone(),
-                BOB_ID.clone(),
-                Quantity::from(4_u32),
-            )
-            .expect("the exact definition permission inherited from a role must authorize");
-
-            assert_eq!(
-                asset_balance_or_zero(&stx, &source_asset_id),
-                Quantity::from(6_u32)
-            );
-            assert_eq!(
-                asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::from(4_u32)
-            );
-        }
-
-        #[test]
-        fn user_transfer_rejects_same_name_permissions_with_wrong_payloads() {
-            let (state, asset_definition_id, source_asset_id) =
-                build_asset_transfer_control_test_state(10);
-            let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xA4);
-            stx.world.add_account_permission(
-                &BOB_ID,
-                Permission::new("CanTransferAsset".into(), Json::new(())),
-            );
-            let role_id: RoleId = "malformed_asset_transfer_delegate"
-                .parse()
-                .expect("valid role id");
-            let role = Role::new(role_id.clone(), BOB_ID.clone())
-                .add_permission(Permission::new(
-                    "CanTransferAssetWithDefinition".into(),
-                    Json::new("all"),
-                ))
-                .build(&BOB_ID);
-            stx.world.roles.insert(role_id.clone(), role);
-            stx.world.account_roles.insert(
-                crate::role::RoleIdWithOwner::new(BOB_ID.clone(), role_id),
-                (),
-            );
-
-            execute_user_numeric_asset_transfer(
-                &mut stx,
-                &BOB_ID,
-                source_asset_id.clone(),
-                BOB_ID.clone(),
-                Quantity::one(),
-            )
-            .expect_err("permission names without exact typed payloads must not authorize");
-
-            assert_eq!(
-                asset_balance_or_zero(&stx, &source_asset_id),
-                Quantity::from(10_u32)
-            );
-            assert_eq!(
-                asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::zero()
-            );
-        }
-
-        #[test]
-        fn zero_mint_rejects_before_account_admission_and_preserves_once_budget() {
-            let domain_id = DomainId::try_new("mint_budget", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let definition_id =
-                AssetDefinitionId::new(domain_id, "voucher".parse().expect("asset name"));
-            let definition = AssetDefinition::numeric(definition_id.clone())
-                .with_name("voucher".to_owned())
-                .mintable_once()
-                .build(&ALICE_ID);
-            let world = World::with(
-                [domain],
-                [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
-                [definition],
-            );
-            let state = State::new(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            let destination_id = AssetId::new(definition_id.clone(), BOB_ID.clone());
-            let event_count = stx.world.internal_event_buf.len();
-
-            let error = Mint::asset_quantity(Quantity::zero(), destination_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("a zero mint must be rejected before consuming issuance budget");
-
-            assert!(
-                error.to_string().contains("mint amount must be non-zero"),
-                "unexpected zero-mint error: {error}"
-            );
-            assert!(
-                stx.world.account(&BOB_ID).is_err(),
-                "zero mint must not create the destination account"
-            );
-            assert!(stx.world.assets.get(&destination_id).is_none());
-            let definition = stx
-                .world
-                .asset_definition(&definition_id)
-                .expect("definition remains registered");
-            assert_eq!(definition.mintable(), Mintable::Once);
-            assert_eq!(definition.total_quantity(), &Quantity::zero());
-            assert_eq!(
-                stx.world.internal_event_buf.len(),
-                event_count,
-                "zero mint must not stage events"
-            );
-
-            let valid_destination = AssetId::new(definition_id.clone(), ALICE_ID.clone());
-            Mint::asset_quantity(Quantity::one(), valid_destination.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("the preserved once budget must permit one non-zero mint");
-            let definition = stx
-                .world
-                .asset_definition(&definition_id)
-                .expect("definition remains registered");
-            assert_eq!(definition.mintable(), Mintable::Not);
-            assert_eq!(definition.total_quantity(), &Quantity::one());
-            assert_eq!(
-                asset_balance_or_zero(&stx, &valid_destination),
-                Quantity::one()
-            );
-        }
-
-        #[test]
-        fn find_asset_definitions_filters_owner_with_owner_index() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let alice_definition_id =
-                AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-            let bob_definition_id =
-                AssetDefinitionId::new(domain_id.clone(), "tea".parse().unwrap());
-            let alice_definition = build_numeric_asset_definition(&alice_definition_id, &ALICE_ID);
-            let bob_definition = build_numeric_asset_definition(&bob_definition_id, &BOB_ID);
-            let world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [alice_definition, bob_definition],
-                [],
-                [],
-            );
-            assert!(
-                world
-                    .view()
-                    .asset_definitions_by_owner
-                    .get(&ALICE_ID)
-                    .is_some_and(|ids| ids.contains(&alice_definition_id)),
-                "world constructor should build the asset-definition owner index",
-            );
-
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-            let view = state.view();
-            let predicate = CompoundPredicate::<AssetDefinition>::build(|p| {
-                p.equals("owned_by", ALICE_ID.to_string())
-            });
-            let results: Vec<_> = FindAssetsDefinitions
-                .execute(predicate, &view)
-                .unwrap()
-                .map(|definition| definition.id().clone())
-                .collect();
-
-            assert_eq!(results, vec![alice_definition_id]);
-        }
-
-        fn asset_balance_or_zero(
-            state_transaction: &crate::state::StateTransaction<'_, '_>,
-            asset_id: &AssetId,
-        ) -> Quantity {
-            state_transaction
-                .world
-                .assets
-                .get(asset_id)
-                .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(Quantity::zero)
-        }
-
-        fn load_asset_transfer_control_store(
-            state_transaction: &crate::state::StateTransaction<'_, '_>,
-            account_id: &AccountId,
-        ) -> AssetTransferControlStoreV1 {
-            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
-                .parse()
-                .expect("metadata key");
-            let account = state_transaction
-                .world
-                .account(account_id)
-                .expect("controlled account exists");
-            let raw = account
-                .metadata()
-                .get(&metadata_key)
-                .cloned()
-                .expect("asset transfer control metadata stored");
-            raw.try_into_any_norito::<AssetTransferControlStoreV1>()
-                .expect("stored control metadata decodes")
-        }
-
-        #[test]
-        fn find_assets_returns_registered_balances() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-            let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(13_u32));
-
-            let world = World::with_assets([domain], [account], [asset_def], [asset], []);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-            let view = state.view();
-
-            let iter = ValidQuery::execute(FindAssets, CompoundPredicate::PASS, &view)
-                .expect("query execution succeeds");
-            let assets: Vec<_> = iter.collect();
-
-            assert_eq!(assets.len(), 1, "expected the pre-registered asset");
-            let fetched = &assets[0];
-            assert_eq!(fetched.id(), &asset_id);
-            assert_eq!(*fetched.value(), Quantity::from(13_u32));
-        }
-
-        #[test]
-        fn find_assets_by_account_id_limits_results_to_requested_owner() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-            let bob_account = build_account_in_domain(&bob_id, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-            let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13_u32));
-            let bob_asset = Asset::new(bob_asset_id, Quantity::from(7_u32));
-
-            let world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [asset_def],
-                [alice_asset, bob_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-            let view = state.view();
-
-            let assets: Vec<_> = FindAssetsByAccountId::new(ALICE_ID.clone())
-                .execute(CompoundPredicate::PASS, &view)
-                .expect("query execution succeeds")
-                .collect();
-
-            assert_eq!(assets.len(), 1);
-            assert_eq!(assets[0].id().account(), &*ALICE_ID);
-            assert_eq!(assets[0].id(), &alice_asset_id);
-        }
-
-        #[test]
-        fn find_assets_filters_by_account_predicate() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-            let bob_account = build_account_in_domain(&bob_id, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-            let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13_u32));
-            let bob_asset = Asset::new(bob_asset_id, Quantity::from(7_u32));
-
-            let world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [asset_def],
-                [alice_asset, bob_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-            let view = state.view();
-
-            let mut predicate = PredicateJson::default();
-            predicate.equals.push(EqualsCondition::new(
-                "account",
-                Value::String(ALICE_ID.to_string()),
-            ));
-            let filter = predicate
-                .into_compound::<Asset>()
-                .expect("predicate is valid JSON");
-
-            let assets: Vec<_> = ValidQuery::execute(FindAssets, filter, &view)
-                .expect("query execution succeeds")
-                .collect();
-
-            assert_eq!(assets.len(), 1);
-            assert_eq!(assets[0].id(), &alice_asset_id);
-            assert_eq!(*assets[0].value(), Quantity::from(13_u32));
-        }
-
-        #[test]
-        fn asset_predicate_view_extracts_alias_fields_for_planner() {
-            let account_filter =
-                CompoundPredicate::<Asset>::build(|p| p.equals("id.account", ALICE_ID.to_string()));
-            let account_view = AssetPredicateView::from_predicate(&account_filter);
-            assert!(
-                matches!(account_view.plan(), AssetQueryPlan::Subjects { .. }),
-                "id.account should seed subject plan"
-            );
-
-            let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let definition_filter = CompoundPredicate::<Asset>::build(|p| {
-                p.equals("id.definition", definition_id.clone())
-            });
-            let definition_view = AssetPredicateView::from_predicate(&definition_filter);
-            assert!(
-                matches!(definition_view.plan(), AssetQueryPlan::Definitions(_)),
-                "id.definition should seed definition plan"
-            );
-
-            let domain_filter =
-                CompoundPredicate::<Asset>::build(|p| p.equals("definition.domain", "wonderland"));
-            let domain_view = AssetPredicateView::from_predicate(&domain_filter);
-            assert!(
-                matches!(domain_view.plan(), AssetQueryPlan::Domains { .. }),
-                "definition.domain should seed domain plan"
-            );
-
-            let id_domain_filter = CompoundPredicate::<Asset>::build(|p| {
-                p.equals("id.definition.domain", "wonderland")
-            });
-            let id_domain_view = AssetPredicateView::from_predicate(&id_domain_filter);
-            assert!(
-                matches!(id_domain_view.plan(), AssetQueryPlan::Domains { .. }),
-                "id.definition.domain should seed domain plan"
-            );
-
-            let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
-            let id_filter = CompoundPredicate::<Asset>::build(|p| {
-                p.equals("id", asset_id.to_string())
-                    .equals("id.definition.domain", "wonderland")
-            });
-            let id_view = AssetPredicateView::from_predicate(&id_filter);
-            let AssetQueryPlan::Ids(ids) = id_view.plan() else {
-                panic!("exact asset id should seed direct id plan");
-            };
-            assert_eq!(ids, vec![asset_id]);
-        }
-
-        #[test]
-        fn find_assets_filters_by_id_account_alias_predicate() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-            let bob_account = build_account_in_domain(&bob_id, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-            let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13_u32));
-            let bob_asset = Asset::new(bob_asset_id, Quantity::from(7_u32));
-
-            let world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [asset_def],
-                [alice_asset, bob_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-            let view = state.view();
-
-            let predicate =
-                CompoundPredicate::<Asset>::build(|p| p.equals("id.account", ALICE_ID.to_string()));
-            let assets: Vec<_> = ValidQuery::execute(FindAssets, predicate, &view)
-                .expect("query execution succeeds")
-                .collect();
-
-            assert_eq!(assets.len(), 1);
-            assert_eq!(assets[0].id(), &alice_asset_id);
-            assert_eq!(*assets[0].value(), Quantity::from(13_u32));
-        }
-
-        #[test]
-        fn find_assets_filters_by_exact_id_with_extra_predicate() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-            let bob_account = build_account_in_domain(&bob_id, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                domain_id.clone(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-            let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let bob_asset_id = AssetId::new(asset_def_id, bob_id.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13_u32));
-            let bob_asset = Asset::new(bob_asset_id, Quantity::from(7_u32));
-
-            let world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [asset_def],
-                [alice_asset, bob_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-            let view = state.view();
-
-            let predicate = CompoundPredicate::<Asset>::build(|p| {
-                p.equals("id", alice_asset_id.to_string())
-                    .equals("id.definition.domain", domain_id.to_string())
-            });
-            let assets: Vec<_> = ValidQuery::execute(FindAssets, predicate, &view)
-                .expect("query execution succeeds")
-                .collect();
-
-            assert_eq!(assets.len(), 1);
-            assert_eq!(assets[0].id(), &alice_asset_id);
-            assert_eq!(*assets[0].value(), Quantity::from(13_u32));
-        }
-
-        #[test]
-        fn find_assets_filters_by_account_and_domain_predicate() {
-            let primary_domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let secondary_domain_id: DomainId =
-                DomainId::try_new("redland", "universal").expect("domain id");
-            let primary_domain = Domain::new(primary_domain_id.clone()).build(&ALICE_ID);
-            let secondary_domain = Domain::new(secondary_domain_id.clone()).build(&ALICE_ID);
-
-            let alice_account = build_account_in_domain(&ALICE_ID, &primary_domain_id);
-            let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-            let bob_account = build_account_in_domain(&bob_id, &primary_domain_id);
-
-            let primary_asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::new(
-                    primary_domain_id.clone(),
-                    "rose".parse().unwrap(),
-                );
-            let secondary_asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::new(
-                    secondary_domain_id.clone(),
-                    "lily".parse().unwrap(),
-                );
-            let primary_asset_def = {
-                let __asset_definition_id = primary_asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-            let secondary_asset_def = {
-                let __asset_definition_id = secondary_asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-
-            let alice_primary_asset_id =
-                AssetId::new(primary_asset_def_id.clone(), ALICE_ID.clone());
-            let alice_secondary_asset_id =
-                AssetId::new(secondary_asset_def_id.clone(), ALICE_ID.clone());
-            let bob_primary_asset_id = AssetId::new(primary_asset_def_id, bob_id.clone());
-            let alice_primary_asset =
-                Asset::new(alice_primary_asset_id.clone(), Quantity::from(13_u32));
-            let alice_secondary_asset = Asset::new(alice_secondary_asset_id, Quantity::from(7_u32));
-            let bob_primary_asset = Asset::new(bob_primary_asset_id, Quantity::from(5_u32));
-
-            let world = World::with_assets(
-                [primary_domain, secondary_domain],
-                [alice_account, bob_account],
-                [primary_asset_def, secondary_asset_def],
-                [
-                    alice_primary_asset,
-                    alice_secondary_asset,
-                    bob_primary_asset,
-                ],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-            let view = state.view();
-
-            let mut predicate = PredicateJson::default();
-            predicate.equals.push(EqualsCondition::new(
-                "account",
-                Value::String(ALICE_ID.to_string()),
-            ));
-            predicate.equals.push(EqualsCondition::new(
-                "domain",
-                Value::String(primary_domain_id.to_string()),
-            ));
-            let filter = predicate
-                .into_compound::<Asset>()
-                .expect("predicate is valid JSON");
-
-            let assets: Vec<_> = ValidQuery::execute(FindAssets, filter, &view)
-                .expect("query execution succeeds")
-                .collect();
-
-            assert_eq!(assets.len(), 1);
-            assert_eq!(assets[0].id(), &alice_primary_asset_id);
-            assert_eq!(*assets[0].value(), Quantity::from(13_u32));
-        }
-
-        #[test]
-        fn transfer_removes_metadata_when_balance_zero() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-            let alice_asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(1_u32));
-
-            let world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [asset_def],
-                [alice_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xB1);
-
-            let key: Name = "tag".parse().expect("metadata key");
-            let value = Json::from(norito::json!("seed"));
-            SetAssetKeyValue::new(alice_asset_id.clone(), key, value)
-                .execute(&ALICE_ID, &mut stx)
-                .expect("set metadata");
-
-            Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("transfer succeeds");
-
-            assert!(stx.world.assets.get(&alice_asset_id).is_none());
-            assert!(stx.world.asset_metadata.get(&alice_asset_id).is_none());
-        }
-
-        #[test]
-        fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
-            let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id parses");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let definition_id = AssetDefinitionId::new(
-                domain_id,
-                "rose".parse().expect("asset definition name parses"),
-            );
-            let definition = build_numeric_asset_definition(&definition_id, &ALICE_ID);
-            let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::one());
-            let world = World::with_assets([domain], [alice_account], [definition], [asset], []);
-            let state = State::new(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xB2);
-
-            let key: Name = "tag".parse().expect("metadata key parses");
-            SetAssetKeyValue::new(
-                asset_id.clone(),
-                key,
-                Json::from(norito::json!("preserve-me")),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("set asset metadata");
-            let metadata_before = stx
-                .world
-                .asset_metadata
-                .get(&asset_id)
-                .cloned()
-                .expect("metadata exists before self-transfer");
-            stx.world.internal_event_buf.clear();
-
-            Transfer::asset_quantity(asset_id.clone(), Quantity::one(), ALICE_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("a full-balance self-transfer is an identity movement");
-
-            assert_eq!(asset_balance_or_zero(&stx, &asset_id), Quantity::one());
-            assert_eq!(
-                stx.world.asset_metadata.get(&asset_id),
-                Some(&metadata_before),
-                "the identity transfer must not remove and recreate the asset"
-            );
-            assert!(
-                stx.world
-                    .asset_definition_assets
-                    .get(&definition_id)
-                    .is_some_and(|assets| assets.contains(&asset_id))
-            );
-            assert!(
-                stx.world
-                    .asset_definition_holders
-                    .get(&definition_id)
-                    .is_some_and(|holders| holders.contains(&ALICE_ID))
-            );
-            assert!(
-                stx.world
-                    .asset_definition_nonzero_holders
-                    .get(&definition_id)
-                    .is_some_and(|holders| holders.contains(&ALICE_ID))
-            );
-            assert_eq!(
-                stx.world.internal_event_buf.len(),
-                3,
-                "identity movement emits the canonical deltas and one paired transfer event"
-            );
-            assert!(stx.world.internal_event_buf.iter().any(|event| matches!(
-                event.as_ref(),
-                DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
-                    AssetEvent::Transferred(transfer)
-                ))) if transfer.source() == &asset_id
-                    && transfer.destination() == &asset_id
-                    && transfer.amount() == &Quantity::one()
-            )));
-        }
-
-        #[test]
-        fn asset_transfer_controls_require_asset_owner_authority() {
-            let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            let alice_alias = AccountAlias::new(
-                "alice".parse().expect("account alias label"),
-                Some(AccountAliasDomain::new(
-                    "wonderland".parse().expect("account alias domain"),
-                )),
-                DataSpaceId::UNIVERSAL,
-            );
-            seed_test_account_alias_binding(&mut stx, &ALICE_ID, &alice_alias);
-            seed_test_account_alias_lease(&mut stx, &ALICE_ID, &alice_alias);
-
-            let err = SetAssetTransferAvailability::new(
-                ALICE_ID.clone(),
-                asset_definition_id.clone(),
-                0,
-                AssetTransferAvailability::Enabled,
-                AssetTransferAvailability::Disabled,
-                Some("operator hold".to_owned()),
-            )
-            .execute(&BOB_ID, &mut stx)
-            .expect_err("non-owner must be rejected");
-            assert!(
-                err.to_string().contains("owner is"),
-                "unexpected error: {err}"
-            );
-
-            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
-                .parse()
-                .expect("metadata key");
-            let account = stx
-                .world
-                .account(&ALICE_ID)
-                .expect("controlled account exists");
-            assert!(
-                account.metadata().get(&metadata_key).is_none(),
-                "rejected control instruction must not persist metadata"
-            );
-        }
-
-        #[test]
-        fn genesis_has_inherent_transfer_control_authority() {
-            let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-
-            SetAssetTransferAvailability::new(
-                ALICE_ID.clone(),
-                asset_definition_id.clone(),
-                0,
-                AssetTransferAvailability::Enabled,
-                AssetTransferAvailability::Disabled,
-                Some("genesis policy".to_owned()),
-            )
-            .execute(&BOB_ID, &mut stx)
-            .expect("genesis may establish initial availability independent of ownership");
-            SetAssetHoldingLimit::new(
-                ALICE_ID.clone(),
-                asset_definition_id.clone(),
-                Some(Quantity::from(5_000_u32)),
-            )
-            .execute(&BOB_ID, &mut stx)
-            .expect("genesis may establish an initial holding limit independent of ownership");
-            let record = load_asset_transfer_control_store(&stx, &ALICE_ID)
-                .find(&asset_definition_id)
-                .cloned()
-                .expect("genesis availability persisted");
-            assert_eq!(record.availability_revision, 1);
-            assert_eq!(
-                record.outgoing_availability,
-                AssetTransferAvailability::Disabled
-            );
-            assert_eq!(record.holding_limit, Some(Quantity::from(5_000_u32)));
-        }
-
-        #[test]
-        fn delegated_controls_use_exact_availability_scoped_daily_and_exact_holding() {
-            let domain_id = DomainId::try_new("currency", "sbp").expect("asset definition domain");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let owner = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-            let delegate = Account::new(BOB_ID.clone()).build(&ALICE_ID);
-            let hbl_sbp_id = iroha_test_samples::gen_account_in("hbl").0;
-            let hbl_other_id = iroha_test_samples::gen_account_in("hbl_other").0;
-            let ubl_sbp_id = iroha_test_samples::gen_account_in("ubl").0;
-            let unlabeled_id = iroha_test_samples::gen_account_in("unlabeled").0;
-            let hbl_sbp_alias = AccountAlias::new(
-                "retail_hbl_sbp".parse().expect("alias label"),
-                Some(AccountAliasDomain::new(
-                    "hbl".parse().expect("alias domain"),
-                )),
-                DataSpaceId::new(10),
-            );
-            let hbl_other_alias = AccountAlias::new(
-                "retail_hbl_other".parse().expect("alias label"),
-                Some(AccountAliasDomain::new(
-                    "hbl".parse().expect("alias domain"),
-                )),
-                DataSpaceId::new(11),
-            );
-            let ubl_sbp_alias = AccountAlias::new(
-                "retail_ubl_sbp".parse().expect("alias label"),
-                Some(AccountAliasDomain::new(
-                    "ubl".parse().expect("alias domain"),
-                )),
-                DataSpaceId::new(10),
-            );
-            let hbl_sbp = Account::new(hbl_sbp_id.clone()).build(&ALICE_ID);
-            let hbl_other = Account::new(hbl_other_id.clone()).build(&ALICE_ID);
-            let ubl_sbp = Account::new(ubl_sbp_id.clone()).build(&ALICE_ID);
-            let unlabeled = Account::new(unlabeled_id.clone()).build(&ALICE_ID);
-            let asset_definition_id =
-                AssetDefinitionId::new(domain_id, "pkr".parse().expect("asset definition name"));
-            let asset_definition = build_numeric_asset_definition(&asset_definition_id, &ALICE_ID);
-            let account_domain = AccountAliasDomain::new("hbl".parse().expect("HBL domain"));
-            let account_dataspace = DataSpaceId::new(10);
-            let mut world = World::with_assets(
-                [domain],
-                [owner, delegate, hbl_sbp, hbl_other, ubl_sbp, unlabeled],
-                [asset_definition],
-                [],
-                [],
-            );
-            world.account_permissions.insert(
-                BOB_ID.clone(),
-                BTreeSet::from([
-                    Permission::from(
-                        iroha_executor_data_model::permission::asset::CanSetAssetTransferAvailability {
-                            account: hbl_sbp_id.clone(),
-                            asset_definition: asset_definition_id.clone(),
-                        },
-                    ),
-                    Permission::from(
-                        iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit {
-                            asset_definition: asset_definition_id.clone(),
-                            account_domain,
-                            account_dataspace,
-                        },
-                    ),
-                    Permission::from(
-                        iroha_executor_data_model::permission::asset::CanSetAssetHoldingLimit {
-                            account: hbl_sbp_id.clone(),
-                            asset_definition: asset_definition_id.clone(),
-                        },
-                    ),
-                ]),
-            );
-            let state = State::new(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let dataspace_catalog = DataSpaceCatalog::new(vec![
-                iroha_data_model::nexus::DataSpaceMetadata::default(),
-                iroha_data_model::nexus::DataSpaceMetadata {
-                    id: DataSpaceId::new(10),
-                    alias: "banking".to_owned(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-                iroha_data_model::nexus::DataSpaceMetadata {
-                    id: DataSpaceId::new(11),
-                    alias: "alternate".to_owned(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-            ])
-            .expect("transfer-control dataspace catalog");
-            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 86_400_000, 0);
-            let mut block = state.block(header);
-            block.nexus.dataspace_catalog = dataspace_catalog.clone();
-            let mut stx = block.transaction();
-            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
-            stx.world.dataspace_catalog = dataspace_catalog;
-            seed_test_account_alias_binding(&mut stx, &hbl_sbp_id, &hbl_sbp_alias);
-            seed_test_account_alias_binding(&mut stx, &hbl_other_id, &hbl_other_alias);
-            seed_test_account_alias_binding(&mut stx, &ubl_sbp_id, &ubl_sbp_alias);
-            seed_test_account_alias_lease(&mut stx, &hbl_sbp_id, &hbl_sbp_alias);
-            seed_test_account_alias_lease(&mut stx, &hbl_other_id, &hbl_other_alias);
-            seed_test_account_alias_lease(&mut stx, &ubl_sbp_id, &ubl_sbp_alias);
-
-            SetAssetTransferAvailability::new(
-                hbl_sbp_id.clone(),
-                asset_definition_id.clone(),
-                0,
-                AssetTransferAvailability::Disabled,
-                AssetTransferAvailability::Disabled,
-                Some("exact FI scope".to_owned()),
-            )
-            .execute(&BOB_ID, &mut stx)
-            .expect("exact HBL/SBP availability permission must execute");
-            SetAssetTransferControl::new(
-                hbl_sbp_id.clone(),
-                asset_definition_id.clone(),
-                vec![AssetTransferLimit {
-                    window: AssetTransferControlWindow::Day,
-                    cap_amount: Some(Quantity::from(100_u32)),
-                }],
-            )
-            .execute(&BOB_ID, &mut stx)
-            .expect("exact HBL/SBP daily-limit permission must execute");
-            SetAssetHoldingLimit::new(
-                hbl_sbp_id.clone(),
-                asset_definition_id.clone(),
-                Some(Quantity::from(1_000_u32)),
-            )
-            .execute(&BOB_ID, &mut stx)
-            .expect("exact holding-limit permission must execute");
-            let blacklist_error = SetAssetTransferBlacklist::new(
-                hbl_sbp_id.clone(),
-                asset_definition_id.clone(),
-                true,
-            )
-            .execute(&BOB_ID, &mut stx)
-            .expect_err("holding-limit permission must not authorize blacklist changes");
-            assert!(
-                blacklist_error
-                    .to_string()
-                    .contains("required asset-owner transfer-control permission"),
-                "unexpected blacklist authorization error: {blacklist_error}",
-            );
-
-            for (target, expected_error) in [
-                (
-                    &hbl_other_id,
-                    "lacks the required account-domain-and-dataspace transfer-control permission",
-                ),
-                (
-                    &ubl_sbp_id,
-                    "lacks the required account-domain-and-dataspace transfer-control permission",
-                ),
-                (&unlabeled_id, "no canonical on-chain alias label"),
-            ] {
-                let availability_error = SetAssetTransferAvailability::new(
-                    target.clone(),
-                    asset_definition_id.clone(),
-                    0,
-                    AssetTransferAvailability::Disabled,
-                    AssetTransferAvailability::Disabled,
-                    Some("out of scope".to_owned()),
-                )
-                .execute(&BOB_ID, &mut stx)
-                .expect_err("cross-scope availability update must be rejected");
-                assert!(
-                    availability_error
-                        .to_string()
-                        .contains("lacks the required exact account-and-asset"),
-                    "unexpected availability error for {target}: {availability_error}",
-                );
-                let limit_error = SetAssetTransferControl::new(
-                    target.clone(),
-                    asset_definition_id.clone(),
-                    vec![AssetTransferLimit {
-                        window: AssetTransferControlWindow::Day,
-                        cap_amount: Some(Quantity::from(100_u32)),
-                    }],
-                )
-                .execute(&BOB_ID, &mut stx)
-                .expect_err("cross-scope limit must be rejected");
-                assert!(
-                    limit_error.to_string().contains(expected_error),
-                    "unexpected limit error for {target}: {limit_error}",
-                );
-                let holding_error = SetAssetHoldingLimit::new(
-                    target.clone(),
-                    asset_definition_id.clone(),
-                    Some(Quantity::from(1_000_u32)),
-                )
-                .execute(&BOB_ID, &mut stx)
-                .expect_err("cross-account holding limit must be rejected");
-                assert!(
-                    holding_error
-                        .to_string()
-                        .contains("lacks the required exact account-and-asset"),
-                    "unexpected holding-limit error for {target}: {holding_error}",
-                );
-            }
-
-            let exact = load_asset_transfer_control_store(&stx, &hbl_sbp_id);
-            let exact = exact
-                .find(&asset_definition_id)
-                .expect("exact-scope controls persisted");
-            assert_eq!(
-                exact.outgoing_availability,
-                AssetTransferAvailability::Disabled
-            );
-            assert_eq!(exact.limits.len(), 1);
-            assert_eq!(exact.holding_limit, Some(Quantity::from(1_000_u32)));
-            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
-                .parse()
-                .expect("metadata key");
-            for target in [&hbl_other_id, &ubl_sbp_id, &unlabeled_id] {
-                assert!(
-                    stx.world
-                        .account(target)
-                        .expect("target account")
-                        .metadata()
-                        .get(&metadata_key)
-                        .is_none(),
-                    "rejected cross-scope operation must not mutate {target}",
-                );
-            }
-        }
-
-        #[test]
-        fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened() {
-            let (state, asset_definition_id, source_asset_id) =
-                build_asset_transfer_control_test_state(10);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xCB);
-
-            SetAssetTransferAvailability::new(
-                ALICE_ID.clone(),
-                asset_definition_id.clone(),
-                0,
-                AssetTransferAvailability::Disabled,
-                AssetTransferAvailability::Disabled,
-                Some("compliance hold".to_owned()),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("availability close succeeds");
-
-            let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("disabled outgoing transfer must be rejected");
-            assert!(matches!(
-                err,
-                InstructionExecutionError::AssetTransferAdmission(
-                    AssetTransferAdmissionError::OutgoingDisabled(_)
-                )
-            ));
-
-            Mint::asset_quantity(2_u32, source_asset_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("mint is a supply operation, not an incoming transfer");
-            Burn::asset_quantity(1_u32, source_asset_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("burn is a supply operation, not an outgoing transfer");
-            assert_eq!(
-                asset_balance_or_zero(&stx, &source_asset_id),
-                Quantity::from(11_u32)
-            );
-            assert!(
-                !stx.world.internal_event_buf.iter().any(|event| matches!(
-                    event.as_ref(),
-                    DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
-                        AssetEvent::Transferred(_)
-                    )))
-                )),
-                "mint and burn must not emit the transfer-specific event"
-            );
-
-            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-            Mint::asset_quantity(Quantity::one(), destination_asset_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("asset owner funds the incoming-transfer source");
-            let incoming_err =
-                Transfer::asset_quantity(destination_asset_id.clone(), 1_u32, ALICE_ID.clone())
-                    .execute(&BOB_ID, &mut stx)
-                    .expect_err("disabled incoming transfer must be rejected");
-            assert!(matches!(
-                incoming_err,
-                InstructionExecutionError::AssetTransferAdmission(
-                    AssetTransferAdmissionError::IncomingDisabled(_)
-                )
-            ));
-            let stale = SetAssetTransferAvailability::new(
-                ALICE_ID.clone(),
-                asset_definition_id.clone(),
-                0,
-                AssetTransferAvailability::Enabled,
-                AssetTransferAvailability::Enabled,
-                Some("stale reopen".to_owned()),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect_err("stale revision must fail");
-            assert!(matches!(
-                stale,
-                InstructionExecutionError::AssetTransferAdmission(
-                    AssetTransferAdmissionError::AvailabilityRevisionMismatch(_)
-                )
-            ));
-            SetAssetTransferAvailability::new(
-                ALICE_ID.clone(),
-                asset_definition_id.clone(),
-                1,
-                AssetTransferAvailability::Enabled,
-                AssetTransferAvailability::Enabled,
-                Some("hold released".to_owned()),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("matching revision reopens both directions");
-            Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("outgoing transfer succeeds after reopen");
-            assert_eq!(
-                asset_balance_or_zero(&stx, &source_asset_id),
-                Quantity::from(10_u32)
-            );
-            assert_eq!(
-                asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::from(2_u32)
-            );
-
-            let store = load_asset_transfer_control_store(&stx, &ALICE_ID);
-            let record = store
-                .find(&asset_definition_id)
-                .expect("reopened revisioned record remains stored");
-            assert_eq!(record.availability_revision, 2);
-            assert!(record.incoming_availability.is_enabled());
-            assert!(record.outgoing_availability.is_enabled());
-            assert!(!record.blacklisted);
-            assert!(record.usages.is_empty());
-        }
-
-        #[test]
-        fn availability_reason_over_limit_is_rejected_without_persistence() {
-            let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            let reason = "x".repeat(
-                iroha_data_model::asset::ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 + 1,
-            );
-
-            let error = SetAssetTransferAvailability::new(
-                ALICE_ID.clone(),
-                asset_definition_id.clone(),
-                0,
-                AssetTransferAvailability::Enabled,
-                AssetTransferAvailability::Disabled,
-                Some(reason),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect_err("oversized persisted reason must be rejected");
-
-            assert!(
-                error.to_string().contains("maximum byte length"),
-                "unexpected error: {error}"
-            );
-            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
-                .parse()
-                .expect("metadata key");
-            let account = stx
-                .world
-                .account(&ALICE_ID)
-                .expect("controlled account exists");
-            assert!(
-                account.metadata().get(&metadata_key).is_none(),
-                "invalid reason must not persist transfer-control metadata"
-            );
-        }
-
-        #[test]
-        fn transfer_rejects_when_account_is_blacklisted_for_asset() {
-            let (state, asset_definition_id, source_asset_id) =
-                build_asset_transfer_control_test_state(10);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-
-            SetAssetTransferBlacklist::new(ALICE_ID.clone(), asset_definition_id.clone(), true)
-                .execute(&ALICE_ID, &mut stx)
-                .expect("blacklist succeeds");
-
-            let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("blacklisted outbound transfer must be rejected");
-            assert!(
-                err.to_string().contains("blacklisted"),
-                "unexpected error: {err}"
-            );
-
-            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-            assert_eq!(
-                asset_balance_or_zero(&stx, &source_asset_id),
-                Quantity::from(10_u32)
-            );
-            assert_eq!(
-                asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::zero()
-            );
-
-            let store = load_asset_transfer_control_store(&stx, &ALICE_ID);
-            let record = store
-                .find(&asset_definition_id)
-                .expect("blacklist record stored");
-            assert!(record.blacklisted);
-            assert!(record.outgoing_availability.is_enabled());
-            assert!(record.usages.is_empty());
-        }
-
-        #[test]
-        fn holding_limit_applies_to_transfer_and_mint_credit_paths() {
-            let (state, asset_definition_id, source_asset_id) =
-                build_asset_transfer_control_test_state(10);
-            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xCA);
-
-            SetAssetHoldingLimit::new(
-                BOB_ID.clone(),
-                asset_definition_id.clone(),
-                Some(Quantity::from(5_u32)),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("asset owner sets destination holding limit");
-
-            Transfer::asset_quantity(source_asset_id.clone(), 5_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("credit exactly at holding limit");
-            let transfer_error =
-                Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("transfer above holding limit must fail");
-            assert!(matches!(
-                transfer_error,
-                InstructionExecutionError::AssetTransferAdmission(
-                    AssetTransferAdmissionError::HoldingLimitExceeded(_)
-                )
-            ));
-
-            let mint_error = Mint::asset_quantity(1_u32, destination_asset_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("mint above holding limit must fail");
-            assert!(matches!(
-                mint_error,
-                InstructionExecutionError::AssetTransferAdmission(
-                    AssetTransferAdmissionError::HoldingLimitExceeded(_)
-                )
-            ));
-            assert_eq!(
-                asset_balance_or_zero(&stx, &source_asset_id),
-                Quantity::from(5_u32)
-            );
-            assert_eq!(
-                asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::from(5_u32)
-            );
-            let store = load_asset_transfer_control_store(&stx, &BOB_ID);
-            assert_eq!(
-                store
-                    .find(&asset_definition_id)
-                    .and_then(|record| record.holding_limit.as_ref()),
-                Some(&Quantity::from(5_u32))
-            );
-
-            SetAssetHoldingLimit::new(
-                BOB_ID.clone(),
-                asset_definition_id.clone(),
-                Some(Quantity::zero()),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("asset owner can close inbound credit while a balance remains");
-            let closed_error =
-                Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("zero holding limit must reject further inbound credit");
-            assert!(matches!(
-                closed_error,
-                InstructionExecutionError::AssetTransferAdmission(
-                    AssetTransferAdmissionError::HoldingLimitExceeded(_)
-                )
-            ));
-            assert_eq!(
-                asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::from(5_u32)
-            );
-        }
-
-        #[test]
-        fn exact_numeric_credit_precheck_enforces_holding_limit_without_mutation() {
-            let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-
-            SetAssetHoldingLimit::new(
-                BOB_ID.clone(),
-                asset_definition_id.clone(),
-                Some(Quantity::from(5_u32)),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("asset owner sets destination holding limit");
-
-            let (resolved_id, candidate) = stx
-                .world
-                .precheck_numeric_asset_credit(&destination_asset_id, &Quantity::from(5_u32))
-                .expect("credit exactly at the holding limit must precheck");
-            assert_eq!(resolved_id, destination_asset_id);
-            assert_eq!(candidate, Quantity::from(5_u32));
-            assert!(
-                stx.world.assets.get(&destination_asset_id).is_none(),
-                "read-only credit precheck must not create a balance"
-            );
-
-            stx.world
-                .deposit_numeric_asset_exact(&resolved_id, &Quantity::from(5_u32))
-                .expect("checked exact credit at the holding limit must apply");
-            let error = stx
-                .world
-                .precheck_numeric_asset_credit_exact(&resolved_id, &Quantity::one())
-                .expect_err("exact credit above the holding limit must fail");
-            assert!(matches!(
-                error,
-                InstructionExecutionError::AssetTransferAdmission(
-                    AssetTransferAdmissionError::HoldingLimitExceeded(_)
-                )
-            ));
-            assert_eq!(
-                asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::from(5_u32),
-                "rejected exact credit must leave the balance unchanged"
-            );
-
-            SetAssetHoldingLimit::new(
-                BOB_ID.clone(),
-                asset_definition_id,
-                Some(Quantity::from(4_u32)),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("asset owner may lower the limit below the current balance");
-            let error = stx
-                .world
-                .deposit_numeric_asset(&destination_asset_id, &Quantity::one())
-                .expect_err("a balance already above its limit must reject further credit");
-            assert!(matches!(
-                error,
-                InstructionExecutionError::AssetTransferAdmission(
-                    AssetTransferAdmissionError::HoldingLimitExceeded(_)
-                )
-            ));
-            assert_eq!(
-                asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::from(5_u32)
-            );
-        }
-
-        #[test]
-        fn duplicate_transfer_limit_windows_are_rejected() {
-            let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-
-            let error = SetAssetTransferControl::new(
-                ALICE_ID.clone(),
-                asset_definition_id.clone(),
-                vec![
-                    AssetTransferLimit {
-                        window: AssetTransferControlWindow::Day,
-                        cap_amount: Some(Quantity::from(5_u32)),
-                    },
-                    AssetTransferLimit {
-                        window: AssetTransferControlWindow::Day,
-                        cap_amount: Some(Quantity::from(10_u32)),
-                    },
-                ],
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect_err("duplicate windows must not be order-dependent");
-            assert!(
-                error
-                    .to_string()
-                    .contains("duplicate asset transfer limit window DAY"),
-                "unexpected error: {error}"
-            );
-            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
-                .parse()
-                .expect("metadata key");
-            assert!(
-                stx.world
-                    .account(&ALICE_ID)
-                    .expect("controlled account exists")
-                    .metadata()
-                    .get(&metadata_key)
-                    .is_none(),
-                "rejected duplicate windows must not create control metadata",
-            );
-        }
-
-        #[test]
-        fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
-            let (state, asset_definition_id, source_asset_id) =
-                build_asset_transfer_control_test_state(10);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xB2);
-
-            SetAssetTransferControl::new(
-                ALICE_ID.clone(),
-                asset_definition_id.clone(),
-                vec![AssetTransferLimit {
-                    window: AssetTransferControlWindow::Day,
-                    cap_amount: Some(Quantity::from(5_u32)),
-                }],
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("limit update succeeds");
-
-            Transfer::asset_quantity(source_asset_id.clone(), 5_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("exact-cap transfer must succeed");
-
-            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-            assert_eq!(
-                asset_balance_or_zero(&stx, &source_asset_id),
-                Quantity::from(5_u32)
-            );
-            assert_eq!(
-                asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::from(5_u32)
-            );
-
-            let store_after_success = load_asset_transfer_control_store(&stx, &ALICE_ID);
-            let record_after_success = store_after_success
-                .find(&asset_definition_id)
-                .expect("limit record stored after successful transfer");
-            assert_eq!(record_after_success.limits.len(), 1);
-            assert_eq!(record_after_success.usages.len(), 1);
-            let usage = &record_after_success.usages[0];
-            assert_eq!(usage.window, AssetTransferControlWindow::Day);
-            assert_eq!(usage.bucket_start_ms, 86_400_000);
-            assert_eq!(usage.spent_amount, Quantity::from(5_u32));
-
-            let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("over-cap transfer must be rejected");
-            assert!(
-                err.to_string().contains("cap exceeded"),
-                "unexpected error: {err}"
-            );
-
-            assert_eq!(
-                asset_balance_or_zero(&stx, &source_asset_id),
-                Quantity::from(5_u32)
-            );
-            assert_eq!(
-                asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::from(5_u32)
-            );
-
-            let store_after_rejection = load_asset_transfer_control_store(&stx, &ALICE_ID);
-            let record_after_rejection = store_after_rejection
-                .find(&asset_definition_id)
-                .expect("limit record retained after rejected transfer");
-            assert_eq!(record_after_rejection.usages.len(), 1);
-            assert_eq!(
-                record_after_rejection.usages[0].spent_amount,
-                Quantity::from(5_u32)
-            );
-            assert_eq!(record_after_rejection.usages[0].bucket_start_ms, 86_400_000);
-        }
-
-        #[test]
-        fn transfer_rejects_configured_offline_escrow_source() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-            let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(10_u32));
-
-            let world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [asset_def],
-                [alice_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let mut state = State::new(world, kura, query_store);
-            state
-                .settlement
-                .offline
-                .escrow_accounts
-                .insert(asset_def_id.clone(), ALICE_ID.clone());
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-
-            let err = Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("generic transfer from escrow source must be rejected");
-            assert!(
-                err.to_string().contains("offline escrow account"),
-                "unexpected error: {err}"
-            );
-
-            let source_balance = stx
-                .world
-                .assets
-                .get(&alice_asset_id)
-                .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(Quantity::zero);
-            assert_eq!(source_balance, Quantity::from(10_u32));
-
-            let destination_asset = AssetId::new(asset_def_id, BOB_ID.clone());
-            assert!(
-                stx.world.assets.get(&destination_asset).is_none(),
-                "destination account must not be credited"
-            );
-        }
-
-        #[test]
-        fn transfer_rejects_deterministically_derived_offline_escrow_source() {
-            let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let escrow_account = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
-                &chain_id,
-                &asset_def_id,
-            );
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let escrow_account_model = build_account_in_domain(&escrow_account, &domain_id);
-            let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-            let escrow_asset_id = AssetId::new(asset_def_id.clone(), escrow_account.clone());
-            let escrow_asset = Asset::new(escrow_asset_id.clone(), Quantity::from(10_u32));
-            let world = World::with_assets(
-                [domain],
-                [escrow_account_model, bob_account],
-                [asset_def],
-                [escrow_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let mut state = State::new_with_chain(world, kura, query_store, chain_id);
-            state
-                .settlement
-                .offline
-                .escrow_accounts
-                .insert(asset_def_id.clone(), BOB_ID.clone());
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-
-            let err = Transfer::asset_quantity(escrow_asset_id.clone(), 1_u32, BOB_ID.clone())
-                .execute(&escrow_account, &mut stx)
-                .expect_err("deterministically derived escrow source must be rejected");
-            assert!(
-                err.to_string().contains("offline escrow account"),
-                "unexpected error: {err}"
-            );
-
-            let source_balance = stx
-                .world
-                .assets
-                .get(&escrow_asset_id)
-                .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(Quantity::zero);
-            assert_eq!(source_balance, Quantity::from(10_u32));
-
-            let destination_asset = AssetId::new(asset_def_id, BOB_ID.clone());
-            assert!(
-                stx.world.assets.get(&destination_asset).is_none(),
-                "destination account must not be credited"
-            );
-        }
-
-        #[test]
-        fn find_assets_filters_by_definition_predicate() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-            let accounts = [
-                build_account_in_domain(&ALICE_ID, &domain_id),
-                build_account_in_domain(&bob_id, &domain_id),
-            ];
-            let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let tulip_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "tulip".parse().unwrap(),
-            );
-            let definitions = [
-                {
-                    let __asset_definition_id = rose_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
+            for entry in std::fs::read_dir(directory).expect("read source directory") {
+                let path = entry.expect("read source entry").path();
+                if path.is_dir() {
+                    collect_rust_sources(&path, sources);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    sources.push(path);
                 }
-                .build(&ALICE_ID),
-                {
-                    let __asset_definition_id = tulip_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
-                }
-                .build(&ALICE_ID),
-            ];
-            let assets = [
-                Asset::new(
-                    AssetId::new(rose_def_id.clone(), ALICE_ID.clone()),
-                    Quantity::from(13_u32),
-                ),
-                Asset::new(
-                    AssetId::new(rose_def_id.clone(), bob_id.clone()),
-                    Quantity::from(7_u32),
-                ),
-                Asset::new(
-                    AssetId::new(tulip_def_id, ALICE_ID.clone()),
-                    Quantity::from(3_u32),
-                ),
-            ];
-
-            let world =
-                World::with_assets([domain], accounts, definitions, assets, /*nfts*/ []);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-            let view = state.view();
-
-            let mut predicate = PredicateJson::default();
-            predicate.equals.push(EqualsCondition::new(
-                "definition",
-                Value::String(rose_def_id.to_string()),
-            ));
-            let filter = predicate
-                .into_compound::<Asset>()
-                .expect("predicate is valid JSON");
-
-            let assets: Vec<_> = ValidQuery::execute(FindAssets, filter, &view)
-                .expect("query execution succeeds")
-                .collect();
-
-            assert_eq!(assets.len(), 2);
-            assert!(
-                assets
-                    .iter()
-                    .all(|asset| asset.id().definition() == &rose_def_id)
-            );
-            let mut ids: Vec<_> = assets.into_iter().map(|asset| asset.id().clone()).collect();
-            ids.sort();
-            let mut expected = vec![
-                AssetId::new(rose_def_id.clone(), ALICE_ID.clone()),
-                AssetId::new(rose_def_id, bob_id),
-            ];
-            expected.sort();
-            assert_eq!(ids, expected);
-        }
-
-        #[test]
-        fn find_assets_filters_by_id_definition_alias_predicate() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-            let accounts = [
-                build_account_in_domain(&ALICE_ID, &domain_id),
-                build_account_in_domain(&bob_id, &domain_id),
-            ];
-            let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let tulip_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "tulip".parse().unwrap(),
-            );
-            let definitions = [
-                {
-                    let __asset_definition_id = rose_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
-                }
-                .build(&ALICE_ID),
-                {
-                    let __asset_definition_id = tulip_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
-                }
-                .build(&ALICE_ID),
-            ];
-            let assets = [
-                Asset::new(
-                    AssetId::new(rose_def_id.clone(), ALICE_ID.clone()),
-                    Quantity::from(13_u32),
-                ),
-                Asset::new(
-                    AssetId::new(rose_def_id.clone(), bob_id.clone()),
-                    Quantity::from(7_u32),
-                ),
-                Asset::new(
-                    AssetId::new(tulip_def_id, ALICE_ID.clone()),
-                    Quantity::from(3_u32),
-                ),
-            ];
-
-            let world =
-                World::with_assets([domain], accounts, definitions, assets, /*nfts*/ []);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-            let view = state.view();
-
-            let predicate = CompoundPredicate::<Asset>::build(|p| {
-                p.equals("id.definition", rose_def_id.clone())
-            });
-            let assets: Vec<_> = ValidQuery::execute(FindAssets, predicate, &view)
-                .expect("query execution succeeds")
-                .collect();
-
-            assert_eq!(assets.len(), 2);
-            assert!(
-                assets
-                    .iter()
-                    .all(|asset| asset.id().definition() == &rose_def_id)
-            );
-        }
-
-        #[test]
-        fn find_assets_filters_by_domain_predicate() {
-            let wonderland_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let oasis_id: DomainId = DomainId::try_new("oasis", "universal").expect("domain id");
-            let domains = [
-                Domain::new(wonderland_id.clone()).build(&ALICE_ID),
-                Domain::new(oasis_id.clone()).build(&ALICE_ID),
-            ];
-            let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-            let (dune_id, _) = iroha_test_samples::gen_account_in("oasis");
-            let accounts = [
-                build_account_in_domain(&ALICE_ID, &wonderland_id),
-                build_account_in_domain(&bob_id, &wonderland_id),
-                build_account_in_domain(&dune_id, &oasis_id),
-            ];
-            let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let spice_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("oasis", "universal").unwrap(),
-                "spice".parse().unwrap(),
-            );
-            let definitions = [
-                {
-                    let __asset_definition_id = rose_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
-                }
-                .build(&ALICE_ID),
-                {
-                    let __asset_definition_id = spice_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
-                }
-                .build(&ALICE_ID),
-            ];
-            let assets = [
-                Asset::new(
-                    AssetId::new(rose_def_id.clone(), ALICE_ID.clone()),
-                    Quantity::from(5_u32),
-                ),
-                Asset::new(
-                    AssetId::new(rose_def_id.clone(), bob_id.clone()),
-                    Quantity::from(11_u32),
-                ),
-                Asset::new(
-                    AssetId::new(spice_def_id, dune_id.clone()),
-                    Quantity::from(42_u32),
-                ),
-            ];
-
-            let world =
-                World::with_assets(domains, accounts, definitions, assets, /*nfts*/ []);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-            let view = state.view();
-
-            let mut predicate = PredicateJson::default();
-            predicate.equals.push(EqualsCondition::new(
-                "domain",
-                Value::String(wonderland_id.to_string()),
-            ));
-            let filter = predicate
-                .into_compound::<Asset>()
-                .expect("predicate is valid JSON");
-
-            let assets: Vec<_> = ValidQuery::execute(FindAssets, filter, &view)
-                .expect("query execution succeeds")
-                .collect();
-
-            assert_eq!(assets.len(), 2);
-            for asset in &assets {
-                assert_eq!(asset.id().definition().domain(), &wonderland_id);
-            }
-            let mut ids: Vec<_> = assets.into_iter().map(|asset| asset.id().clone()).collect();
-            ids.sort();
-            let mut expected = vec![
-                AssetId::new(rose_def_id.clone(), ALICE_ID.clone()),
-                AssetId::new(rose_def_id, bob_id),
-            ];
-            expected.sort();
-            assert_eq!(ids, expected);
-        }
-
-        #[test]
-        fn find_assets_filters_by_definition_domain_alias_predicate() {
-            let wonderland_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let oasis_id: DomainId = DomainId::try_new("oasis", "universal").expect("domain id");
-            let domains = [
-                Domain::new(wonderland_id.clone()).build(&ALICE_ID),
-                Domain::new(oasis_id.clone()).build(&ALICE_ID),
-            ];
-            let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-            let (dune_id, _) = iroha_test_samples::gen_account_in("oasis");
-            let accounts = [
-                build_account_in_domain(&ALICE_ID, &wonderland_id),
-                build_account_in_domain(&bob_id, &wonderland_id),
-                build_account_in_domain(&dune_id, &oasis_id),
-            ];
-            let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let spice_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("oasis", "universal").unwrap(),
-                "spice".parse().unwrap(),
-            );
-            let definitions = [
-                {
-                    let __asset_definition_id = rose_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
-                }
-                .build(&ALICE_ID),
-                {
-                    let __asset_definition_id = spice_def_id.clone();
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
-                }
-                .build(&ALICE_ID),
-            ];
-            let assets = [
-                Asset::new(
-                    AssetId::new(rose_def_id.clone(), ALICE_ID.clone()),
-                    Quantity::from(5_u32),
-                ),
-                Asset::new(
-                    AssetId::new(rose_def_id, bob_id.clone()),
-                    Quantity::from(11_u32),
-                ),
-                Asset::new(
-                    AssetId::new(spice_def_id, dune_id.clone()),
-                    Quantity::from(42_u32),
-                ),
-            ];
-
-            let world =
-                World::with_assets(domains, accounts, definitions, assets, /*nfts*/ []);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-            let view = state.view();
-
-            let predicate =
-                CompoundPredicate::<Asset>::build(|p| p.equals("definition.domain", "wonderland"));
-            let assets: Vec<_> = ValidQuery::execute(FindAssets, predicate, &view)
-                .expect("query execution succeeds")
-                .collect();
-
-            assert_eq!(assets.len(), 2);
-            assert!(
-                assets
-                    .iter()
-                    .all(|asset| asset.id().definition().domain() == &wonderland_id)
-            );
-        }
-
-        #[test]
-        fn nominal_asset_mutation_boundaries_reject_negative_values_and_underflow() {
-            let (state, asset_definition_id, source_asset_id) =
-                build_asset_transfer_control_test_state(10);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0x91);
-            let negative = Numeric::new(-1_i32, 0);
-            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-
-            assert!(
-                Quantity::try_from_numeric(negative).is_err(),
-                "negative signed values must not cross the nominal asset boundary"
-            );
-            assert!(stx.world.assets.get(&destination_asset_id).is_none());
-
-            let err = stx
-                .world
-                .decrease_asset_total_amount(&asset_definition_id, &Quantity::one())
-                .expect_err("quantity subtraction must not create a negative total");
-            assert!(matches!(
-                err,
-                InstructionExecutionError::Math(MathError::NotEnoughQuantity)
-            ));
-
-            assert_eq!(
-                stx.world
-                    .assets
-                    .get(&source_asset_id)
-                    .map(|value| value.as_ref()),
-                Some(&Quantity::from(10_u32))
-            );
-            assert!(stx.world.assets.get(&destination_asset_id).is_none());
-            assert_eq!(
-                stx.world
-                    .asset_definition(&asset_definition_id)
-                    .expect("asset definition")
-                    .total_quantity(),
-                &Quantity::zero()
-            );
-        }
-
-        #[test]
-        fn asset_insert_and_totals_reject_values_outside_numeric_spec() {
-            let domain_id = DomainId::try_new("integer_assets", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let definition_id =
-                AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
-            let definition = AssetDefinition::new(
-                definition_id.clone(),
-                iroha_primitives::numeric::NumericSpec::integer(),
-            )
-            .with_name("coin".to_owned())
-            .build(&ALICE_ID);
-            let world = World::with([domain], [alice_account], [definition]);
-            let state = State::new(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
-            let fractional_quantity: Quantity =
-                "0.1".parse().expect("non-negative fractional quantity");
-
-            let err = stx
-                .world
-                .asset_or_insert_exact(&asset_id, fractional_quantity.clone())
-                .expect_err("fractional default must violate integer asset spec");
-            assert!(matches!(
-                err,
-                InstructionExecutionError::Evaluate(InstructionEvaluationError::Type(
-                    TypeError::AssetNumericSpec(_)
-                ))
-            ));
-            let err = stx
-                .world
-                .increase_asset_total_amount(&definition_id, &fractional_quantity)
-                .expect_err("fractional total delta must violate integer asset spec");
-            assert!(matches!(
-                err,
-                InstructionExecutionError::Evaluate(InstructionEvaluationError::Type(
-                    TypeError::AssetNumericSpec(_)
-                ))
-            ));
-            assert!(stx.world.assets.get(&asset_id).is_none());
-            assert_eq!(
-                stx.world
-                    .asset_definition(&definition_id)
-                    .expect("asset definition must remain present")
-                    .total_quantity(),
-                &Quantity::zero(),
-                "rejected out-of-spec values must not mutate aggregate supply"
-            );
-        }
-
-        #[test]
-        fn mint_restricted_asset_uses_current_dataspace_bucket() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            )
-            .build(&ALICE_ID);
-
-            let world = World::with([domain], [account], [asset_def]);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            let dsid = DataSpaceId::new(7);
-            stx.current_dataspace_id = Some(dsid);
-            stx.world.current_dataspace_id = Some(dsid);
-
-            let mint_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            Mint::asset_quantity(5_u32, mint_id)
-                .execute(&ALICE_ID, &mut stx)
-                .expect("mint must succeed in dataspace context");
-
-            let scoped_id = AssetId::with_scope(
-                asset_def_id.clone(),
-                ALICE_ID.clone(),
-                iroha_data_model::asset::AssetBalanceScope::Dataspace(dsid),
-            );
-            assert!(
-                stx.world.assets.get(&scoped_id).is_some(),
-                "restricted asset must be stored under dataspace scope"
-            );
-            assert!(
-                stx.world
-                    .assets
-                    .get(&AssetId::new(asset_def_id, ALICE_ID.clone()))
-                    .is_none(),
-                "global bucket must stay empty for restricted assets"
-            );
-        }
-
-        #[test]
-        fn mint_restricted_asset_honors_explicit_dataspace_bucket_from_universal_route() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            )
-            .build(&ALICE_ID);
-
-            let world = World::with([domain], [account], [asset_def]);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-
-            let dsid = DataSpaceId::new(7);
-            let scoped_id = AssetId::with_scope(
-                asset_def_id.clone(),
-                ALICE_ID.clone(),
-                iroha_data_model::asset::AssetBalanceScope::Dataspace(dsid),
-            );
-            Mint::asset_quantity(5_u32, scoped_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("explicit dataspace scope must be honored from the universal route");
-
-            assert!(
-                stx.world.assets.get(&scoped_id).is_some(),
-                "restricted asset must be stored under the requested dataspace scope"
-            );
-            assert!(
-                stx.world
-                    .assets
-                    .get(&AssetId::with_scope(
-                        asset_def_id.clone(),
-                        ALICE_ID.clone(),
-                        iroha_data_model::asset::AssetBalanceScope::Dataspace(
-                            DataSpaceId::UNIVERSAL
-                        ),
-                    ))
-                    .is_none(),
-                "universal dataspace bucket must not be used for explicit private scope"
-            );
-        }
-
-        #[test]
-        fn mint_restricted_asset_rejects_explicit_dataspace_bucket_mismatch() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            )
-            .build(&ALICE_ID);
-
-            let world = World::with([domain], [account], [asset_def]);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            stx.current_dataspace_id = Some(DataSpaceId::new(8));
-            stx.world.current_dataspace_id = Some(DataSpaceId::new(8));
-
-            let scoped_id = AssetId::with_scope(
-                asset_def_id,
-                ALICE_ID.clone(),
-                iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
-            );
-            let err = Mint::asset_quantity(5_u32, scoped_id)
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("private routes must reject explicit foreign dataspace scopes");
-
-            match err {
-                InstructionExecutionError::InvariantViolation(message) => {
-                    assert!(
-                        message.contains("cannot move across dataspaces"),
-                        "unexpected invariant message: {message}"
-                    );
-                }
-                other => panic!("unexpected error: {other:?}"),
             }
         }
 
-        #[test]
-        fn mint_global_asset_rejects_non_authoritative_dataspace_route() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
-            .build(&ALICE_ID);
+        include!("asset/core_numeric_mutation_tests.rs");
 
-            let world = World::with([domain], [account], [asset_def]);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            let private_dataspace = DataSpaceId::new(7);
-            stx.current_dataspace_id = Some(private_dataspace);
-            stx.world.current_dataspace_id = Some(private_dataspace);
-
-            let mint_id = AssetId::new(asset_def_id, ALICE_ID.clone());
-            let err = Mint::asset_quantity(5_u32, mint_id)
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("global asset writes must use the authoritative route");
-
-            match err {
-                InstructionExecutionError::InvariantViolation(message) => {
-                    assert!(
-                        message.contains("authoritative dataspace"),
-                        "unexpected invariant message: {message}"
-                    );
-                }
-                other => panic!("unexpected error: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn mint_global_asset_rejects_explicit_dataspace_scope_on_universal_route() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
-            .build(&ALICE_ID);
-
-            let world = World::with([domain], [account], [asset_def]);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-
-            let scoped_id = AssetId::with_scope(
-                asset_def_id,
-                ALICE_ID.clone(),
-                iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
-            );
-            let err = Mint::asset_quantity(5_u32, scoped_id)
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("global assets must reject explicit dataspace-scoped ids");
-
-            match err {
-                InstructionExecutionError::InvariantViolation(message) => {
-                    assert!(
-                        message.contains("global assets cannot be addressed with dataspace scope"),
-                        "unexpected invariant message: {message}"
-                    );
-                }
-                other => panic!("unexpected error: {other:?}"),
-            }
-        }
-
-        #[test]
-        fn burn_global_asset_rejects_explicit_dataspace_scope_on_universal_route() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
-            .build(&ALICE_ID);
-
-            let world = World::with([domain], [account], [asset_def]);
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-
-            let scoped_id = AssetId::with_scope(
-                asset_def_id,
-                ALICE_ID.clone(),
-                iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
-            );
-            let err = Burn::asset_quantity(5_u32, scoped_id)
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("global assets must reject explicit dataspace-scoped ids");
-
-            match err {
-                InstructionExecutionError::InvariantViolation(message) => {
-                    assert!(
-                        message.contains("global assets cannot be addressed with dataspace scope"),
-                        "unexpected invariant message: {message}"
-                    );
-                }
-                other => panic!("unexpected error: {other:?}"),
-            }
-        }
+        include!("asset/global_scope_rejection_tests.rs");
 
         #[test]
         fn transfer_global_asset_rejects_explicit_dataspace_scope_on_universal_route() {
@@ -6798,18 +6760,18 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
-
             let world = World::with([domain], [alice_account, bob_account], [asset_def]);
             let kura = Kura::blank_kura_for_testing();
             let query_store = LiveQueryStore::start_test();
@@ -6848,16 +6810,17 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
@@ -6910,16 +6873,17 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
@@ -6971,16 +6935,17 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
             let source_asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
             let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
@@ -7023,18 +6988,18 @@ pub mod query {
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "xor".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(&ALICE_ID);
-
             let mut world = World::with([domain], [account], [asset_def]);
             let alias: iroha_data_model::asset::AssetDefinitionAlias =
                 "xor#paynet".parse().expect("asset alias");
@@ -7093,17 +7058,16 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
             let source_asset = Asset::new(
@@ -7160,17 +7124,16 @@ pub mod query {
             let bob_account = NewAccount::new(BOB_ID.clone())
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
             let source_asset_id = AssetId::with_scope(
@@ -7249,17 +7212,16 @@ pub mod query {
             let bob_account = NewAccount::new(BOB_ID.clone())
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
             let source_asset_id = AssetId::with_scope(
@@ -7330,27 +7292,7 @@ pub mod query {
             );
         }
 
-        #[test]
-        fn transfer_batch_rejects_empty_entries() {
-            let state = State::new(
-                World::new(),
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-            );
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-
-            let err = TransferAssetBatch::new(Vec::new())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("empty transfer batches must be rejected");
-            match err {
-                InstructionExecutionError::InvariantViolation(message) => {
-                    assert!(message.contains("requires at least one entry"), "{message}")
-                }
-                other => panic!("unexpected error: {other:?}"),
-            }
-        }
+        include!("asset/transfer_batch_tests.rs");
 
         #[test]
         fn transfer_policy_rejects_explicit_destination_scope_outside_non_universal_route() {
@@ -7361,17 +7303,16 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
             let source_asset_id = AssetId::with_scope(
@@ -7403,12 +7344,11 @@ pub mod query {
                 BOB_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(destination_dataspace),
             );
-            let err = ensure_numeric_asset_transfer_policies(
+            let err = super::super::isi::validate_user_numeric_asset_transfer_policies_for_test(
                 &mut stx,
                 &source_asset_id,
                 &destination_asset_id,
                 &Quantity::one(),
-                NumericAssetTransferSourcePolicy::User,
             )
             .expect_err("explicit destination scope outside non-universal route must reject");
             match err {
@@ -7450,17 +7390,16 @@ pub mod query {
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let mut asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let mut asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
             let issuer_policy = AssetIssuerUsagePolicyV1 {
@@ -7639,14 +7578,15 @@ pub mod query {
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
             let asset_def_id: AssetDefinitionId =
-                iroha_data_model::asset::AssetDefinitionId::new(domain_id, "rose".parse().unwrap());
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    domain_id.clone(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
             let source_asset_id = AssetId::with_scope(
@@ -7759,17 +7699,16 @@ pub mod query {
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
             let source_asset_id = AssetId::with_scope(
@@ -7863,17 +7802,16 @@ pub mod query {
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
             let source_asset_id = AssetId::with_scope(
@@ -7981,17 +7919,16 @@ pub mod query {
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
+            let asset_def_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_def = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+                Some(domain_id.clone()),
             )
             .build(&ALICE_ID);
             let source_asset_id = AssetId::with_scope(
@@ -8069,374 +8006,6 @@ pub mod query {
             );
         }
 
-        #[test]
-        fn transfer_rejects_when_issuer_policy_requires_binding_for_destination() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
-            let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let mut asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-            let issuer_policy = AssetIssuerUsagePolicyV1 {
-                require_subject_binding: true,
-                subject_bindings: BTreeMap::from([(
-                    ALICE_ID.clone(),
-                    AssetSubjectBindingV1::default(),
-                )]),
-            };
-            asset_def.metadata_mut().insert(
-                ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
-                    .parse()
-                    .expect("metadata key"),
-                Json::new(issuer_policy),
-            );
-            let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
-
-            let world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [asset_def],
-                [source_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-
-            let err = Transfer::asset_quantity(source_asset_id, 1_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("unbound destination must be rejected");
-            assert!(
-                err.to_string()
-                    .contains("requires explicit subject binding"),
-                "unexpected error: {err}"
-            );
-        }
-
-        #[test]
-        fn transfer_accepts_any_matching_allowed_domain_membership() {
-            let denied_domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let allowed_domain_id: DomainId =
-                DomainId::try_new("oasis", "universal").expect("domain id");
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                denied_domain_id.clone(),
-                "rose".parse().unwrap(),
-            );
-
-            let mut denied_domain_metadata = Metadata::default();
-            denied_domain_metadata.insert(
-                DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY
-                    .parse()
-                    .expect("metadata key"),
-                Json::new(DomainAssetUsagePolicyV1 {
-                    allowed_assets: BTreeSet::new(),
-                    denied_assets: BTreeSet::from([asset_def_id.clone()]),
-                }),
-            );
-            let denied_domain = Domain::new(denied_domain_id.clone())
-                .with_metadata(denied_domain_metadata)
-                .build(&ALICE_ID);
-            let allowed_domain = Domain::new(allowed_domain_id.clone()).build(&ALICE_ID);
-
-            let allowed_dataspace_id = DataSpaceId::UNIVERSAL;
-            let alice_alias = AccountAlias::new(
-                "alice".parse().expect("account alias label"),
-                Some(AccountAliasDomain::new(allowed_domain_id.name().clone())),
-                allowed_dataspace_id,
-            );
-            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-            let bob_alias = AccountAlias::new(
-                "bob".parse().expect("account alias label"),
-                Some(AccountAliasDomain::new(allowed_domain_id.name().clone())),
-                allowed_dataspace_id,
-            );
-            let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
-
-            let mut asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-            let binding = AssetSubjectBindingV1 {
-                allowed_domains: BTreeSet::from([
-                    denied_domain_id.clone(),
-                    allowed_domain_id.clone(),
-                ]),
-                allowed_dataspaces: BTreeSet::new(),
-            };
-            let issuer_policy = AssetIssuerUsagePolicyV1 {
-                require_subject_binding: true,
-                subject_bindings: BTreeMap::from([
-                    (ALICE_ID.clone(), binding.clone()),
-                    (BOB_ID.clone(), binding),
-                ]),
-            };
-            asset_def.metadata_mut().insert(
-                ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
-                    .parse()
-                    .expect("metadata key"),
-                Json::new(issuer_policy),
-            );
-
-            let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
-            let world = World::with_assets(
-                [denied_domain, allowed_domain],
-                [alice_account, bob_account],
-                [asset_def],
-                [source_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xB4);
-            seed_test_account_alias_binding(&mut stx, &ALICE_ID, &alice_alias);
-            seed_test_account_alias_binding(&mut stx, &BOB_ID, &bob_alias);
-            seed_test_account_alias_lease(&mut stx, &ALICE_ID, &alice_alias);
-            seed_test_account_alias_lease(&mut stx, &BOB_ID, &bob_alias);
-            Transfer::asset_quantity(source_asset_id, 1_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("one matching allowed domain membership should authorize transfer");
-
-            let destination_asset_id = AssetId::new(asset_def_id, BOB_ID.clone());
-            assert_eq!(
-                stx.world
-                    .asset(&destination_asset_id)
-                    .expect("destination asset created")
-                    .value()
-                    .clone()
-                    .into_inner(),
-                Quantity::from(1_u32)
-            );
-        }
-
-        #[test]
-        fn transfer_rejects_when_bound_domain_policy_denies_asset() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let mut domain_metadata = Metadata::default();
-            let domain_policy = DomainAssetUsagePolicyV1 {
-                allowed_assets: BTreeSet::new(),
-                denied_assets: BTreeSet::from([asset_def_id.clone()]),
-            };
-            domain_metadata.insert(
-                DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY
-                    .parse()
-                    .expect("metadata key"),
-                Json::new(domain_policy),
-            );
-            let domain = Domain::new(domain_id.clone())
-                .with_metadata(domain_metadata)
-                .build(&ALICE_ID);
-            let domain_dataspace_id = DataSpaceId::UNIVERSAL;
-            let alice_alias = AccountAlias::new(
-                "alice".parse().expect("account alias label"),
-                Some(AccountAliasDomain::new(domain_id.name().clone())),
-                domain_dataspace_id,
-            );
-            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-            let bob_alias = AccountAlias::new(
-                "bob".parse().expect("account alias label"),
-                Some(AccountAliasDomain::new(domain_id.name().clone())),
-                domain_dataspace_id,
-            );
-            let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
-
-            let mut asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .build(&ALICE_ID);
-            let binding = AssetSubjectBindingV1 {
-                allowed_domains: BTreeSet::from([domain_id.clone()]),
-                allowed_dataspaces: BTreeSet::new(),
-            };
-            let issuer_policy = AssetIssuerUsagePolicyV1 {
-                require_subject_binding: true,
-                subject_bindings: BTreeMap::from([
-                    (ALICE_ID.clone(), binding.clone()),
-                    (BOB_ID.clone(), binding),
-                ]),
-            };
-            asset_def.metadata_mut().insert(
-                ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
-                    .parse()
-                    .expect("metadata key"),
-                Json::new(issuer_policy),
-            );
-
-            let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
-            let world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [asset_def],
-                [source_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            seed_test_account_alias_binding(&mut stx, &ALICE_ID, &alice_alias);
-            seed_test_account_alias_binding(&mut stx, &BOB_ID, &bob_alias);
-            seed_test_account_alias_lease(&mut stx, &ALICE_ID, &alice_alias);
-            seed_test_account_alias_lease(&mut stx, &BOB_ID, &bob_alias);
-            let err = Transfer::asset_quantity(source_asset_id, 1_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("domain deny policy must reject transfer");
-            assert!(
-                err.to_string().contains("domain policy"),
-                "unexpected error: {err}"
-            );
-        }
-
-        #[test]
-        fn transfer_rejects_when_dataspace_manifest_denies_bound_asset() {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id");
-            let dsid = DataSpaceId::new(7);
-            let uaid_alice = iroha_data_model::nexus::UniversalAccountId::from_hash(
-                iroha_crypto::Hash::new(b"uaid:alice"),
-            );
-            let uaid_bob = iroha_data_model::nexus::UniversalAccountId::from_hash(
-                iroha_crypto::Hash::new(b"uaid:bob"),
-            );
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = NewAccount::new(ALICE_ID.clone())
-                .with_uaid(Some(uaid_alice))
-                .build(&ALICE_ID);
-            let bob_account = NewAccount::new(BOB_ID.clone())
-                .with_uaid(Some(uaid_bob))
-                .build(&BOB_ID);
-
-            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            );
-            let mut asset_def = {
-                let __asset_definition_id = asset_def_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
-            .with_balance_scope_policy(
-                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            )
-            .build(&ALICE_ID);
-            let binding = AssetSubjectBindingV1 {
-                allowed_domains: BTreeSet::new(),
-                allowed_dataspaces: BTreeSet::from([dsid]),
-            };
-            let issuer_policy = AssetIssuerUsagePolicyV1 {
-                require_subject_binding: true,
-                subject_bindings: BTreeMap::from([
-                    (ALICE_ID.clone(), binding.clone()),
-                    (BOB_ID.clone(), binding),
-                ]),
-            };
-            asset_def.metadata_mut().insert(
-                ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
-                    .parse()
-                    .expect("metadata key"),
-                Json::new(issuer_policy),
-            );
-
-            let source_asset_id = AssetId::with_scope(
-                asset_def_id.clone(),
-                ALICE_ID.clone(),
-                iroha_data_model::asset::AssetBalanceScope::Dataspace(dsid),
-            );
-            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10_u32));
-            let world = World::with_assets(
-                [domain],
-                [alice_account, bob_account],
-                [asset_def],
-                [source_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_store = LiveQueryStore::start_test();
-            let state = State::new(world, kura, query_store);
-
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = state.block(header);
-            let mut stx = block.transaction();
-            stx.current_dataspace_id = Some(dsid);
-            stx.world.current_dataspace_id = Some(dsid);
-
-            let mut alice_manifest_record =
-                crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(
-                    AssetPermissionManifest {
-                        version: iroha_data_model::nexus::ManifestVersion::default(),
-                        uaid: uaid_alice,
-                        dataspace: dsid,
-                        issued_ms: 1,
-                        activation_epoch: 0,
-                        expiry_epoch: None,
-                        entries: Vec::new(),
-                    },
-                );
-            alice_manifest_record.lifecycle.mark_activated(0);
-            let mut bob_manifest_record =
-                crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(
-                    AssetPermissionManifest {
-                        version: iroha_data_model::nexus::ManifestVersion::default(),
-                        uaid: uaid_bob,
-                        dataspace: dsid,
-                        issued_ms: 1,
-                        activation_epoch: 0,
-                        expiry_epoch: None,
-                        entries: Vec::new(),
-                    },
-                );
-            bob_manifest_record.lifecycle.mark_activated(0);
-            let mut alice_set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
-            alice_set.upsert(alice_manifest_record);
-            let mut bob_set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
-            bob_set.upsert(bob_manifest_record);
-            stx.world
-                .space_directory_manifests
-                .insert(uaid_alice, alice_set);
-            stx.world
-                .space_directory_manifests
-                .insert(uaid_bob, bob_set);
-
-            let err = Transfer::asset_quantity(source_asset_id, 1_u32, BOB_ID.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("manifest without matching allow should deny");
-            assert!(
-                err.to_string().contains("dataspace policy denied"),
-                "unexpected error: {err}"
-            );
-        }
+        include!("asset_tail_policy_tests.rs");
     }
 }

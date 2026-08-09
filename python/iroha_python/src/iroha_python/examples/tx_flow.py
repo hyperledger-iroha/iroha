@@ -36,7 +36,9 @@ def build_sample_transaction(
          .register_account(account_id) \
          .register_asset_definition(
             asset_definition_id,
-            owner=account_id,
+            owning_domain=domain_id,
+            balance_scope_policy="Global",
+            name="sample_asset",
             mintable="Infinitely",
          )
     draft.mint_asset_quantity(asset_id, quantity)

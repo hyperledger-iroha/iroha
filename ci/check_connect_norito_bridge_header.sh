@@ -765,12 +765,16 @@ run_contract_check \
   "${SWIFT_CONTRACT}" \
   "${DATA_MODEL_PRIVACY}"
 
-if command -v "${CC:-cc}" >/dev/null 2>&1; then
-  "${CC:-cc}" -fsyntax-only -x c \
-    -I"${ROOT_DIR}/crates/connect_norito_bridge/include" "${HEADER}"
+if ! command -v "${CC:-cc}" >/dev/null 2>&1; then
+  echo "[connect-norito-header] required C compiler not found: ${CC:-cc}" >&2
+  exit 1
 fi
+"${CC:-cc}" -fsyntax-only -x c \
+  -I"${ROOT_DIR}/crates/connect_norito_bridge/include" "${HEADER}"
 
-if command -v "${CXX:-c++}" >/dev/null 2>&1; then
-  "${CXX:-c++}" -fsyntax-only -x c++ \
-    -I"${ROOT_DIR}/crates/connect_norito_bridge/include" "${UMBRELLA}"
+if ! command -v "${CXX:-c++}" >/dev/null 2>&1; then
+  echo "[connect-norito-header] required C++ compiler not found: ${CXX:-c++}" >&2
+  exit 1
 fi
+"${CXX:-c++}" -fsyntax-only -x c++ \
+  -I"${ROOT_DIR}/crates/connect_norito_bridge/include" "${UMBRELLA}"

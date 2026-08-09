@@ -161,12 +161,24 @@ Validation rejects unsupported versions with
 - FHE execution policy:
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
-  - Bootstrap-capable policies (`max_bootstrap_count > 0`) must bind exactly the statement class used by their bootstrap key material: `bootstrap_key_zero_refresh_proof_statement_digest` for `RefreshOnlyV1`, or `full_bootstrap_material_proof_statement_digest` for `FullBootstrapV1`. Policies with `max_bootstrap_count = 0` must omit both fields.
+  - Bootstrap-capable policies (`max_bootstrap_count > 0`) must use exactly one
+    governed mode: `bootstrap_key_zero_refresh_proof_statement_digest` for
+    `RefreshOnlyV1`, or a digest-pinned, trusted-reviewer-signed full-bootstrap
+    release-audit package for `FullBootstrapV1`. Policies with
+    `max_bootstrap_count = 0` must omit both modes.
   - parameter-set binding must match by `(param_set, version)`.
   - `max_multiplication_depth` must not exceed parameter-set depth.
   - policy admission rejects `Proposed` or `Withdrawn` parameter-set lifecycle.
 - FHE governance bundle:
   - validates policy + parameter-set compatibility as one deterministic admission payload.
+  - immutable policy material is registered under an exact `(service, policy,
+    version, material_digest)` reference; rotations are consecutive and
+    supersede the prior version, while revocation permanently removes the
+    active version.
+  - jobs carry only the exact active reference and proof attachments. Parameter
+    sets, policies, evaluation keys, refresh transcripts, full-bootstrap
+    artifacts, and their admitting transaction hash are resolved from
+    authoritative deployment state before statement derivation or execution.
 - FHE job spec:
   - `job_id` and `output_state_key` must be non-empty (`output_state_key` starts with `/`).
   - input set must be non-empty and input keys must be unique canonical paths.
@@ -185,13 +197,11 @@ Validation rejects unsupported versions with
     evaluation-key bundle digest, refresh-transcript digest, bootstrap
     transcript seed/key id/round capacity, and refresh ciphertexts. Its
     verifier record must be active for the canonical Soracloud STARK circuit.
-    `FullBootstrapV1` keys use a separate signed
-    `full_bootstrap_material_proof` attachment whose statement hash matches
-    the policy-bound full-bootstrap material digest and whose verifier record
-    must be active for the canonical full-material Soracloud STARK circuit.
-    Current generated `BfvBootstrapKey` material advertises `RefreshOnlyV1`;
-    reserved full-bootstrap execution still fails closed until the executable
-    BFV bootstrapping evaluator and production prover/verifier artifacts land.
+    `FullBootstrapV1` material and artifacts are admitted by the governance
+    lifecycle together with the release-audit package; they are not accepted
+    as caller-supplied proof material. Each full-bootstrap output still requires
+    its canonical execution proof and an active verifier record for the
+    reserved execution circuit.
 - Decryption authority policy:
   - `approver_ids` must be non-empty, unique, and strictly lexicographically sorted.
   - `ClientHeld` mode requires exactly one approver, `approver_quorum=1`,

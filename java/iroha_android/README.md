@@ -101,6 +101,41 @@ contradictory verification responses, and Merkle paths whose direction/length
 does not match the advertised bundle location. Requests are capped at 64 KiB
 and buffered responses at 8 MiB.
 
+## Authoritative Sumeragi status and operational diagnostics
+
+`HttpClientTransport.getSumeragiStatus()` reads only
+`GET /v1/sumeragi/status` into the closed protocol-v4
+`SumeragiStatusModels.SumeragiV2Status` model.
+`getSumeragiDiagnostics()` separately reads
+`GET /v1/sumeragi/diagnostics` into
+`SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus`; diagnostics are durable
+operational evidence and must not be treated as consensus authority.
+
+```java
+final SumeragiStatusModels.SumeragiV2Status status =
+    transport.getSumeragiStatus().join();
+assert status.protocolVersion() == 4;
+System.out.printf(
+    "height=%s view=%s leader=%s%n",
+    status.height(), status.view(), status.leader());
+
+final SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus diagnostics =
+    transport.getSumeragiDiagnostics().join();
+for (SumeragiDiagnosticsModels.NativeAmxParticipantApplication row
+    : diagnostics.nativeAmxParticipantApplications()) {
+  System.out.printf(
+      "lane=%d height=%s state=%s%n",
+      row.laneId(), row.participantHeight(), row.state());
+}
+```
+
+Every JSON `u64` remains lossless as `BigInteger`. Status responses are capped
+at 1 MiB and diagnostics at 16 MiB; both routes require the exact JSON content
+type, a canonical matching `Content-Length` when supplied, fatal UTF-8, closed
+fields and tags, and current Native AMX V2 evidence. The parsers reject
+status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
+participant rows, and inconsistent carrier identities.
+
 ## Offline peer transport V1 (Java)
 
 The first-release peer transport has one wire family only: IPM1 messages,
@@ -364,6 +399,8 @@ network prefix stay aligned with `specs/sns/address_display_guidelines.md`.
 
 ## Kagemusha proof artifacts and device registration
 
+ABI V1 exposes no generic shield, shielded-transfer, or unshield instruction or
+native signer method; confidential movement uses the typed Kagemusha lifecycle.
 The Android/JVM offline surface has exactly two current pieces. `KagemushaRecursiveSpendProver`
 requires native bridge ABI 21, streams the eight authenticated V4 proof artifacts into an atomic
 generation install, and exposes typed `initSpendV4`, `appendSpendV4`, `verifySpendV4`, and
@@ -385,9 +422,10 @@ Artifact installation requires the canonical candidate-bound promotion record th
 `ReleaseAuthentication`, in addition to the trusted policy, attestation, benchmark evidence, and
 cryptographic review. An authenticated-but-unpromoted release cannot become active.
 
-`newToriiClient(...)` exposes only `getReadiness`, `submitTopUp`, `submitRedeem`, and
-`getOperation`. Commands send the typed Norito request directly with `application/x-norito` and the
-signed lowercase operation id as `Idempotency-Key`; responses must be typed Norito as well. Top-up
+`newToriiClient(...)` exposes the query-free, asset-neutral `getOfflineCapability`,
+`getRecipientRegistrationLineage`, `submitTopUp`, `submitRedeem`, and `getOperation`. Commands send
+the typed Norito request directly with `application/x-norito` and the signed lowercase operation id
+as `Idempotency-Key`; responses must be typed Norito as well. Top-up
 bodies are limited to 512 KiB and redemption bodies to 48 MiB, exposed as
 `MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and `MAX_TORII_REDEEM_REQUEST_BYTES_V4`.
 `projectReadiness` returns the live asset scale, committed height/hash, all role-specific verifier
@@ -750,6 +788,10 @@ ANDROID_TRANSPORT_GUARD_AAR=java/iroha_android/android/build/outputs/aar/android
 bash ci/check_android_transport_guard.sh /path/to/classes.jar
 ```
 
+The guard is fail-closed: the compiled artifact, `jdeps`, and archive tooling
+must all be present and successfully inspect the candidate. There is no
+override for allowing JVM transports in an Android release.
+
 ### Transport defaults and troubleshooting
 
 - HTTP clients use a strict runtime split: Android loads `OkHttpTransportExecutorFactory`, while JVM
@@ -763,8 +805,8 @@ bash ci/check_android_transport_guard.sh /path/to/classes.jar
   `OkHttpWebSocketConnectorFactory.createDefault()`, while JVM callers should inject
   `JdkWebSocketConnectorFactory.createDefault()`. This keeps platform selection deterministic and
   avoids reflective discovery; `AndroidClientFactory` performs the injection for its clients.
-- Android artefacts must not contain `java.net.http` bytecode. The `android-and6` workflow now runs a
-  `transport-guard` job that assembles the release AAR and executes
+- Android artefacts must not contain `java.net.http` bytecode. The mobile SDK artifact workflow
+  assembles the Java release AAR and executes
   `ci/check_android_transport_guard.sh` (also available locally via `make android-transport-guard`)
   to fail when JVM-only classes leak into the Android bundle.
 - Guard failures usually mean the wrong artefact was scanned (set `ANDROID_TRANSPORT_GUARD_AAR` to
@@ -1414,9 +1456,10 @@ active and no native library is loaded (avoiding security warnings in CI).
 
 Kotlin callers should use `CudaAcceleratorsKotlin.*OrNull` helpers to receive
 `Long?`/`LongArray?` outputs instead of `Optional` wrappers. See the CUDA
-operator guide for native setup and the manual smoke harness
-(`specs/sdk/android/gpu_operator_guide.md`), which exercises the JNI
-bridge on CUDA-capable devices when `IROHA_CUDA_SELFTEST=1` is set.
+operator guide for native setup and the hardware-qualified smoke harness
+(`specs/sdk/android/gpu_operator_guide.md`). The ordinary JVM suite excludes
+that GPU-only class; the nightly CUDA lane selects it explicitly and any
+missing driver, JNI bridge, or CUDA result fails the lane.
 
 `SoftwareKeyProvider.exportDeterministic(...)` emits a versioned, AES-GCM
 wrapped export bundle (v4) using per-export salt/nonce. The bundle records the
@@ -1506,6 +1549,46 @@ The owner rewrites the canonical corpus first and publishes the Java mirror plus
 the Python and Swift descriptor-only mirrors from the same result. Always commit
 the complete generated set together; never retain an old hash, retired fixture,
 or compatibility-only payload in the Java resource directory.
+
+### Musubi V1 registry reads
+
+`MusubiToriiClientV1` and `MusubiModelsV1` mirror the Kotlin-default first-release
+registry surface without reflection, Android framework dependencies, or legacy
+wire aliases. The signer-free client exposes all twelve typed
+`/v1/musubi/queries/*` POST routes and strictly preserves structured package IDs,
+immutable namespace bindings, SemVer requirement ASTs, chain/genesis lock
+identity, finalized cursors, and authoritative archive commitments. Unknown
+fields, unsupported versions, and duplicate parent-local dependency aliases
+fail closed.
+
+Both Java and Kotlin validate the Rust-owned contract in
+[`fixtures/musubi/sdk_v1.json`](../../fixtures/musubi/sdk_v1.json). Credentials, if
+an operator configures them on the transport, are never represented by these DTOs
+or written into project files.
+
+`search(SearchQuery)` posts to `/v1/musubi/queries/search` and returns a bounded,
+structurally ordered page with a search-specific finalized projection cursor;
+the discovery projection is never a resolver input.
+
+`findArchiveRetention(ArchiveRetentionQuery)` accepts only sorted, distinct,
+non-zero archive identities and rejects a response whose identity order or
+optional finalized snapshot differs from the exact request.
+
+`MusubiInstructionsV1` mirrors the Kotlin typed construction surface for
+immutable namespace-binding registration, package invitation creation,
+acceptance, revocation, role replacement, and removal, permanent alias
+registration, exact release-digest assertion, archive registration, location
+addition or renewal, and location retirement, release publication and
+reversible yank state, package metadata replacement, and Parliament-enacted
+package ownership recovery, permanent-alias retargeting, artifact takedown, and
+registry-policy replacement. Public namespace bindings are constructible,
+maintainer roles require at least one independent permission, and mutation
+reasons use the canonical non-empty
+`MusubiModelsV1.Reason` value bounded to 1,024 UTF-8 bytes. Each builder exposes
+`barePayload()`, `concreteFrame()`, and
+`toInstructionBox()` and is checked at all four framing layers against
+all nineteen cases in
+[`fixtures/musubi/instructions_v1.json`](../../fixtures/musubi/instructions_v1.json).
 
 ## License
 

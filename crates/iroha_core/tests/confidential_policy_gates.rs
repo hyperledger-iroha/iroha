@@ -59,10 +59,11 @@ fn init_state() -> (
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let domain_id: DomainId = DomainId::try_new("zkdomain", "universal").expect("domain id");
-    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("zkdomain", "universal").unwrap(),
-        "shielded".parse().unwrap(),
-    );
+    let asset_def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("zkdomain", "universal").unwrap(),
+            "shielded".parse().unwrap(),
+        );
     let owner = checked_random_confidential_policy_account_id();
 
     (state, header, owner, domain_id, asset_def_id)
@@ -78,10 +79,12 @@ fn transparent_mint_rejected_for_shielded_only_policy() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "shielded".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
     ] {
         stx.world
@@ -91,13 +94,13 @@ fn transparent_mint_rejected_for_shielded_only_policy() {
             .expect("setup instruction should succeed");
     }
 
-    // Register the asset in ZkNative mode which maps to ShieldedOnly policy.
+    // Register the first-release hybrid ledger, then emulate a completed
+    // governance transition to ShieldedOnly.
     let reg = RegisterZkAsset::new(
         asset_def_id.clone(),
-        ZkAssetMode::ZkNative,
-        false,
-        false,
-        None,
+        ZkAssetMode::Hybrid,
+        true,
+        true,
         None,
         None,
     );
@@ -106,6 +109,18 @@ fn transparent_mint_rejected_for_shielded_only_policy() {
         .clone()
         .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
         .expect("register zk asset");
+    {
+        let asset_def = stx
+            .world
+            .asset_definition_mut(&asset_def_id)
+            .expect("asset definition exists");
+        let previous_policy = *asset_def.confidential_policy();
+        let mut policy = AssetConfidentialPolicy::shielded_only();
+        policy.vk_set_hash = *previous_policy.vk_set_hash();
+        policy.poseidon_params_id = previous_policy.poseidon_params_id();
+        policy.pedersen_params_id = previous_policy.pedersen_params_id();
+        asset_def.set_confidential_policy(policy);
+    }
 
     // Attempt to mint transparently; should be rejected by policy gate.
     let asset_id = AssetId::new(asset_def_id.clone(), owner.clone());
@@ -138,10 +153,12 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
         Register::account(NewAccount::new(recipient.clone())).into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "shielded".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
     ] {
         stx.world
@@ -157,7 +174,6 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
         ZkAssetMode::Hybrid,
         true,
         true,
-        None,
         None,
         None,
     );
@@ -220,10 +236,12 @@ fn schedule_shielded_only_requires_window() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "shielded".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
     ] {
         stx.world
@@ -237,7 +255,6 @@ fn schedule_shielded_only_requires_window() {
         ZkAssetMode::Hybrid,
         true,
         true,
-        None,
         None,
         None,
     );
@@ -285,10 +302,12 @@ fn shielded_transition_aborts_when_transparent_supply_non_zero() {
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
         Register::account(NewAccount::new(recipient.clone())).into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "shielded".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
     ] {
         stx.world
@@ -303,7 +322,6 @@ fn shielded_transition_aborts_when_transparent_supply_non_zero() {
         iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
         true,
         true,
-        None,
         None,
         None,
     );
@@ -393,10 +411,12 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string()),
-        )
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "shielded".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
         .into(),
     ] {
         stx.world
@@ -411,7 +431,6 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
         ZkAssetMode::Hybrid,
         true,
         true,
-        None,
         None,
         None,
     );

@@ -5,7 +5,7 @@ use std::time::Duration;
 use http::header::HeaderValue;
 pub use sorafs_manifest::alias_cache::{
     AliasCachePolicy, AliasProofError, AliasProofEvaluation, AliasProofState, decode_alias_proof,
-    unix_now_secs,
+    decode_alias_proof_untrusted_signers, unix_now_secs,
 };
 use sorafs_manifest::pin_registry::AliasProofBundleV1;
 
@@ -863,7 +863,8 @@ mod tests {
     #[test]
     fn decode_alias_proof_validates_bundle() {
         let bytes = encode_valid_bundle();
-        let decoded = decode_alias_proof(&bytes).expect("decode alias proof");
+        let decoded =
+            decode_alias_proof_untrusted_signers(&bytes).expect("decode alias proof integrity");
         assert_eq!(decoded.binding.alias, "docs/sora");
     }
 

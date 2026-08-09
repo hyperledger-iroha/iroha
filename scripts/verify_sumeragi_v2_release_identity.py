@@ -25,7 +25,6 @@ from pathlib import Path
 import re
 import secrets
 import selectors
-import signal
 import stat
 import subprocess
 import sys
@@ -737,20 +736,6 @@ def _closed_environment(private_home: Path) -> dict[str, str]:
     return environment
 
 
-def _abort_process(process: subprocess.Popen[bytes]) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except (OSError, ProcessLookupError):
-        try:
-            process.kill()
-        except OSError:
-            pass
-    try:
-        process.wait(timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-
-
 def _run_bounded(
     executable: Path,
     arguments: list[str],
@@ -760,6 +745,21 @@ def _run_bounded(
     maximum_output_bytes: int,
 ) -> CommandResult:
     argv = (str(executable), *arguments)
+    selector = selectors.DefaultSelector()
+    deadline = time.monotonic() + _COMMAND_TIMEOUT_SECONDS
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    # Bounds determine the eventual verdict; they never control the child.
+    # Retain only the capped prefix while draining both streams through EOF.
+    retained_output_bytes = 0
+    output_limit_exceeded = False
+    runtime_limit_exceeded = False
+    pending_violation: BaseException | None = None
+
+    def latch(violation: BaseException) -> None:
+        nonlocal pending_violation
+        if pending_violation is None:
+            pending_violation = violation
+
     try:
         process = subprocess.Popen(
             argv,
@@ -769,62 +769,109 @@ def _run_bounded(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             close_fds=True,
-            start_new_session=True,
         )
     except OSError as error:
+        selector.close()
         raise VerificationError("pinned Git execution failed") from error
-    assert process.stdout is not None and process.stderr is not None
-    selector = selectors.DefaultSelector()
-    streams = {
-        process.stdout.fileno(): ("stdout", process.stdout),
-        process.stderr.fileno(): ("stderr", process.stderr),
-    }
-    buffers = {"stdout": bytearray(), "stderr": bytearray()}
-    for descriptor, (label, stream) in streams.items():
-        os.set_blocking(descriptor, False)
-        selector.register(descriptor, selectors.EVENT_READ, (label, stream))
-    deadline = time.monotonic() + _COMMAND_TIMEOUT_SECONDS
-    try:
-        while selector.get_map():
+    output_streams = tuple(
+        (stream, label)
+        for stream, label in (
+            (process.stdout, "stdout"),
+            (process.stderr, "stderr"),
+        )
+        if stream is not None
+    )
+    if len(output_streams) != 2:
+        latch(VerificationError("pinned Git output pipes are unavailable"))
+    for stream, label in output_streams:
+        while True:
+            descriptor: int | None = None
+            try:
+                descriptor = stream.fileno()
+                os.set_blocking(descriptor, False)
+                selector.register(descriptor, selectors.EVENT_READ, label)
+                break
+            except BaseException as error:
+                latch(error)
+                if descriptor is not None:
+                    try:
+                        selector.get_key(descriptor)
+                    except KeyError:
+                        pass
+                    except BaseException as lookup_error:
+                        latch(lookup_error)
+                    else:
+                        break
+    while True:
+        try:
+            if not selector.get_map():
+                break
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                _abort_process(process)
-                raise VerificationError("pinned Git execution exceeded its timeout")
-            events = selector.select(min(remaining, 0.25))
-            for key, _ in events:
-                label, stream = key.data
+            if remaining <= 0 and not runtime_limit_exceeded:
+                runtime_limit_exceeded = True
+                latch(
+                    VerificationError(
+                        "pinned Git execution exceeded its timeout"
+                    )
+                )
+            events = selector.select(
+                0.25 if runtime_limit_exceeded else min(remaining, 0.25)
+            )
+        except BaseException as error:
+            latch(error)
+            continue
+        for key, _ in events:
+            try:
                 try:
                     chunk = os.read(key.fd, 64 * 1024)
                 except BlockingIOError:
                     continue
                 if not chunk:
                     selector.unregister(key.fd)
-                    stream.close()
                     continue
-                buffers[label].extend(chunk)
-                if sum(len(value) for value in buffers.values()) > maximum_output_bytes:
-                    _abort_process(process)
-                    raise VerificationError(
-                        "pinned Git output exceeds its closed size limit"
+                retained_capacity = max(
+                    maximum_output_bytes - retained_output_bytes, 0
+                )
+                retained = chunk[:retained_capacity]
+                buffers[key.data].extend(retained)
+                retained_output_bytes += len(retained)
+                if len(retained) != len(chunk) and not output_limit_exceeded:
+                    output_limit_exceeded = True
+                    latch(
+                        VerificationError(
+                            "pinned Git output exceeds its closed size limit"
+                        )
                     )
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            _abort_process(process)
-            raise VerificationError("pinned Git execution exceeded its timeout")
+            except BaseException as error:
+                latch(error)
+    while True:
         try:
-            returncode = process.wait(timeout=remaining)
-        except subprocess.TimeoutExpired as error:
-            _abort_process(process)
-            raise VerificationError("pinned Git execution exceeded its timeout") from error
-    except BaseException:
-        if process.poll() is None:
-            _abort_process(process)
-        raise
-    finally:
+            returncode = process.wait()
+            break
+        except BaseException as error:
+            latch(error)
+    try:
+        if time.monotonic() > deadline and not runtime_limit_exceeded:
+            runtime_limit_exceeded = True
+            latch(
+                VerificationError(
+                    "pinned Git execution exceeded its timeout"
+                )
+            )
+    except BaseException as error:
+        latch(error)
+    try:
         selector.close()
-        for stream in (process.stdout, process.stderr):
+    except BaseException as error:
+        latch(error)
+    for stream, _ in output_streams:
+        try:
             if not stream.closed:
                 stream.close()
+        except BaseException as error:
+            latch(error)
+    if pending_violation is not None:
+        raise pending_violation
     return CommandResult(
         argv,
         returncode,

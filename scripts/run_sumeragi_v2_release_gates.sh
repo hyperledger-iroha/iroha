@@ -84,7 +84,13 @@ if [[ "$profile" == "--release" ]]; then
 fi
 readonly inherited_cargo_cache_home="${CARGO_HOME:-${HOME:-}/.cargo}"
 cd "$repo_root"
+if [[ "$profile" == "--release" ]]; then
+  export IROHA_RELEASE_POLICY_PYTHON="$bootstrap_python"
+fi
+source "${repo_root}/scripts/sumeragi_v2_release_process_policy.sh"
+release_gate_boundary "release-inventory:before" || exit $?
 bash ci/check_sumeragi_v2_multilane_release_inventory.sh
+release_gate_boundary "release-inventory:after-natural-completion" || exit $?
 # Every real-network leg in this parent shell must fail rather than translate a
 # socket/sandbox denial into a successful developer skip.
 export IROHA_TEST_REQUIRE_NETWORK=1
@@ -95,6 +101,7 @@ unset IROHA_TEST_SKIP_BUILD IROHA_TEST_ALLOW_REENTRANT_BUILD
 unset IROHA_TEST_TARGET_DIR IROHA_RELEASE_PREBUILT_MANIFEST_SHA256
 unset IROHA_TEST_BUILD_PROFILE IROHA_TEST_BUILD_TIMEOUT_MS PROFILE
 unset TLAPM_BIN TLAPM_STDLIB TLA2TOOLS_JAR
+unset APALACHE_BIN APALACHE_INSTALL_ROOT
 unset JAVA_BIN SUMERAGI_V2_TLC_PROFILE SUMERAGI_TLAPS_THREADS
 unset SUMERAGI_V2_FORMAL_EVIDENCE_DIR SUMERAGI_V2_CHAOS_EVIDENCE_DIR
 unset SUMERAGI_V2_SEED_MATRIX_EVIDENCE_DIR
@@ -138,38 +145,6 @@ sha256_file() {
   else
     shasum -a 256 "$1" | awk '{print $1}'
   fi
-}
-
-wait_for_external_cargo() {
-  local active_compilers
-  while true; do
-    # This exact snapshot is a release requirement and is intentionally kept
-    # separate from the machine-readable filter below.
-    ps -axo pid,etime,command
-    active_compilers="$(
-      ps -axo pid=,command= | awk '
-        {
-          executable = $2
-          sub(/^.*\//, "", executable)
-          if (executable == "cargo" || executable == "rustc") {
-            print
-          }
-        }
-      '
-    )"
-    if [[ -z "$active_compilers" ]]; then
-      return
-    fi
-    printf '%s\n' \
-      "waiting for active Cargo/rustc processes before release command:" \
-      "$active_compilers" >&2
-    sleep 10
-  done
-}
-
-run_cargo() {
-  wait_for_external_cargo
-  command cargo "$@"
 }
 
 source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"
@@ -379,16 +354,24 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     echo "rustup is required to resolve the repository-pinned release toolchain" >&2
     exit 1
   }
-  release_cargo_bin="$(canonical_path "$("$release_rustup_bin" which cargo)")"
-  release_rustc_bin="$(canonical_path "$("$release_rustup_bin" which rustc)")"
+  release_cargo_bin="$(
+    canonical_path "$("$release_rustup_bin" which --toolchain 1.93.1 cargo)"
+  )"
+  release_rustc_bin="$(
+    canonical_path "$("$release_rustup_bin" which --toolchain 1.93.1 rustc)"
+  )"
   release_node_bin="$(canonical_executable node)" || {
     echo "a resolved Node executable is required for the release corridor" >&2
     exit 1
   }
   readonly release_rustup_bin release_cargo_bin release_rustc_bin release_node_bin
-  wait_for_external_cargo
+  release_cargo_version="$(run_cargo --version)" || {
+    echo "the repository-pinned Cargo version probe failed" >&2
+    exit 1
+  }
+  readonly release_cargo_version
   if [[ ! -x "$release_cargo_bin" \
-    || "$("$release_cargo_bin" --version)" != "cargo 1.93.1 (083ac5135 2025-12-15)" \
+    || "$release_cargo_version" != "cargo 1.93.1 (083ac5135 2025-12-15)" \
     || ! -x "$release_rustc_bin" \
     || "$("$release_rustc_bin" --version)" != "rustc 1.93.1 (01f6ddf75 2026-02-11)" ]]; then
     echo "rustup did not resolve the exact rust-toolchain.toml Cargo/rustc release pair" >&2
@@ -415,37 +398,59 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
   esac
   readonly release_tlapm_platform release_verus_platform
   readonly release_verus_sha256 release_cargo_verus_sha256
-  readonly release_tlapm_root="${repo_root}/target/tlapm/toolchains/3ab43c7ff31db4ced850619d4746fa4c841a7681/${release_tlapm_platform}"
-  readonly release_tlapm_bin="${release_tlapm_root}/tlapm/bin/tlapm"
-  readonly release_tlapm_stdlib="${release_tlapm_root}/tlapm/lib/tlapm/stdlib"
-  readonly release_tla2tools_jar="${repo_root}/target/tla2tools/1.7.4/tla2tools.jar"
-  readonly release_verus_dir="${repo_root}/target/verus/toolchains/0.2026.05.31.5dd6d83/${release_verus_platform}"
-  readonly release_verus_bin="${release_verus_dir}/verus"
-  readonly release_cargo_verus_bin="${release_verus_dir}/cargo-verus"
-  release_java_bin="$("$repo_root/scripts/formal/resolve_java.sh")" || {
-    echo "a resolved Java runtime is required for the release corridor" >&2
+  release_tlapm_bin="$(canonical_executable tlapm)" || {
+    echo "the authenticated bootstrap tool inventory must provide TLAPM" >&2
     exit 1
   }
-  readonly release_java_bin
+  release_tlapm_root="$(dirname "$(dirname "$release_tlapm_bin")")"
+  release_tlapm_stdlib="${release_tlapm_root}/lib/tlapm/stdlib"
+  if [[ -z "${IROHA_RELEASE_TLA2TOOLS_JAR:-}" ]]; then
+    echo "the authenticated bootstrap environment must provide IROHA_RELEASE_TLA2TOOLS_JAR" >&2
+    exit 1
+  fi
+  release_tla2tools_jar="$(canonical_path "$IROHA_RELEASE_TLA2TOOLS_JAR")" || {
+    echo "the authenticated TLA2Tools path is unavailable" >&2
+    exit 1
+  }
+  release_verus_bin="$(canonical_executable verus)" || {
+    echo "the authenticated bootstrap tool inventory must provide Verus" >&2
+    exit 1
+  }
+  release_cargo_verus_bin="$(canonical_executable cargo-verus)" || {
+    echo "the authenticated bootstrap tool inventory must provide cargo-verus" >&2
+    exit 1
+  }
+  release_verus_dir="$(dirname "$release_verus_bin")"
+  if [[ "$(dirname "$release_cargo_verus_bin")" != "$release_verus_dir" ]]; then
+    echo "authenticated Verus and cargo-verus must share one external tool directory" >&2
+    exit 1
+  fi
+  release_java_bin="$(canonical_executable java)" || {
+    echo "the authenticated bootstrap tool inventory must provide Java" >&2
+    exit 1
+  }
+  readonly release_tlapm_bin release_tlapm_root release_tlapm_stdlib
+  readonly release_tla2tools_jar release_verus_bin release_cargo_verus_bin
+  readonly release_verus_dir release_java_bin
   if [[ ! -x "$release_tlapm_bin" \
     || "$($release_tlapm_bin --version 2>&1)" != "3ab43c7" \
     || ! -f "$release_tlapm_stdlib/Functions.tla" \
     || "$(sha256_file "$release_tlapm_stdlib/Functions.tla")" != "b54ff63b7c76c327525c17c188d5f9f5e53d92f3fd701f5e2ba54f0f54391063" \
     || ! -f "$release_tlapm_stdlib/Folds.tla" \
     || "$(sha256_file "$release_tlapm_stdlib/Folds.tla")" != "aa59063fd600bb640b2ae24dc85ef770277ef5bf7955092b76b8b471790086da" ]]; then
-    echo "the caller target lacks the checksum-validated pinned TLAPM toolchain" >&2
+    echo "the authenticated external tool inventory lacks the pinned TLAPM toolchain" >&2
     exit 1
   fi
   if [[ ! -f "$release_tla2tools_jar" \
     || "$(sha256_file "$release_tla2tools_jar")" != "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88" ]]; then
-    echo "the caller target lacks pinned TLA2Tools v1.7.4" >&2
+    echo "the authenticated external tool inventory lacks pinned TLA2Tools v1.7.4" >&2
     exit 1
   fi
   if [[ ! -x "$release_verus_bin" || ! -x "$release_cargo_verus_bin" \
     || "$(sha256_file "$release_verus_bin")" != "$release_verus_sha256" \
     || "$(sha256_file "$release_cargo_verus_bin")" != "$release_cargo_verus_sha256" ]] \
     || ! "$release_verus_bin" --version 2>&1 | grep -Fq '0.2026.05.31.5dd6d83'; then
-    echo "the caller target lacks the checksum-validated pinned Verus toolchain" >&2
+    echo "the authenticated external tool inventory lacks the pinned Verus toolchain" >&2
     exit 1
   fi
   "$release_java_bin" -version >/dev/null 2>&1 || {
@@ -453,10 +458,10 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     exit 1
   }
 
-  # The bootstrap evidence parent is already a private, owner-bound 0700
-  # directory.  Keep all mutable release state below it and refuse reuse; this
-  # removes the predictable shared-/tmp ancestor from the authentication
-  # boundary.
+  # The authenticated bootstrap evidence directory is already one fresh,
+  # private external root. Keep the sealed source, Cargo target, and retained
+  # artifact roots as exact disjoint siblings below its single-use runner
+  # directory; no writable path or symlink is created inside sealed source.
   release_invocation_root="${release_bootstrap_evidence_dir}/release-runner"
   if [[ -e "$release_invocation_root" || -L "$release_invocation_root" ]]; then
     echo "authenticated release invocation root already exists" >&2
@@ -469,7 +474,9 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
   }
   readonly release_invocation_root
   readonly sealed_repo_root="${release_invocation_root}/source"
+  readonly release_target_root="${release_invocation_root}/target"
   readonly release_host_root="${release_invocation_root}/output"
+  readonly release_cancel_request_path="${IROHA_RELEASE_CANCEL_REQUEST_PATH:-${release_invocation_root}/cancel-request.json}"
   readonly sealed_identity_path="${release_invocation_root}/sealed-identity.json"
   readonly aggregate_receipt_path="${release_host_root}/release/RELEASE_COMPLETED.json"
   readonly release_signature_evidence_dir="$release_bootstrap_evidence_dir"
@@ -481,9 +488,14 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
   readonly release_signature_revocation="${release_signature_evidence_dir}/identity-revocation"
   readonly release_verified_git_bin="${release_signature_evidence_dir}/identity-git"
   readonly release_verified_ssh_keygen_bin="${release_signature_evidence_dir}/identity-ssh-keygen"
-  mkdir -m 0700 -- "$release_host_root"
+  mkdir -m 0700 -- "$release_target_root" "$release_host_root"
+  (
+    export CARGO_TARGET_DIR="$release_target_root"
+    export IROHA_RELEASE_ARTIFACT_ROOT="$release_host_root"
+    export IROHA_RELEASE_CANCEL_REQUEST_PATH="$release_cancel_request_path"
+    require_disjoint_release_roots "$repo_root"
+  ) || exit $?
   mkdir -m 0700 -- \
-    "$release_host_root/workspace-target" \
     "$release_host_root/tmp" \
     "$release_host_root/cache" \
     "$release_host_root/cargo-home" \
@@ -543,11 +555,10 @@ for parent in root.parents:
             )
 PY
 
-  ln -s "$release_host_root/workspace-target" "$sealed_repo_root/target"
   python3 -I -S "$sealed_repo_root/scripts/seal_workspace_source.py" \
-    --seal --root "$sealed_repo_root" --writable target
+    --seal --root "$sealed_repo_root" --no-writable-paths
   python3 -I -S "$sealed_repo_root/scripts/seal_workspace_source.py" \
-    --verify --root "$sealed_repo_root" --writable target
+    --verify --root "$sealed_repo_root" --no-writable-paths
   # Keep both digests. The candidate manifest records the original checkout;
   # the sealed manifest may change because the manifest intentionally binds all
   # permission bits. Every child build/evidence item uses the sealed digest,
@@ -561,10 +572,12 @@ PY
   chmod 0400 "$sealed_identity_path"
 
   set +e
-  IROHA_RELEASE_SEALED_WORKTREE=1 \
+    IROHA_RELEASE_SEALED_WORKTREE=1 \
     IROHA_RELEASE_SEALED_ROOT="$sealed_repo_root" \
     IROHA_RELEASE_HOST_ROOT="$release_host_root" \
-    IROHA_RELEASE_WORKSPACE_TARGET="$release_host_root/workspace-target" \
+    IROHA_RELEASE_WORKSPACE_TARGET="$release_target_root" \
+    IROHA_RELEASE_ARTIFACT_ROOT="$release_host_root" \
+    IROHA_RELEASE_CANCEL_REQUEST_PATH="$release_cancel_request_path" \
     IROHA_RELEASE_INVOCATION_ROOT="$release_invocation_root" \
     IROHA_RELEASE_CANDIDATE_IDENTITY_PATH="$candidate_identity_path" \
     IROHA_RELEASE_EXPECTED_IDENTITY_PATH="$sealed_identity_path" \
@@ -628,6 +641,10 @@ verify_release_identity() {
     || "${IROHA_RELEASE_SEALED_ROOT:-}" != "$repo_root" \
     || -z "${IROHA_RELEASE_HOST_ROOT:-}" \
     || -z "${IROHA_RELEASE_WORKSPACE_TARGET:-}" \
+    || -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+    || -z "${IROHA_RELEASE_INVOCATION_ROOT:-}" \
+    || -z "${CARGO_TARGET_DIR:-}" \
+    || -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" \
     || -z "${IROHA_RELEASE_EXPECTED_IDENTITY_PATH:-}" \
     || -z "${IROHA_RELEASE_CANDIDATE_IDENTITY_PATH:-}" \
     || -z "${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH:-}" \
@@ -645,6 +662,13 @@ verify_release_identity() {
     || -z "${SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY:-}" \
     || -z "${SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR:-}" \
     || -z "${SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256:-}" \
+    || "$IROHA_RELEASE_SEALED_ROOT" \
+      != "$IROHA_RELEASE_INVOCATION_ROOT/source" \
+    || "$IROHA_RELEASE_WORKSPACE_TARGET" \
+      != "$IROHA_RELEASE_INVOCATION_ROOT/target" \
+    || "$IROHA_RELEASE_ARTIFACT_ROOT" \
+      != "$IROHA_RELEASE_INVOCATION_ROOT/output" \
+    || "$IROHA_RELEASE_HOST_ROOT" != "$IROHA_RELEASE_ARTIFACT_ROOT" \
     || "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH" \
       != "$IROHA_RELEASE_HOST_ROOT/release/RELEASE_COMPLETED.json" \
     || -z "${IROHA_RELEASE_SIGNATURE_ATTESTATION:-}" \
@@ -708,13 +732,19 @@ verify_release_identity() {
     return 1
   fi
   local observed_target expected_target
-  if [[ ! -L "$repo_root/target" ]]; then
-    echo "sealed release target is not the external output symlink at ${checkpoint}" >&2
+  if [[ -e "$repo_root/target" || -L "$repo_root/target" ]]; then
+    echo "sealed source unexpectedly contains a target path at ${checkpoint}" >&2
+    return 1
+  fi
+  if ! require_external_cargo_target_dir "$repo_root" \
+    || ! require_external_release_artifact_root "$repo_root" \
+    || ! require_disjoint_release_roots "$repo_root"; then
+    echo "sealed release output roots changed at ${checkpoint}" >&2
     return 1
   fi
   observed_target="$(
     python3 -I -S -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
-      "$repo_root/target"
+      "$CARGO_TARGET_DIR"
   )"
   expected_target="$(
     python3 -I -S -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
@@ -735,7 +765,7 @@ verify_release_identity() {
     return 1
   fi
   if ! python3 -I -S scripts/seal_workspace_source.py \
-    --verify --root "$repo_root" --writable target; then
+    --verify --root "$repo_root" --no-writable-paths; then
     echo "release source seal changed at ${checkpoint}" >&2
     return 1
   fi
@@ -750,6 +780,12 @@ verify_release_identity() {
   fi
 }
 
+if [[ "$profile" == "--release" ]]; then
+  export CARGO_TARGET_DIR="$IROHA_RELEASE_WORKSPACE_TARGET"
+  require_external_cargo_target_dir "$repo_root"
+  require_external_release_artifact_root "$repo_root"
+  require_disjoint_release_roots "$repo_root"
+fi
 verify_release_identity "release corridor entry"
 if [[ "$profile" == "--release" ]]; then
   readonly IROHA_RELEASE_SCALING_CONFIGURATION_SHA256
@@ -796,9 +832,27 @@ export IROHA_RELEASE_HEAD_COMMIT="$release_head_commit"
 export IROHA_RELEASE_HEAD_TREE="$release_head_tree"
 export IROHA_RELEASE_CARGO_LOCK_SHA256="$release_cargo_lock_sha256"
 export IROHA_RELEASE_CANDIDATE_SOURCE_MANIFEST_SHA256="$candidate_source_manifest_sha256"
-readonly release_source_bound_root="${repo_root}/target/sumeragi-v2-release/${release_source_manifest_sha256}"
+if [[ "$profile" != "--release" ]]; then
+  development_invocation_root="$(
+    mktemp -d /private/tmp/iroha-sumeragi-v2-pr.XXXXXX
+  )"
+  mkdir -m 0700 -- \
+    "$development_invocation_root/target" \
+    "$development_invocation_root/artifacts"
+  export IROHA_RELEASE_INVOCATION_ROOT="$development_invocation_root"
+  export IROHA_RELEASE_WORKSPACE_TARGET="$development_invocation_root/target"
+  export IROHA_RELEASE_ARTIFACT_ROOT="$development_invocation_root/artifacts"
+  export IROHA_RELEASE_CANCEL_REQUEST_PATH="$development_invocation_root/cancel-request.json"
+  export CARGO_TARGET_DIR="$IROHA_RELEASE_WORKSPACE_TARGET"
+fi
+require_external_cargo_target_dir "$repo_root"
+require_external_release_artifact_root "$repo_root"
+if [[ "$profile" != "--release" ]]; then
+  require_disjoint_release_roots "$repo_root"
+fi
+release_gate_boundary "release-runner:entry" || exit $?
+readonly release_source_bound_root="${IROHA_RELEASE_ARTIFACT_ROOT}/sumeragi-v2-release/${release_source_manifest_sha256}"
 export IROHA_RELEASE_SOURCE_MANIFEST_SHA256="$release_source_manifest_sha256"
-export CARGO_TARGET_DIR="${release_source_bound_root}/test-suite"
 export IROHA_TEST_SKIP_BUILD=1
 export IROHA_TEST_ALLOW_REENTRANT_BUILD=0
 export IROHA_TEST_BUILD_TIMEOUT_MS=3600
@@ -850,8 +904,17 @@ fi
 # Build every real-localnet executable before any Cargo test process starts.
 # Test processes are then permanently skip-build/reentrant-disabled, avoiding a
 # Cargo-under-Cargo lock cycle while retaining a source/lock/binary attestation.
-ensure_source_bound_localnet_binaries
-export_source_bound_localnet_binaries
+release_gate_boundary "release-prebuilt-publication:before" || exit $?
+release_prebuilt_status=0
+ensure_source_bound_localnet_binaries || release_prebuilt_status=$?
+if ((release_prebuilt_status == 0)); then
+  export_source_bound_localnet_binaries || release_prebuilt_status=$?
+fi
+release_gate_boundary "release-prebuilt-publication:after-natural-completion" \
+  || exit $?
+if ((release_prebuilt_status != 0)); then
+  exit "$release_prebuilt_status"
+fi
 
 corridor_enabled=0
 corridor_completion_path=""
@@ -940,7 +1003,14 @@ elif kind == "pytest":
 elif kind == "node":
     passed = [re.fullmatch(r"# pass ([0-9]+)", line) for line in lines]
     passed = [match for match in passed if match]
-    if len(passed) != 1 or lines.count("# fail 0") != 1:
+    if (
+        len(passed) != 1
+        or lines.count(f"# tests {passed[0].group(1)}") != 1
+        or lines.count("# fail 0") != 1
+        or lines.count("# cancelled 0") != 1
+        or lines.count("# skipped 0") != 1
+        or lines.count("# todo 0") != 1
+    ):
         raise SystemExit("ambiguous Node test transcript")
     print(passed[0].group(1))
 elif kind == "native-amx-sdk":
@@ -957,6 +1027,19 @@ elif kind == "native-amx-sdk":
     if len(matches) != 1:
         raise SystemExit("ambiguous grouped Native AMX V2 SDK transcript")
     print(matches[0].group(1))
+elif kind == "sdk-diagnostics":
+    matches = [
+        re.fullmatch(
+            r"sumeragi-v2-sdk-diagnostics surface=[a-z]+ tests=([0-9]+) "
+            r"suite_source_manifest_sha256=[0-9a-f]{64}",
+            line,
+        )
+        for line in lines
+    ]
+    matches = [match for match in matches if match]
+    if len(matches) != 1:
+        raise SystemExit("ambiguous Sumeragi v2 SDK diagnostics transcript")
+    print(matches[0].group(1))
 elif kind == "command":
     print(0)
 else:
@@ -972,6 +1055,14 @@ PY
     expected_marker="native-amx-v2-grouped-parity surface=${expected_surface} tests=${observed_test_count} fixture_sha256=${native_amx_grouped_fixture_sha256:-} suite_source_manifest_sha256=${native_amx_grouped_suite_source_manifest_sha256:-}"
     if [[ "$(grep -Fxc -- "$expected_marker" "$log_path" || true)" != 1 ]]; then
       echo "release corridor leg ${leg_id} is not bound to the exact grouped Native AMX V2 corpus and suite sources" >&2
+      return 1
+    fi
+  elif [[ "$kind" == "sdk-diagnostics" ]]; then
+    local expected_surface="${leg_id#sumeragi-diagnostics-}"
+    local expected_marker
+    expected_marker="sumeragi-v2-sdk-diagnostics surface=${expected_surface} tests=${observed_test_count} suite_source_manifest_sha256=${sumeragi_v2_sdk_diagnostics_suite_source_manifest_sha256:-}"
+    if [[ "$(grep -Fxc -- "$expected_marker" "$log_path" || true)" != 1 ]]; then
+      echo "release corridor leg ${leg_id} is not bound to the exact Sumeragi v2 SDK diagnostics suite sources" >&2
       return 1
     fi
   fi
@@ -1000,8 +1091,10 @@ run_corridor_leg() {
   local required_test_count="$3"
   local command_text="$4"
   shift 4
+  release_gate_boundary "${leg_id}:before" || return $?
   if ((!corridor_enabled)); then
     "$@"
+    release_gate_boundary "${leg_id}:after-natural-completion" || return $?
     return
   fi
   local log_path
@@ -1014,6 +1107,21 @@ run_corridor_leg() {
   record_corridor_log \
     "$leg_id" "$kind" "$required_test_count" "$command_text" "$log_path" \
     "${pipeline_status[0]}" "${pipeline_status[1]}"
+  release_gate_boundary "${leg_id}:after-natural-completion" || return $?
+}
+
+run_cooperative_gate() {
+  local gate_id="$1"
+  local status
+  shift
+  release_gate_boundary "${gate_id}:before" || return $?
+  if "$@"; then
+    status=0
+  else
+    status=$?
+  fi
+  release_gate_boundary "${gate_id}:after-natural-completion" || return $?
+  return "$status"
 }
 
 corridor_contract_log_path() {
@@ -1044,6 +1152,7 @@ required_production_liveness_tests=(
   kura::tests::progress_witness_durability::unindexed_crash_suffix_is_repaired_before_retry_or_append
   kura::tests::certified_lane_block_encoding_enforces_source_envelope
   kura::tests::replace_top_block_replay_metadata_preflight_fails_closed_without_mutation
+  kura::tests::lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered
   kura::lane_geometry::tests::first_release_retirement_classifies_recovery_sync_failure_as_retryable
   kura::lane_geometry::tests::first_release_retirement_discards_unpublished_temp_for_every_fixed_pair
   kura::lane_geometry::tests::first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion
@@ -1075,7 +1184,7 @@ required_production_liveness_tests=(
   sumeragi::v2_core::tests::decision_retains_in_flight_body_pipeline_without_duplicate_fetch
   sumeragi::v2_core::tests::timeout_elapsed_cannot_start_durable_timeout_after_decision
   sumeragi::v2_core::tests::quorum_completing_timeout_vote_cannot_form_tc_after_decision
-  sumeragi::v2_core::tests::commit_qc_cannot_overtake_timeout_frontier
+  sumeragi::v2_core::tests::commit_qc_preempts_hung_timeout_signature_but_not_pending_wal
   sumeragi::v2_core::tests::future_view_commit_qc_uses_current_owner_through_application
   sumeragi::v2_core::tests::later_reproposal_commit_qc_replays_and_applies_its_exact_certified_round
   sumeragi::v2_core::tests::valid_commit_qc_supersedes_different_subject_prepare_lock_live_and_replay
@@ -1150,6 +1259,8 @@ required_production_liveness_tests=(
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_reserves_timeout_vote_bytes_behind_auxiliary_pressure
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_rejects_timeout_vote_larger_than_its_byte_reserve
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_saturated_peer_cannot_block_an_empty_validator_timeout
+  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_escape_survives_exact_same_source_saturation
+  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_serializes_distinct_timeout_certificates_per_source
   sumeragi::authoritative_runtime_gate_tests::direct_and_synthetic_envelopes_keep_identity_roles_consistent
   sumeragi::authoritative_runtime_gate_tests::atomic_lane_certificate_uses_the_shared_progress_owner
   sumeragi::authoritative_runtime_gate_tests::oversized_atomic_lane_certificate_is_returned_exactly
@@ -1162,7 +1273,7 @@ required_production_liveness_tests=(
   sumeragi::authoritative_runtime_gate_tests::transport_reply_route_construction_is_fallible_and_target_bound
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_maximum_merge_sidecar_chunk_frame_matches_canonical_wire
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary
-  sumeragi::authoritative_runtime_gate_tests::sidecar_allocations_require_roster_requester_before_lane_queue_admission
+  sumeragi::authoritative_runtime_gate_tests::sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner
   merge_sidecar::tests::pending_pruning_keeps_only_authoritative_live_carrier_identities
   merge_sidecar::tests::holder_derivation_rejects_noncanonical_qc_rosters_and_bitmaps
   merge_sidecar::tests::unsolicited_and_wrong_sender_chunks_are_rejected
@@ -1293,7 +1404,7 @@ required_production_liveness_tests=(
   sumeragi::v2::tests::unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics
   sumeragi::v2::tests::admission_keeps_only_the_exact_locked_commit_vote_beyond_one_rotation
   sumeragi::v2::tests::deferred_service_cursor_cycles_nonempty_classes
-  sumeragi::v2::tests::unowned_busy_certificates_roll_back_staged_registry_and_active_subject
+  sumeragi::v2::tests::unowned_busy_prepare_certificate_rolls_back_staged_registry_and_active_subject
   sumeragi::v2::tests::unowned_busy_exact_locked_vote_rolls_back_and_remains_retryable
   sumeragi::v2::tests::capacity_bypass_records_follow_current_lock_and_timeout_view
   sumeragi::v2::tests::deferred_progress_capacity_matches_partition_geometry
@@ -1305,7 +1416,7 @@ required_production_liveness_tests=(
   sumeragi::v2::tests::authentication_rejects_valid_commitment_conflicts_without_mutating_adapter
   sumeragi::v2::tests::deferred_adapter_activation_marker_survives_a_no_progress_publication
   sumeragi::v2::tests::deferred_adapter_replay_with_startup_effects_publishes_no_status
-  sumeragi::v2::tests::persistence_macro_step_budgets_have_exact_five_effect_maximum
+  sumeragi::v2::tests::persistence_macro_step_budgets_have_exact_four_effect_maximum
   sumeragi::v2::tests::drive_effects_rejects_oversized_non_persisting_batch
   sumeragi::v2::tests::drive_effects_rejects_record_specific_overbudget_before_wal_append
   sumeragi::v2::tests::drive_effects_rejects_multiple_persist_owners_before_wal_append
@@ -1331,7 +1442,7 @@ required_production_liveness_tests=(
   sumeragi::v2_body_store::tests::rotating_leader_reproposal_authenticates_the_immutable_header_leader
   sumeragi::v2_block_sync::tests::discovery_outputs_only_normal_commit_qc_ingress_and_waits_for_enqueue
   sumeragi::v2_block_sync::tests::catch_up_is_strictly_sequential_across_contexts
-  sumeragi::v2_block_sync::tests::historical_body_comes_from_kura_and_a_non_signer_archive_can_serve
+  sumeragi::v2_block_sync::tests::historical_body_uses_self_contained_kura_finality_without_context_store
   sumeragi::v2_apply::tests::committed_merge_reservation_rejects_bare_norito
   sumeragi::v2_effects::tests::retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it
   sumeragi::v2_effects::tests::authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally
@@ -1375,7 +1486,9 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::production_certified_body_request_rejects_locally_conflicting_qc_without_fail_close
   sumeragi::v2_effects::tests::production_commit_certificate_response_conflict_keeps_discovery_outstanding_and_runtime_open
   sumeragi::v2_effects::tests::proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two
-  sumeragi::v2_effects::tests::serialized_runtime_emits_proposal_a_prepare_qc_b_timeout_capacity_trace
+  sumeragi::v2_effects::tests::passive_fetch_does_not_block_prepare_qc_or_timeout_in_serialized_runtime
+  sumeragi::v2_effects::tests::fetch_retransmissions_reuse_one_work_slot_and_one_signed_request
+  sumeragi::v2_effects::tests::apply_retransmissions_reuse_one_work_slot
   sumeragi::v2_effects::tests::full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases
   sumeragi::v2_effects::tests::certified_request_pressure_retains_higher_authority_upgrade_under_one_owner
   sumeragi::v2_effects::tests::reconstructible_new_certified_fetch_acquires_ownership_from_retained_admission
@@ -1384,6 +1497,9 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity
   sumeragi::v2_effects::tests::retained_producer_suffix_allows_exact_certified_response_to_release_fetch_capacity
   sumeragi::v2_effects::tests::retained_effect_batch_rejects_overtaking_and_oversize_before_partial_dispatch
+  sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_under_the_incumbent_owner
+  sumeragi::v2_effects::tests::fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work
+  sumeragi::v2_effects::tests::adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes
   sumeragi::v2_effects::tests::retained_effect_tail_is_fifo_and_refilters_after_durable_decision
   sumeragi::v2_effects::tests::pending_work_producer_inventory_is_exhaustive_and_source_linked
   sumeragi::v2_effects::tests::reconciled_decision_rejects_same_round_subject_commitment_drift
@@ -1452,13 +1568,23 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::duplicate_generation_hint_coalesces_alternate_reply_sources
   sumeragi::v2_lane_work::tests::typed_finality_handoff_preserves_same_roster_current_chunk_for_retry
   sumeragi::v2_lane_work::tests::typed_finality_handoff_fences_changed_roster_after_sealing_active_writer
+  sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order
+  sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier
+  sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_same_height_participant_identity_conflict
+  sumeragi::v2_lane_work::tests::native_amx_merge_projection_excludes_coordinator_only_receipts
+  sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_same_route_identity_conflict
+  sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_duplicate_group_source
+  sumeragi::v2_lane_work::tests::native_amx_merge_projection_matches_decoded_replay_entry
+  sumeragi::v2_runtime::tests::adapter_effect_binding_is_exact_route_neutral_and_three_bounded
+  sumeragi::v2_runtime::tests::certified_body_pipeline_retains_statement_and_owner_across_stage_kinds
+  sumeragi::v2_runtime::tests::body_pipeline_acquires_commit_authority_monotonically_under_one_owner
   sumeragi::v2_runtime::tests::retiring_exact_body_completion_releases_a_capacity_one_ingress_slot
   sumeragi::v2_runtime::tests::exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot
-  sumeragi::v2_runtime::tests::exact_authenticated_timeout_certificate_from_distinct_sources_coalesces_in_one_runtime_slot
+  sumeragi::v2_runtime::tests::exact_authenticated_timeout_certificate_coalesces_then_applies_through_signer
   sumeragi::v2_runtime::tests::same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically
   sumeragi::v2_runtime::tests::runtime_ingress_carrier_capacity_returns_backpressure_atomically
   sumeragi::v2_runtime::tests::exact_authenticated_progress_retransmission_is_queue_coalesced
-  sumeragi::v2_runtime::tests::commit_certificate_response_coalesces_with_exact_busy_deferred_qc
+  sumeragi::v2_runtime::tests::certified_tc_crosses_full_fence_blocked_prepare_prefix
   sumeragi::v2_runtime::tests::completion_retries_coalesce_across_ingress_and_busy_deferred_ownership
   sumeragi::v2_runtime::tests::body_available_rebind_accepts_same_view_higher_generation
   sumeragi::v2_runtime::tests::body_available_rebind_rejects_uninstalled_destination_without_mutation
@@ -1469,6 +1595,11 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
   sumeragi::v2_runtime::tests::conflicting_local_and_validated_receipts_do_not_coalesce
   sumeragi::v2_runtime::tests::applied_body_pipeline_phases_suppress_retries_before_ordinal_allocation
+  sumeragi::v2_runtime::tests::applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome
+  sumeragi::v2_runtime::tests::applied_local_proposal_handoff_suppresses_retry_before_ordinal_allocation
+  sumeragi::v2_runtime::tests::drained_internal_ignore_uses_exact_durable_tombstone_before_readmission
+  sumeragi::v2_runtime::tests::queued_body_completion_coalesces_only_its_incumbent_owner
+  sumeragi::v2_runtime::tests::stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal
   sumeragi::v2_runtime::tests::body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_duplicates
   sumeragi::v2_runtime::tests::decision_retires_proposal_owners_but_preserves_body_and_application_completions
   sumeragi::v2_runtime::tests::decision_retires_stale_local_completion_for_durable_recovery
@@ -1482,11 +1613,12 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::successor_activation_snapshot_requires_armed_live_clocks
   sumeragi::v2_runtime::tests::production_ingress_pop_uses_shared_selector_for_every_ready_mask
   sumeragi::v2_runtime::tests::network_admission_uses_exact_normal_and_progress_reservations
-  sumeragi::v2_runtime::tests::serviceable_adapter_debt_drains_one_macro_step_before_new_work
+  sumeragi::v2_runtime::tests::absolute_timeout_preempts_serviceable_adapter_debt_then_debt_drains
   sumeragi::v2_runtime::tests::serviceable_adapter_debt_runs_without_runtime_ingress
   sumeragi::v2_runtime::tests::runtime_rejects_driver_selection_outside_eligible_deferred_owner_set
   sumeragi::v2_runtime::tests::runtime_physical_cut_is_monotone_and_regression_fails_closed
   sumeragi::v2_runtime::tests::deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences
+  sumeragi::v2_runtime::tests::distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner
   sumeragi::v2_runtime::tests::post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target
   sumeragi::v2_runtime::tests::pre_dequeue_probe_validates_unfrozen_leader_wire_identity
   sumeragi::v2_runtime::tests::real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
@@ -1506,6 +1638,8 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals
   sumeragi::v2_runtime::tests::older_frozen_aggregate_carrier_rebases_queued_runtime_minimum
   sumeragi::v2_runtime::tests::ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it
+  sumeragi::v2_runtime::tests::restored_serve_high_watermark_precedes_startup_runtime_owner
+  sumeragi::v2_runtime::tests::full_runtime_churn_cannot_cross_an_exact_serve_ordinal
   sumeragi::v2_runtime::tests::preassigned_batch_lifecycles_require_shared_mint_and_exact_root
   sumeragi::v2_runtime::tests::restart_dormant_completion_batch_atomically_replaces_latent_slots
   sumeragi::v2_runtime::tests::restart_dormant_local_fifo_reservation_survives_full_class_churn
@@ -1513,6 +1647,11 @@ required_production_liveness_tests=(
   sumeragi::v2_recovery::tests::all_hash_only_snapshot_recovers_exact_authenticated_successor
   sumeragi::v2_recovery::tests::finalized_tip_derives_one_idempotent_successor_context
   sumeragi::v2_recovery::tests::successor_rejects_foreign_same_height_predecessor_and_mismatched_receipt
+  sumeragi::v2_lifecycle_recovery::tests::generation_takeover_runs_crash_recover_and_rehydrate_then_stutters
+  sumeragi::v2_lifecycle_recovery::tests::every_lifecycle_recovery_cursor_cas_boundary_survives_restart
+  sumeragi::v2_lifecycle_recovery::tests::prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side
+  sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt
+  sumeragi::v2_lifecycle_recovery::tests::local_producer_recovery_requires_the_exact_current_queue_owner
   sumeragi::v2_runner::tests::same_tag_higher_lock_retires_all_local_proposal_owners
   sumeragi::v2_runner::tests::fail_closed_authenticated_coalesce_releases_gate_and_suppresses_retry
   sumeragi::v2_runner::tests::reserved_lane_output_bypasses_unserviceable_head_without_losing_owner
@@ -1533,7 +1672,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::first_same_subject_lock_preserves_pending_local_proposal_events
   sumeragi::v2_runner::tests::higher_same_subject_lock_retires_prior_origin_work
   sumeragi::v2_runner::tests::first_same_subject_lock_from_prior_view_retires_unlocked_work
-  sumeragi::v2_runner::tests::late_old_rejection_cannot_arm_heartbeat_for_replacement_lock
+  sumeragi::v2_runner::tests::late_old_rejection_cannot_arm_non_empty_retry_for_replacement_lock
   sumeragi::v2_runner::tests::decision_retires_local_work_before_prepared_delivery
   sumeragi::v2_runner::tests::finalized_rollover_closes_ingress_before_successor_replay
   sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff
@@ -1546,7 +1685,10 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::direct_close_ack_retains_reply_route_from_lane_through_worker
   sumeragi::v2_runner::tests::empty_drain_after_peek_is_restart_required_without_panicking
   sumeragi::v2_runner::tests::relayed_generation_hint_preserves_reply_route_from_lane_through_worker
-  sumeragi::v2_runner::tests::deferred_startup_producer_turn_is_retained_until_one_exclusive_claim
+  sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation
+  sumeragi::v2_runner::tests::terminal_sweep_source_partitions_whole_units_before_any_mutation
+  sumeragi::v2_runner::tests::local_producer_queue_custody_is_preflighted_before_cursor_mutation
+  sumeragi::v2_runner::tests::dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester
   sumeragi::v2_worker::tests::fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner
   sumeragi::v2_worker::tests::entered_view_accepts_same_view_higher_generation_supersession
   sumeragi::v2_worker::tests::invalid_fetch_consumer_rebind_fails_closed_without_consuming_owner
@@ -1581,10 +1723,10 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::checked_serve_dequeue_rejects_mutated_fair_lifecycle_ordinal
   sumeragi::v2_worker::tests::dormant_exact_head_fail_stops_after_saturated_fair_prefix_without_repair
   sumeragi::v2_worker::tests::dormant_serve_waiters_fail_stop_without_requester_ordinal_repair
-  sumeragi::v2_worker::tests::durable_raw_admission_restart_reuses_lifecycle_and_excludes_family_replacement
+  sumeragi::v2_worker::tests::durable_raw_admission_restart_locally_seals_before_later_producers
   sumeragi::v2_worker::tests::durable_raw_higher_view_drop_restarts_into_local_successor_completion
   sumeragi::v2_worker::tests::durable_raw_waiter_rejects_mutated_logical_lineage
-  sumeragi::v2_worker::tests::durable_serve_state_v4_rejects_v3_header_and_payload_layouts
+  sumeragi::v2_worker::tests::durable_serve_state_v5_rejects_v4_header_and_payload_layouts
   sumeragi::v2_worker::tests::invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity
   sumeragi::v2_worker::tests::raw_admission_persistence_failure_rolls_back_logical_lineage
   sumeragi::v2_worker::tests::fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission
@@ -1592,7 +1734,8 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack
   sumeragi::v2_worker::tests::fair_ingress_terminal_retry_replays_without_lifecycle_resurrection
   sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission
-  sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_resumes_same_lifecycle
+  sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_locally_completes_without_retry
+  sumeragi::v2_worker::tests::durable_coalesced_retransmission_restart_locally_completes_without_retry
   sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source
   sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion
   sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay
@@ -1640,6 +1783,8 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::response_outputs_without_exact_routes_fail_stop
   sumeragi::v2_worker::tests::orphan_chunk_coalescing_preserves_alternate_fair_ingress_routes
   sumeragi::v2_worker::tests::owned_orphan_chunk_replay_preserves_alternate_source_routes_and_cursors
+  sumeragi::v2_worker::tests::durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order
+  sumeragi::v2_worker::tests::productive_retry_after_proofless_reconstruction_does_not_become_orphan
   sumeragi::v2_worker::tests::sidecar_flush_ack_identity_mismatch_fails_closed
   sumeragi::v2_worker::tests::reply_flush_attempt_identity_mismatch_fails_without_cursor_or_attempt_advance
   sumeragi::v2_worker::tests::sidecar_receipts_use_a_separate_bounded_control_queue
@@ -1811,7 +1956,7 @@ required_production_liveness_tests=(
   network::tests::network_actor_drop_retires_routes_and_only_its_waiters
   network::tests::reply_route_tenure_retires_only_after_final_receiver_guard_drops
   network::tests::duplicate_configured_termination_does_not_advance_backoff_or_metrics
-  network::inbound_source_memory_bound_tests::reliable_actor_waiter_geometry_rejects_zero_and_combined_overflow
+  network::inbound_source_memory_bound_tests::reliable_actor_waiter_geometry_rejects_source_overflow
   network::handle_update_tests::configured_producer_geometry_gives_six_same_source_waiters_decreasing_ranks
   consensus_message_control::tests::controlled_v2_admission_preserves_distinct_relay_identity
   consensus_message_control::tests::stale_duplicate_reordered_and_unknown_releases_are_atomic
@@ -1832,11 +1977,6 @@ required_production_liveness_tests=(
   tests::relay_fairness::base_one_four_sources_reserve_both_upstream_lanes_without_head_of_line_wait
   tests::relay_fairness::hold_release_same_source_reconnect_retires_old_delivery_without_rebinding_new_route
   tests::relay_fairness::hold_release_preserves_exact_layered_ownership_until_recorded_terminal
-  genesis_bootstrap::tests::pending_reply_count_uses_shared_per_source_waiter_geometry
-  genesis_bootstrap::tests::unavailable_reply_writer_uses_requester_retransmission_without_parking_old_route
-  genesis_bootstrap::tests::genesis_request_fanout_deduplicates_same_source_targets
-  genesis_bootstrap::tests::bootstrapper_clones_cannot_multiply_listener_producers
-  genesis_bootstrap::tests::bootstrapper_clones_cannot_multiply_fetch_fanouts
   parameters::actual::tests::sumeragi_v2_exact_output_geometry_checks_every_arithmetic_boundary
   parameters::actual::tests::sumeragi_v2_config_format_changes_the_handshake_fingerprint
   parameters::user::duration_clamp_tests::sumeragi_v2_exact_output_geometry_accepts_network_source_boundary
@@ -1845,7 +1985,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=813
+readonly expected_production_liveness_test_count=845
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1920,8 +2060,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
     required_ignored_unit_list="$production_p2p_ignored_unit_list"
   elif [[ "$required_test" == consensus_message_control::tests::* \
     || "$required_test" == network_relay_tests::* \
-    || "$required_test" == tests::relay_fairness::* \
-    || "$required_test" == genesis_bootstrap::tests::* ]]; then
+    || "$required_test" == tests::relay_fairness::* ]]; then
     required_unit_list="$production_irohad_unit_list"
     required_ignored_unit_list="$production_irohad_ignored_unit_list"
   elif [[ "$required_test" == parameters::* ]]; then
@@ -1945,7 +2084,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 813-test liveness inventory above. The later
+# not belong to the canonical 845-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -1964,6 +2103,8 @@ required_multilane_core_focus_tests=(
   kura::tests::native_amx_retention_window_advances_base_and_bounds_index
   kura::tests::native_amx_startup_retention_waits_for_complete_post_wsv_evidence
   kura::tests::native_amx_prepublication_retains_previous_pair_until_post_wsv_cleanup
+  kura::tests::native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable
+  kura::tests::native_amx_prevote_pair_geometry_rejects_empty_hard_cap_and_overflow
   kura::tests::native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scanning
   kura::tests::native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scanning
   kura::tests::native_amx_latest_index_startup_truncates_unindexed_append_tail
@@ -1974,6 +2115,8 @@ required_multilane_core_focus_tests=(
   kura::tests::native_amx_latest_index_startup_rejects_manifest_binding_drift_without_receipt
   kura::tests::native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest_index
   kura::tests::native_amx_retirement_scan_rejects_old_incarnation_evidence_after_aba_recreation
+  kura::lane_geometry::tests::native_amx_retirement_targets_exact_participant_incarnation_and_fails_closed
+  kura::lane_geometry::tests::mixed_role_native_amx_retirement_ignores_coordinator_and_targets_remote_routes
   kura::tests::autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or_stage
   kura::tests::autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging
   kura::tests::autonomous_claim_startup_inventory_bound_fails_before_temp_reconciliation
@@ -1995,21 +2138,23 @@ required_multilane_core_focus_tests=(
   kura::tests::pending_queue_plan_admission_survives_retired_purge_and_process_reopen
   kura::lane_geometry::tests::first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion
   sumeragi::v2_lane_work::tests::native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_hash
-  sumeragi::v2_lane_work::tests::native_participant_recovery_marker_rejects_malformed_height_source_and_aba_shapes
-  sumeragi::v2_lane_work::tests::native_participant_recovery_authority_rejects_missing_leaf_execution_and_finality_drift
-  sumeragi::v2_lane_work::tests::native_participant_recovery_wire_request_is_certificate_free_and_frame_bounded
-  sumeragi::v2_lane_work::tests::native_participant_recovery_response_accepts_valid_carrier_above_autonomous_bundle_bound
+  sumeragi::v2_lane_work::tests::grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or_wsv_mutation
+  sumeragi::v2_lane_work::tests::normal_lane_adapter_serves_certificate_free_canonical_executed_block_chunks
+  sumeragi::v2_lane_work::tests::canonical_executed_block_recovery_rejects_drift_rotates_signers_and_caches_exact_body
+  sumeragi::v2_lane_work::tests::canonical_executed_block_multichunk_restarts_whole_wire_after_byzantine_signer
   sumeragi::v2_lane_work::tests::historical_recovery_request_rejects_missing_extra_and_tampered_signer_pops
   sumeragi::v2_lane_work::tests::historical_recovery_request_survives_current_state_key_pruning
   sumeragi::v2_lane_work::tests::historical_recovery_request_rejects_stale_incarnation_and_unanchored_view
   sumeragi::v2_core::refinement::tests::in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps
+  sumeragi::v2_core::refinement::tests::in_flight_first_release_dynamic_committees_bind_masks_custody_and_canonical_quorum
   queue::reservation_journal::tests::crash_at_every_operation_frame_write_boundary_is_prefix_atomic
   queue::tests::concurrent_lane_reserve_attempts_cannot_duplicate_one_transaction
+  queue::tests::lane_retirement_observer_holds_transition_before_lifecycle_fence
   queue::tests::lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary
-  kura::tests::committed_merge_reservation_lookup_reconstructs_from_canonical_indexes_after_restart
+  kura::tests::committed_merge_entry_lookup_reconstructs_from_canonical_indexes_after_restart
   kura::tests::merge_frontier_startup_requires_geometry_only_after_committed_execution
-  kura::tests::committed_merge_reservation_lookup_fails_closed_on_log_mutation
-  kura::tests::committed_merge_reservation_lookup_requires_complete_unique_transaction_index
+  kura::tests::committed_merge_entry_lookup_fails_closed_on_log_mutation
+  kura::tests::canonical_transaction_index_exposes_completeness_and_all_carrier_heights
   kura::lane_geometry::tests::native_amx_archive_is_admissible_accounted_and_purged_without_touching_sibling
   kura::lane_geometry::tests::native_amx_archive_gc_rejects_malformed_truncated_and_oversized_evidence
   kura::lane_geometry::tests::native_amx_archive_gc_rejects_symlinked_evidence_without_following_it
@@ -2017,13 +2162,22 @@ required_multilane_core_focus_tests=(
   state::tests::merge_execution_predecessor_rejects_wrong_frontier_hash
   state::tests::merge_execution_canonical_order_is_route_first
   state::tests::autonomous_lane_diagnostic_queue_finalization_is_terminal
+  state::tests::mixed_role_native_amx_state_projections_exclude_the_coordinator_route
+  state::tests::mixed_role_native_amx_diagnostics_report_remote_identity_conflict
+  state::tests::mixed_role_native_amx_state_projections_reject_same_route_identity_drift
+  sumeragi::v2_lane_work::tests::pre_kura_direct_release_projection_is_four_validator_bound_and_fail_closed
   sumeragi::v2_lane_work::tests::autonomous_local_author_reserves_fifo_before_durable_hint_free_publication
   sumeragi::v2_lane_work::tests::autonomous_restart_hydrates_durable_hint_free_payload_and_queue_owner
   sumeragi::v2_apply::tests::native_amx_prepublication_failure_leaves_wsv_unchanged
+  sumeragi::v2_apply::tests::native_amx_prevote_byte_failures_have_precommit_error_classification
+  sumeragi::v2_apply::tests::checked_apply_carrier_authorization_binds_exact_state_entry
   sumeragi::v2_apply::tests::live_merge_publication_persists_application_receipt_before_retry
   sumeragi::v2_apply::tests::committed_merge_reservation_is_finalized_exactly_once
   sumeragi::v2_apply::tests::startup_reconciliation_consumes_replayed_committed_merge_reservation
+  sumeragi::v2_apply::tests::autonomous_release_rejects_missing_queue_owner_while_kura_claims_are_pending
   sumeragi::v2_apply::tests::autonomous_reservation_cross_store_crash_matrix_preserves_fifo_exactly_once
+  sumeragi::v2_apply::tests::prospective_autoscale_retirement_queue_veto_rejects_exact_reserved_route
+  queue::tests::forgotten_release_requires_exact_fifo_membership_and_relative_order
   kura::tests::terminal_frontier_compaction_retains_every_later_pending_slot
   kura::tests::terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot
   kura::tests::terminal_auxiliary_cleanup_resumes_after_each_mutation_budget
@@ -2032,16 +2186,27 @@ required_multilane_core_focus_tests=(
   state::tests::certified_autoscale_scale_in_rechecks_late_authenticated_unmerged_relay
   state::tests::certified_autoscale_scale_in_rechecks_late_unapplied_certified_lane_block
   state::tests::certified_autoscale_scale_in_rechecks_late_unrepaired_direct_application_marker
+  state::tests::prospective_autoscale_retirement_binding_projects_exact_active_route_before_staging
+  state::tests::prospective_autoscale_retirement_blocks_block_local_queue_plan_obligation
+  state::tests::autoscale_scale_in_commit_runs_queue_veto_inside_lifecycle_fence
   state::tests::autonomous_lane_diagnostic_same_identity_drift_is_conflict
   state::tests::autonomous_lane_diagnostic_certified_payload_without_bundle_reports_exact_stall
   state::tests::pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers
+  state::tests::queue_plan_registry_absence_rejects_an_orphan_pending_obligation
+  state::tests::queue_plan_conflict_requires_pending_or_applied_owner_evidence
+  state::tests::queue_plan_native_pending_obligations_count_all_unique_routes_and_block_drain
+  state::tests::queue_plan_same_route_roles_share_one_pending_route_counter
+  state::tests::queue_plan_pending_obligation_authenticates_copies_before_counter_mutation
+  state::tests::queue_plan_pending_resolution_decrements_only_exact_bound_route_counts
+  state::tests::queue_plan_pending_resolution_corrupt_route_counts_fail_without_partial_mutation
+  state::tests::queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomically
   state::tests::queue_plan_only_carriers_require_exact_committed_active_lane_bindings
   state::tests::queue_plan_registry_presence_is_bounded_and_malformed_markers_fail_closed
   state::tests::queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set
   state::tests::same_carrier_queue_plan_certificate_cannot_authorize_autonomous_execution
   smartcontracts::ivm::host::tests::state_syscalls_cannot_forge_delete_or_disclose_queue_plan_admission_marker
-  sumeragi::v2_lane_work::tests::repeated_heartbeat_retries_never_make_autonomous_routes_ordinary_eligible
-  sumeragi::v2_runner::tests::deferred_autonomous_work_timeout_arms_only_an_empty_heartbeat
+  sumeragi::v2_lane_work::tests::repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible
+  sumeragi::v2_runner::tests::deferred_autonomous_work_timeout_arms_only_a_non_empty_retry
   torii_proxy::tests::torii_transaction_admission_wire_indexes_are_stable
   torii_proxy::tests::queue_plan_synced_request_identity_is_semantic_and_source_bound
   torii_proxy::tests::queue_plan_certificate_rejects_noncanonical_semantic_request_identity
@@ -2062,9 +2227,186 @@ required_multilane_core_focus_tests=(
   kura::tests::bounded_pending_merge_hash_scan_filters_orders_and_reports_overflow
   kura::tests::complete_merge_retry_ignores_unrelated_pending_sidecar_capacity
   kura::tests::bounded_pending_merge_selection_skips_committed_prefix_without_underfill
+  kura::tests::canonical_prune_capacity_includes_large_commit_roster_generation
+  kura::tests::startup_prune_capacity_reuses_large_roster_admission_exactly
+  kura::tests::active_prune_recovery_never_allocates_missing_retained_merge_carrier
+  kura::tests::historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rejection
+  kura::tests::historical_recovery_partial_batch_restart_completes_remaining_records
+  kura::tests::historical_recovery_append_crash_is_repaired_only_by_startup_before_replay
+  kura::tests::historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed
+  kura::tests::historical_recovery_acquires_prune_before_historical_mutation_lock
+  kura::tests::certified_bundle_reservation_rejects_a_missing_outstanding_transient_entry
+  kura::tests::certified_bundle_rejects_mismatched_authority_before_reserving_or_writing
+  kura::tests::certified_bundle_authorized_active_slot_reset_publishes_exact_bundle
+  kura::tests::certified_bundle_active_slot_reset_without_authority_is_read_only
+  kura::tests::certified_bundle_regressed_proposal_height_rejects_before_reserving
+  kura::tests::certified_bundle_composite_exact_limit_is_atomic_and_retry_leaks_nothing
+  kura::tests::certified_bundle_frontier_crash_rebuilds_exact_remaining_obligation
+  kura::tests::certified_frontier_build_only_restart_promotes_then_rebuilds_remaining_obligation
+  kura::tests::certified_frontier_build_conflict_fails_before_rebuild_map_publication
+  kura::tests::certified_pair_crash_rebuilds_only_bundle_obligation
+  kura::tests::durable_bundle_pair_crash_rebuild_consumes_obligation_from_exact_readback
+  kura::tests::bundle_pair_append_intent_rebuilds_then_repairs_exact_obligation
+  kura::tests::certified_pair_append_intent_rebuilds_and_repairs_at_original_exact_limit
+  kura::tests::certified_and_bundle_authenticated_append_builds_restart_at_original_exact_limit
+  kura::tests::append_intent_and_build_restart_preflight_reject_one_under_without_mutation
+  kura::tests::lane_retirement_is_blocked_by_outstanding_certified_bundle_reservation
+  kura::tests::certified_bundle_preflight_rejects_lone_append_build_without_mutation
+  kura::tests::certified_bundle_preflight_rejects_authenticated_mismatched_append_build
+  kura::tests::certified_bundle_preflight_checks_bad_older_history_beneath_exact_append_intent
+  kura::tests::certified_bundle_stale_incarnation_reservation_blocks_aba_without_mutation
+  kura::tests::certified_bundle_startup_rebuild_publishes_nothing_on_late_route_error
+  kura::tests::historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_inventory
+  kura::tests::historical_atomic_temp_cleans_exact_duplicate_and_two_link_publication_retry
+  kura::tests::historical_atomic_temp_whole_inventory_preflight_prevents_partial_promotion
+  kura::tests::historical_atomic_temp_rejects_multiple_names_for_one_target_before_mutation
+  kura::tests::historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks
+  kura::tests::historical_atomic_temp_rejects_collision_and_stale_incarnation_without_mutation
+  kura::tests::shared_autonomous_mutation_gate_counts_pending_canonical_bytes_exactly
+  kura::tests::startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation
+  kura::tests::lane_history_compaction_recovers_crash_temp_before_tight_capacity_refusal
+  kura::tests::lane_history_compaction_rejects_data_only_temp_before_capacity_refusal
+  kura::tests::lane_history_compaction_rejects_corrupt_temp_index_before_capacity_refusal
+  kura::tests::deterministic_commit_marker_temp_recovers_or_rolls_back_exactly
+  kura::tests::commit_marker_rejects_oversized_deterministic_temp
+  kura::tests::commit_marker_rejects_symlinked_deterministic_temp
+  commit_roster_journal::tests::durable_pointer_temp_recovers_forward_after_restart
+  commit_roster_journal::tests::durable_generation_temp_without_pointer_rolls_back_after_restart
+  commit_roster_journal::tests::partial_deterministic_temps_roll_back_to_stable_pointer
+  commit_roster_journal::tests::load_rejects_oversized_and_unexpected_publication_artifacts
+  commit_roster_journal::tests::load_rejects_symlinked_deterministic_publication_temp
+  commit_roster_journal::tests::prune_projection_accounts_large_generation_and_pointer_peak_exactly
+  kura::tests::kura_start_rejects_unbound_local_peer_identity
+  kura::tests::eviction_requires_distinct_matching_replica_adverts
+  kura::tests::deterministic_commit_qc_keepers_use_f_plus_one_and_pin_a_local_keeper
+  kura::tests::nonkeeper_replica_advert_probe_never_reads_the_complete_body
+  kura::tests::selected_keeper_invalid_index_missing_body_and_corrupt_body_fail_closed
+  kura::tests::authenticated_replica_admission_rejects_forgery_non_qc_peer_and_alternate_finality
+  kura::tests::authenticated_replica_admission_rejects_outside_the_active_horizon_before_mutation
+  kura::tests::eviction_query_prunes_expired_and_out_of_horizon_replica_observations
+  kura::tests::replica_adverts_ignore_zero_height_and_payload_len
+  kura::tests::replica_registry_capacity_preserves_the_configured_evictable_height_window
+  kura::tests::invalid_replica_advert_runtime_geometry_fails_before_store_creation
+  kura::tests::nonselected_or_wrong_length_replica_observations_do_not_count
+  kura::tests::expired_replica_adverts_do_not_allow_eviction
+  kura::tests::replica_adverts_expiring_during_compaction_block_stage_publication
+  sumeragi::message::tests::kura_replica_advert_signature_binds_every_eviction_identity
+  sumeragi::message::tests::kura_replica_advert_is_live_auxiliary_not_lane_or_global_v1
+  tests::kura_replica_advert_uses_bounded_consensus_auxiliary_topic
+  sumeragi::authoritative_runtime_gate_tests::kura_replica_advert_requires_exact_signed_direct_keeper_ownership
+  sumeragi::v2_runner::tests::kura_replica_advert_error_classification_retires_only_invalid_remote_claims
+  sumeragi::v2_worker::kura_replica_advert_refresh_tests::refresh_window_is_evictable_first_and_overflow_safe
+  sumeragi::v2_worker::kura_replica_advert_refresh_tests::refresh_turn_retains_one_source_and_attempts_at_most_one_fanout
+  sumeragi::v2_worker::kura_replica_advert_refresh_tests::tip_advance_never_resets_an_in_progress_scan
+  sumeragi::v2_worker::kura_replica_advert_refresh_tests::same_height_tip_rewrite_requests_follow_up_without_starving_current_cursor
+  sumeragi::v2_worker::tests::retained_replica_advert_source_survives_service_rollover_without_pending_ownership
+  sumeragi::v2_worker::tests::retained_replica_advert_source_never_blocks_handoff_or_seal
+  sumeragi::v2_worker::tests::durable_kura_replica_advert_rollover_claim_rejects_identity_and_recipient_drift
   sumeragi::v2_lane_work::tests::historical_recovery_diagnostics_are_typed_bounded_and_payload_free
-  sumeragi::v2_lane_work::tests::native_participant_pruned_carrier_retries_queue_pressure_and_retires_carrier_siblings
+  sumeragi::v2_lane_work::tests::native_participant_missing_carrier_uses_generic_chunk_recovery_then_repairs_receipt
   sumeragi::v2_lane_work::tests::merge_leader_candidate_rejects_substitution_outer_epoch_and_oversize_before_journal
+  kura::tests::startup_lane_geometry_refresh_replaces_contracted_lane_auxiliary_identities
+  kura::tests::startup_lane_geometry_refresh_replaces_relabelled_lane_auxiliary_identities
+  kura::tests::startup_replay_binding_covers_the_recognized_historical_recovery_namespace
+  kura::tests::startup_replay_auxiliary_capture_rejects_configured_historical_byte_overflow
+  kura::tests::startup_replay_binding_rejects_unknown_nested_lane_artifact_directories
+  kura::historical_autonomous_recovery_bound_tests::aggregate_byte_bound_is_exact_and_duplicate_aware
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_honors_lower_and_higher_configured_limits
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_rejects_same_path_mutation_during_accounting
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_rechecks_every_file_after_enumeration
+  kura::historical_autonomous_recovery_bound_tests::decoded_bytes_must_match_the_scanner_accounted_identity_and_length
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_accepts_exact_record_and_aggregate_limits
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_rejects_count_size_and_aggregate_overflow
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_rejects_noncanonical_and_nested_entries
+  kura::historical_autonomous_recovery_bound_tests::bounded_namespace_rejects_symlinks_and_hardlinks
+  kura::historical_autonomous_recovery_bound_tests::block_store_accounting_counts_recognized_nested_records_once
+  kura::lane_geometry::tests::retirement_historical_recovery_record_bound_is_global_and_exact
+  kura::lane_geometry::tests::retirement_two_lane_scan_passes_remaining_global_budget_before_decode
+  kura::tests::configured_historical_recovery_bytes_follow_runtime_limits
+  kura::tests::historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation
+  sumeragi::v2_apply::tests::prior_height_canonical_uncertified_owner_requires_historical_recovery
+  sumeragi::v2_core::refinement::tests::in_flight_first_release_composed_commit_path_is_exact_and_terminal
+  sumeragi::v2_core::refinement::tests::in_flight_first_release_composed_four_stage_release_is_exact_and_terminal
+  sumeragi::v2_core::refinement::tests::in_flight_first_release_snapshot_and_direct_release_are_exactly_aligned
+  lane_consensus::tests::autonomous_payload_requires_height_rotated_committee_author
+  block::valid::tests::autonomous_anchor_admission_uses_lane_slot_author_not_global_leader
+  kura::tests::autonomous_payload_duplicate_requires_exact_producer_authenticated_bytes
+  sumeragi::v2_candidate::tests::autonomous_anchors_validate_without_ordinary_candidates
+  sumeragi::v2_lane_work::tests::autonomous_non_author_does_not_take_queue_ownership
+  sumeragi::v2_lane_work::tests::autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vote
+  kura::tests::durable_autonomous_merge_source_requires_every_exact_component_and_survives_restart
+  kura::tests::durable_autonomous_merge_source_rejects_execution_input_drift
+  kura::tests::durable_autonomous_merge_source_rejects_persisted_bundle_drift
+  kura::tests::autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_and_linked_artifacts
+  block::valid::tests::autonomous_merge_carrier_content_gate_accepts_only_exact_empty_carrier
+  block::tests::merge_capable_validation_paths_source_bind_post_effect_authorization
+  state::tests::canonical_wsv_authorization_commits_exact_autonomous_execution_once
+  state::tests::autonomous_execution_commit_rejects_missing_apply_carrier_authorization
+  state::tests::autonomous_execution_commit_rejects_missing_wsv_authorization
+  state::tests::autonomous_execution_commit_rejects_missing_carrier_metadata_authorization
+  state::tests::autonomous_execution_commit_rejects_mismatched_wsv_authorization
+  state::tests::autonomous_execution_commit_rejects_replayed_carrier_metadata_authorization
+  state::tests::autonomous_execution_commit_rejects_stale_authorized_base
+  state::tests::autonomous_execution_commit_rejects_post_stage_wsv_drift
+  state::tests::autonomous_execution_commit_rejects_post_stage_runtime_surface_drift
+  state::tests::autonomous_execution_commit_rejects_post_publication_event_surface_drift
+  state::tests::autonomous_execution_defers_expired_axt_replay_pruning
+  state::tests::autonomous_execution_rejects_post_stage_axt_replay_drift
+  state::tests::autonomous_execution_stage_rejects_preexisting_axt_replay_overlay
+  state::tests::finalized_merge_execution_commit_surface_borrows_exact_carrier_hash
+  state::tests::autonomous_execution_pre_vote_rejects_due_start_of_block_effect
+  state::tests::autonomous_execution_pre_vote_requires_exact_empty_carrier_membership
+  state::tests::autonomous_execution_pre_vote_rejects_wrong_carrier_membership_height
+  state::tests::autonomous_execution_pre_vote_rejects_non_empty_carrier_membership
+  state::tests::autonomous_execution_pre_vote_rejects_premature_pending_carrier_hash
+  state::tests::autonomous_execution_finality_rejects_unbound_event_surface_drift
+  block::tests::historical_native_amx_source_bundle_authenticates_every_evidence_layer
+  block::tests::historical_native_amx_validation_uses_frozen_merge_routes_across_participant_drift
+  kura::tests::native_amx_all_manifest_barrier_does_not_promote_another_routes_receipt_temp
+  kura::tests::native_amx_latest_index_startup_reconciles_exact_temporary_matrix
+  kura::tests::native_amx_latest_index_temporary_failures_retain_exact_forensics
+  kura::tests::native_amx_latest_index_temporary_recovery_crash_boundaries_converge
+  kura::tests::native_amx_latest_index_temporary_rejects_links_without_touching_targets
+  kura::tests::native_amx_latest_index_temporary_rejects_recovery_journal_overlap_before_mutation
+  kura::tests::native_amx_latest_index_temporary_rejects_same_byte_swap_before_promotion
+  kura::tests::native_amx_prune_exact_object_removal_rejects_same_byte_path_swaps
+  kura::tests::native_amx_prune_exact_object_removal_rejects_same_length_in_place_rewrites
+  kura::tests::native_amx_prune_identical_stable_and_temporary_converge_idempotently
+  kura::tests::native_amx_prune_intent_v2_rejects_b1_after_b2_recreation
+  kura::tests::native_amx_prune_intent_v2_rejects_every_route_and_entry_geometry_mutation
+  kura::tests::native_amx_prune_intent_v2_requires_exact_protected_pair_and_metadata_join
+  kura::tests::native_amx_prune_intent_v2_temporary_cannot_delete_all_pointerless_pairs
+  kura::tests::native_amx_prune_protected_checkpoint_or_commit_semantic_drift_fails_before_unlink
+  kura::tests::native_amx_prune_rejects_legacy_and_unexpected_special_names_without_downgrade
+  kura::tests::native_amx_prune_rejects_legacy_name_before_consuming_valid_v2_intent
+  kura::tests::native_amx_prune_special_files_reject_bounded_payload_damage_without_unlinking
+  kura::tests::native_amx_prune_special_files_reject_symlinks_and_hardlinks_on_both_paths
+  kura::tests::native_amx_prune_stable_and_temporary_conflict_preserves_both_and_all_evidence
+  kura::tests::native_amx_prune_two_pair_partial_unlinks_recover_every_prefix_idempotently
+  kura::tests::native_amx_startup_repair_does_not_require_retired_sibling_storage
+  kura::tests::native_amx_startup_repair_ignores_recreated_b2_namespace_and_is_idempotent
+  kura::tests::native_amx_startup_repair_preflights_all_targets_then_skips_advanced_sibling
+  native_amx::tests::signing_guard_durably_rejects_same_source_plan_only_equivocation_after_restart
+  native_amx::tests::signing_guard_rejects_anchor_deletion_or_wrong_v4_anchor_version
+  native_amx::tests::signing_guard_rejects_wrong_version_noncanonical_and_hardlinked_records
+  native_amx::tests::signing_guard_restart_rejects_duplicate_record_sequence
+  native_amx::tests::signing_guard_restart_rejects_source_and_slot_equivocating_unpublished_tails
+  native_amx::tests::signing_guard_restart_rejects_truncated_and_oversized_records_and_anchors
+  queue::tests::committing_reservation_owned_transaction_does_not_create_fifo_tombstone
+  queue::tests::reservation_group_commit_preflights_later_identity_before_any_prefix_mutation
+  queue::tests::reservation_group_commit_stages_complete_commit_prefix_before_tombstones
+  state::tests::historical_native_amx_recovery_and_diagnostics_share_the_frozen_source_boundary
+  state::tests::pending_native_diagnostic_entry_rejects_forged_merge_qc_and_lane_bindings
+  sumeragi::v2_lane_work::tests::native_amx_context_guard_rejects_replayed_round_epoch_and_future_view
+  sumeragi::v2_lane_work::tests::native_signing_boundary_rechecks_state_after_durable_record_before_signature
+  sumeragi::v2_lane_work::tests::native_signing_boundary_rechecks_view_routes_predecessors_and_authority
+  sumeragi::v2_lane_work::tests::native_signing_boundary_rejects_delayed_participant_after_same_id_recreation
+  sumeragi::v2_lane_work::tests::native_signing_boundary_rejects_plan_valid_participant_predecessor_drift
+  sumeragi::v2_lane_work::tests::native_signing_boundary_rejects_plan_valid_stale_coordinator_incarnation
+  sumeragi::v2_apply::tests::historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application
+  sumeragi::v2_lifecycle_recovery::tests::every_lifecycle_recovery_cursor_cas_boundary_survives_restart
+  sumeragi::v2_lifecycle_recovery::tests::local_producer_recovery_requires_the_exact_current_queue_owner
+  sumeragi::v2_runner::tests::local_producer_queue_custody_is_preflighted_before_cursor_mutation
 )
 required_multilane_queue_journal_focus_tests=(
   queue::journal::tests::queue_plan_journal_claim_digest_binds_exact_v4_record_bytes_and_context
@@ -2122,6 +2464,9 @@ required_multilane_queue_journal_focus_tests=(
   queue::reservation_journal::tests::prepared_checked_transition_binds_exact_ordered_owner_token_coverage
   queue::reservation_journal::tests::checked_transition_result_identity_and_candidate_application_are_atomic
   queue::reservation_journal::tests::checked_transition_generation_overflow_is_rejected_without_mutation
+  queue::reservation_journal::tests::snapshot_replay_seal_covers_empty_and_live_owner_replays
+  queue::reservation_journal::tests::snapshot_replay_seal_rejects_changed_journal_before_publication
+  queue::reservation_journal::tests::snapshot_replay_receipt_rejects_same_count_owner_identity_drift
   queue::tests::queue_plan_admission_context_binds_legacy_topology_and_contiguous_generation
   queue::tests::queue_plan_journal_replays_matching_plan_after_restart
   queue::tests::strict_durable_claim_rejects_stale_context_before_ownership_and_binds_exact_record
@@ -2164,21 +2509,24 @@ required_multilane_queue_journal_focus_tests=(
   queue::tests::global_candidate_lease_excludes_autonomous_reservation_until_exact_drop
   queue::tests::stale_reservation_commit_digest_cannot_tombstone_or_forget_live_plan
   queue::tests::stale_reservation_commit_binding_cannot_tombstone_or_forget_live_plan
-  queue::tests::installed_plan_journal_reconciles_high_volume_commit_barriers_and_restarts_cleanly
+  queue::tests::high_volume_commit_barriers_require_explicit_proof_before_consumption
   queue::tests::reservation_restart_fits_ordinary_fifo_around_middle_anchor
-  queue::tests::committed_state_with_live_reservation_retains_sole_plan_payload_source
+  queue::tests::state_committed_live_reservation_replays_quarantined_until_explicit_proof_commit
   queue::tests::expired_live_reservation_replays_payload_without_fifo_or_tombstone
+  queue::tests::restart_commit_barrier_stays_quarantined_until_explicit_proof_commit
   queue::tests::restart_commit_barrier_rejects_mismatched_queue_hash_without_tombstone_or_forget
   queue::tests::restart_commit_barrier_rejects_retargeted_coordinator_without_tombstone_or_forget
   queue::tests::restart_commit_barrier_rejects_same_plan_binding_aba_without_tombstone_or_forget
-  queue::tests::restart_after_plan_tombstone_before_forget_commit_is_idempotent
-  queue::tests::plan_install_commit_barrier_reconciliation_refreshes_backpressure_snapshot
+  queue::tests::plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof
+  queue::tests::commit_barrier_pressure_clears_only_after_explicit_proof_commit
+  queue::tests::replay_late_forged_commit_barrier_preserves_every_durable_owner
   queue::tests::globally_bound_reservation_survives_expiry_until_canonical_commit
   queue::tests::lane_reservation_group_diagnostics_rechecks_fault_after_store_lock_handoff
   queue::tests::lane_pending_work_rechecks_durability_fault_after_queue_lock_handoff
   queue::tests::ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain
   queue::tests::ambiguous_reservation_compaction_fails_closed_after_terminal_application
-  queue::tests::install_replay_reconciliation_fault_publishes_backpressure_after_unlock
+  queue::tests::completed_release_install_and_replay_remain_quarantined_until_explicit_proof
+  queue::tests::ordered_release_restart_retains_barrier_until_explicit_evidence_gated_finalize
   queue::tests::reservation_journal_install_rejects_selection_publication_window
   queue::tests::second_reservation_journal_installer_cannot_touch_its_losing_path
   queue::tests::concurrent_reservation_journal_installers_publish_one_untouched_winner
@@ -2267,6 +2615,12 @@ required_multilane_config_lib_focus_tests=(
   parameters::actual::tests::sumeragi_v2_shared_config_defaults_are_finite_and_deterministic
   parameters::actual::tests::sumeragi_v2_shared_fingerprint_binds_every_runtime_category
   parameters::actual::tests::sumeragi_v2_config_rejects_merge_runtime_limit_boundaries
+  parameters::user::duration_clamp_tests::kura_replica_advert_defaults_reserve_an_evictable_window_after_the_tail
+  parameters::user::duration_clamp_tests::kura_replica_advert_ttl_is_nonzero_and_bounded
+  parameters::user::duration_clamp_tests::kura_replica_advert_refresh_is_nonzero_and_at_most_half_the_ttl
+  parameters::user::duration_clamp_tests::kura_replica_advert_geometry_uses_checked_arithmetic
+  parameters::user::duration_clamp_tests::kura_eviction_replica_floor_must_fit_the_protocol_validator_bound
+  parameters::user::duration_clamp_tests::kura_config_rejects_unrepresentable_replica_advert_peer_geometry
 )
 required_multilane_config_runtime_focus_tests=(
   every_merge_runtime_override_reaches_the_actual_config
@@ -2276,7 +2630,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=309
+readonly expected_multilane_focus_test_count=524
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2447,7 +2801,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 309-row TSV is
+  # unambiguous one-test Cargo transcript per entry. The canonical 524-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2555,8 +2909,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 310 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 309 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 525 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 524 focused tests" >&2
     exit 1
   fi
 fi
@@ -2611,7 +2965,7 @@ done
 # The source-binding checker derives this same ordered corpus from the formal
 # ledger. Keep an independent fixed release count and terminal contract marker
 # so the runner and ledger cannot silently agree to drop a mutation together.
-readonly expected_multilane_formal_mutation_count=37
+readonly expected_multilane_formal_mutation_count=106
 observed_multilane_formal_mutation_count="$(
   grep -Ec '^run_mutant [a-z0-9-]+ ' \
     scripts/formal/run_sumeragi_v2_multilane_mutations.sh
@@ -2622,9 +2976,9 @@ if ((observed_multilane_formal_mutation_count
   exit 1
 fi
 if ! grep -Fqx -- \
-  'echo "[tlc] all 37 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"' \
+  'echo "[tlc] all 106 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"' \
   scripts/formal/run_sumeragi_v2_multilane_mutations.sh; then
-  echo "multilane mutation runner lacks the exact 37-mutation completion contract" >&2
+  echo "multilane mutation runner lacks the exact 106-mutation completion contract" >&2
   exit 1
 fi
 
@@ -2666,6 +3020,7 @@ production_liveness_modules=(
   sumeragi::v2_runtime::tests
   sumeragi::v2_transport::tests
   sumeragi::v2_recovery::tests
+  sumeragi::v2_lifecycle_recovery::tests
   sumeragi::v2_runner::tests
   sumeragi::v2_worker::tests
   sumeragi::status::v2_liveness_watchdog_tests
@@ -2682,7 +3037,6 @@ production_liveness_modules=(
   consensus_message_control::tests
   network_relay_tests
   tests::relay_fairness
-  genesis_bootstrap::tests
   parameters::actual::tests
   parameters::user::duration_clamp_tests
 )
@@ -2707,6 +3061,7 @@ production_liveness_leg_ids=(
   production-v2-runtime
   production-v2-transport
   production-v2-recovery
+  production-v2-lifecycle-recovery
   production-v2-runner
   production-v2-worker
   production-v2-watchdog
@@ -2723,7 +3078,6 @@ production_liveness_leg_ids=(
   production-irohad-consensus-message-control
   production-irohad-network-relay
   production-irohad-authenticated-via
-  production-irohad-genesis-reply-geometry
   production-config-v2-exact-output-geometry
   production-config-v2-exact-output-root-parse
 )
@@ -2768,8 +3122,7 @@ for module_index in "${!production_liveness_modules[@]}"; do
       run_cargo test --locked --offline -p iroha_p2p --lib "$module" -- --test-threads=1
   elif [[ "$module" == consensus_message_control::tests \
     || "$module" == network_relay_tests \
-    || "$module" == tests::relay_fairness \
-    || "$module" == genesis_bootstrap::tests ]]; then
+    || "$module" == tests::relay_fairness ]]; then
     module_command="cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
@@ -2834,29 +3187,25 @@ run_corridor_leg \
 run_final_workspace_verification() {
   verify_release_identity "before final source-sealed full workspace verification"
   run_corridor_leg \
+    source-sealed-workspace-build command 0 \
+    "cargo +1.93.1 build -j1 --locked --offline --workspace" \
+    run_cargo build --locked --offline --workspace
+  run_corridor_leg \
+    source-sealed-workspace-tests command 0 \
+    "cargo +1.93.1 test -j1 --locked --offline --workspace" \
+    run_cargo test --locked --offline --workspace
+  run_corridor_leg \
+    source-sealed-workspace-clippy command 0 \
+    "cargo +1.93.1 clippy -j1 --locked --offline --workspace --all-targets -- -D warnings" \
+    run_cargo clippy --locked --offline --workspace --all-targets -- -D warnings
+  run_corridor_leg \
     source-sealed-workspace-format command 0 \
-    "cargo fmt --all -- --check" \
+    "cargo +1.93.1 fmt --all -- --check" \
     run_cargo fmt --all -- --check
   run_corridor_leg \
     source-sealed-legacy-codec-guard command 0 \
     "bash scripts/check_no_legacy_codec.sh" \
     bash scripts/check_no_legacy_codec.sh
-  run_corridor_leg \
-    source-sealed-workspace-build command 0 \
-    "cargo build --locked --offline --workspace" \
-    run_cargo build --locked --offline --workspace
-  run_corridor_leg \
-    source-sealed-workspace-clippy command 0 \
-    "cargo clippy --locked --offline --workspace --all-targets -- -D warnings" \
-    run_cargo clippy --locked --offline --workspace --all-targets -- -D warnings
-  run_corridor_leg \
-    source-sealed-workspace-tests command 0 \
-    "cargo test --locked --offline --workspace" \
-    run_cargo test --locked --offline --workspace
-  run_corridor_leg \
-    source-sealed-irohad-tests command 0 \
-    "cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control" \
-    run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control
   verify_release_identity "after final source-sealed full workspace verification"
 }
 
@@ -2962,9 +3311,9 @@ if [[ "$profile" == "--release" ]]; then
   )
   native_amx_grouped_parity_test_counts=(
     7
-    56
-    54
-    3
+    62
+    60
+    4
     6
     5
   )
@@ -2982,40 +3331,81 @@ if [[ "$profile" == "--release" ]]; then
   done
 fi
 
-js_status_contract_file="javascript/iroha_js/test/toriiClient.test.js"
-required_js_status_contract_tests=(
-  "getSumeragiStatusTyped validates and normalizes authoritative v2 status"
-  "getSumeragiStatusTyped accepts the local-control liveness blocker"
-  "getSumeragiStatusTyped accepts the unsafe-proposal ignore reason"
-  "getSumeragiStatusTyped accepts all twelve ignore reasons at the bound"
+rust_sdk_diagnostics_tests=(
+  client::tests::get_sumeragi_status_prefers_norito_and_handles_json
+  client::tests::get_sumeragi_status_rejects_unknown_json_fields
+  client::tests::get_sumeragi_status_rejects_structurally_impossible_norito_and_json
+  client::tests::get_sumeragi_status_json_requires_exact_json_media_type
+  client::tests::get_sumeragi_diagnostics_verifies_lane_relay_envelopes
+  client::tests::get_sumeragi_diagnostics_rejects_invalid_lane_relay_hash
+  client::tests::get_sumeragi_diagnostics_rejects_malformed_autonomous_execution
+  client::tests::get_sumeragi_diagnostics_rejects_duplicate_autonomous_execution_identity
+  client::tests::get_sumeragi_diagnostics_rejects_malformed_native_amx_receipts_in_every_container
+  client::tests::get_sumeragi_diagnostics_rejects_malformed_json_payload
+  client::tests::get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields
+  client::tests::get_sumeragi_diagnostics_rejects_unknown_json_fields
+  client::tests::get_sumeragi_diagnostics_rejects_zero_npos_seed
+  client::tests::get_sumeragi_diagnostics_requires_declared_current_media_type
 )
-for required_test in "${required_js_status_contract_tests[@]}"; do
-  if ! grep -Fq -- "test(\"${required_test}\"," "$js_status_contract_file"; then
-    echo "missing required JavaScript Sumeragi v2 status-contract test: ${required_test}" >&2
+rust_sdk_diagnostics_list="$(
+  run_cargo test --locked --offline -p iroha --lib -- --list
+)"
+rust_sdk_diagnostics_ignored_list="$(
+  run_cargo test --locked --offline -p iroha --lib -- --list --ignored
+)"
+for required_test in "${rust_sdk_diagnostics_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$rust_sdk_diagnostics_list"; then
+    echo "missing required Rust Sumeragi v2 SDK diagnostics test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" <<<"$rust_sdk_diagnostics_ignored_list"; then
+    echo "required Rust Sumeragi v2 SDK diagnostics test is ignored: ${required_test}" >&2
     exit 1
   fi
 done
-readonly js_status_pattern='getSumeragiStatusTyped (validates and normalizes authoritative v2 status|accepts the local-control liveness blocker|accepts the unsafe-proposal ignore reason|accepts all twelve ignore reasons at the bound)'
 run_corridor_leg \
-  status-javascript node 4 \
-  "node --test --test-reporter=tap --test-name-pattern=${js_status_pattern} ${js_status_contract_file}" \
-  node --test --test-reporter=tap --test-name-pattern="$js_status_pattern" "$js_status_contract_file"
+  sumeragi-diagnostics-rust cargo-exact 14 \
+  "cargo test --locked --offline -p iroha --lib client::tests::get_sumeragi_ -- --test-threads=1" \
+  run_cargo test --locked --offline -p iroha --lib \
+    client::tests::get_sumeragi_ -- --test-threads=1
 
-if ! python3 -c 'import pytest, requests' >/dev/null 2>&1; then
-  echo "Python Sumeragi v2 status-contract tests require the pinned scripts/requirements.txt dependencies to be installed before this offline gate" >&2
+readonly sumeragi_v2_sdk_diagnostics_harness="ci/run_sumeragi_v2_sdk_diagnostics.sh"
+sumeragi_v2_sdk_diagnostics_suite_source_manifest_sha256="$(
+  bash "$sumeragi_v2_sdk_diagnostics_harness" --suite-source-manifest-sha256
+)"
+if [[ ! "$sumeragi_v2_sdk_diagnostics_suite_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "Sumeragi v2 SDK diagnostics harness returned an invalid source digest" >&2
   exit 1
 fi
-python_status_tests=(
-  python/iroha_torii_client/tests/test_client.py::test_get_sumeragi_status_parses_authoritative_v2_snapshot
-  python/iroha_torii_client/tests/test_client.py::test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker
-  python/iroha_torii_client/tests/test_client.py::test_get_sumeragi_status_accepts_unsafe_proposal_ignore_reason
-  python/iroha_torii_client/tests/test_client.py::test_get_sumeragi_status_accepts_all_twelve_ignore_reasons_at_the_bound
-)
-run_corridor_leg \
-  status-python pytest 4 \
-  "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${python_status_tests[*]}" \
-  env PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
-    python3 -m pytest -q -p no:cacheprovider "${python_status_tests[@]}"
+readonly sumeragi_v2_sdk_diagnostics_suite_source_manifest_sha256
+if [[ "$profile" == "--release" ]]; then
+  sumeragi_v2_sdk_diagnostics_surfaces=(
+    python
+    javascript
+    swift
+    kotlin
+    java
+  )
+  sumeragi_v2_sdk_diagnostics_test_counts=(
+    121
+    88
+    17
+    26
+    24
+  )
+  for sumeragi_v2_sdk_diagnostics_index in \
+    "${!sumeragi_v2_sdk_diagnostics_surfaces[@]}"; do
+    sumeragi_v2_sdk_diagnostics_surface="${sumeragi_v2_sdk_diagnostics_surfaces[$sumeragi_v2_sdk_diagnostics_index]}"
+    sumeragi_v2_sdk_diagnostics_test_count="${sumeragi_v2_sdk_diagnostics_test_counts[$sumeragi_v2_sdk_diagnostics_index]}"
+    run_corridor_leg \
+      "sumeragi-diagnostics-${sumeragi_v2_sdk_diagnostics_surface}" \
+      sdk-diagnostics \
+      "$sumeragi_v2_sdk_diagnostics_test_count" \
+      "bash ${sumeragi_v2_sdk_diagnostics_harness} ${sumeragi_v2_sdk_diagnostics_surface}" \
+      bash "$sumeragi_v2_sdk_diagnostics_harness" \
+        "$sumeragi_v2_sdk_diagnostics_surface"
+  done
+fi
 
 # The release identity must include every checkout source plus the ignored
 # workspace lockfile, reject active Git operations and unresolved entries, and
@@ -3027,11 +3417,13 @@ source_manifest_contract_tests=(
   pytests/scripts/seal_workspace_source_test.py
 )
 source_manifest_contract_log="$(corridor_contract_log_path preflight-source-seal)"
+release_gate_boundary "preflight-source-seal:before" || exit $?
 set +e
 PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
   "${source_manifest_contract_tests[@]}" 2>&1 | tee "$source_manifest_contract_log"
 source_manifest_pipeline_status=("${PIPESTATUS[@]}")
 set -e
+release_gate_boundary "preflight-source-seal:after-natural-completion" || exit $?
 source_manifest_pass_summary="$(
   grep -Ec '^30 passed in [0-9]+([.][0-9]+)?s$' "$source_manifest_contract_log" || true
 )"
@@ -3067,11 +3459,13 @@ seed_launcher_contract_tests=(
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_unsafe_retained_localnet_entries
 )
 seed_launcher_contract_log="$(corridor_contract_log_path preflight-seed-launcher)"
+release_gate_boundary "preflight-seed-launcher:before" || exit $?
 set +e
 PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
   "${seed_launcher_contract_tests[@]}" 2>&1 | tee "$seed_launcher_contract_log"
 seed_launcher_pipeline_status=("${PIPESTATUS[@]}")
 set -e
+release_gate_boundary "preflight-seed-launcher:after-natural-completion" || exit $?
 seed_launcher_pass_summary="$(
   grep -Ec '^14 passed in [0-9]+([.][0-9]+)?s$' "$seed_launcher_contract_log" || true
 )"
@@ -3093,11 +3487,13 @@ chaos_launcher_contract_files=(
   pytests/scripts/sumeragi_v2_chaos_release_test.py
 )
 chaos_launcher_contract_log="$(corridor_contract_log_path preflight-chaos-launcher)"
+release_gate_boundary "preflight-chaos-launcher:before" || exit $?
 set +e
 PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
   "${chaos_launcher_contract_files[@]}" 2>&1 | tee "$chaos_launcher_contract_log"
 chaos_launcher_pipeline_status=("${PIPESTATUS[@]}")
 set -e
+release_gate_boundary "preflight-chaos-launcher:after-natural-completion" || exit $?
 chaos_launcher_pass_summary="$(
   grep -Ec '^5 passed in [0-9]+([.][0-9]+)?s$' "$chaos_launcher_contract_log" || true
 )"
@@ -3121,6 +3517,7 @@ if [[ "$profile" == "--release" ]]; then
     pytests/scripts/sumeragi_v2_release_identity_signature_test.py
   )
   release_identity_contract_log="$(corridor_contract_log_path preflight-release-identity)"
+  release_gate_boundary "preflight-release-identity:before" || exit $?
   set +e
   SUMERAGI_V2_TEST_RELOCATABLE_SSH_KEYGEN_BIN="$IROHA_RELEASE_SSH_KEYGEN_BIN" \
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
@@ -3128,6 +3525,8 @@ if [[ "$profile" == "--release" ]]; then
     "${release_identity_contract_files[@]}" 2>&1 | tee "$release_identity_contract_log"
   release_identity_pipeline_status=("${PIPESTATUS[@]}")
   set -e
+  release_gate_boundary "preflight-release-identity:after-natural-completion" \
+    || exit $?
   release_identity_pass_summary="$(
     grep -Ec '^68 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
       "$release_identity_contract_log" || true
@@ -3145,24 +3544,28 @@ if [[ "$profile" == "--release" ]]; then
 
   release_bootstrap_contract_files=(
     pytests/scripts/sumeragi_v2_release_bootstrap_test.py
+    pytests/scripts/sumeragi_v2_release_bootstrap_cancellation_test.py
   )
   release_bootstrap_contract_log="$(corridor_contract_log_path preflight-release-bootstrap)"
+  release_gate_boundary "preflight-release-bootstrap:before" || exit $?
   set +e
   PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
     "${release_bootstrap_contract_files[@]}" 2>&1 | tee "$release_bootstrap_contract_log"
   release_bootstrap_pipeline_status=("${PIPESTATUS[@]}")
   set -e
+  release_gate_boundary "preflight-release-bootstrap:after-natural-completion" \
+    || exit $?
   release_bootstrap_pass_summary="$(
-    grep -Ec '^82 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+    grep -Ec '^257 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
       "$release_bootstrap_contract_log" || true
   )"
   if ((release_bootstrap_pipeline_status[0] != 0 || release_bootstrap_pipeline_status[1] != 0)) \
     || [[ "$release_bootstrap_pass_summary" != 1 ]]; then
-    echo "Sumeragi v2 release-bootstrap preflight did not run exactly 82 passing tests (pytest=${release_bootstrap_pipeline_status[0]}, tee=${release_bootstrap_pipeline_status[1]})" >&2
+    echo "Sumeragi v2 release-bootstrap preflight did not run exactly 257 passing tests (pytest=${release_bootstrap_pipeline_status[0]}, tee=${release_bootstrap_pipeline_status[1]})" >&2
     exit 1
   fi
   record_corridor_log \
-    preflight-release-bootstrap pytest 82 \
+    preflight-release-bootstrap pytest 257 \
     "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_bootstrap_contract_files[*]}" \
     "$release_bootstrap_contract_log" \
     "${release_bootstrap_pipeline_status[0]}" "${release_bootstrap_pipeline_status[1]}"
@@ -3173,12 +3576,15 @@ if [[ "$profile" == "--release" ]]; then
   release_bootstrap_validator_contract_log="$(
     corridor_contract_log_path preflight-release-bootstrap-validator
   )"
+  release_gate_boundary "preflight-release-bootstrap-validator:before" || exit $?
   set +e
   PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
     "${release_bootstrap_validator_contract_files[@]}" 2>&1 \
     | tee "$release_bootstrap_validator_contract_log"
   release_bootstrap_validator_pipeline_status=("${PIPESTATUS[@]}")
   set -e
+  release_gate_boundary \
+    "preflight-release-bootstrap-validator:after-natural-completion" || exit $?
   release_bootstrap_validator_pass_summary="$(
     grep -Ec '^37 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
       "$release_bootstrap_validator_contract_log" || true
@@ -3201,26 +3607,30 @@ fi
 # evidence changes before the corridor relies on the final release receipt.
 release_receipt_contract_files=(
   pytests/scripts/sumeragi_v2_release_receipt_test.py
+  pytests/scripts/sumeragi_v2_release_receipt_components_test.py
   pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py
   pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py
+  pytests/scripts/sumeragi_v2_release_process_policy_test.py
 )
 release_receipt_contract_log="$(corridor_contract_log_path preflight-release-receipt)"
+release_gate_boundary "preflight-release-receipt:before" || exit $?
 set +e
 PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
   "${release_receipt_contract_files[@]}" 2>&1 | tee "$release_receipt_contract_log"
 release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
+release_gate_boundary "preflight-release-receipt:after-natural-completion" || exit $?
 release_receipt_pass_summary="$(
-  grep -Ec '^316 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^362 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 316 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 362 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 316 \
+  preflight-release-receipt pytest 362 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -3237,11 +3647,14 @@ multilane_scaling_contract_files=(
 multilane_scaling_contract_log="$(
   corridor_contract_log_path preflight-multilane-scaling
 )"
+release_gate_boundary "preflight-multilane-scaling:before" || exit $?
 set +e
 PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
   "${multilane_scaling_contract_files[@]}" 2>&1 | tee "$multilane_scaling_contract_log"
 multilane_scaling_pipeline_status=("${PIPESTATUS[@]}")
 set -e
+release_gate_boundary "preflight-multilane-scaling:after-natural-completion" \
+  || exit $?
 multilane_scaling_pass_summary="$(
   grep -Ec '^52 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$multilane_scaling_contract_log" || true
@@ -3267,23 +3680,40 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_proof_ledger_test.py
   pytests/scripts/sumeragi_v2_verus_evidence_test.py
   pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py
+  pytests/scripts/sumeragi_v2_reviewed_rust_source_test.py
+  pytests/scripts/sumeragi_v2_multilane_native_merge_manifest_test.py
+  pytests/scripts/sumeragi_v2_multilane_passive_recovery_contract_test.py
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_legacy_layout_only_claim
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_state_order_weakening
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_layout_contract_rejects_action_inventory_weakening
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_per_key_prefix_skip_weakening
+  pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::test_inflight_composed_contract_rejects_tla_snapshot_nonstutter_mapping
+  pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_layout_contract_rejects_membership_only_lane_authorship
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
+# Collection is source-bound as 4,730 ledger/checker cases (including the
+# lexically executed case components), 28 pinned-Verus evidence cases,
+# 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 29 Native/passive
+# multilane source-contract cases, and nine cases from seven selected layout
+# selectors.
+release_gate_boundary "preflight-proof-fidelity:before" || exit $?
 set +e
 PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
   "${proof_fidelity_contract_files[@]}" 2>&1 | tee "$proof_fidelity_contract_log"
 proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
+release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^1730 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^4819 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 1730 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 4819 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 1730 \
+  preflight-proof-fidelity pytest 4819 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -3293,11 +3723,13 @@ formal_launcher_contract_files=(
   pytests/scripts/sumeragi_v2_formal_release_test.py
 )
 formal_launcher_contract_log="$(corridor_contract_log_path preflight-formal-launcher)"
+release_gate_boundary "preflight-formal-launcher:before" || exit $?
 set +e
 PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
   "${formal_launcher_contract_files[@]}" 2>&1 | tee "$formal_launcher_contract_log"
 formal_launcher_pipeline_status=("${PIPESTATUS[@]}")
 set -e
+release_gate_boundary "preflight-formal-launcher:after-natural-completion" || exit $?
 formal_launcher_pass_summary="$(
   grep -Ec '^26 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$formal_launcher_contract_log" || true
 )"
@@ -3329,11 +3761,13 @@ taira_soak_contract_files=(
   pytests/scripts/taira_v2_soak_evidence_test.py
 )
 taira_soak_contract_log="$(corridor_contract_log_path preflight-taira-soak)"
+release_gate_boundary "preflight-taira-soak:before" || exit $?
 set +e
 PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
   "${taira_soak_contract_files[@]}" 2>&1 | tee "$taira_soak_contract_log"
 taira_soak_pipeline_status=("${PIPESTATUS[@]}")
 set -e
+release_gate_boundary "preflight-taira-soak:after-natural-completion" || exit $?
 taira_soak_pass_summary="$(
   grep -Ec '^42 passed in [0-9]+([.][0-9]+)?s$' "$taira_soak_contract_log" || true
 )"
@@ -3356,11 +3790,11 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 39 production modules + 9 G-UNIT groups + 2 data-model contracts
+  # 38 production modules + 9 G-UNIT groups + 2 data-model contracts
   # + 5 Taira contracts + 1 cross-SDK Rust leg + 1 Native AMX fixture check
   # + 6 grouped SDK parity legs + 2 status SDK legs + 11 contract preflights
-  # + 6 final workspace-verification legs.
-  readonly expected_corridor_leg_count=82
+  # + 5 final workspace-verification legs.
+  readonly expected_corridor_leg_count=85
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -3382,8 +3816,8 @@ publish_corridor_completion() {
   corridor_bash_path="$(canonical_executable bash)"
   corridor_git_path="$(canonical_executable git)"
   corridor_cargo_home="$(canonical_path "$CARGO_HOME")"
-  wait_for_external_cargo
-  corridor_cargo_version="$("$corridor_cargo_path" --version)"
+  corridor_cargo_version="$(run_cargo --version)"
+  release_gate_boundary "corridor-completion:before-publication" || return $?
   corridor_completion_tmp="${corridor_evidence_dir}/.COMPLETED.tsv.$$"
   printf '%s\t%s\n' \
     schema_version 1 \
@@ -3391,6 +3825,8 @@ publish_corridor_completion() {
     head_tree "$release_head_tree" \
     source_manifest_sha256 "$release_source_manifest_sha256" \
     cargo_lock_sha256 "$release_cargo_lock_sha256" \
+    artifact_root_path "$IROHA_RELEASE_ARTIFACT_ROOT" \
+    cargo_target_root_path "$CARGO_TARGET_DIR" \
     prebuilt_manifest_path \
       "${IROHA_TEST_TARGET_DIR}/.sumeragi-v2-prebuilt-binaries.tsv" \
     prebuilt_manifest_sha256 "$IROHA_RELEASE_PREBUILT_MANIFEST_SHA256" \
@@ -3425,18 +3861,26 @@ publish_corridor_completion() {
     native_amx_grouped_fixture_sha256 "$native_amx_grouped_fixture_sha256" \
     native_amx_grouped_suite_source_manifest_sha256 \
       "$native_amx_grouped_suite_source_manifest_sha256" \
-    native_amx_grouped_negative_control_count 50 \
+    native_amx_grouped_negative_control_count 55 \
     tlc_profile "$SUMERAGI_V2_TLC_PROFILE" \
     tlaps_threads "$SUMERAGI_TLAPS_THREADS" \
     >"$corridor_completion_tmp"
   mv -- "$corridor_completion_tmp" "$corridor_completion_path"
+  corridor_publication_status=0
+  release_gate_boundary "corridor-completion:after-publication" \
+    || corridor_publication_status=$?
+  if ((corridor_publication_status != 0)); then
+    rm -f -- "$corridor_completion_path"
+    return "$corridor_publication_status"
+  fi
 }
 verify_release_identity "after release contract preflights"
 
 run_release_scaling_and_formal_gates() {
   scaling_preflight_report="${IROHA_RELEASE_HOST_ROOT}/scaling-validation-preflight.json"
   rm -f -- "$scaling_preflight_report"
-  "$IROHA_RELEASE_PYTHON_BIN" -I -S \
+  run_cooperative_gate source-bound-g-scale-validation \
+    "$IROHA_RELEASE_PYTHON_BIN" -I -S \
     scripts/nexus/validate_multilane_scaling_evidence.py \
     "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
     --report "$scaling_preflight_report" \
@@ -3463,6 +3907,9 @@ run_release_scaling_and_formal_gates() {
 
   # Bind the strict deductive ledger and its backend evidence only after the
   # mandatory fresh-network and fault-soak corridors have completed.
+  export SUMERAGI_V2_FORMAL_EVIDENCE_DIR="${IROHA_RELEASE_ARTIFACT_ROOT}/formal/sumeragi_v2"
+  mkdir -p -m 0700 -- "$SUMERAGI_V2_FORMAL_EVIDENCE_DIR"
+  require_release_artifact_directory "$SUMERAGI_V2_FORMAL_EVIDENCE_DIR"
   formal_completion_path_file="${IROHA_RELEASE_HOST_ROOT}/formal-completion-path"
   rm -f -- "$formal_completion_path_file"
   IROHA_FORMAL_COMPLETION_PATH_FILE="$formal_completion_path_file" \
@@ -3495,7 +3942,6 @@ if [[ "$profile" == "--release" ]]; then
       --release \
       --capture \
       --test-threads 1 \
-      --env IROHA_TEST_ALLOW_REENTRANT_BUILD=0 \
       --multilane-four-peer-release
   if [[ ! -s "$multilane_four_peer_completion_path_file" ]]; then
     echo "mandatory four-peer multilane release gates did not publish a completion path" >&2
@@ -3523,17 +3969,17 @@ if [[ "$profile" == "--release" ]]; then
 fi
 
 # G-12P is a distinct real-network gate from the reducer seed matrix above.
-# Its launcher starts ten fresh 12-peer networks, uses one canonical seed per
-# process, forbids retries, and validates each Cargo transcript as exactly one
-# scheduled/passing test before publishing completion accounting.
-nexus_cross_completion_path_file="${IROHA_RELEASE_HOST_ROOT:-${repo_root}/target}/nexus-cross-dataspace-completion-path"
+# The stable identifier counts twelve lane-validator assignments. Its launcher
+# starts ten fresh exact 13-peer global committees, keeps the final voter out of
+# every lane committee, uses one canonical seed per process, forbids retries,
+# and validates each Cargo transcript as exactly one scheduled/passing test
+# before publishing completion accounting.
+nexus_cross_completion_path_file="${IROHA_RELEASE_ARTIFACT_ROOT}/nexus-cross-dataspace-completion-path"
 rm -f -- "$nexus_cross_completion_path_file"
 nexus_cross_args=(
   --capture
   --test-threads
   1
-  --env
-  IROHA_TEST_ALLOW_REENTRANT_BUILD=0
 )
 if [[ "$profile" == "--release" ]]; then
   nexus_cross_args+=(--release)
@@ -3570,7 +4016,6 @@ if [[ "$profile" == "--release" ]]; then
       --release \
       --capture \
       --test-threads 1 \
-      --env IROHA_TEST_ALLOW_REENTRANT_BUILD=0 \
       --cross-dataspace-fault-soak \
       --cross-dataspace-seed nexus-cross-dataspace-v1-seed-00 \
       --cross-dataspace-soak-duration-secs 7200
@@ -3601,10 +4046,14 @@ if [[ "$profile" == "--release" ]]; then
 fi
 
 if [[ "$profile" == "--pr" ]]; then
-  python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py
-  bash scripts/formal/run_sumeragi_v2_harness.sh --unit
-  bash scripts/formal/run_sumeragi_v2_harness.sh --fast-network
-  bash scripts/formal/run_sumeragi_v2_harness.sh --model-replay
+  run_cooperative_gate pr-proof-ledger \
+    python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py
+  run_cooperative_gate pr-formal-unit \
+    bash scripts/formal/run_sumeragi_v2_harness.sh --unit
+  run_cooperative_gate pr-formal-fast-network \
+    bash scripts/formal/run_sumeragi_v2_harness.sh --fast-network
+  run_cooperative_gate pr-formal-model-replay \
+    bash scripts/formal/run_sumeragi_v2_harness.sh --model-replay
   run_final_workspace_verification
   final_pr_source_manifest_sha256="$(
     python3 -I -S scripts/compute_workspace_source_manifest.py --root "$repo_root"
@@ -3665,30 +4114,41 @@ fi
 # Revalidate the deductive evidence after every long-running gate so a TLA+
 # or production-source edit during chaos or soak execution cannot inherit
 # stale TLAPS/Verus/cross-tool success.
-cross_tool_obligations="$(
-  python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py \
-    --print-cross-tool-obligations
-)"
-final_proof_evidence_args=(
-  --release
-  --evidence target/formal/sumeragi_v2/proof_evidence.json
-  --verus-evidence target/formal/sumeragi_v2/verus_evidence.json
-)
-readonly cross_tool_evidence_path="target/formal/sumeragi_v2/cross_tool_evidence.json"
-if [[ -n "$cross_tool_obligations" ]]; then
-  if [[ ! -f "$cross_tool_evidence_path" || -L "$cross_tool_evidence_path" ]]; then
-    echo "cross_tool_proved obligations require regular cross-tool evidence" >&2
-    exit 1
-  fi
-  final_proof_evidence_args+=(
-    --cross-tool-evidence "$cross_tool_evidence_path"
+run_final_proof_validation() {
+  local cross_tool_obligations cross_tool_evidence_path
+  local -a final_proof_evidence_args
+  cross_tool_obligations="$(
+    python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py \
+      --print-cross-tool-obligations
+  )" || return $?
+  final_proof_evidence_args=(
+    --release
+    --evidence "${SUMERAGI_V2_FORMAL_EVIDENCE_DIR}/proof_evidence.json"
+    --verus-evidence "${SUMERAGI_V2_FORMAL_EVIDENCE_DIR}/verus_evidence.json"
   )
-elif [[ -e "$cross_tool_evidence_path" || -L "$cross_tool_evidence_path" ]]; then
-  echo "dormant cross-tool evidence must be absent" >&2
-  exit 1
+  cross_tool_evidence_path="${SUMERAGI_V2_FORMAL_EVIDENCE_DIR}/cross_tool_evidence.json"
+  if [[ -n "$cross_tool_obligations" ]]; then
+    if [[ ! -f "$cross_tool_evidence_path" || -L "$cross_tool_evidence_path" ]]; then
+      echo "cross_tool_proved obligations require regular cross-tool evidence" >&2
+      return 1
+    fi
+    final_proof_evidence_args+=(
+      --cross-tool-evidence "$cross_tool_evidence_path"
+    )
+  elif [[ -e "$cross_tool_evidence_path" || -L "$cross_tool_evidence_path" ]]; then
+    echo "dormant cross-tool evidence must be absent" >&2
+    return 1
+  fi
+  python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py \
+    "${final_proof_evidence_args[@]}"
+}
+release_gate_boundary "final-proof-validation:before" || exit $?
+final_proof_validation_status=0
+run_final_proof_validation || final_proof_validation_status=$?
+release_gate_boundary "final-proof-validation:after-natural-completion" || exit $?
+if ((final_proof_validation_status != 0)); then
+  exit "$final_proof_validation_status"
 fi
-python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py \
-  "${final_proof_evidence_args[@]}"
 verify_release_identity "after final proof-evidence validation"
 
 run_final_workspace_verification
@@ -3700,6 +4160,7 @@ formal_completion_path="$(<"$formal_completion_path_file")"
 chaos_completion_path="$(<"$chaos_completion_path_file")"
 taira_completion_path="$(<"$taira_completion_path_file")"
 verify_release_identity "before aggregate release receipt publication"
+release_gate_boundary "aggregate-receipt:before-publication" || exit $?
 "$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/write_sumeragi_v2_release_receipt.py \
   --candidate-identity "$IROHA_RELEASE_CANDIDATE_IDENTITY_PATH" \
   --sealed-identity "$IROHA_RELEASE_EXPECTED_IDENTITY_PATH" \
@@ -3743,5 +4204,16 @@ verify_release_identity "before aggregate release receipt publication"
   --expected-scaling-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
+aggregate_publication_status=0
+release_gate_boundary "aggregate-receipt:after-publication" \
+  || aggregate_publication_status=$?
+if ((aggregate_publication_status != 0)) \
+  || ! verify_release_identity "after aggregate release receipt publication"; then
+  rm -f -- "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
+  if ((aggregate_publication_status != 0)); then
+    exit "$aggregate_publication_status"
+  fi
+  exit 1
+fi
 
-  echo "Sumeragi v2 production release gates passed, including exact 309/309 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+echo "Sumeragi v2 production release gates passed, including exact 524/524 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

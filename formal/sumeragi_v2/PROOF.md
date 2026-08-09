@@ -1,5 +1,258 @@
 # Sumeragi v2 safety and liveness argument
 
+## Revision-4 argument
+
+Revision 4 is a fresh-genesis protocol. For each frozen height context, let
+`V` be the unit-vote validator committee and require
+
+```text
+n = |V| = 3f + 1,    1 <= f <= 10,    q = 2f + 1.
+```
+
+The protocol therefore admits exactly 4, 7, ..., 31 validators. At most `f`
+committee members may be Byzantine. Stake affects election and eligibility,
+but it does not weight a Prepare, Commit, or timeout vote. Every certificate
+uses `q` distinct validator identities from the one frozen committee.
+
+A height-seeded permutation of `V` is rotated cyclically by view. In each view,
+Set A is the first `q` validators, including the leader at its head and the
+proxy tail at its end; Set B is the remaining `f` validators. The proxy tail is
+the sole fast-path vote collector. There is no backup collector. The first
+retransmission deadline activates same-view fallback: it keeps the exact
+proposal, view, lock, and quorum rule, but expands full-body recovery and voting
+eligibility from Set A to all of `V`. A certificate of `q` timeout votes changes
+the view and rotates every role. Installing that certified view change resets
+the fallback flag before the new view starts.
+
+Every honest Prepare voter must reconstruct the complete canonical body from
+the mandatory Reed-Solomon-16 layout, verify the manifest and body hashes,
+durably store the exact body, and deterministically validate it before
+persisting its Prepare intent. Commit voting additionally requires the matching
+PrepareQC and durable lock. Honest validators sign at most once per
+height-context, view, and phase, retain locks across fallback and view changes,
+and only accept a proposal justified by the highest certified lock. Signatures
+bind the height context, view, phase, proposal identity, body commitment, and
+execution commitment. These durability, authentication, deterministic
+execution, and safe-proposal checks are trusted production-refinement
+assumptions of the compact model.
+
+### Unit-quorum intersection
+
+For any two revision-4 quorums `Q1` and `Q2`,
+
+```text
+|Q1 intersect Q2| >= |Q1| + |Q2| - n
+                  = 2(2f + 1) - (3f + 1)
+                  = f + 1.
+```
+
+Because at most `f` validators are Byzantine, the intersection contains an
+honest validator. Each quorum also contains at least `f + 1` honest
+validators. No stake-power premise is needed or permitted.
+
+### Safety
+
+**Lemma 1 (same-view certificate uniqueness).** Two valid PrepareQCs, or two
+valid CommitQCs, for one height context, view, and phase cannot certify
+different bodies.
+
+The two signer sets intersect in an honest validator. That validator would have
+to violate its durable sign-once rule to sign both bodies.
+
+**Lemma 2 (full-body external validity).** A valid PrepareQC certifies that at
+least `f + 1` honest validators durably possess and have deterministically
+validated the exact body. A CommitQC inherits the same property.
+
+A QC has `q` distinct signers, at most `f` of whom are Byzantine. The
+full-body-before-Prepare gate applies independently to each honest signer;
+possession of a manifest or a partial shard set is insufficient. A Commit vote
+requires that same full-body authority plus the matching PrepareQC and lock.
+Thus a certified body remains recoverable from honest QC signers after a leader
+or proxy-tail failure.
+
+**Lemma 3 (fallback preservation).** Entering same-view fallback cannot create
+a conflicting certificate.
+
+Fallback changes only which committee members may reconstruct the body and
+vote. It does not change the proposal, view, phase, signer identity, sign-once
+slot, lock, or `q` threshold. Set B votes are therefore ordinary unit votes in
+the same certificate domain, not a second or weaker quorum system. A certified
+view change clears this view-scoped eligibility expansion, so stale fallback
+authority cannot leak into the rotated view.
+
+**Lemma 4 (certified view-change lock preservation).** A certified view change
+cannot replace a locked body with a conflicting body.
+
+A Commit quorum for body `x` contains at least `f + 1` honest locked
+validators. Fewer than `q` other validators remain, so a conflicting
+PrepareQC cannot be the first higher certificate unless one of those honest
+validators abandons its lock. The safe-proposal rule permits such a validator
+to move only through a strictly higher certified lock. Choosing the first
+conflicting higher PrepareQC yields the same contradiction recursively: its
+quorum intersects the protected quorum in an honest validator that cannot
+justify the change. Timeout votes bypass the proxy tail, and the certified
+view-change value carries the highest safe lock into the rotated view. The
+compact revision-4 model represents this by leaving `lockedBody` unchanged in
+`ChangeView` and requiring `Propose` to match a nonempty lock.
+
+**Theorem 1 (agreement).** Two valid CommitQCs in one height context cannot
+certify different bodies.
+
+Same-view conflict contradicts Lemma 1. For different views, order the
+certificates by view and select the earliest conflicting later certificate.
+Its PrepareQC contradicts Lemma 4. Same-view fallback is irrelevant to this
+ordering by Lemma 3.
+
+**Corollary 1 (chain-prefix safety).** If successor height contexts are created
+only from a durably applied revision-4 CommitQC and its exact canonical body,
+then finalized histories of honest validators are prefix comparable.
+
+Theorem 1 gives one certified body per height context. Hash-bound parent and
+height-context construction then gives the induction step. A validator may
+lag, but finalized-output repair for an older height cannot authorize a
+different successor.
+
+### Conditional liveness after GST
+
+The liveness claim is conditional, as required by FLP. Assume that after GST:
+
+1. at least `q = n - f` honest validators remain responsive;
+2. authenticated message delivery, timer service, full-body reconstruction,
+   durable writes, signatures, deterministic validation, and application
+   complete within finite bounds;
+3. retransmission and view-change deadlines eventually exceed those bounds;
+4. an honest leader can recover any certified locked body from honest signers;
+5. enough honest members of every unfinished predecessor lane committee remain
+   responsive to meet its frozen descriptor threshold until exact durable lane
+   completion, even if those members are absent from the successor global
+   roster; and
+6. a correct proxy tail that receives `q` phase votes durably forms and
+   disseminates the corresponding QC.
+
+**Lemma 5 (fallback progress with an honest tail).** In a view with an honest
+leader and honest proxy tail, the height either completes on the Set A fast
+path or completes after same-view fallback.
+
+Set A has exactly `q` members, so the fast path is intentionally optimistic:
+one withholding or unavailable Set A member may prevent its QC. At the first
+retransmission deadline, fallback makes every validator eligible for body
+recovery and voting without changing the proposal. There are exactly `q`
+honest validators in the worst case. After GST they all obtain and validate
+the full body, and their `q` Prepare votes, followed by their `q` Commit votes,
+reach the honest proxy tail.
+
+**Lemma 6 (eventual usable view).** Repeated certified view changes eventually
+select a view with both an honest leader and an honest proxy tail.
+
+Timeout votes do not depend on the proxy tail, so the `q` honest validators can
+certify departure from a stalled view. Across one full cyclic rotation, at
+most `f` views place a Byzantine validator in the leader position and at most
+`f` place one in the proxy-tail position. Their union excludes at most `2f`
+of the `3f + 1` views, leaving at least `f + 1` views with both roles honest.
+Certified view entry resets fallback, after which that view receives its own
+fast-path attempt and, if needed, same-view fallback.
+
+**Theorem 2 (conditional per-height termination).** Under the post-GST
+assumptions, every active height eventually obtains a CommitQC, and every
+responsive honest validator eventually recovers, validates, durably applies
+the exact body, and activates its successor height.
+
+Failed views either decide or collect `q` timeout votes and rotate. Lemma 6
+eventually supplies a usable view; Lemma 5 completes both voting phases there.
+The full-body gate provides the body needed for application. Successor
+activation depends on durable application, not on completion of retryable
+old-height network output, lane sidecars, or cleanup.
+Those retryable historical lane obligations retain their predecessor
+descriptor and committee. A removed configured validator is an observer for
+successor global consensus and has no successor vote, while remaining eligible
+for a lane vote only when that exact frozen descriptor explicitly names it.
+The same rule applies to unfinished old descriptors and independently pinned
+current-height Nexus lane descriptors; neither borrows successor-global
+authority. A proof-carrying historical response from such a signer is bounded
+at successor ingress and revalidated against the exact outstanding request and
+old certificate before persistence.
+
+This theorem does not cover a permanent partition, more than `f` Byzantine or
+unresponsive validators, nonterminating local work, exhausted finite counters,
+or a scheduler that never services an enabled action. Finalized-output repair
+remains required and retryable; it is removed only from the successor
+activation dependency.
+
+### Revision-4 model status
+
+[`SumeragiV2Revision4.tla`](SumeragiV2Revision4.tla) encodes the exact committee
+geometry, one finite cyclic A/B rotation, same-view fallback, fallback reset
+on `q`-certified `ChangeView`, full-body voting gates, durable sign-once state,
+decision agreement, and successor activation independent of finalized-output
+debt. Its routing state additionally records these production-facing
+obligations:
+
+1. a proposal manifest targets the whole frozen committee;
+2. the first body/chunk occurrence targets exactly Set A;
+3. same-view fallback expands body/chunk targets to the whole committee;
+4. Prepare and Commit votes target only the current proxy tail; and
+5. each timeout vote uses committee-wide fanout, so forming a timeout
+   certificate does not depend on the proxy-tail route.
+
+[`SumeragiV2Revision4.cfg`](SumeragiV2Revision4.cfg) instantiates `n = 4`,
+`f = 1`, `q = 3`, two candidate bodies, and one faulty validator for exhaustive
+invariant checking. The finite `Views = 0..(n - 1)` horizon is one complete
+role rotation; unlike the former unbounded natural-valued executable view, it
+has a finite state graph which TLC can exhaust.
+
+[`SumeragiV2Revision4AdversarialSafety.tla`](SumeragiV2Revision4AdversarialSafety.tla)
+separately removes the main compact model's single-proposal and retained-lock
+shortcuts from the agreement search. Its bounded round contains four
+validators, quorum three, two independent candidate bodies, and one Byzantine
+validator which may vote for both. Each honest validator may receive both full
+bodies but its durable Commit intent permits at most one vote. Vote, QC, and
+decision actions remain enabled after the first QC, so TLC continues searching
+for a second, conflicting QC and decision instead of obtaining agreement by
+terminating progress. The exhaustive
+[`SumeragiV2Revision4AdversarialSafety.cfg`](SumeragiV2Revision4AdversarialSafety.cfg)
+checks both conflicting-CommitQC unreachability and decision agreement.
+
+[`SumeragiV2Revision4Liveness.cfg`](SumeragiV2Revision4Liveness.cfg) checks the
+same finite geometry with `PostGSTSpec`. That specification makes the
+conditional partial-synchrony premises executable: while the current leader
+and proxy tail are both honest, the post-GST transition relation suppresses
+timeout-certified departure, representing deadlines longer than the finite
+service bound. Weak fairness is stated explicitly for honest-leader proposal,
+honest full-body service, fallback, honest Prepare and Commit service,
+honest-tail QC and decision formation, honest timeout service and certified
+view change, exact local decided-body recovery, application, and successor
+activation. `RepairFinalizedOutput` is deliberately absent from the fairness
+set and from the activation guard.
+
+The temporal configuration checks both:
+
+```text
+ConditionalPostGSTProgress
+FinalizedOutputDebtDoesNotBlockSuccessor
+```
+
+The first reaches decision, local application, and successor activation from
+the initial height within the fair post-GST model. The second is a leads-to
+property from applied state with outstanding finalized-output debt to an
+active successor. `NonblockingSuccessorActivation` remains the separate
+enabledness invariant.
+
+`CompleteFullBody` and `RecoverDecidedFullBody` atomically abstract RS16
+reconstruction, hash checking, durability, and validation. The compact model
+also does not generate the complete set of arbitrary Byzantine network actions
+or establish a source-level refinement. Consequently TLC success is bounded
+invariant and conditional temporal evidence, not by itself a TLAPS proof of
+the paper theorem, a proof of production refinement, or unconditional
+liveness.
+
+## Revision-3 archive (historical)
+
+Everything below this heading describes the retired weighted-vote
+revision-3 transition relation and its proof ledger. It is preserved as
+historical proof-engineering material. It is not revision-4 release evidence,
+and its count-and-power assumptions must not be imported into the current
+protocol.
+
 This note gives the deductive protocol argument corresponding to
 `SumeragiV2.tla` and `iroha_sumeragi_core::Reducer`. It deliberately separates
 the paper argument from its mechanization status: the lemmas below explain the
@@ -8,7 +261,7 @@ conditional target, while `SumeragiV2Proofs.tla`, `verus_proofs.rs`, and
 recorded as mechanically discharged until the relevant TLAPS or Verus command
 succeeds.
 
-## Definitions and assumptions
+### Definitions and assumptions
 
 For one frozen height context let `V` be the voting roster, `n = |V|`, `P` the
 total voting power, and `w(S)` the power of signer set `S`. A dual quorum `Q`
@@ -52,11 +305,11 @@ work assumptions are the trusted contracts stated in the protocol document.
 The local-work contract is quantified only over validator hosts admitted by
 the first-release storage-platform gate. An unsupported-platform failure is
 not successful termination and cannot discharge application or
-successor-activation fairness. Revision 3 has no legacy decoder premise: a
+successor-activation fairness. Revision 4 has no legacy decoder premise: a
 Vote, QC, status record, or finality artifact without its canonical signed
 proposal origin is rejected.
 
-## Quorum lemmas
+### Quorum lemmas
 
 **Lemma 1 (count intersection).** Any two count quorums intersect in a correct
 validator.
@@ -81,7 +334,7 @@ Their signer sets are dual quorums and therefore intersect in a correct
 validator. That validator would have signed two subjects in the same durable
 sign-once slot, contradicting rule 1.
 
-## Validity, availability, and locks
+### Validity, availability, and locks
 
 **Lemma 4 (external validity and decided-body availability).** Every PrepareQC
 certifies a deterministically valid body that remains available from a correct
@@ -108,7 +361,7 @@ strictly higher PrepareQC. All such changes are complete WAL frames. Replay
 applies the same checks in sequence, while a height transition creates a new
 context rather than mutating the old height's lock.
 
-## Certified timeout protection
+### Certified timeout protection
 
 **Lemma 6 (a formed TC protects every still-formable old CommitQC and its safe
 re-proposal).** Consider a subject `x` whose same-round durable Commit-intent
@@ -146,7 +399,7 @@ loading and checking the canonical body subject, and refusing fresh candidate
 assembly while a lock exists. This is a safe-value/source-refinement fact; it
 does not by itself establish the eventual locked-body reproposal theorem.
 
-## Agreement and chain prefix
+### Agreement and chain prefix
 
 **Theorem 1 (agreement).** Two valid CommitQCs in one height context cannot
 certify different subjects.
@@ -202,7 +455,7 @@ TLAPS receipt. Consequently
 `IndexedChainSpecEstablishesExactPerSlotReceiptAgreement` remains
 `specified_unproved` and is not promoted.
 
-## Crash/restart and reconfiguration
+### Crash/restart and reconfiguration
 
 **Theorem 2 (crash/restart safety).** A crash at any effect boundary cannot
 cause a correct validator to equivocate, lower a lock, enter an uncertified
@@ -253,7 +506,7 @@ SANY-clean but has no fresh strict TLAPS evidence, so
 `specified_unproved`. It does not discharge or promote the terminal Rust trace
 refinement.
 
-## Conditional liveness after GST
+### Conditional liveness after GST
 
 Assume after GST that the responsive correct voters independently meet both
 strict count and power thresholds; per-source authenticated transport is
@@ -268,10 +521,12 @@ runtime duration. The immutable view-zero timeout is positive and view `v` recei
 `base * (v + 1)` (saturating only at that representation limit), so the model
 derives rather than assumes a later view whose timeout exceeds the rank.
 
-The claim is conditional and per height: after GST, with a responsive dual
-quorum and terminating local work, every height eventually decides and every
-responsive validator eventually applies it. No claim covers an unbounded
-partition, loss of either quorum threshold, or local work that never returns.
+The claim is conditional and per height: after GST, with a representative
+roster of at least four voting peers, a responsive dual quorum, and
+deterministic terminating local work, every height eventually decides and
+every responsive validator eventually applies it. No claim covers an
+unbounded partition, loss of either quorum threshold, an undersized production
+fixture, or local work that never returns.
 The model's per-node service-deadline vector is ghost bookkeeping for this
 trusted runtime contract, not shared production state. Production source seals
 establish the narrower structural facts—one serialized height loop, bounded
@@ -571,16 +826,18 @@ complete rotation.
 
 This is necessarily a conditional temporal target: FLP rules out unconditional
 termination without post-GST bounds. Without bounded delivery and service, a
-responsive dual quorum, terminating validation/fsync/application, and a
-representable service bound that some view-indexed timeout can exceed,
-deterministic consensus cannot guarantee progress. The paper argument derives
-height progress under those premises, including a valid empty heartbeat; it
+representative roster of at least four voting peers, a responsive dual quorum,
+deterministic terminating validation/fsync/application, and a representable
+service bound that some view-indexed timeout can exceed, deterministic
+consensus cannot guarantee progress. The paper argument derives
+height progress under those premises when valid transaction, autonomous,
+internal, or state-derived time-trigger work exists; it
 does not prove transaction inclusion or censorship fairness. It is not a
 machine-checked liveness completion while the ledger reports
 `machine_checked_completion: false` and retains downstream asynchronous and
 multi-height liveness obligations as `specified_unproved`.
 
-## Exact reply-writer boundary
+### Exact reply-writer boundary
 
 `SumeragiV2ReplyWriterDeadline.tla` is an orthogonal executable abstraction of
 one exact-reply actor occurrence. It acquires one absolute adaptively scaled
@@ -608,8 +865,10 @@ that assumption by retaining outstanding ownership, using weak fairness to
 reconnect and first-dispatch parked work, and using strong fairness to admit
 and publish across fragmented `WriterPending` intervals.
 `ResponsiveReplyWriterCursorLivenessFromStrongFairness` composes that bridge
-with the conditional cursor theorem. All current-source theorem obligations
-remain `specified_unproved` until a fresh strict TLAPS run succeeds.
+with the conditional cursor theorem. These source proof bodies are deductively
+classified support for the still-unpromoted production progress refinement;
+they are not independent ledger rows. A fresh strict TLAPS run over the final
+dependency closure remains required before that consumer can be promoted.
 The termination statement is qualitative, not a fixed operational wall-clock
 SLA: finite `u8`/`Duration` scaling can produce very long later deadlines. A
 recovered responsive writer may nevertheless publish and be polled immediately
@@ -624,7 +883,7 @@ semantic refinement theorem. The earlier 276/276 strict TLAPS receipt predates
 the final witness origin, monotonicity, receipt-attempt, and strong-fairness
 theorems; a fresh strict run against the current proof source remains pending.
 
-## Typed rollover handoff boundary
+### Typed rollover handoff boundary
 
 `SumeragiV2TypedRolloverHandoff.tla` isolates one changed- or same-roster
 handoff with two initial exact-output workers, a move-only service/transport
@@ -660,7 +919,7 @@ consumed by the top-level successor-activation production-refinement debt; they
 are not independent ledger rows. No filesystem refinement claim follows from
 the abstract model.
 
-## Mechanization ledger
+### Mechanization ledger
 
 `proof_coverage.json` is the checked-in status declaration, not independent
 proof authority. The checker binds it to exact theorem declarations and
@@ -723,28 +982,35 @@ lemma: post-GST deadlock freedom requires an enabled `AsyncNext` step that grows
 current-height protocol evidence, strictly consumes a concrete deadline debt,
 or decreases/exits a protected candidate or Serve-occurrence rank. Repeated
 clock or view-change steps alone do not satisfy that productive obligation.
-Stage-2/3/6, packet-admission, and zero-deadline cases therefore remain explicit
-proof debt. The executable async model now retains an exact deferred handoff
-across a Busy retry: matching work clears only its own token, Completion work
-may still terminate the current Busy owner, and foreign non-Completion work
-cannot create a successor owner. The Stage-2 scratch isolates the remaining
-timer/retransmit rearm, finite cursor, and exact-service leaves; the Stage-3
-scratch reduces strict FIFO closure to the same-node `PostGstRunNode` induction
-and the all-other-action UNLESS induction. Neither scratch has fresh strict
-TLAPS evidence, so no ledger status changes. Runner preservation and the dependent async type closure are now
-proved. Starvation has conditional precursor proof bodies, while
-the release-facing theorem remains proofless and depends on the still-unproved
-service-rank theorem. It remains `specified_unproved`. Durable witness,
-rank decrease, and the remaining stable-suffix liveness theorems are exact
-universally quantified declarations recorded as `specified_unproved`. The
+Stage-2/3/6, packet-admission, and zero-deadline cases remain explicit branches
+of the reviewed rank and deadlock decompositions; they are not hidden behind
+an enabled-action facade. The executable async model retains an exact deferred
+handoff across a Busy retry: matching work clears only its own token,
+Completion work may still terminate the current Busy owner, and foreign
+non-Completion work cannot create a successor owner. The Stage-2 and Stage-3
+leaves close timer/retransmit rearm, finite cursor, exact service, same-node
+`PostGstRunNode`, and all-other-action UNLESS cases. Together with Stage 6 and
+the Completion product rank they feed the ledgered `tlaps_proved` aggregate
+protected-service-rank theorem; all of those final-source dependencies still
+require fresh strict revalidation after source drift. Runner preservation and
+the dependent async type closure are also ledgered proved. Deadlock and
+starvation have
+composed source proof bodies; starvation consumes protected-service-rank
+progress and the finite-runner episode closure. Both remain
+`specified_unproved` until their complete dependency cones pass fresh strict
+TLAPS. Durable production witnesses and the remaining stable-suffix liveness
+theorems are exact universally quantified declarations recorded as
+`specified_unproved`. The
 argument above does not upgrade any of those statuses. The concrete genesis
 chain product's first-successor handoff also has a source proof body but remains
 ledgered `specified_unproved`. The application debt is now isolated at
-`ApplicationCompletionProgressObligation`, the proofless per-responsive-node
-decision-to-application pipeline. The aggregate `ApplicationLivenessObligation`
-is derived from that premise by application monotonicity, a frozen responsive
-voter set, and finite validator-prefix induction; this composition introduces
-no global application barrier and does not promote the ledger entry. The chain
+`AsyncTemporalClosureApplicationCompletionProgressObligation`, the exact
+per-responsive-node decision-to-application pipeline. Its source proof
+composes the five off-scheduler Decision leaves with protected finite-runner
+service. The aggregate application theorem adds application monotonicity, a
+frozen responsive voter set, and finite validator-prefix induction; this
+composition introduces no global application barrier and does not promote the
+ledger entry before fresh strict verification. The chain
 refinement contains the authoritative indexed successor-instance product;
 `SumeragiV2ChainLivenessProofs!HeightLivenessObligation` now lives in a child
 of the successor-starvation proof module, so the composition no longer asks a
@@ -764,17 +1030,18 @@ pending-state preservation. It leaves clock/readiness, preservation across all
 unrelated actions, the authenticated request/response-to-Decision corridor,
 and the historical Decision/body/application corridor as visible operator
 premises. The remaining exact historical closure is registered as exactly
-three proofless temporal release targets:
+three temporal support theorems with source proof bodies:
 `IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation`,
 `IndexedHistoricalCertificateRankProgressResidualObligation`,
 and `IndexedHistoricalDecisionRankProgressResidualObligation`. The separate
 `IndexedHistoricalDecisionStageOwnershipResidualObligation` is now a proved
 safety support theorem: `IndexedChainSpec` establishes the composition,
 Decision-witness, and recovery-dormancy invariants that make its residual
-empty. Downstream composition derives that ownership property and assumes only
-the three temporal residuals. Consequently those three remain transitively
-`specified_unproved`, and neither the top-level ledger nor exact liveness is
-promoted. The release-facing theorem remains proofless and ledgered
+empty. Downstream composition derives that ownership property and consumes the
+three temporal theorems. All four historical leaves are deductively classified
+support rather than independent ledger rows; neither the top-level ledger nor
+exact liveness is promoted without fresh strict evidence. The release-facing
+height theorem also has a source proof body and remains ledgered
 `specified_unproved` until those prerequisites are discharged and the whole
 theorem passes a fresh pinned strict proof
 after rotating-leader, application liveness, and the separately ledgered
@@ -843,7 +1110,20 @@ application maps to that abstract Applied boundary only after canonical lane
 completion. If block sync installs that canonical ownership after adapter
 construction, production rehydrates its exact bounded proposal at rollover so
 the missing lane certificate remains recoverable. Proving that delayed mapping
-remains explicit refinement debt.
+remains explicit refinement debt. The concrete effect executor now coalesces
+every exact in-flight `Apply` rediscovery and retains the typed Kura finality
+receipt, exact artifact, and original reducer tag as a completion tombstone.
+An exact post-drain retry is absorbed; tag, subject, context, or CommitQC drift
+fails closed. This closes old-stage recreation in source but does not promote
+the application theorem or any cross-tool production-refinement obligation.
+At the enclosing adapter boundary, a zero-to-one semantic candidate publishes
+its immutable owner, while a one-to-one retry must present that exact owner.
+A different owner for the same semantic lifecycle is rejected before the
+effect-to-candidate trace projection is constructed. The separate physical
+Fetch/Store/Validate lineage may retain a stronger carrier only after its
+distinct phase/commitment identity passes the typed monotone authority gate and
+the adopted lineage is re-projected. These source and mutation checks do not
+promote the effect-to-candidate cross-tool obligation before its strict pass.
 Recovered publication requires absent
 process-visible predecessor ownership plus durable complete-tip authority. For
 a tip whose canonical block owns lane payloads, that authority additionally
@@ -866,10 +1146,9 @@ No top-level assumption, axiom, or unledgered omitted proof can satisfy the
 release checker. A proofless release theorem is accepted only when its exact
 module and symbol are pinned as `specified_unproved`; it must be discharged by
 TLAPS before machine-checked completion can become true. This is a structural
-rule even outside release mode. Exactly three theorem-bearing modules are
-non-release inventory:
-`SumeragiV2AsyncOutstandingLivenessDebt` contains the exact proofless
-timeout-view, locked-body, and rotating-leader declarations, while
+rule even outside release mode. The theorem-free compatibility shard
+`SumeragiV2AsyncOutstandingLivenessDebt` and exactly two theorem-bearing
+scratch modules are non-release inventory.
 `SumeragiV2HistoricalLockedBodyRecoveryBridgeScratch` and
 `SumeragiV2ProgressWitnessCrossToolScratch` each recheck one authoritative
 bridge. None is release evidence and none can promote a ledger entry.
@@ -935,11 +1214,13 @@ expects 44 `tlaps_proved`, 3 `cross_tool_proved`, 6 `trusted_contract`, and 1
 `out_of_scope`. Sixteen decomposition declarations remain source-bound and
 transitively checked through their reviewed top-level consumers rather than
 appearing as extra claims, so `machine_checked_completion` remains false.
-The aggregate temporal closure deliberately leaves
+The aggregate temporal closure now gives
 `AdequateLeaderExactClosureResidualObligation` and
-`ExactDecisionOffSchedulerResidualConvergenceObligation` proofless. The
-theorems which consume them are dependency wiring, not evidence that either
-residual has been discharged.
+`ExactDecisionOffSchedulerResidualConvergenceObligation` pinned source proof
+bodies and classifies them as deductively proved support leaves. They are not
+independent ledger rows; fresh strict verification and the remaining consumer
+dependencies are still required before rotating-leader or application
+liveness can be promoted.
 
 The adequate-leader residual is target-local rather than aggregate: another
 validator's Decision is not terminal for the indexed target. Its occurrence
@@ -948,13 +1229,33 @@ preventing one serviced owner from hiding another. Equal-count replacement
 and count-increasing replenishment remain explicit non-progress cases and
 require a prior finite or coalesced producer argument.
 
+The production queue closes the matching final-retirement race with a one-shot
+local handoff. The last owner in a frozen Serve batch arms
+`producer_episode_due` under the same mutex that retires it; fresh Serve
+admission is `Busy` while the handoff is due or while
+`producer_episode_active` owns its bounded outer turn. The runner atomically
+consumes due into active, and the local lease clears active before admission
+reopens. Rejected replenishment cannot mint either scheduler or logical
+lifecycle ordinals. Digest-refreshed mutations bind both Busy boundaries, the
+high-water marks, timeout-owner ordering, strict predecessor service, and the
+real timeout-certificate/EnterView suffix. This source refinement does not
+count replenishment as progress, add fairness, or promote a ledger row.
+
 The exact-Decision producer audit narrows causal replenishment to reachable
 local debt setters; Serve-capacity growth to ordinary or historical request
 drain, fresh causal Completion admission, or local Control enqueue; and
 priority growth to exact network-claim admission or the same archive's normal,
-recovery, or historical runner. Each classification is action-local. No
-current state expression decreases across every producer episode, so the five
-exact off-scheduler convergence leaves remain proofless.
+recovery, or historical runner. Each classification is action-local. The five
+exact off-scheduler convergence leaves now have source proof bodies over the
+immutable owner, finite prefix, admission/coalescing, and nonphysical response
+gate. Their composition does not treat replenishment itself as progress, and
+fresh strict TLAPS remains required before promotion.
+The production mirror likewise keeps one Apply work owner through queued,
+active, and completion-pending retries. Once Kura returns the exact typed
+finality artifact, that durable completion retains the original reducer tag as
+the tombstone for the logical request, so exact periodic rediscovery after
+drain remains idempotent even after live tag authority is relinquished. Tag
+drift or a different CommitQC remains a fail-closed conflict.
 
 TLC runs exhaustive constant checks and bounded asynchronous counterexample
 searches. It cannot upgrade a proof status. The scheduler corridor runs nine
@@ -1122,7 +1423,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 813 tests across thirty-nine Rust
+The current pre-network release inventory names 845 tests across thirty-nine Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1216,10 +1517,19 @@ fail-closed authenticated semantic-only Coalesce defense. Subsequent source
 reconciliation and exact-ingress lifecycle, restart, provenance, and
 quarantine regressions bind one logical owner across every physical retry,
 yielding the 806-test checkpoint. Seven physical-cut, adapter-capability,
-aggregate-rebase, and ineligible-driver regressions yield the current 813-test,
+aggregate-rebase, and ineligible-driver regressions yield the 813-test
+checkpoint. Five admission/coalescing, Busy pre-runtime ownership, and
+reconstructed-chunk terminality regressions yield the 818-test checkpoint.
+Thirteen exact admission, retry, tombstone, and high-water regressions yield the
+831-test checkpoint. Retiring five obsolete peer-genesis protocol regressions
+yields the 826-test checkpoint. Replacing one obsolete restart selector with
+its separate raw/coalesced crash boundaries and restoring two implemented
+certified-ingress regressions yields the 829-test checkpoint. Autonomous-
+lifecycle terminal-outcome and startup-recovery coverage plus the final source
+reconciliation yield the current 845-test,
 39-module inventory. The complete source-sealed
 pre-network corridor
-contains 82 legs. Six source-sealed command legs and the G-SCALE
+contains 85 legs. Five source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
 requester epoch, and per-stream semantic sequence coordinates. Canonical
@@ -1288,7 +1598,12 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f`.
+`08987916d9ea4fad6bc48cbd483f702766c69b057ff4cc2a099a586f8561eeff`.
+The separate source-sealed G-UNIT inventory contains 524 focused tests,
+including 318 `iroha_core` tests. Its 525-line canonical TSV has SHA-256
+`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`;
+the sealed Native rows cover exact per-route prevote-byte accounting,
+empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,
@@ -1317,42 +1632,79 @@ atomic-lane, semantic-origin, P2P source-fairness, daemon-relay, and active-
 watchdog regressions. The 232-name baseline already included two exact locked-Commit
 progress-witness regressions
 and six outer TransportCompletion-corridor regressions. The current
-geometry inventories four owners per validator, two owners for every one of
+geometry inventories five owners per validator, three owners for every one of
 the `H` simultaneously materialized authenticated non-validator lanes, and two
-anonymous owners (`4N+2H+2` total), including a roster-origin completion relayed
+anonymous owners (`5N+3H+2` total), including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The five integration names share a module-filtered leg; the pre-network corridor
-now has 82 legs, including separate exact data-model status and atomic
+now has 85 legs, including the autonomous lifecycle-recovery module, separate
+exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
-geometry modules, the daemon genesis module, and source-sealed command-success
-legs. Its finality, offline compact-QC, and height-context proposal-origin
+geometry modules, and source-sealed command-success legs. Its finality, offline
+compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the thirty-eight-module, eighty-one-leg corridor. It
+tests are not claimed by the thirty-nine-module, eighty-six-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
-`4N+2H+2` ingress and `2N+3` deferred partitions, successor activation/recovery,
+`5N+3H+2` ingress and `2N+3` deferred partitions, successor activation/recovery,
 authenticated exact historical recovery, retained effect-capacity ownership,
 post-decision timeout/TC quiescence, and watchdog classification. It also pins
-the adapter's maximum flattened persistence macro-step at five effects within
+the adapter's maximum flattened persistence macro-step at four effects within
 the reducer's eight-effect bound, services at most one Busy-deferred adapter
 macro-step per serialized runtime turn, and forbids terminal readiness while
 any Completion, Progress, or Normal deferred queue remains nonempty. The
 production-default saturation regression fills all 256 certified-request
-owners, 640 Normal ingress slots, and the 128-slot reserved Progress increment
-while preserving the 256-slot Completion reserve, then proves that an exact
+owners, 639 Normal ingress slots, and the 128-slot reserved Progress increment
+while preserving the 256-slot Completion reserve and one separately charged
+certified-fence slot, then proves that an exact
 authenticated `CertifiedBodyResponse` with a still-live matching logical
-request registration can retire the old request; the executor then retries the
+request registration can retire the old request. The fence slot is one
+retained physical credit rather than a limit of one
+certificate. Multiple distinct authenticated TCs, CommitQCs, or
+CommitQC-carrying recovery responses share that credit; every certificate
+after the first consumes ordinary Progress capacity, and the ordinary
+reservation is independent of whether the first certificate arrives before
+or after ordinary work. While an authenticated certified-body
+response remains retained, its escape episode is explicitly `Fresh`,
+`Charged`, or `Spent`: Fresh admits at most one new direct TC, CommitQC, or
+`CommitCertificateResponse` carrying a CommitQC root; Charged and Spent reject
+every further fresh root, and only claim retirement resets the latch.
+The claimed-response rank counts the exact frozen direct
+roots and their strictly decreasing trusted causal tail, so pacemaker priority
+cannot be replenished indefinitely. The standalone revision-4 kernel charges
+an unpublished `BodyAvailable` token as an ordinary Completion owner and
+atomically replaces its conflicting proposal owner without changing physical
+occupancy. Production refinement additionally persists a complete Busy-
+deferred producer-release batch before removing queue owners, reconciles
+obsolete Reserved producers only after restart WAL replay while preserving the
+exact protected body pipeline, and retires a restored stage-7 Fetch parent even
+when no Completion token was reserved. The fresh post-restart Fetch owner proves
+only its exact effect; the adapter resolves the old parent by durable
+round/subject coordinates plus exact manifest identity when supplied, and
+requires a unique match when the manifest is absent. Body rebind preserves the sole
+persistent producer and rejects two persistent roots before mutation. The
+generic productive-wire cut is monotone at certified EnterView and durable
+Decision: the durable gate prunes exactly obsolete Dormant records before the
+fair-ingress mirror, preserves ordinal high-waters, rolls back on store failure,
+and rejects below-cut view-scoped admission. A `CertifiedResponse` is not
+view-scoped at this boundary: durable Decision may precede recovery of its exact
+body, so both cuts preserve the bounded response owner and defer authority to
+the outstanding signed request, QC, responder signature, canonical body, and
+manifest checks. Proposal chunks remain cut-scoped. These are source-bound
+production-refinement contracts; the existing deductive asynchronous proof
+does not by itself prove their Rust persistence ordering. The executor then retries the
 same retained FIFO occurrence and acquires pending-work and request ownership
 atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
-earlier 168-name inventory. Fresh 738-name discovery is green; the clean
-committed, detached, source-sealed serial release execution remains pending. An
+earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
+names; the current 845-name tree still requires a clean committed, detached,
+source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither
 inventory presence nor regression evidence is a machine proof.

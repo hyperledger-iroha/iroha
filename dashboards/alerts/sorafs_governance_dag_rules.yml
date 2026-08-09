@@ -10,9 +10,40 @@ groups:
         annotations:
           summary: "SoraFS Governance DAG publication failures detected"
           description: |
-            Governance DAG publication failed for payload kind {{ $labels.payload_kind }} on
-            sink {{ $labels.sink }} within the last 15 minutes. Check filesystem/IPFS sink
-            health and retry the affected evidence bundle before relying on the public head.
+            Governance DAG publication failed on sink {{ $labels.sink }} within the last
+            15 minutes. Check the fixed-profile Kubo
+            publisher and authenticated signed-head service before retrying the evidence bundle.
+      - alert: SoraFSGovernanceDagValidationFailures
+        expr: increase(sorafs_governance_dag_validation_failure_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS Governance DAG validation failures detected"
+          description: |
+            The supervised Governance DAG service rejected authenticated publication or mirror
+            state within the last 15 minutes. Investigate before restoring readiness.
+      - alert: SoraFSGovernanceDagPinLagHigh
+        expr: sorafs_governance_dag_ipfs_pin_lag_seconds > 1800
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS Governance DAG Kubo pin lag is high"
+          description: |
+            Verified Kubo pin lag has exceeded 30 minutes for 10 minutes. Check authenticated
+            Kubo ingress, object repair, and the rotating retained-object audit.
+      - alert: SoraFSGovernanceDagMirrorDrift
+        expr: sorafs_governance_dag_mirror_drift > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS Governance DAG mirror drift detected"
+          description: |
+            The supervised service has been unable to prove that its mirror, sealed checkpoint,
+            and public objects are coherent for five minutes. Keep public reads unavailable until
+            deterministic recovery and a complete coherent reconciliation succeed.
       - alert: SoraFSGovernanceDagBacklogHigh
         expr: sorafs_governance_dag_backlog > 10
         for: 10m
@@ -43,5 +74,5 @@ groups:
           summary: "SoraFS Governance DAG has no recent successful publication"
           description: |
             Governance DAG sink {{ $labels.sink }} has no successful publication timestamp
-            within the last hour. Verify the local publisher and any downstream IPFS/IPNS
-            bridge before publishing rollout evidence.
+            within the last hour. Verify the fixed-profile Kubo publisher and authenticated
+            signed-head service before publishing rollout evidence.

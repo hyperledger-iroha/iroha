@@ -29,6 +29,7 @@ WORKDIR /iroha
 COPY . .
 RUN cargo build \
     --bin irohad \
+    --bin sorafs_governance_dag \
     --bin iroha \
     --bin kagami \
     --bin attachment_sanitizer \
@@ -68,6 +69,7 @@ RUN <<EOT
 EOT
 
 COPY --from=builder $TARGET_DIR/irohad $BIN_PATH
+COPY --from=builder $TARGET_DIR/sorafs_governance_dag $BIN_PATH
 COPY --from=builder $TARGET_DIR/iroha $BIN_PATH
 COPY --from=builder $TARGET_DIR/kagami $BIN_PATH
 COPY --from=builder $TARGET_DIR/attachment_sanitizer $BIN_PATH

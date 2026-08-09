@@ -240,14 +240,14 @@ AdequateLeaderTargetProducerOriginExposureProperty(specification) ==
              leaderView \in Views,
              subject \in Subjects,
              sourceOccurrenceRank \in
-               AdequateLeaderTargetOccurrenceRankCarrier,
-             known \in
-               SUBSET AdequateLeaderFrozenOwnerUniverse(
-                 target, leaderContext, leader, leaderView, subject),
-             budget \in Nat,
-             owner \in
-               AdequateLeaderFrozenCandidateOwnerUniverse(
-                 target, leaderContext, leader, leaderView, subject):
+               AdequateLeaderTargetOccurrenceRankCarrier:
+            \A known \in
+              SUBSET AdequateLeaderFrozenOwnerUniverse(
+                target, leaderContext, leader, leaderView, subject),
+              budget \in Nat,
+              owner \in
+                AdequateLeaderFrozenCandidateOwnerUniverse(
+                  target, leaderContext, leader, leaderView, subject):
             AdequateLeaderTargetProducerTransportOccurrenceSource(
               target, leaderContext, leader, leaderView,
               subject, sourceOccurrenceRank, known, budget, owner)
@@ -262,14 +262,14 @@ AdequateLeaderTargetProducerOriginExposureOrGoalProperty(specification) ==
              leaderView \in Views,
              subject \in Subjects,
              sourceOccurrenceRank \in
-               AdequateLeaderTargetOccurrenceRankCarrier,
-             known \in
-               SUBSET AdequateLeaderFrozenOwnerUniverse(
-                 target, leaderContext, leader, leaderView, subject),
-             budget \in Nat,
-             owner \in
-               AdequateLeaderFrozenCandidateOwnerUniverse(
-                 target, leaderContext, leader, leaderView, subject):
+               AdequateLeaderTargetOccurrenceRankCarrier:
+            \A known \in
+              SUBSET AdequateLeaderFrozenOwnerUniverse(
+                target, leaderContext, leader, leaderView, subject),
+              budget \in Nat,
+              owner \in
+                AdequateLeaderFrozenCandidateOwnerUniverse(
+                  target, leaderContext, leader, leaderView, subject):
             AdequateLeaderTargetProducerTransportOccurrenceSource(
               target, leaderContext, leader, leaderView,
               subject, sourceOccurrenceRank, known, budget, owner)
@@ -299,14 +299,14 @@ AdequateLeaderTargetConcreteProducerTransportOccurrenceClosureProperty(
           leaderView \in Views,
           subject \in Subjects,
           sourceOccurrenceRank \in
-            AdequateLeaderTargetOccurrenceRankCarrier,
-          known \in
-            SUBSET AdequateLeaderFrozenOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          budget \in Nat,
-          owner \in
-            AdequateLeaderFrozenCandidateOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject):
+            AdequateLeaderTargetOccurrenceRankCarrier:
+         \A known \in
+           SUBSET AdequateLeaderFrozenOwnerUniverse(
+             target, leaderContext, leader, leaderView, subject),
+           budget \in Nat,
+           owner \in
+             AdequateLeaderFrozenCandidateOwnerUniverse(
+               target, leaderContext, leader, leaderView, subject):
          /\ AdequateLeaderTargetProducerTransportOccurrenceSource(
               target, leaderContext, leader, leaderView,
               subject, sourceOccurrenceRank, known, budget, owner)
@@ -394,10 +394,13 @@ service theorem.  In particular,
 interface: its source is only the fresh self-leader arming instant and it has
 no temporal-history carrier for an arbitrary later target corridor.
 
-The fixed-deadline provider must prove the acquisition/carry pair below from
-the immutable receipt, the configured cumulative clock budget, and exact
-target dissemination.  Until then the following theorems are conditional
-compositions only; they are not live-provider or ledger-promotion theorems.
+The following theorems remain conditional compositions for an arbitrary later
+target and are not live-provider or ledger-promotion theorems.  The release
+path does not instantiate this stronger past-time interface: the quantitative
+fresh-self provider in
+`SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs` closes the configured
+deadline at its arming boundary, then uses exact responsive Decision
+dissemination to reach each target without reconstructing a past receipt.
 ***************************************************************************)
 
 AdequateLeaderAuthorityBoundFixedDeadlineReceipt(

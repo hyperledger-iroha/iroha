@@ -17,6 +17,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
+    asset::AssetBalanceScope,
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
     prelude::{AccountId, AssetDefinitionId, ChainId},
@@ -49,6 +50,7 @@ pub struct ZkAcePrivacyTransferV1 {
     policy: PrivacyZkAcePolicyRecordV1,
     source: AccountId,
     destination: AccountId,
+    public_balance_scope: AssetBalanceScope,
     amount: u128,
 }
 
@@ -63,6 +65,7 @@ impl ZkAcePrivacyTransferV1 {
         policy: PrivacyZkAcePolicyRecordV1,
         source: AccountId,
         destination: AccountId,
+        public_balance_scope: AssetBalanceScope,
         amount: u128,
     ) -> Result<Self, ZkAcePrivacyActionBuildErrorV1> {
         policy
@@ -80,10 +83,17 @@ impl ZkAcePrivacyTransferV1 {
         if policy.source_allowlist.binary_search(&source).is_err() {
             return Err(ZkAcePrivacyActionBuildErrorV1::SourceNotAllowed);
         }
+        if matches!(
+            public_balance_scope,
+            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL)
+        ) {
+            return Err(ZkAcePrivacyActionBuildErrorV1::UniversalDataspaceScope);
+        }
         Ok(Self {
             policy,
             source,
             destination,
+            public_balance_scope,
             amount,
         })
     }
@@ -104,6 +114,12 @@ impl ZkAcePrivacyTransferV1 {
     #[must_use]
     pub const fn destination(&self) -> &AccountId {
         &self.destination
+    }
+
+    /// Exact transparent balance partition authorized by this transfer.
+    #[must_use]
+    pub const fn public_balance_scope(&self) -> AssetBalanceScope {
+        self.public_balance_scope
     }
 
     /// Exact atomic amount.
@@ -145,6 +161,8 @@ pub struct ZkAcePrivacyTransferEffectV1 {
     pub destination: AccountId,
     /// Transparent asset definition.
     pub asset_definition_id: AssetDefinitionId,
+    /// Exact transparent balance partition.
+    pub public_balance_scope: AssetBalanceScope,
     /// Atomic amount.
     pub amount: u128,
     /// Replay marker consumed atomically with the transfer.
@@ -346,6 +364,8 @@ pub enum ZkAcePrivacyActionBuildErrorV1 {
     SourceEqualsDestination,
     /// The source is absent from the governed sorted allowlist.
     SourceNotAllowed,
+    /// The universal coordinator is a route, never a restricted balance partition.
+    UniversalDataspaceScope,
     /// The witness does not open the governed identity commitment.
     IdentityCommitmentMismatch,
     /// The caller supplied the all-zero genesis sentinel.
@@ -400,6 +420,9 @@ impl core::fmt::Display for ZkAcePrivacyActionBuildErrorV1 {
                 Self::ZeroAmount => "ZK-ACE transfer amount must be non-zero",
                 Self::SourceEqualsDestination => "ZK-ACE source and destination must differ",
                 Self::SourceNotAllowed => "ZK-ACE source is not authorized by the policy",
+                Self::UniversalDataspaceScope => {
+                    "ZK-ACE public balance scope cannot be the universal dataspace"
+                }
                 Self::IdentityCommitmentMismatch => {
                     "ZK-ACE witness identity commitment differs from the governed policy"
                 }
@@ -616,6 +639,7 @@ where
         source: transfer.source.clone(),
         destination: transfer.destination.clone(),
         asset_definition_id: transfer.policy.asset_definition_id.clone(),
+        public_balance_scope: transfer.public_balance_scope,
         amount: transfer.amount,
         authorization_epoch: transfer.policy.authorization_epoch,
         replay_nullifier: PrivacyNullifierV1::new([0; 32]),
@@ -689,6 +713,7 @@ where
         source: transfer.source,
         destination: transfer.destination,
         asset_definition_id: transfer.policy.asset_definition_id,
+        public_balance_scope: transfer.public_balance_scope,
         amount: transfer.amount,
         replay_nullifier: final_statement.replay_nullifier,
     };
@@ -855,7 +880,7 @@ mod tests {
     }
 
     fn asset(name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("test domain"),
             Name::from_str(name).expect("asset name"),
         )
@@ -902,6 +927,7 @@ mod tests {
             policy(&witness, source.clone()),
             source,
             account(2),
+            AssetBalanceScope::Global,
             19,
         )
         .expect("valid transfer");
@@ -1032,16 +1058,44 @@ mod tests {
         let active = policy(&witness, source.clone());
 
         assert!(matches!(
-            ZkAcePrivacyTransferV1::try_new(active.clone(), source.clone(), destination.clone(), 0,),
+            ZkAcePrivacyTransferV1::try_new(
+                active.clone(),
+                source.clone(),
+                destination.clone(),
+                AssetBalanceScope::Global,
+                0,
+            ),
             Err(ZkAcePrivacyActionBuildErrorV1::ZeroAmount)
         ));
         assert!(matches!(
-            ZkAcePrivacyTransferV1::try_new(active.clone(), source.clone(), source.clone(), 1,),
+            ZkAcePrivacyTransferV1::try_new(
+                active.clone(),
+                source.clone(),
+                source.clone(),
+                AssetBalanceScope::Global,
+                1,
+            ),
             Err(ZkAcePrivacyActionBuildErrorV1::SourceEqualsDestination)
         ));
         assert!(matches!(
-            ZkAcePrivacyTransferV1::try_new(active.clone(), account(3), destination.clone(), 1),
+            ZkAcePrivacyTransferV1::try_new(
+                active.clone(),
+                account(3),
+                destination.clone(),
+                AssetBalanceScope::Global,
+                1,
+            ),
             Err(ZkAcePrivacyActionBuildErrorV1::SourceNotAllowed)
+        ));
+        assert!(matches!(
+            ZkAcePrivacyTransferV1::try_new(
+                active.clone(),
+                source.clone(),
+                destination.clone(),
+                AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL,),
+                1,
+            ),
+            Err(ZkAcePrivacyActionBuildErrorV1::UniversalDataspaceScope)
         ));
 
         let revoked = PrivacyZkAcePolicyRecordV1::new(
@@ -1055,14 +1109,26 @@ mod tests {
         )
         .expect("self-consistent revoked record");
         assert!(matches!(
-            ZkAcePrivacyTransferV1::try_new(revoked, source.clone(), destination.clone(), 1),
+            ZkAcePrivacyTransferV1::try_new(
+                revoked,
+                source.clone(),
+                destination.clone(),
+                AssetBalanceScope::Global,
+                1,
+            ),
             Err(ZkAcePrivacyActionBuildErrorV1::PolicyNotActive)
         ));
 
         let mut tampered = active;
         tampered.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0xA5; 32]);
         assert!(matches!(
-            ZkAcePrivacyTransferV1::try_new(tampered, source, destination, 1),
+            ZkAcePrivacyTransferV1::try_new(
+                tampered,
+                source,
+                destination,
+                AssetBalanceScope::Global,
+                1,
+            ),
             Err(ZkAcePrivacyActionBuildErrorV1::InvalidPolicy(_))
         ));
     }

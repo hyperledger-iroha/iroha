@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 set -ex
 
 # This diagram describes the state when the root multisig account is successfully authenticated in this test:
@@ -38,7 +38,7 @@ gen_signatories() {
 # populate signatories
 N_SIGNATORIES=6
 SIGNATORIES=($(gen_signatories $N_SIGNATORIES))
-for signatory in ${SIGNATORIES[@]}; do
+for signatory in "${SIGNATORIES[@]}"; do
     ./iroha account register --id $signatory
 done
 WEIGHTS=($(yes 1 | head -n $N_SIGNATORIES))

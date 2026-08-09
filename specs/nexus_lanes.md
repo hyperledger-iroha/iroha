@@ -14,8 +14,8 @@ description: Logical lane taxonomy, lane configuration geometry, and world-state
 
 This document captures the production architecture for Nexus’ multilane
 consensus layer. It produces one deterministic world state while allowing
-individual data spaces (lanes) to run public or private validator sets with
-isolated workloads.
+internal execution lanes, grouped by governance-scoped dataspaces, to run
+public or private validator sets with isolated workloads.
 
 > **Cross-lane proofs:** This note focuses on geometry and storage. The per-lane settlement commitments, relay pipeline, and merge-ledger proofs required for roadmap **NX-4** are spelled out in [nexus_cross_lane.md](nexus_cross_lane.md).
 
@@ -106,7 +106,7 @@ LaneConfigEntry {
 - `nexus.storage.local_budget_bytes` is the sole operator-facing aggregate on-disk budget for Nexus nodes. It covers Kura, cold WSV snapshots, SoraFS storage, and SoraNet/SoraVPN spools; zero and the pre-release `max_disk_usage_bytes` alias are rejected.
 - The actual configuration keeps the operator value separate from an actual-only `effective_local_budget_bytes`. An explicit operator value initializes both. When the operator value is omitted, `irohad` derives only the effective value at every startup and never rewrites the TOML file.
 - Runtime derivation groups canonicalized managed roots by live filesystem identity and computes each filesystem cap as `(managed_bytes + available_bytes) - ceil(total_bytes * 20%)` with checked arithmetic. Underflow, zero, overflow, or a result below current managed usage aborts startup instead of activating an unenforceable cap.
-- Every subsystem disk weight must be non-zero and the five weights must sum to `10_000` basis points. Runtime application recomputes the aggregate with checked arithmetic from the per-filesystem budgets rather than accepting separate aggregate metadata.
+- Every subsystem disk weight must be non-zero and the five weights must sum to `10_000` basis points. Operator budgets too small to give every component a non-zero cap are rejected because zero means unlimited to the component enforcers. Runtime application requires non-empty, strictly ordered, globally unique component sets, rejects zero component shares, and recomputes the aggregate with checked arithmetic from the per-filesystem budgets rather than accepting separate aggregate metadata. Proportional products use exact `u128` intermediates so `u64::MAX` budgets cannot saturate into incorrect shares.
 - A symbolic link or Windows reparse point is allowed only strictly above a configured managed root. The exact root, any descendant, and dangling links/reparse points fail closed. Accepted ancestors are canonicalized before grouping and deduplication, and filesystem identity is rechecked while measuring every managed tree; crossing a mount boundary is fatal.
 - Explicit budgets receive the same structural filesystem validation. Only a genuine low-space comparison is warning-only: the warning accounts for already-managed bytes and reports when additional growth required by the configured component caps exceeds available space.
 - `nexus.storage.budget_enforce_interval_blocks` sets how often (in committed blocks) the storage budget scan runs; set to 0 to enforce every block.
@@ -139,16 +139,25 @@ LaneConfigEntry {
 - Verified lane relay registration additionally shares the runtime relay
   finality verifier: it derives the canonical `3f+1` committee from the exact
   transaction snapshot, requires commit quorum, and verifies the aggregate BLS
-  signature and proofs of possession. It then verifies the FastPQ proof and its
-  effect claim over the exact relay envelope before writing contract-visible
-  state. The submitting account is only a transporter; a missing or forged QC,
-  substituted settlement, or metadata-only FastPQ claim is rejected regardless
-  of transaction authority.
+  signature and proofs of possession. The QC mode tag is the strict canonical
+  `lane-finality:v1` tag and signs a domain-separated statement containing the
+  header hash, lane/dataspace/incarnation/height, DA commitment, standalone lane
+  descriptor, manifest root, complete settlement commitment and hash, and RBC
+  byte total. QC and proof carriers are excluded from that statement. The
+  FastPQ proof is validity evidence, not authority: its old/new roots must equal
+  the QC state roots, its transaction-set hash must equal the signed finality
+  statement hash, and its DA and manifest commitments must equal the envelope.
+  The submitting account is only a transporter; a missing or forged QC, a
+  re-proved substituted settlement, or metadata-only FastPQ claim is rejected
+  regardless of transaction authority and before contract state is mutated.
 - `FindLaneRelayEnvelopeByRef` and runtime relay-cache hydration read verified
   relay records through the canonical `LaneRelayEnvelopeRef::relay_state_key()`
   and reject decoded records whose embedded `relay_ref` does not exactly match
   the requested or scanned key, so malformed contract state cannot spoof a
-  different lane, dataspace, height, or settlement hash under a valid key.
+  different lane, dataspace, incarnation, or lane-local height under a valid
+  key. The durable identity is exactly `(lane, dataspace, incarnation, height)`;
+  a second finality effect at those coordinates is a conflict rather than a
+  second settlement-hash-derived record.
 - Merge-ledger commit validation and Space Directory-derived AXT policy snapshot
   derivation use the same active-lane agreement. A stale derived geometry entry
   cannot make a retired or removed lane merge-active, cannot select a target
@@ -764,7 +773,8 @@ LaneConfigEntry {
 
 - Integrate settlement router updates (NX-3) with the new geometry so XOR buffer debits and receipts are tagged by lane slug.
 - Close the still-open multilane release-evidence gates: fresh unskipped
-  four-peer suites; 10/10 fresh twelve-peer corridor seeds; the two-hour fault
+  four-peer suites; 10/10 fresh 13-peer global corridor seeds (twelve lane
+  validators); the two-hour fault
   soak; five pinned-hardware one-versus-four-lane pairs meeting the throughput,
   latency, and resource bounds; SDK/formal evidence; and the prescribed
   locked/offline full-workspace build, test, strict Clippy, formatting, and

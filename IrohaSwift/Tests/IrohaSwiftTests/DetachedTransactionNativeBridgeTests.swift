@@ -13,13 +13,13 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
             {
               "schema":"iroha.detached_transaction_scaffold.v1",
               "payload_signing_hash_hex":"\(hashA)",
-              "authority":"sorau-authority",
+              "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "chain":"chain",
               "creation_time_ms":18446744073709551615,
               "time_to_live_ms":60000,
               "metadata":{"signed":-9223372036854775808,"unsigned":18446744073709551615,"nested":{"ok":true}},
               "entrypoint_hash_hex":"\(hashB)",
-              "executable":{"kind":"contract_call","contract_address":"sorac1contract","expected_code_hash":"hash:contract","entrypoint":"pay","arguments_b64":"AQID"}
+              "executable":{"kind":"contract_call","contract_address":"irohac1contract","expected_code_hash":"hash:contract","entrypoint":"pay","arguments_b64":"AQID"}
             }
             """.utf8
         )
@@ -32,7 +32,7 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
         guard case let .contractCall(call) = inspection.executable else {
             return XCTFail("expected contract call")
         }
-        XCTAssertEqual(call.contractAddress, "sorac1contract")
+        XCTAssertEqual(call.contractAddress, "irohac1contract")
         XCTAssertEqual(call.expectedCodeHash, "hash:contract")
         XCTAssertEqual(call.entrypoint, "pay")
         XCTAssertEqual(call.arguments, Data([1, 2, 3]))

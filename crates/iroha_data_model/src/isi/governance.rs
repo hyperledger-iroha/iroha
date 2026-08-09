@@ -157,6 +157,9 @@ pub struct ProposeDeployContract {
 impl crate::seal::Instruction for ProposeDeployContract {}
 
 /// Propose a runtime upgrade manifest through governance.
+///
+/// Ledger admission requires an exact `CanProposeRuntimeUpgrade` permission whose ABI version and
+/// hash match the manifest; contract-deployment permissions do not authorize runtime upgrades.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeRuntimeUpgradeProposal {
     /// Canonical runtime-upgrade manifest payload.
@@ -220,11 +223,14 @@ impl crate::seal::Instruction for ProposeValidationFeePayoutLifecycle {}
 /// Cast a ZK ballot (default voting mode)
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct CastZkBallot {
-    /// Election/referendum identifier (opaque)
+    /// Canonical V1 election/referendum selector.
     pub election_id: String,
     /// Base64-encoded proof bytes (envelope routing determines backend)
     pub proof_b64: String,
-    /// Opaque JSON of public inputs as a UTF-8 string (for Norito)
+    /// Closed V1 JSON public-input object encoded as UTF-8 for Norito.
+    ///
+    /// The object accepts only `root_hint`, `owner`, `amount`, `duration_blocks`, `direction`, and
+    /// `nullifier`; `amount` is an exact canonical non-negative [`Quantity`] string.
     pub public_inputs_json: String,
 }
 
@@ -235,6 +241,7 @@ impl crate::seal::Instruction for CastZkBallot {}
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 /// Canonical V1 ZK ballot proof envelope.
 ///
 /// Opaque container for the ballot proof and minimal public context.
@@ -271,7 +278,7 @@ pub struct BallotProof {
 /// Cast a non‑ZK quadratic ballot (optional mode)
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct CastPlainBallot {
-    /// Identifier of the referendum this ballot targets.
+    /// Canonical V1 selector of the referendum this ballot targets.
     pub referendum_id: String,
     /// Account submitting the ballot.
     pub owner: AccountId,
@@ -376,9 +383,9 @@ impl norito::json::JsonDeserialize for ParliamentDecision {
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
         match value.as_str() {
-            "approve" | "Approve" => Ok(Self::Approve),
-            "reject" | "Reject" => Ok(Self::Reject),
-            "abstain" | "Abstain" => Ok(Self::Abstain),
+            "approve" => Ok(Self::Approve),
+            "reject" => Ok(Self::Reject),
+            "abstain" => Ok(Self::Abstain),
             other => Err(norito::json::Error::UnknownField {
                 field: other.to_owned(),
             }),
@@ -494,7 +501,7 @@ impl crate::seal::Instruction for UnregisterCitizen {}
 /// Slash a governance bond lock for a referendum.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct SlashGovernanceLock {
-    /// Identifier of the referendum whose lock is being slashed.
+    /// Canonical V1 selector of the referendum whose lock is being slashed.
     pub referendum_id: String,
     /// Account whose bond lock will be reduced.
     pub owner: AccountId,
@@ -509,7 +516,7 @@ impl crate::seal::Instruction for SlashGovernanceLock {}
 /// Restitute a previously slashed governance bond lock.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct RestituteGovernanceLock {
-    /// Identifier of the referendum whose lock is being restored.
+    /// Canonical V1 selector of the referendum whose lock is being restored.
     pub referendum_id: String,
     /// Account receiving the restitution.
     pub owner: AccountId,
@@ -680,7 +687,7 @@ mod tests {
     }
 
     fn contract_address() -> crate::smart_contract::ContractAddress {
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
             .parse()
             .expect("contract address")
     }
@@ -805,6 +812,35 @@ mod tests {
             assert!(
                 norito::json::from_str::<VotingMode>(&json).is_err(),
                 "noncanonical voting mode alias must reject: {alias:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn parliament_decision_json_is_exact_lowercase() {
+        for (decision, label) in [
+            (ParliamentDecision::Approve, "approve"),
+            (ParliamentDecision::Reject, "reject"),
+            (ParliamentDecision::Abstain, "abstain"),
+        ] {
+            let json = format!("\"{label}\"");
+            assert_eq!(
+                norito::json::to_json(&decision).expect("serialize parliament decision"),
+                json
+            );
+            assert_eq!(
+                norito::json::from_str::<ParliamentDecision>(&json)
+                    .expect("decode canonical parliament decision"),
+                decision
+            );
+        }
+
+        for alias in ["Approve", "Reject", "Abstain", " approve", "approve "] {
+            let json = format!("\"{alias}\"");
+            assert!(
+                norito::json::from_str::<ParliamentDecision>(&json).is_err(),
+                "noncanonical parliament decision alias must reject: {alias:?}"
             );
         }
     }

@@ -6,6 +6,256 @@
 # DecisionAgreement, not from the write-once chain projection.
 EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     (
+        "SumeragiV2AsyncNetwork",
+        "AsyncIngressDrainFramesDeferredAndCausalQueues",
+    ): (
+        "\\A node \\in ValidatorIds: IngressDrainStep(node) "
+        "=> /\\ asyncDeferredCompletionQueues' = asyncDeferredCompletionQueues "
+        "/\\ asyncDeferredProgressQueues' = asyncDeferredProgressQueues "
+        "/\\ asyncDeferredNormalQueues' = asyncDeferredNormalQueues "
+        "/\\ asyncCausalQueues' = asyncCausalQueues"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncTimeoutVoteFairIngressFramesCommandAndWork",
+    ): (
+        "\\A node \\in ValidatorIds: LET item == "
+        "AsyncSelectedFairIngressItem(node) candidate == "
+        "DeliveryCandidate(item) IN /\\ DrainFairIngressSelected(node) "
+        "/\\ item.kind = \"TimeoutVote\" "
+        "=> /\\ asyncOutstandingWork' = asyncOutstandingWork "
+        "/\\ \\/ asyncCommandQueues' = asyncCommandQueues "
+        "\\/ asyncCommandQueues' = [asyncCommandQueues EXCEPT "
+        "![candidate.node] = Append(@, candidate)]"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncSequenceSetAfterAppendAddsOnlyValue",
+    ): (
+        "\\A sequence, value: sequence \\in Seq(Range(sequence)) "
+        "=> SequenceSet(Append(sequence, value)) "
+        "\\subseteq SequenceSet(sequence) \\cup {value}"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue",
+    ): (
+        "\\A keys, mapping, key, value: /\\ DOMAIN mapping = keys "
+        "/\\ (\\A owner \\in keys: "
+        "mapping[owner] \\in Seq(Range(mapping[owner]))) "
+        "=> UNION {SequenceSet( "
+        "[mapping EXCEPT ![key] = Append(@, value)][owner]): "
+        "owner \\in keys} \\subseteq "
+        "(UNION {SequenceSet(mapping[owner]): owner \\in keys}) "
+        "\\cup {value}"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncProposedTimeoutCausalOriginHasBeginTimeoutPhase",
+    ): (
+        "\\A node \\in ValidatorIds: "
+        "AsyncProposedTimeoutCausalOrigin(node).phase = \"BeginTimeout\""
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncOwnedTimeoutLifecycleOriginHasBeginTimeoutPhase",
+    ): (
+        "\\A node \\in ValidatorIds: "
+        "/\\ AsyncTimeoutRecoveryEpisodeTypeInvariantIn( "
+        "asyncControlServiceState) "
+        "/\\ AsyncTimeoutLifecycleOwned(node) "
+        "=> AsyncTimeoutLifecycleOrigin(node).phase = \"BeginTimeout\""
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCurrentTimeoutCausalOriginUsesEffectiveOrigin",
+    ): (
+        "\\A node \\in ValidatorIds: "
+        "AsyncCurrentTimeoutCausalOrigin(node) = "
+        "AsyncEffectiveTimeoutLifecycleOrigin(node)"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncDeliveryCandidateOriginPhaseEqualsDeliveryKind",
+    ): (
+        "\\A item: DeliveryCandidate(item).causalOrigin.phase = "
+        "DeliveryKind(item)"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncFairIngressDrainPreservesRetransmitTimerState",
+    ): (
+        "\\A node \\in ValidatorIds: DrainFairIngressSelected(node) "
+        "=> /\\ asyncOutstandingTags' = asyncOutstandingTags "
+        "/\\ asyncRetransmitDeadlines' = asyncRetransmitDeadlines"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncFairIngressDrainExcludesDirectRetransmit",
+    ): (
+        "\\A node \\in ValidatorIds: /\\ AsyncRetransmitPeriod \\in Nat \\ {0} "
+        "/\\ asyncNow \\in Nat "
+        "/\\ asyncRetransmitDeadlines \\in [ValidatorIds -> Nat] "
+        "/\\ DrainFairIngressSelected(node) "
+        "=> ~DirectRetransmitStep(node)"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncTypedOutstandingTagRemovalChangesFunction",
+    ): (
+        "\\A tags \\in [ValidatorIds -> SUBSET AsyncCompletionTags]: "
+        "\\A node \\in ValidatorIds: "
+        "\"RetransmitElapsed\" \\in tags[node] "
+        "=> [tags EXCEPT ![node] = @ \\ {\"RetransmitElapsed\"}] # tags"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncDeferredRetransmitRemovesOutstandingTag",
+    ): (
+        "\\A node \\in ValidatorIds: DeferredRetransmitStep(node) "
+        "=> /\\ \"RetransmitElapsed\" \\in asyncOutstandingTags[node] "
+        "/\\ asyncOutstandingTags' = [asyncOutstandingTags EXCEPT "
+        "![node] = @ \\ {\"RetransmitElapsed\"}]"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncFairIngressDrainExcludesDeferredRetransmit",
+    ): (
+        "ASSUME NEW node \\in ValidatorIds, "
+        "asyncOutstandingTags \\in "
+        "[ValidatorIds -> SUBSET AsyncCompletionTags], "
+        "DrainFairIngressSelected(node), DeferredRetransmitStep(node) "
+        "PROVE FALSE"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncIngressDrainDoesNotCompleteRetransmitLifecycle",
+    ): (
+        "\\A node \\in ValidatorIds: /\\ AsyncRetransmitPeriod \\in Nat \\ {0} "
+        "/\\ asyncNow \\in Nat "
+        "/\\ asyncRetransmitDeadlines \\in [ValidatorIds -> Nat] "
+        "/\\ asyncOutstandingTags \\in "
+        "[ValidatorIds -> SUBSET AsyncCompletionTags] "
+        "/\\ IngressDrainStep(node) /\\ DrainFairIngressSelected(node) "
+        "=> ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
+    ): (
+        "\\A node \\in ValidatorIds: /\\ AsyncControlServiceStateTypeInvariant "
+        "/\\ AsyncNext /\\ ~AsyncRetransmitLifecycleOwned(node) "
+        "/\\ AsyncRetransmitLifecycleCanAcquireThisStep(node) "
+        "/\\ ~AsyncRetransmitLifecycleResetThisStep(node) "
+        "/\\ ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(node) "
+        "=> /\\ AsyncRetransmitLifecycleOwned(node)' "
+        "/\\ AsyncRetransmitLifecyclePhysicalCut(node)' "
+        "= AsyncNextIngressPhysicalOrdinal(node)' "
+        "/\\ AsyncNextCandidateLifecycleOrdinal(node) "
+        "<= AsyncRetransmitLifecycleOrdinal(node)' "
+        "/\\ AsyncNextCandidateLifecycleOrdinal(node)' "
+        "> AsyncRetransmitLifecycleOrdinal(node)'"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",
+    ): (
+        "\\A node \\in ValidatorIds: /\\ AsyncNext "
+        "/\\ AsyncRetransmitLifecycleOwned(node) "
+        "/\\ ~AsyncRetransmitLifecycleResetThisStep(node) "
+        "/\\ ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(node) "
+        "=> /\\ AsyncRetransmitLifecycleOrdinal(node)' "
+        "= AsyncRetransmitLifecycleOrdinal(node) "
+        "/\\ AsyncRetransmitLifecyclePhysicalCut(node)' "
+        "= AsyncRetransmitLifecyclePhysicalCut(node)"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncRetransmitLifecycleOwnerAndPhysicalCutClearAtEndpoint",
+    ): (
+        "\\A node \\in ValidatorIds: /\\ AsyncNext "
+        "/\\ AsyncRetransmitLifecycleOwned(node) "
+        "/\\ AsyncRetransmitLifecycleOrdinal(node)' = 0 "
+        "=> /\\ AsyncRetransmitLifecyclePhysicalCut(node)' = 0 "
+        "/\\ \\/ AsyncRetransmitLifecycleResetThisStep(node) "
+        "\\/ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateProducerContinuationPostRetransmitCutCannotOwnRunnerTurn",
+    ): (
+        "\\A node \\in ValidatorIds, record \\in "
+        "AsyncCandidateProducerContinuationResolutionRecordsForNode(node): "
+        "/\\ AsyncRetransmitLifecycleOwned(node) "
+        "/\\ AsyncRetransmitLifecyclePhysicalCut(node) "
+        "<= record.sourcePhysicalOrdinal "
+        "=> record \\notin "
+        "AsyncCandidateProducerContinuationRunnableResolutionRecordsForNode( "
+        "node)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOccurrenceFrontierStartsFiniteEpisode",
+    ): (
+        "\\A target, leaderContext, leader, leaderView, subject, "
+        "sourceOccurrenceRank, owner: /\\ AsyncStrongTypeInvariant "
+        "/\\ AdequateLeaderFrozenTargetCorridor( target, leaderContext, "
+        "leader, leaderView) /\\ AdequateLeaderTargetOccurrenceRankFrontier( "
+        "target, leaderContext, leader, leaderView, subject, "
+        "sourceOccurrenceRank) /\\ AdequateLeaderTargetOccurrenceOwnerSelected( "
+        "target, leaderContext, leader, leaderView, subject, "
+        "sourceOccurrenceRank, owner) "
+        "/\\ AdequateLeaderProtectedPeriodicSnapshot( target, leaderContext, "
+        "leader, leaderView, subject) = {} "
+        "=> \\/ AdequateLeaderTargetStrictOccurrenceDescentGoal( target, "
+        "leaderContext, leader, leaderView, subject, sourceOccurrenceRank) "
+        "\\/ \\E known \\in SUBSET AdequateLeaderFrozenOwnerUniverse( target, "
+        "leaderContext, leader, leaderView, subject), budget \\in Nat: "
+        "/\\ known = AdequateLeaderTargetLiveOwnerIdentitySet( target, "
+        "leaderContext, leader, leaderView, subject) "
+        "/\\ AdequateLeaderTargetNonDescentEpisodeBudgetFrontier( target, "
+        "leaderContext, leader, leaderView, subject, sourceOccurrenceRank, "
+        "owner, known, budget)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicSnapshotCannotReplenish",
+    ): (
+        "\\A target, leaderContext, leader, leaderView, subject, "
+        "sourceOccurrenceRank, owner: /\\ AsyncStrongTypeInvariant "
+        "/\\ AsyncProgressOwnershipInvariant "
+        "/\\ AdequateLeaderFrozenTargetCorridor( target, leaderContext, "
+        "leader, leaderView) /\\ AdequateLeaderTargetOccurrenceOwnerSelected( "
+        "target, leaderContext, leader, leaderView, subject, "
+        "sourceOccurrenceRank, owner) /\\ [AsyncNext]_AsyncAllVars "
+        "/\\ AdequateLeaderFrozenTargetCorridor( target, leaderContext, "
+        "leader, leaderView)' "
+        "/\\ AdequateLeaderTargetOccurrenceOwnerSelected( target, "
+        "leaderContext, leader, leaderView, subject, sourceOccurrenceRank, "
+        "owner)' => AdequateLeaderProtectedPeriodicSnapshot( target, "
+        "leaderContext, leader, leaderView, subject)' \\subseteq "
+        "AdequateLeaderProtectedPeriodicSnapshot( target, leaderContext, "
+        "leader, leaderView, subject)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicIdentityServiceClosesSnapshot",
+    ): (
+        "\\A specification: "
+        "AdequateLeaderProtectedPeriodicIdentityServiceProperty(specification) "
+        "=> AdequateLeaderProtectedPeriodicEpisodeClosureProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedPeriodicClosureStartsFiniteOwnerEpisode",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderProtectedPeriodicEpisodeClosureProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> AdequateLeaderTargetPeriodicPrefixThenFiniteEpisodeProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "LeaderWirePhysicalFrozenCertificateRetainsPastCut",
     ): (
@@ -79,9 +329,50 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ),
     (
         "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AsyncLiveProvidesAdequateLeaderAsyncNextBehavior",
+    ): (
+        "\\A initialContext: AdequateLeaderAsyncNextBehaviorProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedPreCandidateSelectionAndFairnessSupplyEntryService",
+    ): (
+        "\\A specification: "
+        "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification) "
+        "/\\ AdequateLeaderFixedSelectedOwnerFairnessProperty(specification) "
+        "/\\ AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty( "
+        "specification) "
+        "/\\ AdequateLeaderFixedSelectedActionClockCarryProviderProperty( "
+        "specification) "
+        "=> AdequateLeaderFixedPreCandidateEntryServiceProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedGlobalBlockerProvidersSupplyProducerEpisodeStep",
+    ): (
+        "\\A specification: "
+        "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification) "
+        "/\\ AdequateLeaderFixedSelectedOwnerFairnessProperty(specification) "
+        "/\\ AdequateLeaderFixedGlobalBlockerProviderProperty(specification) "
+        "=> AdequateLeaderFixedGlobalProducerEpisodeStepProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderFixedGlobalBlockerProvidersSupplyRankStep",
+    ): (
+        "\\A specification: "
+        "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification) "
+        "/\\ AdequateLeaderFixedSelectedOwnerFairnessProperty(specification) "
+        "/\\ AdequateLeaderFixedGlobalBlockerProviderProperty(specification) "
+        "=> AdequateLeaderFixedGlobalBlockerRankStepProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
         "AdequateLeaderFixedCandidateFairnessAndRawRouteClosureSupplyEpisodeStep",
     ): (
         "\\A specification: "
+        "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification) "
         "/\\ AdequateLeaderFixedSelectedOwnerFairnessProperty(specification) "
         "/\\ "
         "AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProviderProperty( "
@@ -90,6 +381,19 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "specification) "
         "=> AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty( "
         "specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderRetainedProducerPacketProvidersSupplyRankStep",
+    ): (
+        "\\A specification, initialContext: "
+        "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification) "
+        "/\\ AdequateLeaderRetainedProducerPacketActionProviderProperty( "
+        "specification, initialContext) "
+        "/\\ AdequateLeaderRetainedProducerExactOwnerFairnessProperty( "
+        "specification, initialContext) "
+        "=> AdequateLeaderRetainedProducerPacketPrefixRankStepProperty( "
+        "specification, initialContext)"
     ),
     (
         "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
@@ -165,6 +469,39 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "\\A initialContext: "
         "AdequateLeaderExactClosureResidualProperty("
         "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestRuntimePrefixSnapshotIsFinite",
+    ): (
+        "\\A node \\in ValidatorIds, schedulerCeiling \\in Nat \\ {0}, "
+        "physicalCut \\in Nat \\ {0}: "
+        "/\\ AsyncStrongTypeInvariant "
+        "/\\ AsyncCandidateServiceLifecycleInvariant "
+        "/\\ schedulerCeiling "
+        "<= AsyncNextCandidateLifecycleOrdinal(node) "
+        "/\\ physicalCut <= AsyncNextIngressPhysicalOrdinal(node) "
+        "=> LET snapshot == ExactDecisionRequestRuntimePrefixSnapshot( "
+        "node, schedulerCeiling, physicalCut) "
+        "IN /\\ ExactDecisionRequestRuntimePrefixSnapshotActive( "
+        "snapshot, node) "
+        "/\\ ExactDecisionRequestRuntimeFrozenPrefixRank(snapshot) "
+        "\\in ExactDecisionRequestRuntimeFrozenPrefixCarrier"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestOwnedEpisodeHasRigidPrefixSnapshot",
+    ): (
+        "\\A node, qc, ownerOrdinal: /\\ AsyncStrongTypeInvariant "
+        "/\\ AsyncCandidateServiceLifecycleInvariant "
+        "/\\ ExactDecisionRequestOwnedRetransmitEpisode( "
+        "node, qc, ownerOrdinal) => \\E snapshot: "
+        "/\\ snapshot = ExactDecisionRequestRuntimePrefixSnapshot( "
+        "node, ownerOrdinal, AsyncRetransmitLifecyclePhysicalCut(node)) "
+        "/\\ ExactDecisionRequestRuntimePrefixSnapshotActive( "
+        "snapshot, node) "
+        "/\\ ExactDecisionRequestClockPrefixSnapshotBinding( "
+        "\"Owned\", snapshot, node, ownerOrdinal)"
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
@@ -1328,10 +1665,9 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "THEN AsyncCandidateServiceStateAfterSuccessfulService( "
         "candidateReclamationState, CHOOSE candidate \\in "
         "AsyncCandidateServicesThisStep: TRUE) ELSE IF "
-        "AsyncCandidateTerminalDiscardsThisStep # {} THEN "
+        "AsyncCandidateEligibleTerminalDiscardsThisStep # {} THEN "
         "AsyncCandidateServiceStateAfterTerminalRetirement( "
-        "candidateReclamationState, CHOOSE candidate \\in "
-        "AsyncCandidateTerminalDiscardsThisStep: TRUE) ELSE "
+        "candidateReclamationState) ELSE "
         "candidateReclamationState candidateOwnedState == IF "
         "AsyncCandidateLifecycleDeparturesThisStep # {} THEN "
         "AsyncCandidateLifecycleStateAfterServiceSlotTransfer( "
@@ -1342,15 +1678,24 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "AsyncCandidateProducerContinuationStateAfterDeparture( "
         "candidateOwnedState, CHOOSE candidate \\in "
         "AsyncCandidateLifecycleDeparturesThisStep: TRUE) ELSE "
-        "candidateOwnedState carrierState == "
+        "candidateOwnedState ordinaryCarrierState == "
+        "AsyncOrdinaryIngressCarrierStateAfterTransition( "
+        "candidateServiceState) carrierState == "
         "AsyncCandidateLifecycleStateAfterCarrierUpdate( "
-        "candidateServiceState) compactedState == "
+        "ordinaryCarrierState) compactedState == "
         "AsyncCandidateLifecycleStateAfterCompaction(carrierState) "
         "leaderWireState == "
         "AsyncCandidateLifecycleStateAfterLeaderWireAdmission( compactedState) "
         "serveIngressState == "
         "AsyncCandidateLifecycleStateAfterServeIngressAdmission( "
-        "leaderWireState) IN "
+        "leaderWireState) lifecycleState == "
+        "AsyncCandidateLifecycleStateAfterAdmission( serveIngressState) "
+        "timeoutState == AsyncCandidateLifecycleStateAfterTimeoutOwnership( "
+        "serveIngressState, lifecycleState) timeoutRecoveryState == "
+        "AsyncTimeoutRecoveryEpisodeStateAfterTransition( leaderWireState, "
+        "serveIngressState, timeoutState) timeoutVoteState == "
+        "AsyncTimeoutRecoveryVoteOwnerStateAfterAdmission( "
+        "timeoutRecoveryState) IN "
         "/\\ AsyncFreshLeaderWireLifecycleAdmissionsAreSingularThisStep "
         "/\\ AsyncFreshLeaderWireLifecycleAdmissionOrdinalMatchesIn( "
         "compactedState) "
@@ -1359,6 +1704,21 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ AsyncFreshServeIngressAdmissionsAreSingularThisStep "
         "/\\ AsyncFreshServeIngressSchedulerReservationMatchesIn( "
         "leaderWireState) "
+        "/\\ AsyncTimeoutRecoveryTransitionGateIn( "
+        "leaderWireState, serveIngressState) "
+        "/\\ timeoutRecoveryState.timeoutRecoveryEpisodes = "
+        "AsyncTimeoutRecoveryRetainedEpisodesAfterTransition( "
+        "leaderWireState, timeoutState) \\cup "
+        "AsyncTimeoutRecoveryNewEpisodesAfterTransition( "
+        "leaderWireState, serveIngressState) "
+        "/\\ timeoutVoteState.timeoutRecoveryEpisodes = "
+        "{AsyncTimeoutRecoveryEpisodeAfterVoteAdmission( "
+        "timeoutRecoveryState, episode): episode \\in "
+        "timeoutRecoveryState.timeoutRecoveryEpisodes} "
+        "/\\ timeoutState.timeoutRecoveryEpisodes = "
+        "resetState.timeoutRecoveryEpisodes "
+        "/\\ asyncControlServiceState'.timeoutRecoveryEpisodes = "
+        "timeoutVoteState.timeoutRecoveryEpisodes "
         "/\\ AsyncCandidateLifecycleReservationsAvailableIn( serveIngressState) "
         "/\\ AsyncCandidateTerminalServiceReservationAvailableIn( "
         "candidateReclamationState) "

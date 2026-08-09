@@ -26,10 +26,14 @@ public final class VpnQuote {
   private final String meterFamily;
   private final int flowLabelBits;
   private final int paddingBudgetMs;
+  private final String relayIdHex;
+  private final String descriptorCommitHex;
+  private final String tlsServerName;
   private final String relayTlsSpkiSha256Hex;
+  private final String relayCertificateSha256Hex;
+  private final String directorySnapshotDigestHex;
   private final String meteringPublicKeyHex;
   private final VpnTxInstruction openLeaseInstruction;
-  private final List<VpnTxInstruction> txInstructions;
 
   public VpnQuote(
       final String quoteId,
@@ -53,10 +57,14 @@ public final class VpnQuote {
       final String meterFamily,
       final int flowLabelBits,
       final int paddingBudgetMs,
+      final String relayIdHex,
+      final String descriptorCommitHex,
+      final String tlsServerName,
       final String relayTlsSpkiSha256Hex,
+      final String relayCertificateSha256Hex,
+      final String directorySnapshotDigestHex,
       final String meteringPublicKeyHex,
-      final VpnTxInstruction openLeaseInstruction,
-      final List<VpnTxInstruction> txInstructions) {
+      final VpnTxInstruction openLeaseInstruction) {
     this.quoteId = Objects.requireNonNull(quoteId, "quoteId");
     this.leaseIdHex = Objects.requireNonNull(leaseIdHex, "leaseIdHex");
     this.sessionIdHex = Objects.requireNonNull(sessionIdHex, "sessionIdHex");
@@ -78,10 +86,18 @@ public final class VpnQuote {
     this.meterFamily = Objects.requireNonNull(meterFamily, "meterFamily");
     this.flowLabelBits = flowLabelBits;
     this.paddingBudgetMs = paddingBudgetMs;
-    this.relayTlsSpkiSha256Hex = relayTlsSpkiSha256Hex;
+    this.relayIdHex = Objects.requireNonNull(relayIdHex, "relayIdHex");
+    this.descriptorCommitHex = Objects.requireNonNull(descriptorCommitHex, "descriptorCommitHex");
+    this.tlsServerName = Objects.requireNonNull(tlsServerName, "tlsServerName");
+    this.relayTlsSpkiSha256Hex =
+        Objects.requireNonNull(relayTlsSpkiSha256Hex, "relayTlsSpkiSha256Hex");
+    this.relayCertificateSha256Hex =
+        Objects.requireNonNull(relayCertificateSha256Hex, "relayCertificateSha256Hex");
+    this.directorySnapshotDigestHex =
+        Objects.requireNonNull(directorySnapshotDigestHex, "directorySnapshotDigestHex");
     this.meteringPublicKeyHex = Objects.requireNonNull(meteringPublicKeyHex, "meteringPublicKeyHex");
-    this.openLeaseInstruction = openLeaseInstruction;
-    this.txInstructions = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(Objects.requireNonNull(txInstructions, "txInstructions")));
+    this.openLeaseInstruction =
+        Objects.requireNonNull(openLeaseInstruction, "openLeaseInstruction");
   }
 
   public String quoteId() { return quoteId; }
@@ -105,8 +121,12 @@ public final class VpnQuote {
   public String meterFamily() { return meterFamily; }
   public int flowLabelBits() { return flowLabelBits; }
   public int paddingBudgetMs() { return paddingBudgetMs; }
+  public String relayIdHex() { return relayIdHex; }
+  public String descriptorCommitHex() { return descriptorCommitHex; }
+  public String tlsServerName() { return tlsServerName; }
   public String relayTlsSpkiSha256Hex() { return relayTlsSpkiSha256Hex; }
+  public String relayCertificateSha256Hex() { return relayCertificateSha256Hex; }
+  public String directorySnapshotDigestHex() { return directorySnapshotDigestHex; }
   public String meteringPublicKeyHex() { return meteringPublicKeyHex; }
   public VpnTxInstruction openLeaseInstruction() { return openLeaseInstruction; }
-  public List<VpnTxInstruction> txInstructions() { return txInstructions; }
 }

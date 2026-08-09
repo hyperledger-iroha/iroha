@@ -627,7 +627,9 @@ PROOF
          DEF CommandSuccessors, PersistDecisionRecoverySuccessor,
              PersistDecisionRecoveryKind, PersistDecisionBody,
              PersistDecisionValidationHeld, PersistDecisionRequest,
-             AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateSuccessorProposalRound,
+             AsyncCandidateWithIdentityAndOrigin,
              NoItemCandidate, SequenceSet
     <2>22. CASE command.kind = "BeginTimeout"
       BY <1>1, <2>22, Isa
@@ -644,7 +646,9 @@ PROOF
     <2>25. CASE command.kind = "SignTimeout"
       BY <1>1, <2>25, Isa
          DEF CommandSuccessors, SignTimeoutFormsTC,
-             CausalCandidateWithEvidence, AsyncCandidateWithIdentity,
+             CausalCandidateWithEvidence,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateWithIdentityAndOrigin,
              NoItemCandidate, SequenceSet
     <2>26. CASE command.kind = "DeliverTC"
       BY <1>1, <2>26, Isa
@@ -661,7 +665,9 @@ PROOF
              InstallCommitSignSuccessors,
              InstallLockedFetchSuccessor,
              InstallCommitSignSuccessor, InstallProposalSuccessor,
-             AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateSuccessorProposalRound,
+             AsyncCandidateWithIdentityAndOrigin,
              NoItemCandidate, SequenceSet
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
          <2>7, <2>8, <2>9, <2>10, <2>11, <2>12, <2>13, <2>14,
@@ -3129,7 +3135,7 @@ PROOF
       <3>1. /\ asyncIngressLanes[recipient] =
                     [source \in AsyncIngressSources |-> <<>>]
              /\ AsyncIngressCapacity \in Nat
-             /\ AsyncIngressCapacity >= 4 * N + 2
+             /\ AsyncIngressCapacity >= 5 * N + 2
         BY <1>1, <2>1, SMT
            DEF AsyncInitAt, AsyncBaseInitAt, AsyncIngressInit,
                AsyncConfiguration
@@ -3158,7 +3164,12 @@ PROOF
                  Len(asyncIngressLanes[recipient][source]) = 0
           BY <3>1, <4>1, Isa
         <4> QED BY <4>2, Isa
-             DEF IngressContinuationProtectedSourcesFor
+             DEF IngressContinuationProtectedSourcesFor,
+                 IngressProtectedClassesPresentIn,
+                 IngressLaneHasNonTimeoutProgressIn,
+                 IngressLaneHasCertifiedFenceEscapeIn,
+                 IngressLaneHasTimeoutVoteIn,
+                 IngressLaneHasTransportCompletionIn, SequenceSet
       <3>8. IngressTimeoutVoteProtectedSourcesFor(
                  asyncIngressLanes, recipient) = ValidatorIds
         <4>1. ValidatorIds \subseteq AsyncIngressSources
@@ -3169,6 +3180,16 @@ PROOF
         <4> QED BY <4>2, Isa
              DEF IngressTimeoutVoteProtectedSourcesFor,
                  IngressLaneHasTimeoutVoteIn, SequenceSet
+      <3>8b. IngressCertifiedFenceEscapeProtectedSourcesFor(
+                  asyncIngressLanes, recipient) = ValidatorIds
+        <4>1. ValidatorIds \subseteq AsyncIngressSources
+          BY Isa DEF AsyncIngressSources
+        <4>2. \A source \in ValidatorIds:
+                 Len(asyncIngressLanes[recipient][source]) = 0
+          BY <3>1, <4>1, Isa
+        <4> QED BY <4>2, Isa
+             DEF IngressCertifiedFenceEscapeProtectedSourcesFor,
+                 IngressLaneHasCertifiedFenceEscapeIn, SequenceSet
       <3>8c. IngressTransportCompletionProtectedSourcesFor(
                   asyncIngressLanes, recipient) = AsyncIngressSources
         <4>1. \A source \in AsyncIngressSources:
@@ -3191,8 +3212,9 @@ PROOF
       <3>13. IngressDepth(recipient)
                 + IngressProtectedSlotCountFor(
                     asyncIngressLanes, recipient)
-              = 4 * N + 2
-        BY <3>3, <3>4, <3>6, <3>7, <3>8, <3>8c, <3>9, <3>10, SMT
+              = 5 * N + 2
+        BY <3>3, <3>4, <3>6, <3>7, <3>8, <3>8b, <3>8c,
+           <3>9, <3>10, SMT
            DEF IngressProtectedSlotCountFor
       <3>14. IngressDepth(recipient)
                 + IngressProtectedSlotCountFor(

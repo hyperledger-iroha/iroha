@@ -115,11 +115,19 @@ use sorafs_manifest::{
 use tiny_keccak::{Hasher as _, Sha3};
 
 #[cfg(test)]
-use iroha::data_model::soracloud::{
-    SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
-    SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SoraUploadedModelEncryptionRecipientV1,
-    SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
-    SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
+use iroha::data_model::{
+    nexus::{DataSpaceId, FeeDebitSource},
+    soracloud::{
+        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+        SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SoraUploadedModelEncryptionRecipientV1,
+        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
+        SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
+    },
+    transaction::SignedTransaction,
+};
+#[cfg(test)]
+use iroha_torii_shared::{
+    FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse,
 };
 
 use crate::{Run, RunContext};
@@ -21387,6 +21395,7 @@ mod tests {
         SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
     };
     use iroha_crypto::Algorithm;
+    use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
     use norito::json::Value;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use std::{
@@ -21993,7 +22002,7 @@ mod tests {
     }
 
     fn hf_shared_lease_asset_definition() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
             "lease".parse().expect("name"),
         )
@@ -22206,17 +22215,11 @@ mod tests {
             .into_iter()
             .find(|request| request.method == "POST" && request.path == "/v1/sorafs/pin/register")
             .expect("captured pin registration");
-        let register_body: Value =
-            json::from_slice(&register_request.body).expect("decode pin registration");
-        let manifest_payload = register_body
-            .get("manifest_payload")
-            .and_then(Value::as_str)
-            .expect("pin registration manifest payload");
-        let manifest_bytes = base64::engine::general_purpose::STANDARD
-            .decode(manifest_payload)
-            .expect("decode registered manifest payload");
-        let published_manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)
-            .expect("decode registered manifest");
+        let registration = mock_sorafs_pin_registration(&register_request)
+            .expect("decode native pin registration transaction");
+        let published_manifest =
+            sorafs_manifest::decode_manifest_v1_canonical(&registration.manifest_payload)
+                .expect("decode registered manifest");
 
         let descriptor = chunker_registry::default_descriptor();
         let (plan, payload) =
@@ -22274,6 +22277,13 @@ mod tests {
         body: Vec<u8>,
     }
 
+    #[derive(Clone, Debug)]
+    struct MockSorafsPinRegistration {
+        manifest_payload: Vec<u8>,
+        manifest_digest_hex: String,
+        tx_hash_hex: String,
+    }
+
     struct MockHttpServer {
         base_url: String,
         address: String,
@@ -22308,35 +22318,63 @@ mod tests {
                                 continue;
                             }
                             let path = request.path.clone();
-                            let registered_manifest_digest =
-                                mock_sorafs_pin_register_digest(&request);
+                            let fee_quote_response = mock_fee_quote_response(&request);
+                            let pin_registration = mock_sorafs_pin_registration(&request);
+                            let is_pin_registration = request.method == "POST"
+                                && request.path == "/v1/sorafs/pin/register";
                             captured_requests
                                 .lock()
                                 .expect("lock captured requests")
                                 .push(request);
-                            let routed_response = routes.get(&path).cloned();
-                            let pin_registry_response = if routed_response.is_none() {
+                            let configured_response = routes.get(&path).cloned();
+                            let pin_registration_response = configured_response
+                                .as_ref()
+                                .filter(|_| is_pin_registration)
+                                .and_then(|_| pin_registration.as_ref())
+                                .map(mock_sorafs_pin_registration_response);
+                            let pin_registry_response = if configured_response.is_none()
+                                && fee_quote_response.is_none()
+                                && pin_registration_response.is_none()
+                            {
                                 mock_sorafs_pin_registry_response(&path, &registered_pin_manifests)
                             } else {
                                 None
                             };
-                            let request_matched =
-                                routed_response.is_some() || pin_registry_response.is_some();
-                            let response = routed_response.or(pin_registry_response).unwrap_or(
-                                MockHttpResponse {
-                                    content_type: "text/plain",
-                                    body: b"not found".to_vec(),
-                                },
-                            );
-                            let status = if request_matched {
-                                "200 OK"
-                            } else {
-                                "404 Not Found"
-                            };
-                            if status == "200 OK" {
-                                if let Some(digest) = registered_manifest_digest {
-                                    registered_pin_manifests.insert(digest);
-                                }
+                            let (response, status) =
+                                if let Some(response) = pin_registration_response {
+                                    (response, "202 Accepted")
+                                } else if configured_response.is_some()
+                                    && is_pin_registration
+                                    && pin_registration.is_none()
+                                {
+                                    (
+                                        MockHttpResponse {
+                                            content_type: "text/plain",
+                                            body: b"invalid pin registration transaction".to_vec(),
+                                        },
+                                        "400 Bad Request",
+                                    )
+                                } else if let Some(response) = configured_response {
+                                    (response, "200 OK")
+                                } else if let Some(response) = fee_quote_response {
+                                    (response, "200 OK")
+                                } else if let Some(response) = pin_registry_response {
+                                    (response, "200 OK")
+                                } else {
+                                    (
+                                        MockHttpResponse {
+                                            content_type: "text/plain",
+                                            body: b"not found".to_vec(),
+                                        },
+                                        "404 Not Found",
+                                    )
+                                };
+                            if status == "202 Accepted" {
+                                registered_pin_manifests.insert(
+                                    pin_registration
+                                        .expect("accepted pin registration was decoded")
+                                        .manifest_digest_hex,
+                                );
                             }
                             if let Err(error) = write!(
                                 stream,
@@ -22380,21 +22418,80 @@ mod tests {
         }
     }
 
-    fn mock_sorafs_pin_register_digest(request: &CapturedHttpRequest) -> Option<String> {
+    fn mock_fee_quote_response(request: &CapturedHttpRequest) -> Option<MockHttpResponse> {
+        if request.method != "POST" || request.path != iroha_torii_shared::uri::FEES_QUOTE {
+            return None;
+        }
+        let request: FeeQuoteRequest = json::from_slice(&request.body).ok()?;
+        let (debit_source, program_revision) = match request.payload.fee_payment.sponsor_program() {
+            Some((program_id, revision)) => (
+                FeeDebitSource::SponsorProgram(program_id.clone()),
+                Some(revision),
+            ),
+            None => (
+                FeeDebitSource::Account(request.payload.authority.clone()),
+                None,
+            ),
+        };
+        let response = FeeQuoteResponse {
+            intent: request.payload.fee_payment.clone(),
+            observation: FeeQuoteObservation {
+                ledger_time_ms: 1,
+                next_block_height: 1,
+                route_dataspace_id: DataSpaceId::UNIVERSAL,
+            },
+            components: Vec::new(),
+            capacities: Vec::new(),
+            decision: FeeQuoteDecision::Accepted {
+                debit_source,
+                program_revision,
+            },
+        };
+        Some(MockHttpResponse {
+            content_type: "application/json",
+            body: json::to_vec(&response).ok()?,
+        })
+    }
+
+    fn mock_sorafs_pin_registration(
+        request: &CapturedHttpRequest,
+    ) -> Option<MockSorafsPinRegistration> {
         if request.method != "POST" || request.path != "/v1/sorafs/pin/register" {
             return None;
         }
-        let body: norito::json::Value = json::from_slice(&request.body).ok()?;
-        let manifest_payload = body.get("manifest_payload")?.as_str()?;
-        let manifest_bytes = base64::engine::general_purpose::STANDARD
-            .decode(manifest_payload)
-            .ok()?;
-        if base64::engine::general_purpose::STANDARD.encode(&manifest_bytes) != manifest_payload {
+        let transaction = SignedTransaction::decode_all_versioned(&request.body).ok()?;
+        transaction.verify_signature().ok()?;
+        let Executable::Instructions(instructions) = transaction.instructions() else {
             return None;
-        }
-        let manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes).ok()?;
+        };
+        let [instruction] = instructions.as_ref() else {
+            return None;
+        };
+        let registration = instruction
+            .as_any()
+            .downcast_ref::<iroha::data_model::isi::sorafs::RegisterPinManifest>()?;
+        let manifest =
+            sorafs_manifest::decode_manifest_v1_canonical(&registration.manifest_payload).ok()?;
         let digest = manifest.digest().ok()?;
-        Some(hex::encode(digest.as_bytes()))
+        Some(MockSorafsPinRegistration {
+            manifest_payload: registration.manifest_payload.clone(),
+            manifest_digest_hex: hex::encode(digest.as_bytes()),
+            tx_hash_hex: hex::encode(transaction.hash().as_ref()),
+        })
+    }
+
+    fn mock_sorafs_pin_registration_response(
+        registration: &MockSorafsPinRegistration,
+    ) -> MockHttpResponse {
+        MockHttpResponse {
+            content_type: "application/json",
+            body: json::to_vec(&norito::json!({
+                "status": "submitted",
+                "tx_hash_hex": (registration.tx_hash_hex.clone()),
+                "manifest_digest_hex": (registration.manifest_digest_hex.clone()),
+            }))
+            .expect("encode mock SoraFS pin registration response"),
+        }
     }
 
     fn mock_sorafs_pin_registry_response(
@@ -22423,6 +22520,41 @@ mod tests {
     }
 
     #[test]
+    fn mock_http_server_quotes_the_exact_requested_fee_intent() {
+        let server = MockHttpServer::start(BTreeMap::new());
+        let key_pair = soracloud_fixture_key_pair(0x49);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut config = crate::fallback_config();
+        config.account = authority.clone();
+        config.key_pair = key_pair;
+        config.torii_api_url = server.base_url.parse().expect("mock Torii URL");
+        let client = Client::new(config);
+        let requested_intent = FeePaymentIntent::authority(Vec::new(), None);
+        let payload = client
+            .try_build_transaction_payload(
+                Vec::<InstructionBox>::new(),
+                requested_intent.clone(),
+                Metadata::default(),
+            )
+            .expect("build exact unsigned fee quote payload");
+
+        let quote = client.quote_fees(&payload).expect("quote mock fees");
+
+        assert_eq!(quote.intent, requested_intent);
+        assert_eq!(quote.observation.route_dataspace_id, DataSpaceId::UNIVERSAL);
+        assert!(matches!(
+            quote.decision,
+            FeeQuoteDecision::Accepted {
+                debit_source: FeeDebitSource::Account(ref quoted_authority),
+                program_revision: None,
+            } if quoted_authority == &authority
+        ));
+        assert!(server.requests().iter().any(|request| {
+            request.method == "POST" && request.path == iroha_torii_shared::uri::FEES_QUOTE
+        }));
+    }
+
+    #[test]
     fn mock_http_server_helpers_track_sorafs_pin_registration_digest() {
         let manifest = ManifestBuilder::new()
             .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xA1; 32]))
@@ -22445,19 +22577,37 @@ mod tests {
                 .expect("digest mock pin manifest")
                 .as_bytes(),
         );
-        let manifest_payload = base64::engine::general_purpose::STANDARD.encode(&manifest_bytes);
+        let key_pair = soracloud_fixture_key_pair(0x4A);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut config = crate::fallback_config();
+        config.account = authority;
+        config.key_pair = key_pair;
+        let client = Client::new(config);
+        let transaction = client
+            .try_build_transaction_from_items(
+                [iroha::data_model::isi::sorafs::RegisterPinManifest::new(
+                    manifest_bytes.clone(),
+                    42,
+                    None,
+                    None,
+                )],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
+            .expect("build mock native pin registration transaction");
         let request = CapturedHttpRequest {
             method: "POST".to_owned(),
             path: "/v1/sorafs/pin/register".to_owned(),
-            body: json::to_vec(&norito::json!({
-                "manifest_payload": manifest_payload,
-            }))
-            .expect("encode mock register body"),
+            body: transaction.encode_versioned(),
         };
 
+        let registration =
+            mock_sorafs_pin_registration(&request).expect("decode mock registration transaction");
+        assert_eq!(registration.manifest_payload, manifest_bytes);
+        assert_eq!(registration.manifest_digest_hex, digest);
         assert_eq!(
-            mock_sorafs_pin_register_digest(&request).as_deref(),
-            Some(digest.as_str())
+            registration.tx_hash_hex,
+            hex::encode(transaction.hash().as_ref())
         );
 
         let mut registered_pin_manifests = BTreeSet::new();
@@ -36630,389 +36780,5 @@ assert(missingChallengeId.json().error === "challenge_id must be a string", "mis
         );
     }
 
-    #[test]
-    fn generated_pii_app_auth_smoke_supports_shared_sessions_and_cross_replica_logout_invalidation()
-    {
-        let dir = temp_dir("pii_auth_shared_session_smoke");
-        InitArgs {
-            output_dir: dir.clone(),
-            service_name: "clinic_console".to_owned(),
-            service_version: "1.0.0".to_owned(),
-            template: InitTemplate::PiiApp,
-            overwrite: false,
-        }
-        .run()
-        .expect("pii-app init should succeed");
-
-        let server_path = dir.join("pii-app/api/server.mjs");
-        if !node_available() {
-            eprintln!("node unavailable; validating static pii replay/session markers in scaffold");
-            let api = fs::read_to_string(&server_path).expect("read pii api");
-            assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
-            assert!(api.contains("AUTH_CHALLENGE_EXPIRED"));
-            assert!(api.contains("AUTH_CHALLENGE_NOT_FOUND"));
-            assert!(api.contains("AUTH_CHALLENGE_PRINCIPAL_MISMATCH"));
-            assert!(api.contains("AUTH_SIGNATURE_INVALID"));
-            assert!(api.contains("AUTH_SESSION_PREFIX"));
-            assert!(api.contains("SameSite=Strict"));
-            assert!(api.contains("/pii/api/consent/state"));
-            return;
-        }
-
-        let state_file = dir.join(".shared_auth_state.json");
-        let harness_path = dir.join("pii_auth_shared_session_smoke.mjs");
-        let mut script = r#"import { spawn } from "node:child_process";
-import crypto from "node:crypto";
-import fs from "node:fs";
-import net from "node:net";
-import path from "node:path";
-
-const SERVER_PATH = __SERVER_PATH__;
-const STATE_FILE = __STATE_FILE__;
-const REQUEST_TIMEOUT_MS = 60000;
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-async function freePort() {
-  return await new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      probe.close((closeError) => {
-        if (closeError) {
-          reject(closeError);
-          return;
-        }
-        resolve(port);
-      });
-    });
-  });
-}
-
-function startReplica(port, envOverrides) {
-  const child = spawn(process.execPath, [SERVER_PATH, `--port=${port}`], {
-    env: { ...process.env, ...envOverrides },
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-  let logs = "";
-  child.stdout.on("data", (chunk) => {
-    logs += chunk.toString("utf8");
-  });
-  child.stderr.on("data", (chunk) => {
-    logs += chunk.toString("utf8");
-  });
-  return { child, logs: () => logs };
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForExit(child, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (child.exitCode === null && Date.now() < deadline) {
-    await sleep(25);
-  }
-}
-
-async function stopReplica(replica) {
-  if (!replica || !replica.child || replica.child.exitCode !== null) {
-    return;
-  }
-  replica.child.kill("SIGTERM");
-  await waitForExit(replica.child, 800);
-  if (replica.child.exitCode === null) {
-    replica.child.kill("SIGKILL");
-    await waitForExit(replica.child, 1500);
-  }
-}
-
-async function waitForHealth(port, route) {
-  for (let attempt = 0; attempt < 160; attempt += 1) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}${route}`);
-      if (response.status === 200) {
-        return;
-      }
-    } catch {
-      // keep retrying while process boots
-    }
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`server failed healthcheck on port ${port}`);
-}
-
-async function jsonRequest(port, method, route, body, headers = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new Error(`${method} ${route} request timed out`)),
-    REQUEST_TIMEOUT_MS
-  );
-  const init = { method, headers: { ...headers } };
-  if (body !== undefined) {
-    init.headers["content-type"] = "application/json";
-    init.body = JSON.stringify(body);
-  }
-  init.signal = controller.signal;
-  let response;
-  try {
-    response = await fetch(`http://127.0.0.1:${port}${route}`, init);
-  } finally {
-    clearTimeout(timeout);
-  }
-  const text = await response.text();
-  const setCookie = typeof response.headers.getSetCookie === "function"
-    ? response.headers.getSetCookie()[0] ?? null
-    : response.headers.get("set-cookie");
-  return {
-    status: response.status,
-    body: text.length > 0 ? JSON.parse(text) : null,
-    setCookie
-  };
-}
-
-function publicKeyHexFromSpki(spkiDer) {
-  return Buffer.from(spkiDer).subarray(-32).toString("hex");
-}
-
-async function main() {
-  let replicaA = null;
-  let replicaB = null;
-  try {
-  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
-  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-  const publicKeyHex = publicKeyHexFromSpki(
-    publicKey.export({ format: "der", type: "spki" })
-  );
-  const env = {
-    AUTH_MODE: "strict",
-    NODE_ENV: "development",
-    SESSION_HMAC_KEY: "abcdef0123456789abcdef0123456789abcdef0123456789",
-    AUTH_SESSION_TTL_SECS: "900",
-    AUTH_CHALLENGE_TTL_SECS: "120",
-    AUTH_CAPABILITY_MAP_JSON: JSON.stringify({ [publicKeyHex]: ["pii.records.read"] }),
-    AUTH_REQUIRE_EXTERNAL_SHARED_STATE: "0",
-    PUBLIC_BASE_URL: "http://127.0.0.1",
-    SORACLOUD_SHARED_STATE_FILE: STATE_FILE
-  };
-
-  const portA = await freePort();
-  replicaA = startReplica(portA, env);
-  await waitForHealth(portA, "/pii/api/healthz");
-
-  const challenge = await jsonRequest(portA, "POST", "/pii/api/auth/challenge", {
-    public_key: publicKeyHex
-  });
-  assert(challenge.status === 200, `challenge failed: ${JSON.stringify(challenge)}`);
-  const expectedChallengeMessage = [
-    challenge.body.auth_message_version,
-    `challenge_id=${challenge.body.challenge_id}`,
-    `public_key=${challenge.body.public_key}`,
-    `nonce=${challenge.body.nonce}`,
-    `issued_at_unix_ms=${challenge.body.issued_at_unix_ms}`,
-    `expires_at_unix_ms=${challenge.body.expires_at_unix_ms}`,
-    "origin=http://127.0.0.1"
-  ].join("\n");
-  assert(
-    challenge.body.message === expectedChallengeMessage,
-    `challenge message must be canonical and deterministic: ${JSON.stringify(challenge.body)}`
-  );
-
-  const { publicKey: otherPublicKey } = crypto.generateKeyPairSync("ed25519");
-  const otherPublicKeyHex = publicKeyHexFromSpki(
-    otherPublicKey.export({ format: "der", type: "spki" })
-  );
-  const principalMismatch = await jsonRequest(portA, "POST", "/pii/api/auth/login", {
-    public_key: otherPublicKeyHex,
-    challenge_id: challenge.body.challenge_id,
-    signature: "00".repeat(64)
-  });
-  assert(
-    principalMismatch.status === 401,
-    `challenge principal mismatch should fail: ${JSON.stringify(principalMismatch)}`
-  );
-  assert(
-    principalMismatch.body?.code === "AUTH_CHALLENGE_PRINCIPAL_MISMATCH",
-    `challenge principal mismatch code mismatch: ${JSON.stringify(principalMismatch.body)}`
-  );
-
-  const malformed = await jsonRequest(portA, "POST", "/pii/api/auth/login", {
-    public_key: publicKeyHex,
-    challenge_id: challenge.body.challenge_id,
-    signature: "00".repeat(64)
-  });
-  assert(malformed.status === 401, `malformed signature should fail: ${JSON.stringify(malformed)}`);
-  assert(
-    malformed.body?.code === "AUTH_SIGNATURE_INVALID",
-    `malformed signature code mismatch: ${JSON.stringify(malformed.body)}`
-  );
-
-  const unknown = await jsonRequest(portA, "POST", "/pii/api/auth/login", {
-    public_key: publicKeyHex,
-    challenge_id: crypto.randomUUID(),
-    signature: "00".repeat(64)
-  });
-  assert(unknown.status === 401, `unknown challenge should fail: ${JSON.stringify(unknown)}`);
-  assert(
-    unknown.body?.code === "AUTH_CHALLENGE_NOT_FOUND",
-    `unknown challenge code mismatch: ${JSON.stringify(unknown.body)}`
-  );
-
-  const signature = crypto
-    .sign(null, Buffer.from(challenge.body.message, "utf8"), privateKey)
-    .toString("hex");
-  const login = await jsonRequest(portA, "POST", "/pii/api/auth/login", {
-    public_key: publicKeyHex,
-    challenge_id: challenge.body.challenge_id,
-    signature
-  });
-  assert(login.status === 200, `login failed: ${JSON.stringify(login)}`);
-  assert(login.setCookie && login.setCookie.includes("session="), "login must set session cookie");
-  assert(login.setCookie.includes("HttpOnly"), "session cookie must be HttpOnly");
-  assert(login.setCookie.includes("SameSite=Strict"), "session cookie must be SameSite=Strict");
-  const sessionCookie = login.setCookie.split(";")[0];
-
-  const me = await jsonRequest(portA, "GET", "/pii/api/auth/me", undefined, {
-    cookie: sessionCookie
-  });
-  assert(me.status === 200, `auth me should succeed on replica A: ${JSON.stringify(me)}`);
-  assert(me.body?.principal === publicKeyHex, "auth me principal mismatch");
-
-  const replay = await jsonRequest(portA, "POST", "/pii/api/auth/login", {
-    public_key: publicKeyHex,
-    challenge_id: challenge.body.challenge_id,
-    signature
-  });
-  assert(replay.status === 401, `challenge replay should fail: ${JSON.stringify(replay)}`);
-  assert(
-    replay.body?.code === "AUTH_CHALLENGE_REPLAYED",
-    `challenge replay code mismatch: ${JSON.stringify(replay.body)}`
-  );
-
-  const expiringChallenge = await jsonRequest(portA, "POST", "/pii/api/auth/challenge", {
-    public_key: publicKeyHex
-  });
-  assert(expiringChallenge.status === 200, "expiring challenge should be issued");
-  const expiringSnapshot = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-  const challengeKey = `/state/auth/challenges/${expiringChallenge.body.challenge_id}`;
-  expiringSnapshot.records[challengeKey].expires_at_unix_ms = Date.now() - 1;
-  fs.writeFileSync(STATE_FILE, JSON.stringify(expiringSnapshot));
-  const expiringSignature = crypto
-    .sign(null, Buffer.from(expiringChallenge.body.message, "utf8"), privateKey)
-    .toString("hex");
-  const expired = await jsonRequest(portA, "POST", "/pii/api/auth/login", {
-    public_key: publicKeyHex,
-    challenge_id: expiringChallenge.body.challenge_id,
-    signature: expiringSignature
-  });
-  assert(expired.status === 401, `expired challenge should be rejected: ${JSON.stringify(expired)}`);
-  assert(
-    expired.body?.code === "AUTH_CHALLENGE_EXPIRED",
-    `unexpected expired challenge code: ${JSON.stringify(expired.body)}`
-  );
-
-  const stateOnReplicaA = await jsonRequest(
-    portA,
-    "GET",
-    "/pii/api/consent/state",
-    undefined,
-    { cookie: sessionCookie }
-  );
-  assert(
-    stateOnReplicaA.status === 200,
-    `authorized read should succeed on replica A: ${JSON.stringify(stateOnReplicaA)}`
-  );
-
-  const stateSnapshot = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-  const hasSessionRecord = Object.keys(stateSnapshot.records).some((key) =>
-    key.startsWith("/state/auth/sessions/")
-  );
-  assert(hasSessionRecord, "shared auth state must persist session records");
-
-  const portB = await freePort();
-  replicaB = startReplica(portB, env);
-  await waitForHealth(portB, "/pii/api/healthz");
-  const sharedSession = await jsonRequest(
-    portB,
-    "GET",
-    "/pii/api/consent/state",
-    undefined,
-    { cookie: sessionCookie }
-  );
-  assert(
-    sharedSession.status === 200,
-    `replica session continuation should succeed: ${JSON.stringify(sharedSession)}`
-  );
-  assert(sharedSession.body?.requested_by === publicKeyHex, "shared session principal mismatch");
-
-  const logout = await jsonRequest(portB, "POST", "/pii/api/auth/logout", undefined, {
-    cookie: sessionCookie
-  });
-  assert(logout.status === 204, `logout failed: ${JSON.stringify(logout)}`);
-  assert(logout.setCookie && logout.setCookie.includes("Max-Age=0"), "logout must clear cookie");
-  assert(logout.setCookie.includes("HttpOnly"), "logout cookie must stay HttpOnly");
-  assert(logout.setCookie.includes("SameSite=Strict"), "logout cookie must be SameSite=Strict");
-
-  const postLogout = await jsonRequest(
-    portA,
-    "GET",
-    "/pii/api/consent/state",
-    undefined,
-    { cookie: sessionCookie }
-  );
-  assert(
-    postLogout.status === 401,
-    `session should be invalidated across replicas after logout: ${JSON.stringify(postLogout)}`
-  );
-  assert(
-    postLogout.body?.code === "AUTH_REQUIRED",
-    `post-logout code mismatch: ${JSON.stringify(postLogout.body)}`
-  );
-  } finally {
-    await stopReplica(replicaB);
-    await stopReplica(replicaA);
-  }
-}
-
-main().catch((error) => {
-  console.error(error?.stack ?? String(error));
-  process.exit(1);
-});
-"#
-        .to_owned();
-        script = script.replace("__SERVER_PATH__", &js_string_literal(&server_path));
-        script = script.replace("__STATE_FILE__", &js_string_literal(&state_file));
-        fs::write(&harness_path, script).expect("write node harness");
-        run_node_harness(&harness_path);
-    }
-
-    #[test]
-    fn legacy_health_app_template_selector_is_rejected() {
-        use clap::ValueEnum;
-
-        let parsed =
-            <InitTemplate as ValueEnum>::from_str("health-app", true).expect_err("must reject");
-        assert!(
-            parsed.contains("health-app"),
-            "error message should mention rejected selector: {parsed}"
-        );
-        let parsed_new =
-            <InitTemplate as ValueEnum>::from_str("pii-app", true).expect("pii-app must parse");
-        assert_eq!(parsed_new, InitTemplate::PiiApp);
-        let parsed_hayahi = <InitTemplate as ValueEnum>::from_str("hayahi-app", true)
-            .expect("hayahi-app must parse");
-        assert_eq!(parsed_hayahi, InitTemplate::HayahiApp);
-        let parsed_http_service = <InitTemplate as ValueEnum>::from_str("http-service", true)
-            .expect("http-service must parse");
-        assert_eq!(parsed_http_service, InitTemplate::HttpService);
-        let parsed_split_app = <AppInitTemplate as ValueEnum>::from_str("split-app", true)
-            .expect("split-app must parse");
-        assert_eq!(parsed_split_app, AppInitTemplate::SplitApp);
-    }
+    include!("soracloud/generated_auth_tail_tests.rs");
 }

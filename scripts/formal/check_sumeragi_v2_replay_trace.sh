@@ -15,7 +15,7 @@ readonly FIXTURE_DIR="${REPO_ROOT}/crates/iroha_sumeragi_core/tests/fixtures"
 readonly EXPECTED="${FIXTURE_DIR}/tlc_replay_witness.tsv"
 readonly CONFIG="${FIXTURE_DIR}/tlc_replay_witness.cfg"
 readonly NORMALIZER="${REPO_ROOT}/scripts/normalize_sumeragi_v2_tlc_trace.py"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 if [[ -n "${JAVA_BIN:-}" ]]; then
   resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
@@ -32,7 +32,7 @@ case "$(uname -s)-$(uname -m)" in
     exit 1
     ;;
 esac
-readonly TLAPM_STDLIB="${TLAPM_STDLIB:-${REPO_ROOT}/target/tlapm/toolchains/${TLAPM_COMMIT}/${TLAPM_PLATFORM}/tlapm/lib/tlapm/stdlib}"
+readonly TLAPM_STDLIB="${TLAPM_STDLIB:?TLAPM_STDLIB must name the authenticated external standard library}"
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then

@@ -41,7 +41,7 @@ use iroha_core::{
             OrchardActionPublicV1, OrchardChangeProverInputV1, OrchardSpendProverInputV1,
             authorize_orchard_bundle_v1, prepare_orchard_bundle_v1,
         },
-        p256::{SecretScalarV1, TranscriptBindingV1},
+        p256::{DeviceSigningKeyV1, SecretScalarV1, TranscriptBindingV1},
         pq_masp::{
             PqMaspInputWitnessV1, PqMaspOutputWitnessV1, PqMaspWitnessV1,
             derive_pq_masp_authorization_key_digest_from_secret_v1,
@@ -76,7 +76,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
-    asset::AssetDefinitionId,
+    asset::{AssetBalanceScope, AssetDefinitionId},
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
     prelude::{AccountId, ChainId},
@@ -359,7 +359,7 @@ pub struct VegaCredentialPresentationActionRequestV1 {
     /// Exact private ISO 18013-5 document material.
     pub witness_material: VegaPrivacyActionWitnessMaterialV1,
     /// Holder device ES256 signing key; `H_dev` is derived inside the builder.
-    pub device_signing_key: p256::ecdsa::SigningKey,
+    pub device_signing_key: DeviceSigningKeyV1,
     /// Trusted block time used by the closed presentation-validity policy.
     pub trusted_block_timestamp_ms: u64,
 }
@@ -1913,6 +1913,7 @@ pub fn build_signed_orchard_note_action_v1(
     let mut statement = OrchardHalo2ActionsStatementV1 {
         context: statement_context(&context, profile),
         asset_definition_id: request.asset_definition_id,
+        public_balance_scope: AssetBalanceScope::Global,
         pool_id: request.pool_id,
         anchor: request.anchor,
         anchor_epoch: request.anchor_epoch,
@@ -2163,6 +2164,7 @@ pub fn build_signed_ivm_private_note_action_v1(
     let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
         context: statement_context(&context, profile),
         asset_definition_id: request.asset_definition_id,
+        public_balance_scope: AssetBalanceScope::Global,
         pool_id: request.pool_id,
         program_id,
         action_digest: PrivacyActionDigestV1::new([0; 32]),

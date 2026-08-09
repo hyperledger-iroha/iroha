@@ -63,7 +63,7 @@ public final class GovernanceInstructionBuilderTests {
     args.put("action", "ProposeDeployContract");
     args.put(
         "contract_address",
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7");
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw");
     args.put("code_hash_hex", "a2".repeat(32));
     args.put("abi_hash_hex", "b3".repeat(32));
     args.put("abi_version", "1");
@@ -72,7 +72,7 @@ public final class GovernanceInstructionBuilderTests {
         ProposeDeployContractInstruction.fromArguments(args);
 
     assert instruction.contractAlias() == null : "contract alias should be absent";
-    assert "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    assert "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         .equals(instruction.contractAddress()) : "contract address mismatch";
     assert instruction.toArguments().equals(args) : "arguments should round-trip";
   }
@@ -83,7 +83,7 @@ public final class GovernanceInstructionBuilderTests {
       ProposeDeployContractInstruction.builder()
           .setContractAlias("router::universal")
           .setContractAddress(
-              "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7")
+              "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw")
           .setCodeHashHex("a4".repeat(32))
           .setAbiHashHex("b5".repeat(32))
           .setAbiVersion("1")
@@ -315,13 +315,14 @@ public final class GovernanceInstructionBuilderTests {
   }
 
   private static void finalizeReferendumRoundTrip() {
+    final String proposalId = "e1".repeat(32);
     final FinalizeReferendumInstruction instruction =
         FinalizeReferendumInstruction.builder()
-            .setReferendumId("ref-final")
-            .setProposalIdHex("e1".repeat(32))
+            .setReferendumId(proposalId)
+            .setProposalIdHex(proposalId)
             .build();
-    assert "ref-final".equals(instruction.referendumId()) : "referendum id mismatch";
-    assert "e1".repeat(32).equals(instruction.proposalIdHex()) : "proposal id mismatch";
+    assert proposalId.equals(instruction.referendumId()) : "referendum id mismatch";
+    assert proposalId.equals(instruction.proposalIdHex()) : "proposal id mismatch";
   }
 
   private static void persistCouncilRoundTrip() {

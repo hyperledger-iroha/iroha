@@ -105,8 +105,10 @@ fn build_faucet_test_context_with_registration(
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
     let domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain id");
-    let asset_definition_id =
-        AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("asset name"));
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "xor".parse().expect("asset name"),
+    );
     let canonical_selector = asset_definition_id.to_string();
     let authority_kp = checked_faucet_account_key_fixture();
     let authority_id = AccountId::new(authority_kp.public_key().clone());
@@ -118,9 +120,13 @@ fn build_faucet_test_context_with_registration(
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
     let other_user_account = Account::new(other_user_id.clone()).build(&authority_id);
-    let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
-        .with_name("XOR".to_owned())
-        .build(&authority_id);
+    let asset_definition = AssetDefinition::numeric(
+        asset_definition_id.clone(),
+        "XOR".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority_id);
     let mut accounts = vec![authority_account, other_user_account];
     if register_user {
         accounts.push(Account::new(user_id.clone()).build(&authority_id));

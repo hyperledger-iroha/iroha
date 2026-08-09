@@ -60,7 +60,7 @@ EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS = {
     ),
 }
 
-# Pin the direct property surfaces consumed by the six theorem statements.
+# Pin the direct property surfaces consumed by the release theorem statements.
 # Without these contracts, replacing a property with TRUE would preserve the
 # theorem declaration and silently turn a real release obligation into a
 # tautology.
@@ -95,6 +95,45 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "/\\ gst /\\ target \\in AsyncCurrentResponsiveVoters "
         "/\\ target \\in AsyncActiveServiceNodes "
         "/\\ ~NodeHasDecision(target)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderAsyncNextBehaviorProperty",
+    ): "specification => [][AsyncNext]_AsyncAllVars",
+    (
+        "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+        "AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle",
+    ): (
+        "/\\ ModelConfiguration "
+        "/\\ AdequateLeaderFixedConfiguredPipelineBudgetCompatibility "
+        "/\\ AdequateLeaderFixedConfiguredDeadlineCompatibility "
+        "/\\ (specification => []AsyncStrongTypeInvariant) "
+        "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification) "
+        "/\\ AdequateLeaderFixedSelectedOwnerFairnessProperty(specification) "
+        "/\\ AdequateLeaderAuthorityDeadlineImmediateSourceEntryProviderProperty( "
+        "specification) "
+        "/\\ AdequateLeaderFixedSubjectReplacementProviderProperties( "
+        "specification) "
+        "/\\ AdequateLeaderFixedPipelineTokenOwnershipAndTailCarryProperty( "
+        "specification) "
+        "/\\ AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProviderProperty( "
+        "specification) "
+        "/\\ AdequateLeaderFixedCutPerActionProviderProperty(specification) "
+        "/\\ AdequateLeaderFixedSelectedActionClockCarryProviderProperty( "
+        "specification) "
+        "/\\ AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty( "
+        "specification) "
+        "/\\ AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty( "
+        "specification) "
+        "/\\ AdequateLeaderRetainedProducerNonDescentEpisodeStepProperty( "
+        "specification) "
+        "/\\ AdequateLeaderRetainedProducerNonDescentEpisodeClosureProperty( "
+        "specification) "
+        "/\\ AdequateLeaderFixedGlobalBlockerProviderProperty(specification) "
+        "/\\ AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty( "
+        "specification) "
+        "/\\ AdequateLeaderAuthorityDeadlineDecisionRetentionStepProviderProperty( "
+        "specification)"
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
@@ -1578,6 +1617,8 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderTargetComposedRankDescentProperty",
     ): (
+        "/\\ AdequateLeaderProtectedPeriodicEpisodeClosureProperty("
+        "specification) "
         "/\\ AdequateLeaderTargetOccurrenceRankServiceProperty(specification) "
         "/\\ AdequateLeaderTargetProducerTransportOccurrenceClosureProperty( "
         "specification) "
@@ -2743,8 +2784,8 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "SumeragiV2TimeoutViewProgressProofs",
         "TimeoutPhysicalControlPacketDependencyRank",
     ): (
-        "ExactDecisionTargetNeutralPacketDependencyRank( "
-        "TimeoutPhysicalControlSelectedPacket(item))"
+        "ExactDecisionTargetNeutralPacketDependencyRankForSnapshot( "
+        "snapshot, TimeoutPhysicalControlSelectedPacket(item))"
     ),
     (
         "SumeragiV2TimeoutViewProgressProofs",
@@ -2763,9 +2804,9 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
     ): "snapshot.predecessors",
     (
         "SumeragiV2TimeoutViewProgressProofs",
-        "TimeoutPhysicalControlFrozenProducerEpisodeBudget",
+        "TimeoutPhysicalControlFrozenProducerEpisodeRank",
     ): (
-        "ExactDecisionTargetNeutralProducerEpisodeBudget(snapshot)"
+        "ExactDecisionTargetNeutralProducerEpisodeRank(snapshot)"
     ),
     (
         "SumeragiV2TimeoutViewProgressProofs",

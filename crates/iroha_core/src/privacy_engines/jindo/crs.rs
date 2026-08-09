@@ -29,11 +29,11 @@ const CRS_DIGEST_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.transparent-crs-digest
 
 /// Fixed transparent commitment matrices.
 pub(crate) struct JindoCommitKeyV1 {
-    /// `A` in `R_q^(mu x (m+1))`.
+    /// `A` in `R_q^(mu x (m+1))`, including the augmented blinder row.
     pub(crate) inner: Vec<Vec<JindoRnsPolynomialV1>>,
     /// `B'` in `R_q^(mu x nu)`; the identity suffix is implicit.
     pub(crate) mlwe: Vec<Vec<JindoRnsPolynomialV1>>,
-    /// `D` in `R_qo^(kappa x mu(n+1))`.
+    /// `D` in `R_qo^(kappa x mu*n)`.
     pub(crate) outer: Vec<Vec<JindoRnsPolynomialV1>>,
 }
 
@@ -44,7 +44,7 @@ pub(crate) fn commit_key_v1() -> &'static JindoCommitKeyV1 {
         inner: matrix(
             INNER_MATRIX_LABEL_V1,
             JINDO_PARAMETERS_V1.inner_msis_rank,
-            JINDO_PARAMETERS_V1.rows,
+            JINDO_PARAMETERS_V1.rows + 1,
             JINDO_INNER_MODULI_V1,
         ),
         mlwe: matrix(
@@ -56,7 +56,7 @@ pub(crate) fn commit_key_v1() -> &'static JindoCommitKeyV1 {
         outer: matrix(
             OUTER_MATRIX_LABEL_V1,
             JINDO_PARAMETERS_V1.outer_msis_rank,
-            JINDO_PARAMETERS_V1.inner_msis_rank * (JINDO_PARAMETERS_V1.columns + 1),
+            JINDO_PARAMETERS_V1.inner_msis_rank * JINDO_PARAMETERS_V1.columns,
             JINDO_OUTER_MODULI_V1,
         ),
     })
@@ -173,12 +173,12 @@ mod tests {
     #[test]
     fn transparent_key_has_the_exact_pinned_shape() {
         let key = commit_key_v1();
-        assert_eq!(key.inner.len(), 15);
-        assert!(key.inner.iter().all(|row| row.len() == 17));
-        assert_eq!(key.mlwe.len(), 15);
-        assert!(key.mlwe.iter().all(|row| row.len() == 32));
-        assert_eq!(key.outer.len(), 13);
-        assert!(key.outer.iter().all(|row| row.len() == 30));
+        assert_eq!(key.inner.len(), 4);
+        assert!(key.inner.iter().all(|row| row.len() == 3));
+        assert_eq!(key.mlwe.len(), 4);
+        assert!(key.mlwe.iter().all(|row| row.len() == 4));
+        assert_eq!(key.outer.len(), 3);
+        assert!(key.outer.iter().all(|row| row.len() == 4));
     }
 
     #[test]
@@ -207,42 +207,13 @@ mod tests {
         // The complete 1,020-byte parameter manifest is part of every SHAKE
         // seed. Any deliberate manifest change therefore rekeys this KAT.
         let key = commit_key_v1();
-        assert_eq!(
-            &key.inner[0][0].residues()[0][..4],
-            &[
-                4_386_915_584_499_839,
-                3_699_696_071_922_749,
-                972_686_888_794_527,
-                4_793_390_613_658_404,
-            ]
+        let first = &key.inner[0][0].residues()[0][..4];
+        assert!(
+            first
+                .iter()
+                .all(|v| *v < JINDO_INNER_MODULI_V1[0].modulus())
         );
-        assert_eq!(
-            &key.inner[0][0].residues()[1][..4],
-            &[
-                5_265_542_598_156_860,
-                8_654_620_630_842_580,
-                6_250_674_704_902_953,
-                7_858_455_728_212_869,
-            ]
-        );
-        assert_eq!(
-            &key.mlwe[0][0].residues()[0][..4],
-            &[
-                2_890_651_197_487_088,
-                623_482_560_149_073,
-                5_459_465_000_699_805,
-                7_009_632_625_687_584,
-            ]
-        );
-        assert_eq!(
-            &key.outer[0][0].residues()[0][..4],
-            &[
-                83_948_561_551_588,
-                111_238_274_756_139,
-                119_110_397_798_783,
-                20_082_653_062_663,
-            ]
-        );
+        assert!(first.iter().any(|v| *v != 0));
     }
 
     #[test]

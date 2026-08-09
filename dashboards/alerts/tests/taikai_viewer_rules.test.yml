@@ -5,28 +5,28 @@ tests:
   - interval: 1m
     input_series:
       - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="alpha",stream="main",le="1500"}'
-        values: '0 0 0 0 0 0 0 0 0 0 0 0'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
       - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="alpha",stream="main",le="2000"}'
-        values: '0 0 0 0 0 1 2 3 4 5 6 7'
+        values: '0 0 0 0 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14'
       - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="alpha",stream="main",le="+Inf"}'
-        values: '0 0 0 0 0 1 2 3 4 5 6 7'
+        values: '0 0 0 0 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14'
       - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="beta",stream="main",le="1500"}'
-        values: '0 0 0 0 0 1 2 3 4 5 6 7'
+        values: '0 0 0 0 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14'
       - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="beta",stream="main",le="2000"}'
-        values: '0 0 0 0 0 1 2 3 4 5 6 7'
+        values: '0 0 0 0 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14'
       - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="beta",stream="main",le="+Inf"}'
-        values: '0 0 0 0 0 1 2 3 4 5 6 7'
+        values: '0 0 0 0 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14'
       - series: 'taikai_ingest_segment_errors_total{cluster="alpha",stream="main",reason="decode"}'
-        values: '0 0 0 1 2 3 4 5 6 7 8 9'
+        values: '0 0 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16'
       - series: 'taikai_viewer_cek_rotation_seconds_ago{lane="lane-a"}'
-        values: '0 0 0 200 200 200 200 200 200 200 200 200 200 200 200 200'
+        values: '0 0 0 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200'
       - series: 'torii_sorafs_proof_health_alerts_total{provider_id="prov-a",trigger="pdp",penalty="penalty_applied"}'
         values: '0 0 0 0 1 1 1 2 2 2 3 3 3 3 3'
       - series: 'torii_sorafs_proof_health_cooldown{provider_id="prov-a"}'
         values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1 1'
     alert_rule_test:
       - alertname: TaikaiLiveEdgeDrift
-        eval_time: 12m
+        eval_time: 16m
         exp_alerts:
           - exp_labels:
               cluster: alpha
@@ -35,8 +35,10 @@ tests:
               stream: main
             exp_annotations:
               summary: "Taikai live-edge drift above 1.5s (p99)"
+              description: >
+                Cluster alpha drift exceeded 1.5s at p99 for 10 minutes. Check ingest ladder health and confirm clocks are synchronized.
       - alertname: TaikaiIngestFailure
-        eval_time: 6m
+        eval_time: 9m
         exp_alerts:
           - exp_labels:
               cluster: alpha
@@ -45,8 +47,10 @@ tests:
               stream: main
             exp_annotations:
               summary: "Taikai ingest errors detected"
+              description: >
+                Segment errors detected for 0.016666666666666666 occurrences over 5 minutes. Inspect taikai_ingest_segment_errors_total counters for reasons.
       - alertname: TaikaiCekRotationLag
-        eval_time: 16m
+        eval_time: 18m
         exp_alerts:
           - exp_labels:
               lane: lane-a
@@ -54,6 +58,8 @@ tests:
               service: taikai-viewer
             exp_annotations:
               summary: "CEK rotation overdue"
+              description: >
+                PQ lane lane-a has not rotated CEK in 200 seconds. Ensure CEK publisher and viewer caches are synchronized.
       - alertname: SorafsProofHealthPenalty
         eval_time: 12m
         exp_alerts:
@@ -65,6 +71,8 @@ tests:
               trigger: pdp
             exp_annotations:
               summary: "SoraFS proof-health penalty applied"
+              description: >
+                Provider prov-a triggered 3 proof-health penalty events over the last 15 minutes (trigger=pdp). Investigate PDP/PoTR failures and confirm collateral actions.
       - alertname: SorafsProofHealthCooldown
         eval_time: 10m
         exp_alerts:
@@ -74,6 +82,8 @@ tests:
               service: taikai-viewer
             exp_annotations:
               summary: "SoraFS proof-health cooldown active"
+              description: >
+                Provider prov-a is under proof-health cooldown; penalties are temporarily suppressed. Verify PoR/PoTR health and cooldown clearance criteria.
   - interval: 1m
     input_series:
       - series: 'taikai_ingest_live_edge_drift_ms_bucket{cluster="alpha",stream="main",le="1500"}'

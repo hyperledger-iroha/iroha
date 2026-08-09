@@ -1,36 +1,48 @@
 //! Native zk-X509 engine boundary.
 //!
-//! The prover preparation path is complete and authoritative: it validates
-//! persisted governance/root state against trusted block time, decodes the
-//! sole canonical private-witness grammar, and executes the strict reference
-//! relation.  This makes the codec and relation reachable production code
-//! rather than disconnected laboratory helpers.
+//! The consensus verifier is present in every node build. Prover preparation
+//! and proof construction are compiled only for tests or the explicitly
+//! non-shipping `privacy-release-evidence` workflow.
 //!
 //! The sole credential path constructs and independently verifies the bound
 //! `X5S1` MAIN/compact-CA envelope. A native reference check, projection-only
 //! proof, or collection of unbound subproofs is never accepted as a
 //! credential proof.
 
-use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1};
-use rand::{TryCryptoRng, rngs::OsRng};
+use iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use iroha_data_model::privacy::PrivacyConsensusLimitsV1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use rand::TryCryptoRng;
 use thiserror::Error;
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::{
     accumulator_stark::{
-        ZkX509CaAccumulatorProofErrorV1, ca_accumulator_base_root_from_proof_v1,
-        ca_accumulator_subproof_binding_from_proof_v1, ca_profile_digest_v1, ca_public_digest_v1,
-        prove_zk_x509_ca_accumulator_stark_v1_with_rng,
+        ZkX509CaAccumulatorProofErrorV1, prove_zk_x509_ca_accumulator_stark_v1_with_rng,
+    },
+    codec::{ZkX509WitnessCodecErrorV1, ZkX509WitnessV1},
+    credential_pre_aux::ZkX509CredentialPreAuxErrorV1,
+    credential_stark::encode_zk_x509_credential_envelope_v1,
+    main_assembly::{ZkX509MainAssemblyErrorV1, build_zk_x509_main_trace_assembly_v1},
+    relation::{
+        ZkX509GovernanceV1, ZkX509RelationErrorV1, ZkX509RelationOutputV1,
+        validate_reference_relation_v1,
+    },
+    stark::{ZkX509StarkErrorV1, commit_zk_x509_main_base_phase_v1_with_rng},
+};
+use super::{
+    accumulator_stark::{
+        ca_accumulator_base_root_from_proof_v1, ca_accumulator_subproof_binding_from_proof_v1,
+        ca_profile_digest_v1, ca_public_digest_v1,
     },
     air::{ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1, ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1},
-    codec::{ZkX509WitnessCodecErrorV1, ZkX509WitnessV1},
     credential_pre_aux::{
-        ZK_X509_CREDENTIAL_PRE_AUX_DESCRIPTOR_V1, ZkX509CredentialPreAuxErrorV1,
-        derive_zk_x509_credential_pre_aux_binding_v1,
+        ZK_X509_CREDENTIAL_PRE_AUX_DESCRIPTOR_V1, derive_zk_x509_credential_pre_aux_binding_v1,
     },
     credential_stark::{
         ZkX509CredentialProofErrorV1, ZkX509CredentialPublicBindingV1,
-        decode_zk_x509_credential_envelope_v1, encode_zk_x509_credential_envelope_v1,
-        validate_cross_subproof_binding_v1,
+        decode_zk_x509_credential_envelope_v1, validate_cross_subproof_binding_v1,
     },
     der_air::ZkX509Rfc5280StatementV1,
     fixed_algebraic::ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1,
@@ -43,11 +55,6 @@ use super::{
         zk_x509_sha_fixed_algebraic_schedule_v1,
     },
     io_air::ZK_X509_IO_AIR_DESCRIPTOR_V1,
-    main_assembly::{
-        ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1, ZkX509MainAssemblyErrorV1,
-        build_zk_x509_main_trace_assembly_v1,
-        compile_zk_x509_rfc_statement_from_authoritative_state_v1,
-    },
     main_io::ZK_X509_MAIN_IO_DECLARATIONS_DESCRIPTOR_V1,
     merkle::hash_frame_v1,
     profile::{
@@ -56,27 +63,24 @@ use super::{
         ZK_X509_RFC5280_PROFILE_V1, ZK_X509_SOURCE_PROFILE_V1, ZK_X509_STARK_PROFILE_DESCRIPTOR_V1,
         ZK_X509_SUITE_V1, ZK_X509_TRUST_ANCHOR_REVISION_SCHEMA_V1,
     },
-    relation::{
-        ZkX509GovernanceV1, ZkX509RelationErrorV1, ZkX509RelationOutputV1,
-        validate_reference_relation_v1,
-    },
     sha_call_bus_stark::{
         ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1, ZkX509ShaCallPublicShapeV1,
         ZkX509ShaCallScheduleV1,
     },
-    sha256_air::ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1,
     sha256_word_air::ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1,
-    stark::{
-        ZkX509StarkErrorV1, commit_zk_x509_main_base_phase_v1_with_rng,
-        verify_zk_x509_main_aggregate_stark_v1, zk_x509_main_pre_aux_from_proof_v1,
+    stark::{verify_zk_x509_main_aggregate_stark_v1, zk_x509_main_pre_aux_from_proof_v1},
+    verifier_profile::{
+        ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1, ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1,
+        compile_zk_x509_rfc_statement_from_authoritative_state_v1,
     },
 };
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::prover_randomness::{
     HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1,
 };
-use crate::privacy_state::{
-    PrivacyZkX509AuthoritativeStateV1, validate_privacy_zk_x509_statement_state_v1,
-};
+use crate::privacy_state::PrivacyZkX509AuthoritativeStateV1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use crate::privacy_state::validate_privacy_zk_x509_statement_state_v1;
 
 const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.compiled-profile.v1";
 const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+trusted-block-time+taira-consensus-limits+exact-IRX509W1-private-witness+strict-reference-relation";
@@ -106,12 +110,14 @@ impl ZkX509CompiledProfileV1 {
 }
 
 /// Canonically decoded and reference-validated private prover input.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PreparedZkX509ProverInputV1 {
     witness: ZkX509WitnessV1,
     projection: ZkX509RelationOutputV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl PreparedZkX509ProverInputV1 {
     /// Borrow the sole canonical witness representation.
     pub(crate) const fn witness(&self) -> &ZkX509WitnessV1 {
@@ -152,39 +158,50 @@ fn compile_zk_x509_consensus_public_inputs_v1(
 #[derive(Debug, PartialEq, Eq, Error)]
 pub(crate) enum ZkX509EngineErrorV1 {
     /// Persisted state, roots, epochs, policy, or trusted block time mismatch.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 authoritative state validation failed: {0}")]
     InvalidAuthoritativeState(String),
     /// Private witness bytes are not the sole exact bounded grammar.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     WitnessCodec(#[from] ZkX509WitnessCodecErrorV1),
     /// Decode followed by encode did not reproduce the exact input bytes.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 witness codec failed its exact round-trip invariant")]
     WitnessRoundTripMismatch,
     /// Strict RFC 5280/reference relation failure.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     ReferenceRelation(#[from] ZkX509RelationErrorV1),
     /// Canonical challenge-independent MAIN material could not be assembled.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     MainAssembly(#[from] ZkX509MainAssemblyErrorV1),
     /// Joint MAIN/compact-CA challenge derivation failed.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     CredentialPreAux(#[from] ZkX509CredentialPreAuxErrorV1),
     /// Complete MAIN proof construction failed.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     MainProofConstruction(#[from] ZkX509StarkErrorV1),
     /// Dedicated compact-CA proof construction failed.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     CaProofConstruction(#[from] ZkX509CaAccumulatorProofErrorV1),
     /// Prover entropy was unavailable or failed the first-release health policy.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error(transparent)]
     ProverRandomness(#[from] TryCryptoProverRandomnessErrorV1),
     /// Canonical credential envelope or consensus-context binding failure.
     #[error(transparent)]
     CredentialProof(#[from] ZkX509CredentialProofErrorV1),
     /// Producer-generated X5S1 bytes failed the independent consensus verifier.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 credential prover self-check failed")]
     ProverSelfCheckFailed,
     /// Canonical MAIN assembly did not reproduce prover preparation exactly.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 canonical prover projection mismatch")]
     ProverProjectionMismatch,
     /// The canonical SHA algebraic compiler or schedule rejected its profile.
@@ -289,6 +306,7 @@ pub(crate) fn verify_zk_x509_credential_proof_v1(
 ///
 /// This function performs no proof construction. Its output is the only
 /// admitted input to the credential-proof constructor.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn prepare_zk_x509_prover_input_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
@@ -340,6 +358,7 @@ pub(crate) fn prepare_zk_x509_prover_input_v1(
 /// There is no independently accepted subproof path and no host-side
 /// reference-relation substitute for the final self-check.
 #[allow(clippy::too_many_arguments)]
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     statement: &IrohaZkX509StarkP256StatementV1,
     authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
@@ -417,27 +436,6 @@ pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng<R: TryCryptoRng>(
     )
     .map_err(|_| ZkX509EngineErrorV1::ProverSelfCheckFailed)?;
     Ok(encoded)
-}
-
-/// Construct one canonical `X5S1` credential proof with operating-system
-/// cryptographic entropy.
-pub(crate) fn prove_zk_x509_credential_proof_v1(
-    statement: &IrohaZkX509StarkP256StatementV1,
-    authoritative_state: &PrivacyZkX509AuthoritativeStateV1,
-    trusted_block_timestamp_ms: u64,
-    consensus_limits: &PrivacyConsensusLimitsV1,
-    genesis_hash: [u8; 32],
-    encoded_witness: &[u8],
-) -> Result<Vec<u8>, ZkX509EngineErrorV1> {
-    prove_zk_x509_credential_proof_v1_with_rng(
-        statement,
-        authoritative_state,
-        trusted_block_timestamp_ms,
-        consensus_limits,
-        genesis_hash,
-        encoded_witness,
-        &mut OsRng,
-    )
 }
 
 fn compiled_profile_fields_v1<'a>(
@@ -803,7 +801,7 @@ mod tests {
             .find("pub(crate) fn prove_zk_x509_credential_proof_v1_with_rng")
             .expect("sole credential prover");
         let prover_end = source[prover_start..]
-            .find("/// Construct one canonical `X5S1` credential proof with operating-system")
+            .find("fn compiled_profile_fields_v1")
             .map(|offset| prover_start + offset)
             .expect("sole credential prover end");
         let prover = &source[prover_start..prover_end];
@@ -858,6 +856,7 @@ mod tests {
             "require_complete_zk_x509_air_v1",
             "after_release_gate",
             "zk_x509_air_gaps_v1",
+            "OsRng",
         ] {
             assert!(
                 !production_source.contains(forbidden),

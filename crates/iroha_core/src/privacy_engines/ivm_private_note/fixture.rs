@@ -87,7 +87,7 @@ fn note(
 
 fn release_asset_definition_id_v1() -> Result<AssetDefinitionId, IvmPrivateNoteReleaseFixtureErrorV1>
 {
-    Ok(AssetDefinitionId::new(
+    Ok(AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal")
             .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?,
         iroha_data_model::name::Name::from_str("ivmnote")
@@ -134,6 +134,7 @@ fn build_fixture<R: RngCore + CryptoRng>(
     let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
         context: context()?,
         asset_definition_id,
+        public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
         pool_id,
         program_id,
         action_digest: PrivacyActionDigestV1::new([0; 32]),

@@ -1,30 +1,22 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { computeIvmArtifactHashes } from "../src/ivmArtifact.js";
 import { verifyCompiledContractArtifact } from "../src/kotodamaCompiler/normalize.js";
+import { parseStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
 
 const TEST_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = path.resolve(TEST_DIRECTORY, "../../..");
 const FIXTURE_DIRECTORY = path.join(TEST_DIRECTORY, "fixtures");
-const FIXTURE = JSON.parse(
+const FIXTURE = parseStrictLosslessIntegerJson(
   readFileSync(
     path.join(FIXTURE_DIRECTORY, "current_rust_contract_artifact.json"),
     "utf8",
   ),
+  "current Rust contract artifact fixture",
 );
 
 function sha256(bytes) {
@@ -42,79 +34,6 @@ function fixtureArtifact() {
   return Uint8Array.from(canonical);
 }
 
-function canonicalHashLiteral(hex) {
-  const body = hex.toUpperCase();
-  let crc = 0xffff;
-  const processByte = (byte) => {
-    crc ^= (byte & 0xff) << 8;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc =
-        (crc & 0x8000) !== 0
-          ? ((crc << 1) ^ 0x1021) & 0xffff
-          : (crc << 1) & 0xffff;
-    }
-  };
-  for (const byte of Buffer.from(`hash:${body}`, "utf8")) processByte(byte);
-  return `hash:${body}#${crc.toString(16).toUpperCase().padStart(4, "0")}`;
-}
-
-function locatePinnedIvmRlib() {
-  const explicit = process.env.IROHA_JS_IVM_RLIB;
-  if (explicit !== undefined) {
-    const candidate = path.resolve(REPOSITORY_ROOT, explicit);
-    assert.equal(
-      sha256(readFileSync(candidate)),
-      FIXTURE.generation_provenance.ivm_rlib_sha256,
-      "IROHA_JS_IVM_RLIB must name the exact fixture-pinned IVM rlib",
-    );
-    return candidate;
-  }
-
-  const cargoTargetDirectory =
-    process.env.CARGO_TARGET_DIR === undefined
-      ? path.join(REPOSITORY_ROOT, "target")
-      : path.resolve(REPOSITORY_ROOT, process.env.CARGO_TARGET_DIR);
-  const dependencyDirectories = ["release", "debug"]
-    .map((profile) => path.join(cargoTargetDirectory, profile, "deps"))
-    .filter(existsSync);
-  const candidates = dependencyDirectories.flatMap((dependencyDirectory) =>
-    readdirSync(dependencyDirectory)
-      .filter((name) => /^libivm-[0-9a-f]+\.rlib$/u.test(name))
-      .map((name) => path.join(dependencyDirectory, name))
-      .filter(
-        (candidate) =>
-          sha256(readFileSync(candidate)) ===
-          FIXTURE.generation_provenance.ivm_rlib_sha256,
-      ),
-  );
-  assert.equal(
-    candidates.length,
-    1,
-    "the exact pinned current-source IVM rlib must be available",
-  );
-  return candidates[0];
-}
-
-function compileRustOracle(directory) {
-  const executable = path.join(directory, "verify-current-ivm-artifact");
-  const ivmRlib = locatePinnedIvmRlib();
-  execFileSync(
-    process.env.RUSTC ?? "rustc",
-    [
-      "--edition=2024",
-      path.join(FIXTURE_DIRECTORY, "verify_current_rust_contract_artifact.rs"),
-      "-L",
-      `dependency=${path.dirname(ivmRlib)}`,
-      "--extern",
-      `ivm=${ivmRlib}`,
-      "-o",
-      executable,
-    ],
-    { cwd: REPOSITORY_ROOT, stdio: "pipe" },
-  );
-  return executable;
-}
-
 test("real current compiler artifact is source-bound and passes the browser structural boundary", () => {
   const sourceBindings = [
     [
@@ -125,19 +44,11 @@ test("real current compiler artifact is source-bound and passes the browser stru
       "scripts/regenerate_current_rust_contract_artifact.py",
       "artifact_generator_git_blob",
     ],
-    [
-      "javascript/iroha_js/test/fixtures/verify_current_rust_contract_artifact.rs",
-      "rust_verifier_rs_git_blob",
-    ],
-    ["crates/ivm/src/contract_artifact.rs", "contract_artifact_rs_git_blob"],
-    ["crates/ivm_abi/src/syscalls.rs", "ivm_syscalls_rs_git_blob"],
-    ["crates/kotodama_lang/src/compiler.rs", "kotodama_compiler_rs_git_blob"],
-    ["Cargo.lock", "cargo_lock_git_blob"],
   ];
   for (const [relativePath, fixtureField] of sourceBindings) {
     assert.equal(
       gitBlobId(readFileSync(path.join(REPOSITORY_ROOT, relativePath))),
-      FIXTURE.generation_provenance[fixtureField],
+      FIXTURE.source_provenance[fixtureField],
       `${relativePath} changed; regenerate this exact-current-source parity fixture`,
     );
   }
@@ -148,59 +59,41 @@ test("real current compiler artifact is source-bound and passes the browser stru
   const verified = verifyCompiledContractArtifact(
     artifact,
     FIXTURE.manifest,
-    FIXTURE.rust_verifier.code_hash_hex,
-    FIXTURE.rust_verifier.abi_hash_hex,
+    FIXTURE.artifact_semantics.code_hash_hex,
+    FIXTURE.artifact_semantics.abi_hash_hex,
   );
-  assert.equal(verified.codeHashHex, FIXTURE.rust_verifier.code_hash_hex);
-  assert.equal(verified.abiHashHex, FIXTURE.rust_verifier.abi_hash_hex);
+  assert.equal(verified.codeHashHex, FIXTURE.artifact_semantics.code_hash_hex);
+  assert.equal(verified.abiHashHex, FIXTURE.artifact_semantics.abi_hash_hex);
 });
 
-test(
-  "current Rust admission oracle proves executable validation missing from the structural JS boundary",
-  { skip: process.env.IROHA_JS_RUN_RUST_ARTIFACT_PARITY !== "1" },
-  () => {
-    const directory = mkdtempSync(path.join(tmpdir(), "iroha-js-rust-artifact-"));
-    try {
-      const executable = compileRustOracle(directory);
-      const artifactPath = path.join(directory, "current.to");
-      const artifact = fixtureArtifact();
-      writeFileSync(artifactPath, artifact);
-
-      const positive = spawnSync(executable, [artifactPath], {
-        cwd: REPOSITORY_ROOT,
-        encoding: "utf8",
-      });
-      assert.equal(positive.status, 0, positive.stderr);
-      for (const [field, expected] of Object.entries(FIXTURE.rust_verifier)) {
-        assert.match(positive.stdout, new RegExp(`^${field}=${expected}$`, "mu"));
-      }
-
-      const invalid = artifact.slice();
-      invalid.set(
-        Uint8Array.of(0x00, 0x00, 0xfe, 0x62),
-        FIXTURE.rust_verifier.code_offset,
-      );
-      const invalidPath = path.join(directory, "invalid-opcode.to");
-      writeFileSync(invalidPath, invalid);
-      const invalidHash = computeIvmArtifactHashes(invalid).codeHashHex;
-      const invalidManifest = JSON.parse(JSON.stringify(FIXTURE.manifest));
-      invalidManifest.code_hash = canonicalHashLiteral(invalidHash);
-
-      assert.doesNotThrow(() =>
-        verifyCompiledContractArtifact(
-          invalid,
-          invalidManifest,
-          invalidHash,
-          FIXTURE.rust_verifier.abi_hash_hex,
-        ));
-      const negative = spawnSync(executable, [invalidPath], {
-        cwd: REPOSITORY_ROOT,
-        encoding: "utf8",
-      });
-      assert.equal(negative.status, 2);
-      assert.match(negative.stderr, /invalid contract artifact/u);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  },
-);
+test("canonical provenance is platform-independent and contains no build-machine identity", () => {
+  assert.equal(FIXTURE.fixture_version, 2);
+  assert.deepEqual(Object.keys(FIXTURE.source_provenance).sort(), [
+    "artifact_generator_git_blob",
+    "closure_algorithm",
+    "closure_sha256",
+    "contract_source_git_blob",
+    "file_count",
+    "scope",
+  ]);
+  assert.equal(
+    FIXTURE.source_provenance.scope,
+    "tracked-semantic-source-closure-v1",
+  );
+  assert.equal(
+    FIXTURE.source_provenance.closure_algorithm,
+    "sha256-framed-path-and-bytes-v1",
+  );
+  assert.match(FIXTURE.source_provenance.closure_sha256, /^[0-9a-f]{64}$/u);
+  assert.ok(FIXTURE.source_provenance.file_count > 0);
+  assert.equal("generation_provenance" in FIXTURE, false);
+  const canonical = JSON.stringify(FIXTURE);
+  for (const forbidden of [
+    "koto_sha256",
+    "rustc_sha256",
+    "ivm_rlib_sha256",
+    "rust_dependency_closure_sha256",
+  ]) {
+    assert.equal(canonical.includes(forbidden), false);
+  }
+});

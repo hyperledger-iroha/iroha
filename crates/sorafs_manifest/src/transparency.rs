@@ -298,6 +298,12 @@ pub struct ModerationPrivacyAggregateV1 {
     /// BLAKE3 digest of the canonical private population selector.
     #[norito(with = "fixed_bytes")]
     pub population_digest: [u8; 32],
+    /// BLAKE3 commitment to the canonical ordered private source-event set.
+    ///
+    /// The committed event digests include server-derived ingress provenance,
+    /// while the private accounts and source-event contents remain undisclosed.
+    #[norito(with = "fixed_bytes")]
+    pub source_commitment: [u8; 32],
     /// Explicit privacy parameters applied before publication.
     pub privacy: ModerationPrivacyParametersV1,
     /// Typed evidence for the randomness source selected by [`Self::privacy`].
@@ -560,6 +566,7 @@ impl ModerationPrivacyAggregateV1 {
         }
         require_public_text("population_label", &self.population_label)?;
         require_nonzero32("population_digest", &self.population_digest)?;
+        require_nonzero32("source_commitment", &self.source_commitment)?;
         self.privacy.validate()?;
         match (self.privacy.mode, self.noise_source) {
             (
@@ -2069,6 +2076,7 @@ mod tests {
             generated_at_unix: 1_767_830_400,
             population_label: "jurisdiction-a".to_string(),
             population_digest: digest(0xA0),
+            source_commitment: digest(0xA1),
             privacy: ModerationPrivacyParametersV1 {
                 version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
                 mode: ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
@@ -2456,6 +2464,29 @@ mod tests {
         assert_eq!(
             decoded_json.validate(),
             Err(TransparencyLedgerError::InvalidPrivacyAggregateGeneratedAt)
+        );
+    }
+
+    #[test]
+    fn privacy_aggregate_requires_and_hashes_source_commitment() {
+        let aggregate = privacy_aggregate();
+        let original_hash = aggregate.aggregate_hash().expect("aggregate hashes");
+
+        let mut changed = aggregate.clone();
+        changed.source_commitment[0] ^= 1;
+        assert_ne!(
+            changed.aggregate_hash().expect("changed aggregate hashes"),
+            original_hash,
+            "the canonical aggregate hash must bind the private source-event commitment"
+        );
+
+        let mut missing = aggregate;
+        missing.source_commitment = [0; 32];
+        assert_eq!(
+            missing.validate(),
+            Err(TransparencyLedgerError::MissingDigest {
+                field: "source_commitment",
+            })
         );
     }
 

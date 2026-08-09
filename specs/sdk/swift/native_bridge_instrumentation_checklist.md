@@ -1,6 +1,6 @@
 ---
 title: Swift Native Bridge Instrumentation Checklist
-summary: Playbook for wiring NoritoBridge load/fallback signals, Connect codec telemetry, and XCFramework smoke feeds ahead of IOS6.
+summary: Playbook for wiring fail-closed NoritoBridge load signals, Connect codec telemetry, and XCFramework smoke feeds ahead of IOS6.
 ---
 
 # Swift Native Bridge Instrumentation Checklist
@@ -14,7 +14,7 @@ changes, the XCFramework harness is updated, or new telemetry sinks are added.
 
 | Signal | Source | Sink / Evidence | Notes |
 |--------|--------|-----------------|-------|
-| Bridge load status & version | `NoritoNativeBridge.shared` loader (`NativeBridge.swift:13`, path-based candidate probing) | `connect.error` events emitted via `ConnectError.telemetryAttributes` (`IrohaSwift/Sources/IrohaSwift/ConnectError.swift`) and `status.md` excerpts | Emit a `connect.error` event tagged `category=internal code=norito_bridge.load_failure` when the loader falls back to JSON; record version/build metadata when the handle resolves successfully. |
+| Bridge load status & version | `NoritoNativeBridge.shared` loader (`NativeBridge.swift:13`, path-based candidate probing) | `connect.error` events emitted via `ConnectError.telemetryAttributes` (`IrohaSwift/Sources/IrohaSwift/ConnectError.swift`) and `status.md` excerpts | Emit a `connect.error` event tagged `category=internal code=norito_bridge.load_failure` and fail closed when the bridge is unavailable; no JSON codec fallback exists. Record the authenticated manifest identity when the handle resolves successfully. |
 | Connect codec bridge enforcement | `ConnectCodec.encode/decode` (`IrohaSwift/Sources/IrohaSwift/ConnectCodec.swift`) | `connect.error` telemetry + parity feeds | Alert whenever `ConnectCodecError.bridgeUnavailable` is raised so dashboards can confirm the XCFramework ships with every release and fail closed when the bridge is missing. |
 | Sorafs orchestrator reports | `sorafsLocalFetch` (`NativeBridge.swift:1982`) and fixtures (`fixtures/sorafs_orchestrator/README.md`) | CI/SDK parity harness (`ci/sdk_sorafs_orchestrator.sh`) and `specs/sorafs/reports/orchestrator_ga.md` | Persist `reportJSON` produced by the bridge, include it in the fixture bundle, and ensure it flows into the shared parity tests. |
 | XCFramework smoke lanes & device tags | `scripts/ci/run_xcframework_smoke.sh` → `dashboards/mobile_ci.swift` | `artifacts/xcframework_smoke_result.json`, `artifacts/xcframework_smoke_anomalies.json`, `dashboards/data/mobile_ci*.json`, Buildkite metadata `ci/xcframework-smoke:<lane>:device_tag` | Required so dashboards expose StrongBox coverage and macOS fallbacks; validated via `scripts/check_swift_dashboard_data.py`. |
@@ -27,6 +27,24 @@ changes, the XCFramework harness is updated, or new telemetry sinks are added.
 - `ci/sdk_sorafs_orchestrator.sh` – replays the multi-provider fetch parity suite to guarantee consistent `reportJSON` outputs across SDKs.
 - Hardware: simulator pool defined in `specs/swift_xcframework_device_matrix.md` plus the StrongBox device recorded in `specs/swift_xcframework_hardware_plan.md`.
 
+Before any bridge build or smoke run, export the exact first-release envelope:
+
+```bash
+export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
+mkdir -p "$CARGO_TARGET_DIR"
+export CARGO_BUILD_JOBS=1
+export CARGO_INCREMENTAL=0
+export CARGO_NET_OFFLINE=true
+export RUSTC_BOOTSTRAP=1
+export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
+export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
+```
+
+Use Python 3.12 and the repository-root `Cargo.lock`; alternate lockfiles and
+in-tree or symbolic Cargo targets are rejected. A nonempty external isolated
+target is supported; builds sharing that target or output are serialized, and
+each Apple slice is freshly invoked.
+
 ## 3. Checklist
 
 ### 3.1 Bridge Load & Fallback Detection
@@ -38,10 +56,10 @@ changes, the XCFramework harness is updated, or new telemetry sinks are added.
    ```
 2. **Verify availability telemetry.**
    - Run `swift test --filter TxBuilderTests --package-path IrohaSwift`.
-   - Ensure the tests that skip on `!NoritoNativeBridge.shared.isAvailable` now run.
+   - Require every bridge-dependent test to execute; a bridge-unavailable skip is a failure.
    - Confirm the logger/telemetry hooks emit a `connect.error` with `code=norito_bridge.available` when the bridge loads and `code=norito_bridge.load_failure` when the xcframework is missing or malformed.
 3. **Record version info.**
-   - Capture the SHA + build date from `dist/NoritoBridge.xcframework/Info.plist` and attach it to the `status.md` update or release note.
+   - Capture `source_commit`, `source_fingerprint_sha256`, `cargo_lock_sha256`, and `build_environment` from `dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json` and attach them to the `status.md` update or release note.
 
 ### 3.2 Connect Codec Instrumentation
 
@@ -76,7 +94,7 @@ changes, the XCFramework harness is updated, or new telemetry sinks are added.
    ```bash
    scripts/ci/run_xcframework_smoke.sh
    ```
-   - Confirm `artifacts/xcframework_smoke_result.json` lists every lane (`iphone-sim`, `ipad-sim`, `strongbox`, optional `macos-fallback`) and that Buildkite metadata contains the corresponding `device_tag`. The anomaly summary is written to `artifacts/xcframework_smoke_anomalies.json` for release/incident bundles.
+   - The harness rebuilds the bridge with the inherited exact envelope and has no skip mode. Confirm `artifacts/xcframework_smoke_result.json` lists every lane (`iphone-sim`, `ipad-sim`, `strongbox`, optional `macos-fallback`) and that Buildkite metadata contains the corresponding `device_tag`. The anomaly summary is written to `artifacts/xcframework_smoke_anomalies.json` for release/incident bundles.
 2. **Validate the CI feed.**
    ```bash
    scripts/check_swift_dashboard_data.py artifacts/xcframework_smoke_result.json \

@@ -199,13 +199,35 @@ def _finality_anchor() -> Dict[str, Any]:
     return {
         "version": 1,
         "source_network": _network("sora-taira"),
-        "protocol_version": 3,
+        "protocol_version": 4,
         "chain_id_hash": sccp._SORA_TAIRA_CHAIN_ID_HASH.hex().upper(),  # noqa: SLF001
         "checkpoint_height": 7,
         "checkpoint_block_hash": UPPER(0xA1, 32),
         "checkpoint_context_id": UPPER(0xA2, 32),
         "checkpoint_finality_artifact_hash": UPPER(0xA3, 32),
     }
+
+
+def test_finality_anchor_accepts_historical_v3_and_current_v4() -> None:
+    current = _finality_anchor()
+    current_hash, current_roles = sccp._sora_finality_anchor(  # noqa: SLF001
+        current, "current anchor"
+    )
+    assert len(current_roles) == 4
+    assert current_hash.hex().upper() == (
+        "4410EE4CCFD06F2D0E3A658615D516AC8CF65255D8A8716CE511EA95E135C8C3"
+    )
+
+    historical = copy.deepcopy(current)
+    historical["protocol_version"] = 3
+    historical_hash, historical_roles = sccp._sora_finality_anchor(  # noqa: SLF001
+        historical, "historical anchor"
+    )
+    assert historical_roles == current_roles
+    assert historical_hash.hex().upper() == (
+        "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA"
+    )
+    assert historical_hash != current_hash
 
 
 def _outbound_policy() -> Dict[str, Any]:
@@ -871,6 +893,7 @@ def test_registry_validates_full_key_and_rejects_retired_or_aliased_routes() -> 
     ("mutation", "expected"),
     (
         (lambda anchor: anchor.update(protocol_version=1), "protocol_version"),
+        (lambda anchor: anchor.update(protocol_version=5), "protocol_version"),
         (lambda anchor: anchor.update(protocol_version=True), "integer"),
         (lambda anchor: anchor.update(checkpoint_context_id=UPPER(0, 32)), "nonzero"),
         (
@@ -899,15 +922,15 @@ def test_registry_rejects_legacy_or_ambiguous_v2_finality_anchor(
     (
         (
             "bsc-mainnet",
-            "cf29ff20ded900ee5571d1d2ded8cd14c85018fd63af0da89a040b4bfde30280",
-            "50542cf770b037dc5762d23945b3f7985e41ba0d431daa92ebef76a2313f021e",
-            "57f92589f513d0dda3edb5baaf7490b32937320971d7dc4efc579abd1e84787d",
+            "0d3f2789f19af900584d24bab4148ac32ac1532e85748845646ca032e43c0757",
+            "c96a33a74f1e4134a7d6d63cb2ee4eaffe7d2007d4189bddce6d39f5aa97bc5c",
+            "ddf6b59ee7dae1f134455eaa19b166f951af30188e1adc2cf9d68dd8734789c1",
         ),
         (
             "tron-nile",
-            "70d4c2848f70d990c4b0947bb7b80b7f099d69512924846e756e53cf521e3c28",
-            "5e81199cba1d4025c631a2066c7021da08f857f0d2adbe9f6e2f59830ab5d192",
-            "53438fa035a8cb92d9d6528dd4977eb04647def1c543ad4517dc735e2baab74d",
+            "929040304688aed6529341a8060ca669d6ace688eec98036e4c1d4a8f28eb564",
+            "376a54dfc0288fd43fe696a5be9a898196fb2195bd33c21eca6cbedd022e17c4",
+            "8b5a7d81f6a8f4d25601d8bc34ab0237e666c8216d06feb4ec05bb00ac9ee255",
         ),
     ),
 )
@@ -1761,7 +1784,6 @@ def test_torii_sccp_streaming_rejects_non_utf8_json_and_closes() -> None:
     with pytest.raises(ValueError, match="UTF-8 JSON"):
         client.get_sccp_capabilities()
     assert response.was_closed is True
-
 
 def test_torii_sccp_error_response_uses_the_same_actual_byte_bound() -> None:
     response = StubResponse(status_code=400, raw=b" " * (64 * 1024 + 1))

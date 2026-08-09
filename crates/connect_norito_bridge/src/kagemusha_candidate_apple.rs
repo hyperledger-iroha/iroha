@@ -317,7 +317,7 @@ fn install_candidate_from_directory(
     candidate
         .validate()
         .map_err(|_| BridgeError::KagemushaProve)?;
-    if !candidate.manifest.source_repo_dirty
+    if candidate.manifest.source_repo_dirty
         || candidate.manifest.reviewed_source_closure_descriptor_sha256 == [0; 32]
     {
         return fail();
@@ -448,7 +448,7 @@ fn candidate_context(
     candidate
         .validate()
         .map_err(|_| BridgeError::KagemushaProve)?;
-    if !candidate.manifest.source_repo_dirty
+    if candidate.manifest.source_repo_dirty
         || candidate.manifest.reviewed_source_closure_descriptor_sha256 == [0; 32]
     {
         return fail();
@@ -1239,7 +1239,7 @@ fn restart_phase(
     let accepted: super::KagemushaCandidateEvidenceLabAcceptedIdentityV2 =
         decode(&accepted_identity)?;
     if accepted.production_capability_observed
-        || !accepted.source_repo_dirty
+        || accepted.source_repo_dirty
         || accepted.candidate_record_sha256 != checkpoint.candidate_record_sha256
         || accepted.candidate_manifest_sha256 != checkpoint.candidate_manifest_sha256
         || accepted.source_commit != candidate.manifest.source_commit
@@ -1599,7 +1599,7 @@ fn restart_phase(
     transcript.insert("platform".to_owned(), JsonValue::from("ios"));
     transcript.insert("physical_device_required".to_owned(), JsonValue::Bool(true));
     transcript.insert("simulator_accepted".to_owned(), JsonValue::Bool(false));
-    transcript.insert("source_repo_dirty".to_owned(), JsonValue::Bool(true));
+    transcript.insert("source_repo_dirty".to_owned(), JsonValue::Bool(false));
     transcript.insert(
         "production_capability_observed".to_owned(),
         JsonValue::Bool(false),

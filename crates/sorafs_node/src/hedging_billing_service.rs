@@ -4233,6 +4233,10 @@ pub enum HedgingBillingRuntimeApiErrorV1 {
 ///
 /// Torii depends only on this node-owned boundary and never receives the raw
 /// billing service, HSM/KMS adapters, publisher, or hedge-execution adapter.
+/// Projection methods, including reconciliation status, must fail closed unless
+/// a live qualified finalized head proves the retained projection fresh and
+/// remains stable through response construction. Payload-free daemon health and
+/// metrics remain observable while the projection is unavailable.
 pub trait HedgingBillingRuntimeApiV1: Send + Sync + fmt::Debug {
     /// Return the current exact checkpoint/finality anchor.
     fn projection_anchor(
@@ -4251,7 +4255,8 @@ pub trait HedgingBillingRuntimeApiV1: Send + Sync + fmt::Debug {
         request: &BillingPublishedStatementRequestV1,
     ) -> Result<BillingPublishedStatementV1, HedgingBillingRuntimeApiErrorV1>;
 
-    /// Authenticate and durably acknowledge one owner statement.
+    /// Authenticate and durably acknowledge one owner statement under a fresh
+    /// finalized-head fence that is rechecked immediately before local commit.
     fn acknowledge_statement(
         &self,
         request: &BillingStatementAcknowledgementRequestV1,
@@ -5448,6 +5453,28 @@ impl HedgingBillingService {
         authentication_proof: Vec<u8>,
         expected_checkpoint_fingerprint: Option<[u8; 32]>,
     ) -> Result<BillingStatementAcknowledgementV1, HedgingBillingServiceError> {
+        let mut allow_commit = || Ok(());
+        self.acknowledge_statement_at_fingerprint_with_precommit_fence(
+            statement_id,
+            account_id,
+            request_binding_digest,
+            acknowledged_at_unix,
+            authentication_proof,
+            expected_checkpoint_fingerprint,
+            &mut allow_commit,
+        )
+    }
+
+    fn acknowledge_statement_at_fingerprint_with_precommit_fence(
+        &self,
+        statement_id: [u8; 32],
+        account_id: &[u8],
+        request_binding_digest: [u8; 32],
+        acknowledged_at_unix: u64,
+        authentication_proof: Vec<u8>,
+        expected_checkpoint_fingerprint: Option<[u8; 32]>,
+        pre_commit_fence: &mut dyn FnMut() -> Result<(), HedgingBillingServiceError>,
+    ) -> Result<BillingStatementAcknowledgementV1, HedgingBillingServiceError> {
         if validate_canonical_account_id_bytes(account_id).is_err()
             || statement_id == [0; 32]
             || request_binding_digest == [0; 32]
@@ -5523,6 +5550,7 @@ impl HedgingBillingService {
         acknowledgement.acknowledgement_id = acknowledgement_digest(&acknowledgement)?;
         self.acknowledgement_authority
             .verify(&signed, &acknowledgement)?;
+        pre_commit_fence()?;
         let authoritative = self
             .acknowledgement_authority
             .record(&signed, &acknowledgement)?;
@@ -5567,7 +5595,7 @@ impl HedgingBillingService {
             .sort_by_key(|entry| entry.acknowledgement_id);
         find_statement_mut(&mut next, statement_id)?.state =
             StoredStatementDeliveryStateV1::Acknowledged;
-        self.commit_locked(guard, next)?;
+        self.commit_locked_with_precommit_fence(guard, next, pre_commit_fence)?;
         Ok(acknowledgement)
     }
 
@@ -5588,6 +5616,20 @@ impl HedgingBillingService {
         &self,
         statement_id: [u8; 32],
         expected_checkpoint_fingerprint: Option<[u8; 32]>,
+    ) -> Result<Option<BillingStatementAcknowledgementV1>, HedgingBillingServiceError> {
+        let mut allow_commit = || Ok(());
+        self.reconcile_acknowledgement_at_fingerprint_with_precommit_fence(
+            statement_id,
+            expected_checkpoint_fingerprint,
+            &mut allow_commit,
+        )
+    }
+
+    fn reconcile_acknowledgement_at_fingerprint_with_precommit_fence(
+        &self,
+        statement_id: [u8; 32],
+        expected_checkpoint_fingerprint: Option<[u8; 32]>,
+        pre_commit_fence: &mut dyn FnMut() -> Result<(), HedgingBillingServiceError>,
     ) -> Result<Option<BillingStatementAcknowledgementV1>, HedgingBillingServiceError> {
         let Some(acknowledgement) = self.acknowledgement_authority.lookup(statement_id)? else {
             let guard = self
@@ -5666,7 +5708,7 @@ impl HedgingBillingService {
             .sort_by_key(|entry| entry.acknowledgement_id);
         find_statement_mut(&mut next, statement_id)?.state =
             StoredStatementDeliveryStateV1::Acknowledged;
-        self.commit_locked(guard, next)?;
+        self.commit_locked_with_precommit_fence(guard, next, pre_commit_fence)?;
         Ok(Some(acknowledgement))
     }
 
@@ -5905,6 +5947,29 @@ impl HedgingBillingService {
         request: &BillingStatementAcknowledgementRequestV1,
         server_time_unix: u64,
     ) -> Result<BillingStatementAcknowledgementResponseV1, HedgingBillingRuntimeApiErrorV1> {
+        let mut allow_commit = || Ok(());
+        self.api_acknowledge_statement_with_precommit_fence(
+            request,
+            server_time_unix,
+            &mut allow_commit,
+        )
+    }
+
+    /// Authenticate and durably acknowledge one owner statement while invoking
+    /// an external authority fence immediately before every durable local
+    /// checkpoint store write.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same bounded runtime API errors as
+    /// [`Self::api_acknowledge_statement`], and maps a failed fence to the
+    /// caller-supplied service error without changing the local checkpoint.
+    pub fn api_acknowledge_statement_with_precommit_fence(
+        &self,
+        request: &BillingStatementAcknowledgementRequestV1,
+        server_time_unix: u64,
+        pre_commit_fence: &mut dyn FnMut() -> Result<(), HedgingBillingServiceError>,
+    ) -> Result<BillingStatementAcknowledgementResponseV1, HedgingBillingRuntimeApiErrorV1> {
         validate_canonical_account_id_bytes(&request.owner_account_id)
             .map_err(|_| HedgingBillingRuntimeApiErrorV1::InvalidRequest)?;
         if request.expected_checkpoint_fingerprint == [0; 32]
@@ -5944,9 +6009,10 @@ impl HedgingBillingService {
             request.request_nonce,
         )?;
         if let Some(authoritative) = self
-            .reconcile_acknowledgement_at_fingerprint(
+            .reconcile_acknowledgement_at_fingerprint_with_precommit_fence(
                 request.statement_id,
                 Some(request.expected_checkpoint_fingerprint),
+                pre_commit_fence,
             )
             .map_err(runtime_api_acknowledgement_error)?
         {
@@ -5984,13 +6050,14 @@ impl HedgingBillingService {
             });
         }
         let acknowledgement = self
-            .acknowledge_statement_at_fingerprint(
+            .acknowledge_statement_at_fingerprint_with_precommit_fence(
                 request.statement_id,
                 &request.owner_account_id,
                 request_binding_digest,
                 server_time_unix,
                 request.authentication_proof.clone(),
                 Some(request.expected_checkpoint_fingerprint),
+                pre_commit_fence,
             )
             .map_err(runtime_api_acknowledgement_error)?;
         let anchor = self.api_projection_anchor()?;
@@ -6511,11 +6578,22 @@ impl HedgingBillingService {
 
     fn commit_locked(
         &self,
+        guard: std::sync::MutexGuard<'_, RuntimeState>,
+        next: HedgingBillingCheckpointV1,
+    ) -> Result<(), HedgingBillingServiceError> {
+        let mut allow_commit = || Ok(());
+        self.commit_locked_with_precommit_fence(guard, next, &mut allow_commit)
+    }
+
+    fn commit_locked_with_precommit_fence(
+        &self,
         mut guard: std::sync::MutexGuard<'_, RuntimeState>,
         next: HedgingBillingCheckpointV1,
+        pre_commit_fence: &mut dyn FnMut() -> Result<(), HedgingBillingServiceError>,
     ) -> Result<(), HedgingBillingServiceError> {
         next.validate(&self.policy, &self.feed_policy)?;
         let bytes = encode_checkpoint(&next, &self.policy, &self.feed_policy)?;
+        pre_commit_fence()?;
         let fingerprint = self.store.commit_bytes(&bytes, guard.fingerprint)?;
         guard.checkpoint = next;
         guard.fingerprint = Some(fingerprint);
@@ -10819,131 +10897,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn exposure_and_intent_pages_include_below_threshold_periods_without_auto_execution() {
-        let root = tempfile::tempdir().expect("state root");
-        let (service, _feed_policy, reference, _verifier, _publisher, _ack_authority) =
-            ready_service(root.path());
-        let mut second = event(2, "storage:event:below-threshold:2", "1");
-        second.account_id = account_bytes(0x92);
-        let first = page(vec![
-            event(1, "storage:event:below-threshold:1", "1"),
-            second,
-        ]);
-        service
-            .ingest_finalized_page(&first)
-            .expect("committed source page");
-        let period = service
-            .finalize_next_period(&period_close(&reference, first.journal_commitment))
-            .expect("committed below-threshold period");
-        assert!(period.hedge_intent.is_none());
-        let anchor = service.api_projection_anchor().expect("projection anchor");
-        let request = HedgingBillingProjectionPageRequestV1 {
-            expected_checkpoint_fingerprint: anchor.checkpoint_fingerprint,
-            after: None,
-            limit: 1,
-        };
-        let exposure = service
-            .api_exposure_page(&request)
-            .expect("below-threshold exposure page");
-        assert_eq!(exposure.items.len(), 1);
-        assert_eq!(exposure.items[0].statement_count, 2);
-        assert_eq!(exposure.items[0].xor_exposure, xor("2"));
-        assert!(!exposure.items[0].hedge_threshold_reached);
-        assert!(exposure.items[0].hedge_intent_id.is_none());
-        assert!(!exposure.items[0].automatic_execution);
-        let after = service
-            .api_exposure_page(&HedgingBillingProjectionPageRequestV1 {
-                after: Some(exposure.items[0].cursor),
-                ..request
-            })
-            .expect("exclusive exposure cursor");
-        assert!(after.items.is_empty());
-        assert_eq!(
-            service
-                .api_exposure_page(&HedgingBillingProjectionPageRequestV1 {
-                    after: Some([0xCC; 32]),
-                    ..request
-                })
-                .expect_err("unknown exposure cursor"),
-            HedgingBillingRuntimeApiErrorV1::InvalidRequest
-        );
-
-        let intents = service
-            .api_hedge_intent_page(&request)
-            .expect("empty hedge-intent page");
-        assert!(intents.items.is_empty());
-        assert!(!intents.automatic_execution_enabled);
-        assert!(matches!(
-            service.pending_statement_delivery_projections(0),
-            Err(HedgingBillingServiceError::InvalidQueryBound)
-        ));
-        assert!(matches!(
-            service.pending_statement_delivery_projections(
-                HEDGING_BILLING_MAX_DELIVERY_WORK_ITEMS_V1 + 1
-            ),
-            Err(HedgingBillingServiceError::InvalidQueryBound)
-        ));
-        let work = service
-            .pending_statement_delivery_projections(1)
-            .expect("bounded delivery work scan");
-        assert_eq!(work.len(), 1);
-        assert_eq!(
-            work[0].status,
-            BillingStatementDeliveryStatusV1::ReadyForSigning
-        );
-        let rotated = service
-            .pending_statement_delivery_projections_rotated(1, 1)
-            .expect("rotated bounded delivery work scan");
-        assert_eq!(rotated.len(), 1);
-        assert_ne!(
-            work[0].statement_id, rotated[0].statement_id,
-            "the scan cursor must rotate within a persistent stage backlog"
-        );
-        let selected_id = rotated[0].statement_id;
-        let signed = service
-            .sign_statement(selected_id, &TestSigner::valid())
-            .expect("sign the exact fair-scan selection");
-        assert_eq!(
-            signed.governed_statement.statement.statement_id,
-            selected_id
-        );
-        let delivery_states = service
-            .statement_delivery_projections()
-            .expect("inspect exact delivery states");
-        let selected = delivery_states
-            .iter()
-            .find(|projection| projection.statement_id == selected_id)
-            .expect("selected statement projection");
-        assert_eq!(
-            selected.status,
-            BillingStatementDeliveryStatusV1::ReadyForPublication
-        );
-        let original = delivery_states
-            .iter()
-            .find(|projection| projection.statement_id == work[0].statement_id)
-            .expect("original first statement projection");
-        assert_eq!(
-            original.status,
-            BillingStatementDeliveryStatusV1::ReadyForSigning
-        );
-        let receipt = service
-            .publish_statement(selected_id)
-            .expect("publish the exact fair-scan selection");
-        assert_eq!(receipt.statement_id, selected_id);
-        let after_publication = service
-            .statement_delivery_projections()
-            .expect("inspect states after targeted publication");
-        let original = after_publication
-            .iter()
-            .find(|projection| projection.statement_id == work[0].statement_id)
-            .expect("original first statement after publication");
-        assert_eq!(
-            original.status,
-            BillingStatementDeliveryStatusV1::ReadyForSigning,
-            "targeted publication must not disturb an unrelated ready statement"
-        );
-    }
+    include!("hedging_billing_service/freshness_api_tests.rs");
 
     #[test]
     fn automatic_hedge_execution_is_unconditionally_rejected() {

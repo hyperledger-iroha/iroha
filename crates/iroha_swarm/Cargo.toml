@@ -23,4 +23,5 @@ norito = { workspace = true, default-features = false, features = ["node-codec"]
 
 [dev-dependencies]
 iroha_config.workspace = true
+expect-test.workspace = true
 nonzero_ext.workspace = true

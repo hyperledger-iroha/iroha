@@ -21,6 +21,11 @@ use super::{
 };
 use crate::{account::AccountId, asset::AssetDefinitionId, block::consensus_v2::PROTOCOL_VERSION};
 
+/// Oldest authoritative Sumeragi wire revision retained in SCCP V1 anchors.
+pub const SCCP_V1_MIN_SUMERAGI_PROTOCOL_VERSION: u16 = 3;
+/// Newest authoritative Sumeragi wire revision accepted by SCCP V1 anchors.
+pub const SCCP_V1_MAX_SUMERAGI_PROTOCOL_VERSION: u16 = PROTOCOL_VERSION;
+
 /// Maximum decimal scale accepted by first-release SCCP amount payloads.
 pub const SCCP_V1_MAX_PAYLOAD_AMOUNT_SCALE: u32 = 28;
 /// Exact decimal scale of the first-release XOR SCCP payload.
@@ -563,7 +568,8 @@ pub struct SccpSoraFinalityAnchorV1 {
     pub version: u8,
     /// Exact source chain. SCCP V1 outbound proofs require SORA Taira.
     pub source_network: SccpNetworkV1,
-    /// Exact authoritative Sumeragi wire protocol. SCCP V1 requires revision 3.
+    /// Authoritative Sumeragi wire protocol (`3` for historical anchors, `4`
+    /// for fresh revision-4 checkpoints).
     pub protocol_version: u16,
     /// Keccak-256 of the canonical 16-byte Taira chain identifier.
     pub chain_id_hash: [u8; 32],
@@ -587,7 +593,8 @@ impl SccpSoraFinalityAnchorV1 {
     pub fn validate(self) -> Result<(), SccpRouteValidationError> {
         if self.version != 1
             || self.source_network != SccpNetworkV1::SoraTaira
-            || self.protocol_version != PROTOCOL_VERSION
+            || !(SCCP_V1_MIN_SUMERAGI_PROTOCOL_VERSION..=SCCP_V1_MAX_SUMERAGI_PROTOCOL_VERSION)
+                .contains(&self.protocol_version)
             || self.chain_id_hash != sccp_sora_taira_chain_id_hash_v1()
             || self.checkpoint_height == 0
             || validate_hash_roles(&[
@@ -2885,7 +2892,7 @@ mod tests {
             sora_finality_anchor: SccpSoraFinalityAnchorV1 {
                 version: 1,
                 source_network: SccpNetworkV1::SoraTaira,
-                protocol_version: PROTOCOL_VERSION,
+                protocol_version: SCCP_V1_MIN_SUMERAGI_PROTOCOL_VERSION,
                 chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
                 checkpoint_height: 5,
                 checkpoint_block_hash: [0x73; 32],
@@ -3301,7 +3308,7 @@ mod tests {
         .expect("exact native verifier config");
         assert_eq!(
             native_config,
-            hex32("bcb83baf2f2ab57a56b72529cf749da6175f8e65a048287eae217b61a2c84669"),
+            hex32("81acbcf95363017aabb1cf1edbc0f3f85d3ddb0529666870e653894fee567d98"),
             "native verifier config must match the independent JavaScript V1 vector"
         );
         for excluded in [
@@ -3416,12 +3423,12 @@ mod tests {
         assert_eq!(&source_bytes[74..106], &source_fields.state_account);
         assert_eq!(
             source_fields.route_config_hash,
-            hex32("3f2c81fe59637d4a9af916dfce1b623ef59f44087db3ee0c25e42ad8ec1bf958"),
+            hex32("72f9cc2bfa3bb4064777315ef6288e74052849f842fba0c84b4557d939fdc9d1"),
             "Solana source emitter must pin the same exact route configuration as JavaScript"
         );
         assert_eq!(
             sccp_source_emitter_identity_hash_v1(&source).expect("source emitter hash"),
-            hex32("f0c6b976d69c3d0e001b5ee87d7d2fabd068db424c1e261cf8e9e1d8b1f4cbfa"),
+            hex32("714bd05afa96ae367e08d4daed9632b208f6c432660f106dd10a8d616d17929c"),
             "Solana source emitter must match the independent JavaScript V1 vector"
         );
 
@@ -3550,12 +3557,12 @@ mod tests {
             .expect("baseline route hash");
         assert_eq!(
             baseline_binding,
-            hex32("cd1ff581301bd31b583b835ec71f185139ce1af2376dfe656216481f7a77ba2c"),
+            hex32("647aa3dfb00a102f4fbbac9f00c0b5828b4851212df46aaa302d416b43feaa18"),
             "Solana destination binding must match the independent JavaScript V1 vector"
         );
         assert_eq!(
             baseline_route,
-            hex32("3f2c81fe59637d4a9af916dfce1b623ef59f44087db3ee0c25e42ad8ec1bf958"),
+            hex32("72f9cc2bfa3bb4064777315ef6288e74052849f842fba0c84b4557d939fdc9d1"),
             "Solana route configuration must match the independent JavaScript V1 vector"
         );
         let mut swapped_accounts = deployment;
@@ -3659,7 +3666,7 @@ mod tests {
             sccp_source_identity_hash_v1(&route.source_identity).expect("source identity hash");
         assert_eq!(
             baseline_source_hash,
-            hex32("6c62bd033e5beb7848c66c10ae1be0a6fc1960b239f7b04b31bb3c5a7b1efa69"),
+            hex32("8577e67ddc7f0bb8f0058e23449a811dfb04ab0808b696af66cd2d75fa714771"),
             "Solana source identity must match the independent JavaScript V1 vector"
         );
         let mut swapped_source = route.clone();
@@ -4197,7 +4204,7 @@ mod tests {
         );
 
         let mut wrong_asset = route(1, SccpRouteActivationV1::Staged);
-        wrong_asset.settlement.asset_definition_id = AssetDefinitionId::new(
+        wrong_asset.settlement.asset_definition_id = AssetDefinitionId::derive_from_components(
             crate::domain::DomainId::try_new("wrong", "universal").expect("valid domain"),
             "xor".parse().expect("valid name"),
         );
@@ -4238,6 +4245,11 @@ mod tests {
     fn outbound_proof_policy_rejects_every_malformed_or_aliased_role() {
         let policy = outbound_proof_policy();
         policy.validate().expect("exact fixture policy");
+        let mut revision_4 = policy;
+        revision_4.sora_finality_anchor.protocol_version = SCCP_V1_MAX_SUMERAGI_PROTOCOL_VERSION;
+        revision_4
+            .validate()
+            .expect("fresh revision-4 checkpoint policy");
         let profile_hash = policy.semantic_profile_hash().expect("profile hash");
         let anchor_hash = policy.sora_finality_anchor_hash().expect("anchor hash");
         assert_eq!(

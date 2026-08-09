@@ -6,6 +6,7 @@ package org.hyperledger.iroha.sdk.privacy
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.Base64
 import java.util.Collections
 import org.hyperledger.iroha.sdk.norito.CRC64
@@ -19,7 +20,7 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 /** One byte-complete row of the canonical first-release exact-12 fixture. */
 class PrivacyExact12TypedFixtureRowV1(
-    @JvmField val protocolId: PrivacyNativeBridge.ProtocolIdV1,
+    @JvmField val protocolId: PrivacyProtocolIdV1,
     statementNorito: ByteArray,
     envelopeNorito: ByteArray,
     @JvmField val submitProofWireId: String,
@@ -161,7 +162,7 @@ class PrivacyExact12FixtureBundleV1(
         require(rows.size == PrivacyExact12FixtureCodecV1.ROW_COUNT) {
             "exact-12 fixture must contain exactly ${PrivacyExact12FixtureCodecV1.ROW_COUNT} rows"
         }
-        val expected = PrivacyNativeBridge.ProtocolIdV1.values()
+        val expected = PrivacyProtocolIdV1.values()
         require(expected.size == PrivacyExact12FixtureCodecV1.ROW_COUNT) {
             "privacy protocol registry must contain exactly ${PrivacyExact12FixtureCodecV1.ROW_COUNT} entries"
         }
@@ -188,6 +189,8 @@ class PrivacyExact12FixtureBundleV1(
 object PrivacyExact12FixtureCodecV1 {
     const val SCHEMA_NAME: String = "iroha.privacy.exact12-typed-fixture-bundle.v1"
     const val SUBMIT_PROOF_WIRE_ID: String = "iroha.privacy.submit_proof.v1"
+    const val CANONICAL_ARCHIVE_SHA256_HEX: String =
+        "d1bed4c1a07f7fb487ceb4b343d621fab1660ed2f35217543160a8fed921b90f"
     const val VERSION: Int = 1
     const val ROW_COUNT: Int = 12
     const val HASH_BYTES: Int = 32
@@ -260,6 +263,9 @@ object PrivacyExact12FixtureCodecV1 {
         require(encoded.size <= MAX_ARCHIVE_BYTES) {
             "exact-12 fixture archive exceeds $MAX_ARCHIVE_BYTES bytes"
         }
+        require(canonicalArchiveDigestHex(encoded) == CANONICAL_ARCHIVE_SHA256_HEX) {
+            "exact-12 fixture differs from the pinned Rust-derived first-release KAT"
+        }
         return encoded
     }
 
@@ -317,6 +323,11 @@ object PrivacyExact12FixtureCodecV1 {
         }
     }
 
+    private fun canonicalArchiveDigestHex(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(bytes)
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
     private object BundleAdapter : TypeAdapter<PrivacyExact12FixtureBundleV1> {
         override fun encode(encoder: NoritoEncoder, value: PrivacyExact12FixtureBundleV1) {
             encodeSizedField(encoder, UINT32_ADAPTER, value.version.toLong())
@@ -348,7 +359,7 @@ object PrivacyExact12FixtureCodecV1 {
             require(decoder.readLength(false) == ROW_COUNT.toLong()) {
                 "exact-12 fixture must declare exactly $ROW_COUNT rows"
             }
-            val expected = PrivacyNativeBridge.ProtocolIdV1.values()
+            val expected = PrivacyProtocolIdV1.values()
             val adapter = RowAdapter(requireNotNull(budget))
             return List(ROW_COUNT) { index ->
                 val row = decodeBoundedSizedField(
@@ -382,7 +393,7 @@ object PrivacyExact12FixtureCodecV1 {
         override fun decode(decoder: NoritoDecoder): PrivacyExact12TypedFixtureRowV1 {
             val decodeBudget = requireNotNull(budget)
             val protocolTag = decodeExactSizedField(decoder, UINT32_ADAPTER, 4L, "protocol id")
-            val protocols = PrivacyNativeBridge.ProtocolIdV1.values()
+            val protocols = PrivacyProtocolIdV1.values()
             require(protocolTag >= 0L && protocolTag < protocols.size.toLong()) {
                 "unknown exact-12 protocol discriminant: $protocolTag"
             }

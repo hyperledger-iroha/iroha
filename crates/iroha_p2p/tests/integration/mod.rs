@@ -7,6 +7,21 @@ use std::{
     },
 };
 
+use iroha_crypto::{Algorithm, KeyPair};
+use iroha_p2p::P2pIdentityKeys;
+
+/// Generate the only supported first-release node identity for P2P tests.
+fn random_node_key_pair() -> KeyPair {
+    KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+}
+
+/// Assign an independently generated Ed25519 identity to the SoraNet transport role.
+fn p2p_identity_keys(node: KeyPair) -> P2pIdentityKeys {
+    let soranet_transport = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    P2pIdentityKeys::new(node, soranet_transport)
+        .expect("BLS-normal node and Ed25519 SoraNet identities must be valid")
+}
+
 fn tcp_bind_permitted() -> bool {
     static PERMITTED: OnceLock<bool> = OnceLock::new();
     *PERMITTED.get_or_init(

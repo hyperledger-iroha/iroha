@@ -7,6 +7,9 @@ import {
   ToriiClient as SourceToriiClient,
   __sumeragiNativeAmxTestHelpers as sourceNativeAmxTestHelpers,
 } from "../src/toriiClient.js";
+import {
+  verifyBlockMerkleProof as sourceVerifyBlockMerkleProof,
+} from "../src/norito.js";
 
 const distToriiClientPath =
   process.env.IROHA_JS_NATIVE_AMX_V2_PARITY_DIST_TORII_CLIENT;
@@ -17,6 +20,13 @@ const {
   ToriiClient: DistToriiClient,
   __sumeragiNativeAmxTestHelpers: distNativeAmxTestHelpers,
 } = await import(distToriiClientUrl);
+const {
+  verifyBlockMerkleProof: distVerifyBlockMerkleProof,
+} = await import(new URL("./norito.js", distToriiClientUrl));
+const merkleProofImplementations = [
+  ["source", sourceVerifyBlockMerkleProof],
+  ["dist", distVerifyBlockMerkleProof],
+];
 
 const fixtureUrl = new URL(
   "../../../fixtures/sumeragi_v2/native_amx_v2_grouped.json",
@@ -129,6 +139,22 @@ function validateApplicationEvidence(document) {
   const execution = evidence.execution_commitment;
   const artifacts = evidence.manifest_artifacts;
   assert.equal(execution.native_amx_application_manifest_version, 1);
+  assert.equal(
+    typeof execution.merge_carrier,
+    "object",
+    "merge carrier must be an object",
+  );
+  assert.notEqual(execution.merge_carrier, null);
+  assert.equal(Array.isArray(execution.merge_carrier), false);
+  assert.deepEqual(
+    Object.keys(execution.merge_carrier).sort(),
+    ["entry_hash", "version"],
+  );
+  assert.equal(execution.merge_carrier.version, 1);
+  assert.match(
+    execution.merge_carrier.entry_hash,
+    /^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u,
+  );
   assert.equal(execution.native_amx_application_manifest_count, artifacts.length);
   assert.equal(artifacts.length, 1);
 
@@ -139,16 +165,30 @@ function validateApplicationEvidence(document) {
   assert.equal(artifact.leaf_index, 0);
   assert.equal(proof.leaf_index, 0);
   assert.deepEqual(proof.audit_path, []);
-  assert.equal(artifact.manifest_leaf_count, 1);
+  assert.equal(
+    artifact.manifest_leaf_count,
+    execution.native_amx_application_manifest_count,
+  );
   assert.equal(
     artifact.manifest_root,
     execution.native_amx_application_manifest_root,
   );
-  assert.equal(artifact.manifest_root, artifact.leaf_hash);
+  for (const [implementation, verifyMerkleProof] of merkleProofImplementations) {
+    assert.equal(
+      verifyMerkleProof(artifact.leaf_hash, proof, {
+        root: artifact.manifest_root,
+        leaf_count: artifact.manifest_leaf_count,
+      }),
+      true,
+      `${implementation} must authenticate the singleton manifest commitment`,
+    );
+  }
   assert.equal(
     leaf.executed_block_wire_hash,
     execution.executed_block_wire_hash,
   );
+  assert.equal(Number.isSafeInteger(execution.executed_block_wire_len), true);
+  assert.equal(execution.executed_block_wire_len, 49);
   assert.equal(leaf.predecessor_height + 1, leaf.participant_height);
   assert.deepEqual(evidence.active_lane_incarnations, [{
     lane_id: leaf.lane_id,
@@ -258,6 +298,33 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
   assert.equal(
     fixtureDocument.rust_owner,
     "iroha_data_model::block::consensus",
+  );
+  const negativeControlIds = new Set(
+    fixtureDocument.negative_controls.map((control) => control.id),
+  );
+  assert.ok(negativeControlIds.has("coherent_duplicate_validator_set"));
+  assert.ok(negativeControlIds.has("coherent_over_quorum_requirement"));
+  assert.ok(
+    negativeControlIds.has(
+      "execution_commitment_merge_carrier_wrong_version",
+    ),
+  );
+  assert.ok(
+    negativeControlIds.has(
+      "execution_commitment_missing_merge_carrier_field",
+    ),
+  );
+  const declarations = readFileSync(
+    new URL("../index.d.ts", import.meta.url),
+    "utf8",
+  );
+  const legDeclaration = declarations.match(
+    /export interface ToriiNativeAmxLeg \{([\s\S]*?)\n\}/u,
+  );
+  assert.ok(legDeclaration, "missing ToriiNativeAmxLeg declaration");
+  assert.match(
+    legDeclaration[1],
+    /readonly requires_mixed_role_anchor_validation: boolean;/u,
   );
   const expectedSettlementHashes = new Map([
     [
@@ -425,6 +492,24 @@ test("grouped Native AMX v2 requires the exact ordered outer source group", asyn
   await assert.rejects(
     () => diagnosticsClient(diagnosticsPayload).getSumeragiDiagnosticsTyped(),
     /exact ordered source group/,
+  );
+});
+
+test("Rust-owned grouped Native AMX v2 corpus includes required controls", () => {
+  const identifiers = new Set(
+    fixtureDocument.negative_controls.map((control) => control.id),
+  );
+  const required = [
+    "coherent_forged_validator_set_hash",
+    "coherent_stale_descriptor_hash",
+    "coherent_stale_proposal_hash",
+    "coherent_stale_settlement_hash",
+    "manifest_leaf_hash_tampering",
+    "non_canonical_validator_peer_id",
+  ];
+  assert.deepEqual(
+    required.filter((identifier) => !identifiers.has(identifier)),
+    [],
   );
 });
 

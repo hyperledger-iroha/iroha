@@ -7,13 +7,11 @@
 //! The absolute value of every integer residue is below `2^43`, so equality in
 //! Goldilocks is equality over the integers rather than a field-wrap shortcut.
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use p256::elliptic_curve::bigint::{Encoding as _, NonZero, U256, U512};
 use thiserror::Error;
 
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
-
-/// Stable descriptor for the exact nonnative arithmetic chip.
-pub(crate) const ZK_X509_P256_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-air-v4-incompatible:16xu16-little-endian:32-coefficient-rows-per-operation:all-limbs-bit-ranged:canonical-a-b-c-by-fixed-modulus-subtraction:exact-schoolbook-mul-or-modular-add-or-modular-subtract:exact-256-bit-mul-quotient:boolean-add-sub-quotient:25-bit-biased-signed-carry-range-minus2pow24-to2pow24:canonical-builder-carry-under2pow22:integer-residue-under2pow43:verifier-preprocessed-numeric-fixed90:aggregate-aux1-zero:fixed-constraint-vector368-degree4:fixed-operation-topology:group-and-ecdsa-composition=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
 
 /// P-256 coordinate-field modulus in canonical big-endian form.
 pub(crate) const P256_BASE_MODULUS_BE_V1: [u8; 32] = [
@@ -47,6 +45,7 @@ pub(crate) const P256_ARITHMETIC_STARK_CONSTRAINT_DEGREE_V1: u8 = 4;
 const LIMB_BITS: usize = 16;
 const CARRY_BITS: usize = 25;
 const CARRY_BIAS: i64 = 1 << 24;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const CARRY_ABSOLUTE_BOUND: i64 = 1 << 22;
 const RADIX: i64 = 1 << 16;
 
@@ -135,6 +134,7 @@ pub(crate) struct ZkX509P256ArithmeticTopologyV1 {
 }
 
 /// One canonical arithmetic operation before row expansion.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509P256ArithmeticOperationV1 {
     /// Relation kind.
@@ -150,6 +150,7 @@ pub(crate) struct ZkX509P256ArithmeticOperationV1 {
 }
 
 /// Verifier-regenerated row location and selectors.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509P256ArithmeticFixedRowV1 {
     /// Sequential operation index.
@@ -162,6 +163,7 @@ pub(crate) struct ZkX509P256ArithmeticFixedRowV1 {
     pub(crate) modulus: ZkX509P256ModulusV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509P256ArithmeticFixedRowV1 {
     const fn is_first(self) -> bool {
         self.coefficient == 0
@@ -181,6 +183,7 @@ impl ZkX509P256ArithmeticFixedRowV1 {
 }
 
 /// Complete exact arithmetic trace.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509P256ArithmeticTraceV1 {
     /// Verifier-regenerated fixed topology.
@@ -196,6 +199,7 @@ pub(crate) struct ZkX509P256ArithmeticTraceV1 {
 /// This helper deliberately performs no native row decoding: source-product
 /// evaluators consume these sixteen committed cells directly on the
 /// extension domain.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_arithmetic_opened_c_limb_bits_v1(
     base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
 ) -> [F; LIMB_BITS] {
@@ -238,6 +242,7 @@ pub(crate) fn p256_arithmetic_opened_operand_limbs_v1(
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509P256ArithmeticTraceV1 {
     /// Number of logical rows.
     pub(crate) fn rows(&self) -> usize {
@@ -365,11 +370,6 @@ impl P256ArithmeticStarkFixedProviderV1 {
         ));
         Ok(row)
     }
-
-    /// Native row count.
-    pub(crate) const fn trace_size_v1(&self) -> usize {
-        self.trace_size
-    }
 }
 
 /// Exact P-256 arithmetic trace failure.
@@ -379,12 +379,15 @@ pub(crate) enum ZkX509P256AirErrorV1 {
     #[error("zk-X509 P-256 arithmetic topology is invalid")]
     Topology,
     /// An operand or result is not below its selected modulus.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 integer is non-canonical")]
     NonCanonicalInteger,
     /// The claimed modular result is false.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 modular operation is invalid")]
     InvalidOperation,
     /// A carry escaped the proved fixed signed range.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 arithmetic carry is out of range")]
     CarryRange,
     /// A range, comparison, transition, or coefficient identity failed.
@@ -395,6 +398,7 @@ pub(crate) enum ZkX509P256AirErrorV1 {
     Allocation,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct ExpandedOperationV1 {
     a: [u16; LIMBS],
@@ -410,6 +414,7 @@ struct ExpandedOperationV1 {
     carries: [i64; P256_ARITHMETIC_ROWS_PER_OPERATION_V1 + 1],
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ExpandedOperationV1 {
     fn base_row(
         self,
@@ -470,6 +475,7 @@ impl ExpandedOperationV1 {
 }
 
 /// Expand a non-empty fixed operation batch into exact coefficient rows.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_zk_x509_p256_arithmetic_trace_v1(
     operations: &[ZkX509P256ArithmeticOperationV1],
 ) -> Result<ZkX509P256ArithmeticTraceV1, ZkX509P256AirErrorV1> {
@@ -516,6 +522,7 @@ pub(crate) fn build_zk_x509_p256_arithmetic_trace_v1(
 ///
 /// This is the narrow source-binding surface used by value-copy buses.  It
 /// deliberately keeps the arithmetic column layout private.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_arithmetic_operand_limbs_v1(
     trace: &ZkX509P256ArithmeticTraceV1,
     operation: usize,
@@ -545,6 +552,7 @@ pub(crate) fn p256_arithmetic_operand_limbs_v1(
 /// This is the narrow source-binding surface used by the scalar-bit copy bus.
 /// It deliberately exposes the constrained bit cells without exposing their
 /// private column offsets.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_arithmetic_c_limb_bits_v1(
     trace: &ZkX509P256ArithmeticTraceV1,
     operation: usize,
@@ -565,6 +573,7 @@ pub(crate) fn p256_arithmetic_c_limb_bits_v1(
     Ok(core::array::from_fn(|bit| base[C_BITS + bit]))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn expand_operation_v1(
     operation: ZkX509P256ArithmeticOperationV1,
 ) -> Result<ExpandedOperationV1, ZkX509P256AirErrorV1> {
@@ -613,6 +622,7 @@ fn expand_operation_v1(
 ///
 /// Every returned expression is degree at most two.  `next_base` is required
 /// inside an operation and ignored on its final row.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_p256_arithmetic_row_constraints_v1(
     fixed: ZkX509P256ArithmeticFixedRowV1,
     base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
@@ -779,6 +789,7 @@ pub(crate) fn evaluate_p256_arithmetic_row_constraints_v1(
 /// `operations` must come from the deterministic ECDSA topology compiler, not
 /// from proof bytes or a witness trace. The suffix through `trace_size` is the
 /// sole canonical padding schedule.
+#[cfg(test)]
 pub(crate) fn compile_p256_arithmetic_stark_fixed_rows_v1(
     operations: &[ZkX509P256ArithmeticTopologyV1],
     trace_size: usize,
@@ -823,7 +834,8 @@ fn push_stark_range_residues_v1(
 
 /// Evaluate one P-256 arithmetic row as a fixed-width polynomial vector.
 ///
-/// Unlike [`evaluate_p256_arithmetic_row_constraints_v1`], this function never
+/// Unlike the native `evaluate_p256_arithmetic_row_constraints_v1` reference
+/// evaluator, this function never
 /// branches on a native enum or row number. Kind, coefficient, modulus, range
 /// slot, and boundary selectors are verifier-preprocessed polynomial
 /// openings. Consequently the same degree-four expressions are valid on the
@@ -1019,6 +1031,7 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
     Ok(residues)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_range_residues_v1(residues: &mut Vec<F>, value: F, bits: &[F]) {
     let mut packed = F::ZERO;
     for (index, bit) in bits.iter().copied().enumerate() {
@@ -1032,6 +1045,7 @@ fn boolean_residue_v1(value: F) -> F {
     value.mul(value.sub(F::ONE))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn arithmetic_carries_v1(
     kind: ZkX509P256ArithmeticKindV1,
     a: [u16; LIMBS],
@@ -1089,6 +1103,7 @@ fn arithmetic_carries_v1(
     Ok(carries)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn less_than_witness_v1(
     value: [u16; LIMBS],
     modulus: [u16; LIMBS],
@@ -1110,6 +1125,7 @@ fn less_than_witness_v1(
     Ok((difference, borrow))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn exact_multiplication_quotient_v1(
     a: [u8; 32],
     b: [u8; 32],
@@ -1133,6 +1149,7 @@ fn exact_multiplication_quotient_v1(
     Ok(result)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn exact_addition_quotient_v1(
     a: [u8; 32],
     b: [u8; 32],
@@ -1153,6 +1170,7 @@ fn exact_addition_quotient_v1(
     Ok(result)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn exact_subtraction_quotient_v1(
     a: [u8; 32],
     b: [u8; 32],
@@ -1173,12 +1191,14 @@ fn exact_subtraction_quotient_v1(
     Ok(result)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn widen_be_v1(value: [u8; 32]) -> [u8; 33] {
     let mut wide = [0_u8; 33];
     wide[1..].copy_from_slice(&value);
     wide
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn add_be_v1(left: [u8; 32], right: [u8; 32]) -> [u8; 33] {
     let mut result = [0_u8; 33];
     let mut carry = 0_u16;
@@ -1191,6 +1211,7 @@ fn add_be_v1(left: [u8; 32], right: [u8; 32]) -> [u8; 33] {
     result
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn add_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX509P256AirErrorV1> {
     let mut result = [0_u8; 33];
     let mut carry = 0_u16;
@@ -1205,6 +1226,7 @@ fn add_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX509P25
     Ok(result)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn subtract_wide_be_v1(left: [u8; 33], right: [u8; 33]) -> Result<[u8; 33], ZkX509P256AirErrorV1> {
     if left < right {
         return Err(ZkX509P256AirErrorV1::InvalidOperation);
@@ -1234,12 +1256,14 @@ fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; LIMBS] {
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_limbs_v1(target: &mut [F], limbs: [u16; LIMBS]) {
     for (target, limb) in target.iter_mut().zip(limbs) {
         *target = F(u64::from(limb));
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_bits_v1(target: &mut [F], value: u16) {
     for (bit, target) in target.iter_mut().enumerate() {
         *target = F(u64::from((value >> bit) & 1));

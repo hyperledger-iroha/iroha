@@ -88,7 +88,7 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
 }
 
 fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTransition) {
-    let asset_definition = AssetDefinitionId::new(
+    let asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("fixture", "universal").unwrap(),
         "xor".parse().unwrap(),
     );

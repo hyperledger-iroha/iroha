@@ -11,7 +11,7 @@ readonly TLC_FINISHED_PATTERN='^Finished in (([0-9]+d )?([0-9]+h )?([0-9]+min )?
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
-readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"
 readonly MULTILANE_CONTRACT_CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_models.py"
 readonly MULTILANE_MUTATION_RUNNER="${REPO_ROOT}/scripts/formal/run_sumeragi_v2_multilane_mutations.sh"
 readonly INFLIGHT_FIRST_RELEASE_RUNNER="${REPO_ROOT}/scripts/formal/run_sumeragi_v2_inflight_first_release.sh"
@@ -32,7 +32,7 @@ case "$(uname -s)-$(uname -m)" in
     exit 1
     ;;
 esac
-readonly TLAPM_STDLIB="${TLAPM_STDLIB:-${REPO_ROOT}/target/tlapm/toolchains/${TLAPM_COMMIT}/${TLAPM_PLATFORM}/tlapm/lib/tlapm/stdlib}"
+readonly TLAPM_STDLIB="${TLAPM_STDLIB:?TLAPM_STDLIB must name the authenticated external standard library}"
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -104,12 +104,17 @@ allowed_configs=(
   safety_stake
   chain_epoch
   liveness
+  revision4_safety
+  revision4_adversarial_safety
+  revision4_liveness
+  revision4_certified_fence_reservation
   effective_lock_acquisition
   resume_locked_commit_witness
   multilane_autoscale_lifecycle_fixed
   multilane_native_application_evidence_fixed
   multilane_autonomous_reservation_carrier_fixed
   multilane_queue_plan_admission_registry_fixed
+  kura_replica_retention_fixed
 )
 if (($#)); then
   configs=("$@")
@@ -136,7 +141,13 @@ ln -s "${TLAPM_STDLIB}/Functions.tla" "${tlapm_compat_dir}/Functions.tla"
 ln -s "${TLAPM_STDLIB}/Folds.tla" "${tlapm_compat_dir}/Folds.tla"
 seed=424242
 for config in "${configs[@]}"; do
-  cfg="${config}.cfg"
+  case "$config" in
+    revision4_safety) cfg="SumeragiV2Revision4.cfg" ;;
+    revision4_adversarial_safety) cfg="SumeragiV2Revision4AdversarialSafety.cfg" ;;
+    revision4_liveness) cfg="SumeragiV2Revision4Liveness.cfg" ;;
+    revision4_certified_fence_reservation) cfg="revision4_certified_fence_reservation_fixed.cfg" ;;
+    *) cfg="${config}.cfg" ;;
+  esac
   metadir="${run_dir}/${config}"
   tlc_log="${run_dir}/${config}.log"
   mkdir -p "$metadir"
@@ -175,6 +186,15 @@ for config in "${configs[@]}"; do
         "${common[@]}" -depth "$TRACE_DEPTH" -seed "$seed" -aril 0 \
           -simulate "num=${TRACE_COUNT}" SumeragiV2AsyncNetwork.tla
         ;;
+      revision4_safety|revision4_liveness)
+        "${common[@]}" SumeragiV2Revision4.tla
+        ;;
+      revision4_adversarial_safety)
+        "${common[@]}" SumeragiV2Revision4AdversarialSafety.tla
+        ;;
+      revision4_certified_fence_reservation)
+        "${common[@]}" SumeragiV2Revision4CertifiedFenceReservation.tla
+        ;;
       effective_lock_acquisition)
         "${common[@]}" SumeragiV2EffectiveLockAcquisition.tla
         ;;
@@ -192,6 +212,9 @@ for config in "${configs[@]}"; do
         ;;
       multilane_queue_plan_admission_registry_fixed)
         "${common[@]}" SumeragiV2QueuePlanAdmissionRegistry.tla
+        ;;
+      kura_replica_retention_fixed)
+        "${common[@]}" SumeragiV2KuraReplicaRetention.tla
         ;;
       *)
         echo "internal error: unclassified TLC configuration ${config}" >&2

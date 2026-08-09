@@ -1188,17 +1188,38 @@ class SccpClientExactTest {
         assertEquals(tairaChainIdHash(), request.soraFinalityAnchor.chainIdHash)
         assertEquals(BigInteger.valueOf(7), request.soraFinalityAnchor.checkpointHeight)
         assertEquals(upper(0xa1, 32), request.soraFinalityAnchor.checkpointBlockHash)
-        assertEquals(3, request.soraFinalityAnchor.protocolVersion)
+        assertEquals(4, request.soraFinalityAnchor.protocolVersion)
         assertEquals(upper(0xa2, 32), request.soraFinalityAnchor.checkpointContextId)
         assertEquals(upper(0xa3, 32), request.soraFinalityAnchor.checkpointFinalityArtifactHash)
         assertEquals(
-            "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba",
+            "0x4410ee4ccfd06f2d0e3a658615d516ac8cf65255d8a8716ce511ea95e135c8c3",
             request.soraFinalityAnchor.anchorHash,
         )
         assertEquals("0x${finalityAnchorHash().lowercase()}", request.soraFinalityAnchor.anchorHash)
 
+        val historicalValue = proofRequest()
+        @Suppress("UNCHECKED_CAST")
+        val historicalAnchor =
+            historicalValue["sora_finality_anchor"] as MutableMap<String, Any?>
+        historicalAnchor["protocol_version"] = 3
+        historicalValue["sora_finality_anchor_hash"] =
+            "0x${finalityAnchorHash(3).lowercase()}"
+        val historicalRequest = SccpJsonParser.parseProofRequest(jsonBytes(historicalValue))
+        assertEquals(3, historicalRequest.soraFinalityAnchor.protocolVersion)
+        assertEquals(
+            "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba",
+            historicalRequest.soraFinalityAnchor.anchorHash,
+        )
+        assertFalse(
+            historicalRequest.soraFinalityAnchor.anchorHash ==
+                request.soraFinalityAnchor.anchorHash,
+        )
+
         val invalidFinalityAnchors: List<(MutableMap<String, Any?>) -> Unit> = listOf(
             { it["protocol_version"] = 1 },
+            { it["protocol_version"] = "4" },
+            { it["protocol_version"] = 4.0 },
+            { it["protocol_version"] = 5 },
             { it["protocol_version"] = "3" },
             { it["protocol_version"] = 3.0 },
             { it["protocol_version"] = true },
@@ -1603,7 +1624,7 @@ class SccpClientExactTest {
     private fun finalityAnchor(): MutableMap<String, Any?> = linkedMapOf(
         "version" to 1,
         "source_network" to network("sora-taira"),
-        "protocol_version" to 3,
+        "protocol_version" to 4,
         "chain_id_hash" to tairaChainIdHash(),
         "checkpoint_height" to 7,
         "checkpoint_block_hash" to upper(0xa1, 32),
@@ -1661,7 +1682,7 @@ class SccpClientExactTest {
             ),
             "settlement" to linkedMapOf(
                 "asset_definition_id" to "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                "custody_account_id" to "sorau-test-account",
+                "custody_account_id" to "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "payload_amount_scale" to 9,
             ),
         )
@@ -1959,7 +1980,7 @@ class SccpClientExactTest {
             "asset_home_domain" to 0,
             "asset_id" to canonicalProjectionText("xor"),
             "amount" to 1000,
-            "sender" to canonicalProjectionText("sorau-test-account"),
+            "sender" to canonicalProjectionText("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
             "recipient" to linkedMapOf(
                 "EvmAddress20" to linkedMapOf("bytes" to "0x${"11".repeat(20)}"),
             ),
@@ -2057,11 +2078,11 @@ class SccpClientExactTest {
             publicSignalSchemaHash().hexToBytes(),
     ).toUpperHex()
 
-    private fun finalityAnchorHash(): String {
+    private fun finalityAnchorHash(protocolVersion: Int = 4): String {
         val canonical = ByteArrayOutputStream().also { output ->
             output.write(1)
             output.write(1)
-            writeU16(output, 3)
+            writeU16(output, protocolVersion)
             output.write(tairaChainIdHash().hexToBytes())
             writeU64(output, 7)
             output.write(upper(0xa1, 32).hexToBytes())
@@ -2121,9 +2142,9 @@ class SccpClientExactTest {
         const val TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
         // These authenticate this fixture's semantic commitments and deployment code hashes.
         const val DEFAULT_ROUTE_CONFIG_HASH =
-            "77D2C235AABDFFE9125F27F960FE58F34E9C418BBE452CCC926B10DE18B22BD1"
+            "65ABF3081D137062860FD712B5414A17C3664FD42C7567373FF3302BA331EFDD"
         const val TRON_ROUTE_CONFIG_HASH =
-            "6D14339A4E342F0F5E72947A19133426EAC1DA9F9A01FB15DCAC55078A842AE2"
+            "1BB8C081AA96766CF63FFE063E5B506FF17005E033C7B47E9760214C4C8D5519"
         val MESSAGE_ID: String = "11".repeat(32)
     }
 }

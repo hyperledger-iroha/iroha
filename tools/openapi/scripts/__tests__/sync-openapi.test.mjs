@@ -1,12 +1,17 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, readFile, access, mkdir, symlink, utimes, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, access, mkdir, rm, symlink, utimes, writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 
 import {computeOpenApiBlake3Hex} from '../lib/openapi-manifest-v2.mjs';
-import {defaultRepoRoot, parseArgs, syncOpenApi} from '../sync-openapi.mjs';
+import {
+  createCliContext,
+  defaultRepoRoot,
+  parseArgs,
+  syncOpenApi,
+} from '../sync-openapi.mjs';
 import {attachOpenApiManifestSignature} from './helpers/openapi-signing.mjs';
 
 function releaseSpec(marker) {
@@ -30,6 +35,24 @@ test('default repository root contains the Cargo workspace', async () => {
   await access(join(defaultRepoRoot, 'Cargo.toml'));
 });
 
+test('default generator enables the xtask binary feature', () => {
+  assert.deepEqual(openApiGeneratorCargoArgs('/tmp/torii.json'), [
+    'run',
+    '--locked',
+    '--offline',
+    '-p',
+    'xtask',
+    '--features',
+    'dev-tools',
+    '--bin',
+    'xtask',
+    '--',
+    'openapi',
+    '--output',
+    '/tmp/torii.json',
+  ]);
+});
+
 test('parseArgs handles version, latest, and mirrors', () => {
   const options = parseArgs([
     '--version=candidate',
@@ -37,24 +60,94 @@ test('parseArgs handles version, latest, and mirrors', () => {
     '--mirror=current',
     '--mirror=preview',
     '--allow-unsigned',
-    '--require-signed',
     '--allowed-signers=operator/openapi-signers.json',
+    '--output-dir=operator/openapi-output',
   ]);
 
   assert.equal(options.version, 'candidate');
   assert.equal(options.latest, true);
   assert.deepEqual(options.mirrors, ['current', 'preview']);
-  assert.equal(options.requireSigned, true);
+  assert.equal(options.requireSigned, false);
   assert.equal(
     options.allowedSignersFile,
     resolve('operator/openapi-signers.json'),
   );
+  assert.equal(options.outputDir, resolve('operator/openapi-output'));
 
   assert.throws(() => parseArgs(['--mirror=']), /mirror label must not be empty/);
   assert.throws(() => parseArgs(['--version=../../escape']), /version label must/);
   assert.throws(() => parseArgs(['--mirror=latest']), /reserved/);
   assert.throws(() => parseArgs(['--allowed-signers=']), /path must not be empty/);
+  assert.throws(() => parseArgs(['--output-dir=']), /unambiguous directory path/);
+  assert.throws(() => parseArgs(['--output-dir=.']), /unambiguous directory path/);
+  assert.throws(
+    () => parseArgs([`--output-dir=${defaultRepoRoot}`]),
+    /repository root/,
+  );
+  assert.throws(
+    () => parseArgs([`--output-dir=${join(defaultRepoRoot, '.git', 'openapi')}`]),
+    /Git metadata/,
+  );
+  assert.throws(
+    () => parseArgs(['--output-dir=stage/openapi', '--output-dir=stage/other']),
+    /only once/,
+  );
+  assert.throws(
+    () => parseArgs(['--version=one', '--version=two', '--latest']),
+    /--version only once/,
+  );
+  assert.throws(
+    () => parseArgs(['--latest', '--latest']),
+    /--latest only once/,
+  );
+  assert.throws(
+    () => parseArgs(['--allow-unsigned', '--require-signed', '--latest']),
+    /one signature policy/,
+  );
+  assert.throws(
+    () => parseArgs(['--mirror=preview', '--mirror=preview', '--latest']),
+    /only once/,
+  );
+  assert.throws(
+    () => parseArgs(['--version=current', '--mirror=current', '--latest']),
+    /must be distinct/,
+  );
+  assert.throws(() => parseArgs(['--reuse-canonical-spec']), /unknown argument/);
+  assert.throws(() => parseArgs(['--output-root=stage/openapi']), /unknown argument/);
   assert.throws(() => parseArgs(['--unknown']), /unknown argument/);
+});
+
+test('CLI consumes only the stable canonical spec under output-dir', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-cli-reuse-'));
+  const outputDir = join(tempRoot, 'openapi');
+  const canonicalSpec = join(outputDir, 'torii.json');
+  const copiedSpec = join(tempRoot, 'copied.json');
+  const spec = releaseSpec('cli-reuse');
+  await mkdir(outputDir, {recursive: true});
+  await writeFile(canonicalSpec, spec, 'utf8');
+
+  const options = parseArgs([
+    `--output-dir=${outputDir}`,
+    '--latest',
+  ]);
+  const context = createCliContext(options);
+  await context.generateSpec(defaultRepoRoot, copiedSpec);
+  assert.equal(await readFile(copiedSpec, 'utf8'), spec);
+  assert.equal(context.outputDir, outputDir);
+  assert.equal(context.versionsDir, join(outputDir, 'versions'));
+
+  const outsideSpec = join(tempRoot, 'outside.json');
+  await writeFile(outsideSpec, spec, 'utf8');
+  await rm(canonicalSpec);
+  await symlink(outsideSpec, canonicalSpec);
+  await assert.rejects(
+    () => context.generateSpec(defaultRepoRoot, copiedSpec),
+    /symlink/i,
+  );
+  assert.throws(
+    () => createCliContext(parseArgs(['--latest'])),
+    /explicit --output-dir/,
+  );
 });
 
 test('parseArgs can disable signature enforcement explicitly', () => {
@@ -307,6 +400,7 @@ test('syncOpenApi allows unsigned manifests only when opted-in', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-unsigned-allowed-'));
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
+  const forbiddenContextOutputDir = join(tempRoot, 'live-artifacts-must-not-be-used');
   const fakeSpec = releaseSpec('generated');
   await writeCanonicalManifest(outputDir, fakeSpec, {signature: null});
   await writeAllowedSigners(outputDir, []);
@@ -317,11 +411,12 @@ test('syncOpenApi allows unsigned manifests only when opted-in', async () => {
       latest: true,
       mirrors: ['current'],
       requireSigned: false,
+      outputDir,
     },
     {
       repoRoot: tempRoot,
-      outputDir,
-      versionsDir,
+      outputDir: forbiddenContextOutputDir,
+      versionsDir: join(forbiddenContextOutputDir, 'versions'),
       async generateSpec(_, outputFile) {
         await mkdir(dirname(outputFile), {recursive: true});
         await writeFile(outputFile, fakeSpec, 'utf8');
@@ -340,6 +435,7 @@ test('syncOpenApi allows unsigned manifests only when opted-in', async () => {
   const entry = versionsManifest.entries.find((candidate) => candidate.label === 'candidate');
   assert.equal(entry?.signed, false);
   assert.equal(entry?.manifestPath, 'versions/candidate/manifest.json');
+  assert.equal(await pathExists(forbiddenContextOutputDir), false);
 });
 
 test('syncOpenApi rejects a forged signature before changing tracked snapshots', async () => {

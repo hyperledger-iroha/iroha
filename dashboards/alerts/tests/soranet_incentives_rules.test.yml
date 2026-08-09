@@ -19,15 +19,23 @@ tests:
         exp_alerts:
           - exp_labels:
               relay: 0xrelay
+              severity: critical
             exp_annotations:
               summary: Relay dropped below minimum bond
+              description: >
+                Relay 0xrelay reported insufficient-bond skips in the last 10m. Freeze payouts
+                until exit bonds meet the configured policy.
       - alertname: SoranetRewardPayoutAnomaly
-        eval_time: 6m
+        eval_time: 5m
         exp_alerts: []
       - alertname: SoranetRewardPayoutAnomaly
         eval_time: 15m
         exp_alerts:
           - exp_labels:
               relay: 0xrelay
+              severity: warning
             exp_annotations:
               summary: Reward payouts below 0.1 XOR floor
+              description: >
+                Relay 0xrelay minted less than 0.1 XOR over the last 15m despite reward events.
+                Investigate measurement inputs and treasury reconciliation before enabling automated payouts.

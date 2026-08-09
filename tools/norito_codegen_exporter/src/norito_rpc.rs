@@ -2840,7 +2840,7 @@ mod tests {
         invocation.insert(
             "contract_address".to_owned(),
             Value::String(
-                "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8".to_owned(),
+                "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh".to_owned(),
             ),
         );
         invocation.insert(

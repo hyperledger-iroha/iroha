@@ -15,7 +15,10 @@ use iroha::data_model::isi::{
 use iroha_crypto::Hash as CryptoHash;
 use norito::{decode_from_bytes, json};
 
-use super::shared::{canonicalize_hex32, print_with_summary};
+use super::shared::{
+    canonicalize_hex32, parse_governance_proposal_id_v1, parse_governance_selector_v1,
+    print_with_summary,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 /// Voting mode selector for `iroha_cli gov vote`.
@@ -129,6 +132,14 @@ fn normalize_public_inputs(map: &mut json::Map) -> Result<()> {
     reject_public_input_key(map, "rootHint", "root_hint")?;
     reject_public_input_key(map, "nullifier_hex", "nullifier")?;
     reject_public_input_key(map, "nullifierHex", "nullifier")?;
+    for key in map.keys() {
+        if !matches!(
+            key.as_str(),
+            "root_hint" | "owner" | "amount" | "duration_blocks" | "direction" | "nullifier"
+        ) {
+            return Err(eyre!("unsupported ZK V1 public-input field: {key}"));
+        }
+    }
     canonicalize_public_input_hex(map, "root_hint")?;
     canonicalize_public_input_hex(map, "nullifier")?;
     Ok(())
@@ -160,14 +171,21 @@ fn reject_public_input_key(map: &json::Map, key: &str, canonical: &str) -> Resul
 
 #[derive(clap::Args, Debug)]
 pub struct VoteArgs {
-    #[arg(long, value_name = "REFERENDUM_ID")]
+    #[arg(
+        long,
+        value_name = "REFERENDUM_ID",
+        value_parser = parse_governance_selector_v1
+    )]
     pub referendum_id: String,
     /// Voting mode override. Defaults to auto-detect via GET /v1/gov/referenda/{id}.
     #[arg(long, value_enum, default_value_t = VoteMode::Auto)]
     pub mode: VoteMode,
-    /// Base64-encoded proof for ZK voting mode.
+    /// Exact proof backend tag for ZK voting mode.
     #[arg(long)]
-    pub proof_b64: Option<String>,
+    pub backend: Option<String>,
+    /// Base64-encoded proof envelope for ZK voting mode.
+    #[arg(long)]
+    pub envelope_b64: Option<String>,
     /// Optional JSON file containing public inputs for ZK voting mode.
     #[arg(long, value_name = "PATH")]
     pub public: Option<std::path::PathBuf>,
@@ -175,10 +193,10 @@ pub struct VoteArgs {
     #[arg(long)]
     pub owner: Option<String>,
     /// Locked amount for plain voting mode (string to preserve large integers).
-    #[arg(long, alias = "lock-amount")]
+    #[arg(long)]
     pub amount: Option<String>,
     /// Lock duration (in blocks) for plain voting mode.
-    #[arg(long, alias = "lock-duration-blocks")]
+    #[arg(long)]
     pub duration_blocks: Option<u64>,
     /// Ballot direction for plain voting mode: Aye, Nay, or Abstain.
     #[arg(long)]
@@ -193,7 +211,8 @@ impl Run for VoteArgs {
         let VoteArgs {
             referendum_id,
             mode,
-            proof_b64,
+            backend,
+            envelope_b64,
             public,
             owner,
             amount,
@@ -207,12 +226,18 @@ impl Run for VoteArgs {
 
         match resolved {
             ResolvedVoteMode::Zk => {
-                let proof = proof_b64.ok_or_else(|| {
-                    eyre!("--proof-b64 is required for Zk voting; provide it or set --mode plain")
+                let backend = backend.ok_or_else(|| {
+                    eyre!("--backend is required for Zk voting; provide it or set --mode plain")
+                })?;
+                let envelope = envelope_b64.ok_or_else(|| {
+                    eyre!(
+                        "--envelope-b64 is required for Zk voting; provide it or set --mode plain"
+                    )
                 })?;
                 let args = VoteZkArgs {
                     election_id: referendum_id,
-                    proof_b64: proof,
+                    backend,
+                    envelope_b64: envelope,
                     public,
                     owner,
                     amount,
@@ -223,24 +248,33 @@ impl Run for VoteArgs {
                 args.run(context)
             }
             ResolvedVoteMode::Plain => {
+                if backend.is_some()
+                    || envelope_b64.is_some()
+                    || public.is_some()
+                    || nullifier.is_some()
+                {
+                    return Err(eyre!(
+                        "plain voting does not accept --backend, --envelope-b64, --public, or --nullifier"
+                    ));
+                }
                 let owner = owner.ok_or_else(|| {
                     eyre!(
-                        "--owner is required for plain voting; provide it or set --mode zk with proof"
+                        "--owner is required for plain voting; provide it or set --mode zk with an envelope"
                     )
                 })?;
                 let amount = amount.ok_or_else(|| {
                     eyre!(
-                        "--amount is required for plain voting; provide it or set --mode zk with proof"
+                        "--amount is required for plain voting; provide it or set --mode zk with an envelope"
                     )
                 })?;
                 let duration_blocks = duration_blocks.ok_or_else(|| {
                     eyre!(
-                        "--duration-blocks is required for plain voting; provide it or set --mode zk with proof"
+                        "--duration-blocks is required for plain voting; provide it or set --mode zk with an envelope"
                     )
                 })?;
                 let direction = direction.ok_or_else(|| {
                     eyre!(
-                        "--direction is required for plain voting; provide it or set --mode zk with proof"
+                        "--direction is required for plain voting; provide it or set --mode zk with an envelope"
                     )
                 })?;
                 let args = VotePlainArgs {
@@ -258,10 +292,12 @@ impl Run for VoteArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct VoteZkArgs {
-    #[arg(long)]
+    #[arg(long, value_parser = parse_governance_selector_v1)]
     pub election_id: String,
     #[arg(long)]
-    pub proof_b64: String,
+    pub backend: String,
+    #[arg(long)]
+    pub envelope_b64: String,
     /// Path to a JSON file with additional public inputs (optional)
     #[arg(long)]
     pub public: Option<std::path::PathBuf>,
@@ -269,10 +305,10 @@ pub struct VoteZkArgs {
     #[arg(long)]
     pub owner: Option<String>,
     /// Optional lock amount hint mirrored into public inputs.
-    #[arg(long, alias = "lock-amount")]
+    #[arg(long)]
     pub amount: Option<String>,
     /// Optional lock duration hint mirrored into public inputs.
-    #[arg(long, alias = "lock-duration-blocks")]
+    #[arg(long)]
     pub duration_blocks: Option<u64>,
     /// Optional direction hint mirrored into public inputs.
     #[arg(long)]
@@ -314,12 +350,18 @@ impl Run for VoteZkArgs {
         }
         ensure_lock_hints_complete(public_obj)?;
         normalize_public_input_owner(public_obj)?;
-        let body = json_object(vec![
-            ("election_id", json_value(&self.election_id)?),
-            ("proof_b64", json_value(&self.proof_b64)?),
-            ("public", public),
-        ])?;
-        let mut value = client.post_gov_ballot_zk_json(&body)?;
+        public_obj.insert(
+            "authority".to_owned(),
+            json_value(&client.account.to_string())?,
+        );
+        public_obj.insert(
+            "chain_id".to_owned(),
+            json_value(&client.chain.to_string())?,
+        );
+        public_obj.insert("election_id".to_owned(), json_value(&self.election_id)?);
+        public_obj.insert("backend".to_owned(), json_value(&self.backend)?);
+        public_obj.insert("envelope_b64".to_owned(), json_value(&self.envelope_b64)?);
+        let mut value = client.post_gov_ballot_zk_v1_json(&public)?;
         let annotation = annotate_vote_instructions(&mut value)?;
         let ok = value
             .get("ok")
@@ -350,7 +392,7 @@ impl Run for VoteZkArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct VotePlainArgs {
-    #[arg(long)]
+    #[arg(long, value_parser = parse_governance_selector_v1)]
     pub referendum_id: String,
     #[arg(long)]
     pub owner: String,
@@ -404,7 +446,11 @@ impl Run for VotePlainArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ProposalGetArgs {
-    #[arg(long, value_name = "ID_HEX")]
+    #[arg(
+        long,
+        value_name = "ID_HEX",
+        value_parser = parse_governance_proposal_id_v1
+    )]
     pub id: String,
 }
 
@@ -702,7 +748,7 @@ mod tests {
 
 #[derive(clap::Args, Debug)]
 pub struct LocksGetArgs {
-    #[arg(long)]
+    #[arg(long, value_parser = parse_governance_selector_v1)]
     pub referendum_id: String,
 }
 
@@ -759,7 +805,10 @@ impl Run for UnlockStatsArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ReferendumGetArgs {
-    #[arg(long = "referendum-id", alias = "id")]
+    #[arg(
+        long = "referendum-id",
+        value_parser = parse_governance_selector_v1
+    )]
     pub referendum_id: String,
 }
 
@@ -781,7 +830,10 @@ impl Run for ReferendumGetArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct TallyGetArgs {
-    #[arg(long = "referendum-id", alias = "id")]
+    #[arg(
+        long = "referendum-id",
+        value_parser = parse_governance_selector_v1
+    )]
     pub referendum_id: String,
 }
 

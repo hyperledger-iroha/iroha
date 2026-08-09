@@ -931,8 +931,8 @@ mod tests {
 
         let sandbox = tempfile::tempdir().expect("create signer custody sandbox");
         let path = sandbox.path().join("genesis.private_key");
-        let expected =
-            KeyPair::try_from_seed([23_u8; 32], Algorithm::default()).expect("derive signer");
+        let expected = KeyPair::try_from_seed([23_u8; 32].to_vec(), Algorithm::default())
+            .expect("derive signer");
         let exposed = ExposedPrivateKey(expected.private_key().clone());
         let mut file = OpenOptions::new()
             .write(true)

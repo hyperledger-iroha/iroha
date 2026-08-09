@@ -255,6 +255,9 @@ fn collect_multisig_account_activities(
         MultisigInstructionBox::Cancel(cancel) => {
             push_unique(out, &cancel.account, AccountActivityRole::Affected);
         }
+        MultisigInstructionBox::InvalidateOutstanding(invalidate) => {
+            push_unique(out, &invalidate.account, AccountActivityRole::Affected);
+        }
         MultisigInstructionBox::Propose(propose) => {
             push_unique(out, &propose.account, AccountActivityRole::Affected);
             for nested in &propose.instructions {
@@ -324,7 +327,8 @@ mod tests {
 
     fn asset_id(account: AccountId) -> AssetId {
         let domain = DomainId::try_new("wallet", "universal").expect("domain");
-        let definition = AssetDefinitionId::new(domain, "xor".parse().expect("asset name"));
+        let definition =
+            AssetDefinitionId::derive_from_components(domain, "xor".parse().expect("asset name"));
         AssetId::new(definition, account)
     }
 

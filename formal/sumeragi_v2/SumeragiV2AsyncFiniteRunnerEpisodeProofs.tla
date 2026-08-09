@@ -162,8 +162,8 @@ BY AsyncProtectedCandidateIngressEpisodeRankOrderingIsWellFounded,
        AsyncCapacityRunnerEpisodeRankCarrier
 
 THEOREM AsyncReadyRunnerEpisodeRankInCarrier ==
-  \A kind \in AsyncReadyRunnerEpisodeKinds,
-     candidate, position, baselineRank:
+  \A candidate, position, baselineRank:
+    \A kind \in AsyncReadyRunnerEpisodeKinds:
     AsyncReadyRunnerEpisodeRankedKernel(
       kind, candidate, position, baselineRank)
       => AsyncReadyRunnerEpisodeRank(candidate)
@@ -186,8 +186,8 @@ BY AsyncProtectedCandidateIngressEpisodeRankIsFinite,
        ResponsiveProtectedCandidateOwned
 
 THEOREM AsyncCapacityRunnerEpisodeRankInCarrier ==
-  \A kind \in AsyncCapacityRunnerEpisodeKinds,
-     candidate, position, baselineRank:
+  \A candidate, position, baselineRank:
+    \A kind \in AsyncCapacityRunnerEpisodeKinds:
     AsyncCapacityRunnerEpisodeRankedKernel(
       kind, candidate, position, baselineRank)
       => AsyncCapacityRunnerEpisodeRank(candidate)
@@ -244,8 +244,8 @@ new action/intersection fairness clause.
 ***************************************************************************)
 
 THEOREM AsyncReadyRunnerEpisodeStepIsGoalDescentOrFrame ==
-  \A kind \in AsyncReadyRunnerEpisodeKinds,
-     candidate, position, baselineRank:
+  \A candidate, position, baselineRank:
+    \A kind \in AsyncReadyRunnerEpisodeKinds:
     /\ AsyncReadyRunnerEpisodeRankedKernel(
          kind, candidate, position, baselineRank)
     /\ [AsyncNext]_AsyncAllVars
@@ -283,8 +283,8 @@ BY AsyncProtectedCandidateIngressEpisodeStepIsDescentOrFrame,
        ReadyRunAuxOrdering, LexPairOrdering, AsyncAllVars
 
 THEOREM AsyncCapacityRunnerEpisodeStepIsGoalDescentOrFrame ==
-  \A kind \in AsyncCapacityRunnerEpisodeKinds,
-     candidate, position, baselineRank:
+  \A candidate, position, baselineRank:
+    \A kind \in AsyncCapacityRunnerEpisodeKinds:
     /\ AsyncCapacityRunnerEpisodeRankedKernel(
          kind, candidate, position, baselineRank)
     /\ [AsyncNext]_AsyncAllVars
@@ -316,8 +316,8 @@ BY AsyncProtectedCandidateIngressEpisodeStepIsDescentOrFrame,
        Stage4CapacityOrdering, LexPairOrdering, AsyncAllVars
 
 THEOREM AsyncReadyRunnerEpisodeSelectedActionConsumesRankCell ==
-  \A kind \in AsyncReadyRunnerEpisodeKinds,
-     candidate, position, baselineRank:
+  \A candidate, position, baselineRank:
+    \A kind \in AsyncReadyRunnerEpisodeKinds:
     /\ AsyncReadyRunnerEpisodeRankedKernel(
          kind, candidate, position, baselineRank)
     /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
@@ -355,8 +355,8 @@ BY AsyncProtectedCandidateSelectedOwnerIsConcreteAndEnabled,
        LexPairOrdering, AsyncAllVars
 
 THEOREM AsyncCapacityRunnerEpisodeSelectedActionConsumesRankCell ==
-  \A kind \in AsyncCapacityRunnerEpisodeKinds,
-     candidate, position, baselineRank:
+  \A candidate, position, baselineRank:
+    \A kind \in AsyncCapacityRunnerEpisodeKinds:
     /\ AsyncCapacityRunnerEpisodeRankedKernel(
          kind, candidate, position, baselineRank)
     /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
@@ -431,12 +431,12 @@ BY AsyncCausalEpisodeTargetLifecycleOrdinalPersists,
 
 THEOREM AsyncRunnerEpisodeConcreteOwnerUsesExistingFairness ==
   \A initialContext, node, ownerKind:
-    /\ node \in AsyncVotersAt(initialContext)
-    /\ node \in Responsive
-    /\ ownerKind \in AsyncProtectedCandidateFairOwnerKinds
-    => AsyncSpecAt(initialContext)
-         => WF_AsyncAllVars(
-              AsyncProtectedCandidateFairAction(node, ownerKind))
+    (/\ node \in AsyncVotersAt(initialContext)
+     /\ node \in Responsive
+     /\ ownerKind \in AsyncProtectedCandidateFairOwnerKinds)
+      => (AsyncSpecAt(initialContext)
+            => WF_AsyncAllVars(
+                 AsyncProtectedCandidateFairAction(node, ownerKind)))
 BY Isa, PTL
    DEF AsyncSpecAt, AsyncFairnessAt,
        AsyncProtectedCandidateFairOwnerKinds,
@@ -445,9 +445,9 @@ BY Isa, PTL
 
 AsyncReadyRunnerEpisodeRankStepProperty(specification) ==
   specification
-    => \A kind \in AsyncReadyRunnerEpisodeKinds,
-          candidate, position, baselineRank,
-          episodeRank \in AsyncReadyRunnerEpisodeRankCarrier:
+    => \A candidate, position, baselineRank:
+         \A kind \in AsyncReadyRunnerEpisodeKinds:
+           \A episodeRank \in AsyncReadyRunnerEpisodeRankCarrier:
          AsyncReadyRunnerEpisodeAtRank(
            kind, candidate, position, baselineRank, episodeRank)
            ~> AsyncReadyRunnerEpisodeRankGoal(
@@ -455,9 +455,9 @@ AsyncReadyRunnerEpisodeRankStepProperty(specification) ==
 
 AsyncCapacityRunnerEpisodeRankStepProperty(specification) ==
   specification
-    => \A kind \in AsyncCapacityRunnerEpisodeKinds,
-          candidate, position, baselineRank,
-          episodeRank \in AsyncCapacityRunnerEpisodeRankCarrier:
+    => \A candidate, position, baselineRank:
+         \A kind \in AsyncCapacityRunnerEpisodeKinds:
+           \A episodeRank \in AsyncCapacityRunnerEpisodeRankCarrier:
          AsyncCapacityRunnerEpisodeAtRank(
            kind, candidate, position, baselineRank, episodeRank)
            ~> AsyncCapacityRunnerEpisodeRankGoal(
@@ -509,8 +509,8 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
 
 AsyncReadyRunnerEpisodeClosureProperty(specification) ==
   specification
-    => \A kind \in AsyncReadyRunnerEpisodeKinds,
-          candidate, position, baselineRank:
+    => \A candidate, position, baselineRank:
+         \A kind \in AsyncReadyRunnerEpisodeKinds:
          AsyncReadyRunnerEpisodeRankedKernel(
            kind, candidate, position, baselineRank)
            ~> AsyncReadyRunnerEpisodeGoal(
@@ -518,8 +518,8 @@ AsyncReadyRunnerEpisodeClosureProperty(specification) ==
 
 AsyncCapacityRunnerEpisodeClosureProperty(specification) ==
   specification
-    => \A kind \in AsyncCapacityRunnerEpisodeKinds,
-          candidate, position, baselineRank:
+    => \A candidate, position, baselineRank:
+         \A kind \in AsyncCapacityRunnerEpisodeKinds:
          AsyncCapacityRunnerEpisodeRankedKernel(
            kind, candidate, position, baselineRank)
            ~> AsyncCapacityRunnerEpisodeGoal(
@@ -903,24 +903,93 @@ BY AsyncVoterRunNodeWorkStrictlyDecreasesFrozenProducerContinuationCompositeRank
        PreGstResponsiveRestart, PreGstResponsiveReplay,
        AsyncAllVars
 
+THEOREM AsyncVoterRunNodeIsNonstuttering ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ RunNode(node)
+      => <<RunNode(node)>>_AsyncAllVars
+BY Isa
+   DEF RunNode, RunNodeWork,
+       LocalAdmissionStep, IngressDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       AsyncAllVars, AsyncSchedulerVars,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
+
 THEOREM AsyncVoterProducerContinuationFairRunnerIsEnabled ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
     /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
     /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ AsyncVoterCandidateProducerContinuationEpisodePending(node)
-      => ENABLED PostGstRunNode(node)
-BY ResponsiveUnappliedRunNodeIsEnabled,
-   EnabledRunNodeLiftsPostGst,
-   AsyncStrongTypeProjectsAsyncType,
-   GstResponsiveNodesAreUp,
-   GstExcludesResponsiveReplayQuarantine,
-   IsaT(600)
-   DEF AsyncVoterCandidateProducerContinuationEpisodePending,
-       AsyncStrongTypeInvariant, AsyncCurrentResponsiveVoters,
-       AsyncCandidateProducerContinuationRunnerResolutionRequired,
-       AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
-       RecoveryRunNodeGuard
+      => ENABLED <<PostGstRunNode(node)>>_AsyncAllVars
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
+                AsyncVoterCandidateProducerContinuationEpisodePending(node)
+         PROVE ENABLED <<PostGstRunNode(node)>>_AsyncAllVars
+    <2>1. /\ AsyncTypeInvariant
+           /\ node \in AsyncCurrentResponsiveVoters
+           /\ gst
+           /\ ~NodeHasApplication(node)
+      BY <1>1, AsyncStrongTypeProjectsAsyncType
+         DEF AsyncVoterCandidateProducerContinuationEpisodePending,
+             AsyncCandidateProducerContinuationRunnerResolutionRequired,
+             AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode
+    <2>2. ENABLED PostGstRunNode(node)
+      BY <1>1, <2>1,
+         ResponsiveUnappliedRunNodeIsEnabled,
+         EnabledRunNodeLiftsPostGst,
+         GstResponsiveNodesAreUp,
+         GstExcludesResponsiveReplayQuarantine,
+         IsaT(600)
+         DEF AsyncStrongTypeInvariant, AsyncCurrentResponsiveVoters,
+             RecoveryRunNodeGuard
+    <2>3. PostGstRunNode(node)
+             => <<PostGstRunNode(node)>>_AsyncAllVars
+      BY <2>1, AsyncVoterRunNodeIsNonstuttering, Isa
+         DEF PostGstRunNode
+    <2> QED BY <2>2, <2>3, ENABLEDaxioms
+  <1> QED BY <1>1
+
+THEOREM AsyncVoterProducerContinuationFairRunnerOccurrenceReachesRankGoal ==
+  \A node \in ValidatorIds, rank \in Nat:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ AsyncVoterCandidateProducerContinuationEpisodeAtRank(node, rank)
+    /\ <<PostGstRunNode(node)>>_AsyncAllVars
+      => AsyncVoterCandidateProducerContinuationEpisodeRankGoal(node, rank)'
+BY AsyncVoterRunNodeWorkStrictlyDecreasesFrozenProducerContinuationCompositeRank,
+   IsaT(900)
+   DEF AsyncVoterCandidateProducerContinuationEpisodeAtRank,
+       AsyncVoterCandidateProducerContinuationEpisodeRankGoal,
+       AsyncVoterCandidateProducerContinuationEpisodePending,
+       AsyncVoterCandidateProducerContinuationFrozenCompositeRankDecreases,
+       PostGstRunNode, RunNode,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       SetLessThan, OpToRel
+
+THEOREM AsyncVoterProducerContinuationRankStepPreservesOrProgresses ==
+  \A node \in ValidatorIds, rank \in Nat:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ AsyncVoterCandidateProducerContinuationEpisodeAtRank(node, rank)
+    /\ [AsyncNext]_AsyncAllVars
+      => \/ AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                node, rank)'
+         \/ AsyncVoterCandidateProducerContinuationEpisodeAtRank(node, rank)'
+BY AsyncVoterProducerContinuationCompositeRankStepCannotIncrease,
+   IsaT(900)
+   DEF AsyncVoterCandidateProducerContinuationEpisodeAtRank,
+       AsyncVoterCandidateProducerContinuationEpisodeRankGoal,
+       AsyncVoterCandidateProducerContinuationEpisodePending,
+       SetLessThan, OpToRel
 
 AsyncVoterCandidateProducerContinuationRankStepProperty(
     specification, initialContext) ==
@@ -943,22 +1012,69 @@ THEOREM AsyncSpecProvidesVoterCandidateProducerContinuationRankStep ==
   \A initialContext:
     AsyncVoterCandidateProducerContinuationRankStepProperty(
       AsyncSpecAt(initialContext), initialContext)
-BY AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
-   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
-   AsyncSpecAlwaysUsesFixedResponsiveVoters,
-   AsyncVoterProducerContinuationCompositeRankStepCannotIncrease,
-   AsyncVoterProducerContinuationFairRunnerIsEnabled,
-   AsyncVoterRunNodeWorkStrictlyDecreasesFrozenProducerContinuationCompositeRank,
-   WF1, PTL, IsaT(1800)
-   DEF AsyncVoterCandidateProducerContinuationRankStepProperty,
-       AsyncVoterCandidateProducerContinuationEpisodeAtRank,
-       AsyncVoterCandidateProducerContinuationEpisodeRankGoal,
-       AsyncVoterCandidateProducerContinuationEpisodePending,
-       AsyncVoterCandidateProducerContinuationFrozenCompositeRankDecreases,
-       PostGstRunNode, RunNode,
-       AsyncSpecAt, AsyncFairnessAt,
-       SetLessThan, OpToRel
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncVoterCandidateProducerContinuationRankStepProperty(
+                 AsyncSpecAt(initialContext), initialContext)
+    <2>1. ASSUME NEW node \in AsyncVotersAt(initialContext),
+                  NEW rank \in Nat,
+                  AsyncSpecAt(initialContext)
+           PROVE AsyncVoterCandidateProducerContinuationEpisodeAtRank(
+                   node, rank)
+                   ~>
+                 AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                   node, rank)
+      <3>1. [](/\ AsyncStrongTypeInvariant
+                /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+                /\ AsyncCurrentResponsiveVoters
+                     = AsyncVotersAt(initialContext))
+        BY <2>1,
+           AsyncSpecAlwaysStrongTypeInvariant,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+           AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+           AsyncSpecAlwaysUsesFixedResponsiveVoters, PTL
+      <3>2. [](AsyncVoterCandidateProducerContinuationEpisodeAtRank(
+                  node, rank)
+                /\ ~AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                     node, rank)
+               => ENABLED <<PostGstRunNode(node)>>_AsyncAllVars)
+        BY <3>1,
+           AsyncCurrentResponsiveVotersAreValidators,
+           AsyncVoterProducerContinuationFairRunnerIsEnabled,
+           PTL
+      <3>3. (AsyncVoterCandidateProducerContinuationEpisodeAtRank(
+                  node, rank)
+                /\ ~AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                     node, rank)
+                /\ <<PostGstRunNode(node)>>_AsyncAllVars
+               => AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                    node, rank)')
+        BY <3>1,
+           AsyncCurrentResponsiveVotersAreValidators,
+           AsyncVoterProducerContinuationFairRunnerOccurrenceReachesRankGoal,
+           PTL
+      <3>4. (AsyncVoterCandidateProducerContinuationEpisodeAtRank(
+                  node, rank)
+                /\ ~AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                     node, rank)
+                /\ [AsyncNext]_AsyncAllVars
+               => \/ AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                       node, rank)'
+                  \/ AsyncVoterCandidateProducerContinuationEpisodeAtRank(
+                       node, rank)')
+        BY <3>1,
+           AsyncCurrentResponsiveVotersAreValidators,
+           AsyncVoterProducerContinuationRankStepPreservesOrProgresses,
+           PTL
+      <3>5. WF_AsyncAllVars(PostGstRunNode(node))
+        BY <2>1 DEF AsyncSpecAt, AsyncFairnessAt
+      <3>6. [][AsyncNext]_AsyncAllVars
+        BY <2>1 DEF AsyncSpecAt
+      <3> QED BY <3>2, <3>3, <3>4, <3>5, <3>6, PTL
+    <2> QED BY <2>1
+         DEF AsyncVoterCandidateProducerContinuationRankStepProperty
+  <1> QED BY <1>1
 
 THEOREM AsyncSpecProvidesVoterCandidateProducerContinuationResolutionClosure ==
   \A initialContext:
@@ -1146,8 +1262,8 @@ AsyncCapacityRunnerEpisodeContinuationResidual(
        candidate.node)
 
 THEOREM AsyncReadyRunnerEpisodeContinuationOwnsVoterEpisode ==
-  \A kind \in AsyncReadyRunnerEpisodeKinds,
-     candidate, position, rank:
+  \A candidate, position, rank:
+    \A kind \in AsyncReadyRunnerEpisodeKinds:
     AsyncReadyRunnerEpisodeContinuationResidual(
       kind, candidate, position, rank)
       => AsyncVoterCandidateProducerContinuationEpisodePending(
@@ -1167,8 +1283,8 @@ BY IsaT(600)
        AsyncCurrentResponsiveVoters
 
 THEOREM AsyncCapacityRunnerEpisodeContinuationOwnsVoterEpisode ==
-  \A kind \in AsyncCapacityRunnerEpisodeKinds,
-     candidate, position, rank:
+  \A candidate, position, rank:
+    \A kind \in AsyncCapacityRunnerEpisodeKinds:
     AsyncCapacityRunnerEpisodeContinuationResidual(
       kind, candidate, position, rank)
       => AsyncVoterCandidateProducerContinuationEpisodePending(
@@ -1186,8 +1302,8 @@ BY IsaT(600)
        AsyncCurrentResponsiveVoters
 
 THEOREM AsyncReadyRunnerEpisodeContinuationStepFramesTarget ==
-  \A kind \in AsyncReadyRunnerEpisodeKinds,
-     candidate, position, rank:
+  \A candidate, position, rank:
+    \A kind \in AsyncReadyRunnerEpisodeKinds:
     /\ AsyncReadyRunnerEpisodeContinuationResidual(
          kind, candidate, position, rank)
     /\ [AsyncNext]_AsyncAllVars
@@ -1219,8 +1335,8 @@ BY Stage3SameNodeRunAuxOutcomeObligation,
        AsyncAllVars
 
 THEOREM AsyncCapacityRunnerEpisodeContinuationStepFramesTarget ==
-  \A kind \in AsyncCapacityRunnerEpisodeKinds,
-     candidate, position, rank:
+  \A candidate, position, rank:
+    \A kind \in AsyncCapacityRunnerEpisodeKinds:
     /\ AsyncCapacityRunnerEpisodeContinuationResidual(
          kind, candidate, position, rank)
     /\ [AsyncNext]_AsyncAllVars
@@ -1248,8 +1364,8 @@ BY Stage4CapacitySameNodeRunProducesOutcome,
 AsyncReadyRunnerEpisodeContinuationClosureProperty(
     specification, initialContext) ==
   specification
-    => \A kind \in AsyncReadyRunnerEpisodeKinds,
-          candidate, position, rank:
+    => \A candidate, position, rank:
+         \A kind \in AsyncReadyRunnerEpisodeKinds:
          AsyncReadyRunnerEpisodeContinuationResidual(
            kind, candidate, position, rank)
            ~> (AsyncReadyRunnerEpisodeGoal(
@@ -1260,8 +1376,8 @@ AsyncReadyRunnerEpisodeContinuationClosureProperty(
 AsyncCapacityRunnerEpisodeContinuationClosureProperty(
     specification, initialContext) ==
   specification
-    => \A kind \in AsyncCapacityRunnerEpisodeKinds,
-          candidate, position, rank:
+    => \A candidate, position, rank:
+         \A kind \in AsyncCapacityRunnerEpisodeKinds:
          AsyncCapacityRunnerEpisodeContinuationResidual(
            kind, candidate, position, rank)
            ~> (AsyncCapacityRunnerEpisodeGoal(
@@ -1299,8 +1415,8 @@ BY AsyncSpecProvidesVoterCandidateProducerContinuationResolutionClosure,
 
 AsyncReadyRunnerEpisodeCompleteClosureProperty(specification) ==
   specification
-    => \A kind \in AsyncReadyRunnerEpisodeKinds,
-          candidate, position, rank:
+    => \A candidate, position, rank:
+         \A kind \in AsyncReadyRunnerEpisodeKinds:
          AsyncReadyRunnerEpisodeResidual(
            kind, candidate, position, rank)
            ~> AsyncReadyRunnerEpisodeGoal(
@@ -1308,8 +1424,8 @@ AsyncReadyRunnerEpisodeCompleteClosureProperty(specification) ==
 
 AsyncCapacityRunnerEpisodeCompleteClosureProperty(specification) ==
   specification
-    => \A kind \in AsyncCapacityRunnerEpisodeKinds,
-          candidate, position, rank:
+    => \A candidate, position, rank:
+         \A kind \in AsyncCapacityRunnerEpisodeKinds:
          AsyncCapacityRunnerEpisodeResidual(
            kind, candidate, position, rank)
            ~> AsyncCapacityRunnerEpisodeGoal(

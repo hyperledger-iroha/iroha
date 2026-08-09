@@ -61,7 +61,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<offline::ActivateKagemushaRecursiveReleaseV4>,
     InstructionRegistry::register_slice::<offline::RegisterOfflineDeviceAttestation>,
     InstructionRegistry::register_slice::<offline::SetOfflineDeviceAttestationPolicy>,
-    InstructionRegistry::register_slice::<asset_alias::SetAssetDefinitionBalancePolicy>,
     InstructionRegistry::register_slice::<crate::isi::staking::RegisterPublicLaneValidator>,
     InstructionRegistry::register_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>,
     InstructionRegistry::register_slice::<crate::isi::staking::ActivatePublicLaneValidator>,
@@ -115,13 +114,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<escrow::DrawdownAssetLock>,
     InstructionRegistry::register_slice::<escrow::CancelAssetLock>,
     InstructionRegistry::register_slice::<escrow::ExpireAssetLock>,
-    InstructionRegistry::register_slice::<escrow::OpenAnonymousAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::AcceptAnonymousAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::MarkAnonymousEscrowPaymentSent>,
-    InstructionRegistry::register_slice::<escrow::ReleaseAnonymousAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::CancelAnonymousAssetEscrow>,
-    InstructionRegistry::register_slice::<escrow::OpenAnonymousEscrowDispute>,
-    InstructionRegistry::register_slice::<escrow::ResolveAnonymousEscrowDispute>,
     InstructionRegistry::register_slice::<vpn::OpenVpnLeaseEscrow>,
     InstructionRegistry::register_slice::<vpn::SettleVpnLease>,
     InstructionRegistry::register_slice::<vpn::RefundExpiredVpnLease>,
@@ -135,6 +127,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<soracloud::SetSoracloudServiceSecret>,
     InstructionRegistry::register_slice::<soracloud::DeleteSoracloudServiceSecret>,
     InstructionRegistry::register_slice::<soracloud::MutateSoracloudState>,
+    InstructionRegistry::register_slice::<soracloud::RegisterSoracloudFhePolicy>,
+    InstructionRegistry::register_slice::<soracloud::RotateSoracloudFhePolicy>,
+    InstructionRegistry::register_slice::<soracloud::RevokeSoracloudFhePolicy>,
     InstructionRegistry::register_slice::<soracloud::RunSoracloudFheJob>,
     InstructionRegistry::register_slice::<soracloud::RecordSoracloudDecryptionRequest>,
     InstructionRegistry::register_slice::<soracloud::JoinSoracloudHfSharedLease>,
@@ -204,10 +199,25 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<account_recovery::CancelAccountRecovery>,
     InstructionRegistry::register_slice::<account_recovery::FinalizeAccountRecovery>,
     InstructionRegistry::register_slice::<contract_alias::SetContractAlias>,
-    InstructionRegistry::register_slice::<musubi::PublishMusubiRelease>,
-    InstructionRegistry::register_slice::<musubi::YankMusubiRelease>,
-    InstructionRegistry::register_slice::<musubi::SetMusubiShortAlias>,
-    InstructionRegistry::register_slice::<musubi::AssertMusubiReleaseExists>,
+    InstructionRegistry::register_slice::<musubi::RegisterMusubiNamespaceBindingV1>,
+    InstructionRegistry::register_slice::<musubi::RegisterMusubiArchiveV1>,
+    InstructionRegistry::register_slice::<musubi::RegisterMusubiProviderBundleAttestationV1>,
+    InstructionRegistry::register_slice::<musubi::AddMusubiArchiveLocationV1>,
+    InstructionRegistry::register_slice::<musubi::RetireMusubiArchiveLocationV1>,
+    InstructionRegistry::register_slice::<musubi::PublishMusubiReleaseV1>,
+    InstructionRegistry::register_slice::<musubi::SetMusubiReleaseYankV1>,
+    InstructionRegistry::register_slice::<musubi::SetMusubiPackageMetadataV1>,
+    InstructionRegistry::register_slice::<musubi::InviteMusubiPackageMaintainerV1>,
+    InstructionRegistry::register_slice::<musubi::AcceptMusubiPackageMaintainerV1>,
+    InstructionRegistry::register_slice::<musubi::RevokeMusubiPackageMaintainerInvitationV1>,
+    InstructionRegistry::register_slice::<musubi::SetMusubiPackageMaintainerRoleV1>,
+    InstructionRegistry::register_slice::<musubi::RemoveMusubiPackageMaintainerV1>,
+    InstructionRegistry::register_slice::<musubi::RegisterMusubiAliasV1>,
+    InstructionRegistry::register_slice::<musubi::RecoverMusubiPackageV1>,
+    InstructionRegistry::register_slice::<musubi::RetargetMusubiAliasV1>,
+    InstructionRegistry::register_slice::<musubi::SetMusubiArtifactTakedownV1>,
+    InstructionRegistry::register_slice::<musubi::SetMusubiRegistryPolicyV1>,
+    InstructionRegistry::register_slice::<musubi::AssertMusubiReleaseDigestV1>,
     InstructionRegistry::register_slice::<ram_lfe::RegisterRamLfeProgramPolicy>,
     InstructionRegistry::register_slice::<ram_lfe::ActivateRamLfeProgramPolicy>,
     InstructionRegistry::register_slice::<ram_lfe::DeactivateRamLfeProgramPolicy>,
@@ -334,9 +344,6 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<zk::RegisterZkAsset>,
     InstructionRegistry::register_slice::<zk::ScheduleConfidentialPolicyTransition>,
     InstructionRegistry::register_slice::<zk::CancelConfidentialPolicyTransition>,
-    InstructionRegistry::register_slice::<zk::Shield>,
-    InstructionRegistry::register_slice::<zk::ZkTransfer>,
-    InstructionRegistry::register_slice::<zk::Unshield>,
     InstructionRegistry::register_slice::<zk::CreateElection>,
     InstructionRegistry::register_slice::<zk::SubmitBallot>,
     InstructionRegistry::register_slice::<zk::FinalizeElection>,
@@ -456,16 +463,36 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<offline::RegisterOfflineDeviceAttestation>(
         offline::RegisterOfflineDeviceAttestation::WIRE_ID,
     );
-    registry = registry.register_with_id_slice::<musubi::PublishMusubiRelease>(
-        musubi::PublishMusubiRelease::WIRE_ID,
-    );
-    registry = registry
-        .register_with_id_slice::<musubi::YankMusubiRelease>(musubi::YankMusubiRelease::WIRE_ID);
-    registry = registry.register_with_id_slice::<musubi::SetMusubiShortAlias>(
-        musubi::SetMusubiShortAlias::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<musubi::AssertMusubiReleaseExists>(
-        musubi::AssertMusubiReleaseExists::WIRE_ID,
+    macro_rules! register_musubi_v1 {
+        ($registry:ident; $($instruction:ident),+ $(,)?) => {
+            $(
+                $registry = $registry.register_with_id_slice::<musubi::$instruction>(
+                    musubi::$instruction::WIRE_ID,
+                );
+            )+
+        };
+    }
+    register_musubi_v1!(
+        registry;
+        RegisterMusubiNamespaceBindingV1,
+        RegisterMusubiArchiveV1,
+        RegisterMusubiProviderBundleAttestationV1,
+        AddMusubiArchiveLocationV1,
+        RetireMusubiArchiveLocationV1,
+        PublishMusubiReleaseV1,
+        SetMusubiReleaseYankV1,
+        SetMusubiPackageMetadataV1,
+        InviteMusubiPackageMaintainerV1,
+        AcceptMusubiPackageMaintainerV1,
+        RevokeMusubiPackageMaintainerInvitationV1,
+        SetMusubiPackageMaintainerRoleV1,
+        RemoveMusubiPackageMaintainerV1,
+        RegisterMusubiAliasV1,
+        RecoverMusubiPackageV1,
+        RetargetMusubiAliasV1,
+        SetMusubiArtifactTakedownV1,
+        SetMusubiRegistryPolicyV1,
+        AssertMusubiReleaseDigestV1,
     );
     registry = registry.register_with_id_slice::<crate::isi::staking::ActivatePublicLaneValidator>(
         "iroha.staking.activate_public_lane_validator",
@@ -590,6 +617,15 @@ fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     );
     registry = registry.register_with_id_slice::<soracloud::MutateSoracloudState>(
         "soracloud::MutateSoracloudState",
+    );
+    registry = registry.register_with_id_slice::<soracloud::RegisterSoracloudFhePolicy>(
+        "soracloud::RegisterSoracloudFhePolicy",
+    );
+    registry = registry.register_with_id_slice::<soracloud::RotateSoracloudFhePolicy>(
+        "soracloud::RotateSoracloudFhePolicy",
+    );
+    registry = registry.register_with_id_slice::<soracloud::RevokeSoracloudFhePolicy>(
+        "soracloud::RevokeSoracloudFhePolicy",
     );
     registry = registry
         .register_with_id_slice::<soracloud::RunSoracloudFheJob>("soracloud::RunSoracloudFheJob");
@@ -792,9 +828,6 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
     registry = registry.register_with_id_slice::<asset_alias::SetAssetDefinitionAlias>(
         asset_alias::SetAssetDefinitionAlias::WIRE_ID,
     );
-    registry = registry.register_with_id_slice::<asset_alias::SetAssetDefinitionBalancePolicy>(
-        asset_alias::SetAssetDefinitionBalancePolicy::WIRE_ID,
-    );
     registry = registry
         .register_with_id_slice::<asset_transfer_control::SetAssetTransferAvailability>(
             asset_transfer_control::SetAssetTransferAvailability::WIRE_ID,
@@ -888,7 +921,7 @@ mod tests {
     }
 
     fn asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(domain_id(), "rose".parse().expect("asset name"))
+        AssetDefinitionId::derive_from_components(domain_id(), "rose".parse().expect("asset name"))
     }
 
     fn asset_id() -> AssetId {
@@ -1106,9 +1139,9 @@ mod tests {
 
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "cac7fc565a6a5a5b25be028218e08cb46973b96bfc24dd488c56c9b84bbdc297";
+            "68123bb16922f819106520b25bc0e3df75196a2e271f99f37edc7171bf736839";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "8b3425102fdceb1cf4e61ef19ec6db5474d365918d1fe233255aa47e08de47b8";
+            "8420134d76274e6ed35c8d0960d2da7f20738fb83fbdf24f86bebd6a5d93e5a9";
 
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
@@ -2098,6 +2131,101 @@ mod tests {
                 registry.decode(retired, &[]).is_none(),
                 "retired ZK-ACE instruction wire unexpectedly remains decodable: {retired}"
             );
+        }
+    }
+
+    #[test]
+    fn default_registry_excludes_retired_confidential_instructions() {
+        let retired_wires = [
+            ["iroha_data_model::isi::zk::", "Shield"].concat(),
+            ["iroha_data_model::isi::zk::", "ZkTransfer"].concat(),
+            ["iroha_data_model::isi::zk::", "Unshield"].concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "OpenAnonymous",
+                "AssetEscrow",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "AcceptAnonymous",
+                "AssetEscrow",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "MarkAnonymous",
+                "EscrowPaymentSent",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "ReleaseAnonymous",
+                "AssetEscrow",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "CancelAnonymous",
+                "AssetEscrow",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "OpenAnonymous",
+                "EscrowDispute",
+            ]
+            .concat(),
+            [
+                "iroha_data_model::isi::escrow::",
+                "ResolveAnonymous",
+                "EscrowDispute",
+            ]
+            .concat(),
+        ];
+        let registry = default();
+
+        for retired in &retired_wires {
+            assert!(
+                !registry.contains(retired),
+                "retired confidential wire must not be registered: {retired}"
+            );
+            assert!(
+                registry.decode(retired, &[]).is_none(),
+                "retired confidential wire must not be dispatchable: {retired}"
+            );
+        }
+
+        for specialized in [
+            std::any::type_name::<offline::TopUpKagemushaRecursiveV4>(),
+            std::any::type_name::<offline::RedeemKagemushaRecursiveV4>(),
+        ] {
+            assert!(
+                registry.contains(specialized),
+                "protocol-bound confidential instruction must remain registered: {specialized}"
+            );
+            assert_eq!(registry.wire_id(specialized), Some(specialized));
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn structured_json_rejects_retired_confidential_dispatch() {
+        for name in [
+            "Shield".to_owned(),
+            "ZkTransfer".to_owned(),
+            "Unshield".to_owned(),
+            ["OpenAnonymous", "AssetEscrow"].concat(),
+            ["AcceptAnonymous", "AssetEscrow"].concat(),
+            ["MarkAnonymous", "EscrowPaymentSent"].concat(),
+            ["ReleaseAnonymous", "AssetEscrow"].concat(),
+            ["CancelAnonymous", "AssetEscrow"].concat(),
+            ["OpenAnonymous", "EscrowDispute"].concat(),
+            ["ResolveAnonymous", "EscrowDispute"].concat(),
+        ] {
+            let retired = format!(r#"{{"name":"{name}","params":{{}}}}"#);
+            norito::json::from_str::<InstructionBox>(&retired)
+                .expect_err("retired confidential JSON must not dispatch");
         }
     }
 

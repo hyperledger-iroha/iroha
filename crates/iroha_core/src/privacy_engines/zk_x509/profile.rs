@@ -30,10 +30,12 @@ pub(crate) const ZK_X509_SUITE_V1: &[u8] = b"iroha-zk-x509-stark-p256-v0";
 pub(crate) const ZK_X509_SOURCE_PROFILE_V1: &[u8] =
     b"iroha-native-rust:strict-der:rfc5280-p256-sha256:private-chain-crl-ownership:goldilocks-stark:v1";
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Minimum admitted certificate-chain depth, including leaf and root.
 pub(crate) const ZK_X509_MIN_CHAIN_DEPTH_V1: usize = 2;
 /// Maximum admitted certificate-chain depth, including leaf and root.
 pub(crate) const ZK_X509_MAX_CHAIN_DEPTH_V1: usize = 3;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Maximum DER bytes in the private CRL witness.
 ///
 /// Unbounded parsing is deliberately excluded from a consensus circuit.
@@ -47,48 +49,39 @@ pub(crate) const ZK_X509_MAX_CRL_BYTES_V1: usize = 4_096;
 pub(crate) const ZK_X509_MAX_CRL_ENTRIES_V1: usize = 64;
 /// Maximum canonical unsigned certificate-serial bytes.
 pub(crate) const ZK_X509_MAX_SERIAL_BYTES_V1: usize = 20;
-/// Exact depth of the governed CA membership tree.
-///
-/// The first-release registry admits at most 4,096 trust-anchor SPKIs, so the
-/// sole canonical tree is the complete depth-12 tree used by the codec,
-/// Merkle relation, SHA-call schedule, accumulator AIR, and X5C1 proof.  There
-/// is no parallel 256-level profile or legacy decoder.
-pub(crate) const ZK_X509_CA_TREE_DEPTH_V1: usize = 12;
 /// Maximum accepted lag between trusted block time and CRL `thisUpdate`.
 pub(crate) const ZK_X509_MAX_CRL_AGE_SECONDS_V1: u64 = 300;
-/// Maximum accepted future skew for any witness time.
-///
-/// Consensus supplies one trusted block timestamp, so future tolerance is
-/// intentionally zero rather than dependent on a node's wall clock.
-pub(crate) const ZK_X509_MAX_FUTURE_SKEW_SECONDS_V1: u64 = 0;
 /// Fixed private salt width for one subject-attribute commitment.
 pub(crate) const ZK_X509_ATTRIBUTE_SALT_BYTES_V1: usize = 32;
 /// Maximum exact DER content bytes in one committed subject attribute.
 pub(crate) const ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1: usize = 256;
-/// Fixed raw P-256 affine public-key width, including SEC1 prefix.
-pub(crate) const ZK_X509_COMPRESSED_P256_BYTES_V1: usize = 33;
 /// Fixed uncompressed P-256 affine public-key width, including SEC1 prefix.
 pub(crate) const ZK_X509_UNCOMPRESSED_P256_BYTES_V1: usize = 65;
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// RFC 5280 client-authentication EKU OID.
 pub(crate) const ZK_X509_CLIENT_AUTHENTICATION_EKU_OID_V1: &str = "1.3.6.1.5.5.7.3.2";
+#[cfg(test)]
 /// Iroha document-signing EKU OID.
 ///
 /// The `2.25` UUID OID is UUIDv5(URL namespace,
 /// `https://hyperledger.github.io/iroha/eku/document-signing/v1`).
 pub(crate) const ZK_X509_DOCUMENT_SIGNING_EKU_OID_V1: &str =
     "2.25.27309815684091774780500832483404888315";
+#[cfg(test)]
 /// Iroha wallet-identity EKU OID.
 ///
 /// The `2.25` UUID OID is UUIDv5(URL namespace,
 /// `https://hyperledger.github.io/iroha/eku/wallet-identity/v1`).
 pub(crate) const ZK_X509_WALLET_IDENTITY_EKU_OID_V1: &str =
     "2.25.325405717892146366947968947126277329515";
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// DER content octets of the Iroha document-signing EKU OID.
 pub(crate) const ZK_X509_DOCUMENT_SIGNING_EKU_DER_VALUE_V1: &[u8] = &[
     0x69, 0xa9, 0x8b, 0xd6, 0xf7, 0xd8, 0x86, 0xaa, 0xc4, 0xb3, 0x8b, 0xcd, 0xbc, 0xba, 0xe7, 0x86,
     0x8c, 0xf1, 0x7b,
 ];
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// DER content octets of the Iroha wallet-identity EKU OID.
 pub(crate) const ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1: &[u8] = &[
     0x69, 0x83, 0xe9, 0xce, 0xee, 0xa4, 0xdc, 0xb4, 0xda, 0xe5, 0xdf, 0xbe, 0xf0, 0xac, 0xd6, 0xd0,
@@ -97,10 +90,9 @@ pub(crate) const ZK_X509_WALLET_IDENTITY_EKU_DER_VALUE_V1: &[u8] = &[
 
 /// Domain for the canonical SHA-256 field-framing function.
 pub(crate) const ZK_X509_HASH_FRAME_DOMAIN_V1: &[u8] = b"iroha.zk-x509.sha256.frame.v1";
-/// Domain for CA sparse-tree member keys.
-pub(crate) const ZK_X509_CA_KEY_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.key.v1";
 /// Domain for occupied CA leaves.
 pub(crate) const ZK_X509_CA_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.leaf.v1";
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 /// Domain for empty CA leaves.
 pub(crate) const ZK_X509_CA_EMPTY_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-x509.ca.empty-leaf.v1";
 /// Domain for CA internal tree nodes.
@@ -142,45 +134,6 @@ pub(crate) const ZK_X509_CRL_REVISION_SCHEMA_V1: &[u8] = b"implicit_version:u16-
 /// CRLs, distribution-point partitions, and incomplete shard claims are
 /// rejected rather than interpreted.
 pub(crate) const ZK_X509_CRL_SCOPE_PROFILE_V1: &[u8] = b"leaf-only:one-issuer-per-certificate-policy:complete-base-crl:no-delta:no-indirect:no-partition:no-distribution-point";
-
-/// Exact extension roles admitted on every certificate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ZkX509CertificateExtensionV1 {
-    /// RFC 5280 authority key identifier, non-critical.
-    AuthorityKeyIdentifier,
-    /// RFC 5280 subject key identifier, non-critical.
-    SubjectKeyIdentifier,
-    /// RFC 5280 basic constraints, critical.
-    BasicConstraints,
-    /// RFC 5280 key usage, critical.
-    KeyUsage,
-    /// RFC 5280 extended key usage, critical and leaf-only.
-    ExtendedKeyUsage,
-}
-
-/// Complete certificate extension allow-list in canonical engine role order.
-pub(crate) const ZK_X509_ALLOWED_CERTIFICATE_EXTENSIONS_V1: [ZkX509CertificateExtensionV1; 5] = [
-    ZkX509CertificateExtensionV1::AuthorityKeyIdentifier,
-    ZkX509CertificateExtensionV1::SubjectKeyIdentifier,
-    ZkX509CertificateExtensionV1::KeyUsage,
-    ZkX509CertificateExtensionV1::BasicConstraints,
-    ZkX509CertificateExtensionV1::ExtendedKeyUsage,
-];
-
-/// Exact extension roles admitted on the complete base CRL.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ZkX509CrlExtensionV1 {
-    /// RFC 5280 authority key identifier, non-critical.
-    AuthorityKeyIdentifier,
-    /// RFC 5280 monotonically increasing CRLNumber, non-critical.
-    CrlNumber,
-}
-
-/// Complete CRL extension allow-list in canonical engine role order.
-pub(crate) const ZK_X509_ALLOWED_CRL_EXTENSIONS_V1: [ZkX509CrlExtensionV1; 2] = [
-    ZkX509CrlExtensionV1::AuthorityKeyIdentifier,
-    ZkX509CrlExtensionV1::CrlNumber,
-];
 
 /// Canonical rules for the admitted complete base CRL.
 ///
@@ -361,12 +314,16 @@ pub(crate) use readiness_certificates::{
     resource_certificate_matches_source_v1, validate_resource_certificate_payload_v1,
 };
 use readiness_certificates::{
-    ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, ZK_X509_RESOURCE_MAXIMUM_ELAPSED_MILLIS_V1,
+    ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1,
+    resource_certificate_is_pinned_v1, soundness_certificate_is_pinned_v1,
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use readiness_certificates::{
+    ZK_X509_RESOURCE_MAXIMUM_ELAPSED_MILLIS_V1,
     ZK_X509_RESOURCE_MAXIMUM_PEAK_ADDRESS_SPACE_BYTES_V1,
     ZK_X509_RESOURCE_MAXIMUM_PEAK_RSS_BYTES_V1, ZK_X509_RESOURCE_POSITIVE_ELAPSED_MILLIS_V1,
     ZK_X509_RESOURCE_POSITIVE_PEAK_ADDRESS_SPACE_BYTES_V1,
-    ZK_X509_RESOURCE_POSITIVE_PEAK_RSS_BYTES_V1, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1,
-    resource_certificate_is_pinned_v1, soundness_certificate_is_pinned_v1,
+    ZK_X509_RESOURCE_POSITIVE_PEAK_RSS_BYTES_V1,
 };
 
 const fn digest_is_nonzero_v1(digest: [u8; 32]) -> bool {
@@ -405,6 +362,7 @@ const fn release_evidence_pins_are_complete_v1(
         && digests_differ_v1(expectations_norito_sha256, expectations_json_sha256)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct ZkX509ReleaseCapturePinsV1 {
     kat_proof_bytes: u32,
@@ -420,6 +378,7 @@ struct ZkX509ReleaseCapturePinsV1 {
     maximum_peak_address_space_bytes: u64,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn source_release_capture_pins_v1() -> ZkX509ReleaseCapturePinsV1 {
     ZkX509ReleaseCapturePinsV1 {
         kat_proof_bytes: ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1,
@@ -436,6 +395,7 @@ const fn source_release_capture_pins_v1() -> ZkX509ReleaseCapturePinsV1 {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn native_release_capture_open_with_pins_v1(pins: ZkX509ReleaseCapturePinsV1) -> bool {
     pins.kat_proof_bytes == 0
         && !digest_is_nonzero_v1(pins.kat_proof_sha256)
@@ -450,6 +410,7 @@ const fn native_release_capture_open_with_pins_v1(pins: ZkX509ReleaseCapturePins
         && pins.maximum_peak_address_space_bytes == 0
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const fn native_release_expectation_digests_match_with_pins_v1(
     expected_norito_sha256: [u8; 32],
     expected_json_sha256: [u8; 32],
@@ -463,6 +424,7 @@ const fn native_release_expectation_digests_match_with_pins_v1(
 }
 
 /// Whether every deterministic proof and native fixture pin is populated.
+#[cfg(test)]
 pub(crate) const fn zk_x509_release_evidence_pins_complete_v1() -> bool {
     release_evidence_pins_are_complete_v1(
         ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1,
@@ -473,11 +435,13 @@ pub(crate) const fn zk_x509_release_evidence_pins_complete_v1() -> bool {
 }
 
 /// Whether the one-time native expectation capture corridor remains open.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const fn zk_x509_native_release_expectation_capture_open_v1() -> bool {
     native_release_capture_open_with_pins_v1(source_release_capture_pins_v1())
 }
 
 /// Whether an expectation pair matches both compiled release pins exactly.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) const fn zk_x509_native_release_expectation_digests_match_v1(
     norito_sha256: [u8; 32],
     json_sha256: [u8; 32],

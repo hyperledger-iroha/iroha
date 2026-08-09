@@ -45,11 +45,14 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
-        iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
+        "coin".to_owned(),
         NumericSpec::default(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
     )
     .build(&alice_id);
     let acc_a = Account::new(alice_id.clone()).build(&alice_id);
@@ -71,10 +74,11 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     // 1) Mint to Alice (independent)
     // 2) Transfer from Alice to Bob (depends on 1)
     // 3) Set metadata on Carol (independent)
-    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "coin".parse().unwrap(),
-    );
+    let rose: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let tx1 = TransactionBuilder::new(
         chain_id.clone(),

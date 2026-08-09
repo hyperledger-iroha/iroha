@@ -30,22 +30,44 @@ use crate::{
     parameters::{actual as base, defaults},
 };
 
+fn parse_exact_value_via_tape<'input, T>(
+    parser: &mut json::Parser<'input>,
+    parse: impl FnOnce(&mut TapeWalker<'input>, &mut Arena) -> Result<T, NoritoError>,
+) -> Result<T, json::Error> {
+    let input = parser.input();
+    let start = parser.position();
+
+    // Bound and validate exactly the next value before building the structural
+    // tape. In particular, do not rebuild a tape for the entire enclosing
+    // document for every element when this bridge is used under `Vec<T>`.
+    let mut boundary = *parser;
+    boundary.skip_value()?;
+    let end = boundary.position();
+    let subtree = input
+        .get(start..end)
+        .ok_or_else(|| json::Error::Message("JSON value bounds are not UTF-8 boundaries".into()))?;
+
+    let mut walker = TapeWalker::new(subtree);
+    walker.ensure_document_depth()?;
+    let mut arena = Arena::new();
+    let value =
+        parse(&mut walker, &mut arena).map_err(|err| json::Error::Message(err.to_string()))?;
+    walker.skip_ws();
+    if walker.raw_pos() != subtree.len() {
+        return Err(json::Error::Message(
+            "fast JSON parser did not consume the exact JSON value".into(),
+        ));
+    }
+
+    *parser = boundary;
+    Ok(value)
+}
+
 fn parse_via_fast<T>(parser: &mut json::Parser<'_>) -> Result<T, json::Error>
 where
     for<'a> T: FastFromJson<'a>,
 {
-    let input = parser.input();
-    let start = parser.position();
-    let mut walker = TapeWalker::new(input);
-    walker.sync_to_raw(start);
-    let mut arena = Arena::new();
-    let value =
-        T::parse(&mut walker, &mut arena).map_err(|err| json::Error::Message(err.to_string()))?;
-    let end = walker.raw_pos();
-    while parser.position() < end {
-        let _ = parser.bump();
-    }
-    Ok(value)
+    parse_exact_value_via_tape(parser, T::parse)
 }
 
 // Manual Norito fast JSON writers for small DTOs used on the client path
@@ -162,12 +184,6 @@ impl FastJsonWrite for SoranetVpnSummary {
         out.push_str("\"meter_family\":");
         json::write_json_string(&self.meter_family, out);
         out.push(',');
-        out.push_str("\"fee_asset_id\":");
-        json::write_json_string(&self.fee_asset_id, out);
-        out.push(',');
-        out.push_str("\"escrow_account_id\":");
-        json::write_json_string(&self.escrow_account_id, out);
-        out.push(',');
         out.push_str("\"operator_account_id\":");
         json::write_json_string(&self.operator_account_id, out);
         out.push(',');
@@ -203,11 +219,6 @@ impl FastJsonWrite for SoranetVpnSummary {
             json::write_json_string(server, out);
         }
         out.push(']');
-        if let Some(pin) = &self.relay_tls_spki_sha256_hex {
-            out.push(',');
-            out.push_str("\"relay_tls_spki_sha256_hex\":");
-            json::write_json_string(pin, out);
-        }
         out.push('}');
     }
 }
@@ -1815,15 +1826,12 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
         let mut dns_push_interval_secs = None;
         let mut exit_class = None;
         let mut meter_family = None;
-        let mut fee_asset_id = None;
-        let mut escrow_account_id = None;
         let mut operator_account_id = None;
         let mut lease_fee = None;
         let mut settlement_grace_secs = None;
         let mut route_pushes = None;
         let mut excluded_routes = None;
         let mut dns_servers = None;
-        let mut relay_tls_spki_sha256_hex = None;
 
         let kh_enabled = norito::json::key_hash_const("enabled");
         let kh_cell = norito::json::key_hash_const("cell_size_bytes");
@@ -1838,15 +1846,12 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
         let kh_dns = norito::json::key_hash_const("dns_push_interval_secs");
         let kh_exit_class = norito::json::key_hash_const("exit_class");
         let kh_meter_family = norito::json::key_hash_const("meter_family");
-        let kh_fee_asset = norito::json::key_hash_const("fee_asset_id");
-        let kh_escrow = norito::json::key_hash_const("escrow_account_id");
         let kh_operator = norito::json::key_hash_const("operator_account_id");
         let kh_lease_fee = norito::json::key_hash_const("lease_fee");
         let kh_settlement_grace = norito::json::key_hash_const("settlement_grace_secs");
         let kh_route_pushes = norito::json::key_hash_const("route_pushes");
         let kh_excluded_routes = norito::json::key_hash_const("excluded_routes");
         let kh_dns_servers = norito::json::key_hash_const("dns_servers");
-        let kh_relay_tls_pin = norito::json::key_hash_const("relay_tls_spki_sha256_hex");
 
         while !w.peek_object_end()? {
             let kh = w.read_key_hash()?;
@@ -1912,12 +1917,6 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
                 x if x == kh_meter_family && w.last_key() == "meter_family" => {
                     meter_family = Some(w.parse_string_ref_inline(arena)?.to_string());
                 }
-                x if x == kh_fee_asset && w.last_key() == "fee_asset_id" => {
-                    fee_asset_id = Some(w.parse_string_ref_inline(arena)?.to_string());
-                }
-                x if x == kh_escrow && w.last_key() == "escrow_account_id" => {
-                    escrow_account_id = Some(w.parse_string_ref_inline(arena)?.to_string());
-                }
                 x if x == kh_operator && w.last_key() == "operator_account_id" => {
                     operator_account_id = Some(w.parse_string_ref_inline(arena)?.to_string());
                 }
@@ -1953,9 +1952,6 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
                         norito::json::JsonDeserialize::json_deserialize(&mut parser)?;
                     w.sync_to_raw(parser.position());
                     dns_servers = Some(vec);
-                }
-                x if x == kh_relay_tls_pin && w.last_key() == "relay_tls_spki_sha256_hex" => {
-                    relay_tls_spki_sha256_hex = Some(w.parse_string_ref_inline(arena)?.to_string());
                 }
                 _ => w.skip_value()?,
             }
@@ -1999,9 +1995,6 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
             exit_class,
             meter_family: meter_family
                 .unwrap_or_else(|| defaults::soranet::vpn::METER_FAMILY.to_string()),
-            fee_asset_id: fee_asset_id.unwrap_or_else(defaults::soranet::vpn::fee_asset_id),
-            escrow_account_id: escrow_account_id
-                .unwrap_or_else(defaults::soranet::vpn::escrow_account_id),
             operator_account_id: operator_account_id
                 .unwrap_or_else(defaults::soranet::vpn::operator_account_id),
             lease_fee: lease_fee.unwrap_or_else(defaults::soranet::vpn::lease_fee),
@@ -2011,7 +2004,6 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
             excluded_routes: excluded_routes
                 .unwrap_or_else(defaults::soranet::vpn::excluded_routes),
             dns_servers: dns_servers.unwrap_or_else(defaults::soranet::vpn::dns_servers),
-            relay_tls_spki_sha256_hex,
         })
     }
 }
@@ -2837,10 +2829,6 @@ pub struct SoranetVpnSummary {
     pub exit_class: String,
     /// Meter family identifier.
     pub meter_family: String,
-    /// XOR asset definition used for escrowed VPN fees.
-    pub fee_asset_id: String,
-    /// Account that receives escrowed VPN lease fees.
-    pub escrow_account_id: String,
     /// Relay operator account eligible for receipt settlement.
     pub operator_account_id: String,
     /// Fixed prepaid XOR lease fee.
@@ -2853,8 +2841,6 @@ pub struct SoranetVpnSummary {
     pub excluded_routes: Vec<String>,
     /// DNS servers pushed to VPN clients.
     pub dns_servers: Vec<String>,
-    /// Optional SHA-256 SPKI pin for the relay TLS certificate.
-    pub relay_tls_spki_sha256_hex: Option<String>,
 }
 
 impl From<&'_ base::SoranetVpn> for SoranetVpnSummary {
@@ -2877,15 +2863,12 @@ impl From<&'_ base::SoranetVpn> for SoranetVpnSummary {
             dns_push_interval_secs: value.dns_push_interval.as_secs(),
             exit_class: exit_class.as_label().to_string(),
             meter_family: value.meter_family.clone(),
-            fee_asset_id: value.fee_asset_id.clone(),
-            escrow_account_id: value.escrow_account_id.to_string(),
             operator_account_id: value.operator_account_id.to_string(),
             lease_fee: value.lease_fee.clone(),
             settlement_grace_secs: value.settlement_grace.as_secs(),
             route_pushes: value.route_pushes.clone(),
             excluded_routes: value.excluded_routes.clone(),
             dns_servers: value.dns_servers.clone(),
-            relay_tls_spki_sha256_hex: value.relay_tls_spki_sha256_hex.clone(),
         }
     }
 }
@@ -3289,17 +3272,7 @@ impl JsonDeserialize for SoranetHandshakePowUpdate {
 
 impl JsonDeserialize for SoranetHandshakePuzzleUpdate {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
-        let input = parser.input();
-        let start = parser.position();
-        let mut walker = TapeWalker::new(input);
-        walker.sync_to_raw(start);
-        let value = parse_soranet_puzzle_update(&mut walker)
-            .map_err(|err| json::Error::Message(err.to_string()))?;
-        let end = walker.raw_pos();
-        while parser.position() < end {
-            let _ = parser.bump();
-        }
-        Ok(value)
+        parse_exact_value_via_tape(parser, |walker, _arena| parse_soranet_puzzle_update(walker))
     }
 }
 
@@ -3482,6 +3455,29 @@ mod test {
 
     use super::*;
 
+    std::thread_local! {
+        static FAST_BRIDGE_TAPE_BYTES: std::cell::Cell<usize> = const {
+            std::cell::Cell::new(0)
+        };
+    }
+
+    struct CountingLogger(Logger);
+
+    impl<'a> FastFromJson<'a> for CountingLogger {
+        fn parse(walker: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
+            FAST_BRIDGE_TAPE_BYTES.with(|bytes| {
+                bytes.set(bytes.get().saturating_add(walker.input().len()));
+            });
+            <Logger as FastFromJson<'a>>::parse(walker, arena).map(Self)
+        }
+    }
+
+    impl JsonDeserialize for CountingLogger {
+        fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+            parse_via_fast(parser)
+        }
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
     fn snapshot_serialized_form() {
@@ -3555,7 +3551,7 @@ mod test {
                 max_retained_bytes: nonzero!(123_456_789_u64),
             },
             consensus: Consensus {
-                protocol_version: 3,
+                protocol_version: 4,
                 role: "validator".to_string(),
             },
             confidential_gas: ConfidentialGas {
@@ -3654,8 +3650,6 @@ mod test {
                   "dns_push_interval_secs": 90,
                   "exit_class": "standard",
                   "meter_family": "soranet.vpn.standard",
-                  "fee_asset_id": "xor#universal.universal",
-                  "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "operator_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "lease_fee": "0.001",
                   "settlement_grace_secs": 60,
@@ -3677,7 +3671,7 @@ mod test {
                 "max_retained_bytes": 123456789
               },
               "consensus": {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "role": "validator"
               },
               "confidential_gas": {
@@ -3831,5 +3825,74 @@ mod test {
             err.to_string().contains("exceeds u32::MAX"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn generic_collection_fast_bridge_builds_tapes_only_for_exact_elements() {
+        const ELEMENT_COUNT: usize = 64;
+        let element = r#"{"level":"INFO","filter":null}"#;
+        let payload = format!("[{}]", vec![element; ELEMENT_COUNT].join(","));
+        FAST_BRIDGE_TAPE_BYTES.with(|bytes| bytes.set(0));
+
+        let parsed = norito::json::from_json::<Vec<CountingLogger>>(&payload)
+            .expect("decode logger collection through the generic-to-fast bridge");
+        assert_eq!(parsed.len(), ELEMENT_COUNT);
+        assert!(
+            parsed
+                .iter()
+                .all(|logger| logger.0.level == Level::INFO && logger.0.filter.is_none())
+        );
+        FAST_BRIDGE_TAPE_BYTES.with(|bytes| {
+            assert_eq!(
+                bytes.get(),
+                ELEMENT_COUNT * element.len(),
+                "each bridge invocation must build its tape from only its exact element"
+            );
+        });
+    }
+
+    #[test]
+    fn parse_via_fast_accepts_global_depth_boundary_and_rejects_next_level() {
+        let boundary_wrappers = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 2;
+        let boundary_nested = format!(
+            "{}null{}",
+            "[".repeat(boundary_wrappers),
+            "]".repeat(boundary_wrappers)
+        );
+        let boundary_payload = format!(r#"{{"level":"INFO","unknown":{boundary_nested}}}"#);
+        let mut boundary_parser = norito::json::Parser::new(&boundary_payload);
+        let parsed = parse_via_fast::<Logger>(&mut boundary_parser)
+            .expect("complete-document depth boundary must decode");
+        assert_eq!(parsed.level, Level::INFO);
+        assert_eq!(boundary_parser.position(), boundary_payload.len());
+
+        let wrappers = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 1;
+        let nested = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
+        let payload = format!(r#"{{"unknown":{nested}}}"#);
+        let mut parser = norito::json::Parser::new(&payload);
+        assert!(matches!(
+            parse_via_fast::<SoranetVpnSummary>(&mut parser),
+            Err(json::Error::NestingDepthExceeded {
+                depth,
+                limit: norito::json::MAX_JSON_VALUE_NESTING_DEPTH,
+                context: "JSON value",
+            }) if depth == norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1
+        ));
+    }
+
+    #[test]
+    fn puzzle_update_custom_parser_rejects_globally_overdeep_documents() {
+        let wrappers = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 1;
+        let nested = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
+        let payload = format!(r#"{{"unknown":{nested}}}"#);
+        let mut parser = norito::json::Parser::new(&payload);
+        assert!(matches!(
+            <SoranetHandshakePuzzleUpdate as JsonDeserialize>::json_deserialize(&mut parser),
+            Err(json::Error::NestingDepthExceeded {
+                depth,
+                limit: norito::json::MAX_JSON_VALUE_NESTING_DEPTH,
+                context: "JSON value",
+            }) if depth == norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1
+        ));
     }
 }

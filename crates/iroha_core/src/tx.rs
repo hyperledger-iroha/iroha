@@ -34,10 +34,8 @@ use iroha_data_model::{
             FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
             RemoveSmartContractBytes, UploadSmartContractCodeChunk,
         },
-        zk,
     },
     nexus::UniversalAccountId,
-    proof::{ProofAttachment, ProofBox},
     query::error::FindError,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::signed::{
@@ -45,18 +43,15 @@ use iroha_data_model::{
         SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
     },
     transaction::{error::TransactionLimitError, signed::TransactionSignatureError},
-    zk::OpenVerifyEnvelope,
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
 use iroha_primitives::time::TimeSource;
-use iroha_schema::Ident;
 use mv::storage::StorageReadOnly;
 
 use crate::{
     compliance::{LaneComplianceContext, LaneComplianceEvaluation},
-    gas as isi_gas,
     governance::manifest::{GovernanceRules, LaneManifestRegistryHandle},
     interlane::verify_lane_privacy_proofs,
     nexus::space_directory::{
@@ -65,7 +60,7 @@ use crate::{
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
-    smartcontracts::{Execute, code, ivm::cache::IvmCache},
+    smartcontracts::{code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
 
@@ -492,125 +487,6 @@ fn ensure_metadata_depth_with_prepared(
     }
 }
 
-#[derive(Debug, Clone)]
-struct PrivateKaigiFeeBinding {
-    action_hash_hex: String,
-    chain_id: String,
-    asset_definition_id: String,
-    fee_amount: Quantity,
-}
-
-fn json_object_string(
-    map: &norito::json::Map,
-    key: &str,
-    context: &str,
-) -> Result<String, TransactionRejectionReason> {
-    map.get(key)
-        .and_then(norito::json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                "{context} must include non-empty `{key}`"
-            )))
-        })
-}
-
-fn decode_private_kaigi_fee_binding(
-    proof_bytes: &[u8],
-) -> Result<PrivateKaigiFeeBinding, TransactionRejectionReason> {
-    let envelope: OpenVerifyEnvelope = norito::decode_canonical(proof_bytes).map_err(|_| {
-        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-            "private Kaigi fee spend proof must use OpenVerifyEnvelope payload".into(),
-        ))
-    })?;
-    if envelope.aux.is_empty() {
-        return Err(TransactionRejectionReason::Validation(
-            ValidationFail::NotPermitted(
-                "private Kaigi fee spend proof is missing binding metadata".into(),
-            ),
-        ));
-    }
-    let aux = std::str::from_utf8(&envelope.aux).map_err(|_| {
-        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-            "private Kaigi fee spend aux payload must be valid UTF-8 JSON".into(),
-        ))
-    })?;
-    let aux_value: norito::json::Value = norito::json::from_str(aux).map_err(|_| {
-        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-            "private Kaigi fee spend aux payload must be valid JSON".into(),
-        ))
-    })?;
-    let norito::json::Value::Object(map) = aux_value else {
-        return Err(TransactionRejectionReason::Validation(
-            ValidationFail::NotPermitted(
-                "private Kaigi fee spend aux payload must be a JSON object".into(),
-            ),
-        ));
-    };
-    let schema = json_object_string(&map, "schema", "private Kaigi fee spend aux payload")?;
-    if schema != "iroha.private_kaigi.fee.v1" {
-        return Err(TransactionRejectionReason::Validation(
-            ValidationFail::NotPermitted(
-                "private Kaigi fee spend aux payload has unsupported schema".into(),
-            ),
-        ));
-    }
-    let fee_amount_text = map
-        .get("fee_amount")
-        .and_then(norito::json::Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-                "private Kaigi fee spend aux payload must include non-empty `fee_amount`".into(),
-            ))
-        })?;
-    let fee_amount = Quantity::from_str(fee_amount_text).map_err(|err| {
-        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-            "private Kaigi fee amount is invalid: {err}"
-        )))
-    })?;
-    if fee_amount_text != fee_amount.to_string() {
-        return Err(TransactionRejectionReason::Validation(
-            ValidationFail::NotPermitted(format!(
-                "private Kaigi fee amount must use canonical form `{fee_amount}`"
-            )),
-        ));
-    }
-
-    Ok(PrivateKaigiFeeBinding {
-        action_hash_hex: json_object_string(
-            &map,
-            "action_hash_hex",
-            "private Kaigi fee spend aux payload",
-        )?,
-        chain_id: json_object_string(&map, "chain_id", "private Kaigi fee spend aux payload")?,
-        asset_definition_id: json_object_string(
-            &map,
-            "asset_definition_id",
-            "private Kaigi fee spend aux payload",
-        )?,
-        fee_amount,
-    })
-}
-
-fn canonical_private_kaigi_fee_transfer_proof(
-    proof_bytes: &[u8],
-) -> Result<Vec<u8>, TransactionRejectionReason> {
-    let mut envelope: OpenVerifyEnvelope = norito::decode_canonical(proof_bytes).map_err(|_| {
-        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-            "private Kaigi fee spend proof must use OpenVerifyEnvelope payload".into(),
-        ))
-    })?;
-    envelope.aux.clear();
-    norito::encode_canonical(&envelope).map_err(|err| {
-        TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
-            "failed to canonicalize private Kaigi fee spend proof: {err}"
-        )))
-    })
-}
-
 /// Verification failed of some signature due to following reason
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureVerificationFail {
@@ -1022,17 +898,15 @@ pub(crate) fn instructions_allow_multisig_envelope_authority(
 
 #[derive(Clone, Copy)]
 enum ConfidentialPolicyAdmissionAction {
-    Shield,
     Transfer,
-    Unshield,
+    Redeem,
 }
 
 impl ConfidentialPolicyAdmissionAction {
     const fn label(self) -> &'static str {
         match self {
-            Self::Shield => "shield",
             Self::Transfer => "transfer",
-            Self::Unshield => "unshield",
+            Self::Redeem => "confidential redemption",
         }
     }
 }
@@ -1082,23 +956,6 @@ fn validate_confidential_policy_for_action(
     let policy_mode =
         effective_confidential_policy_mode_for_admission(world, asset_def_id, block_height)?;
     match action {
-        ConfidentialPolicyAdmissionAction::Shield => match policy_mode {
-            ConfidentialPolicyMode::TransparentOnly => {
-                Err(confidential_policy_admission_rejection(action))
-            }
-            ConfidentialPolicyMode::Convertible => {
-                let allowed = world
-                    .zk_assets()
-                    .get(asset_def_id)
-                    .is_some_and(|st| st.allow_shield);
-                if allowed {
-                    Ok(())
-                } else {
-                    Err(confidential_policy_admission_rejection(action))
-                }
-            }
-            ConfidentialPolicyMode::ShieldedOnly => Ok(()),
-        },
         ConfidentialPolicyAdmissionAction::Transfer => {
             if matches!(policy_mode, ConfidentialPolicyMode::TransparentOnly) {
                 Err(confidential_policy_admission_rejection(action))
@@ -1106,7 +963,7 @@ fn validate_confidential_policy_for_action(
                 Ok(())
             }
         }
-        ConfidentialPolicyAdmissionAction::Unshield => match policy_mode {
+        ConfidentialPolicyAdmissionAction::Redeem => match policy_mode {
             ConfidentialPolicyMode::TransparentOnly | ConfidentialPolicyMode::ShieldedOnly => {
                 Err(confidential_policy_admission_rejection(action))
             }
@@ -1132,21 +989,7 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
 ) -> Result<(), TransactionRejectionReason> {
     for instruction in executable.explicit_instructions() {
         let any = instruction.as_any();
-        if let Some(shield) = any.downcast_ref::<zk::Shield>() {
-            validate_confidential_policy_for_action(
-                world,
-                shield.asset(),
-                block_height,
-                ConfidentialPolicyAdmissionAction::Shield,
-            )?;
-        } else if let Some(transfer) = any.downcast_ref::<zk::ZkTransfer>() {
-            validate_confidential_policy_for_action(
-                world,
-                transfer.asset(),
-                block_height,
-                ConfidentialPolicyAdmissionAction::Transfer,
-            )?;
-        } else if let Some(topup) =
+        if let Some(topup) =
             any.downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>()
         {
             validate_confidential_policy_for_action(
@@ -1162,14 +1005,7 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
                 world,
                 &redeem.request.bundle.statement.current_note.asset,
                 block_height,
-                ConfidentialPolicyAdmissionAction::Unshield,
-            )?;
-        } else if let Some(unshield) = any.downcast_ref::<zk::Unshield>() {
-            validate_confidential_policy_for_action(
-                world,
-                unshield.asset(),
-                block_height,
-                ConfidentialPolicyAdmissionAction::Unshield,
+                ConfidentialPolicyAdmissionAction::Redeem,
             )?;
         }
     }
@@ -1325,14 +1161,14 @@ impl<'tx> AcceptedTransaction<'tx> {
         norito::codec::encode_with_header_flags(tx)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn external_entrypoint_hash_from_signed(
         tx: &SignedTransaction,
     ) -> HashOf<TransactionEntrypoint> {
         tx.hash_as_entrypoint()
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn external_entrypoint_hash_from_signed_frame(
         signed_frame: &[u8],
     ) -> Result<HashOf<TransactionEntrypoint>, norito::core::Error> {
@@ -1376,7 +1212,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                 Self::framed_encoded_len(entrypoint)
             }
             TransactionEntrypoint::SealedReveal(entrypoint) => Self::framed_encoded_len(entrypoint),
-            TransactionEntrypoint::PrivateKaigi(entrypoint) => Self::framed_encoded_len(entrypoint),
             TransactionEntrypoint::Time(entrypoint) => Self::framed_encoded_len(entrypoint),
         }
     }
@@ -1818,261 +1653,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         CheckedTransaction::new(self, state)
     }
 
-    fn validate_private_kaigi_with_now(
-        tx: &PrivateKaigiTransaction,
-        expected_chain_id: &ChainId,
-        max_clock_drift: Duration,
-        limits: TransactionParameters,
-        now: Duration,
-    ) -> Result<(), AcceptTransactionFail> {
-        if tx.chain != *expected_chain_id {
-            return Err(AcceptTransactionFail::ChainIdMismatch(Mismatch {
-                expected: expected_chain_id.clone(),
-                actual: tx.chain.clone(),
-            }));
-        }
-
-        let creation_time = tx.creation_time();
-        if creation_time.saturating_sub(now) > max_clock_drift {
-            return Err(AcceptTransactionFail::TransactionInTheFuture);
-        }
-
-        let entrypoint = TransactionEntrypoint::PrivateKaigi(tx.clone());
-        let tx_encoded_len =
-            u64::try_from(Self::entrypoint_encoded_len(&entrypoint)).unwrap_or(u64::MAX);
-        let max_tx_bytes = limits.max_tx_bytes().get();
-        if tx_encoded_len > max_tx_bytes {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason: format!(
-                        "Transaction size {tx_encoded_len} bytes exceeds limit {max_tx_bytes} bytes"
-                    ),
-                },
-            ));
-        }
-
-        let decompressed_len = tx
-            .artifacts
-            .proof
-            .len()
-            .saturating_add(tx.fee_spend.proof.len())
-            .saturating_add(
-                tx.fee_spend
-                    .encrypted_change_payloads
-                    .iter()
-                    .map(Vec::len)
-                    .sum::<usize>(),
-            );
-        let decompressed_len = u64::try_from(decompressed_len).unwrap_or(u64::MAX);
-        let max_decompressed_bytes = limits.max_decompressed_bytes().get();
-        if decompressed_len > max_decompressed_bytes {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason: format!(
-                        "Private Kaigi artifacts expand to {decompressed_len} bytes which exceeds limit {max_decompressed_bytes} bytes"
-                    ),
-                },
-            ));
-        }
-
-        let max_metadata_depth = usize::from(limits.max_metadata_depth().get());
-        ensure_metadata_depth(&tx.metadata, max_metadata_depth)
-            .map_err(AcceptTransactionFail::TransactionLimit)?;
-
-        if tx.artifacts.proof.is_empty() {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason: "private Kaigi proof payload must be non-empty".into(),
-                },
-            ));
-        }
-        if tx.fee_spend.proof.is_empty() {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason: "private Kaigi fee spend proof must be non-empty".into(),
-                },
-            ));
-        }
-        if tx.fee_spend.nullifiers.is_empty() {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason: "private Kaigi fee spend must consume at least one nullifier".into(),
-                },
-            ));
-        }
-        if tx.fee_spend.output_commitments.len() != tx.fee_spend.encrypted_change_payloads.len() {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason:
-                        "private Kaigi fee spend outputs must match encrypted change payload count"
-                            .into(),
-                },
-            ));
-        }
-        if tx.fee_spend.asset_definition_id.to_string()
-            != iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
-        {
-            return Err(AcceptTransactionFail::TransactionLimit(
-                TransactionLimitError {
-                    reason:
-                        "private Kaigi fee spend asset must be the canonical xor#universal asset"
-                            .into(),
-                },
-            ));
-        }
-
-        match &tx.action {
-            PrivateKaigiAction::Create(create) => {
-                if create.call.privacy_mode != iroha_data_model::kaigi::KaigiPrivacyMode::ZkRosterV1
-                {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "private Kaigi create must use ZkRosterV1 privacy mode".into(),
-                        },
-                    ));
-                }
-            }
-            PrivateKaigiAction::Join(_) | PrivateKaigiAction::End(_) => {}
-        }
-
-        Ok(())
-    }
-
-    fn private_kaigi_instruction_gas(
-        tx: &PrivateKaigiTransaction,
-    ) -> Result<u64, TransactionRejectionReason> {
-        let instruction =
-            crate::smartcontracts::isi::kaigi::private_instruction_box(tx).map_err(|error| {
-                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
-            })?;
-        Ok(isi_gas::meter_instruction(&instruction))
-    }
-
-    fn compute_private_kaigi_fee_amount(
-        tx: &PrivateKaigiTransaction,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<Quantity, TransactionRejectionReason> {
-        if !state_transaction.nexus.enabled {
-            return Ok(Quantity::zero());
-        }
-
-        let cfg = state_transaction.nexus.fees.clone();
-        let entrypoint = TransactionEntrypoint::PrivateKaigi(tx.clone());
-        let tx_bytes_len = norito::to_bytes(&entrypoint)
-            .map(|bytes| bytes.len())
-            .map_err(|err| {
-                TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
-                    "failed to encode private Kaigi transaction for fee metering: {err}"
-                )))
-            })?;
-        let gas_used = Self::private_kaigi_instruction_gas(tx)?;
-        crate::executor::compute_nexus_fee_amount(&cfg, tx_bytes_len, 1, gas_used)
-            .map_err(TransactionRejectionReason::Validation)
-    }
-
-    fn execute_private_kaigi_fee_spend(
-        tx: &PrivateKaigiTransaction,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), TransactionRejectionReason> {
-        let binding = decode_private_kaigi_fee_binding(&tx.fee_spend.proof)?;
-        let expected_action_hash = hex::encode(tx.action_hash().as_ref());
-        if binding.action_hash_hex != expected_action_hash {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(
-                    "private Kaigi fee spend proof is not bound to this action hash".into(),
-                ),
-            ));
-        }
-        if binding.chain_id != tx.chain.to_string() {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(
-                    "private Kaigi fee spend proof is not bound to this chain id".into(),
-                ),
-            ));
-        }
-        if binding.asset_definition_id != tx.fee_spend.asset_definition_id.to_string() {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(
-                    "private Kaigi fee spend proof is not bound to the canonical xor#universal asset"
-                        .into(),
-                ),
-            ));
-        }
-
-        let expected_fee = Self::compute_private_kaigi_fee_amount(tx, state_transaction)?;
-        if binding.fee_amount != expected_fee {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(format!(
-                    "private Kaigi fee spend amount mismatch: expected {expected_fee}, observed {}",
-                    binding.fee_amount
-                )),
-            ));
-        }
-        let canonical_fee_proof = canonical_private_kaigi_fee_transfer_proof(&tx.fee_spend.proof)?;
-
-        let zk_asset = state_transaction
-            .world
-            .zk_assets
-            .get(&tx.fee_spend.asset_definition_id)
-            .cloned()
-            .ok_or_else(|| {
-                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-                    "private Kaigi fee asset is not configured for confidential transfers".into(),
-                ))
-            })?;
-        let Some(vk_binding) = zk_asset.vk_transfer.clone() else {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(
-                    "private Kaigi fee asset is missing a confidential transfer verifier".into(),
-                ),
-            ));
-        };
-        let backend_ident = Ident::from_str(vk_binding.id.backend.as_str()).map_err(|_| {
-            TransactionRejectionReason::Validation(ValidationFail::InternalError(
-                "invalid transfer verifier backend identifier".into(),
-            ))
-        })?;
-        let mut attachment = ProofAttachment::new_ref(
-            backend_ident.clone(),
-            ProofBox::new(backend_ident, canonical_fee_proof),
-            vk_binding.id,
-        );
-        attachment.vk_commitment = Some(vk_binding.commitment);
-
-        let transfer = zk::ZkTransfer::new(
-            tx.fee_spend.asset_definition_id.clone(),
-            tx.fee_spend.nullifiers.clone(),
-            tx.fee_spend.output_commitments.clone(),
-            attachment,
-            Some(tx.fee_spend.anchor_root.into()),
-        );
-
-        let fee_payer = Self::private_kaigi_fee_payer_account(tx)?;
-
-        transfer
-            .execute(&fee_payer, state_transaction)
-            .map_err(|error| {
-                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
-            })
-    }
-
-    fn private_kaigi_fee_payer_account(
-        tx: &PrivateKaigiTransaction,
-    ) -> Result<AccountId, TransactionRejectionReason> {
-        let fee_payer_seed = iroha_crypto::Hash::new(tx.action_hash().as_ref());
-        let fee_payer_keypair = iroha_crypto::KeyPair::try_from_seed(
-            fee_payer_seed.as_ref().to_vec(),
-            Algorithm::Ed25519,
-        )
-        .map_err(|err| {
-            TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
-                "failed to derive private Kaigi fee payer account: {err}"
-            )))
-        })?;
-        Ok(AccountId::new(fee_payer_keypair.public_key().clone()))
-    }
-
-    /// Like [`Self::accept_genesis`], but without wrapping.
+    /// Validate a genesis transaction, including its individual authorization proof.
     ///
     /// # Errors
     ///
@@ -2115,6 +1696,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         }
 
         Self::ensure_signing_allowed(tx, crypto)?;
+        Self::verify_signature_for_check(tx, SignatureCheck::Verify, None)?;
 
         Ok(())
     }
@@ -2646,9 +2228,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 Some(entrypoint.signed_transaction())
             }
-            TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::PrivateKaigi(_)
-            | TransactionEntrypoint::Time(_) => None,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
         }
     }
 
@@ -2793,7 +2373,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 entrypoint.signed_transaction().creation_time()
             }
-            TransactionEntrypoint::PrivateKaigi(entrypoint) => entrypoint.creation_time(),
             TransactionEntrypoint::Time(_) => Duration::ZERO,
         }
     }
@@ -2840,15 +2419,6 @@ impl AcceptedTransaction<'static> {
                     now,
                 )?;
                 enforce_nts_health_for_time_sensitive(signed)?;
-            }
-            TransactionEntrypoint::PrivateKaigi(private) => {
-                Self::validate_private_kaigi_with_now(
-                    private,
-                    expected_chain_id,
-                    max_clock_drift,
-                    limits,
-                    now,
-                )?;
             }
             TransactionEntrypoint::Time(_) => {
                 return Err(AcceptTransactionFail::TransactionLimit(
@@ -3120,9 +2690,6 @@ impl<'tx> From<AcceptedTransaction<'tx>> for SignedTransaction {
             TransactionEntrypoint::SealedCommitment(_) => {
                 panic!("sealed commitment entrypoints are not signed transactions")
             }
-            TransactionEntrypoint::PrivateKaigi(_) => {
-                panic!("private Kaigi entrypoints are not signed transactions")
-            }
             TransactionEntrypoint::Time(_) => {
                 panic!("time entrypoints are not signed transactions")
             }
@@ -3139,7 +2706,7 @@ impl<'tx> From<AcceptedTransaction<'tx>> for (AccountId, Executable) {
 impl AsRef<SignedTransaction> for AcceptedTransaction<'_> {
     fn as_ref(&self) -> &SignedTransaction {
         self.external()
-            .expect("private Kaigi entrypoints do not expose SignedTransaction access")
+            .expect("system entrypoints do not expose SignedTransaction access")
     }
 }
 
@@ -3469,7 +3036,7 @@ impl StateBlock<'_> {
                         return Err("execution input contains duplicate sealed commitments");
                     }
                 }
-                TransactionEntrypoint::PrivateKaigi(_) | TransactionEntrypoint::Time(_) => {}
+                TransactionEntrypoint::Time(_) => {}
             }
         }
         Ok(())
@@ -3558,9 +3125,6 @@ impl StateBlock<'_> {
         ivm_cache: &mut IvmCache,
         routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> TransactionResultInner {
-        if let TransactionEntrypoint::PrivateKaigi(private_tx) = tx.entrypoint() {
-            return Self::validate_private_kaigi_transaction(private_tx, state_transaction);
-        }
         if let TransactionEntrypoint::SealedCommitment(commitment) = tx.entrypoint() {
             return Self::validate_sealed_transaction_commitment(commitment, state_transaction);
         }
@@ -3659,21 +3223,6 @@ impl StateBlock<'_> {
         }
 
         Ok(trigger_sequence)
-    }
-
-    fn validate_private_kaigi_transaction(
-        tx: &PrivateKaigiTransaction,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> TransactionResultInner {
-        state_transaction.tx_call_hash = Some(tx.action_hash());
-        AcceptedTransaction::execute_private_kaigi_fee_spend(tx, state_transaction)?;
-        state_transaction.last_tx_gas_used =
-            AcceptedTransaction::private_kaigi_instruction_gas(tx)?;
-        crate::smartcontracts::isi::kaigi::execute_private_transaction(tx, state_transaction)
-            .map_err(|error| {
-                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
-            })?;
-        Ok(DataTriggerSequence::default())
     }
 
     fn validate_sealed_transaction_commitment(
@@ -5779,7 +5328,7 @@ pub mod tests {
             EventBox,
             data::{
                 self,
-                prelude::{AccountEvent, AssetChanged, AssetEvent, DomainEvent},
+                prelude::{AssetChanged, AssetEvent, DomainEvent},
             },
             trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
         },
@@ -5835,7 +5384,7 @@ pub mod tests {
             SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
         },
         query::store::LiveQueryStore,
-        smartcontracts::ivm::cache::IvmCache,
+        smartcontracts::{Execute, ivm::cache::IvmCache},
         state::{State, StateBlock, StateReadOnly, World},
     };
 
@@ -5896,71 +5445,6 @@ pub mod tests {
         let domain = Domain::new(domain_id.clone()).build(&authority_id);
         let account = new_account_in_domain(&authority_id, &domain_id).build(&authority_id);
         (World::with([domain], [account], []), authority_id, key_pair)
-    }
-
-    fn world_with_convertible_zk_asset(
-        allow_shield: bool,
-        allow_unshield: bool,
-    ) -> (World, AccountId, AssetDefinitionId) {
-        let (mut world, authority_id, _) = world_with_authority("wonderland");
-        let asset_def_id = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").expect("domain id"),
-            "zkpolicy".parse().expect("asset name"),
-        );
-        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
-            .with_name(asset_def_id.name().to_string())
-            .confidential_policy(
-                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
-            )
-            .build(&authority_id);
-        world
-            .asset_definitions
-            .insert(asset_def_id.clone(), asset_definition);
-        let mut zk_state = crate::state::ZkAssetState::default();
-        zk_state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
-        zk_state.allow_shield = allow_shield;
-        zk_state.allow_unshield = allow_unshield;
-        world.zk_assets.insert(asset_def_id.clone(), zk_state);
-        (world, authority_id, asset_def_id)
-    }
-
-    #[test]
-    fn confidential_policy_admission_rejects_disabled_shield() {
-        let (world, authority_id, asset_def_id) = world_with_convertible_zk_asset(false, true);
-        let executable =
-            Executable::Instructions(ConstVec::from(vec![InstructionBox::from(zk::Shield::new(
-                asset_def_id,
-                authority_id,
-                10_u128,
-                [7; 32],
-                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-            ))]));
-
-        let err = validate_confidential_policy_admission_for_world(&executable, &world.view(), 1)
-            .expect_err("disabled shield must be rejected during admission");
-
-        match err {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
-                assert_eq!(reason, "shield not permitted by policy");
-            }
-            other => panic!("expected policy NotPermitted rejection, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn confidential_policy_admission_allows_enabled_shield() {
-        let (world, authority_id, asset_def_id) = world_with_convertible_zk_asset(true, true);
-        let executable =
-            Executable::Instructions(ConstVec::from(vec![InstructionBox::from(zk::Shield::new(
-                asset_def_id,
-                authority_id,
-                10_u128,
-                [9; 32],
-                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-            ))]));
-
-        validate_confidential_policy_admission_for_world(&executable, &world.view(), 1)
-            .expect("enabled shield should pass confidential policy admission");
     }
 
     fn world_with_uaid_account(
@@ -6181,6 +5665,41 @@ pub mod tests {
             far_future,
         )
         .expect("genesis validation should use provided timestamp");
+    }
+
+    #[test]
+    fn validate_genesis_with_now_rejects_invalid_transaction_signature() {
+        let now = Duration::from_secs(10_000);
+        let (_handle, time_source) = TimeSource::new_mock(now);
+        let mut tx = TransactionBuilder::new_with_time_source(
+            CHAIN_ID.clone(),
+            GENESIS_ACCOUNT.id.clone(),
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::DEBUG,
+            "genesis signature check".to_string(),
+        )])
+        .sign(&GENESIS_ACCOUNT.key);
+        let unrelated = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
+        tx.set_signature(TransactionSignature(checked_signature_of(
+            unrelated.private_key(),
+            tx.payload(),
+        )));
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        assert!(matches!(
+            AcceptedTransaction::validate_genesis_with_now(
+                &tx,
+                &CHAIN_ID,
+                Duration::from_secs(1),
+                &GENESIS_ACCOUNT.id,
+                &crypto_cfg,
+                now,
+            ),
+            Err(AcceptTransactionFail::SignatureVerification(_))
+        ));
     }
 
     #[test]
@@ -6469,7 +5988,7 @@ pub mod tests {
         let deployer_keypair = checked_random_tx_keypair();
         let deployer = AccountId::new(deployer_keypair.public_key().clone());
         let contract_address = ContractAddress::derive(
-            0,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &deployer,
             1,
             iroha_data_model::nexus::DataSpaceId::new(0),
@@ -7261,38 +6780,6 @@ pub mod tests {
     }
 
     #[test]
-    fn accepted_private_entrypoint_into_checked_uses_entrypoint_hash() {
-        let chain: ChainId = "checked-private-entrypoint-chain".parse().unwrap();
-        let private = sample_private_kaigi_transaction(chain);
-        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
-            TransactionEntrypoint::PrivateKaigi(private),
-        ));
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query);
-
-        let view = state.view();
-        let checked = accepted
-            .clone()
-            .into_checked(&view)
-            .expect("private entrypoint should not require signed transaction access");
-        assert_eq!(checked.hash(), accepted.hash());
-        drop(view);
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        state_block
-            .transactions
-            .insert_block_with_single_tx(accepted.hash(), nonzero!(1_usize));
-        state_block.commit().expect("block commit");
-
-        let view = state.view();
-        let result = accepted.into_checked(&view);
-        assert!(matches!(result, Err((_, TransactionAlreadyCommitted))));
-    }
-
-    #[test]
     fn accepted_transaction_caches_hashes_and_encoded_length() {
         let chain: ChainId = "accepted-cache-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7357,7 +6844,7 @@ pub mod tests {
         let secp_keypair = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
         let secp_authority = AccountId::new(secp_keypair.public_key().clone());
         let secp_signed = TransactionBuilder::new(
-            chain.clone(),
+            chain,
             secp_authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7593,23 +7080,17 @@ pub mod tests {
     fn decoded_versioned_signed_transaction_normalizes_adaptive_payload_metadata() {
         let chain: ChainId = "decoded-versioned-adaptive-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let asset_def_id = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").expect("domain id"),
-            "adaptivezk".parse().expect("asset name"),
-        );
         let signed = TransactionBuilder::new(
             chain.clone(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([InstructionBox::from(
-            iroha_data_model::isi::zk::Shield::new(
-                asset_def_id,
-                authority,
-                200_u128,
-                [7; 32],
-                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-            ),
+            iroha_data_model::isi::zk::VerifyProof::new(ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![8; 192]),
+                VerifyingKeyId::new("halo2/ipa", "adaptive-zk-proof"),
+            )),
         )])
         .sign(keypair.private_key());
         let actual_payload_len = norito::codec::Encode::encode(&signed).len();
@@ -7844,23 +7325,6 @@ pub mod tests {
             .encoded_len(),
             time_expected_len
         );
-
-        let private_entrypoint = sample_private_kaigi_transaction(chain);
-        let private_expected_len = norito::to_bytes(&private_entrypoint)
-            .expect("private Kaigi entrypoint encodes")
-            .len();
-
-        assert_eq!(
-            AcceptedTransaction::framed_encoded_len(&private_entrypoint),
-            private_expected_len
-        );
-        assert_eq!(
-            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
-                TransactionEntrypoint::PrivateKaigi(private_entrypoint)
-            ))
-            .encoded_len(),
-            private_expected_len
-        );
     }
 
     #[test]
@@ -7992,220 +7456,6 @@ pub mod tests {
                 Some(&prepared)
             ),
             u64::try_from(signed_bytes.len()).expect("length fits in u64")
-        );
-    }
-
-    fn sample_private_kaigi_transaction(chain: ChainId) -> PrivateKaigiTransaction {
-        PrivateKaigiTransaction {
-            chain,
-            creation_time_ms: 42,
-            nonce: Some(NonZeroU32::new(7).expect("nonce")),
-            metadata: Metadata::default(),
-            action: PrivateKaigiAction::Create(PrivateCreateKaigi {
-                call: PrivateKaigiTemplate {
-                    id: KaigiId::new(
-                        DomainId::try_new("kaigi", "universal").expect("domain"),
-                        Name::from_str("private-room").expect("call"),
-                    ),
-                    title: Some("Private".to_owned()),
-                    description: None,
-                    max_participants: Some(2),
-                    gas_rate_per_minute: 5,
-                    metadata: Metadata::default(),
-                    scheduled_start_ms: None,
-                    privacy_mode: KaigiPrivacyMode::ZkRosterV1,
-                    room_policy: KaigiRoomPolicy::Authenticated,
-                    relay_manifest: None,
-                },
-            }),
-            artifacts: PrivateKaigiArtifacts {
-                commitment: KaigiParticipantCommitment {
-                    commitment: Hash::new(b"host-commitment"),
-                    alias_tag: Some("host".to_owned()),
-                },
-                nullifier: KaigiParticipantNullifier {
-                    digest: Hash::new(b"private-kaigi-nullifier"),
-                    issued_at_ms: 42,
-                },
-                roster_root: Hash::new(b"roster-root"),
-                proof: vec![0xAA, 0xBB, 0xCC],
-            },
-            fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::new(
-                    DomainId::try_new("wonderland", "universal").expect("domain"),
-                    Name::from_str("xor").expect("name"),
-                ),
-                anchor_root: Hash::new(b"anchor-root"),
-                nullifiers: vec![[0x11; 32]],
-                output_commitments: vec![[0x22; 32]],
-                encrypted_change_payloads: vec![vec![0x33, 0x44]],
-                proof: vec![0x55, 0x66],
-            },
-        }
-    }
-
-    #[test]
-    fn private_kaigi_fee_transfer_proof_canonicalization_strips_only_aux() {
-        let aux = br#"{"schema":"iroha.private_kaigi.fee.v1","action_hash_hex":"abcd","chain_id":"private-kaigi-chain","asset_definition_id":"xor#wonderland","fee_amount":"5"}"#;
-        let envelope = OpenVerifyEnvelope {
-            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
-            vk_hash: [0x42; 32],
-            public_inputs:
-                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
-                    .to_vec(),
-            proof_bytes: vec![0xCA, 0xFE, 0xBA, 0xBE],
-            aux: aux.to_vec(),
-        };
-        let proof_bytes = norito::encode_canonical(&envelope).expect("encode fee envelope");
-
-        let binding =
-            super::decode_private_kaigi_fee_binding(&proof_bytes).expect("binding decodes");
-        assert_eq!(binding.action_hash_hex, "abcd");
-        assert_eq!(binding.chain_id, "private-kaigi-chain");
-        assert_eq!(binding.asset_definition_id, "xor#wonderland");
-        assert_eq!(binding.fee_amount, Quantity::from(5_u32));
-
-        let canonical = super::canonical_private_kaigi_fee_transfer_proof(&proof_bytes)
-            .expect("canonicalize fee proof");
-        let decoded: OpenVerifyEnvelope =
-            norito::decode_canonical(&canonical).expect("decode canonical envelope");
-        assert_eq!(decoded.backend, envelope.backend);
-        assert_eq!(decoded.circuit_id, envelope.circuit_id);
-        assert_eq!(decoded.vk_hash, envelope.vk_hash);
-        assert_eq!(decoded.public_inputs, envelope.public_inputs);
-        assert_eq!(decoded.proof_bytes, envelope.proof_bytes);
-        assert!(
-            decoded.aux.is_empty(),
-            "internal ZkTransfer proof must not carry fee-binding aux"
-        );
-
-        let err = super::decode_private_kaigi_fee_binding(&canonical)
-            .expect_err("canonical internal transfer proof should no longer carry fee binding");
-        match err {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => assert!(
-                msg.contains("missing binding metadata"),
-                "unexpected message: {msg}"
-            ),
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn private_kaigi_fee_binding_rejects_alternate_layout_outer() {
-        let aux = br#"{"schema":"iroha.private_kaigi.fee.v1","action_hash_hex":"abcd","chain_id":"private-kaigi-chain","asset_definition_id":"xor#wonderland","fee_amount":"5"}"#;
-        let envelope = OpenVerifyEnvelope {
-            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
-            vk_hash: [0x42; 32],
-            public_inputs:
-                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
-                    .to_vec(),
-            proof_bytes: vec![0xCA, 0xFE, 0xBA, 0xBE],
-            aux: aux.to_vec(),
-        };
-        let canonical = norito::encode_canonical(&envelope).expect("encode canonical fee envelope");
-        let alternate_flags =
-            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-        let alternate = {
-            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-            norito::to_bytes(&envelope).expect("encode alternate-layout fee envelope")
-        };
-        assert_ne!(alternate, canonical);
-        norito::decode_from_bytes::<OpenVerifyEnvelope>(&alternate)
-            .expect("ordinary Norito accepts the advertised layout");
-
-        for err in [
-            super::decode_private_kaigi_fee_binding(&alternate)
-                .expect_err("alternate-layout fee binding must fail closed"),
-            super::canonical_private_kaigi_fee_transfer_proof(&alternate)
-                .expect_err("alternate-layout fee proof must not be normalized"),
-        ] {
-            match err {
-                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
-                    assert!(
-                        msg.contains("must use OpenVerifyEnvelope payload"),
-                        "unexpected semantic classification: {msg}"
-                    );
-                }
-                other => panic!("unexpected error classification: {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn private_kaigi_fee_binding_rejects_negative_amount() {
-        let aux = br#"{"schema":"iroha.private_kaigi.fee.v1","action_hash_hex":"abcd","chain_id":"private-kaigi-chain","asset_definition_id":"xor#wonderland","fee_amount":"-1"}"#;
-        let envelope = OpenVerifyEnvelope {
-            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-            circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
-            vk_hash: [0x42; 32],
-            public_inputs:
-                crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
-                    .to_vec(),
-            proof_bytes: vec![0xCA, 0xFE, 0xBA, 0xBE],
-            aux: aux.to_vec(),
-        };
-        let proof_bytes =
-            norito::encode_canonical(&envelope).expect("encode negative fee envelope");
-
-        let err = super::decode_private_kaigi_fee_binding(&proof_bytes)
-            .expect_err("negative private Kaigi fee amount must fail at the nominal boundary");
-        match err {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => assert!(
-                msg.contains("private Kaigi fee amount is invalid"),
-                "unexpected message: {msg}"
-            ),
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn private_kaigi_fee_binding_rejects_noncanonical_amount_text() {
-        for amount in ["+1", "01", "1.0", "123.4500", " 1 "] {
-            let aux = format!(
-                r#"{{"schema":"iroha.private_kaigi.fee.v1","action_hash_hex":"abcd","chain_id":"private-kaigi-chain","asset_definition_id":"xor#wonderland","fee_amount":"{amount}"}}"#
-            );
-            let envelope = OpenVerifyEnvelope {
-                backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-                circuit_id: crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
-                    .to_owned(),
-                vk_hash: [0x42; 32],
-                public_inputs:
-                    crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1
-                        .to_vec(),
-                proof_bytes: vec![0xCA, 0xFE, 0xBA, 0xBE],
-                aux: aux.into_bytes(),
-            };
-            let proof_bytes =
-                norito::encode_canonical(&envelope).expect("encode noncanonical fee envelope");
-
-            let err = super::decode_private_kaigi_fee_binding(&proof_bytes)
-                .expect_err("noncanonical private Kaigi fee text must fail closed");
-            match err {
-                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
-                    assert!(
-                        msg.contains("private Kaigi fee amount must use canonical form"),
-                        "unexpected message for `{amount}`: {msg}"
-                    );
-                }
-                other => panic!("unexpected error for `{amount}`: {other:?}"),
-            }
-        }
-    }
-
-    #[test]
-    fn private_kaigi_fee_payer_account_uses_checked_ed25519_derivation() {
-        let tx = sample_private_kaigi_transaction("private-kaigi-chain".parse().expect("chain id"));
-        let fee_payer = AcceptedTransaction::private_kaigi_fee_payer_account(&tx)
-            .expect("checked private Kaigi fee payer derivation");
-        let seed = Hash::new(tx.action_hash().as_ref());
-        let expected_keypair = KeyPair::try_from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519)
-            .expect("expected checked fee payer seed derivation");
-
-        assert_eq!(
-            fee_payer,
-            AccountId::new(expected_keypair.public_key().clone())
         );
     }
 
@@ -8378,14 +7628,14 @@ pub mod tests {
         let agreement_id: iroha_data_model::repo::RepoAgreementId =
             "repo-1".parse().expect("repo id");
         let cash_leg = iroha_data_model::repo::RepoCashLeg {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1u32.into(),
         };
         let collateral_leg = iroha_data_model::repo::RepoCollateralLeg::new(
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
@@ -8450,7 +7700,7 @@ pub mod tests {
         let dvp = iroha_data_model::isi::settlement::DvpIsi::new(
             settlement_id.clone(),
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 ),
@@ -8459,7 +7709,7 @@ pub mod tests {
                 authority.clone(),
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
@@ -8475,7 +7725,7 @@ pub mod tests {
         let pvp = iroha_data_model::isi::settlement::PvpIsi::new(
             settlement_id,
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "eur".parse().unwrap(),
                 ),
@@ -8484,7 +7734,7 @@ pub mod tests {
                 authority.clone(),
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
@@ -8525,7 +7775,8 @@ pub mod tests {
             iroha_data_model::events::EventFilterBox::ExecuteTrigger(
                 iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new(),
             ),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         let trigger = iroha_data_model::trigger::Trigger::new(trigger_id, action);
         let register = iroha_data_model::isi::register::Register::trigger(trigger);
         let boxed = InstructionBox::from(register);
@@ -10433,7 +9684,7 @@ pub mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(Executable::ContractCall(ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: Hash::new(b"admission-contract-code"),
@@ -10467,7 +9718,7 @@ pub mod tests {
         let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let call = ContractInvocation {
-            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+            contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                 .parse()
                 .expect("contract address"),
             expected_code_hash: Hash::new(b"batch-admission-contract-code"),
@@ -11705,38 +10956,7 @@ pub mod tests {
         }
     }
 
-    #[test]
-    fn state_rejects_empty_instruction_transactions() {
-        let chain: ChainId = "empty-instructions-chain".parse().unwrap();
-        let (world, authority, keypair) = world_with_authority("wonderland");
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
-        let tx = TransactionBuilder::new(
-            chain,
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(std::iter::empty::<InstructionBox>())
-        .sign(keypair.private_key());
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-
-        match result {
-            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
-                assert!(
-                    msg.contains("at least one instruction"),
-                    "expected empty-instruction rejection, got {msg}"
-                );
-            }
-            other => panic!("expected empty-instruction rejection, got {other:?}"),
-        }
-    }
+    include!("tx/empty_instruction_test.rs");
 
     #[test]
     fn lane_privacy_proofs_collected_from_attachments() {
@@ -11911,7 +11131,7 @@ pub mod tests {
             .insert(Name::from_str("apps").expect("namespace"));
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11954,14 +11174,14 @@ pub mod tests {
             .insert(Name::from_str("apps").expect("namespace"));
 
         let old_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
         )
         .expect("old contract address");
         let new_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
@@ -12065,7 +11285,7 @@ pub mod tests {
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -12482,7 +11702,7 @@ pub mod tests {
         state.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             0,
             TestDataSpaceId::UNIVERSAL,
@@ -13289,7 +12509,7 @@ pub mod tests {
         LazyLock::new(|| DomainId::try_new(DOMAIN_STR, "universal").unwrap());
     /// Pre-parsed asset definition identifier for the sandbox asset.
     pub static ASSET: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DOMAIN.clone(),
             ASSET_STR.parse().expect("sandbox asset name is valid"),
         )
@@ -13348,720 +12568,8 @@ pub mod tests {
             .collect()
     });
 
-    #[test]
-    fn sandbox_accounts_are_deterministic() {
-        for (name, public, _) in SANDBOX_ACCOUNT_KEYS {
-            assert_eq!(
-                ACCOUNT[name].id.expect_single_signatory().to_string(),
-                *public
-            );
-        }
-    }
-
-    /// Account credentials used by the sandbox (ID and signing key).
-    #[derive(Debug, Clone)]
-    pub struct Credential {
-        /// Fully-qualified account identifier.
-        pub id: AccountId,
-        /// Private key used to sign transactions for the account.
-        pub key: iroha_crypto::PrivateKey,
-    }
-
-    /// Credentials of the special genesis account used to bootstrap state.
-    pub static GENESIS_ACCOUNT: LazyLock<Credential> = LazyLock::new(|| {
-        let (id, key_pair) = gen_account_in(GENESIS_DOMAIN_ID.clone());
-        Credential {
-            id,
-            key: key_pair.into_parts().1,
-        }
-    });
-    /// Chain identifier used in sandbox transactions.
-    pub static CHAIN_ID: LazyLock<ChainId> =
-        LazyLock::new(|| ChainId::from("00000000-0000-0000-0000-000000000000"));
-
-    /// Build the [`AssetId`] for the sandbox test asset owned by a named account.
-    pub fn asset(account_name: &str) -> AssetId {
-        AssetId::new(ASSET.clone(), ACCOUNT[account_name].id.clone())
-    }
-
-    /// Convenience builder that yields a single transfer instruction iterator.
-    ///
-    /// Transfers `quantity` units of the sandbox asset from `src` to `dest`.
-    pub fn transfer<'a>(
-        src: &'a str,
-        quantity: u32,
-        dest: &'a str,
-    ) -> impl IntoIterator<Item = InstructionBox> + 'a {
-        transfers_batched::<1>(src, quantity, dest)
-    }
-
-    /// Produce an iterator over `N_INSTRUCTIONS` transfer instructions.
-    ///
-    /// Each instruction transfers `quantity_per_instruction` units of the sandbox
-    /// asset from `src` to `dest`.
-    pub fn transfers_batched<'a, const N_INSTRUCTIONS: usize>(
-        src: &'a str,
-        quantity_per_instruction: u32,
-        dest: &'a str,
-    ) -> impl IntoIterator<Item = InstructionBox> + 'a {
-        (0..N_INSTRUCTIONS).map(move |_| {
-            Transfer::asset_quantity(
-                asset(src),
-                quantity_per_instruction,
-                ACCOUNT[dest].id.clone(),
-            )
-            .into()
-        })
-    }
-
-    /// Assert that the emitted events match a stored JSON snapshot.
-    pub fn assert_events(actual: &[EventBox], snapshot_path: impl AsRef<std::path::Path>) {
-        let snapshot_path_buf = {
-            let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures")
-                .join(snapshot_path.as_ref());
-            path.set_extension("json");
-            path
-        };
-        let (snapshot_text, line_endings) = load_snapshot(&snapshot_path_buf);
-        let expected = expect_test::expect_file![snapshot_path_buf.clone()];
-        let actual = actual
-            .iter()
-            .filter(|e| {
-                !matches!(
-                    e,
-                    EventBox::Time(_) | EventBox::Pipeline(_) | EventBox::PipelineBatch(_)
-                )
-            })
-            .map(EventSnapshot::from_event)
-            .collect::<Vec<_>>();
-        let rendered = if actual.is_empty() {
-            "[]".to_owned()
-        } else {
-            norito::json::to_json_pretty(&actual).unwrap()
-        };
-        if let Some(text) = snapshot_text.as_deref() {
-            let collapsed = collapse_to_unix_line_endings(text);
-            let collapsed = collapsed.strip_suffix('\n').unwrap_or(collapsed.as_ref());
-            if collapsed == rendered {
-                return;
-            }
-        }
-        let normalised = normalise_line_endings(&rendered, line_endings);
-        expected.assert_eq(normalised.as_ref());
-    }
-
-    enum EventSnapshot<'a> {
-        Asset(AssetEventSnapshot<'a>),
-        TriggerCompleted(TriggerCompletedSnapshot<'a>),
-        Raw(String),
-    }
-
-    impl<'a> EventSnapshot<'a> {
-        fn from_event(event: &'a EventBox) -> Self {
-            match event {
-                EventBox::Data(data) => AssetEventSnapshot::from_data_event(data.as_ref())
-                    .map_or_else(|| Self::Raw(format!("{event:?}")), Self::Asset),
-                EventBox::TriggerCompleted(event) => {
-                    Self::TriggerCompleted(TriggerCompletedSnapshot(event))
-                }
-                other => Self::Raw(format!("{other:?}")),
-            }
-        }
-    }
-
-    impl norito::json::JsonSerialize for EventSnapshot<'_> {
-        fn json_serialize(&self, out: &mut String) {
-            match self {
-                Self::Asset(asset) => asset.json_serialize(out),
-                Self::TriggerCompleted(event) => event.json_serialize(out),
-                Self::Raw(raw) => norito::json::write_json_string(raw, out),
-            }
-        }
-    }
-
-    enum AssetEventSnapshot<'a> {
-        Added(&'a AssetChanged),
-        Removed(&'a AssetChanged),
-    }
-
-    impl<'a> AssetEventSnapshot<'a> {
-        fn from_data_event(event: &'a data::DataEvent) -> Option<Self> {
-            match event {
-                data::DataEvent::Domain(domain_event) => Self::from_domain_event(domain_event),
-                _ => None,
-            }
-        }
-
-        fn from_domain_event(event: &'a DomainEvent) -> Option<Self> {
-            match event {
-                DomainEvent::Account(account_event) => Self::from_account_event(account_event),
-                _ => None,
-            }
-        }
-
-        fn from_account_event(event: &'a AccountEvent) -> Option<Self> {
-            match event {
-                AccountEvent::Asset(asset_event) => Self::from_asset_event(asset_event),
-                _ => None,
-            }
-        }
-
-        fn from_asset_event(event: &'a AssetEvent) -> Option<Self> {
-            match event {
-                AssetEvent::Added(change) => Some(Self::Added(change)),
-                AssetEvent::Removed(change) => Some(Self::Removed(change)),
-                _ => None,
-            }
-        }
-
-        fn variant_label(&self) -> &'static str {
-            match self {
-                Self::Added(_) => "Added",
-                Self::Removed(_) => "Removed",
-            }
-        }
-
-        fn change(&self) -> &'a AssetChanged {
-            match self {
-                Self::Added(change) | Self::Removed(change) => change,
-            }
-        }
-    }
-
-    fn format_asset_id_for_snapshot(asset_id: &AssetId) -> String {
-        let account = asset_id.account();
-        let account_str = ACCOUNT_ALIAS_BY_ID.get(account).map_or_else(
-            || format!("{}@{}", account.expect_single_signatory(), DOMAIN_STR),
-            |alias| format!("{alias}@{DOMAIN_STR}"),
-        );
-        if asset_id.definition().try_domain() == Some(&*DOMAIN) {
-            let name = asset_id
-                .definition()
-                .try_name()
-                .expect("matching domain projection must include a name");
-            format!("{name}##{account_str}")
-        } else {
-            format!("{}#{}", asset_id.definition(), account_str)
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum SnapshotLineEndings {
-        Lf,
-        Crlf,
-    }
-
-    fn load_snapshot(path: &std::path::Path) -> (Option<String>, SnapshotLineEndings) {
-        std::fs::read_to_string(path).map_or((None, SnapshotLineEndings::Lf), |text| {
-            let endings = detect_line_endings_from_text(&text);
-            (Some(text), endings)
-        })
-    }
-
-    fn normalise_line_endings(
-        input: &str,
-        endings: SnapshotLineEndings,
-    ) -> std::borrow::Cow<'_, str> {
-        match endings {
-            SnapshotLineEndings::Lf => std::borrow::Cow::Borrowed(input),
-            SnapshotLineEndings::Crlf => {
-                if input.contains('\r') {
-                    std::borrow::Cow::Borrowed(input)
-                } else {
-                    std::borrow::Cow::Owned(input.replace('\n', "\r\n"))
-                }
-            }
-        }
-    }
-
-    fn detect_line_endings_from_text(text: &str) -> SnapshotLineEndings {
-        if text.contains('\r') {
-            SnapshotLineEndings::Crlf
-        } else {
-            SnapshotLineEndings::Lf
-        }
-    }
-
-    fn collapse_to_unix_line_endings(text: &str) -> std::borrow::Cow<'_, str> {
-        if text.contains('\r') {
-            let collapsed = text.replace("\r\n", "\n").replace('\r', "\n");
-            std::borrow::Cow::Owned(collapsed)
-        } else {
-            std::borrow::Cow::Borrowed(text)
-        }
-    }
-
-    impl norito::json::JsonSerialize for AssetEventSnapshot<'_> {
-        fn json_serialize(&self, out: &mut String) {
-            out.push('{');
-            norito::json::write_json_string("Data", out);
-            out.push(':');
-            out.push('{');
-            norito::json::write_json_string("Domain", out);
-            out.push(':');
-            out.push('{');
-            norito::json::write_json_string("Account", out);
-            out.push(':');
-            out.push('{');
-            norito::json::write_json_string("Asset", out);
-            out.push(':');
-            out.push('{');
-            norito::json::write_json_string(self.variant_label(), out);
-            out.push(':');
-            out.push('{');
-            norito::json::write_json_string("asset", out);
-            out.push(':');
-            let asset_id = format_asset_id_for_snapshot(self.change().asset());
-            norito::json::write_json_string(&asset_id, out);
-            out.push(',');
-            norito::json::write_json_string("amount", out);
-            out.push(':');
-            let amount = self.change().amount().to_string();
-            norito::json::write_json_string(&amount, out);
-            out.push('}');
-            out.push('}');
-            out.push('}');
-            out.push('}');
-            out.push('}');
-            out.push('}');
-        }
-    }
-
-    struct TriggerCompletedSnapshot<'a>(&'a TriggerCompletedEvent);
-
-    impl norito::json::JsonSerialize for TriggerCompletedSnapshot<'_> {
-        fn json_serialize(&self, out: &mut String) {
-            out.push('{');
-            norito::json::write_json_string("TriggerCompleted", out);
-            out.push(':');
-            out.push('{');
-            norito::json::write_json_string("trigger_id", out);
-            out.push(':');
-            let trigger_id = self.0.trigger_id().to_string();
-            norito::json::write_json_string(&trigger_id, out);
-            out.push(',');
-            norito::json::write_json_string("outcome", out);
-            out.push(':');
-            match self.0.outcome() {
-                TriggerCompletedOutcome::Success => {
-                    norito::json::write_json_string("Success", out);
-                }
-                TriggerCompletedOutcome::Failure(message) => {
-                    out.push('{');
-                    norito::json::write_json_string("Failure", out);
-                    out.push(':');
-                    norito::json::write_json_string(message, out);
-                    out.push('}');
-                }
-            }
-            out.push('}');
-            out.push('}');
-        }
-    }
-
-    impl Default for Sandbox {
-        fn default() -> Self {
-            let world = {
-                let domain = Domain::new(DOMAIN.clone()).build(&GENESIS_ACCOUNT.id);
-                let asset_def = {
-                    let __asset_definition_id = ASSET.clone();
-                    AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-                        .with_name(__asset_definition_id.name().to_string())
-                }
-                .build(&GENESIS_ACCOUNT.id);
-                let accounts = ACCOUNT
-                    .clone()
-                    .into_iter()
-                    .chain([("genesis", GENESIS_ACCOUNT.clone())])
-                    .map(|(_name, cred)| Account::new(cred.id.clone()).build(&GENESIS_ACCOUNT.id));
-                let assets = INIT_BALANCE
-                    .iter()
-                    .map(|(name, num)| Asset::new(asset(name), *num));
-
-                World::with_assets([domain], accounts, [asset_def], assets, [])
-            };
-            let kura = crate::kura::Kura::blank_kura_for_testing();
-            let query_handle = crate::query::store::LiveQueryStore::start_test();
-            let state =
-                State::new_with_chain_for_testing(world, kura, query_handle, CHAIN_ID.clone());
-            let mut sandbox = Self {
-                state,
-                transactions: vec![],
-            };
-            // Force deterministic single-threaded pipeline evaluation in tests to avoid
-            // parallel scheduling reordering transactions that rely on chained data triggers.
-            sandbox.state.pipeline.dynamic_prepass = false;
-            sandbox.state.pipeline.parallel_overlay = false;
-            sandbox.state.pipeline.parallel_apply = false;
-            sandbox.state.pipeline.workers = 1;
-
-            sandbox.with_max_execution_depth(INIT_EXECUTION_DEPTH)
-        }
-    }
-
-    impl Sandbox {
-        fn trigger_registration_metadata(&self) -> Metadata {
-            let height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
-            let registered_ms = self
-                .state
-                .view()
-                .latest_block()
-                .map(|block| block.header().creation_time().as_millis())
-                .and_then(|ms| u64::try_from(ms).ok())
-                .unwrap_or(0);
-            let mut metadata = Metadata::default();
-            let key_height = "__registered_block_height"
-                .parse::<Name>()
-                .expect("registered block height metadata key");
-            let key_time = "__registered_at_ms"
-                .parse::<Name>()
-                .expect("registered timestamp metadata key");
-            metadata.insert(key_height, Json::new(height));
-            metadata.insert(key_time, Json::new(registered_ms));
-            metadata
-        }
-
-        /// Add a time trigger that transfers the test asset after a timer fires.
-        ///
-        /// Enqueues a time-based trigger which moves `quantity` units from `src`
-        /// to `dest` on each firing. The trigger is configured for infinite repeats
-        /// in the sandbox unless otherwise specified by a labeled variant.
-        #[must_use]
-        pub fn with_time_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_time_trigger_transfer_internal(src, quantity, dest, Repeats::Indefinitely, 0)
-        }
-
-        /// Add a labeled time trigger variant for test disambiguation.
-        #[must_use]
-        pub fn with_time_trigger_transfer_labeled(
-            self,
-            src: &str,
-            quantity: u32,
-            dest: &str,
-            label: u32,
-        ) -> Self {
-            self.with_time_trigger_transfer_internal(
-                src,
-                quantity,
-                dest,
-                Repeats::Indefinitely,
-                label,
-            )
-        }
-
-        fn with_time_trigger_transfer_internal(
-            self,
-            src: &str,
-            quantity: u32,
-            dest: &str,
-            repeats: Repeats,
-            label: u32,
-        ) -> Self {
-            let mut block = self.state.world.triggers.block();
-            let mut transaction = block.transaction();
-            let trigger = Trigger::new(
-                format!("time-{src}-{dest}-{label}").parse().unwrap(),
-                Action::new(
-                    transfer(src, quantity, dest),
-                    repeats,
-                    GENESIS_ACCOUNT.id.clone(),
-                    TimeEventFilter::new(ExecutionTime::PreCommit),
-                )
-                .with_metadata(self.trigger_registration_metadata()),
-            )
-            .try_into()
-            .unwrap();
-
-            transaction.add_time_trigger(trigger).unwrap();
-            transaction.apply();
-            block.commit();
-            self
-        }
-
-        /// Add a data trigger that reacts to asset-added events and forwards funds.
-        #[must_use]
-        pub fn with_data_trigger_transfer(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_data_trigger_transfer_quantity_internal(
-                src,
-                Quantity::from(quantity),
-                dest,
-                Repeats::Indefinitely,
-                0,
-            )
-        }
-
-        /// Add a single-use data trigger that fires at most once.
-        #[must_use]
-        pub fn with_data_trigger_transfer_once(self, src: &str, quantity: u32, dest: &str) -> Self {
-            self.with_data_trigger_transfer_quantity_internal(
-                src,
-                Quantity::from(quantity),
-                dest,
-                Repeats::Exactly(1),
-                0,
-            )
-        }
-
-        /// Add a labeled data trigger for disambiguation between similar triggers in tests.
-        #[must_use]
-        pub fn with_data_trigger_transfer_labeled(
-            self,
-            src: &str,
-            quantity: u32,
-            dest: &str,
-            label: u32,
-        ) -> Self {
-            self.with_data_trigger_transfer_quantity_internal(
-                src,
-                Quantity::from(quantity),
-                dest,
-                Repeats::Indefinitely,
-                label,
-            )
-        }
-
-        /// Add a data trigger with an explicit [`Quantity`] amount.
-        #[must_use]
-        pub fn with_data_trigger_transfer_quantity(
-            self,
-            src: &str,
-            amount: Quantity,
-            dest: &str,
-        ) -> Self {
-            self.with_data_trigger_transfer_quantity_internal(
-                src,
-                amount,
-                dest,
-                Repeats::Indefinitely,
-                0,
-            )
-        }
-
-        fn with_data_trigger_transfer_quantity_internal(
-            self,
-            src: &str,
-            amount: Quantity,
-            dest: &str,
-            repeats: Repeats,
-            label: u32,
-        ) -> Self {
-            let mut block = self.state.world.triggers.block();
-            let mut transaction = block.transaction();
-            let trigger = Trigger::new(
-                format!("data-{src}-{dest}-{label}").parse().unwrap(),
-                Action::new(
-                    [InstructionBox::from(Transfer::asset_quantity(
-                        asset(src),
-                        amount,
-                        ACCOUNT[dest].id.clone(),
-                    ))],
-                    repeats,
-                    GENESIS_ACCOUNT.id.clone(),
-                    AssetEventFilter::new()
-                        .for_events(AssetEventSet::Added)
-                        .for_asset(asset(src)),
-                )
-                .with_metadata(self.trigger_registration_metadata()),
-            )
-            .try_into()
-            .unwrap();
-
-            transaction.add_data_trigger(trigger).unwrap();
-            transaction.apply();
-            block.commit();
-            self
-        }
-
-        /// Limit the maximum smart contract execution depth in the sandbox state.
-        #[must_use]
-        pub fn with_max_execution_depth(self, depth: u8) -> Self {
-            let mut world = self.state.world.block();
-            world.parameters.set_parameter(Parameter::SmartContract(
-                iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(depth),
-            ));
-            world.commit();
-            self
-        }
-
-        /// Queue a single transfer transaction from `src` to `dest`.
-        ///
-        /// This is a convenience wrapper over [`Self::request_transfers_batched`] with
-        /// `N_INSTRUCTIONS = 1`.
-        pub fn request_transfer(&mut self, src: &str, quantity: u32, dest: &str) {
-            self.request_transfers_batched::<1>(src, quantity, dest);
-        }
-
-        /// Queue a transaction consisting of repeated Transfer instructions.
-        ///
-        /// Builds and buffers a signed transaction that contains `N_INSTRUCTIONS`
-        /// transfer instructions, each moving `quantity_per_instruction` units of
-        /// the test asset from `src` to `dest`. The buffered transaction is
-        /// included the next time a sandbox block is constructed via [`Self::block`].
-        ///
-        /// - `N_INSTRUCTIONS`: number of identical transfer instructions to include
-        /// - `src`: source account name (e.g., "alice")
-        /// - `quantity_per_instruction`: amount transferred by each instruction
-        /// - `dest`: destination account name (e.g., "bob")
-        pub fn request_transfers_batched<const N_INSTRUCTIONS: usize>(
-            &mut self,
-            src: &str,
-            quantity_per_instruction: u32,
-            dest: &str,
-        ) {
-            let transaction = {
-                let instructions =
-                    transfers_batched::<N_INSTRUCTIONS>(src, quantity_per_instruction, dest);
-                TransactionBuilder::new(
-                    CHAIN_ID.clone(),
-                    GENESIS_ACCOUNT.id.clone(),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )
-                .with_instructions(instructions)
-                .sign(&GENESIS_ACCOUNT.key)
-            };
-            self.transactions.push(transaction);
-        }
-
-        /// Build a signed block from all queued transactions and open it for assertions.
-        ///
-        /// Consumes the currently queued transactions, packs them into a signed
-        /// block and returns a [`SandboxBlock`] handle which allows asserting
-        /// balances and applying the block to the in-memory test state.
-        pub fn block(&mut self) -> SandboxBlock<'_> {
-            let block: SignedBlock = {
-                let transactions = {
-                    let signed = core::mem::take(&mut self.transactions);
-                    // Skip static analysis (AcceptedTransaction::accept)
-                    signed
-                        .into_iter()
-                        .map(|tx| AcceptedTransaction::new_unchecked(Cow::Owned(tx)))
-                        .collect::<Vec<_>>()
-                };
-                BlockBuilder::new_preserve_order(transactions)
-                    .chain(0, self.state.view().latest_block().as_deref())
-                    .sign(&GENESIS_ACCOUNT.key)
-                    .unpack(|_| {})
-                    .into()
-            };
-
-            SandboxBlock {
-                state: self.state.block(block.header()),
-                block: Some(block),
-            }
-        }
-    }
-
-    impl SandboxBlock<'_> {
-        /// Validate and commit the prepared block to the sandbox state.
-        ///
-        /// Returns the list of emitted events together with the committed
-        /// block for further inspection in tests.
-        pub fn apply(&mut self) -> (Vec<EventBox>, CommittedBlock) {
-            let _fifo_lock = FIFO_SCHEDULER_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            struct RestoreFifoScheduler(bool);
-            impl Drop for RestoreFifoScheduler {
-                fn drop(&mut self) {
-                    crate::pipeline::set_force_fifo_scheduler(self.0);
-                }
-            }
-            let _restore_fifo =
-                RestoreFifoScheduler(crate::pipeline::set_force_fifo_scheduler(true));
-            let valid = ValidBlock::validate_unchecked(
-                core::mem::take(&mut self.block).unwrap(),
-                &mut self.state,
-            )
-            .unpack(|_| {});
-            let committed = valid.commit_unchecked().unpack(|_| {});
-            let events = self.state.apply_without_execution(
-                &committed,
-                // topology in state is only used by sumeragi
-                vec![],
-            );
-
-            (events, committed)
-        }
-
-        /// Assert that selected accounts have the expected balances.
-        ///
-        /// The `expected` map specifies accounts (by short name like "alice")
-        /// and their expected balances of the sandbox test asset. Only the
-        /// accounts present in `expected` are checked.
-        pub fn assert_balances(&self, expected: impl Into<AccountBalance>) {
-            let expected = expected.into();
-            let actual: AccountBalance = ACCOUNTS_STR
-                .iter()
-                .filter(|name| expected.contains_key(*name))
-                .map(|name| {
-                    let balance_num = self.state.world.assets.get(&asset(name)).map_or_else(
-                        || panic!("{name}'s asset not found"),
-                        |asset| asset.0.clone(),
-                    );
-                    let balance =
-                        numeric_to_u64(balance_num.as_numeric()).unwrap_or_else(|error| {
-                            panic!(
-                                "account {name} has non-integer balance {balance_num}: {error:?}"
-                            );
-                        });
-                    (*name, balance)
-                })
-                .collect();
-
-            assert_eq!(actual, expected);
-        }
-    }
+    include!("tx/sandbox_state_tests.rs");
 }
 
 #[cfg(test)]
-fn numeric_to_u64(n: &Numeric) -> Result<u64, iroha_primitives::TryFromNumericError> {
-    let mantissa = n
-        .try_mantissa_u128()
-        .ok_or(iroha_primitives::TryFromNumericError)?;
-    if n.scale() == 0 {
-        return mantissa
-            .try_into()
-            .map_err(|_| iroha_primitives::TryFromNumericError);
-    }
-
-    let scale = 10u128
-        .checked_pow(n.scale())
-        .ok_or(iroha_primitives::TryFromNumericError)?;
-    if mantissa % scale != 0 {
-        return Err(iroha_primitives::TryFromNumericError);
-    }
-    mantissa
-        .checked_div(scale)
-        .ok_or(iroha_primitives::TryFromNumericError)?
-        .try_into()
-        .map_err(|_| iroha_primitives::TryFromNumericError)
-}
-
-#[cfg(test)]
-mod numeric_to_u64_tests {
-    use iroha_primitives::numeric::Numeric;
-
-    use super::numeric_to_u64;
-
-    #[test]
-    fn accepts_scaled_whole_numbers() {
-        let scaled = Numeric::try_new(120_i32, 1).expect("numeric");
-        assert_eq!(numeric_to_u64(&scaled).unwrap(), 12);
-    }
-
-    #[test]
-    fn rejects_fractional_balances() {
-        let fractional = Numeric::try_new(1_i32, 1).expect("numeric");
-        assert!(numeric_to_u64(&fractional).is_err());
-    }
-
-    #[test]
-    fn rejects_values_outside_u64_range() {
-        // Any value that cannot be represented as u64 should error.
-        let large = Numeric::try_new(i128::MAX, 0).expect("numeric");
-        assert!(numeric_to_u64(&large).is_err());
-        let overflowing = Numeric::try_new(i128::MIN, 0).expect("numeric");
-        assert!(numeric_to_u64(&overflowing).is_err());
-    }
-}
+include!("tx/numeric_to_u64_tests.rs");

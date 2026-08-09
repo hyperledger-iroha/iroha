@@ -8,6 +8,14 @@ mod composer_scenarios;
 mod config;
 #[path = "dashboard_view.rs"]
 mod dashboard_view;
+#[cfg(test)]
+#[path = "gui_lifecycle_tests.rs"]
+mod lifecycle_tests;
+#[path = "sandbox_cli.rs"]
+mod sandbox_cli;
+#[cfg(test)]
+#[path = "gui_test_support.rs"]
+mod test_support;
 #[path = "wizard.rs"]
 mod wizard;
 
@@ -17,7 +25,6 @@ use std::{
     env,
     ffi::OsString,
     fs,
-    future::Future,
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     process,
@@ -75,21 +82,21 @@ use mochi_core::{
     BootstrapInputs, BootstrapWriteError, ChaosPreset, ChaosReport, ChaosRunRequest,
     DashboardSnapshot, EventCategory, EventDecodeStage, EventStreamDecodeError, EventStreamEvent,
     EventSummary, ExposedPrivateKey, GenesisProfile, InstructionDraft, InstructionPermission,
-    KeyPair, LifecycleEvent, LocalMcpProbeResult, LogStreamKind, ManagedBlockStream,
-    ManagedEventStream, ManagedStatusStream, NetworkProfile, PeerLogEvent, PeerState, PrivateKey,
-    ProfilePreset, SigningAuthority, StateCursor, StateEntry, StatePage, StateQueryKind,
-    StatusStreamEvent, Supervisor, SupervisorBuilder, SupervisorError, SupervisorSessionInfo,
-    ToriiClient, ToriiError, TransactionComposeOptions, TransactionPreview,
-    compose_preview_with_options, development_signing_authorities, drafts_from_json_str,
-    drafts_to_pretty_json, fetch_dashboard_snapshot, infer_workspace_root_from_sandbox_root,
-    run_chaos_preset, run_state_query, sample_cabbage_definition_id, sample_rose_definition_id,
-    sandbox_root_for_workspace,
+    KeyPair, LifecycleEvent, LogStreamKind, ManagedBlockStream, ManagedEventStream,
+    ManagedStatusStream, NetworkProfile, PeerLogEvent, PeerState, PrivateKey, ProfilePreset,
+    SelectedPeerStoragePaths, SigningAuthority, StateCursor, StateEntry, StatePage, StateQueryKind,
+    StatusStreamEvent, Supervisor, SupervisorBuilder, SupervisorError, ToriiClient,
+    TransactionComposeOptions, TransactionPreview, compose_preview_with_options,
+    development_signing_authorities, drafts_from_json_str, drafts_to_pretty_json,
+    fetch_dashboard_snapshot, infer_workspace_root_from_sandbox_root,
+    resolve_selected_peer_storage_paths, run_chaos_preset, run_state_query,
+    sample_cabbage_definition_id, sample_rose_definition_id, sandbox_root_for_workspace,
     supervisor::RestartPolicy,
     torii::{
         ReadinessOptions, ReadinessSmokeOutcome, SmokeCommitOptions, StatusMetrics, ToriiErrorInfo,
         ToriiErrorKind, ToriiMetricsSnapshot, ToriiStatusSnapshot,
     },
-    wait_for_all_managed_peers_genesis, write_bootstrap_bundle,
+    write_bootstrap_bundle,
 };
 use norito::json;
 use norito::json::{Map, Value};
@@ -113,8 +120,6 @@ const SANDBOX_READINESS_TIMEOUT: Duration = Duration::from_secs(60);
 const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(12);
 const SMOKE_MAX_ATTEMPTS: usize = 3;
-const LOCAL_MCP_STARTUP_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
-const LOCAL_MCP_STARTUP_MAX_BACKOFF: Duration = Duration::from_secs(1);
 const EVENT_FILTER_STORAGE_KEY: &str = "mochi.event_filter";
 const ACTIVE_VIEW_STORAGE_KEY: &str = "mochi.active_view";
 const FIRST_RUN_COMPLETED_STORAGE_KEY: &str = "mochi.first_run_completed";
@@ -266,6 +271,7 @@ struct ParsedCli {
 enum CliCommand {
     Gui,
     SandboxServe,
+    SandboxWipeRehearsal,
 }
 
 #[derive(Debug)]
@@ -461,20 +467,22 @@ where
         .ok_or_else(|| CliParseError::new("arguments must be valid UTF-8"))?;
     if first == "sandbox" {
         let Some(second) = args.get(1) else {
-            return Err(CliParseError::new(
-                "expected `serve` after the `sandbox` subcommand",
-            ));
+            return Err(CliParseError::new("expected a sandbox subcommand"));
         };
         let second = second
             .to_str()
             .ok_or_else(|| CliParseError::new("arguments must be valid UTF-8"))?;
-        if second != "serve" {
-            return Err(CliParseError::new(format!(
-                "unknown sandbox subcommand `{second}`"
-            )));
-        }
+        let command = match second {
+            "serve" => CliCommand::SandboxServe,
+            "rehearse-wipe-and-regenerate" => CliCommand::SandboxWipeRehearsal,
+            _ => {
+                return Err(CliParseError::new(format!(
+                    "unknown sandbox subcommand `{second}`"
+                )));
+            }
+        };
         args.drain(0..2);
-        return Ok((CliCommand::SandboxServe, args));
+        return Ok((command, args));
     }
     Ok((CliCommand::Gui, args))
 }
@@ -901,14 +909,13 @@ fn print_cli_usage() {
     println!("MOCHI usage:");
     println!("  mochi [options]");
     println!("  mochi sandbox serve [options]");
+    println!("  mochi sandbox rehearse-wipe-and-regenerate [options]");
     println!("Options:");
     println!(
         "  --workspace-root <path>      Workspace root; Mochi stores runtime state under .mochi/sandbox."
     );
     println!("  --data-root <path>           Override the supervisor data root.");
-    println!(
-        "  --profile <single-peer|four-peer-bft|{{ peer_count = 3, consensus_mode = \"permissioned\" }}>"
-    );
+    println!("  --profile <four-peer-bft|{{ peer_count = 7, consensus_mode = \"permissioned\" }}>");
     println!("                               Choose a preset or custom profile table.");
     println!("  --config <path>              Load overrides from a specific config file.");
     println!("  --torii-start <port>         Override the base Torii port.");
@@ -1002,310 +1009,6 @@ fn resolve_workspace_root_for_cli(
         .or_else(|| supervisor.and_then(MochiApp::infer_workspace_root_from_supervisor))
         .or_else(|| env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."))
-}
-
-fn write_session_metadata_file(
-    session_path: &Path,
-    workspace_root: &Path,
-    session: &SupervisorSessionInfo,
-    readiness_smoke: bool,
-    mcp_probe: &LocalMcpProbeResult,
-) -> Result<(), String> {
-    let payload = json!({
-        "pid": (process::id()),
-        "ready": true,
-        "mcp_ready": true,
-        "readiness_smoke": readiness_smoke,
-        "profile": (session.profile_slug.clone()),
-        "chain_id": (session.chain_id.clone()),
-        "workspace_root": (workspace_root.display().to_string()),
-        "sandbox_root": (session.sandbox_root.display().to_string()),
-        "peer_alias": (session.peer_alias.clone()),
-        "api_base": (session.api_base.clone()),
-        "torii_url": (session.torii_url.clone()),
-        "mcp_url": (session.mcp_url.clone()),
-        "account_id": (session.account_id.clone()),
-        "private_key": (session.private_key.clone()),
-        "mcp_protocol_version": (mcp_probe.protocol_version.clone()),
-        "mcp_toolset_version": (mcp_probe.toolset_version.clone()),
-        "mcp_tool_count": (mcp_probe.tool_count),
-        "mcp_tools": (mcp_probe.tool_names.clone()),
-    });
-    let bytes = json::to_vec_pretty(&payload)
-        .map_err(|err| format!("failed to serialize session metadata: {err}"))?;
-    if let Some(parent) = session_path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            format!(
-                "failed to create session metadata directory {}: {err}",
-                parent.display()
-            )
-        })?;
-    }
-    fs::write(session_path, bytes).map_err(|err| {
-        format!(
-            "failed to write session metadata {}: {err}",
-            session_path.display()
-        )
-    })
-}
-
-fn bootstrap_inputs_from_session(session: &SupervisorSessionInfo) -> BootstrapInputs {
-    BootstrapInputs {
-        api_base: session.api_base.clone(),
-        torii_url: session.torii_url.clone(),
-        mcp_url: Some(session.mcp_url.clone()),
-        chain_id: session.chain_id.clone(),
-        account_id: session.account_id.clone(),
-        private_key: session.private_key.clone(),
-    }
-}
-
-fn write_bootstrap_files_for_session(
-    workspace_root: &Path,
-    session: &SupervisorSessionInfo,
-) -> Result<Vec<PathBuf>, BootstrapWriteError> {
-    let bundle = BootstrapBundle::render(&bootstrap_inputs_from_session(session));
-    write_bootstrap_bundle(workspace_root, &bundle, true)
-}
-
-async fn wait_for_shutdown_signal() {
-    #[cfg(unix)]
-    {
-        if std::env::var_os("MOCHI_DETACHED").is_some() {
-            let mut terminate =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
-            let mut interrupt =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
-            let mut hangup =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).ok();
-            loop {
-                tokio::select! {
-                    received = async {
-                        match &mut terminate {
-                            Some(signal) => signal.recv().await,
-                            None => std::future::pending().await,
-                        }
-                    } => {
-                        if received.is_some() {
-                            break;
-                        }
-                    }
-                    _ = async {
-                        match &mut interrupt {
-                            Some(signal) => signal.recv().await,
-                            None => std::future::pending().await,
-                        }
-                    } => {}
-                    _ = async {
-                        match &mut hangup {
-                            Some(signal) => signal.recv().await,
-                            None => std::future::pending().await,
-                        }
-                    } => {}
-                }
-            }
-            return;
-        }
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut terminate) => {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {}
-                    _ = terminate.recv() => {}
-                }
-            }
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
-}
-
-fn run_sandbox_serve_cli(overrides: CliOverrides) -> Result<(), String> {
-    let (supervisor, supervisor_error, bundle_config) =
-        prepare_supervisor_with_overrides(&overrides);
-    let mut supervisor = supervisor.ok_or_else(|| {
-        supervisor_error
-            .map(|err| format!("failed during sandbox preparation: {err}"))
-            .unwrap_or_else(|| "failed during sandbox preparation".to_owned())
-    })?;
-
-    let workspace_root =
-        resolve_workspace_root_for_cli(&overrides, bundle_config.as_ref(), Some(&supervisor));
-    let readiness_smoke = configured_readiness_smoke_for(bundle_config.as_ref(), &overrides);
-    let readiness_options = configured_readiness_options_for(&overrides);
-
-    supervisor
-        .start_all()
-        .map_err(|err| format!("failed while starting peers: {err}"))?;
-
-    let session = supervisor
-        .session_info()
-        .map_err(|err| format!("failed while collecting sandbox connection info: {err}"))?;
-    let client = supervisor
-        .torii_client(&session.peer_alias)
-        .ok_or_else(|| "failed to create a Torii client for the local sandbox".to_owned())?;
-
-    let runtime = Runtime::new().map_err(|err| format!("failed to create runtime: {err}"))?;
-    runtime.block_on(async {
-        if readiness_smoke {
-            if supervisor.peers().len() > 1 {
-                let managed_clients = supervisor
-                    .peers()
-                    .iter()
-                    .map(|peer| {
-                        peer.torii_client()
-                            .map(|client| (peer.alias().to_owned(), client))
-                            .map_err(|err| {
-                                format!(
-                                    "failed to create Torii client for managed peer {} at {}: {err}",
-                                    peer.alias(),
-                                    peer.torii_address()
-                                )
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                wait_for_all_managed_peers_genesis(managed_clients, readiness_options)
-                    .await
-                    .map_err(|err| {
-                        format!(
-                            "failed while waiting for committed genesis on every managed peer: {err}"
-                        )
-                    })?;
-            }
-            let mut plan = supervisor
-                .default_readiness_smoke_plan()
-                .map_err(|err| format!("failed while preparing readiness smoke: {err}"))?;
-            plan.status_options = readiness_options;
-            client.wait_for_readiness_smoke(plan).await.map_err(|err| {
-                format!(
-                    "failed while waiting for readiness smoke: {err} ({:?})",
-                    err.summarize()
-                )
-            })?;
-        } else {
-            client
-                .wait_for_ready(readiness_options)
-                .await
-                .map_err(|err| {
-                    format!(
-                        "failed while waiting for /status readiness: {err} ({:?})",
-                        err.summarize()
-                    )
-                })?;
-        }
-        Ok::<(), String>(())
-    })?;
-
-    let mcp_probe = runtime.block_on(async {
-        validate_local_mcp_for_startup(&client, readiness_options.timeout)
-            .await
-            .map_err(|err| format!("failed while validating local MCP: {err}"))
-    })?;
-
-    write_bootstrap_files_for_session(&workspace_root, &session)
-        .map_err(|err| format!("failed while writing workspace bootstrap files: {err}"))?;
-
-    let session_path = session.sandbox_root.join("session.json");
-    write_session_metadata_file(
-        &session_path,
-        &workspace_root,
-        &session,
-        readiness_smoke,
-        &mcp_probe,
-    )?;
-
-    println!("MOCHI sandbox ready");
-    println!("  workspace: {}", workspace_root.display());
-    println!("  sandbox: {}", session.sandbox_root.display());
-    println!("  torii: {}", session.torii_url);
-    println!("  mcp: {}", session.mcp_url);
-    println!("  session: {}", session_path.display());
-
-    runtime.block_on(wait_for_shutdown_signal());
-    Ok(())
-}
-
-async fn validate_local_mcp_for_startup(
-    client: &ToriiClient,
-    readiness_timeout: Duration,
-) -> Result<LocalMcpProbeResult, ToriiError> {
-    retry_local_mcp_rate_limit(
-        || client.validate_local_mcp(),
-        readiness_timeout,
-        LOCAL_MCP_STARTUP_INITIAL_BACKOFF,
-        LOCAL_MCP_STARTUP_MAX_BACKOFF,
-    )
-    .await
-}
-
-async fn retry_local_mcp_rate_limit<F, Fut>(
-    mut probe: F,
-    readiness_timeout: Duration,
-    initial_backoff: Duration,
-    max_backoff: Duration,
-) -> Result<LocalMcpProbeResult, ToriiError>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = Result<LocalMcpProbeResult, ToriiError>>,
-{
-    let started = tokio::time::Instant::now();
-    let Some(deadline) = started.checked_add(readiness_timeout) else {
-        return Err(local_mcp_readiness_timeout(readiness_timeout));
-    };
-    let mut backoff = initial_backoff.min(max_backoff);
-    loop {
-        match tokio::time::timeout_at(deadline, probe()).await {
-            Ok(Ok(result)) => return Ok(result),
-            Ok(Err(error)) if local_mcp_error_is_rate_limited(&error) => {
-                let delay = local_mcp_retry_delay(&error, backoff)
-                    .expect("rate-limited MCP errors always produce a retry delay");
-                if error.retry_after().is_none() {
-                    backoff = backoff.saturating_mul(2).min(max_backoff);
-                }
-
-                let now = tokio::time::Instant::now();
-                let Some(remaining) = deadline.checked_duration_since(now) else {
-                    return Err(local_mcp_readiness_timeout(readiness_timeout));
-                };
-                if delay >= remaining {
-                    tokio::time::sleep(remaining).await;
-                    return Err(local_mcp_readiness_timeout(readiness_timeout));
-                }
-                if delay.is_zero() {
-                    tokio::task::yield_now().await;
-                } else {
-                    tokio::time::sleep(delay).await;
-                }
-            }
-            Ok(Err(error)) => return Err(error),
-            Err(_) => return Err(local_mcp_readiness_timeout(readiness_timeout)),
-        }
-    }
-}
-
-fn local_mcp_retry_delay(error: &ToriiError, fallback: Duration) -> Option<Duration> {
-    if !local_mcp_error_is_rate_limited(error) {
-        return None;
-    }
-    Some(error.retry_after().unwrap_or(fallback))
-}
-
-fn local_mcp_readiness_timeout(readiness_timeout: Duration) -> ToriiError {
-    ToriiError::Timeout {
-        context: format!("local MCP readiness after {readiness_timeout:?}"),
-    }
-}
-
-fn local_mcp_error_is_rate_limited(error: &ToriiError) -> bool {
-    matches!(error, ToriiError::RateLimited { .. })
-        || matches!(
-            error,
-            ToriiError::UnexpectedStatus { status, .. } if status.as_u16() == 429
-        )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1739,6 +1442,7 @@ impl ComposerTemplate {
             ComposerTemplate::RegisterAssetDefinitionLily => {
                 app.composer_instruction_kind = ComposerInstructionKind::RegisterAssetDefinition;
                 app.composer_asset_definition_id = "4jAY5UbAxnGPt31CkijmAsqXP4o4".to_owned();
+                app.composer_asset_definition_name = "lily".to_owned();
                 app.composer_asset_definition_mintable = Mintable::Infinitely;
                 app.composer_mintability_tokens = 1;
                 app.last_info = Some("Loaded asset definition registration template.".to_owned());
@@ -1970,6 +1674,7 @@ struct LanePathPreview {
     peer_alias: String,
     blocks_dir: PathBuf,
     merge_log: PathBuf,
+    _selection_lease: Option<SelectedPeerStoragePaths>,
 }
 
 #[derive(Debug, Clone)]
@@ -2179,12 +1884,22 @@ pub fn run() -> eframe::Result<()> {
         }
     }
 
-    if parsed_cli.command == CliCommand::SandboxServe {
-        if let Err(err) = run_sandbox_serve_cli(parsed_cli.overrides) {
-            eprintln!("MOCHI: {err}");
-            process::exit(1);
+    match parsed_cli.command {
+        CliCommand::SandboxServe => {
+            if let Err(err) = sandbox_cli::run_serve(parsed_cli.overrides) {
+                eprintln!("MOCHI: {err}");
+                process::exit(1);
+            }
+            return Ok(());
         }
-        return Ok(());
+        CliCommand::SandboxWipeRehearsal => {
+            if let Err(err) = sandbox_cli::run_wipe_rehearsal(parsed_cli.overrides) {
+                eprintln!("MOCHI: {err}");
+                process::exit(1);
+            }
+            return Ok(());
+        }
+        CliCommand::Gui => {}
     }
 
     set_cli_overrides(parsed_cli.overrides);
@@ -2397,6 +2112,7 @@ struct MochiApp {
     composer_destination_account: String,
     composer_account_id: String,
     composer_asset_definition_id: String,
+    composer_asset_definition_name: String,
     composer_asset_definition_mintable: Mintable,
     composer_mintability_tokens: u32,
     composer_role_id: String,
@@ -2453,8 +2169,6 @@ struct MochiApp {
     settings_nexus_lane_count_input: String,
     settings_nexus_lane_catalog_input: String,
     settings_nexus_dataspace_catalog_input: String,
-    settings_torii_da_replay_dir_input: String,
-    settings_torii_da_manifest_dir_input: String,
     settings_build_binaries: bool,
     settings_readiness_smoke: bool,
     settings_log_stdout: bool,
@@ -2501,7 +2215,7 @@ impl Default for FirstRunWizardState {
             open: false,
             completed: false,
             workspace_input: String::new(),
-            preset: ProfilePreset::SinglePeer,
+            preset: ProfilePreset::FourPeerBft,
             enable_nexus: false,
         }
     }
@@ -2541,7 +2255,7 @@ fn prepare_supervisor_with_overrides(
     let mut builder = if let Some(profile) = overrides.profile.clone() {
         SupervisorBuilder::with_profile(profile)
     } else {
-        SupervisorBuilder::new(ProfilePreset::SinglePeer)
+        SupervisorBuilder::new(ProfilePreset::FourPeerBft)
     };
 
     if let Some(cfg) = config.as_ref() {
@@ -2658,6 +2372,7 @@ impl MochiApp {
             composer_destination_account: String::new(),
             composer_account_id: String::new(),
             composer_asset_definition_id: String::new(),
+            composer_asset_definition_name: String::new(),
             composer_asset_definition_mintable: Mintable::Infinitely,
             composer_mintability_tokens: 1,
             composer_role_id: String::new(),
@@ -2714,8 +2429,6 @@ impl MochiApp {
             settings_nexus_lane_count_input: String::new(),
             settings_nexus_lane_catalog_input: String::new(),
             settings_nexus_dataspace_catalog_input: String::new(),
-            settings_torii_da_replay_dir_input: String::new(),
-            settings_torii_da_manifest_dir_input: String::new(),
             settings_build_binaries: true,
             settings_readiness_smoke: true,
             settings_log_stdout: true,
@@ -2754,492 +2467,7 @@ fn socket_bind_available() -> bool {
 }
 
 #[cfg(test)]
-mod cli_tests {
-    use std::{
-        env,
-        ffi::OsString,
-        path::{Path, PathBuf},
-        sync::{Mutex, OnceLock},
-    };
-
-    use super::*;
-
-    fn cli_env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct CliEnvGuard {
-        key: &'static str,
-        prev: Option<String>,
-    }
-
-    impl CliEnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let prev = env::var(key).ok();
-            // SAFETY: Tests serialise environment mutations via `cli_env_lock`.
-            unsafe { env::set_var(key, value) };
-            Self { key, prev }
-        }
-    }
-
-    impl Drop for CliEnvGuard {
-        fn drop(&mut self) {
-            if let Some(prev) = self.prev.as_ref() {
-                // SAFETY: Tests serialise environment mutations via `cli_env_lock`.
-                unsafe { env::set_var(self.key, prev) };
-            } else {
-                // SAFETY: Tests serialise environment mutations via `cli_env_lock`.
-                unsafe { env::remove_var(self.key) };
-            }
-        }
-    }
-
-    #[test]
-    fn parse_cli_kagami_override_sets_path() {
-        let args = vec![OsString::from("--kagami"), OsString::from("/tmp/kagami")];
-        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-        assert!(!parsed.help, "help should not be triggered");
-        assert_eq!(
-            parsed.overrides.binaries.kagami.as_deref(),
-            Some(Path::new("/tmp/kagami"))
-        );
-    }
-
-    #[test]
-    fn parse_cli_config_override_sets_path() {
-        let args = vec![
-            OsString::from("--config"),
-            OsString::from("/tmp/mochi.toml"),
-        ];
-        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-        assert_eq!(
-            parsed.overrides.config_path.as_deref(),
-            Some(Path::new("/tmp/mochi.toml"))
-        );
-    }
-
-    #[test]
-    fn parse_cli_help_flag_short_circuits() {
-        let parsed =
-            parse_cli_overrides_from(vec![OsString::from("--help")]).expect("parse help flag");
-        assert!(parsed.help, "help flag should be detected");
-    }
-
-    #[test]
-    fn parse_cli_sandbox_serve_command_and_workspace_root() {
-        let parsed = parse_cli_overrides_from(vec![
-            OsString::from("sandbox"),
-            OsString::from("serve"),
-            OsString::from("--workspace-root"),
-            OsString::from("/tmp/workspace"),
-        ])
-        .expect("parse CLI");
-        assert_eq!(parsed.command, CliCommand::SandboxServe);
-        assert_eq!(
-            parsed.overrides.workspace_root.as_deref(),
-            Some(Path::new("/tmp/workspace"))
-        );
-    }
-
-    #[test]
-    fn parse_cli_chain_id_override_sets_value() {
-        let args = vec![OsString::from("--chain-id"), OsString::from("demo-chain")];
-        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-        assert_eq!(parsed.overrides.chain_id.as_deref(), Some("demo-chain"));
-    }
-
-    #[test]
-    fn parse_cli_genesis_profile_sets_value() {
-        let args = vec![
-            OsString::from("--genesis-profile"),
-            OsString::from("iroha3-dev"),
-        ];
-        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-        assert_eq!(
-            parsed.overrides.genesis_profile,
-            Some(GenesisProfile::Iroha3Dev)
-        );
-    }
-
-    #[test]
-    fn parse_cli_profile_inline_table_sets_custom_profile() {
-        let args = vec![
-            OsString::from("--profile"),
-            OsString::from("{ peer_count = 3, consensus_mode = \"permissioned\" }"),
-        ];
-        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-        let profile = parsed.overrides.profile.expect("profile override");
-        assert_eq!(profile.preset, None);
-        assert_eq!(profile.topology.peer_count, 3);
-        assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
-    }
-
-    #[test]
-    fn parse_cli_profile_inline_table_sets_genesis_profile() {
-        let args = vec![
-            OsString::from("--profile"),
-            OsString::from(
-                "{ peer_count = 4, consensus_mode = \"npos\", genesis_profile = \"iroha3-dev\" }",
-            ),
-        ];
-        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-        assert_eq!(
-            parsed.overrides.genesis_profile,
-            Some(GenesisProfile::Iroha3Dev)
-        );
-    }
-
-    #[test]
-    fn parse_cli_profile_genesis_conflict_errors() {
-        let args = vec![
-            OsString::from("--profile"),
-            OsString::from(
-                "{ peer_count = 4, consensus_mode = \"npos\", genesis_profile = \"iroha3-dev\" }",
-            ),
-            OsString::from("--genesis-profile"),
-            OsString::from("iroha3-testus"),
-        ];
-        let err = parse_cli_overrides_from(args).expect_err("conflict should error");
-        assert!(
-            err.to_string().contains("conflicts"),
-            "unexpected error message: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_cli_vrf_seed_sets_value() {
-        let args = vec![OsString::from("--vrf-seed-hex"), OsString::from("abcd")];
-        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-        assert_eq!(parsed.overrides.vrf_seed_hex.as_deref(), Some("abcd"));
-    }
-
-    #[test]
-    fn parse_cli_nexus_config_sets_table() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let config_path = temp.path().join("nexus.toml");
-        fs::write(
-            &config_path,
-            r#"
-enabled = true
-lane_count = 2
-"#,
-        )
-        .expect("write nexus config");
-        let args = vec![
-            OsString::from("--nexus-config"),
-            OsString::from(config_path.as_os_str()),
-        ];
-        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-        let nexus = parsed.overrides.nexus_config.expect("nexus config");
-        assert!(matches!(
-            nexus.get("enabled"),
-            Some(toml::Value::Boolean(true))
-        ));
-        assert_eq!(
-            nexus.get("lane_count").and_then(toml::Value::as_integer),
-            Some(2)
-        );
-    }
-
-    #[test]
-    fn parse_cli_nexus_flags_set_overrides() {
-        let args = vec![
-            OsString::from("--enable-nexus"),
-            OsString::from("--nexus-lane-count"),
-            OsString::from("3"),
-        ];
-        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-        assert_eq!(parsed.overrides.nexus_enabled, Some(true));
-        assert_eq!(parsed.overrides.nexus_lane_count, Some(3));
-    }
-
-    #[test]
-    fn parse_cli_rejects_retired_da_flags() {
-        let error = parse_cli_overrides_from(vec![OsString::from("--disable-da")])
-            .expect_err("retired DA toggle must be rejected");
-        assert!(error.to_string().contains("unknown option"));
-    }
-
-    #[test]
-    fn parse_cli_restart_mode_never_sets_policy() {
-        let args = vec![OsString::from("--restart-mode"), OsString::from("never")];
-        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-        assert!(matches!(
-            parsed.overrides.restart_policy,
-            Some(RestartPolicy::Never)
-        ));
-    }
-
-    #[test]
-    fn parse_cli_restart_on_failure_overrides_attempts() {
-        let args = vec![
-            OsString::from("--restart-max"),
-            OsString::from("5"),
-            OsString::from("--restart-backoff-ms"),
-            OsString::from("2500"),
-        ];
-        let parsed = parse_cli_overrides_from(args).expect("parse CLI");
-        match parsed.overrides.restart_policy.expect("restart policy") {
-            RestartPolicy::OnFailure {
-                max_restarts,
-                backoff,
-            } => {
-                assert_eq!(max_restarts, 5);
-                assert_eq!(backoff, Duration::from_millis(2500));
-            }
-            RestartPolicy::Never => panic!("expected on-failure policy"),
-        }
-    }
-
-    #[test]
-    fn parse_cli_build_binaries_flag_enables_auto_build() {
-        let parsed =
-            parse_cli_overrides_from(vec![OsString::from("--build-binaries")]).expect("parse CLI");
-        assert_eq!(parsed.overrides.build_binaries, Some(true));
-    }
-
-    #[test]
-    fn parse_cli_no_build_binaries_flag_disables_auto_build() {
-        let parsed = parse_cli_overrides_from(vec![OsString::from("--no-build-binaries")])
-            .expect("parse CLI");
-        assert_eq!(parsed.overrides.build_binaries, Some(false));
-    }
-
-    #[test]
-    fn parse_cli_disable_smoke_flag_disables_readiness_smoke() {
-        let parsed =
-            parse_cli_overrides_from(vec![OsString::from("--disable-smoke")]).expect("parse CLI");
-        assert_eq!(parsed.overrides.readiness_smoke, Some(false));
-    }
-
-    #[test]
-    fn parse_cli_enable_smoke_flag_enables_readiness_smoke() {
-        let parsed =
-            parse_cli_overrides_from(vec![OsString::from("--enable-smoke")]).expect("parse CLI");
-        assert_eq!(parsed.overrides.readiness_smoke, Some(true));
-    }
-
-    #[test]
-    fn parse_cli_readiness_timeout_applies_to_cold_start() {
-        let parsed = parse_cli_overrides_from(vec![
-            OsString::from("--readiness-timeout-ms"),
-            OsString::from("300000"),
-        ])
-        .expect("parse CLI");
-        assert_eq!(
-            parsed.overrides.readiness_timeout,
-            Some(Duration::from_secs(300))
-        );
-        let options = configured_readiness_options_for(&parsed.overrides);
-        assert_eq!(options.timeout, Duration::from_secs(300));
-        assert_eq!(options.poll_interval, READINESS_POLL_INTERVAL);
-    }
-
-    #[test]
-    fn sandbox_readiness_timeout_defaults_to_cold_start_budget() {
-        let options = configured_readiness_options_for(&CliOverrides::default());
-        assert_eq!(options.timeout, SANDBOX_READINESS_TIMEOUT);
-        assert_eq!(options.poll_interval, READINESS_POLL_INTERVAL);
-    }
-
-    #[test]
-    fn parse_cli_readiness_timeout_rejects_zero() {
-        let error = parse_cli_overrides_from(vec![
-            OsString::from("--readiness-timeout-ms"),
-            OsString::from("0"),
-        ])
-        .expect_err("zero readiness timeout must be rejected");
-        assert!(error.to_string().contains("greater than zero"));
-    }
-
-    #[test]
-    fn parse_cli_unknown_flag_errors() {
-        let err = parse_cli_overrides_from(vec![OsString::from("--unknown")])
-            .expect_err("unknown flag should error");
-        assert!(
-            err.to_string().contains("unknown flag"),
-            "unexpected error message: {err}"
-        );
-    }
-
-    #[test]
-    fn env_profile_override_applies() {
-        let _guard = cli_env_lock().lock().expect("env lock");
-        let _profile = CliEnvGuard::set("MOCHI_PROFILE", "four-peer-bft");
-        let overrides = parse_env_overrides().expect("parse env overrides");
-        assert_eq!(
-            overrides.profile,
-            Some(NetworkProfile::from_preset(ProfilePreset::FourPeerBft))
-        );
-    }
-
-    #[test]
-    fn env_workspace_root_override_applies() {
-        let _guard = cli_env_lock().lock().expect("env lock");
-        let _workspace = CliEnvGuard::set("MOCHI_WORKSPACE_ROOT", "/tmp/workspace");
-        let overrides = parse_env_overrides().expect("parse env overrides");
-        assert_eq!(
-            overrides.workspace_root.as_deref(),
-            Some(Path::new("/tmp/workspace"))
-        );
-    }
-
-    #[test]
-    fn should_default_workspace_root_when_no_paths_are_configured() {
-        assert!(should_default_workspace_root(
-            &CliOverrides::default(),
-            None
-        ));
-    }
-
-    #[test]
-    fn should_not_default_workspace_root_when_data_root_is_configured() {
-        let config = ResolvedBundleConfig {
-            config: BundleConfig {
-                data_root: Some(PathBuf::from("/tmp/mochi")),
-                ..Default::default()
-            },
-            path: PathBuf::from("/tmp/mochi.toml"),
-        };
-
-        assert!(!should_default_workspace_root(
-            &CliOverrides::default(),
-            Some(&config),
-        ));
-    }
-
-    #[test]
-    fn resolved_build_binaries_defaults_to_true() {
-        assert!(resolved_build_binaries(&CliOverrides::default(), None));
-    }
-
-    #[test]
-    fn resolved_build_binaries_honors_explicit_config_disable() {
-        let config = ResolvedBundleConfig {
-            config: BundleConfig {
-                build_binaries: Some(false),
-                ..Default::default()
-            },
-            path: PathBuf::from("/tmp/mochi.toml"),
-        };
-
-        assert!(!resolved_build_binaries(
-            &CliOverrides::default(),
-            Some(&config),
-        ));
-    }
-
-    #[test]
-    fn env_build_binaries_override_applies() {
-        let _guard = cli_env_lock().lock().expect("env lock");
-        let _build = CliEnvGuard::set("MOCHI_BUILD_BINARIES", "true");
-        let overrides = parse_env_overrides().expect("parse env overrides");
-        assert_eq!(overrides.build_binaries, Some(true));
-    }
-
-    #[test]
-    fn env_readiness_smoke_override_applies() {
-        let _guard = cli_env_lock().lock().expect("env lock");
-        let _smoke = CliEnvGuard::set("MOCHI_READINESS_SMOKE", "false");
-        let overrides = parse_env_overrides().expect("parse env overrides");
-        assert_eq!(overrides.readiness_smoke, Some(false));
-    }
-
-    #[test]
-    fn env_readiness_timeout_override_applies() {
-        let _guard = cli_env_lock().lock().expect("env lock");
-        let _timeout = CliEnvGuard::set("MOCHI_READINESS_TIMEOUT_MS", "45000");
-        let overrides = parse_env_overrides().expect("parse env overrides");
-        assert_eq!(overrides.readiness_timeout, Some(Duration::from_secs(45)));
-    }
-
-    #[test]
-    fn cli_readiness_timeout_overrides_environment() {
-        let env_overrides = CliOverrides {
-            readiness_timeout: Some(Duration::from_secs(45)),
-            ..Default::default()
-        };
-        let cli_overrides = CliOverrides {
-            readiness_timeout: Some(Duration::from_secs(300)),
-            ..Default::default()
-        };
-        let merged = merge_overrides(env_overrides, cli_overrides);
-        assert_eq!(merged.readiness_timeout, Some(Duration::from_secs(300)));
-    }
-
-    #[test]
-    fn cli_flags_override_env_values() {
-        let _guard = cli_env_lock().lock().expect("env lock");
-        let _profile = CliEnvGuard::set("MOCHI_PROFILE", "four-peer-bft");
-        let env_overrides = parse_env_overrides().expect("parse env overrides");
-
-        let cli = parse_cli_overrides_from(vec![
-            OsString::from("--profile"),
-            OsString::from("single-peer"),
-        ])
-        .expect("parse CLI");
-
-        let merged = merge_overrides(env_overrides, cli.overrides);
-        assert_eq!(
-            merged.profile,
-            Some(NetworkProfile::from_preset(ProfilePreset::SinglePeer))
-        );
-    }
-
-    #[cfg(unix)]
-    fn write_kagami_override_stub(root: &Path) -> (PathBuf, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-
-        let script_path = root.join("kagami_cli_override.sh");
-        let log_path = root.join("kagami_cli_override.log");
-        let script = r#"#!/bin/sh
-set -e
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
-printf '%s\n' "$@" >> "$SCRIPT_DIR/kagami_cli_override.log"
-if [ "$1" = "--version" ]; then
-  echo "kagami-stub iroha3"
-  exit 0
-fi
-cat <<'JSON'
-{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","consensus_mode":"Permissioned","transactions":[{"instructions":[]}]}
-JSON
-"#;
-        std::fs::write(&script_path, script).expect("write kagami CLI override stub");
-        let mut perms = std::fs::metadata(&script_path)
-            .expect("override stub metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).expect("set override stub permissions");
-        (script_path, log_path)
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cli_overrides_apply_kagami_path_to_supervisor_builder() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping CLI override supervisor test due to socket restrictions");
-            return;
-        }
-        let temp = tempfile::tempdir().expect("temp dir");
-        let (script_path, log_path) = write_kagami_override_stub(temp.path());
-
-        let mut overrides = CliOverrides::default();
-        overrides.binaries.kagami = Some(script_path.clone());
-
-        let builder = SupervisorBuilder::new(ProfilePreset::SinglePeer).data_root(temp.path());
-        overrides
-            .apply_to(builder)
-            .build()
-            .expect("build supervisor with CLI overrides");
-
-        let log = std::fs::read_to_string(&log_path).expect("read CLI override kagami log");
-        assert!(
-            log.contains("--genesis-public-key"),
-            "expected CLI override stub to capture genesis args, got `{log}`"
-        );
-    }
-}
+mod cli_tests;
 
 impl Drop for MochiApp {
     fn drop(&mut self) {
@@ -3446,6 +2674,74 @@ impl MochiApp {
             .any(|peer| peer.alias() == alias && matches!(peer.state(), PeerState::Running))
     }
 
+    fn collect_alias_operation_failures<E, F>(aliases: &[String], mut operation: F) -> Vec<String>
+    where
+        E: std::fmt::Display,
+        F: FnMut(&str) -> Result<(), E>,
+    {
+        aliases
+            .iter()
+            .filter_map(|alias| {
+                operation(alias)
+                    .err()
+                    .map(|error| format!("{alias}: {error}"))
+            })
+            .collect()
+    }
+
+    fn start_requested_peer_aliases(
+        supervisor: &mut Supervisor,
+        aliases: &[String],
+    ) -> Result<(), SupervisorError> {
+        let already_running = supervisor
+            .peers()
+            .iter()
+            .filter(|peer| matches!(peer.state(), PeerState::Running | PeerState::Restarting))
+            .map(|peer| peer.alias().to_owned())
+            .collect::<HashSet<_>>();
+        Self::start_requested_peer_aliases_with(aliases, &already_running, |alias| {
+            supervisor.start_peer(alias)
+        })
+    }
+
+    fn start_requested_peer_aliases_with<E, F>(
+        aliases: &[String],
+        already_running: &HashSet<String>,
+        mut start: F,
+    ) -> Result<(), SupervisorError>
+    where
+        E: std::fmt::Display,
+        F: FnMut(&str) -> Result<(), E>,
+    {
+        let failures = Self::collect_alias_operation_failures(aliases, |alias| {
+            if already_running.contains(alias) {
+                Ok(())
+            } else {
+                start(alias)
+            }
+        });
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(SupervisorError::PeerSetStart {
+                details: failures.join("; "),
+            })
+        }
+    }
+
+    fn combine_with_running_set_restore(
+        primary: SupervisorError,
+        restore: Result<(), SupervisorError>,
+    ) -> SupervisorError {
+        match restore {
+            Ok(()) => primary,
+            Err(restore) => SupervisorError::OperationAndRunningSetRestore {
+                primary: Box::new(primary),
+                restore: Box::new(restore),
+            },
+        }
+    }
+
     fn preferred_activity_alias(
         selection: Option<&String>,
         active: Option<&String>,
@@ -3467,7 +2763,7 @@ impl MochiApp {
     fn selected_quickstart_preset(&self, supervisor: &Supervisor) -> ProfilePreset {
         parse_profile_preset(self.settings_profile_input.trim())
             .or(supervisor.profile().preset)
-            .unwrap_or(ProfilePreset::SinglePeer)
+            .unwrap_or(ProfilePreset::FourPeerBft)
     }
 
     fn set_quickstart_preset(&mut self, preset: ProfilePreset) {
@@ -5520,16 +4816,6 @@ impl MochiApp {
                     .as_ref()
                     .and_then(|cfg| cfg.config.nexus.as_ref())
             });
-        let torii_table = self
-            .supervisor
-            .as_ref()
-            .and_then(|supervisor| supervisor.torii_config_overrides())
-            .or_else(|| {
-                self.bundle_config
-                    .as_ref()
-                    .and_then(|cfg| cfg.config.torii.as_ref())
-            });
-
         if let Some(supervisor) = self.supervisor.as_ref() {
             let workspace_root = self
                 .configured_workspace_root_path(Some(supervisor))
@@ -5575,20 +4861,6 @@ impl MochiApp {
         self.settings_nexus_dataspace_catalog_input =
             Self::format_toml_array_input(nexus_table, "dataspace_catalog");
 
-        self.settings_torii_da_replay_dir_input = torii_table
-            .and_then(|table| table.get("da_ingest").and_then(TomlValue::as_table))
-            .and_then(|ingest| {
-                ingest
-                    .get("replay_cache_store_dir")
-                    .and_then(TomlValue::as_str)
-            })
-            .unwrap_or_default()
-            .to_string();
-        self.settings_torii_da_manifest_dir_input = torii_table
-            .and_then(|table| table.get("da_ingest").and_then(TomlValue::as_table))
-            .and_then(|ingest| ingest.get("manifest_store_dir").and_then(TomlValue::as_str))
-            .unwrap_or_default()
-            .to_string();
         self.lane_reset_selection = None;
 
         self.sync_log_export_dir_input();
@@ -5603,14 +4875,6 @@ impl MochiApp {
                     .as_ref()
                     .and_then(|cfg| cfg.config.nexus.as_ref())
             });
-        let torii_table = supervisor
-            .and_then(|runtime| runtime.torii_config_overrides())
-            .or_else(|| {
-                self.bundle_config
-                    .as_ref()
-                    .and_then(|cfg| cfg.config.torii.as_ref())
-            });
-
         if let Some(supervisor) = supervisor {
             let workspace_root = self
                 .configured_workspace_root_path(Some(supervisor))
@@ -5656,20 +4920,6 @@ impl MochiApp {
         self.settings_nexus_dataspace_catalog_input =
             Self::format_toml_array_input(nexus_table, "dataspace_catalog");
 
-        self.settings_torii_da_replay_dir_input = torii_table
-            .and_then(|table| table.get("da_ingest").and_then(TomlValue::as_table))
-            .and_then(|ingest| {
-                ingest
-                    .get("replay_cache_store_dir")
-                    .and_then(TomlValue::as_str)
-            })
-            .unwrap_or_default()
-            .to_string();
-        self.settings_torii_da_manifest_dir_input = torii_table
-            .and_then(|table| table.get("da_ingest").and_then(TomlValue::as_table))
-            .and_then(|ingest| ingest.get("manifest_store_dir").and_then(TomlValue::as_str))
-            .unwrap_or_default()
-            .to_string();
         self.lane_reset_selection = None;
 
         self.sync_log_export_dir_input();
@@ -5686,7 +4936,7 @@ impl MochiApp {
             self.first_run_wizard.preset = supervisor
                 .profile()
                 .preset
-                .unwrap_or(ProfilePreset::SinglePeer);
+                .unwrap_or(ProfilePreset::FourPeerBft);
             self.first_run_wizard.enable_nexus = supervisor
                 .nexus_config_overrides()
                 .and_then(|table| table.get("enabled").and_then(TomlValue::as_bool))
@@ -5736,7 +4986,7 @@ impl MochiApp {
             .supervisor
             .as_ref()
             .map(|supervisor| supervisor.profile().clone())
-            .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::SinglePeer));
+            .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::FourPeerBft));
         let mut builder = SupervisorBuilder::with_profile(profile);
         if let Some(cfg) = self.bundle_config.as_ref() {
             builder = cfg.config.apply_to(builder);
@@ -5759,34 +5009,62 @@ impl MochiApp {
         }
 
         let mut previous = self.supervisor.take();
-        let mut was_running = false;
+        let previously_running = previous
+            .as_ref()
+            .map(|supervisor| {
+                supervisor
+                    .peers()
+                    .iter()
+                    .filter(|peer| {
+                        matches!(peer.state(), PeerState::Running | PeerState::Restarting)
+                    })
+                    .map(|peer| peer.alias().to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         if let Some(old) = previous.as_mut() {
-            was_running = old.is_any_running();
-            let _ = old.stop_all();
+            if let Err(primary) = old.stop_all() {
+                let restore = Self::start_requested_peer_aliases(old, &previously_running);
+                let error = Self::combine_with_running_set_restore(primary, restore);
+                self.supervisor = previous;
+                return Err(error);
+            }
         }
         self.reset_runtime_state_after_maintenance();
 
-        match builder.build() {
+        let build_result = match previous {
+            Some(old) => builder
+                .build_replacing(old)
+                .map_err(|failure| failure.into_parts()),
+            None => builder.build().map_err(|error| (error, None)),
+        };
+        match build_result {
             Ok(mut supervisor) => {
-                if (was_running || force_start_after_rebuild)
-                    && let Err(err) = supervisor.start_all()
-                {
-                    self.last_error = Some(format!("Failed to restart peers after rebuild: {err}"));
-                }
+                let aliases_to_start = if force_start_after_rebuild {
+                    supervisor
+                        .peers()
+                        .iter()
+                        .map(|peer| peer.alias().to_owned())
+                        .collect::<Vec<_>>()
+                } else {
+                    previously_running.clone()
+                };
+                let restart =
+                    Self::start_requested_peer_aliases(&mut supervisor, &aliases_to_start);
                 self.supervisor = Some(supervisor);
                 self.supervisor_error = None;
                 self.initialize_settings_from_supervisor();
-                Ok(())
+                restart
             }
-            Err(err) => {
+            Err((primary, previous)) => {
+                let mut error = primary;
                 if let Some(mut old) = previous {
-                    if was_running {
-                        let _ = old.start_all();
-                    }
+                    let restore = Self::start_requested_peer_aliases(&mut old, &previously_running);
+                    error = Self::combine_with_running_set_restore(error, restore);
                     self.supervisor = Some(old);
                 }
                 self.initialize_settings_from_supervisor();
-                Err(err)
+                Err(error)
             }
         }
     }
@@ -5897,7 +5175,7 @@ impl MochiApp {
             .supervisor
             .as_ref()
             .map(|supervisor| supervisor.profile().clone())
-            .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::SinglePeer));
+            .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::FourPeerBft));
         let effective_profile = if let Some(parsed) = profile_override.as_ref() {
             if let Some(preset) = parsed.profile.preset {
                 let mut profile = NetworkProfile::from_preset(preset);
@@ -5981,40 +5259,6 @@ impl MochiApp {
             resolved.config.nexus = None;
         }
 
-        let torii_replay_dir = self.settings_torii_da_replay_dir_input.trim();
-        let torii_manifest_dir = self.settings_torii_da_manifest_dir_input.trim();
-        let mut torii_table = resolved.config.torii.clone().unwrap_or_default();
-        let mut da_ingest_table = torii_table
-            .get("da_ingest")
-            .and_then(TomlValue::as_table)
-            .cloned()
-            .unwrap_or_default();
-        if torii_replay_dir.is_empty() {
-            da_ingest_table.remove("replay_cache_store_dir");
-        } else {
-            da_ingest_table.insert(
-                "replay_cache_store_dir".into(),
-                TomlValue::String(torii_replay_dir.to_owned()),
-            );
-        }
-        if torii_manifest_dir.is_empty() {
-            da_ingest_table.remove("manifest_store_dir");
-        } else {
-            da_ingest_table.insert(
-                "manifest_store_dir".into(),
-                TomlValue::String(torii_manifest_dir.to_owned()),
-            );
-        }
-        if da_ingest_table.is_empty() {
-            torii_table.remove("da_ingest");
-        } else {
-            torii_table.insert("da_ingest".into(), TomlValue::Table(da_ingest_table));
-        }
-        if torii_table.is_empty() {
-            resolved.config.torii = None;
-        } else {
-            resolved.config.torii = Some(torii_table);
-        }
         if let Err(err) = resolved.config.write_to_path(&resolved.path) {
             return Err(err.to_string());
         }
@@ -6232,11 +5476,7 @@ impl MochiApp {
     ) -> Option<LanePathPreview> {
         let peer = supervisor.peers().first()?;
         let peer_alias = peer.alias().to_owned();
-        let kura_root = supervisor
-            .paths()
-            .peer_dir(&peer_alias)
-            .join("storage")
-            .join("kura");
+        let kura_root = peer.storage_dir().join("kura");
         let slug = lane_slug(alias, lane_id);
         let blocks_dir = kura_root
             .join("blocks")
@@ -6250,6 +5490,7 @@ impl MochiApp {
             peer_alias,
             blocks_dir,
             merge_log,
+            _selection_lease: None,
         })
     }
 
@@ -6258,20 +5499,34 @@ impl MochiApp {
         lane_count: Option<u32>,
         lane_catalog: Option<&[TomlValue]>,
     ) -> Option<Vec<LanePathPreview>> {
-        let base_root = self.effective_sandbox_base_root(self.supervisor.as_ref());
-        let profile = self
-            .supervisor
-            .as_ref()
-            .map(|supervisor| supervisor.profile().clone())
-            .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::SinglePeer));
-        let paths = mochi_core::config::NetworkPaths::from_root(base_root, &profile);
-        let peer_alias = self
-            .supervisor
-            .as_ref()
-            .and_then(|supervisor| supervisor.peers().first())
-            .map(|peer| peer.alias().to_owned())
-            .unwrap_or_else(|| "peer0".to_owned());
-        let kura_root = paths.peer_dir(&peer_alias).join("storage").join("kura");
+        let (peer_alias, kura_root, selection_lease) =
+            if let Some(supervisor) = self.supervisor.as_ref() {
+                let peer = supervisor.peers().first()?;
+                (
+                    peer.alias().to_owned(),
+                    peer.storage_dir().join("kura"),
+                    None,
+                )
+            } else {
+                let base_root = self.effective_sandbox_base_root(None);
+                let profile = self
+                    .cli_overrides
+                    .profile
+                    .clone()
+                    .or_else(|| {
+                        self.bundle_config
+                            .as_ref()
+                            .and_then(|bundle| bundle.config.profile.clone())
+                    })
+                    .unwrap_or_else(|| NetworkProfile::from_preset(ProfilePreset::FourPeerBft));
+                let paths = mochi_core::config::NetworkPaths::from_root(base_root, &profile);
+                let peer_alias = "peer0".to_owned();
+                let selected = resolve_selected_peer_storage_paths(paths.root(), &peer_alias)
+                    .ok()
+                    .flatten()?;
+                let kura_root = selected.storage_dir().join("kura");
+                (peer_alias, kura_root, Some(selected))
+            };
 
         let mut aliases = BTreeMap::new();
         let mut max_index: Option<u32> = None;
@@ -6330,6 +5585,7 @@ impl MochiApp {
                     peer_alias: peer_alias.clone(),
                     blocks_dir,
                     merge_log,
+                    _selection_lease: selection_lease.clone(),
                 }
             })
             .collect::<Vec<_>>();
@@ -6914,12 +6170,12 @@ impl MochiApp {
                             {
                                 supervisor
                                     .and_then(|runtime| runtime.profile().preset)
-                                    .unwrap_or(ProfilePreset::SinglePeer)
+                                    .unwrap_or(ProfilePreset::FourPeerBft)
                             } else {
                                 parse_profile_preset(&self.settings_profile_input)
-                                    .unwrap_or(ProfilePreset::SinglePeer)
+                                    .unwrap_or(ProfilePreset::FourPeerBft)
                             };
-                            for preset in [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft] {
+                            for preset in [ProfilePreset::FourPeerBft] {
                                 let selected = selected_profile == preset;
                                 if ui
                                     .add(Button::selectable(selected, preset.label()))
@@ -6972,7 +6228,7 @@ impl MochiApp {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.settings_profile_input)
                                         .hint_text(
-                                            "single-peer | four-peer-bft | { peer_count = 3, consensus_mode = \"permissioned\" }",
+                                            "four-peer-bft | { peer_count = 7, consensus_mode = \"permissioned\" }",
                                         ),
                                 );
                                 ui.small(
@@ -7000,7 +6256,7 @@ impl MochiApp {
                                         &mut self.settings_nexus_lane_catalog_input,
                                     )
                                     .desired_rows(6)
-                                    .hint_text("[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"universal\""),
+                                    .hint_text("[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"universal\"\nmetadata = {}"),
                                 );
                                 ui.add_space(6.0);
                                 ui.label("Dataspace catalog (TOML using [[dataspace_catalog]] entries):");
@@ -7010,22 +6266,6 @@ impl MochiApp {
                                     )
                                     .desired_rows(4)
                                     .hint_text("[[dataspace_catalog]]\nalias = \"universal\"\nid = 0"),
-                                );
-                                ui.add_space(6.0);
-                                ui.label("Torii DA replay cache dir (blank = per-peer default):");
-                                ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut self.settings_torii_da_replay_dir_input,
-                                    )
-                                    .hint_text("/path/to/da_replay"),
-                                );
-                                ui.add_space(6.0);
-                                ui.label("Torii DA manifest spool dir (blank = per-peer default):");
-                                ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut self.settings_torii_da_manifest_dir_input,
-                                    )
-                                    .hint_text("/path/to/da_manifests"),
                                 );
                                 let lane_count = match Self::parse_lane_count_input(
                                     &self.settings_nexus_lane_count_input,
@@ -7624,7 +6864,7 @@ impl MochiApp {
                 ui.add_space(10.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Preset").small().color(palette.text_muted));
-                    for preset in [ProfilePreset::SinglePeer, ProfilePreset::FourPeerBft] {
+                    for preset in [ProfilePreset::FourPeerBft] {
                         let selected = selected_preset == preset;
                         let button = Button::selectable(selected, preset.label())
                             .fill(if selected {
@@ -7649,7 +6889,7 @@ impl MochiApp {
                 ui.add_space(8.0);
                 ui.small(match selected_preset {
                     ProfilePreset::SinglePeer => {
-                        "Single Peer is the solo sandbox: the fastest loop for UI work, schema changes, and transaction debugging."
+                        "The historical Single Peer name now launches the mandatory four-validator committee."
                     }
                     ProfilePreset::FourPeerBft => {
                         "Four Peer BFT is the quorum playground: closer to validator reality for failover, committee, and consensus-path debugging."
@@ -10718,6 +9958,10 @@ impl MochiApp {
                 ui.text_edit_singleline(&mut self.composer_asset_definition_id);
             });
             ui.horizontal(|ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut self.composer_asset_definition_name);
+            });
+            ui.horizontal(|ui| {
                 ui.label("Mintable");
                 ComboBox::from_id_salt("mochi_composer_mintable_selector")
                     .selected_text(Self::mintable_label(
@@ -11393,8 +10637,15 @@ impl MochiApp {
                         Some("Asset definition identifier is required.".to_owned());
                     return;
                 }
+                let name = self.composer_asset_definition_name.trim().to_owned();
+                self.composer_asset_definition_name = name.clone();
+                if name.is_empty() {
+                    self.composer_error = Some("Asset definition name is required.".to_owned());
+                    return;
+                }
                 InstructionDraft::register_asset_definition_from_input(
                     &definition,
+                    &name,
                     self.composer_asset_definition_mintable,
                 )
             }
@@ -13453,10 +12704,6 @@ mod tests {
         collections::VecDeque,
         num::NonZeroU64,
         path::Path,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
         time::{Duration, Instant},
     };
 
@@ -13491,13 +12738,16 @@ mod tests {
     };
     use norito::json::{self, Value};
 
+    use super::test_support::{
+        TestEnvGuard, env_lock, genesis_invocation_count, install_kagami_stub, install_noop_stub,
+        kagami_sign_invocation_count,
+    };
     use super::{
-        ActiveView, CliOverrides, InstructionPermission, LocalMcpProbeResult, MaintenanceCommand,
-        MaintenanceState, MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm,
-        SignerEntryState, StatePageCache, StateQueryKind, SupervisorBuilder,
-        compose_app_env_recipe, compose_launch_recipe, ensure_http_base, filter_state_entries,
-        local_mcp_retry_delay, reset_cli_overrides_for_tests, retry_local_mcp_rate_limit,
-        shell_quote,
+        ActiveView, CliOverrides, InstructionPermission, MaintenanceCommand, MaintenanceState,
+        MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm, SignerEntryState,
+        StatePageCache, StateQueryKind, SupervisorBuilder, SupervisorError, compose_app_env_recipe,
+        compose_launch_recipe, ensure_http_base, filter_state_entries,
+        reset_cli_overrides_for_tests, shell_quote,
     };
 
     #[test]
@@ -13551,115 +12801,6 @@ mod tests {
         );
     }
 
-    fn local_mcp_probe_fixture() -> LocalMcpProbeResult {
-        LocalMcpProbeResult {
-            protocol_version: "2025-06-18".to_owned(),
-            toolset_version: Some("test-v1".to_owned()),
-            tool_count: 1,
-            tool_names: vec!["iroha.health".to_owned()],
-        }
-    }
-
-    fn local_mcp_rate_limit_error(retry_after: Option<Duration>) -> ToriiError {
-        ToriiError::RateLimited { retry_after }
-    }
-
-    #[test]
-    fn local_mcp_startup_retry_recovers_from_transient_429() {
-        let runtime = tokio::runtime::Runtime::new().expect("runtime");
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let observed_attempts = Arc::clone(&attempts);
-        let result = runtime.block_on(retry_local_mcp_rate_limit(
-            move || {
-                let attempt = observed_attempts.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    if attempt < 2 {
-                        Err(local_mcp_rate_limit_error(None))
-                    } else {
-                        Ok(local_mcp_probe_fixture())
-                    }
-                }
-            },
-            Duration::from_secs(1),
-            Duration::ZERO,
-            Duration::ZERO,
-        ));
-
-        assert_eq!(
-            result.expect("third attempt succeeds"),
-            local_mcp_probe_fixture()
-        );
-        assert_eq!(attempts.load(Ordering::SeqCst), 3);
-    }
-
-    #[test]
-    fn local_mcp_startup_retry_never_retries_protocol_failure() {
-        let runtime = tokio::runtime::Runtime::new().expect("runtime");
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let observed_attempts = Arc::clone(&attempts);
-        let error = runtime
-            .block_on(retry_local_mcp_rate_limit(
-                move || {
-                    observed_attempts.fetch_add(1, Ordering::SeqCst);
-                    async { Err(ToriiError::Decode("invalid MCP tool catalog".to_owned())) }
-                },
-                Duration::from_secs(1),
-                Duration::ZERO,
-                Duration::ZERO,
-            ))
-            .expect_err("protocol failure must be returned immediately");
-
-        assert!(matches!(error, ToriiError::Decode(_)));
-        assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn local_mcp_startup_retry_is_bounded() {
-        let runtime = tokio::runtime::Runtime::new().expect("runtime");
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let observed_attempts = Arc::clone(&attempts);
-        let error = runtime
-            .block_on(retry_local_mcp_rate_limit(
-                move || {
-                    observed_attempts.fetch_add(1, Ordering::SeqCst);
-                    async { Err(local_mcp_rate_limit_error(Some(Duration::from_secs(1)))) }
-                },
-                Duration::from_millis(10),
-                Duration::from_millis(1),
-                Duration::from_millis(2),
-            ))
-            .expect_err("persistent throttling must reach the readiness deadline");
-
-        assert!(matches!(
-            error,
-            ToriiError::Timeout { context } if context.contains("local MCP readiness")
-        ));
-        assert_eq!(
-            attempts.load(Ordering::SeqCst),
-            1,
-            "a Retry-After beyond the remaining deadline cannot trigger another probe"
-        );
-    }
-
-    #[test]
-    fn local_mcp_startup_retry_honors_server_retry_after() {
-        let retry_after = Duration::from_secs(7);
-        assert_eq!(
-            local_mcp_retry_delay(
-                &local_mcp_rate_limit_error(Some(retry_after)),
-                Duration::from_millis(250),
-            ),
-            Some(retry_after)
-        );
-        assert_eq!(
-            local_mcp_retry_delay(
-                &local_mcp_rate_limit_error(None),
-                Duration::from_millis(250),
-            ),
-            Some(Duration::from_millis(250))
-        );
-    }
-
     #[test]
     fn compose_launch_recipe_includes_current_flags() {
         let recipe = compose_launch_recipe(
@@ -13702,78 +12843,6 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_inputs_from_session_keeps_local_mcp_fields() {
-        let session = SupervisorSessionInfo {
-            profile_slug: "single-peer".to_owned(),
-            chain_id: "mochi-local".to_owned(),
-            sandbox_root: PathBuf::from("/tmp/workspace/.mochi/sandbox/single-peer"),
-            workspace_root: Some(PathBuf::from("/tmp/workspace")),
-            peer_alias: "peer-1".to_owned(),
-            api_base: "http://127.0.0.1:8080".to_owned(),
-            torii_url: "http://127.0.0.1:8080".to_owned(),
-            mcp_url: "http://127.0.0.1:8080/v1/mcp".to_owned(),
-            account_id: Some("alice@wonderland".to_owned()),
-            private_key: Some("deadbeef".to_owned()),
-        };
-
-        let inputs = bootstrap_inputs_from_session(&session);
-
-        assert_eq!(inputs.api_base, session.api_base);
-        assert_eq!(inputs.torii_url, session.torii_url);
-        assert_eq!(inputs.mcp_url.as_deref(), Some(session.mcp_url.as_str()));
-        assert_eq!(inputs.chain_id, session.chain_id);
-        assert_eq!(inputs.account_id.as_deref(), session.account_id.as_deref());
-        assert_eq!(
-            inputs.private_key.as_deref(),
-            session.private_key.as_deref()
-        );
-    }
-
-    #[test]
-    fn write_bootstrap_files_for_session_writes_env_bundle() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let session = SupervisorSessionInfo {
-            profile_slug: "single-peer".to_owned(),
-            chain_id: "mochi-local".to_owned(),
-            sandbox_root: temp
-                .path()
-                .join(".mochi")
-                .join("sandbox")
-                .join("single-peer"),
-            workspace_root: Some(temp.path().to_path_buf()),
-            peer_alias: "peer-1".to_owned(),
-            api_base: "http://127.0.0.1:8080".to_owned(),
-            torii_url: "http://127.0.0.1:8080".to_owned(),
-            mcp_url: "http://127.0.0.1:8080/v1/mcp".to_owned(),
-            account_id: Some("alice@wonderland".to_owned()),
-            private_key: Some("deadbeef".to_owned()),
-        };
-
-        let written = write_bootstrap_files_for_session(temp.path(), &session)
-            .expect("bootstrap files should write");
-        assert_eq!(written.len(), 4);
-
-        let env_local = std::fs::read_to_string(temp.path().join(".env.local"))
-            .expect("env local should exist");
-        assert!(env_local.contains("IROHA_MCP_URL=http://127.0.0.1:8080/v1/mcp"));
-        assert!(
-            temp.path()
-                .join(".mochi/generated/typescript/connect.ts")
-                .exists()
-        );
-        assert!(
-            temp.path()
-                .join(".mochi/generated/rust/connect.rs")
-                .exists()
-        );
-        assert!(
-            temp.path()
-                .join(".mochi/generated/kotlin/MochiConnect.kt")
-                .exists()
-        );
-    }
-
-    #[test]
     fn render_view_tabs_keeps_active_view() {
         let mut app = MochiApp::default();
         app.active_view = ActiveView::Activity;
@@ -13794,7 +12863,7 @@ mod tests {
         }
         let _lock = env_lock().lock().expect("env lock");
         let temp = tempfile::tempdir().expect("temp dir");
-        let kagami_stub = install_kagami_stub(temp.path());
+        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
         let irohad_stub = install_noop_stub(temp.path(), "irohad_ui_stub.sh");
         let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
         let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
@@ -13988,275 +13057,7 @@ mod tests {
         assert_eq!(toml_u32(&TomlValue::String("12".to_owned())), Some(12));
     }
 
-    #[test]
-    fn lane_slug_matches_supervisor_logic() {
-        assert_eq!(lane_slug("Core Lane", 0), "core_lane");
-        assert_eq!(lane_slug("Gov+Ops", 1), "gov_ops");
-        assert_eq!(lane_slug("---", 3), "lane3");
-    }
-
-    #[test]
-    fn lane_catalog_snapshot_resolves_aliases_and_dataspaces() {
-        let mut nexus = TomlTable::new();
-        nexus.insert("enabled".into(), TomlValue::Boolean(true));
-        nexus.insert("lane_count".into(), TomlValue::Integer(2));
-
-        let mut lane0 = TomlTable::new();
-        lane0.insert("index".into(), TomlValue::Integer(0));
-        lane0.insert("alias".into(), TomlValue::String("core".into()));
-        lane0.insert("dataspace".into(), TomlValue::String("universal".into()));
-        let mut lane1 = TomlTable::new();
-        lane1.insert("index".into(), TomlValue::Integer(1));
-        lane1.insert("alias".into(), TomlValue::String("ops".into()));
-        lane1.insert("dataspace_id".into(), TomlValue::Integer(3));
-        nexus.insert(
-            "lane_catalog".into(),
-            TomlValue::Array(vec![TomlValue::Table(lane0), TomlValue::Table(lane1)]),
-        );
-
-        let mut global = TomlTable::new();
-        global.insert("alias".into(), TomlValue::String("universal".into()));
-        global.insert("id".into(), TomlValue::Integer(0));
-        let mut private = TomlTable::new();
-        private.insert("alias".into(), TomlValue::String("private".into()));
-        private.insert("id".into(), TomlValue::Integer(3));
-        nexus.insert(
-            "dataspace_catalog".into(),
-            TomlValue::Array(vec![TomlValue::Table(global), TomlValue::Table(private)]),
-        );
-
-        let snapshot = lane_catalog_snapshot(Some(&nexus));
-        assert_eq!(snapshot.lane_alias(0), "core");
-        assert_eq!(snapshot.lane_alias(1), "ops");
-        assert_eq!(
-            snapshot.dataspace_label(snapshot.lane_dataspace_id(1)),
-            "private"
-        );
-    }
-
-    #[test]
-    fn lane_reset_candidates_skip_disabled_nexus() {
-        let mut nexus = TomlTable::new();
-        nexus.insert("enabled".into(), TomlValue::Boolean(false));
-        nexus.insert("lane_count".into(), TomlValue::Integer(2));
-        let candidates = MochiApp::lane_reset_candidates(Some(&nexus));
-        assert!(
-            candidates.is_empty(),
-            "disabled nexus should yield no candidates"
-        );
-    }
-
-    #[test]
-    fn lane_metadata_for_id_reads_lane_fields() {
-        let mut nexus = TomlTable::new();
-        nexus.insert("enabled".into(), TomlValue::Boolean(true));
-
-        let mut lane = TomlTable::new();
-        lane.insert("index".into(), TomlValue::Integer(2));
-        lane.insert("alias".into(), TomlValue::String("alpha".into()));
-        lane.insert("dataspace".into(), TomlValue::String("universal".into()));
-        lane.insert("visibility".into(), TomlValue::String("restricted".into()));
-        lane.insert(
-            "storage".into(),
-            TomlValue::String("commitment_only".into()),
-        );
-        lane.insert(
-            "proof_scheme".into(),
-            TomlValue::String("merkle_sha256".into()),
-        );
-        lane.insert("governance".into(), TomlValue::String("parliament".into()));
-        let mut metadata = TomlTable::new();
-        metadata.insert("tier".into(), TomlValue::String("gold".into()));
-        lane.insert("metadata".into(), TomlValue::Table(metadata));
-        nexus.insert(
-            "lane_catalog".into(),
-            TomlValue::Array(vec![TomlValue::Table(lane)]),
-        );
-        let mut dataspace = TomlTable::new();
-        dataspace.insert("alias".into(), TomlValue::String("universal".into()));
-        dataspace.insert("id".into(), TomlValue::Integer(0));
-        nexus.insert(
-            "dataspace_catalog".into(),
-            TomlValue::Array(vec![TomlValue::Table(dataspace)]),
-        );
-
-        let metadata = MochiApp::lane_metadata_for_id(Some(&nexus), 2);
-        assert_eq!(metadata.id, LaneId::new(2));
-        assert_eq!(metadata.alias, "alpha");
-        assert_eq!(metadata.dataspace_id, DataSpaceId::new(0));
-        assert_eq!(metadata.visibility, LaneVisibility::Restricted);
-        assert_eq!(metadata.storage, LaneStorageProfile::CommitmentOnly);
-        assert_eq!(metadata.proof_scheme, DaProofScheme::MerkleSha256);
-        assert_eq!(metadata.governance.as_deref(), Some("parliament"));
-        assert_eq!(
-            metadata.metadata.get("tier").map(String::as_str),
-            Some("gold")
-        );
-    }
-
-    #[test]
-    fn lane_path_previews_include_slugged_paths() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping lane preview test due to socket restrictions");
-            return;
-        }
-        let _lock = env_lock().lock().expect("env lock");
-        let temp = tempfile::tempdir().expect("temp dir");
-        let kagami_stub = install_kagami_stub(temp.path());
-        let irohad_stub = install_noop_stub(temp.path(), "irohad_preview_stub.sh");
-        let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
-        let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-        let data_root = temp.path().join("lane-preview-data");
-        let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-        reset_cli_overrides_for_tests();
-
-        let app = MochiApp::default();
-        let mut lane = TomlTable::new();
-        lane.insert("index".into(), TomlValue::Integer(0));
-        lane.insert("alias".into(), TomlValue::String("Core Lane".into()));
-        let lane_catalog = vec![TomlValue::Table(lane)];
-        let previews = app
-            .lane_path_previews(Some(1), Some(&lane_catalog))
-            .expect("previews");
-        assert_eq!(previews.len(), 1);
-        let preview = &previews[0];
-        let blocks = preview.blocks_dir.to_string_lossy();
-        let merge = preview.merge_log.to_string_lossy();
-        assert!(blocks.contains("storage/kura/blocks"));
-        assert!(merge.contains("storage/kura/merge_ledger"));
-        assert!(blocks.contains("lane_000_core_lane"));
-        assert!(merge.contains("lane_000_core_lane_merge.log"));
-    }
-
-    #[test]
-    fn reset_lane_lifecycle_plan_builds_consensus_replacement() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping lane reset plan test due to socket restrictions");
-            return;
-        }
-        let _lock = env_lock().lock().expect("env lock");
-        let temp = tempfile::tempdir().expect("temp dir");
-        let kagami_stub = install_kagami_stub(temp.path());
-        let irohad_stub = install_noop_stub(temp.path(), "irohad_lane_reset_inner_stub.sh");
-        let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
-        let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-        let data_root = temp.path().join("lane-reset-inner-data");
-        let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-        reset_cli_overrides_for_tests();
-
-        let app = MochiApp::default();
-        let supervisor = app.supervisor.as_ref().expect("supervisor ready");
-        let plan = MochiApp::lane_reset_lifecycle_plan(supervisor, 0);
-        assert_eq!(plan.additions.len(), 1);
-        assert_eq!(plan.additions[0].id, LaneId::new(0));
-        assert_eq!(plan.retire, vec![LaneId::new(0)]);
-    }
-
-    #[test]
-    fn parse_min_initial_amounts_parses_lines() {
-        let rose = sample_rose_definition_id();
-        let cabbage = sample_cabbage_definition_id();
-        let raw = format!("{rose} = 5\n{cabbage} = 1");
-        let parsed = MochiApp::parse_min_initial_amounts(&raw).expect("amounts parse");
-        assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed.get(&rose), Some(&"5".parse::<Quantity>().unwrap()));
-        assert_eq!(
-            parsed.get(&cabbage),
-            Some(&"1".parse::<Quantity>().unwrap())
-        );
-    }
-
-    #[test]
-    fn parse_min_initial_amounts_rejects_negative_values() {
-        let rose = sample_rose_definition_id();
-        let error = MochiApp::parse_min_initial_amounts(&format!("{rose} = -1"))
-            .expect_err("negative admission minimum must be rejected");
-        assert!(error.contains("Invalid amount"));
-    }
-
-    #[test]
-    fn parse_multisig_policy_parses_json() {
-        let account = account_literal(&ALICE_ID);
-        let json = format!(
-            r#"{{
-  "signatories": {{
-    "{account}": 1
-  }},
-  "quorum": 1,
-  "transaction_ttl_ms": 3600000
-}}"#
-        );
-        let spec = MochiApp::parse_multisig_policy(&json).expect("policy should parse");
-        assert!(spec.signatories.contains_key(&*ALICE_ID));
-        assert_eq!(spec.quorum.get(), 1);
-        assert_eq!(spec.transaction_ttl_ms.get(), 3_600_000);
-    }
-
-    #[test]
-    fn admission_mode_label_matches_variants() {
-        assert_eq!(
-            MochiApp::admission_mode_label(AccountAdmissionMode::ImplicitReceive),
-            "Implicit receive"
-        );
-        assert_eq!(
-            MochiApp::admission_mode_label(AccountAdmissionMode::ExplicitOnly),
-            "Explicit only"
-        );
-    }
-
-    #[test]
-    fn parse_account_admission_policy_builds_policy() {
-        let mut app = MochiApp::default();
-        app.composer_admission_domain = "wonderland.universal".to_owned();
-        app.composer_admission_mode = AccountAdmissionMode::ImplicitReceive;
-        app.composer_admission_max_per_tx = "2".to_owned();
-        app.composer_admission_max_per_block = "5".to_owned();
-        app.composer_admission_fee_enabled = true;
-        app.composer_admission_fee_asset = sample_rose_definition_literal();
-        app.composer_admission_fee_amount = "1".to_owned();
-        app.composer_admission_fee_destination_burn = false;
-        app.composer_admission_fee_destination_account = account_literal(&ALICE_ID);
-        app.composer_admission_min_initial_amounts = format!("{} = 5", sample_rose_definition_id());
-        app.composer_admission_default_role = "basic_user".to_owned();
-
-        let (domain, policy) = app
-            .parse_account_admission_policy()
-            .expect("policy should parse");
-        assert_eq!(domain, "wonderland.universal");
-        assert_eq!(policy.mode, AccountAdmissionMode::ImplicitReceive);
-        assert_eq!(policy.max_implicit_creations_per_tx, Some(2));
-        assert_eq!(policy.max_implicit_creations_per_block, Some(5));
-        let fee = policy.implicit_creation_fee.expect("fee configured");
-        let asset = sample_rose_definition_id();
-        assert_eq!(fee.asset_definition_id, asset);
-        assert_eq!(fee.amount, "1".parse::<Quantity>().unwrap());
-        let treasury = ALICE_ID.clone();
-        match fee.destination {
-            ImplicitAccountFeeDestination::Account(account) => assert_eq!(account, treasury),
-            other => panic!("unexpected fee destination: {other:?}"),
-        }
-        let min_amounts = policy.min_initial_amounts;
-        assert_eq!(min_amounts.len(), 1);
-        let min_asset = sample_rose_definition_id();
-        assert_eq!(
-            min_amounts.get(&min_asset),
-            Some(&"5".parse::<Quantity>().unwrap())
-        );
-        let expected_role: RoleId = "basic_user".parse().unwrap();
-        assert_eq!(policy.default_role_on_create, Some(expected_role));
-    }
-
-    #[test]
-    fn reject_code_hint_covers_queue_and_axt() {
-        assert_eq!(
-            super::reject_code_hint("PRTRY:QUEUE_FULL"),
-            Some("transaction queue full")
-        );
-        assert_eq!(
-            super::reject_code_hint("PRTRY:AXT_HANDLE_ERA"),
-            Some("AXT policy rejected")
-        );
-    }
+    include!("gui/tests/lane_and_admission.rs");
 
     #[test]
     fn maintenance_export_snapshot_creates_snapshot_directory() {
@@ -14267,7 +13068,7 @@ mod tests {
         let _lock = env_lock().lock().expect("env lock");
         let temp = tempfile::tempdir().expect("temp dir");
 
-        let kagami_stub = install_kagami_stub(temp.path());
+        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
         let irohad_stub = install_noop_stub(temp.path(), "irohad_snapshot_stub.sh");
         let log_path = temp.path().join("kagami_snapshot.log");
 
@@ -14359,7 +13160,7 @@ mod tests {
         let _lock = env_lock().lock().expect("env lock");
         let temp = tempfile::tempdir().expect("temp dir");
 
-        let kagami_stub = install_kagami_stub(temp.path());
+        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
         let irohad_stub = install_noop_stub(temp.path(), "irohad_reset_stub.sh");
         let log_path = temp.path().join("kagami_reset.log");
 
@@ -14376,8 +13177,7 @@ mod tests {
         {
             let supervisor = supervisor_slot.as_ref().expect("supervisor ready");
             for peer in supervisor.peers() {
-                let storage_dir = supervisor.paths().peer_dir(peer.alias()).join("storage");
-                fs::create_dir_all(&storage_dir).expect("ensure storage directory exists");
+                let storage_dir = peer.storage_dir();
                 fs::write(storage_dir.join("junk.bin"), b"junk").expect("write junk file");
             }
         }
@@ -14421,13 +13221,13 @@ mod tests {
         }
 
         for peer in supervisor.peers() {
-            let storage_dir = supervisor.paths().peer_dir(peer.alias()).join("storage");
+            let storage_dir = peer.storage_dir();
             assert!(
                 !storage_dir.join("junk.bin").exists(),
                 "storage should remove junk for {}",
                 peer.alias()
             );
-            let snapshot_dir = storage_dir.join("snapshot");
+            let snapshot_dir = peer.snapshot_dir();
             assert!(
                 snapshot_dir.exists(),
                 "snapshot directory should exist for {}",
@@ -14464,7 +13264,7 @@ mod tests {
         let _lock = env_lock().lock().expect("env lock");
         let temp = tempfile::tempdir().expect("temp dir");
 
-        let kagami_stub = install_kagami_stub(temp.path());
+        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
         let irohad_stub = install_noop_stub(temp.path(), "irohad_restore_stub.sh");
         let log_path = temp.path().join("kagami_restore.log");
 
@@ -14480,8 +13280,7 @@ mod tests {
         let supervisor = supervisor_slot.as_mut().expect("supervisor ready");
 
         let peer = supervisor.peers().first().expect("at least one peer");
-        let storage_dir = supervisor.paths().peer_dir(peer.alias()).join("storage");
-        fs::create_dir_all(&storage_dir).expect("create storage dir");
+        let storage_dir = peer.storage_dir();
         let marker_path = storage_dir.join("marker.txt");
         fs::write(&marker_path, b"snapshot-data").expect("write snapshot data");
 
@@ -15145,14 +13944,7 @@ mod tests {
         assert_eq!(text, "[alpha] started\n[alpha] running");
     }
 
-    #[test]
-    fn collect_log_text_rejects_empty() {
-        let entries: Vec<(usize, String)> = Vec::new();
-        assert!(
-            super::collect_log_text(&entries).is_err(),
-            "export should fail when no logs are available"
-        );
-    }
+    include!("gui/collect_log_text_empty_test.rs");
 
     #[test]
     fn save_logs_to_file_writes_filtered_entries() {
@@ -15737,7 +14529,7 @@ mod tests {
         }
         let _lock = env_lock().lock().expect("env lock");
         let temp = tempfile::tempdir().expect("tempdir");
-        let kagami_stub = install_kagami_stub(temp.path());
+        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
         let irohad_stub = install_noop_stub(temp.path(), "irohad_stub.sh");
         let config_dir = temp.path().join("config");
         fs::create_dir_all(&config_dir).expect("config dir");
@@ -15790,7 +14582,7 @@ mod tests {
         }
         let _lock = env_lock().lock().expect("env lock");
         let temp = tempfile::tempdir().expect("tempdir");
-        let kagami_stub = install_kagami_stub(temp.path());
+        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
         let irohad_stub = install_noop_stub(temp.path(), "irohad_stub.sh");
         let config_dir = temp.path().join("config");
         fs::create_dir_all(&config_dir).expect("config dir");
@@ -15843,7 +14635,7 @@ mod tests {
         }
         let _lock = env_lock().lock().expect("env lock");
         let temp = tempfile::tempdir().expect("tempdir");
-        let kagami_stub = install_kagami_stub(temp.path());
+        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
         let irohad_stub = install_noop_stub(temp.path(), "irohad_stub.sh");
         let config_dir = temp.path().join("config");
         fs::create_dir_all(&config_dir).expect("config dir");
@@ -16220,394 +15012,5 @@ mod tests {
         );
     }
 
-    use std::{
-        env, fs,
-        path::PathBuf,
-        sync::{Mutex, OnceLock},
-    };
-
-    use super::*;
-
-    #[test]
-    fn applying_settings_persists_config_and_rebuilds_supervisor() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping settings persistence test due to socket restrictions");
-            return;
-        }
-        let _lock = env_lock().lock().expect("env lock");
-        let temp = tempfile::tempdir().expect("tempdir");
-        let config_dir = temp.path().join("config");
-        fs::create_dir_all(&config_dir).expect("config dir");
-        let config_path = config_dir.join("local.toml");
-        fs::write(&config_path, "[supervisor]\n").expect("write starter config");
-
-        let kagami_stub = install_kagami_stub(temp.path());
-        let irohad_stub = install_noop_stub(temp.path(), "irohad_stub.sh");
-        let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
-        let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-        let _config_guard = TestEnvGuard::set("MOCHI_CONFIG", &config_path);
-
-        let initial_root = temp
-            .path()
-            .join(format!("mochi-data-{}", std::process::id()));
-        let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &initial_root);
-
-        reset_cli_overrides_for_tests();
-
-        let mut app = MochiApp::default();
-        let resolved_path = app
-            .bundle_config
-            .as_ref()
-            .map(|cfg| cfg.path.clone())
-            .unwrap_or_else(|| config_path.clone());
-
-        let new_root = temp.path().join("custom-root");
-        app.settings_data_root_input = new_root.display().to_string();
-        app.settings_torii_port_input = "15000".to_owned();
-        app.settings_p2p_port_input = "16000".to_owned();
-        app.settings_chain_id_input = "custom-chain".to_owned();
-        app.settings_profile_input =
-            "{ peer_count = 3, consensus_mode = \"permissioned\" }".to_owned();
-        app.settings_nexus_enabled = true;
-        app.settings_nexus_lane_count_input = "2".to_owned();
-        app.settings_nexus_lane_catalog_input =
-            "[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"universal\"".to_owned();
-        app.settings_nexus_dataspace_catalog_input =
-            "[[dataspace_catalog]]\nalias = \"universal\"\nid = 0".to_owned();
-        let replay_dir = temp.path().join("da-replay");
-        let manifest_dir = temp.path().join("da-manifests");
-        let replay_dir_text = replay_dir.display().to_string();
-        let manifest_dir_text = manifest_dir.display().to_string();
-        app.settings_torii_da_replay_dir_input = replay_dir.display().to_string();
-        app.settings_torii_da_manifest_dir_input = manifest_dir.display().to_string();
-        let export_dir = temp.path().join("log-export");
-        app.settings_log_export_dir_input = export_dir.display().to_string();
-        let state_export_dir = temp.path().join("state-export");
-        app.settings_state_export_dir_input = state_export_dir.display().to_string();
-
-        app.apply_settings_changes_with_restart(false)
-            .expect("settings persistence should succeed");
-
-        let bundle = app
-            .bundle_config
-            .as_ref()
-            .expect("bundle config should be tracked after apply");
-        if bundle.path != resolved_path {
-            let expected_suffix = Path::new("config").join("local.toml");
-            assert!(
-                bundle.path.ends_with(&expected_suffix),
-                "bundle config path should match override or default; got {}, expected {}",
-                bundle.path.display(),
-                resolved_path.display()
-            );
-        }
-        assert_eq!(
-            bundle.config.workspace_root.as_deref(),
-            Some(new_root.as_path())
-        );
-        assert!(bundle.config.data_root.is_none());
-        assert_eq!(bundle.config.torii_start, Some(15000));
-        assert_eq!(bundle.config.p2p_start, Some(16000));
-        assert_eq!(bundle.config.chain_id.as_deref(), Some("custom-chain"));
-        let profile = bundle.config.profile.as_ref().expect("profile config");
-        assert_eq!(profile.preset, None);
-        assert_eq!(profile.topology.peer_count, 3);
-        assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
-        let nexus = bundle.config.nexus.as_ref().expect("nexus config");
-        assert_eq!(
-            nexus.get("enabled").and_then(TomlValue::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            nexus.get("lane_count").and_then(TomlValue::as_integer),
-            Some(2)
-        );
-        let lane_catalog = nexus
-            .get("lane_catalog")
-            .and_then(TomlValue::as_array)
-            .expect("lane catalog array");
-        assert_eq!(lane_catalog.len(), 1);
-        let lane0 = lane_catalog[0].as_table().expect("lane table");
-        assert_eq!(lane0.get("alias").and_then(TomlValue::as_str), Some("core"));
-        let dataspace_catalog = nexus
-            .get("dataspace_catalog")
-            .and_then(TomlValue::as_array)
-            .expect("dataspace catalog array");
-        assert_eq!(dataspace_catalog.len(), 1);
-        let dataspace = dataspace_catalog[0].as_table().expect("dataspace table");
-        assert_eq!(
-            dataspace.get("alias").and_then(TomlValue::as_str),
-            Some("universal")
-        );
-        assert!(bundle.config.sumeragi.is_none());
-        let torii = bundle.config.torii.as_ref().expect("torii config");
-        let da_ingest = torii
-            .get("da_ingest")
-            .and_then(TomlValue::as_table)
-            .expect("da_ingest table");
-        assert_eq!(
-            da_ingest
-                .get("replay_cache_store_dir")
-                .and_then(TomlValue::as_str),
-            Some(replay_dir_text.as_str())
-        );
-        assert_eq!(
-            da_ingest
-                .get("manifest_store_dir")
-                .and_then(TomlValue::as_str),
-            Some(manifest_dir_text.as_str())
-        );
-        assert_eq!(app.log_export_dir.as_deref(), Some(export_dir.as_path()));
-        assert_eq!(
-            app.state_export_dir.as_deref(),
-            Some(state_export_dir.as_path())
-        );
-
-        let round_trip = super::config::load_bundle_config()
-            .expect("reload persisted config")
-            .expect("config should exist on disk");
-        assert_eq!(round_trip.path, bundle.path);
-        assert_eq!(
-            round_trip.config.workspace_root.as_deref(),
-            Some(new_root.as_path())
-        );
-        assert!(round_trip.config.data_root.is_none());
-        assert_eq!(round_trip.config.torii_start, Some(15000));
-        assert_eq!(round_trip.config.p2p_start, Some(16000));
-        assert_eq!(round_trip.config.chain_id.as_deref(), Some("custom-chain"));
-        let round_trip_profile = round_trip.config.profile.expect("profile config");
-        assert_eq!(round_trip_profile.preset, None);
-        assert_eq!(round_trip_profile.topology.peer_count, 3);
-        assert_eq!(
-            round_trip_profile.consensus_mode,
-            SumeragiConsensusMode::Permissioned
-        );
-        let round_trip_nexus = round_trip.config.nexus.expect("nexus config");
-        assert_eq!(
-            round_trip_nexus.get("enabled").and_then(TomlValue::as_bool),
-            Some(true)
-        );
-        assert!(round_trip.config.sumeragi.is_none());
-        let round_trip_torii = round_trip.config.torii.expect("torii config");
-        let round_trip_da = round_trip_torii
-            .get("da_ingest")
-            .and_then(TomlValue::as_table)
-            .expect("da_ingest table");
-        assert_eq!(
-            round_trip_da
-                .get("replay_cache_store_dir")
-                .and_then(TomlValue::as_str),
-            Some(replay_dir_text.as_str())
-        );
-        assert_eq!(
-            round_trip_da
-                .get("manifest_store_dir")
-                .and_then(TomlValue::as_str),
-            Some(manifest_dir_text.as_str())
-        );
-        let _ = fs::remove_file(&bundle.path);
-        assert!(
-            !app.settings_dialog,
-            "settings dialog should close after a successful apply"
-        );
-
-        let supervisor = app
-            .supervisor
-            .as_ref()
-            .expect("rebuild should leave a supervisor instance");
-        assert_eq!(
-            MochiApp::supervisor_base_data_root(supervisor),
-            sandbox_root_for_workspace(&new_root),
-            "rebuilt supervisor should derive sandbox state under the workspace"
-        );
-        assert_eq!(supervisor.chain_id(), "custom-chain");
-        assert_eq!(
-            app.settings_data_root_input,
-            new_root.display().to_string(),
-            "settings inputs should reflect rebuilt supervisor state"
-        );
-        assert_eq!(
-            app.settings_log_export_dir_input,
-            export_dir.display().to_string(),
-            "log export directory input should reflect applied setting"
-        );
-        assert_eq!(
-            app.settings_state_export_dir_input,
-            state_export_dir.display().to_string(),
-            "state export directory input should reflect applied setting"
-        );
-        assert_eq!(
-            app.settings_chain_id_input, "custom-chain",
-            "chain id input should reflect applied value"
-        );
-    }
-
-    #[test]
-    fn default_app_uses_single_peer_profile() {
-        if !super::socket_bind_available() {
-            eprintln!("Skipping default app supervisor test due to socket restrictions");
-            return;
-        }
-        let _lock = env_lock().lock().expect("env lock");
-        let temp = tempfile::tempdir().expect("tempdir");
-        let kagami_stub = install_kagami_stub(temp.path());
-        let irohad_stub = install_noop_stub(temp.path(), "irohad_stub.sh");
-        let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
-        let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
-        let data_root = temp
-            .path()
-            .join(format!("mochi-data-{}", std::process::id()));
-        let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-        reset_cli_overrides_for_tests();
-        let app = MochiApp::default();
-        if let Some(err) = app.supervisor_error.as_ref() {
-            panic!("default supervisor preparation should succeed: {err}");
-        }
-        let supervisor = app
-            .supervisor
-            .as_ref()
-            .expect("default supervisor preparation should succeed");
-
-        assert_eq!(
-            supervisor.profile().topology.peer_count,
-            1,
-            "default topology must match single peer preset"
-        );
-        assert_eq!(supervisor.chain_id(), "mochi-local");
-        assert!(app.last_error.is_none());
-        assert!(!app.theme_applied);
-        assert!(matches!(app.active_view, ActiveView::Dashboard));
-        assert!(matches!(app.activity_view, ActivityView::Logs));
-        assert!(app.auto_block_stream);
-        assert!(app.auto_event_stream);
-        assert!(app.auto_log_stream);
-        assert!(app.block_stream.is_none());
-        assert!(app.block_receiver.is_none());
-        assert!(app.block_events.is_empty());
-        assert!(app.block_stream_peer.is_none());
-        assert!(app.block_snapshots.is_empty());
-        assert!(app.event_stream.is_none());
-        assert!(app.event_receiver.is_none());
-        assert!(app.event_events.is_empty());
-        assert!(app.event_stream_peer.is_none());
-        assert!(app.event_selected_peer.is_none());
-        assert!(app.event_snapshots.is_empty());
-        assert!(app.log_receiver.is_none());
-        assert!(app.log_events.is_empty());
-        assert!(app.log_stream_peer.is_none());
-        assert!(app.log_snapshots.is_empty());
-        assert!(app.log_filter.is_empty());
-        assert!(app.status_snapshots.is_empty());
-        assert!(app.status_streams.is_empty());
-        assert!(
-            matches!(app.maintenance_state, MaintenanceState::Idle),
-            "maintenance state should start idle"
-        );
-        assert!(!app.settings_dialog);
-        assert!(app.settings_log_stdout);
-        assert!(app.settings_log_stderr);
-        assert!(app.settings_log_system);
-        assert!(app.log_export_dir.is_none());
-        assert!(app.settings_log_export_dir_input.is_empty());
-        assert!(app.state_export_dir.is_none());
-        assert!(app.settings_state_export_dir_input.is_empty());
-        assert_eq!(PathBuf::from(&app.settings_data_root_input), data_root);
-        assert_eq!(app.settings_torii_port_input, "8080");
-        assert_eq!(app.settings_p2p_port_input, "1337");
-    }
-
-    struct TestEnvGuard {
-        key: &'static str,
-        prev: Option<String>,
-    }
-
-    impl TestEnvGuard {
-        fn set(key: &'static str, value: &Path) -> Self {
-            let prev = env::var(key).ok();
-            // SAFETY: Tests run single-threaded under an env lock, so mutating env vars is safe.
-            unsafe { env::set_var(key, value) };
-            Self { key, prev }
-        }
-    }
-
-    impl Drop for TestEnvGuard {
-        fn drop(&mut self) {
-            if let Some(prev) = self.prev.as_ref() {
-                unsafe { env::set_var(self.key, prev) };
-            } else {
-                unsafe { env::remove_var(self.key) };
-            }
-        }
-    }
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    fn genesis_invocation_count(path: &Path) -> usize {
-        if !path.exists() {
-            return 0;
-        }
-        let contents =
-            fs::read_to_string(path).unwrap_or_else(|err| panic!("read kagami log: {err}"));
-        contents.lines().filter(|line| *line == "genesis").count()
-    }
-
-    fn install_kagami_stub(root: &Path) -> PathBuf {
-        install_stub_script(
-            root,
-            "kagami_stub.sh",
-            r#"#!/bin/sh
-set -e
-if [ "$1" = "--version" ]; then
-  echo "kagami-stub iroha3"
-  exit 0
-fi
-if [ "$1" = "verify" ]; then
-  exit 0
-fi
-if [ "$1" = "genesis" ] && [ "$2" = "generate" ]; then
-  LOG_FILE="${MOCHI_TEST_KAGAMI_LOG:-}"
-  if [ -n "$LOG_FILE" ]; then
-    printf '%s\n' "$@" >> "$LOG_FILE"
-  fi
-  cat <<'JSON'
-{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","consensus_mode":"Permissioned","transactions":[{"instructions":[]}]}
-JSON
-else
-  printf 'unexpected invocation: %s\n' "$0 $*" >&2
-  exit 1
-fi
-"#,
-        )
-    }
-
-    fn install_noop_stub(root: &Path, name: &str) -> PathBuf {
-        install_stub_script(
-            root,
-            name,
-            r#"#!/bin/sh
-exit 0
-"#,
-        )
-    }
-
-    fn install_stub_script(root: &Path, name: &str, contents: &str) -> PathBuf {
-        let path = root.join(name);
-        fs::write(&path, contents).expect("write stub");
-        make_executable(&path);
-        path
-    }
-
-    #[cfg(unix)]
-    fn make_executable(path: &Path) {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(path).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).expect("set perms");
-    }
-
-    #[cfg(not(unix))]
-    fn make_executable(_path: &Path) {}
+    include!("gui/settings_tail_tests.rs");
 }

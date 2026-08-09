@@ -144,8 +144,6 @@ pub const ERR_VK_INACTIVE: u64 = 13;
 pub const ERR_NAMESPACE: u64 = 14;
 pub const ERR_DOMAIN_TAG: u64 = 15;
 
-pub const LABEL_TRANSFER: &str = "zk_verify_transfer/v2";
-pub const LABEL_UNSHIELD: &str = "zk_verify_unshield/v2";
 pub const LABEL_VOTE_BALLOT: &str = "zk_verify_ballot/v2";
 pub const LABEL_VOTE_TALLY: &str = "zk_verify_tally/v2";
 pub const LABEL_BATCH: &str = "zk_verify_batch/v2";
@@ -1115,8 +1113,6 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
     if matches!(
         number,
         syscalls::SYSCALL_VERIFY_PROOF
-            | syscalls::SYSCALL_ZK_VERIFY_TRANSFER
-            | syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY
             | syscalls::SYSCALL_ZK_VERIFY_BATCH
@@ -1135,11 +1131,8 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
     if matches!(
         number,
         syscalls::SYSCALL_SCHEMA_ENCODE
-            | syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT
             | syscalls::SYSCALL_SCHEMA_DECODE
-            | syscalls::SYSCALL_SCHEMA_DECODE_DIRECT
             | syscalls::SYSCALL_SCHEMA_INFO
-            | syscalls::SYSCALL_SCHEMA_INFO_DIRECT
     ) {
         return Some(HostSyscallGasFormula::SchemaByteLinear);
     }
@@ -1227,13 +1220,6 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_AXT_COMMIT
             | syscalls::SYSCALL_VERIFY_DS_PROOF
             | syscalls::SYSCALL_USE_ASSET_HANDLE
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE
-            | syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE
             | syscalls::SYSCALL_ESCROW_OPEN_OFFER
             | syscalls::SYSCALL_ESCROW_ACCEPT
             | syscalls::SYSCALL_ESCROW_MARK_PAYMENT_SENT
@@ -1297,18 +1283,6 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_JSON_OBJECT
             | syscalls::SYSCALL_JSON_SET_I64
             | syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
-            | syscalls::SYSCALL_JSON_GET_JSON_DIRECT
-            | syscalls::SYSCALL_JSON_GET_NAME_DIRECT
-            | syscalls::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
-            | syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT
-            | syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT
-            | syscalls::SYSCALL_JSON_GET_INT_DIRECT
-            | syscalls::SYSCALL_JSON_GET_DECIMAL_DIRECT
-            | syscalls::SYSCALL_JSON_GET_QUANTITY_DIRECT
-            | syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
-            | syscalls::SYSCALL_JSON_SET_I64_DIRECT
-            | syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT
-            | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
             | syscalls::SYSCALL_NAME_DECODE
             | syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
             | syscalls::SYSCALL_STATE_PATH_FROM_NAME
@@ -1762,7 +1736,6 @@ pub(crate) const fn is_sm_syscall(number: u32) -> bool {
 /// `None` means the syscall's gas depends on host-owned state or on an output
 /// whose encoded size must be estimated by that host.
 pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u64>, VMError> {
-    let number = syscalls::canonical_helper_syscall(number);
     let blob_len = |register: usize| -> Result<usize, VMError> {
         quote_tlv_payload_len_at(
             vm,
@@ -3052,7 +3025,6 @@ impl IVMHost for DefaultHost {
         if metering.metering == SyscallMetering::Staged {
             return Ok(0);
         }
-        let number = crate::syscalls::canonical_helper_syscall(number);
         if is_sm_syscall(number) && !self.sm_enabled {
             // Disabled ShangMi helpers fail before doing metered work.
             return Ok(0);
@@ -3222,9 +3194,7 @@ impl IVMHost for DefaultHost {
                 )?;
                 Self::vrf_verify_gas(crate::vrf::MAX_VRF_VERIFY_BATCH_ITEMS_V1, payload_len)
             }
-            crate::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
-            | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
-            | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
+            crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
                 quote_zk_single_at(vm, vm.register(10), self.zk_gas_schedule)?.1
             }
@@ -3312,15 +3282,12 @@ impl IVMHost for DefaultHost {
     }
 
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
-        let requested_number = number;
-        require_host_syscall_metering_spec(vm.syscall_policy(), requested_number)?;
-        let number = crate::syscalls::canonical_helper_syscall(number);
+        require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
         if crate::syscalls::is_numeric_v1_syscall(number) {
             return crate::numeric_v1::execute(number, vm);
         }
         if crate::syscalls::is_json_getter_syscall(number) {
-            let cost =
-                crate::json::typed_getter(vm, requested_number, Self::resolve_code_tlv_addr)?;
+            let cost = crate::json::typed_getter(vm, number, Self::resolve_code_tlv_addr)?;
             return Ok(crate::json::typed_getter_gas(
                 cost.input_bytes,
                 cost.output_bytes,
@@ -4855,9 +4822,7 @@ impl IVMHost for DefaultHost {
                 Ok(Self::merkle_path_gas(depth))
             }
             // --- ZK verify/state-read helpers ---
-            crate::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
-            | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
-            | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
+            crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
@@ -4932,8 +4897,11 @@ impl IVMHost for DefaultHost {
                     Ok(Self::state_query_gas(input_len.saturating_add(body.len())))
                 } else {
                     // Vote tally read
-                    let _req: crate::zk_verify::VoteGetTallyRequest =
+                    let req: crate::zk_verify::VoteGetTallyRequest =
                         decode_canonical_norito(tlv.payload)?;
+                    if !req.is_valid_v1() {
+                        return Err(VMError::NoritoInvalid);
+                    }
                     let resp = crate::zk_verify::VoteGetTallyResponse {
                         finalized: false,
                         tally: Vec::new(),
@@ -6320,7 +6288,7 @@ mod tests {
             .expect("alloc malformed envelope");
         vm.set_register(10, ptr);
         assert_eq!(
-            host.syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm),
+            host.syscall(syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm),
             Ok(gas::zk_verify_gas(malformed.len()))
         );
         assert_eq!(vm.register(10), 0);
@@ -6333,7 +6301,7 @@ mod tests {
             .expect("allocate canonical envelope");
         vm.set_register(10, canonical_ptr);
         assert_eq!(
-            host.syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm),
+            host.syscall(syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm),
             Ok(host
                 .zk_gas_schedule()
                 .actual_single_gas(canonical.len(), 64))
@@ -6719,6 +6687,31 @@ mod tests {
             DefaultHost::state_query_gas(
                 tally_payload.len().saturating_add(tally_out.payload.len())
             )
+        );
+    }
+
+    #[test]
+    fn default_host_vote_tally_rejects_noncanonical_selector_without_response() {
+        crate::set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let mut host = DefaultHost::new();
+        let request = crate::zk_verify::VoteGetTallyRequest {
+            election_id: ".hidden".to_owned(),
+        };
+        let payload = norito::to_bytes(&request).expect("encode tally request");
+        let request_ptr = vm
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &payload))
+            .expect("allocate tally request");
+        vm.set_register(10, request_ptr);
+
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm),
+            Err(VMError::NoritoInvalid)
+        );
+        assert_eq!(
+            vm.register(10),
+            request_ptr,
+            "failed tally queries must not publish a response pointer"
         );
     }
 
@@ -7543,259 +7536,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn expect_tlv_enforces_pointer_policy() {
-        crate::set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
-        let program = ProgramMetadata::default_for(1, 0, 1).encode();
-        vm.load_program(&program).expect("load program");
-        // The first release only supports ABI v1; installing any other
-        // annotated ABI version must fail closed during pointer validation.
-        let _guard =
-            crate::pointer_abi::PointerPolicyGuard::install(crate::SyscallPolicy::AbiV1, 2);
-        let mut tlv = Vec::new();
-        tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
-        tlv.push(1);
-        tlv.extend_from_slice(&0u32.to_be_bytes());
-        let hash: [u8; 32] = iroha_crypto::Hash::new([]).into();
-        tlv.extend_from_slice(&hash);
-        let ptr = vm.alloc_input_tlv(&tlv).expect("allocate TLV");
-        vm.set_register(10, ptr);
-        let err = DefaultHost::expect_tlv(&vm, 10, PointerType::AccountId).unwrap_err();
-        assert!(matches!(
-            err,
-            VMError::AbiTypeNotAllowed { abi: 2, type_id } if type_id == PointerType::AccountId as u16
-        ));
-    }
-
-    #[test]
-    fn quantity_arguments_require_canonical_quantity_pointer() {
-        crate::set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
-        let canonical = "1.25".parse::<Quantity>().expect("canonical quantity");
-        let canonical_payload = QuantityValueV1::new(canonical.clone())
-            .encode_frame()
-            .expect("encode canonical quantity frame");
-        let canonical_ptr = vm
-            .alloc_input_tlv(&test_tlv(PointerType::Quantity, &canonical_payload))
-            .expect("allocate canonical quantity");
-        vm.set_register(13, canonical_ptr);
-        assert_eq!(
-            DefaultHost::expect_quantity(&vm, 13),
-            Ok(canonical_payload.len())
-        );
-
-        let account_ptr = vm
-            .alloc_input_tlv(&test_tlv(PointerType::AccountId, &[]))
-            .expect("allocate account fixture");
-        let definition_ptr = vm
-            .alloc_input_tlv(&test_tlv(PointerType::AssetDefinitionId, &[]))
-            .expect("allocate asset definition fixture");
-        let dataspace_ptr = vm
-            .alloc_input_tlv(&test_tlv(PointerType::DataSpaceId, &[]))
-            .expect("allocate dataspace fixture");
-        vm.set_register(10, account_ptr);
-        vm.set_register(11, account_ptr);
-        vm.set_register(12, definition_ptr);
-        vm.set_register(14, dataspace_ptr);
-        let expected_gas = DefaultHost::mutation_gas(canonical_payload.len());
-
-        let mut scoped_host = DefaultHost::new();
-        assert_eq!(
-            scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
-            Ok(expected_gas)
-        );
-        assert_eq!(
-            scoped_host.syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm),
-            Ok(expected_gas)
-        );
-
-        let mut batch_host = DefaultHost::new();
-        assert_eq!(
-            batch_host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm),
-            Ok(gas::G_FASTPQ_BATCH)
-        );
-        assert_eq!(
-            batch_host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm),
-            Ok(expected_gas)
-        );
-        assert!(batch_host.fastpq_batch_has_entries);
-
-        let legacy_payload =
-            norito::to_bytes(&canonical.into_numeric()).expect("encode legacy Numeric");
-        let legacy_ptr = vm
-            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &legacy_payload))
-            .expect("allocate legacy Numeric pointer");
-        vm.set_register(13, legacy_ptr);
-        assert_eq!(
-            DefaultHost::expect_quantity(&vm, 13),
-            Err(VMError::NoritoInvalid)
-        );
-
-        let noncanonical = Numeric::new(1_250_u32, 3);
-        let noncanonical_ptr = vm
-            .alloc_input_tlv(&test_tlv(
-                PointerType::Quantity,
-                &norito::to_bytes(&noncanonical).expect("encode noncanonical quantity"),
-            ))
-            .expect("allocate noncanonical quantity");
-        vm.set_register(13, noncanonical_ptr);
-        assert_eq!(
-            DefaultHost::expect_quantity(&vm, 13),
-            Err(VMError::DecodeError)
-        );
-    }
-
-    #[test]
-    fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
-        crate::set_banner_enabled(false);
-        let mut vm = IVM::new(u64::MAX);
-
-        let account_ptr = vm
-            .alloc_input_tlv(&test_tlv(PointerType::AccountId, &[]))
-            .expect("allocate account fixture");
-        let definition_ptr = vm
-            .alloc_input_tlv(&test_tlv(PointerType::AssetDefinitionId, &[]))
-            .expect("allocate asset definition fixture");
-        let dataspace_ptr = vm
-            .alloc_input_tlv(&test_tlv(PointerType::DataSpaceId, &[]))
-            .expect("allocate dataspace fixture");
-        let oversized = test_tlv(
-            PointerType::Quantity,
-            &[0xa5; MAX_QUANTITY_FRAME_BYTES_V1 + 1],
-        );
-        let valid_oversized_ptr = vm
-            .alloc_input_tlv(&oversized)
-            .expect("allocate oversized quantity with a valid digest");
-        let mut corrupted_oversized = oversized;
-        *corrupted_oversized
-            .last_mut()
-            .expect("quantity envelope has a digest") ^= 1;
-        let quantity_ptr = vm
-            .alloc_input_tlv(&corrupted_oversized)
-            .expect("allocate oversized quantity with a corrupt digest");
-        let mut impossible_length = test_tlv(PointerType::Quantity, &[]);
-        impossible_length[3..7].copy_from_slice(&u32::MAX.to_be_bytes());
-        let impossible_length_ptr = vm
-            .alloc_input_tlv(&impossible_length)
-            .expect("allocate quantity with an impossible declared length");
-        let maximum_sized_noncanonical_ptr = vm
-            .alloc_input_tlv(&test_tlv(
-                PointerType::Quantity,
-                &[0x5a; MAX_QUANTITY_FRAME_BYTES_V1],
-            ))
-            .expect("allocate maximum-sized noncanonical quantity");
-
-        vm.set_register(13, maximum_sized_noncanonical_ptr);
-        assert_eq!(
-            read_bounded_tlv_payload_len_at(
-                &vm,
-                maximum_sized_noncanonical_ptr,
-                PointerType::Quantity,
-                MAX_QUANTITY_FRAME_BYTES_V1,
-            ),
-            Ok(MAX_QUANTITY_FRAME_BYTES_V1),
-            "the exact V1 maximum must reach canonical frame validation"
-        );
-        assert_eq!(
-            DefaultHost::expect_quantity(&vm, 13),
-            Err(VMError::DecodeError),
-            "size admission must not replace canonical frame validation"
-        );
-
-        for (label, pointer) in [
-            ("valid digest", valid_oversized_ptr),
-            ("corrupt digest", quantity_ptr),
-            ("impossible declared length", impossible_length_ptr),
-        ] {
-            vm.set_register(13, pointer);
-            vm.memory.clear_tracking();
-            assert_eq!(
-                DefaultHost::expect_quantity(&vm, 13),
-                Err(VMError::NoritoInvalid),
-                "{label}"
-            );
-            assert_eq!(
-                vm.memory.read_set(),
-                vec![crate::memory::AccessRange {
-                    addr: pointer,
-                    len: 7,
-                }],
-                "{label} must be rejected after the fixed header only"
-            );
-            assert!(vm.memory.write_log().is_empty(), "{label}");
-        }
-
-        vm.set_register(10, account_ptr);
-        vm.set_register(11, account_ptr);
-        vm.set_register(12, definition_ptr);
-        vm.set_register(13, quantity_ptr);
-        vm.set_register(14, dataspace_ptr);
-        let registers_before = [
-            vm.register(10),
-            vm.register(11),
-            vm.register(12),
-            vm.register(13),
-            vm.register(14),
-        ];
-
-        let mut scoped_host = DefaultHost::new();
-        vm.memory.clear_tracking();
-        assert_eq!(
-            scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
-            Err(VMError::NoritoInvalid)
-        );
-        assert!(
-            vm.memory.read_set().is_empty(),
-            "header-only preparation must reject the oversized frame before reading its payload"
-        );
-        assert!(vm.memory.write_log().is_empty());
-
-        vm.memory.clear_tracking();
-        assert_eq!(
-            scoped_host.syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm),
-            Err(VMError::NoritoInvalid)
-        );
-        assert_eq!(
-            vm.memory.read_set(),
-            vec![crate::memory::AccessRange {
-                addr: quantity_ptr,
-                len: 7,
-            }],
-            "scoped transfer must read only the bounded header before rejecting the payload"
-        );
-        assert!(vm.memory.write_log().is_empty());
-        assert_eq!(
-            [
-                vm.register(10),
-                vm.register(11),
-                vm.register(12),
-                vm.register(13),
-                vm.register(14),
-            ],
-            registers_before
-        );
-
-        let mut batch_host = DefaultHost::new();
-        assert_eq!(
-            batch_host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm),
-            Ok(gas::G_FASTPQ_BATCH)
-        );
-        vm.memory.clear_tracking();
-        assert_eq!(
-            batch_host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm),
-            Err(VMError::NoritoInvalid)
-        );
-        assert_eq!(
-            vm.memory.read_set(),
-            vec![crate::memory::AccessRange {
-                addr: quantity_ptr,
-                len: 7,
-            }],
-            "batch transfer must read only the bounded header before rejecting the payload"
-        );
-        assert!(vm.memory.write_log().is_empty());
-        assert!(batch_host.fastpq_batch_active);
-        assert!(!batch_host.fastpq_batch_has_entries);
-    }
+    mod quantity_pointer_tests;
 }

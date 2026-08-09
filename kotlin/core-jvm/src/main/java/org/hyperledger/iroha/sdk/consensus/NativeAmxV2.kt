@@ -617,7 +617,9 @@ object NativeAmxV2 {
     /** Parse UTF-8 JSON and strictly validate one Native AMX receipt group. */
     @JvmStatic
     fun parseReceiptGroup(json: ByteArray): ReceiptGroup =
-        parseReceiptGroup(String(json, StandardCharsets.UTF_8))
+        parseReceiptGroup(
+            SumeragiJsonPrimitives.decodeUtf8(json, "Native AMX receipt group"),
+        )
 
     /** Strictly validate a map produced by the SDK JSON parser. */
     @JvmStatic
@@ -632,7 +634,9 @@ object NativeAmxV2 {
     /** Parse UTF-8 JSON and strictly validate one standalone receipt. */
     @JvmStatic
     fun parseReceipt(json: ByteArray): Receipt =
-        parseReceipt(String(json, StandardCharsets.UTF_8))
+        parseReceipt(
+            SumeragiJsonPrimitives.decodeUtf8(json, "Native AMX V2 receipt"),
+        )
 
     /** Strictly validate a standalone receipt map produced by the SDK JSON parser. */
     @JvmStatic
@@ -1279,10 +1283,9 @@ object NativeAmxV2 {
         return value as Map<String, Any?>
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun array(value: Any?, path: String): List<Any?> {
         require(value is List<*>) { "$path must be a JSON array" }
-        return value as List<Any?>
+        return value
     }
 
     private fun string(value: Any?, path: String): String {

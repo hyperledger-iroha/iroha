@@ -2797,7 +2797,7 @@ mod measured_bytes_impls {
         },
         smartcontracts::code::ContractSubjectBinding,
         state::{
-            AssetDefinitionAliasBindingRecord, ContractAliasBindingRecord,
+            AssetDefinitionAliasBindingRecord, ConfidentialTreeProfile, ContractAliasBindingRecord,
             DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker, ElectionState,
             FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
             GovernanceLocksForReferendum, GovernanceParliamentSnapshot, GovernancePipeline,
@@ -2856,6 +2856,7 @@ mod measured_bytes_impls {
         ConfidentialPolicyMode,
         ConfidentialPolicyTransition,
         ConfidentialStatus,
+        ConfidentialTreeProfile,
         ContractAbiHash,
         ContractCodeHash,
         CouncilDerivationKind,
@@ -3214,14 +3215,7 @@ mod measured_bytes_impls {
 
     impl MeasuredBytes for AssetDefinitionId {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<AssetDefinitionId>();
-            if let Some(domain) = self.try_domain() {
-                total = total.saturating_add(domain.measured_bytes_extra());
-            }
-            if let Some(name) = self.try_name() {
-                total = total.saturating_add(name.measured_bytes_extra());
-            }
-            total
+            size_of::<AssetDefinitionId>()
         }
     }
 
@@ -3853,17 +3847,18 @@ mod measured_bytes_impls {
     impl MeasuredBytes for ZkAssetState {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ZkAssetState>();
+            total = total.saturating_add(self.tree_profile.measured_bytes_extra());
+            total = total.saturating_add(self.tree_frontier.measured_bytes_extra());
+            total = total.saturating_add(self.persisted_root.measured_bytes_extra());
             total = total.saturating_add(self.mode.measured_bytes_extra());
             total = total.saturating_add(self.allow_shield.measured_bytes_extra());
             total = total.saturating_add(self.allow_unshield.measured_bytes_extra());
             total = total.saturating_add(self.commitments.measured_bytes_extra());
             total = total.saturating_add(self.root_history.measured_bytes_extra());
             total = total.saturating_add(self.nullifiers.measured_bytes_extra());
-            total = total.saturating_add(self.vk_transfer.measured_bytes_extra());
             total = total.saturating_add(self.vk_unshield.measured_bytes_extra());
             total = total.saturating_add(self.vk_shield.measured_bytes_extra());
             total = total.saturating_add(self.frontier_checkpoints.measured_bytes_extra());
-            total = total.saturating_add(self.tree.measured_bytes_extra());
             total
         }
     }
@@ -3950,6 +3945,9 @@ mod measured_bytes_impls {
                 }
                 ProposalKind::ValidationFeePayoutLifecycle(payload) => {
                     total = total.saturating_add(payload.measured_bytes_extra());
+                }
+                ProposalKind::MusubiRegistryGovernance(action) => {
+                    total = total.saturating_add(norito::codec::Encode::encode(action).len());
                 }
             }
             total
@@ -5520,10 +5518,11 @@ mod tests {
     fn measured_bytes_cover_opaque_asset_definition_id() {
         use iroha_data_model::asset::AssetDefinitionId;
 
-        let opaque = AssetDefinitionId::from_uuid_bytes_unchecked([
+        let opaque = AssetDefinitionId::from_uuid_bytes([
             0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x4d, 0xef, 0x80, 0x11, 0x22, 0x33, 0x44, 0x55,
             0x66, 0x77,
-        ]);
+        ])
+        .expect("measured-bytes fixture UUID is valid");
         assert_eq!(
             MeasuredBytes::measured_bytes(&opaque),
             std::mem::size_of::<AssetDefinitionId>()
@@ -5704,11 +5703,11 @@ mod tests {
         let mut backend = TieredStateBackend::new(true, 0, 1, 0, Some(root.clone()), None, 0, 0);
         let mut world = World::default();
 
-        let definition_id =
-            iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes_unchecked([
-                0x31, 0x42, 0x53, 0x64, 0x75, 0x86, 0x47, 0x98, 0x80, 0x19, 0x2a, 0x3b, 0x4c, 0x5d,
-                0x6e, 0x7f,
-            ]);
+        let definition_id = iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+            0x31, 0x42, 0x53, 0x64, 0x75, 0x86, 0x47, 0x98, 0x80, 0x19, 0x2a, 0x3b, 0x4c, 0x5d,
+            0x6e, 0x7f,
+        ])
+        .expect("cold-tier fixture UUID is valid");
         let asset_binding = crate::state::AssetDefinitionAliasBindingRecord {
             alias: "tiered_cold_asset#universal".parse().expect("asset alias"),
             lease_expiry_ms: Some(2_000),
@@ -5726,7 +5725,7 @@ mod tests {
         .expect("fixture seed derives a valid keypair");
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,
@@ -7050,103 +7049,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn preflight_lane_geometry_rejects_relabel_target_snapshot_dir() {
-        let temp = tempdir().expect("tmpdir");
-        let mut backend =
-            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
-
-        let initial_catalog = LaneCatalog::new(
-            nonzero!(1_u32),
-            vec![LaneConfig {
-                alias: "Alpha Lane".to_string(),
-                ..LaneConfig::default()
-            }],
-        )
-        .expect("initial catalog");
-        let initial_cfg = RuntimeLaneConfig::from_catalog(&initial_catalog);
-        backend
-            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &initial_cfg, &[])
-            .expect("provision initial snapshot");
-        let old_entry = initial_cfg
-            .entry(LaneId::SINGLE)
-            .expect("initial lane entry");
-
-        let updated_catalog = LaneCatalog::new(
-            nonzero!(1_u32),
-            vec![LaneConfig {
-                alias: "Payments Lane".to_string(),
-                ..LaneConfig::default()
-            }],
-        )
-        .expect("updated catalog");
-        let updated_cfg = RuntimeLaneConfig::from_catalog(&updated_catalog);
-        let new_entry = updated_cfg
-            .entry(LaneId::SINGLE)
-            .expect("updated lane entry");
-        let lanes_root = temp.path().join("lanes");
-        let target_dir = lane_snapshot_dir(&lanes_root, new_entry);
-        fs::create_dir_all(&target_dir).expect("seed conflicting relabel target");
-
-        let err = backend
-            .preflight_lane_geometry(&initial_cfg, &updated_cfg, &[], &[(old_entry, new_entry)])
-            .expect_err("occupied relabel target must fail preflight");
-
-        assert!(
-            format!("{err:?}").contains("lane snapshot relabel target already exists"),
-            "unexpected error: {err:?}"
-        );
-        assert!(
-            lane_snapshot_dir(&lanes_root, old_entry).exists(),
-            "preflight must not move source snapshot dir"
-        );
-        assert!(
-            target_dir.exists(),
-            "preflight must leave conflicting target dir in place"
-        );
-    }
-
-    #[test]
-    fn preflight_lane_geometry_rejects_retired_lane_root_file() {
-        let temp = tempdir().expect("tmpdir");
-        let mut backend =
-            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
-
-        let lane1 = LaneConfig {
-            id: LaneId::from(1),
-            alias: "beta".to_string(),
-            ..LaneConfig::default()
-        };
-        let two_lane_catalog =
-            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane1])
-                .expect("two-lane catalog");
-        let two_lane_cfg = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
-        backend
-            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &two_lane_cfg, &[])
-            .expect("provision lane snapshots");
-
-        let retired_lane_root = temp.path().join("retired").join("lanes");
-        if let Some(parent) = retired_lane_root.parent() {
-            fs::create_dir_all(parent).expect("retired parent");
-        }
-        fs::write(&retired_lane_root, b"blocker").expect("retired root blocker");
-
-        let err = backend
-            .preflight_lane_geometry(&two_lane_cfg, &RuntimeLaneConfig::default(), &[], &[])
-            .expect_err("retired root file must fail preflight");
-
-        assert!(
-            format!("{err:?}").contains("expected directory path"),
-            "unexpected error: {err:?}"
-        );
-        let lane1_entry = two_lane_cfg.entry(LaneId::from(1)).expect("lane 1 entry");
-        assert!(
-            lane_snapshot_dir(&temp.path().join("lanes"), lane1_entry).exists(),
-            "preflight must not retire source snapshot dir"
-        );
-        assert!(
-            retired_lane_root.is_file(),
-            "preflight must leave conflicting retired root in place"
-        );
-    }
+    include!("tiered_preflight_lane_tests.rs");
 }

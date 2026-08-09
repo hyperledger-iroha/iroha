@@ -21,6 +21,34 @@ public final class PrivacyNativeBridgeTest {
       rows("retired").stream().map(row -> row.get(1)).collect(Collectors.toUnmodifiableList());
   private static final List<String> EXPECTED =
       PROTOCOL_ROWS.stream().map(row -> row.get(2)).collect(Collectors.toUnmodifiableList());
+  private static final List<PrivacyProofSystemIdV1> EXPECTED_PROOF_SYSTEMS =
+      List.of(
+          PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
+          PrivacyProofSystemIdV1.ANONYMOUS_PGC_P256,
+          PrivacyProofSystemIdV1.IROHA_VERANGE_P256,
+          PrivacyProofSystemIdV1.ZK_AMS_MASKED_RELAXED_SPARTAN_T256_RISTRETTO255_SHA3_512,
+          PrivacyProofSystemIdV1.VEGA_NEUTRON_NOVA_SPARTAN_HYRAX_T256,
+          PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
+          PrivacyProofSystemIdV1.JINDO_POLYNOMIAL_COMMITMENT,
+          PrivacyProofSystemIdV1.LANTERN_LNP22_MODULE_LINEAR_NORM,
+          PrivacyProofSystemIdV1.HALO2_IPA_PASTA,
+          PrivacyProofSystemIdV1.FCMP_PLUS_PLUS_CURVE_TREE_BULLETPROOFS,
+          PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS,
+          PrivacyProofSystemIdV1.STARK_FRI_SHA256_GOLDILOCKS);
+  private static final List<PrivacyEngineIdV1> EXPECTED_ENGINES =
+      List.of(
+          PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
+          PrivacyEngineIdV1.NATIVE_ANONYMOUS_PGC_P256,
+          PrivacyEngineIdV1.NATIVE_VERANGE_P256,
+          PrivacyEngineIdV1.NATIVE_ZK_AMS_MASKED_RELAXED_SPARTAN_T256_RISTRETTO255,
+          PrivacyEngineIdV1.NATIVE_VEGA,
+          PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
+          PrivacyEngineIdV1.NATIVE_JINDO,
+          PrivacyEngineIdV1.NATIVE_LANTERN_LNP22,
+          PrivacyEngineIdV1.NATIVE_HALO2_ORCHARD,
+          PrivacyEngineIdV1.NATIVE_FCMP_PLUS_PLUS,
+          PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI,
+          PrivacyEngineIdV1.NATIVE_GOLDILOCKS_STARK_FRI);
 
   private PrivacyNativeBridgeTest() {}
 
@@ -30,9 +58,9 @@ public final class PrivacyNativeBridgeTest {
     aliasesAndNonCanonicalSpellingsAreRejected();
     sharedTypedValidatorStatusContractIsStable();
     compiledProfileCatalogPreflightRejectsNullEmptyAndOversizeWithoutNativeCalls();
-    compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesWhenAvailable();
+    compiledProfileCatalogRoundTripsAndRejectsAdversarialBytes();
     exact12FixturePreflightRejectsNullEmptyAndOversizeWithoutNativeCalls();
-    exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable();
+    exact12FixtureBundleRoundTripsAndRejectsAdversarialBytes();
     retiredGenericProofSurfaceIsAbsent();
     System.out.println("[IrohaAndroid] PrivacyNativeBridgeTest passed.");
   }
@@ -42,9 +70,11 @@ public final class PrivacyNativeBridgeTest {
     assert PrivacyNativeBridge.protocolsV1().size() == 12;
     for (int index = 0; index < EXPECTED.size(); index++) {
       final String label = EXPECTED.get(index);
-      final PrivacyNativeBridge.ProtocolIdV1 protocol = PrivacyNativeBridge.protocolsV1().get(index);
+      final PrivacyProtocolIdV1 protocol = PrivacyNativeBridge.protocolsV1().get(index);
       assert protocol.canonicalLabel().equals(label);
-      assert PrivacyNativeBridge.ProtocolIdV1.fromCanonicalLabel(label) == protocol;
+      assert PrivacyProtocolIdV1.fromCanonicalLabel(label) == protocol;
+      assert protocol.expectedProofSystem() == EXPECTED_PROOF_SYSTEMS.get(index);
+      assert protocol.expectedEngine() == EXPECTED_ENGINES.get(index);
     }
     assertThrows(() -> PrivacyNativeBridge.protocolsV1().clear());
   }
@@ -99,9 +129,9 @@ public final class PrivacyNativeBridgeTest {
             "",
             "unknown-privacy-protocol-v1"));
     for (final String rejected : rejectedLabels) {
-      assertThrows(() -> PrivacyNativeBridge.ProtocolIdV1.fromCanonicalLabel(rejected));
+      assertThrows(() -> PrivacyProtocolIdV1.fromCanonicalLabel(rejected));
     }
-    assertThrows(() -> PrivacyNativeBridge.ProtocolIdV1.fromCanonicalLabel(null));
+    assertThrows(() -> PrivacyProtocolIdV1.fromCanonicalLabel(null));
   }
 
   private static List<List<String>> rows(final String kind) {
@@ -205,14 +235,10 @@ public final class PrivacyNativeBridgeTest {
         == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.ARCHIVE_TOO_LARGE;
   }
 
-  private static void compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesWhenAvailable() {
-    final boolean available = PrivacyNativeBridge.isNativeAvailable();
-    if ("1".equals(System.getenv("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE")) && !available) {
+  private static void compiledProfileCatalogRoundTripsAndRejectsAdversarialBytes() {
+    if (!PrivacyNativeBridge.isNativeAvailable()) {
       throw new AssertionError(
           "ABI-21 connect_norito_bridge with compiled-profile catalog JNI exports is required");
-    }
-    if (!available) {
-      return;
     }
 
     final byte[] canonical = PrivacyNativeBridge.compiledProfileCatalogV1();
@@ -221,6 +247,13 @@ public final class PrivacyNativeBridgeTest {
     assert PrivacyNativeBridge.validateCompiledProfileCatalogV1(canonical)
         == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.VALID;
     assert Arrays.equals(canonical, PrivacyNativeBridge.compiledProfileCatalogV1());
+    final org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogV1 typed =
+        PrivacyNativeBridge.compiledProfileCatalogTypedV1();
+    assert typed.protocols.size() == 12;
+    assert Arrays.equals(
+        canonical,
+        org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogCodecV1.encodeCanonical(
+            typed));
 
     final byte[][] truncated = {
       Arrays.copyOfRange(canonical, 0, canonical.length - 1),
@@ -255,14 +288,10 @@ public final class PrivacyNativeBridgeTest {
         == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.ARCHIVE_TOO_LARGE;
   }
 
-  private static void exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable() {
-    final boolean available = PrivacyNativeBridge.isNativeAvailable();
-    if ("1".equals(System.getenv("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE")) && !available) {
+  private static void exact12FixtureBundleRoundTripsAndRejectsAdversarialBytes() {
+    if (!PrivacyNativeBridge.isNativeAvailable()) {
       throw new AssertionError(
           "ABI-21 connect_norito_bridge with exact-12 fixture JNI exports is required");
-    }
-    if (!available) {
-      return;
     }
 
     final byte[] fetched = PrivacyNativeBridge.exact12FixtureBundleV1();

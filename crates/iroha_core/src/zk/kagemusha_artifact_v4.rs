@@ -17,7 +17,6 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-#[cfg(feature = "kagemusha-candidate-evidence-lab")]
 use iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4;
 use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_MAX_BYTES_V4,
@@ -630,14 +629,13 @@ pub struct KagemushaValidatedArtifactPayloadV4 {
 
 /// Trust mode attached to one parsed ABI-21 inventory.
 ///
-/// The candidate variant is compiled only into the explicitly requested
-/// non-shipping evidence harness. Keeping the mode in the carrier prevents a
+/// The candidate variant authenticates pre-promotion qualification inputs.
+/// Keeping the mode in the carrier prevents a
 /// candidate payload from being relabelled as release-authenticated material
 /// while still allowing both modes to exercise the same prover and verifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum KagemushaArtifactManifestBindingV4 {
     AuthenticatedRelease(KagemushaAuthenticatedReleaseV4),
-    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
     CandidateEvidence {
         candidate: KagemushaRecursiveSpendCandidateV4,
         candidate_sha256: [u8; 32],
@@ -650,7 +648,6 @@ impl KagemushaArtifactManifestBindingV4 {
         Self::AuthenticatedRelease(release.clone())
     }
 
-    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
     fn candidate_evidence(
         candidate: &KagemushaRecursiveSpendCandidateV4,
         expected_candidate_sha256: [u8; 32],
@@ -679,7 +676,6 @@ impl KagemushaArtifactManifestBindingV4 {
     fn manifest(&self) -> &KagemushaRecursiveSpendArtifactManifestV4 {
         match self {
             Self::AuthenticatedRelease(release) => release.manifest(),
-            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
             Self::CandidateEvidence { candidate, .. } => &candidate.manifest,
         }
     }
@@ -687,7 +683,6 @@ impl KagemushaArtifactManifestBindingV4 {
     fn manifest_sha256(&self) -> [u8; 32] {
         match self {
             Self::AuthenticatedRelease(release) => release.manifest_sha256(),
-            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
             Self::CandidateEvidence {
                 manifest_sha256, ..
             } => *manifest_sha256,
@@ -695,11 +690,7 @@ impl KagemushaArtifactManifestBindingV4 {
     }
 
     fn is_candidate_evidence_lab(&self) -> bool {
-        #[cfg(feature = "kagemusha-candidate-evidence-lab")]
-        if matches!(self, Self::CandidateEvidence { .. }) {
-            return true;
-        }
-        false
+        matches!(self, Self::CandidateEvidence { .. })
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -714,7 +705,6 @@ impl KagemushaArtifactManifestBindingV4 {
                 }
                 Ok(())
             }
-            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
             Self::CandidateEvidence {
                 candidate,
                 candidate_sha256,
@@ -749,7 +739,6 @@ impl KagemushaArtifactManifestBindingV4 {
             Self::AuthenticatedRelease(release) => {
                 validate_header_against_manifest_v4(header, release.manifest(), descriptor)
             }
-            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
             Self::CandidateEvidence { candidate, .. } => {
                 candidate.validate().map_err(|error| error.to_string())?;
                 header
@@ -1183,9 +1172,8 @@ pub fn read_kagemusha_pasta_cycle_artifact_v4<R: Read>(
 }
 
 /// Parse one exact KRV4 artifact against a clean, canonical pre-promotion
-/// candidate. This API exists only in explicitly feature-selected evidence-lab
-/// builds and does not manufacture an authenticated production release.
-#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+/// candidate. This authenticates qualification inputs but does not manufacture
+/// an authenticated production release.
 pub fn read_kagemusha_pasta_cycle_candidate_artifact_v4<R: Read>(
     reader: &mut R,
     candidate: &KagemushaRecursiveSpendCandidateV4,

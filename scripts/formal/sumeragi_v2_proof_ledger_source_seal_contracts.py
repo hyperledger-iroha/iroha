@@ -1,5 +1,891 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+import importlib.util
+import subprocess
+import sys
+
+
+def _load_recursive_reviewed_rust_source_module() -> Any:
+    """Load the shared authenticated recursive Rust include resolver."""
+
+    module_name = "_sumeragi_v2_proof_ledger_reviewed_rust_source"
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        return loaded
+    path = Path(__file__).with_name(
+        "sumeragi_v2_multilane_reviewed_rust_source.py"
+    )
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"cannot load authenticated reviewed Rust source resolver: {path}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+_RECURSIVE_REVIEWED_RUST_SOURCE = _load_recursive_reviewed_rust_source_module()
+
+def _retired_sidecar_gate_ttl_source_errors(
+    path: Path,
+    source: str,
+    role: str,
+) -> list[str]:
+    """Reject any server-request gate TTL identifier in executable Rust."""
+
+    retired_ttl_tokens = sorted(
+        {
+            token
+            for token in rust_code_tokens(source)
+            if "ttl" in token.lower()
+            and all(
+                fragment in token.lower()
+                for fragment in ("server", "request", "gate")
+            )
+        }
+    )
+    if not retired_ttl_tokens:
+        return []
+    return [
+        f"{path}: retired wall-clock sidecar gate TTL must remain absent "
+        f"from production; found identifiers {retired_ttl_tokens} in the "
+        f"{role} seam"
+    ]
+
+
+def _require_exact_output_startup_and_successor_rollover_seams(
+    lane_path: Path,
+    lane_ack_items: dict[str, RustItem | None],
+    runner_path: Path,
+    runner_ack_items: dict[str, RustItem | None],
+    errors: list[str],
+) -> None:
+    """Check exact startup activation and successor rollover ownership seams."""
+
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get(
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport"
+        ),
+        "adapter.hydrate_canonical_lane_artifacts()?;",
+        "the production constructor must remain carrier-silent before exact Queue installation",
+        errors,
+        count=0,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get(
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport"
+        ),
+        "adapter.drive_lane_sessions();",
+        "the production constructor must not drive a lane session before exact Queue installation",
+        errors,
+        count=0,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get(
+            "V2LaneWorkAdapter::activate_after_lane_drain_queue_install"
+        ),
+        """
+if !Arc::ptr_eq(installed_queue, queue) {
+    return Err(V2LaneWorkError::InvalidContext(
+        "lane-work startup activation names a different queue source".to_owned(),
+    ));
+}
+let installed_queue = Arc::clone(installed_queue);
+let output_guard = Arc::clone(&self.output_guard);
+let activation = output_guard
+    .begin_fail_stop_operation()
+    .ok_or(V2LaneWorkError::RestartRequired)?;
+self.hydrate_canonical_lane_artifacts()?;
+self.revalidate_hydrated_autonomous_queue_owners(installed_queue.as_ref())?;
+self.startup_activation_complete = true;
+self.drive_lane_sessions();
+activation.complete();
+Ok(())
+""",
+        "one-shot startup activation must authenticate the installed Queue, fail-stop hydration, revalidate every local reservation owner, and only then drive lane sessions",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_ack_items.get("run_inner"),
+        """
+let _initial_local_validator =
+    local_validator_index(verified_context.context(), &local_peer, config.role)?;
+let _lifecycle_process_generation = claim_runner_lifecycle_process_generation(
+    config.role,
+    kura.as_ref(),
+    verified_context.context(),
+    &local_peer,
+)?;
+""",
+        "runner startup must classify height-local duty before acquiring one configured-role process generation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_ack_items.get("claim_runner_lifecycle_process_generation"),
+        """
+match role {
+    NodeRole::Observer => Ok(None),
+    NodeRole::Validator => {
+        let lifecycle_chain_id = context.chain_id.clone().into_inner();
+        kura.claim_autonomous_lifecycle_process_generation(
+            Hash::new(lifecycle_chain_id.as_bytes()),
+            local_peer,
+        )
+        .map(Some)
+        .map_err(|error| {
+            V2RunnerError::Service(format!(
+                "failed to claim the durable autonomous lifecycle process generation: {error}"
+            ))
+        })
+    }
+}
+""",
+        "the process generation claim must depend only on configured role and authenticated chain/local identity",
+        errors,
+    )
+    for forbidden_roster_gate in (
+        "context.roster",
+        "local_validator_index",
+        "_initial_local_validator",
+    ):
+        _require_rust_token_sequence(
+            runner_path,
+            runner_ack_items.get("claim_runner_lifecycle_process_generation"),
+            forbidden_roster_gate,
+            "the configured-role process generation helper must not consult height-local roster membership",
+            errors,
+            count=0,
+        )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_ack_items.get("run_inner"),
+        """
+reconcile_autonomous_lifecycle_startup(
+    state.as_ref(),
+    queue.as_ref(),
+    kura.as_ref(),
+    &context,
+    planner_evidence,
+    deferred_terminal_recovery,
+    _lifecycle_process_generation.as_ref(),
+""",
+        "startup reconciliation must borrow the exact process-lifetime generation claim",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_ack_items.get("run_inner"),
+        """
+V2LaneWorkAdapter::new_with_output_guard_and_transport(
+    context.clone(),
+    local_peer.clone(),
+    common_config.key_pair.clone(),
+    config.role == NodeRole::Validator,
+""",
+        "the lane adapter must be constructed from the same configured role after startup reconciliation",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_ack_items.get("run_inner"),
+        "_lifecycle_process_generation.clone(),",
+        "the lane adapter must receive the same process-lifetime generation claim",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_ack_items.get("run_inner"),
+        """
+lane_work.install_lane_drain_queue(Arc::clone(&queue))?;
+lane_work.activate_after_lane_drain_queue_install(&queue)?;
+""",
+        "runner startup must install the exact Queue before the one-shot carrier activation seam",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get("RetainedMergeSidecars::rehydrate_for_successor"),
+        """
+if self.successor_context_id != successor.id()
+    || self.successor_context_hash != HashOf::new(successor)
+{
+    return Err(V2LaneWorkError::InvalidContext(
+        "retained merge-sidecar handoff names another successor context".to_owned(),
+    ));
+}
+let authority = DurableMergeSidecarRolloverAuthority {
+    _exact_output_handoff: self.exact_output_handoff,
+};
+self.transport
+    .rehydrate_with_exact_geometry_after_durable_handoff(
+        reply_source_capacity,
+        limits,
+        server_stream_capacity,
+        server_roster_digest,
+        now,
+        authority,
+    )
+""",
+        "retained sidecar ownership must bind the exact successor context and consume its durable output handoff before roster-aware rehydration",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::into_retained_merge_sidecars"),
+        """
+if self.has_pending_committed_output_handoff() {
+    return Err(V2LaneWorkError::InvalidContext(
+        "retained merge-sidecar handoff still owns committed lane output".to_owned(),
+    ));
+}
+if self.effect_count() != 0 {
+    return Err(V2LaneWorkError::InvalidContext(
+        "retained merge-sidecar handoff still owns undispatched lane output".to_owned(),
+    ));
+}
+successor
+    .validate()
+    .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
+""",
+        "lane rollover must prove all committed and queued output empty before validating the immediate successor",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::into_retained_merge_sidecars"),
+        """
+if !exact_output_handoff
+    .is_bound_to_transport_owner(&self.exact_output_handoff_owner)
+{
+    return Err(V2LaneWorkError::InvalidContext(
+        "durable exact-output handoff belongs to another service/transport owner".to_owned(),
+    ));
+}
+if !exact_output_handoff.matches_predecessor_context(&self.context)
+    || !exact_output_handoff.matches_finality_artifact(artifact)
+{
+    return Err(V2LaneWorkError::InvalidContext(
+        "durable exact-output handoff belongs to another predecessor artifact".to_owned(),
+    ));
+}
+if !exact_output_handoff.authorizes_immediate_successor(successor) {
+    return Err(V2LaneWorkError::InvalidContext(
+        "durable exact-output handoff does not authorize the immediate successor".to_owned(),
+    ));
+}
+""",
+        "lane rollover must consume only its paired service receipt for the exact predecessor artifact and immediate successor",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::into_retained_merge_sidecars"),
+        """
+let retained = RetainedMergeSidecars {
+    transport: self.merge_sidecars,
+    exact_output_handoff,
+    successor_context_id: successor.id(),
+    successor_context_hash: HashOf::new(successor),
+};
+handoff.complete();
+Ok(retained)
+""",
+        "lane rollover must bind retained transport ownership to the canonical successor before completing the fail-stop operation",
+        errors,
+    )
+
+
+_SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
+    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
+        "fc34157b31b4dbbc680de730a3a33c7fa68926a6e73e70c1993cd07e55501a24"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
+        "d117c4c9761cccd10d631e6256db1e9addfe156b5042bc7338a67486cbd15a4c"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
+        "fd33217a5c50f5fa21c9a18f4eb70211a2321910a07d37a50008b3586c7fe800"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_core/wal.rs": (
+        "6bff6e8e90983f8bd1657de5faaf59b5db9a57e99ba0f9e0be96e7de0d3e2b9f"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_effects.rs": (
+        "d75634c29a3ded160a8e59e0d093127af4d78a86944caf00cadb3aeb217a616d"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_runner.rs": (
+        "56b6e8f2a3583c5f39f101c633b8d8b9840ee1362247fa3e6e963724e4f1a42c"
+    ),
+    "crates/iroha_core/src/sumeragi/v2_worker.rs": (
+        "51adf2ccf15b202bbfe8188a5d776a49159c1d5b7dba6136278cf51a1299efd6"
+    ),
+    "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
+        "f64417d810f330c9a2e70d76b14f6d61844f830a55ba936b98d376841b6bc573"
+    ),
+}
+
+
+_KURA_PRODUCTION_COMPONENT_FILES = (
+    "kura/startup_finality_support.rs",
+    "kura/bound_progress_and_retained_support.rs",
+    "kura/autonomous_reservation_bounds.rs",
+    "kura/certified_bundle_capacity_reservation_types.rs",
+    "kura/prune_commit_merge_support.rs",
+    "kura/merge_ledger_latest_execution_index.rs",
+    "kura/replica_advert_and_body_status.rs",
+    "kura/retained_finality_replica_authority.rs",
+    "kura/durable_block_and_atomic_sidecar_io.rs",
+    "kura/prune_intent_publication.rs",
+    "kura/prune_recovery_capacity.rs",
+    "kura/block_store_definition_and_test_controls.rs",
+    "kura/pipeline_and_lane_artifacts.rs",
+    "kura/autonomous_terminal_capacity.rs",
+    "kura/autonomous_publication_temp_recovery.rs",
+    "kura/historical_autonomous_recovery_temp_reconciliation.rs",
+    "kura/hot_path_capacity_preflight.rs",
+    "kura/autonomous_execution_view_capacity.rs",
+    "kura/certified_bundle_capacity.rs",
+    "kura/lane_artifact_budget.rs",
+    "kura/autonomous_lifecycle_terminal_outcomes.rs",
+    "kura/autonomous_release_authority.rs",
+    "kura/autonomous_application_evidence.rs",
+    "kura/indexed_sidecar_io.rs",
+    "kura/indexed_sidecar_rewrite.rs",
+    "kura/lane_history_compaction.rs",
+    "kura/test_fault_injection_state.rs",
+    "kura/test_fault_injection_controls.rs",
+    "kura/file_error_support.rs",
+)
+
+_REVIEWED_RUST_INCLUDE_MANIFESTS = {
+    "crates/iroha_core/src/commit_roster_journal.rs": (
+        "commit_roster_journal/tests.rs",
+    ),
+    "crates/iroha_config/src/parameters/actual.rs": (
+        "actual/runtime_tail_tests.rs",
+        "actual/tests.rs",
+    ),
+    "crates/iroha_config/src/parameters/user.rs": (
+        "user/kura.rs",
+        "user/governance_dag_head_mode_tests.rs",
+        "user/kura_and_snapshot_tests.rs",
+        "user/runtime_tail_tests.rs",
+    ),
+    "crates/iroha_data_model/src/block/consensus_v2.rs": (
+        "consensus_v2_tests.rs",
+    ),
+    "crates/iroha_core/src/kura.rs": (
+        *_KURA_PRODUCTION_COMPONENT_FILES,
+        "kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs",
+        "kura/tests/01_prune_capacity_support.rs",
+        "kura/tests/01a_retained_eviction_and_rewrite_tail.rs",
+        "kura/tests/02_replacement_and_preflight.rs",
+        "kura/tests/02a_unauthenticated_preflight.rs",
+        "kura/tests/03_preflight_and_merge_entry.rs",
+        "kura/tests/03a_preflight_and_merge_entry_tail.rs",
+        "kura/tests/04_merge_log_and_associations.rs",
+        "kura/tests/04b_merge_artifact_budget.rs",
+        "kura/tests/04c_canonical_association_capacity.rs",
+        "kura/tests/04d_prune_intent_capacity.rs",
+        "kura/tests/05_merge_resolution_and_eviction.rs",
+        "kura/tests/05a_replica_advert_and_body_eviction.rs",
+        "kura/tests/06_eviction_and_autonomous_lanes.rs",
+        "kura/tests/07a_autonomous_reservation_reconciliation_support.rs",
+        "kura/tests/07_autonomous_lanes_and_sidecars.rs",
+        "kura/tests/07b_autonomous_reservation_reconciliation_tests.rs",
+        "kura/tests/07c_lane_execution_sidecar_tests.rs",
+        "kura/tests/07d_strict_lane_ownership_barrier_tests.rs",
+        "kura/tests/07e_autonomous_lifecycle_and_canonical_artifact_tests.rs",
+        "kura/tests/07e_autonomous_publication_temp_recovery_tests.rs",
+        "kura/tests/07e_terminal_capacity_hardening_tests.rs",
+        "kura/tests/07f_canonical_carrier_terminal_recovery_tests.rs",
+        "kura/tests/07g_claim_capacity_preflight_tests.rs",
+        "kura/tests/07h_autonomous_execution_view_capacity_tests.rs",
+        "kura/tests/07i_historical_autonomous_batch_capacity_tests.rs",
+        "kura/tests/07j_certified_bundle_capacity_tests.rs",
+        "kura/tests/07k_historical_atomic_temp_recovery_tests.rs",
+        "kura/tests/07l_pending_canonical_capacity_tests.rs",
+        "kura/tests/08_lane_receipts_and_artifacts.rs",
+        "kura/tests/08a_certified_lane_block_read_tests.rs",
+        "kura/tests/08b_lane_history_compaction_capacity_tests.rs",
+        "kura/tests/09_lane_artifacts_and_fastpq.rs",
+        "kura/tests/10_native_amx_and_roster.rs",
+        "kura/tests/10b_native_amx_prepublication_transition.rs",
+        "kura/tests/11_roster_and_progress_sidecars.rs",
+        "kura/tests/12_sidecar_index_and_pruning.rs",
+        "kura/tests/13_manifests_and_fsync.rs",
+    ),
+    "crates/iroha_core/src/kura/tests/10_native_amx_and_roster.rs": (
+        "10c_native_amx_latest_index_support_and_bounds.rs",
+    ),
+    "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs": (
+        "autonomous_merge_bundle_support.rs",
+        "autonomous_reservation_types.rs",
+        "autonomous_reservation_inventory.rs",
+        "autonomous_reservation_classifier.rs",
+        "historical_autonomous_recovery.rs",
+    ),
+    "crates/iroha_core/src/kura/lane_geometry.rs": (
+        "lane_geometry/bootstrap_path_safety.rs",
+        "lane_geometry/bootstrap_relabel.rs",
+        "lane_geometry/catalog_validation.rs",
+        "lane_geometry/retirement_bounds.rs",
+        "lane_geometry_tests/00_support.rs",
+        "lane_geometry/native_amx_retained_window_tests.rs",
+        "lane_geometry_tests/00_retirement.rs",
+        "lane_geometry_tests/01_retirement_and_recovery.rs",
+        "lane_geometry_tests/02_geometry_moves_and_journal.rs",
+        "lane_geometry_tests/03_gc_and_startup.rs",
+    ),
+    "crates/iroha_core/src/merge_sidecar.rs": (
+        "merge_sidecar_signing_guard_tests.rs",
+    ),
+    "crates/iroha_core/src/queue.rs": (
+        "queue/canonical_terminal_cleanup.rs",
+        "queue/plan_journal_startup_atomicity_tests.rs",
+        "queue/global_guard_claim_conflict_tests.rs",
+        "queue/queue_metadata_and_admission_tests.rs",
+        "queue/instruction_and_state_routing_tests.rs",
+        "queue/routing_batch_admission_tests.rs",
+        "queue/teu_limit_and_backlog_tests.rs",
+        "queue/routing_projection_resilience_tests.rs",
+        "queue/capacity_and_concurrency_tests.rs",
+        "queue/pressure_resync_tests.rs",
+        "queue/expiry_tracking_tests.rs",
+        "queue/inflight_tracking_tests.rs",
+        "queue/lane_reservation_tests.rs",
+        "queue/lane_reservation_terminal_fault_tests.rs",
+        "queue/reservation_recovery_tests.rs",
+    ),
+    "crates/iroha_core/src/queue/journal.rs": (
+        "journal_reservation_commit_preflight.rs",
+        "journal_direct_file_io.rs",
+        "plan_journal_bounds_tests.rs",
+        "plan_journal_replay_tests.rs",
+    ),
+    "crates/iroha_core/src/state.rs": (
+        "state/vpn_lease_validation.rs",
+        "state/zk_asset_state.rs",
+        "state/passive_lane_diagnostic_methods.rs",
+        "state/diagnostic_state_generation.rs",
+        "state/autonomous_predecessor_application.rs",
+        "state/state_commit_lock_order_tests.rs",
+        "state/transfer_transcript_tests.rs",
+        "state/block_proof_tests.rs",
+        "state/range_bounds.rs",
+        "state/deserialize_core.rs",
+        "state/deserialize_world.rs",
+        "state/default_oracle.rs",
+    ),
+    "crates/iroha_core/src/snapshot.rs": (
+        "snapshot/support_policy_tests.rs",
+        "snapshot/write_roundtrip_tests.rs",
+        "snapshot/reconciliation_generation_tests.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/evidence.rs": (
+        "evidence/missing_signer_pop_test.rs",
+        "evidence/signature_missing_test.rs",
+        "evidence/roundtrip_matrix_test.rs",
+    ),
+    "crates/iroha_p2p/src/network.rs": (
+        "network/handle_update_tests.rs",
+        "network/queue_depth_tests.rs",
+    ),
+    "crates/iroha_p2p/src/peer.rs": (
+        "peer_handshake_config_tests.rs",
+        "peer_state_tests.rs",
+        "peer_consensus_mode_test.rs",
+        "peer_tests.rs",
+    ),
+    "crates/irohad/src/main.rs": (
+        "main/runtime_deps.rs",
+        "main/governance_dag_launcher_tests.rs",
+        "main/runtime_budget_and_config_tests.rs",
+        "main/startup_tail_tests.rs",
+    ),
+    "integration_tests/tests/taira_public_localnet.rs": (
+        "taira_public_localnet_config_digest_test.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/mod.rs": (
+        "tests/mod_authoritative_runtime_gate_01_support.rs",
+        "tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs",
+        "tests/mod_authoritative_runtime_gate_03_admission_and_fairness.rs",
+        "tests/mod_authoritative_runtime_gate_04_routes_and_dequeue.rs",
+        "tests/mod_authoritative_runtime_gate_05_ownership_maintenance.rs",
+        "tests/mod_authoritative_runtime_gate_06_source_isolation.rs",
+        "tests/mod_authoritative_runtime_gate_07_wire_bounds.rs",
+        "tests/mod_authoritative_runtime_gate_08_capacity_and_control.rs",
+        "tests/mod_authoritative_runtime_gate_09_snapshot_and_source_lanes.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/status.rs": (
+        "status/test_guards.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2.rs": (
+        "tests/v2_adapter_activation_context.rs",
+        "tests/v2_adapter_01_replay_and_registry.rs",
+        "tests/v2_adapter_02_view_and_lock_progress.rs",
+        "tests/v2_adapter_03_tc_and_terminal_ingress.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_worker.rs": (
+        "v2_worker/exact_output_rollover_claim.rs",
+        "v2_worker/kura_replica_advert_refresh.rs",
+        "v2_worker/current_lane_output_rollover_claim.rs",
+        "tests/v2_worker_reply_route_cases.rs",
+        "tests/v2_worker_backpressure_cases.rs",
+        "v2_worker/applied_height_handoff_tests.rs",
+        "v2_worker/upstream_reply_route_test.rs",
+        "tests/v2_worker_nonzero_view_restart.rs",
+        "tests/v2_worker_serve_unsealed_cases.rs",
+        "tests/v2_worker_serve_decision_restart_cases.rs",
+        "tests/v2_worker_certified_serve_budget_cases.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_runner.rs": (
+        "v2_runner/height_ingress_bindings.rs",
+        "v2_runner/lifecycle_terminal_recovery.rs",
+        "v2_runner/finalized_output_rollover.rs",
+        "v2_runner/canonical_recovery_ingress.rs",
+        "v2_runner/reply_route_retention.rs",
+        "v2_runner/merge_sidecar_recovery.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_runner_tests.rs": (
+        "tests/v2_runner_unsealed_00.rs",
+        "tests/v2_runner_unsealed_01.rs",
+        "tests/v2_runner_unsealed_02.rs",
+        "tests/v2_runner_upstream_recovery.rs",
+        "tests/v2_runner_lifecycle_startup_order.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_apply.rs": (
+        "v2_apply/autonomous_recovery_types.rs",
+        "v2_apply/reconciliation_authority.rs",
+        "v2_apply/committed_carrier_cleanup.rs",
+        "v2_apply/error_recovery.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
+        "tests/reducer_timeout_and_projection.rs",
+        "tests/v2_core_reducer_primitive_projection.rs",
+        "reducer/counterfeit_boundary_capability_test.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
+        "refinement_constructor_test_helpers.rs",
+        "refinement/transition_gate_tail.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_core/refinement_cases.rs": (
+        "refinement_cases/effect_candidate.rs",
+        "refinement_cases/terminal_body_pipeline.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_core/tests.rs": (
+        "tests/committee_fallback_and_retransmit.rs",
+        "tests/v2_core_view_zero_parent_binding.rs",
+        "tests/empty_replay_resume_test.rs",
+        "tests/v2_core_terminal_transactionality.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_effects.rs": (
+        "tests/v2_effects_kura_tip_replay.rs",
+        "tests/v2_effects_01_view_churn_and_runtime_steps.rs",
+        "tests/v2_effects_02_admission_handoffs.rs",
+    ),
+    "crates/iroha_core/src/sumeragi/v2_lane_work.rs": (
+        "v2_lane_work/canonical_executed_block_application_repair.rs",
+        "v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs",
+        "v2_lane_work/typed_finality_handoff_tests.rs",
+        "tests/v2_lane_work_native_signing_guard.rs",
+        "v2_lane_work/native_amx_route_and_receipt_tests.rs",
+        "tests/v2_lane_work_observer_role.rs",
+        "tests/v2_lane_work_native_body_recovery.rs",
+        "tests/v2_lane_work_effect_queue.rs",
+        "v2_lane_work/historical_recovery_and_carrier_tests.rs",
+    ),
+    "integration_tests/tests/sumeragi_v2_runner.rs": (
+        "sumeragi_v2_runner/restart_timing_test.rs",
+        "sumeragi_v2_runner/status_validation_helpers.rs",
+    ),
+    "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
+        "verus_proofs/production_transition_contracts.rs",
+        "verus_proofs/in_flight_first_release_proofs.rs",
+        "verus_proofs/production_kernel_tail.rs",
+    ),
+}
+
+
+def _read_reviewed_rust_source_fixture(
+    repo_root: Path,
+    relative: str,
+    errors: list[str],
+    description: str,
+    expanded_components: tuple[str, ...] | None = None,
+) -> tuple[Path, str]:
+    """Expand a non-Git mutation fixture using the reviewed direct manifest."""
+
+    path = repo_root / relative
+    if not path.is_file() or path.is_symlink():
+        errors.append(f"{path}: {description} must be a regular non-symlink file")
+        return path, ""
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        errors.append(f"{path}: cannot read {description}: {error}")
+        return path, ""
+
+    manifest = _REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative)
+    if manifest is None:
+        return path, source
+    if expanded_components is not None:
+        unknown_components = tuple(
+            component
+            for component in expanded_components
+            if component not in manifest
+        )
+        if unknown_components:
+            errors.append(
+                f"{path}: requested unknown reviewed Rust include components "
+                f"{unknown_components!r}"
+            )
+
+    masked_source = mask_rust_comments(source)
+    include_invocations = tuple(
+        re.finditer(r"(?m)^[ \t]*include\s*!", masked_source)
+    )
+    include_pattern = re.compile(
+        r'(?m)^[ \t]*include\s*!\s*\(\s*"'
+        r'(?P<relative>[^"\n]+\.rs)"\s*\)\s*;[ \t]*(?:\n|$)'
+    )
+    observed = tuple(
+        match.group("relative") for match in include_pattern.finditer(masked_source)
+    )
+    if observed != manifest or len(include_invocations) != len(manifest):
+        errors.append(
+            f"{path}: reviewed Rust include inventory must equal {manifest!r}; "
+            f"found {observed!r} across {len(include_invocations)} include "
+            "invocation(s)"
+        )
+
+    component_sources: dict[str, str] = {}
+    for component_relative in manifest:
+        component_path = path.parent / component_relative
+        if not component_path.is_file() or component_path.is_symlink():
+            errors.append(
+                f"{component_path}: reviewed Rust include component for {path} "
+                "must be a regular non-symlink file"
+            )
+            component_source = ""
+        else:
+            try:
+                component_source = component_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                errors.append(
+                    f"{component_path}: cannot read reviewed Rust include "
+                    f"component for {path}: {error}"
+                )
+                component_source = ""
+        component_sources[component_relative] = component_source
+
+    def expand(match: re.Match[str]) -> str:
+        component_relative = match.group("relative")
+        component_source = component_sources.get(component_relative)
+        if component_source is None or (
+            expanded_components is not None
+            and component_relative not in expanded_components
+        ):
+            return match.group(0)
+        return component_source
+
+    return path, include_pattern.sub(expand, source)
+
+
+def _read_reviewed_rust_source(
+    repo_root: Path,
+    relative: str,
+    errors: list[str],
+    description: str,
+    expanded_components: tuple[str, ...] | None = None,
+) -> tuple[Path, str]:
+    """Read one Rust source through the authenticated recursive resolver.
+
+    Production validation always uses the shared stage-aware recursive closure.
+    Synthetic mutation fixtures are intentionally not Git worktrees, so their
+    already-reviewed direct components retain the narrow fixture reader.
+    """
+
+    if expanded_components is not None or repo_root.resolve() != ROOT_DIR.resolve():
+        return _read_reviewed_rust_source_fixture(
+            repo_root,
+            relative,
+            errors,
+            description,
+            expanded_components,
+        )
+    closure = _RECURSIVE_REVIEWED_RUST_SOURCE._resolve_reviewed_rust_source(
+        repo_root,
+        relative,
+        description,
+        errors,
+    )
+    path = repo_root / relative
+    if closure is None:
+        return path, ""
+    return closure.path, closure.source
+
+
+def _reviewed_rust_include_manifest_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Fail closed unless every reviewed split Rust source has its exact closure."""
+
+    errors: list[str] = []
+    reviewed_paths = tuple(
+        dict.fromkeys(
+            path
+            for parent_relative, component_relatives in _REVIEWED_RUST_INCLUDE_MANIFESTS.items()
+            for path in (
+                parent_relative,
+                *(
+                    (Path(parent_relative).parent / component_relative).as_posix()
+                    for component_relative in component_relatives
+                ),
+            )
+        )
+    )
+    try:
+        tracked_result = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "--stage", "-z", "--", *reviewed_paths],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as error:
+        errors.append(
+            f"{repo_root}: cannot authenticate reviewed Rust include Git tracking: {error}"
+        )
+        tracked_paths: set[str] = set()
+    else:
+        if tracked_result.returncode != 0:
+            detail = tracked_result.stderr.decode("utf-8", errors="replace").strip()
+            errors.append(
+                f"{repo_root}: cannot authenticate reviewed Rust include Git tracking: "
+                f"{detail or f'git ls-files exited {tracked_result.returncode}'}"
+            )
+            tracked_paths = set()
+        else:
+            tracked_paths = {
+                record.split(b"\t", 1)[1].decode("utf-8", errors="surrogateescape")
+                for record in tracked_result.stdout.split(b"\0")
+                if b"\t" in record
+            }
+    for relative in reviewed_paths:
+        if relative not in tracked_paths:
+            errors.append(
+                f"{repo_root / relative}: reviewed Rust source must be Git-tracked"
+            )
+    for relative in _REVIEWED_RUST_INCLUDE_MANIFESTS:
+        _read_reviewed_rust_source(
+            repo_root,
+            relative,
+            errors,
+            "reviewed split Rust source",
+        )
+    return errors
+
+
+def _kura_production_source_inventory(
+    repo_root: Path = ROOT_DIR,
+) -> tuple[
+    Path,
+    str,
+    tuple[tuple[str, Path, str], ...],
+    list[str],
+]:
+    """Load the exact direct production include closure of ``kura.rs``."""
+
+    source_root = repo_root / "crates" / "iroha_core" / "src"
+    kura_path = source_root / "kura.rs"
+    errors: list[str] = []
+    if not kura_path.is_file() or kura_path.is_symlink():
+        errors.append(
+            f"{kura_path}: Kura production source inventory root must be a "
+            "regular file"
+        )
+        kura_source = ""
+    else:
+        try:
+            kura_source = kura_path.read_text(encoding="utf-8")
+        except OSError as error:
+            errors.append(
+                f"{kura_path}: cannot read Kura production source inventory "
+                f"root: {error}"
+            )
+            kura_source = ""
+
+    masked_source = mask_rust_comments(kura_source)
+    test_module_markers = tuple(
+        re.finditer(
+            r"(?m)^#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*\n"
+            r"mod\s+tests\s*\{",
+            masked_source,
+        )
+    )
+    if len(test_module_markers) != 1:
+        errors.append(
+            f"{kura_path}: Kura production source inventory must retain "
+            "exactly one terminal cfg(test) module boundary; found "
+            f"{len(test_module_markers)}"
+        )
+        production_source = masked_source
+    else:
+        production_source = masked_source[: test_module_markers[0].start()]
+
+    include_invocations = tuple(
+        re.finditer(r"(?m)^[ \t]*include\s*!", production_source)
+    )
+    include_pattern = re.compile(
+        r'(?m)^[ \t]*include\s*!\s*\(\s*"'
+        r'(?P<relative>kura/[^"\n]+\.rs)"\s*\)\s*;[ \t]*$'
+    )
+    observed_components = tuple(
+        match.group("relative")
+        for match in include_pattern.finditer(production_source)
+    )
+    if (
+        observed_components != _KURA_PRODUCTION_COMPONENT_FILES
+        or len(include_invocations) != len(_KURA_PRODUCTION_COMPONENT_FILES)
+    ):
+        errors.append(
+            f"{kura_path}: Kura direct production include inventory must equal "
+            f"{_KURA_PRODUCTION_COMPONENT_FILES!r}; found "
+            f"{observed_components!r} across {len(include_invocations)} "
+            "include invocation(s)"
+        )
+
+    components: list[tuple[str, Path, str]] = []
+    for relative in _KURA_PRODUCTION_COMPONENT_FILES:
+        path = source_root / relative
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: Kura production source inventory component must be "
+                "a regular non-symlink file"
+            )
+            source = ""
+        else:
+            try:
+                source = path.read_text(encoding="utf-8")
+            except OSError as error:
+                errors.append(
+                    f"{path}: cannot read Kura production source inventory "
+                    f"component: {error}"
+                )
+                source = ""
+        components.append((relative, path, source))
+    return kura_path, kura_source, tuple(components), errors
+
+
 # Exact token-stream digests for the nontrivial Verus projection theorems and
 # their concrete mutation witnesses. Unlike raw substrings, these bind the
 # declaration, contract, and proof body of one real, context-checked item while
@@ -35,6 +921,48 @@ _PRODUCTION_CAUSAL_FIFO_VERUS_ITEM_SHA256 = {
     "production_reversed_fresh_order_mutant_is_rejected": (
         "a0b995d9442eb0fef330eb7383c258f16dab35b61b84e02716437f758214a6f5"
     ),
+    "production_completion_capacity_product_rank": (
+        _CHECKED_PRODUCTION_COMPLETION_PRODUCT_RANK_SHA256
+    ),
+    "production_completion_capacity_product_rank_descends": (
+        _CHECKED_PRODUCTION_COMPLETION_PRODUCT_RANK_DESCENT_SHA256
+    ),
+}
+
+_PRODUCTION_EFFECT_CANDIDATE_TLA_OPERATOR_SHA256 = {
+    "AsyncCausalCandidateLifecycleCapacity": (
+        "02882bb4b0f0b52c5e9d0994bdb8f459b768e7612851b68956932bbaecf93591"
+    ),
+    "AsyncCandidateCausalOrigin": (
+        "00a780f6b919c66fc03507311341ff7590f4d37cba9bc4711ee73ec29e23eeef"
+    ),
+    "ExactAsyncCandidateIdentity": (
+        "ceeaebbac450ef309c949f0fc399393ea441763fbb91948bdd5bb8c89f9a165f"
+    ),
+    "FreshCommandSuccessors": (
+        "387d64f773b0d6df95e41ce65e108bd37e23c6b3574ecdd0f049b242b2235997"
+    ),
+    "AppendCausalSuccessors": (
+        "f4c500c716af8d23357691a07a603700fa1d762b2192a2f310845ea021bc5781"
+    ),
+}
+
+_PRODUCTION_EFFECT_CANDIDATE_TLA_THEOREM_SHA256 = {
+    "CommandSuccessorsRetainCausalOrigin": (
+        "cf52b0688a75691dc706a787f2f776f71d929013d82566ddaead6cfb36602247"
+    ),
+}
+
+_PRODUCTION_COMPLETION_CAPACITY_TLA_OPERATOR_SHA256 = {
+    "Stage6CompletionCapacityGoal": (
+        "c983618885f38d74a140a2e1d03f0e9e2e1721553db0e0e457efbf67dbc41dde"
+    ),
+}
+
+_PRODUCTION_COMPLETION_CAPACITY_TLA_THEOREM_SHA256 = {
+    "FairStage6CompletionCapacityOpens": (
+        "d6395e9f9616aca03edbd2dffde7e3aa340e80e3be9fe333f8c4a362ef2e21c1"
+    ),
 }
 
 # Exact comment/literal-free token digests for the production Rust items whose
@@ -56,10 +984,10 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "0964e3e5d76ef3f72a240c03c46c3c15a71c52572acaa34784276c97858d3ab7"
     ),
     "command_is_blocked_by_deferred_fence": (
-        "05f8139fb6d9566a2749cc01e8e906c180ebca304448d635f2d276a5935f3757"
+        "069222d7ba0857ef873a6784ccd4cbc8ecd38882a7914a1cb7d87d27ec5ec7d6"
     ),
     "authenticated_command_reaches_fenced_reducer": (
-        "9a4aa6932087f18a3b4897e3946bb40a9e600c99fd4841ebce7a801247ee9835"
+        "75b1f243e311b75994e8caf13f64192a4672359b9a7daff0c7d48f674e7f66b9"
     ),
     "ready_to_finish": (
         "039df6143d8b4505489db3c75ab2d3d24c01a30a4da0f0d277d865f44cfa0ffa"
@@ -75,14 +1003,29 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "drive_effects": (
         "98ff14c212f7c5f8b1756e7d8661a3ea502dfc334fc22ca592a7f85958909f29"
     ),
-    "pop_fence_completion_with_ownership": (
-        "8fc875ae966aef68a30bec6fb163c10895449a367a9d5731e5e3f8c78594bd64"
+    "pop_fence_dependency_with_ownership": (
+        "cf5a9312b16db72176857a1dfad4e7b64636f7bebd7edc7142f052ec3a2e567b"
     ),
-    "fence_blocked_lifecycle_owners": (
-        "a6ab663afdf61312dd4da128d54967c262f749f966a953dc63abc77d3751c83d"
+    "fence_blocked_occurrence_owners": (
+        "45b2891248d62b2a998ebcaf2e29d35bfeb1687a8869a0b27776904ee6b3f778"
     ),
     "freeze_due_clock_owners": (
-        "e3ac13302ebff5862aa5f0832524be2467d7fe79079b0ac43ed5560b7be6327e"
+        "72400e4f0322887b55caf39ccb20693960aaf607db8c5a36ec393014adef01cd"
+    ),
+    "validate_clock_owner_physical_cuts": (
+        "d032de42de6c77bf66ae4955295a4066f9735eb2cc1f531c6fa5986b0361821b"
+    ),
+    "clock_owner_reservation_blocks_occurrence": (
+        "3429be87183f81ffd68b1da7d1f6ee32f1536de8f7a72098d868ca2d747ae882"
+    ),
+    "clock_owner_reservation_blocks": (
+        "f6db1825402a97f52f35c0ef7cabda380be9055ca7507dfae0476d339057304c"
+    ),
+    "enqueue_after_clock_reservation": (
+        "d71a57ec0eb41724bb65040a35e9d0ac308a2ef387868c207070add6e02be541"
+    ),
+    "scheduler_arbitration_inputs": (
+        "926499ad5bca5e49d512774f85206ab108748834ee27f4864cb88b081d7fdc36"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
@@ -94,37 +1037,191 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "1d27b616e3804e98006a4353d9c7d1e03005ce9299c2e0b0ccbb7782209210df"
     ),
     "minimum_active_lifecycle_ordinal_for_deferred_excluding": (
-        "2707d2e2a3172161c3e68d8bb9779b686c53bb6414001c3827b5141e13c9483d"
+        "eca0b361eb0d72cf5e92e3d38563e04efe062ccde0ffd0db0d75942a40e12505"
     ),
     "eligible_deferred_admission_ordinals": (
-        "14a7d45a4ae18b350de195e1ba766874b531c0249f57b8072c02b2b663d55127"
+        "ca2db5b8e601e556e10001d3c0a6be5b18dd1cd1f92e5eecf0273fe158fb232d"
     ),
     "runtime_step": (
-        "1779e7ccc70bf0d62593d1c1b56d34d3d484ac7d0ebec789560f6ffb2f9e0b31"
+        "07f2cca3bebd7dc32b9f4a4eb969a66d028d09504bdde4dceba8fd15cb4db1a3"
     ),
     "runtime_step_recovery": (
-        "9ef76f925b9b11d907fb355e0bce611d8f92e0f4baa797ec5d75ce736060b2f3"
+        "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
     ),
     "dispatch_one_adapter_deferred": (
-        "30428185a9302b8faf09658e0d122bd407d7309f8679791943c35639bf1d6286"
+        "d87f6e86b65a0b37be7198f880ad2103a4e99c7eb72d2ad32b376865c40d45da"
     ),
     "dispatch_one_fence_dependency": (
-        "048103efd268407f0cd2ad5fd33829d38a8e772c8f67149e558c6ab85e8d9d3c"
+        "539239fa96fca8ea08dc56ac89041b7be0bb6f5f3d33f65259ad8e7833173b69"
     ),
     "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo": (
-        "fd73f3acdd805bc9f4f34b6f660e49ef8a3b1b3327589e40d745770abd5ace12"
+        "ff24e1cb542c713b888110865eb7e976ab71f6e00aaa2739230d8df29d8f9ddb"
     ),
-    "real_adapter_fence_completion_breaks_pre_and_post_timeout_retransmit_debt": (
-        "340a7a261a1d532414e16c6d98b8670c79fc867cdf4a02c5d36571a01e14b59d"
+    "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers": (
+        "93f8290d3a87f463bc2b99d13a9585edc988794ce18f5d2a2e3d80282a79e2ca"
     ),
     "tc_promoted_lock_requires_same_subject_reproposal_before_commit": (
-        "4a6ae3cd80c629e1ec63e32eadc6d6cfcb68a9ccc77a15997a4915931818279c"
+        "0fc1c6de5c9da37a971aa56a6da9120bd590996060ee2a3e8b83f5bb087f9fb0"
+    ),
+}
+
+# Structural inventory for the process-local capability chain which binds an
+# exceptional fence/pacemaker selection to one immutable physical queue
+# occurrence and one exact signer incarnation. Exact token digests are kept in
+# the reviewed SHA-256 tables once refreshed; this inventory independently
+# prevents a helper from disappearing from the proof-ledger fidelity pass.
+_PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_HELPER_CHAIN = (
+    "cached_queue_occurrence_owner",
+    "ownership_snapshot",
+    "mint_selection_seal",
+    "contains_queue_occurrence_owner",
+    "restore_selected_command",
+    "oldest_active_lifecycle_ordinal_before_physical_cut_excluding",
+    "physically_eligible_deferred_admission_ordinals",
+    "pop_pacemaker_progress_with_ownership",
+    "runtime_queue_occurrence_owner_projection_hash",
+    "runtime_queue_ownership_snapshot_projection_hash",
+    "runtime_queue_occurrence_set_matches_snapshot",
+    "runtime_queue_selection_seal_projection_hash",
+    "matches_scheduler_occurrence",
+    "runtime_scheduler_projection_hash",
+    "current_signature_fence_identity",
+    "clear_fence_retry_blocked_fifo_owners",
+    "reconcile_fence_retry_blocked_fifo_owners",
+    "retain_fence_retry_blocked_fifo_owner",
+    "retain_scheduler_ownership",
+    "try_step_pacemaker_escape",
+    "dispatch_one_pacemaker_progress",
+)
+
+_PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
+    "cached_queue_occurrence_owner": (
+        "a113678ffffef7c7bfae9ba827bfddff80e069dd1c1e84d9dbb5525e99138103"
+    ),
+    "ownership_snapshot": (
+        "b46fe089ce520f215926646c49fb991755ae3e2ba6b4dda5242808df6f8d0645"
+    ),
+    "mint_selection_seal": (
+        "981e90ec1cfb8388e1e6058874ecab69d8e415b7319890c5587c683e4dec7568"
+    ),
+    "contains_queue_occurrence_owner": (
+        "c116a2a5423be69a43d6dbf13c00525a416f974020cd96ad7f55282a27293a98"
+    ),
+    "restore_selected_command": (
+        "af1497f566c0c9547983f23469490478ecb322286899a44d7f2761dd668af3a4"
+    ),
+    "oldest_active_lifecycle_ordinal_before_physical_cut_excluding": (
+        "469e352d63c31ef4776fa31bfce7484c16a33f00982058005317494fd87f9e17"
+    ),
+    "physically_eligible_deferred_admission_ordinals": (
+        "0b51819b618a5d50f632ffb772a94be1560e960b57746c10ba3e077aa97b60d3"
+    ),
+    "pop_pacemaker_progress_with_ownership": (
+        "10beefbc980f21e6eb3e07de7153be4e72568a323908211afe1042335125eca9"
+    ),
+    "runtime_queue_occurrence_owner_projection_hash": (
+        "c220a852adcdb9e7a2a20cec297ee79a87cf5b88acac55410eac3c824614d1a6"
+    ),
+    "runtime_queue_ownership_snapshot_projection_hash": (
+        "bb6d0062be867b73c5269979c4f850bc9614e8f15c76f65c60dbc9e44d497eb9"
+    ),
+    "runtime_queue_occurrence_set_matches_snapshot": (
+        "c89fd5e9e3df83fb51e201555e53799c625c9978932fb61be844476ad2c977be"
+    ),
+    "runtime_queue_selection_seal_projection_hash": (
+        "b9036732219388125a51d4652ce4143aaefe00574d7f9f9f359cc90b76b56368"
+    ),
+    "matches_scheduler_occurrence": (
+        "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
+    ),
+    "runtime_scheduler_projection_hash": (
+        "bcee96f000cf6652240fe9dbfa5411f667e3979dc156710e3b1803bc88c63e08"
+    ),
+    "current_signature_fence_identity": (
+        "d3e7b714af5442d66ec2e8f4e1c57bfe649c5b8f41b310d71929fa6586baf0ed"
+    ),
+    "clear_fence_retry_blocked_fifo_owners": (
+        "2ce5c0a06b37a5342eaa297e3fef4ae70ea0856344f03c8eaaf08fe5488097ae"
+    ),
+    "reconcile_fence_retry_blocked_fifo_owners": (
+        "d603d692ea6053b116efce0eb77fb0872e2f0277480239a5a4183583015de370"
+    ),
+    "retain_fence_retry_blocked_fifo_owner": (
+        "f6c5e5ac82dfda26d972715a073a2ddb7a41135ef9be0ee02ed77944f9e186f8"
+    ),
+    "retain_scheduler_ownership": (
+        "4addd609c67402a1a5de9704e093e23bb8a7ea6cef2c2477a9adb6e2aedc5cb6"
+    ),
+    "try_step_pacemaker_escape": (
+        "aa0a41501d13d502e119566bb4fc55e202f820ece97cf66e486ac851b458c64d"
+    ),
+    "dispatch_one_pacemaker_progress": (
+        "54493a9c9ee90735c473e7a11b8abcb171be883e0b4d708256b297b98793de4e"
+    ),
+    "occurrence_owner_validate_exact": (
+        "0f018cbe8ab36b2a5e1f3aa128d7c22c367083b399184aedc8c829f9228db8e3"
+    ),
+    "occurrence_owner_matches_queued": (
+        "e8544136325028c614b22287649c3e7af5779669328b0b64918093edabb8302a"
+    ),
+    "queue_snapshot_validate_identity": (
+        "9ee5bf23ffa531c168a3722a216ef32a9c2cf83f4265e25dde0fe750b4fa890f"
+    ),
+    "queue_selection_validate_identity": (
+        "18019651786d6151ee975cc68de9f43f2e9ece72e979d3957fb67acbb7c09774"
+    ),
+    "queue_selection_matches_scheduler_occurrence": (
+        "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
+    ),
+    "scheduler_evidence_validate_exact": (
+        "04da1f906e4e197bad4e49e962a92ae7d99c2749f6aecfdfe28f256c4426a188"
+    ),
+    "adapter_pacemaker_escape_is_parked": (
+        "5513bb3477396c268d3dc7ed75ded1d6c027bc5780c5f129b53920720c498d86"
+    ),
+    "adapter_signature_fence_is_active": (
+        "2012f7befb770adf8ab34a94452c592836dc3ae6c8e4e8ca4c3148f745e4db38"
+    ),
+    "adapter_signature_fence_identity": (
+        "3bfa48370472e85c7727695165fae3c6758a4a9ff228111c806e558929f7faad"
+    ),
+    "runtime_driver_certified_progress_bypasses_signature_fence": (
+        "6c6761d3f63a292cf04fd123fc055891200081b7dda8f211482f58cfef7b385d"
+    ),
+    "runtime_driver_completion_unblocks_deferred_fence": (
+        "1379d6ae2714aa4bfc2b02cec74611a0f65799319ab94b8fc37b04ef0fec62a5"
+    ),
+    "runtime_driver_command_is_blocked_by_deferred_fence": (
+        "63b773eb42e48fc13be96b5aecd992d9e23a264ba28d0720e450eace4578dc5d"
+    ),
+    "runtime_driver_pacemaker_escape_is_parked": (
+        "4ed5db3024338e14145b7186c4392feb1c14348e887f3695d813f980ad6680e7"
+    ),
+    "runtime_driver_signature_fence_is_active": (
+        "34aa7d6b66cf8ad39f348f2b0ebecd773f4c771867951769222215f5ab877294"
+    ),
+    "runtime_driver_signature_fence_identity": (
+        "135fcb20dbb91a2adfa807031ee70a6b11e396b8369959dbeca22a8aba2718f7"
     ),
 }
 
 # Exact comment/literal-free token digests for the production ownership bridge
 # which retains the complete canonical envelope and fair-ingress carrier from
 # authenticated admission through Busy-deferred service.
+_RUNTIME_ENQUEUE_NETWORK_WITH_INGRESS_OWNERSHIP_ITEM_SHA256 = (
+    "422f7ae170b202c5023c98f94182a4526eb883c39e7576d3c1e0ba69f0723958"
+)
+_RUNTIME_RESTORED_PRE_RUNTIME_TC_CANNOT_DEADLOCK_ITEM_SHA256 = (
+    "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
+)
+_RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256 = (
+    "55911931e88d79735954f6bbe7f246bb91b7da1e28f941a7e6ada9a7a86c7d08"
+)
+_RUNNER_ROLLOVER_FINALIZED_HEIGHT_OUTPUTS_ITEM_SHA256 = (
+    "7049c460f181dbf4b32b3ad153387c0ebd79cf271347b4de39a55502883c686d"
+)
+
+
 _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "matches_authenticated_runtime_bytes": (
         "1d5bd7b516504865f7f8f8db0416c7c1d337ba83342cbd66b564b24e46df3870"
@@ -149,6 +1246,9 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     ),
     "runtime_ingress_leader_wire_physical_carrier": (
         "964b47b38e48c18e93b0a4e9d63ac711f5ef14ed89d933ffbe1e93233d59d7c5"
+    ),
+    "runtime_ingress_is_physical_leader_wire_replay": (
+        "7af77803b6cb064c9f611601e930c2ee13db7e961a5c85fad10a80900299792a"
     ),
     "runtime_ingress_earliest_physical_carrier": (
         "aab95bf9cc5928cda4550fa375c56f8958b473940ab865b7527946eb5f235325"
@@ -184,7 +1284,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "488ba0d5d7896c09a4966d90d16c831090f516c42ab213c70c62aead6b49f0b5"
     ),
     "runtime_deferred_lifecycle_validate_exact": (
-        "df41281db59b26ee4efd086c324d33d9655378f4a2c571335588396db1a71c38"
+        "63e7de646d2eb0dcbc7c9e8aaa87562e44ee3bb007b3185e51237b0b554e4cb3"
     ),
     "runtime_deferred_lifecycle_validate_against_ingress": (
         "5584747a03531f1709f299d16b7cd1884becd7cbd5a37c7619777277112b4e30"
@@ -193,13 +1293,13 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "0ae0c8bde63fd29b4732f301498515f9444a9991f8008aaf3fc23a9a27583918"
     ),
     "runtime_deferred_lifecycle_rebase_deferred_ingress": (
-        "b18470839079c4922c39341a62f804bee2119123e05758c55100b62e183eb363"
+        "981bd3b563516a04eb013b82fbacc7017b4d3a8df16756bcf5c5d7cd72808de4"
     ),
     "reconcile_deferred_ingress_ownership": (
-        "6c47b3670db6f8398e5e4673b8dfc0cd570e0c0a1535aae41aa85c1a7ae0d6c4"
+        "37ebb9c8e38cf6d1eda06a31a83570c40f45771f0847adea36d3305d7a6d38bc"
     ),
     "reconcile_deferred_runtime_ownership_after_retirement": (
-        "2b5b76aaa860e8186f24f20aef7fcf22e4b704678a4179f0e2666b12504addcd"
+        "fb99631aa84450b5b8d2d0ebf09b70d0e5e687868d89977bf8334b554e67b572"
     ),
     "active_leader_wire_runtime_ordinals": (
         "60659f35ec4d592990db68069fb1373bc2af662711fb11a14db1078d8b395dc6"
@@ -217,23 +1317,31 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "6fccf9497abffa385d06a6e4f4fd9a0f641745ca51b17f8b6e7dcede26c449eb"
     ),
     "accept_driver_dispatch": (
-        "53c15b0a9cc4d074707377b6365e8fc3497c57e8706c191d5f503313016838be"
+        "650c7e0b0c9e1af79cb835080e7ff5f9cdf63a0e80e476586c211e6566e6d9f9"
     ),
+    # The public enqueue alias is shared with the timeout-episode inventory;
+    # the two admission predicates retain independently reviewed seals.
     "enqueue_network_with_ingress_ownership": (
-        "f7767ff4d68f29e72bdff8ec39d4c3b2ecaba66733a79c137090d2c29fca7d60"
+        _RUNTIME_ENQUEUE_NETWORK_WITH_INGRESS_OWNERSHIP_ITEM_SHA256
+    ),
+    "can_admit_pre_runtime_leader_wire": (
+        "c87bffb9117487d2697e1cb242859927e0083d8c965674acc9b475a56b50d360"
     ),
     "can_admit_network_message_with_ingress_ownership": (
-        "24903fdc43ff249788662132bdf1c260917a8243b260e67ba5e8224a013d361d"
+        "338ddd65e84755b37a84a618375f27631ddabc72e478b2405ee7f9904b5ecad3"
     ),
     "take_last_scheduler_ownership": (
         "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
     ),
-    "commit_certificate_response_coalesces_with_exact_busy_deferred_qc": (
-        "29cc0769d5f9224ea11e10410b05b97a4e33fb75b9327ee4a18f19e12babbfe9"
+    "network_admission_uses_exact_normal_and_progress_reservations": (
+        "df256be7d1e1d89c254cb75c6e8a064157b9d584c4c095c73f7253917520703d"
     ),
 }
 
 _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
+    "deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences": (
+        "bdd92f55342073ef1a709fbf8400708056ea2042c3a0904fd1f2993993b3298d"
+    ),
     "later_same_semantic_fair_retry_retains_runtime_lifecycle_root": (
         "12e41e90bcd59ef22389131ad4b5cdeb56dce7fa04cd15357d18ce9f62cb1b6a"
     ),
@@ -246,6 +1354,368 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
     "network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals": (
         "878269e9bdf567147360a1f3c2bf5a7def18b7abd1b38aed3978dc7923624291"
     ),
+    "distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner": (
+        "9fd964c7159754e3a01d6d905f40423fb1fb4d573f033f031b3497b02969c1d4"
+    ),
+    # This alias is shared with the timeout-episode regression inventory.
+    "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner": (
+        _RUNTIME_RESTORED_PRE_RUNTIME_TC_CANNOT_DEADLOCK_ITEM_SHA256
+    ),
+}
+
+# Exact comment/literal-free token seals for the finite current-view
+# TimeoutVote recovery episode. Each entry is approved only after its focused
+# positive baseline and negative mutations pass together; no digest in this
+# inventory may be bulk-refreshed.
+_TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
+    "ingress::fair_v2_ingress_is_direct_validator_timeout_vote_owner": (
+        "be2e39948e3696646e15c3331e020351b8f5065ecb25d9aef466674afc18b648"
+    ),
+    "ingress::try_recv_if_checked": (
+        "091f57ccb6adaafd50864565891f636b364658cb8ed70cc5254d521901779a82"
+    ),
+    "ingress::try_recv_if_checked_retiring_obsolete": (
+        "06c5d041e60dd73dbddb63a9e4600772d7ff1e80d250255612a18a3ecb7b7733"
+    ),
+    "ingress::try_recv_if_checked_retiring_obsolete_with_barrier_bypass": (
+        "36e0d2de5bd03d5f3547ab4e7b9be43a74d51b7abfb2f4ca72753171f8605bf6"
+    ),
+    "ingress::try_recv_if_at_checked": (
+        "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
+    ),
+    "ingress::try_recv_if_at_checked_classified": (
+        "cbf4e2244e6f120a4ddf33b2e58c987a1b8f75fafa94c35dc0e10d0652813da9"
+    ),
+    "runner::run_inner": (
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+    ),
+    "runner::drain_v2_ingress": (
+        _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256
+    ),
+    "runtime::RuntimeTimeoutVoteEpisodeOwner::validate_against": (
+        "fb2a98e36b7014a4199ae78eda34119f69cec26fc25fff2d4ce5758f41d74777"
+    ),
+    "runtime::RuntimeTimeoutVoteEpisodeOwner::same_lifecycle_owner_as": (
+        "4c7e987d86308f3f71c36a9c91f9f4dfdda750f411382dd5934fbb61554668bb"
+    ),
+    "runtime::RuntimeTimeoutVoteEpisodeAdmissionPlan::count_transition": (
+        "63923a863bfa409746d6f5efe7a5609913a9ebd19ffe98d65281a2e9a94f310f"
+    ),
+    "runtime::emitted_timeout_recovery_owner": (
+        "62364351b1c0cbc70ec583b61313e53a374b60fc83e4b4257beefcd35c953fa5"
+    ),
+    "runtime::timeout_recovery_episode_allows_clock_blockers": (
+        "4c52b5a78486a535d247919079bb60090ace9ba4b77e1759763aec0f48627f55"
+    ),
+    "runtime::timeout_vote_recovery_candidate_from_fair": (
+        "8a3399864c9016a838a2c64df3ac10e1642e9acdf9275e7b054c0160e7905072"
+    ),
+    "runtime::timeout_vote_recovery_candidate_from_runtime": (
+        "edbe98f16b7a80cb790a6eee1c0a3026c7e6030e005aeaf0d4ef81de45403594"
+    ),
+    "runtime::timeout_vote_recovery_candidate": (
+        "46f46e7ce5eae9a06ff23fbf54c582addeccc5bfe5cef9372e54c1a6053ceda0"
+    ),
+    "runtime::timeout_vote_episode_admission_plan": (
+        "a4e4b2455b2c355c57bdeab05470e4a700afa498980adb02ed31504f75ed01ec"
+    ),
+    "runtime::enqueue_network_with_ingress_ownership": (
+        _RUNTIME_ENQUEUE_NETWORK_WITH_INGRESS_OWNERSHIP_ITEM_SHA256
+    ),
+    "runtime::can_admit_timeout_vote_recovery_episode": (
+        "9b99f56691a9752e95501583a1e187d8727498035d8d899c55277ccd3ffde47b"
+    ),
+}
+
+_TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256 = {
+    "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner": (
+        _RUNTIME_RESTORED_PRE_RUNTIME_TC_CANNOT_DEADLOCK_ITEM_SHA256
+    ),
+    "restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut": (
+        "00eb6a4425997fe9ef985adb09e792913c5df8805e58c4de9473e7fd720724d2"
+    ),
+    "pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot": (
+        "47d9e77bbf51c1564dbdb4bb7ab2f5d3dafecc279a11fb59f91dcdeed2254d7f"
+    ),
+    "two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view": (
+        "7b7545acd3419b5e23f92402787307896e18465e6ad8a922b94a1ec0bddb6581"
+    ),
+    "restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission": (
+        "5cfdf24f7d136889a6bf829dbe980858899c7b663bc6574445c63d08ca869344"
+    ),
+}
+
+_TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256 = {
+    "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier": (
+        "394810ab62d382e3016e5a6c88660778c34beca86d0804b567a74be47f8694d5"
+    ),
+}
+
+_TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256 = {
+    "timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier": (
+        "0fc0836ffbbd67bdd8174d4a981eb6f9e9baf6918705df9d30d3b393bc8fb625"
+    ),
+}
+
+# Comment-normalized formal operators for the same finite producer episode.
+# These remain fail-closed placeholders until every listed semantic mutation
+# is observed to fail independently.
+_TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256 = {
+    "SumeragiV2AsyncNetwork.tla": {
+        "AsyncLeaderWireCanonicalLifecyclePayload": (
+            "b921a227ed962459b4973297dd0d9be90c81401af62ba7f385e398de31a8b453"
+        ),
+        "AsyncLeaderWireLifecycleSubject": (
+            "77c927fa76dda21438c34668681704a702894bde0e6497f57c3518c9f4acb1cb"
+        ),
+        "AsyncLeaderWireLifecycleIdentityAt": (
+            "3144055cc1d2ba15799bc2f716423a113d1998fcdfe2e1e5410e437aafac0045"
+        ),
+        "AsyncLeaderWireLifecycleRecord": (
+            "854dd230bb474215e7b417f3d80d3327811b5aaf3a1eb5cb2ca4c3c3bdb6bc51"
+        ),
+        "AsyncLeaderWireLifecycleTyped": (
+            "dc59143994e349417932182b8042555bd572c60cfa7a6ccf37dd3db9d2252053"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerDispositions": (
+            "f6d0a37b228934a0f88c3d9ae8cc46aec9ed1331ae9172b5784ef78ec6092090"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionDispositions": (
+            "2c2ef87daca3055b2b0747d1664ad617a826c85370434509f8ea58b6050c4c23"
+        ),
+        "AsyncTimeoutRecoveryEpisodeKey": (
+            "61dfcd9bf069add7d70901f79ac047bf57fad89e302b3855c9dddc3ea390da59"
+        ),
+        "AsyncTimeoutRecoveryEpisodeKeySet": (
+            "35f54e3863b1adea21d2f768a5be5862d13d9c4aaff3e41c9eb54fbb3db3a37a"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerSlot": (
+            "681ac1b76eedfd4cf39b4407c5f75a199fc3088fcb89ff2704ef0450e32e757f"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerUniverse": (
+            "eb5c4dc611f078a882b491ffba0e33446987966a124e23630b9835d214e5cdb5"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerValidForEpisode": (
+            "5a7bdb2dff26729c0a73dd25a76f084af512fd78152d84511d77f0cf48b9faa0"
+        ),
+        "AsyncTimeoutRecoveryEpisodeValidIn": (
+            "ebc240a8012b97d2d93de0c8e89b8dc59d16555b4b6246bc5f80640e974aa53d"
+        ),
+        "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant": (
+            "67dda9f1b2cf4edf41d7ef7a7e7279615e9472dc97895e9e677208b882560879"
+        ),
+        "AsyncTimeoutRecoveryVoteBasicBinding": (
+            "7bb504333f577e6112b7d4e700c5bd06273c6a991f37f19b5a2ad148bd3fe286"
+        ),
+        "AsyncTimeoutRecoveryVoteIngressRecordsFor": (
+            "bfa3c52d46c7f667b1c4692190c73202864dde163cb07948424677b7336c0ebf"
+        ),
+        "AsyncTimeoutRecoveryVotePreCutDescent": (
+            "e281c02fe826ce29730d14d8d1660a1fe850ef6e37ba9957d6239e494d8278fb"
+        ),
+        "AsyncTimeoutRecoveryVoteRestoredDescent": (
+            "b62e3824511a155faa4a16e5b264675d112b41c47705d634dc0da866880e1db1"
+        ),
+        "AsyncTimeoutRecoveryVoteFreshReplenishment": (
+            "866f9a2e43a1e7434faa9ed0aabfa15e5a880e8d34b50812c39331763df2bed5"
+        ),
+        "AsyncTimeoutRecoveryVoteDispositionMatches": (
+            "7d7b112535e7390fcc77ea79d994ece09822223bc2f58c255dd57732dd7437f9"
+        ),
+        "AsyncTimeoutRecoveryVoteCandidateOwners": (
+            "30123fde668ec8ff7f8142ba8eb692926e42c9a4bdbb17a568ac3cbd940d1173"
+        ),
+        "AsyncTimeoutRecoveryVoteCandidateDefined": (
+            "0050d45aafb4106ebc997e8b044c310806bbfdaf5233b712374a0a6d3e9889a6"
+        ),
+        "AsyncTimeoutRecoveryVoteCandidateOwner": (
+            "f7fdd337e582dc62d429eab16fd16674b17e07890d2753301f66d9ae0c91bc66"
+        ),
+        "AsyncTimeoutRecoveryVoteIncumbents": (
+            "5de335606d8bf7816ddfea5b85dd1716545d0ca267bd22e89e9888bb732350a1"
+        ),
+        "AsyncTimeoutRecoverySameVoteLifecycleOwner": (
+            "7c638dd0530b7bd889e0755a45eda303f98359575397a219e86593067a78caff"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionPlan": (
+            "d0da8ba07c67af4fd18a668523e3748f3972a66f85b05c2b12795ece44068b55"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionRequired": (
+            "2f5ee1a824beb7736d0bbb7f0c051b29fee24fb4a782c56a3a7b1ab863afc273"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionAllowed": (
+            "8dd0ff9ee7a45c7bd12d8cee1c0ba3c155115b1ec6f8cc83bbdfc237fe14b7d9"
+        ),
+        "AsyncTimeoutRecoveryVoteBarrierException": (
+            "d8522b9b23b8314bdbbe6b6a81d601dfab6d3fbaa389e51e76029b33db0f5b5e"
+        ),
+        "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier": (
+            "085073b59232d8c3e930b7fead0151ac8d6a37602452c556ad4174a98b734988"
+        ),
+        "AsyncServeIngressIndexMayPrecedeAdmittedTarget": (
+            "d2f99c02442f82c8ae6041155b28d431bc38821ca3bb7b5420e032930baa6145"
+        ),
+        "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget": (
+            "86ad64b20c4ec9626b9fc1221b15c3d51a67187d0664a0c41bcd22b48c66a94b"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionOccursThisStep": (
+            "28f5c1e16034f5dd5c3cae9ccf22c81cb02e1d9ffc1eb20aa04f04e6b915b385"
+        ),
+        "AsyncTimeoutRecoveryVoteRuntimeRecordsAfter": (
+            "48aa5a6e4b6422d73214ea872f4fa817071bd17b2a6fa4c55b59aa100f0ac5b2"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionNodesThisStep": (
+            "cc519f7ac25e4fed87ac00a68d907e97b72b1385eb6d527d4ed94facde6456a8"
+        ),
+        "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission": (
+            "f49556faa311370cee18c10d8af8489054c87bfceca95df7e10ca49f4114e0b2"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerStateAfterAdmission": (
+            "37d807e2f76d7170ca7145829e8ebe8b2fafd5f2b24ea0130e3beff0fa5d6021"
+        ),
+        "AsyncTimeoutRecoveryPreAdmissionStateForSlotTransition": (
+            "acf7fbae28f75e45ecd317451bc2e38ab865fab16acdc736d0bd8024d952d200"
+        ),
+        "AsyncTimeoutRecoveryAdmittedVoteSlots": (
+            "b09ad8beca8d2938814d9d19fd3446c596f01131e885bbb4f8875f1749800183"
+        ),
+        "AsyncTimeoutRecoveryRemainingProducerSlots": (
+            "a3c7c870d7110bfcf64c6be0e5889f13fb836379b55954775349f11ab762a75c"
+        ),
+        "AsyncTimeoutRecoveryProducerEpisodeMeasure": (
+            "316131577d432419223b8e039fc85c66144da1996701736cf6a04882105747b7"
+        ),
+    },
+}
+
+# Exact theorem statements and proofs which close the finite producer episode.
+# These seals stay deliberately unapproved until every independent theorem and
+# downstream-provider mutation fails after its local digest is refreshed.
+_TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256 = {
+    "SumeragiV2AsyncNetwork.tla": {
+        "AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite": (
+            "1df06952a3664f7770385d6d4175e73bfbeddc53200715e3ccd627ac925a39f9"
+        ),
+        "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot": (
+            "88bd8b5a5262c9e4220a14c1041492fea1435795035c0df5833da6b01ae7b8f6"
+        ),
+        "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission": (
+            "09724aa3803ff9a87bbc61b24f101afa4d2ead895f167a3c05beb3bd59403698"
+        ),
+        "AsyncTimeoutRecoveryFirstAdmissionConsumesExactlyOneProducerSlot": (
+            "44874f718618e4409812b99ff62e28cefa9dc904a4938889e04104a5a4f1485b"
+        ),
+        "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode": (
+            "4c25562e7e3e5ba4b301a083caf80fc507ca23793fdff5f0d83a61d98ab598db"
+        ),
+        "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot": (
+            "402d555a2123de59812a33b3beb9efd8018fa08f70d293b34284ea83d12ebd12"
+        ),
+        "AsyncTimeoutRecoveryUpdatedEpisodeIsRetainedByAdmissionState": (
+            "81b6e5c8ab71af82a8099a563a96db2e5ee106fc31c9d773b86db2c7652c064e"
+        ),
+        "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionIsStateIndependent": (
+            "f23a0f081c1b20572022d0756f8daa9ee1dbc06da96b1e4ed933fe2406b53686"
+        ),
+        "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation": (
+            "4ff696a18c898ff16ba41a705e464668de9083c018efdafe1baccbeceeae3cb7"
+        ),
+        "AsyncTimeoutRecoveryRetainedEpisodesContainFramedEpisode": (
+            "21fad6c95f6d72febeaea68a67b42c917c44c5d3958203eb2fc2e442227c1529"
+        ),
+        "AsyncTimeoutVoteFairIngressDrainLeavesCoreState": (
+            "579691707af9891234bdee0b535a018dd864baac48548c17ddac66f428dec26e"
+        ),
+        "AsyncPostGstHasNoControlServiceReset": (
+            "d738c3b56078f2a44f76f15c319d310288f9fad7a2ec011a7cdc04af5d06e36d"
+        ),
+        "AsyncTimeoutRecoveryEpisodeCurrentBoundaryForNode": (
+            "d3cd30a1100860fd8c718fce20f20379aba20ed13974fa7eed912503f9138ce8"
+        ),
+        "AsyncUnchangedCoreStatePreservesTimeoutBoundary": (
+            "47d944b51bd1a575c066d1d3218e62de883b07984b04725ae9355234f73a20cc"
+        ),
+        "AsyncTimeoutVoteIngressDrainRetainsCurrentEpisodeBoundary": (
+            "2ea11aa8dc93fa7684d2ecb2a96cb4af7dbbbc8da63d30a008048a2a1fd045aa"
+        ),
+        "AsyncUnchangedCoreStateExcludesPersistInstall": (
+            "095b9ab62786836bcfbb5a4363477378905311a89aebc4d1fcf4feb4bd7ba97f"
+        ),
+        "AsyncFairIngressDrainPreservesRetransmitTimerState": (
+            "b473620a788d1b0f680dc34677d31471a8f218415ab2572c2d18835c1e64b2d9"
+        ),
+        "AsyncFairIngressDrainExcludesDirectRetransmit": (
+            "ad31fdd4ae63ba80ec7d6ca8e9944f5dcc0f8c237ceb6596b35d23d12f7ea674"
+        ),
+        "AsyncTypedOutstandingTagRemovalChangesFunction": (
+            "8ea219351421de1566369e590290bebafc6fd19d80ef1f3173b81d9cafdc11de"
+        ),
+        "AsyncDeferredRetransmitRemovesOutstandingTag": (
+            "4b85c87bc746d4fee0e6844c5f1f3cb72c53a9acaf3cdb8b0f15a2fd69744bb0"
+        ),
+        "AsyncFairIngressDrainExcludesDeferredRetransmit": (
+            "bc19fc379f8da8f848667b77cb0c859605fae3153e2ba6d2a2be334f0b40c17b"
+        ),
+        "AsyncIngressDrainDoesNotCompleteRetransmitLifecycle": (
+            "21b37b8848a7bd3922bf934c2ae2533af315f563465cd07866562762a82dd959"
+        ),
+        "AsyncIngressDrainFramesDeferredAndCausalQueues": (
+            "ed85c48c72dd007237193ba7a5087ba3f635b4fb2c5d9e3c05f5ac3fd78ceb59"
+        ),
+        "AsyncTimeoutVoteFairIngressFramesCommandAndWork": (
+            "9ec8a9f5753e50c531e67e7ff18140a6a442f82afee336a0da542aa24f370c9c"
+        ),
+        "AsyncSequenceSetAfterAppendAddsOnlyValue": (
+            "54303c304b4d75584ef078930e256dbc611662ba19d72a80907c555c4d328ee2"
+        ),
+        "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue": (
+            "41fef605e80b132b9fa9dc1e8be04bbcdc05b95cd3ecb7816db3866d2bcdf01e"
+        ),
+        "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers": (
+            "333bf376ecd4a6de1510f3ef6be559e847804cfc5b5c99abe06bff76a27e241b"
+        ),
+        "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin": (
+            "ec3bf0910e32f4ff43e9c2de072985cfce9ee193894b49857cba30fb2a95222c"
+        ),
+        "AsyncProposedTimeoutCausalOriginHasBeginTimeoutPhase": (
+            "9f877ab73f3e7dd856d0e815adcd53f49537531203273d688470bee4af9cf8bf"
+        ),
+        "AsyncOwnedTimeoutLifecycleOriginHasBeginTimeoutPhase": (
+            "9e91b44806f1f022f7b864cf76c6195a7e4a7d4e47e47685f5cb8db75e426053"
+        ),
+        "AsyncCurrentTimeoutCausalOriginUsesEffectiveOrigin": (
+            "7895a9a9334907f80dafa4f489440db25dd1834c76d1aec5aad4fbf6b3343ae2"
+        ),
+        "AsyncOwnedTimeoutRecoveryCurrentOriginHasBeginTimeoutPhase": (
+            "24f1cc906957182fcb9cc2070f04a36d3d412c649f7eb3266efaac4af6fc3774"
+        ),
+        "AsyncDeliveryCandidateOriginPhaseEqualsDeliveryKind": (
+            "6738b6c3ff4b2f59e8a76c0f3d48a45a1596f33c1034e63bbccee12f687aef9b"
+        ),
+        "AsyncTimeoutVoteDeliveryOriginHasDistinctPhase": (
+            "8575237ea078b3f9aa6ae52221c7005926d933edd1f64e6f76d105ee10b1bde1"
+        ),
+        "AsyncTimeoutVoteIngressDrainDoesNotTransferTimeoutLifecycle": (
+            "ef4c3d237655ff50311beb25ccd505c64a08ec4d7101dc8cfb8561eb27a442ad"
+        ),
+        "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame": (
+            "f042e10c01d4109284f2557ce3da9806f771009526a3ea528b8d899ad794cb64"
+        ),
+        "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode": (
+            "43b470ee0007250242614c689a697ece3ba3c5b97a508ae5dd184f12d9431c28"
+        ),
+        "AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState": (
+            "47d20f52eb8495d81169989c68ba754f7f36bfa6622b02a56433240f41367c54"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition": (
+            "9b7852d4c48d9c782e1e06ad51abdf998b9fe770e65a4c656a13231ce080f93f"
+        ),
+    },
+    "SumeragiV2AdequateLeaderServiceClosureProofs.tla": {
+        "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode": (
+            "3cb5653b8cceb88b3a193570b5b344cde20f58e5759bfb770fa343f9e392126c"
+        ),
+    },
 }
 
 # Exact production effect-executor entry points which retain the authenticated
@@ -255,20 +1725,65 @@ _EFFECT_CAPACITY_PRODUCTION_RUST_ITEM_SHA256 = {
         "9bf3e8ec45247e920681de7f13941d8544df863b73c5a3ac243adcacae0b2587"
     ),
     "can_admit_network_message_with_ingress_ownership": (
-        "644421658388af9adb80656b4b0d7b402835187c13d5c32b92e43f41ae5ff10f"
+        "b2d35847177381a3f4ab5fd6fb06ce4b15e7449220db5daac00699cc5825677d"
     ),
 }
 
 # The retained exact Fetch lifecycle must not duplicate service work while its
-# immutable owner is already installed, and completion must publish the
-# reserved runtime successor before retiring any local owner.  Bind both full
-# methods in addition to the focused ordering checks below.
+# immutable owner is already installed. Completion must publish the reserved
+# runtime successor before retiring local ownership; protected-view transfer
+# must move an unpublished token with its Fetch consumer; every terminal Fetch
+# path must retire either that token or its exact restart-restored stage-7
+# parent before releasing P/Q ownership. The checker separately binds the
+# persist-first deferred batch, restart-only producer frontier, persistent-root
+# rebind, and live leader-wire recovery cut by ordered source contracts. Bind
+# the complete production methods and adversarial regressions in addition to
+# focused order and coordinate checks.
 _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
     "begin_fetch": (
-        "7b34ba0db72d22ad1e86935f129bbd35d17aa31888b67df601c9865cfbd9eb11"
+        "9d50ba3ff1b4227c8e0ce7a8444796eb1b50c6c1a23b8c5f5669991652f7f4e0"
+    ),
+    "reserve_body_available_with_owner": (
+        "a29bf418476f2b07e4821d63c6c1415ac611fc52a59868ea5fb7dc077d17dfa2"
+    ),
+    "rebind_unpublished_body_available": (
+        "00bbe44f9d02199bee50f805425df0760caffc257598003f55aaa35ddb47d46c"
+    ),
+    "retire_unpublished_body_available": (
+        "c692816b54ef0184f6453614a2c8272168ac445e5e1f397ab27a6b508354c6fd"
+    ),
+    "effect_runtime_rebind_unpublished_body_available": (
+        "e126b97f8f5a75b0868f6334ada164ec16e2d35b924e6940daa91f5b5fe3550e"
+    ),
+    "effect_runtime_retire_unpublished_body_available": (
+        "3ed15174c27d497028b91f264a25ec2c1294c35e228298ebc5caa51f74332df5"
+    ),
+    "commit_pending_fetch_retirement": (
+        "2a48078e9a5ffd2d2fc9d57011089be27f15e847b346ba2ff1c3b0a4343d4815"
+    ),
+    "install_view": (
+        "27598c65a38ebe1921d51003a18203315d01e85133b755eed26b29e2251c7850"
     ),
     "commit_fetch_completion": (
         "ee63eedba56be13b1af788f81f9f69dc380a834bc0a8d0b36e1de3910f041f92"
+    ),
+    "retain_retransmit_effect_ownership_for_test": (
+        "7501414a5b20cfeacf429a9d2b43cf5dd2a797e2a579559c05d987437352ed8d"
+    ),
+    "production_capacity_saturation_admits_response_and_reconstructible_fetch": (
+        "a97f5cab5c218297c5df0dbc3c9aa803c9a0284b50fc7c8ad960c2314e56b861"
+    ),
+    "ready_body_backpressure_retains_exact_ingress_until_capacity_retry": (
+        "320015eab09976a0e9f6e823b77f366df19ddca3968aff99627fded06595d085"
+    ),
+    "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner": (
+        "920f70f6d4ebf90ce3f9a4365e99bc88da19671d80e4f716aa57bc08caece7fd"
+    ),
+    "tc_retires_unprotected_retryable_body_token_before_the_next_fetch": (
+        "7ccd83a8975e7fa6c970e517cbdd546468fa19ca876b0deefe34a14f3db76638"
+    ),
+    "durable_sign_preemption_retires_a_retryable_body_token": (
+        "4eff93945c51ac3473a2817a29dfe493a6606b3b2919ba33ff957ee121b325c1"
     ),
 }
 
@@ -293,18 +1808,27 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 813
-_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 82
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 845
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 85
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "708e0ed0221056b20b9d9f03f1ea8cd07225b0c84c39ad18dd25402e090fb30f"
+    "7682213e3d64750910cf8e72c72556641cc04d5a34d931f1b2e0135f290c9599"
+)
+_PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
+    "72328cdb488b6e059e5a774fee2b1daf03d752f0b561fa5dce8a09b8bec742e9"
+)
+_SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
+    "3c48c972b94ed16b8bf51a847148b9c5c2c90d1bd4459ca0ac8a9be71c87fed0"
+)
+_SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 = (
+    "14a20c6ef475d022ab95b754d94fc491cb9b8dde9ed5ac89ebd1366ba8359d07"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 309
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 310
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 524
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 525
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb"
+    "bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -364,23 +1888,23 @@ _SUCCESSOR_PARENT_BINDING_TEST_SHA256 = {
         "79c2caea8dfd6f17885ff3d72253a41cb34db7a99d7976b52d5fdab45c0e9a89"
     ),
     "successor_context_requires_the_durable_cryptographic_parent": (
-        "43ac1f9d461eaebc54570a59b0846abadaa9e8791a8bfc89e02a234e99276555"
+        "f7ff90422e2b67a0d696eecd7da5ca64fcc692cf13f69779c2ea74f58da4e7a3"
     ),
     "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter": (
-        "414c5f5bf9c7156f38222f256673c42e1ce2394293193487fe9d5d2d24044286"
+        "423991082e2c3a6151fdd80b69b643d56b56d2cb7963331024453b2fab7c037c"
     ),
 }
 _LATE_LANE_RECOVERY_TEST_SHA256 = (
-    "ae4bca0b785e6d7d5db41dd5516ce2859464f0f0526d5d7d3a52a3c930f6025e"
+    "b0457ed9453abd1999e7246c3cd2d96aa1dc6e4763466a5f7c76635699997344"
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
-    ("production-kura-progress-durability", "kura::tests", 13),
+    ("production-kura-progress-durability", "kura::tests", 14),
     ("production-kura-lane-geometry", "kura::lane_geometry::tests", 8),
     ("production-lane-relay-exact-ownership", "nexus::lane_relay::tests", 4),
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        41,
+        43,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
@@ -409,13 +1933,18 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 57),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 60),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 129),
+    (
+        "production-v2-lifecycle-recovery",
+        "sumeragi::v2_lifecycle_recovery::tests",
+        5,
+    ),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 132),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -467,11 +1996,6 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-irohad-network-relay", "network_relay_tests", 4),
     ("production-irohad-authenticated-via", "tests::relay_fairness", 7),
     (
-        "production-irohad-genesis-reply-geometry",
-        "genesis_bootstrap::tests",
-        5,
-    ),
-    (
         "production-config-v2-exact-output-geometry",
         "parameters::actual::tests",
         2,
@@ -486,6 +2010,15 @@ _PRODUCTION_LIVENESS_RELEASE_MODULES = tuple(
     module for _, module, _ in _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
 )
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
+    "kura::tests::lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered",
+    "sumeragi::v2_lifecycle_recovery::tests::generation_takeover_runs_crash_recover_and_rehydrate_then_stutters",
+    "sumeragi::v2_lifecycle_recovery::tests::every_lifecycle_recovery_cursor_cas_boundary_survives_restart",
+    "sumeragi::v2_lifecycle_recovery::tests::prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side",
+    "sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt",
+    "sumeragi::v2_lifecycle_recovery::tests::local_producer_recovery_requires_the_exact_current_queue_owner",
+    "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
+    "sumeragi::v2_runner::tests::terminal_sweep_source_partitions_whole_units_before_any_mutation",
+    "sumeragi::v2_runner::tests::local_producer_queue_custody_is_preflighted_before_cursor_mutation",
     "kura::tests::certified_lane_block_encoding_enforces_source_envelope",
     "nexus::lane_relay::tests::actor_backpressure_retains_exact_relay_and_fifo_ticket",
     "nexus::lane_relay::tests::blocked_relay_does_not_starve_a_responsive_relay",
@@ -499,10 +2032,25 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::authoritative_runtime_gate_tests::roster_origin_relay_completion_has_authenticated_source_count_and_byte_owner",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_wire_index_keeps_authenticated_origins_distinct",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_reserves_same_source_transport_completion_behind_auxiliary_pressure",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_escape_survives_exact_same_source_saturation",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_serializes_distinct_timeout_certificates_per_source",
     "sumeragi::serviced_candidate_store::tests::leader_wire_gate_retains_independent_cross_origin_phase_and_chunk_slots",
     "sumeragi::v2_effects::tests::effect_dispatch_consumes_leader_wire_terminal_created_while_batch_drains",
     "sumeragi::v2_effects::tests::retained_live_retry_consumes_decision_retirement_terminal_same_cycle",
     "sumeragi::v2_effects::tests::retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle",
+    "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_under_the_incumbent_owner",
+    "sumeragi::v2_effects::tests::fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work",
+    "sumeragi::v2_effects::tests::adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes",
+    "sumeragi::v2_runtime::tests::adapter_effect_binding_is_exact_route_neutral_and_three_bounded",
+    "sumeragi::v2_runtime::tests::certified_body_pipeline_retains_statement_and_owner_across_stage_kinds",
+    "sumeragi::v2_runtime::tests::body_pipeline_acquires_commit_authority_monotonically_under_one_owner",
+    "sumeragi::v2_runtime::tests::applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome",
+    "sumeragi::v2_runtime::tests::applied_local_proposal_handoff_suppresses_retry_before_ordinal_allocation",
+    "sumeragi::v2_runtime::tests::drained_internal_ignore_uses_exact_durable_tombstone_before_readmission",
+    "sumeragi::v2_runtime::tests::queued_body_completion_coalesces_only_its_incumbent_owner",
+    "sumeragi::v2_runtime::tests::stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal",
+    "sumeragi::v2_runtime::tests::restored_serve_high_watermark_precedes_startup_runtime_owner",
+    "sumeragi::v2_runtime::tests::full_runtime_churn_cannot_cross_an_exact_serve_ordinal",
     "sumeragi::v2_runtime::tests::decision_retirement_releases_queued_leader_wire_runtime_owner",
     "sumeragi::v2_runtime::tests::lock_retirement_releases_busy_deferred_leader_wire_runtime_owner",
     "sumeragi::v2_runtime::tests::production_authenticated_preflight_is_never_semantic_only_coalesce",
@@ -561,7 +2109,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_lane_work::tests::duplicate_reply_effect_retains_alternate_sources_across_source_update",
     "sumeragi::v2_lane_work::tests::temporarily_unserviceable_effect_requeues_behind_later_reserved_work",
     "sumeragi::v2_lane_work::tests::retired_sidecar_route_between_drain_and_lane_queue_preserves_live_sibling",
-    "sumeragi::v2_runtime::tests::commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
+    "sumeragi::v2_runtime::tests::certified_tc_crosses_full_fence_blocked_prepare_prefix",
     "peer::run::tests::authenticated_source_credit_precedes_network_and_subscriber_backlogs",
     "peer::run::tests::recoverable_post_acknowledges_only_after_full_write_and_flush",
     "peer::run::tests::partial_write_error_closes_ack_without_false_completion",
@@ -813,7 +2361,6 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "network::tests::reply_wrapper_exposes_delivery_active_unwritable_no_ownership",
     "network::tests::accepted_draining_connection_delivers_reliable_progress_after_replacement",
     "network::tests::reply_route_tenure_retires_only_after_final_receiver_guard_drops",
-    "genesis_bootstrap::tests::unavailable_reply_writer_uses_requester_retransmission_without_parking_old_route",
     "consensus_message_control::tests::private_reader_treats_safe_atomic_replacement_as_retryable_identity_churn",
     "network_relay_tests::certified_merge_sidecar_close_is_limited_but_responder_controls_are_critical",
     "sumeragi::v2::tests::strict_same_round_tc_preserves_and_retags_timeout_vote_owners",
@@ -836,7 +2383,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_effects::tests::authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally",
     "sumeragi::v2_effects::tests::reproposal_commit_qc_applies_the_exact_unchanged_body",
     "sumeragi::v2_effects::tests::reproposal_commit_signing_uses_its_same_round_validation_marker",
-    "sumeragi::v2_runtime::tests::exact_authenticated_timeout_certificate_from_distinct_sources_coalesces_in_one_runtime_slot",
+    "sumeragi::v2_runtime::tests::exact_authenticated_timeout_certificate_coalesces_then_applies_through_signer",
     "sumeragi::v2_runtime::tests::body_available_rebind_accepts_same_view_higher_generation",
     "sumeragi::v2_transport::tests::reproposal_commit_qc_authenticates_its_exact_same_round_body",
     "block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round",
@@ -894,6 +2441,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_churn",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes",
+    "sumeragi::authoritative_runtime_gate_tests::restored_productive_retry_stays_behind_an_earlier_certified_request_carrier",
     "sumeragi::v2_worker::tests::exact_serve_predecessor_episode_services_older_local_without_admitting_later_io",
     "sumeragi::v2_worker::tests::repeated_exact_serve_claims_close_all_older_sources_before_later_io",
     "sumeragi::v2_worker::tests::exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission",
@@ -907,7 +2455,8 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_worker::tests::fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack",
     "sumeragi::v2_worker::tests::fair_ingress_terminal_retry_replays_without_lifecycle_resurrection",
     "sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission",
-    "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_resumes_same_lifecycle",
+    "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_locally_completes_without_retry",
+    "sumeragi::v2_worker::tests::durable_coalesced_retransmission_restart_locally_completes_without_retry",
     "sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source",
     "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion",
     "sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay",
@@ -925,8 +2474,27 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_worker::tests::certified_serve_higher_view_abort_restores_terminal_high_watermark",
     "sumeragi::v2_worker::tests::certified_serve_receiver_close_aborts_reserved_replacement_without_orphan",
     "sumeragi::v2_worker::tests::certified_serve_delayed_lower_view_cross_relay_cannot_resurrect",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_checked_dequeue_freezes_one_physical_cut_per_occurrence",
+    "sumeragi::v2::tests::deferred_occurrence_capability_binds_direct_authenticated_provenance",
+    "sumeragi::v2_runtime::tests::runtime_rejects_driver_selection_outside_eligible_deferred_owner_set",
+    "sumeragi::v2_runtime::tests::runtime_physical_cut_is_monotone_and_regression_fails_closed",
+    "sumeragi::v2_runtime::tests::deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences",
+    "sumeragi::v2_runtime::tests::post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target",
+    "sumeragi::v2_runtime::tests::pre_dequeue_probe_validates_unfrozen_leader_wire_identity",
     "sumeragi::v2_runtime::tests::busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation",
     "sumeragi::v2_worker::tests::invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity",
+    "sumeragi::v2_effects::tests::fetch_retransmissions_reuse_one_work_slot_and_one_signed_request",
+    "sumeragi::v2_effects::tests::apply_retransmissions_reuse_one_work_slot",
+    "sumeragi::v2_runtime::tests::distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner",
+    "sumeragi::v2_worker::tests::durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order",
+    "sumeragi::v2_worker::tests::productive_retry_after_proofless_reconstruction_does_not_become_orphan",
+    "sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order",
+    "sumeragi::v2_lane_work::tests::native_amx_merge_projection_excludes_coordinator_only_receipts",
+    "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_same_route_identity_conflict",
+    "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_duplicate_group_source",
+    "sumeragi::v2_lane_work::tests::native_amx_merge_projection_matches_decoded_replay_entry",
+    "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
+    "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_same_height_participant_identity_conflict",
 )
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
     test_name
@@ -939,14 +2507,38 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
 # semantic ordering fragments below so failures identify the violated seam.
 _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
     "consume_effects": (
-        "e52cf5a95fff03c6bf9982ac6f8933cfd940d0e8c4d2673a22a73a17ed5f74fa"
+        "e25571feeb68bdfdd4af602b39a40e63c87f11e39619b90281212c48513c71f5"
+    ),
+    "retain_effect_batch": (
+        "3976c357aa3b66c71eac8bf8003bab79e024f76e9e469468bb8fb86c4c58dcfe"
+    ),
+    "retain_effect_batch_at_frontier": (
+        "9f9d0352ea5921e9d081c0cc4775ed26676b0f213866870a681cf9d901d6aa98"
+    ),
+    "preflight_effect_batch_frontier": (
+        "6845921d95bbe60c8e0cd303a30bff4d8dd3aaee120dda41fc93546f932a581f"
+    ),
+    "prepare_parked_effects_for_frontier": (
+        "2311f641861b3fafe8f90c34a7824596287bf1d6d8e791e30ba7b59438c178db"
+    ),
+    "commit_reconciliation_frontier": (
+        "1deed24b38bdba50796b402def3fc3ef9e9eaad44c93449e8e96f1bdb38c430c"
     ),
     "drain_retained_effect_batch": (
-        "d973c4b573c75870a27334050546a1d9f7996ca8f5da6b0c4fb96d23c985e39b"
+        "b796ca52147def7d7642b5f8c352f55e6ab2214b3c8d5c1a631ac5aa9c64bba5"
     ),
-    "step": "7f88caed1111bc8a98699d31100deaa1fa9d3ae01b9891b4396acd546f17d3d7",
+    "consume_pacemaker_effects": (
+        "f9675525191cc1f949cdd7fef4d86facf0a974f8c96c627eba96123246e738db"
+    ),
+    "consume_pending_tip_recovery_effects": (
+        "275bb4749f89c76810b7154c1eca151f2c85e970c162fb3f737034870520578b"
+    ),
+    "step_pacemaker_once": (
+        "09140d1b32a493a591303e376d5ed642ea1479cb2fddae358d8d4d9b5b2a7df5"
+    ),
+    "step": "c56df5c78384e0685390837f6442bf17f81f37134a840445cb2522326a226bcb",
     "step_pending_tip_recovery": (
-        "e5a7cf7d1db1e5558d888b22275a578baa273dbcbc6e282047e6c8d399127172"
+        "2fea51da5e34af31e90c8a42ed6915cb8d6e64dc18a7df89ef0a0545b81b6f94"
     ),
 }
 
@@ -988,7 +2580,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "7e630c6be2466fe0980df81ea194e101b70e4abac9546a379ab9f24c8eb23861"
     ),
     "applied_height_reconstruction_covers": (
-        "528a462db4e8cd5f9f588c333517c07d79691a6770fa8a3bc5ea3e6fa7723e96"
+        "18eb55ebc89c2ae1ca981da5869fa407a204cdee85e3d77ae24926e0a091c952"
     ),
     "durable_exact_output_handoff_owner_pair": (
         "f848a53734e173e64122e3cf198d6e0adfea99909594e667c56a7e11ea271a84"
@@ -997,7 +2589,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "019ae94e6c1ebdea5e6948361cf117d49003d4433cd9daa7c3a28f2e1e391741"
     ),
     "handoff_applied_height_output_to_durable_reconstruction": (
-        "2064071eca55b70e01a51bda015e5cda8561a35d2f0d9e09559ac23c01ae6f8d"
+        "7444ffcb40c52af925865f03520de3eac64f59d1c31ae6e549c5bf92e17aaf84"
     ),
 }
 
@@ -1239,7 +2831,8 @@ _PRODUCTION_MERGE_SIDECAR_BOUNDARY_TEST_SHA256 = {
 _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkLimits::new": "5224fe67da91d648fef4cb803ffcd48e972fbd3b32dc85917773666adf39235e",
     "RetainedMergeSidecars::rehydrate_for_successor": "709b44e4cf845ffe76903ad4d7f61b9fa174ccc1f0a1a793d6733a37a23cd0a6",
-    "V2LaneWorkAdapter::new_with_output_guard_and_transport": "edbb3508e583943428c030cbd22188183f683c9bab025f3d30f1b6f9f19d9fa7",
+    "V2LaneWorkAdapter::new_with_output_guard_and_transport": "53fdbca7b7129a438f9a19c5ab13d8b4d28da1190ebe58cf435765fc5a97a64c",
+    "V2LaneWorkAdapter::activate_after_lane_drain_queue_install": "638503cfcc9963213cb6146d16d82ab270016e6f5da7bbbc8b2918aea9120cb2",
     "V2LaneWorkAdapter::into_retained_merge_sidecars": "96d1e194eda3660ccccf9b4e1860b26a4db8d9ee9fb2bad4f988e37c85627218",
     "V2LaneWorkAdapter::accept_relay_message": "8c307167fe5ea486fc509817d12c352fa8a831751e0e7fc1342b6d43b6ef00bf",
     "V2LaneWorkAdapter::accept_certified_merge_sidecar": "8e348b518da26f91fff8840d1e5bf4016d783fef4720bc275baba90ebe14a0bd",
@@ -1254,14 +2847,15 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "8e684a41c6ed9799d6fdf7598d7accf8f175f38ff1388058568a6f8bc077c9ea",
     "V2LaneWorkAdapter::persist_anchored_sessions": "40f2ca1c93171337adae168019d2f28ca65acf838da2e9011f6e751ad775876f",
-    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "b716b4d92ddd3c4e80e6999bd7aee543701e2727bef70841c2bf89f38ff5a3f1",
+    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "e0d11b53b20233bec2bde982e8e34ddfbb0558ac3561ebd31c927bee5523b942",
     "V2LaneWorkAdapter::next_effect": "62af9ea4c3707845b5b097a27f5cc9281b8ade4bc60db49cdbc9f1c3e2b3496a",
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
     "V2LaneWorkAdapter::requeue_effect": "5259377bba158615135666cb3cddf88e0fbfbdb63e55a7691ba397e34195d856",
     "V2LaneWorkAdapter::drain_effects": "478982ec7c7cec9990a70993011e34e0cf79f57fb903b3c7cbabc040052b1aba",
-    "V2LaneWorkAdapter::push_effect": "cc9f8f5b9469904d0ba6584db2ef13b8aa9ce2f6ed941b5b34e8b7eec3e7717e",
+    "V2LaneWorkAdapter::preflight_effect_insertion": "568289d7497ed37ca03cd91e1fc222bfa010109de640b5d3244672d0a9cf41b3",
+    "V2LaneWorkAdapter::push_effect": "8974bca860609c853efe07e78397cb4be80e8bf1a688831bf1c28b1807293441",
     "V2LaneWorkAdapter::schedule_retransmission": "7468d25a90d61258242527880622e74ff38143c0f75c2e7bf572c9792c9f6232",
-    "V2LaneWorkAdapter::schedule_retransmission_at": "541e8582db809b0bb449610cbf70d61f4dafb806b22add9642baabb557eeb994",
+    "V2LaneWorkAdapter::schedule_retransmission_at": "5f5ccf9a1f78a69d064ed99331a452571d0379497e28cd67daac836effbecd51",
     "V2LaneWorkAdapter::prune_finalized_merge_sidecars": "b8400dca9234242c7f6b8583ffabed34eb17fecc23cf5fd81799bec5cd692af7",
     "V2LaneWorkAdapter::sidecar_effect_slots": "13a99e0350b8d59489cc591573adcc2b1f3f775308e9b225f1672649235699e6",
     "V2LaneWorkAdapter::next_sidecar_effect_selection": "614006f927ec384764396c8742a3b05b5a70907dddd8bcf39ed2db0aba4d8975",
@@ -1274,7 +2868,11 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9",
+    "run_inner": "f3253016bdec713679c96e2f02c3383ddaf603054e34497925b062f7484dc93b",
+    "claim_runner_lifecycle_process_generation": "ceab58cdf06c44c2f85bdcbcae059c0ca7932bbb19fd61da94f1fb6015d4d292",
+    "rollover_finalized_height_outputs": (
+        _RUNNER_ROLLOVER_FINALIZED_HEIGHT_OUTPUTS_ITEM_SHA256
+    ),
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "320507830881ae53c67850d75b030dcdddab32c0ccf2814f8d6bd6705fced09e",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
@@ -1304,22 +2902,22 @@ _RUNTIME_AFTER_GST_REQUIREMENT = (
 
 _EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256 = {
     "V2IoCertifiedServeIngressReservation": (
-        "0d557912a3a40130e201547acf520ed5c9c4ec33e5dda93b52ab6bd79dfa0dcf"
+        "3691c0fd33c09e59c339ee7cb869b2bffd836cd4361bb2d2259c07e6013f18f8"
     ),
     "CertifiedServeProducerEpisode": (
         "e1e0bdfc4854c5553d5fbf70a67a153998be353b7e7016e890af3bbe9a76a67b"
     ),
     "V2IoCommandQueueState": (
-        "d5984aed11709061a31526159de2d21b91daff351892499e2d28d07099f0063f"
+        "e64f72be9cd74df96058c1e86ad2b59d94806aabefec83c18c85b49fe119b107"
     ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256 = {
     "barrier": (
-        "0fd794936441324fa30589c8b167829bd9653da162d7155717d01017e0084ad1"
+        "bce35afb422de5e3b0b7a2667bea940f9170f0ba95dfae03bbea01c36de5a9ad"
     ),
     "matches_barrier": (
-        "3e4b041edb19097dedb4907b8ac46217cac63bd6db20364af4e1fd7979f5c002"
+        "d4ba831e00f4262e51db685213bd83bbdac6edb12ebc691b9aaa62774880a3b8"
     ),
 }
 
@@ -1328,16 +2926,19 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "926626c686c14d453e18bf20dd7232e33383b26b814178e2d2b7e2c2beb161e3"
     ),
     "V2IoCommandQueue::reserve_serve_ingress": (
-        "879cf4ba9107a88226a572068e941693ffd3c2f69c8f1dce943c709cc1321693"
+        "4b67ec1226b66a4aeb9453e0c956babe5d5a73612a43ff09e63901b47ddef235"
+    ),
+    "V2IoCommandQueue::retire_selected_serve_ingress_occurrence": (
+        "c0821d882ae2997fa2632ab0855afde09bf051d353a4a1bd76293b9491d0dce1"
     ),
     "V2IoCommandQueue::try_begin_producer_episode": (
-        "918c8208cde905cc74c7146a81eca81a4f6df71c73ddab94b1728cea02c726c0"
+        "da3de6fd057d35073739151cff96230de08a2669e29720423d9b6b832693dbfc"
     ),
     "V2IoCommandQueue::suspend_materialized_serve_barrier_for_runtime_predecessor": (
         "af55e56ebf4bffef6b765e06aec105ede58a1be56f9612c310799fe67aef2ec1"
     ),
     "V2IoCommandQueue::serve_barrier": (
-        "dee6a2b1e77fa2dcf0293a601b25a21006eefd2d8557051d9be4beef33630003"
+        "1104236dd8cfd0ccec5ea0f3171b9d23c6dc1b0f257f0ec13ff6fe8685ad7d4e"
     ),
     "V2IoCommandQueue::claim_serve_runtime_episode": (
         "776649d85722700536fff55e1af781a66aa8694492c550ba3361255d516d0c2e"
@@ -1349,7 +2950,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "02d2bb266994d99ca4fdef5ec8d90fef193a969fe2136eb6e0f0a7f0ae47f0df"
     ),
     "V2IoCommandQueue::try_send_as": (
-        "4b09b1fb37cd30d067a58a3f9902ebb3f23d22af95e5f72b49bfccbb39a1587f"
+        "6c7a0afdfa074b745803704e6910671ab28099c9bc294c21c5fe67a55fd3905d"
     ),
     "ProductionV2Services::certified_serve_barrier": (
         "2daa1fafb0049a95cb78d01630aa55932539b3de9a0db99eb169c0e5e031f56d"
@@ -1367,19 +2968,22 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "b86f953644efbd6a73d81bba2a3cbc23195cc9dcb68e44bc90e6b9a4a8cfd15f"
     ),
     "ProductionV2Services::take_exact_serve_predecessor_completion": (
-        "08a9eddfb80c1b792988ce4433b0f200e2dccd9a8498b9c8869feb3758647307"
+        "c033089df5ad252d912aec754b9535d16f5a96d99c718a47239116c5916dad88"
+    ),
+    "ProductionV2Services::take_lifecycle_prefix_completion": (
+        "4e8e73973d093f5b642996a26b0995247a38b2c13726567d2b719fbae232d1b6"
     ),
     "ProductionV2Services::drain_exact_serve_runtime_predecessor": (
         "aa2d628cbb2b5f54d0901f9949d3581d6188efe72a3656958e95e9e9dacbae92"
     ),
     "ProductionV2Services::drain_completions_inner": (
-        "412bd6deef3d72f2cf66d11b56c36ad6e85bbeb9f66c602a821b0d4929dd12ec"
+        "08bc6f3ac8bb6d47a59a3c7812717ad06ffab68821cee79559d3f588df129098"
     ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256 = {
     "advance_executor_once_before_exact_serve": (
-        "0d3580e1ced5446597465ca2dd3a177a16dc168b66b8b8c9e2350b68fb03b86b"
+        "065cad68c50e4271298c681772d42e7d823bdd253ee2dc848597194f8490ca26"
     ),
 }
 
@@ -1397,19 +3001,22 @@ _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256 = {
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
     ),
     "minimum_active_lifecycle_ordinal_excluding": (
-        "204a88b77ef7853327a2313583c25ef32f9bdea705dd57e0fc7bbd17b30afa1a"
+        "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01"
+    ),
+    "minimum_runnable_lifecycle_ordinal": (
+        "3c782c6e97e8a3639ea8d9c1eece964b64f9863f2cface7013c95d6e8ed17c61"
     ),
     "active_lifecycle_uses_ordinal": (
-        "3383cbf7969a7f8d792f56ed9c148c4ca523f6366bfac8c60b53a68af427a4fc"
+        "ae450e3b7d749e88ebb10ea93d575ffd88257f1c691bc58d9478adde058cd869"
     ),
     "older_lifecycle_predates_exact_serve": (
-        "2b832129d3f5e91ea0e333400277c9715785f896b460b0de55e398d2cdc69b30"
+        "ae0059eeb7251a27345ea821209d9d018623f3011643970833a6c6fbd0dad30a"
     ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_INGRESS_ITEM_SHA256 = {
     "oldest_active_lifecycle_ordinal": (
-        "fa6fbffb7201f69529caec900bafba3eb4f9433f00ec31289ca3e23e2363c7d4"
+        "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "uses_lifecycle_ordinal": (
         "248f70bfe769734211acc566c8b91b7e0faf037990be47f95b231d5f102a557a"
@@ -1417,14 +3024,17 @@ _EXACT_SERVE_RUNTIME_EPISODE_INGRESS_ITEM_SHA256 = {
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256 = {
+    "final_serve_retirement_yields_one_producer_episode_before_replenishment": (
+        "059218b1bec2859b84f8fe440c785360072fca157e1ea7a4579bff252cd6dde0"
+    ),
     "exact_serve_predecessor_episode_services_older_local_without_admitting_later_io": (
         "51623ab6cf102b45554a8135cb4fbca35062b0d5db6bea99cbabba0eb2305d9f"
     ),
     "repeated_exact_serve_claims_close_all_older_sources_before_later_io": (
-        "7dd6f52990432a274101c3d3ef6f6295d6537a13553db2a405549dfef33457e8"
+        "e97bed021406e0a72e692d2ac6ed58e491a4826b5a9054f17ca8a64d95ef0968"
     ),
     "exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission": (
-        "ac73fa43251f1cbf99d71722f412cf2c6fda79c5b109d41af20cd762b3422d19"
+        "ebeeb9606074ce7e7d51aea4d55d54dabacd23435d639d81ac6f0a9849616e21"
     ),
     "worker_completion_is_retained_behind_a_full_runtime_fifo": (
         "4e807f3dd45e855a96923c803bd970dbc2a6684583b8dfa84aa6db788c5206c1"
@@ -1433,22 +3043,22 @@ _EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256 = {
         "913796745fa6c589f20dd309da632c1dfb05f84aa963377b04ffa9a0556e21eb"
     ),
     "drained_exact_retransmission_gets_fresh_scheduler_ordinal": (
-        "f21eea2060d0b4f969dda5681df7ea0e208af2b0080aaa9fc23271cef72e1b56"
+        "8c4b30a4d0c7d2730d6d2e4c702efb2cc48e514a64513d6b84751f8c91654811"
     ),
     "certified_serve_future_slot_blocks_control_and_consensus_replenishment": (
-        "d1ff8afcad02c99641e66021fd334b88f7f93eb8d3713dc346c08cff915d3342"
+        "4eb2da42d968642c6eaf184f0ddda6f726e4a7fe49d6b6c2499092ee3c97d075"
     ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256 = {
     "restart_dormant_local_fifo_reservation_survives_full_class_churn": (
-        "653fac9ef34bfb376711f643fe231ee9860cb7c1ef29570d514a3f870a531c1c"
+        "4173b41c9622f676b9c9d412a267cb0b3b2aca91ed9725e2a5c450485d7442d9"
     ),
 }
 
 _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
     "restored_productive_retry_freezes_the_current_physical_source_prefix": (
-        "3fa33cdfc0eb55bf7e025c57d340439fbe527c5cf1ba29b48e8779db5be8cd65"
+        "0717cee735d0b0a435bdcd502ca6e29c87a554a9f017cb7edbf1efb46ef33d20"
     ),
     "restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire": (
         "e994c3391ce2626972c26c57a37039f71573adb9d82bbcfa64619edb70640255"
@@ -1457,24 +3067,35 @@ _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
 
 _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
     "fair_v2_ingress_admit_leader_wire": (
-        "140325f2b05a0c93744b2fbd483e485d95f17a0c8ce08ac1bf41808047e306f4"
+        "bda06e6c542397e50d18cde8fd85fb568e619de471719967a594cfbdfc850350"
     ),
     "try_recv_if_at_checked": (
-        "f4769c2e4fd24483e1834c0143f4a316be7951b805ff3c41c60ed03486f748f4"
+        "91464514e1d803d746fe2c9713d318082246fb88dd71881403a04b38f6a32884"
+    ),
+    "try_recv_if_at_checked_classified": (
+        "cbf4e2244e6f120a4ddf33b2e58c987a1b8f75fafa94c35dc0e10d0652813da9"
     ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"
     ),
+    "bind_leader_wire_lifecycle_gate": (
+        "d6d8898d1a10684cc1f1aea7c91aa84dfb2f90862378d41d0f0908d57e2dfcc2"
+    ),
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9",
-    "advance_executor": "321df6c9713c5fb64fa6a0948dff6464afa3d08040e752ae0e19196b9badfb31",
+    "run_inner": (
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+    ),
+    "service_certified_serve_barrier_liveness_turn": (
+        "d6afb60b54ec1b0a482ac76cdcc4f14469dbd39930a21ae26904c1a2d4cacb88"
+    ),
+    "advance_executor": "ce2f1975fd47aac0b33326547595f05779ab0a920e5996499bf450330c457f93",
     "advance_pending_tip_recovery_executor": (
         "a85c018053d4b47dd1c36194a66318422f72eb80e3cca3ac2ba9db5f44eeb9dd"
     ),
     "outer_ingress_turns": (
-        "1c08dc7293a6aacd522d211e8acd862cf8be0fb4926bb943b6464f4bd002e223"
+        "a5408a498d6ee0837e31c5fc1b152c043b3d2930eda580d750eaec4f2704ef18"
     ),
     "apply_bounded_sidecar_admissions": (
         "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad"
@@ -1487,6 +3108,48 @@ _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
     ),
     "ProductionV2Services::drain_completions": (
         "dbdb63d50e19b3dfe3617aaedf53e7d7f13c105c4b844c5367d31487fad10ea3"
+    ),
+}
+
+# Exact comment/literal-free source seals for the production-shaped selected
+# Serve timeout-recovery regression. These are approved independently only
+# after each corresponding digest-refreshed semantic mutation is rejected.
+_PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256 = {
+    "runner::CertifiedServeBarrierLivenessAction": (
+        "4a520a5e830e2eb78e6384de5e353c50d488698ab1f3ee622bcb97a7b8dc2d5b"
+    ),
+    "runner::complete_certified_serve_episode_cannot_veto_pacemaker": (
+        "7de69abaf47816cabdc50c70d9eff0b7fa69342a24b5962ef1da2f1c133c2e47"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture": (
+        "93ec9360435a8cd4e38ba96fd646aac445ba2c5cda6f2e1d06afeda9e6d22629"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::new": (
+        "21c7fd7fcca5641266d01a3c0a3446490c7e130c0f626e46f0d49b442b825f4a"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix": (
+        "26a00adf1b9a47ba3ca88124cd9e2a93ff4b693db65c6f4d7c0fa9e88c53d89a"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_vote_episode": (
+        "aa266e22920cc2b8b5ce8ea0095b519da73c93827d9d916e075df8002ddeca50"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_recovery_prefix": (
+        "26f8db46c991874a993888431415631adee676513c41ba1671176f8e7b91bd9a"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_pacemaker": (
+        "38dbb93aa1cb6f4326767382a354244d21e07a97c78119472da994558d96f65c"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::entered_view_one": (
+        "dff5113863756090795cfd2ff950a3bfd390e5120260d9ef7986b8a95772d93c"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::assert_complete": (
+        "6f322ae1a6658bfa8b5275ed3c7220a8e9a0dbffcd86851340e00358005fdda9"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::assert_missing_proposal_serve_selected": (
+        "72b5987aae636d8c8be84bcc96617451c63fc3d0b2765a189737a7bb04365c7a"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::drop": (
+        "ce14c1b4e75b8ba5c1b225653eac74cfa39a0432dfd7a84592791342f6cb9881"
     ),
 }
 
@@ -1530,8 +3193,8 @@ _PRODUCTION_WORKER_ACK_SEAM_ITEM_SHA256 = {
     "ProductionV2Services::has_pending_exact_output": "107becdd3b504739250f12867eecdb459362f907957797ea3a0e31a71e360768",
     "ProductionV2Services::drain_certified_merge_sidecar_chunk_admissions": "d065d7b2b625852ed7ecd8458997c763b8c6d4d1ef445275150c16a62f1badf6",
     "ProductionV2Services::close_certified_merge_sidecar_prefix": "fb6879c8c325aedc7c19f093a9e5b2cb1b8c25c7bd89c7da1f2694e923cde3a2",
-    "ProductionV2Services::can_retain_lane_work_effect": "e0bc2cb14070a0443f7fa5d44ca11d7e4d78106af0754bd181e86a8ffb0eeb3f",
-    "ProductionV2Services::handoff_applied_height_output_to_durable_reconstruction": "2064071eca55b70e01a51bda015e5cda8561a35d2f0d9e09559ac23c01ae6f8d",
+    "ProductionV2Services::can_retain_lane_work_effect": "a934ecbe56eb0118a5cabbce17c1815fc7346f611e4c83e36c85c918840fde4e",
+    "ProductionV2Services::handoff_applied_height_output_to_durable_reconstruction": "7444ffcb40c52af925865f03520de3eac64f59d1c31ae6e549c5bf92e17aaf84",
     "ProductionV2Services::seal_applied_height_output_handoff": "95138e27f7dbcfe7e84246edd8d14acb3677adec2e0b6ad0c80e2a65688a4a62",
     "ProductionV2Services::validate_applied_height_output_handoff_authority": "7e122f2997f6fa75a67033addc960c72e2dad0dd766588c2d667e056b9363bc3",
     "ProductionV2Services::finish_height": "2700da04492e8587a8934f3d037d05e8176746a4a52790a29b185560c20af360",
@@ -1642,19 +3305,19 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "b6379336a656f578037f65bb7b297529092f3f64c06bf38ef5f590a4a3aa81c6"
     ),
     "ProductionV2Services::start": (
-        "b7b913d0a5dab195265fcd24da2e3ed7727e2cd5b00d3ff95bcffa4aeac227bf"
+        "1ebacea10fedde3013ef2d6646e037c328f031a3c9e9c8b1ae1ce9946f87e039"
     ),
     "ProductionV2Services::exact_target_geometry": (
         "978520459f9dd3c5459478e222418ffed2924445c40a79722c307f97e6d28871"
     ),
     "ProductionV2Services::can_retain_lane_work_effect": (
-        "e0bc2cb14070a0443f7fa5d44ca11d7e4d78106af0754bd181e86a8ffb0eeb3f"
+        "a934ecbe56eb0118a5cabbce17c1815fc7346f611e4c83e36c85c918840fde4e"
     ),
 }
 
 _PRODUCTION_DURABLE_HISTORY_WORKER_ITEM_SHA256 = {
     "durable_history_source_covers": (
-        "c33f30a9d2e34b9860f96ba156788f3a6289776da59a45eb7c2fa717b5b90299"
+        "fb4a530d7579ba3be2e168d43ee5cf10c25bfa5c52c19c5b6973665212499d38"
     ),
 }
 
@@ -1673,9 +3336,12 @@ _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256 = {
     "native_amx_message_body": (
         "90737e4116833fb086b7c1f3a7a04dbb34fc9157385103f3dc1be6e74c127eae"
     ),
-    "scope": "f86a8297b6cbfb9042d6fda08cab69dcc2ff2e8c64455982df70b249afbfcf64",
+    "scope": "d5ad6343749bdcf31860c9ce596a271a867868c4f6394f56520df3cd23cc7408",
     "validate_fanout": (
-        "26e909f5558df72e2f13643d356ae8788175375cb37dd4895cfa0b3f8d60a8d2"
+        "1879582b160ef218fc516bbb7f4880ea302e8b37f83ca4a3d1b0c8ed20cd198a"
+    ),
+    "validate_non_retireable_lane_transport_fanout": (
+        "6f57bc6fc5d7b127d67745f5d042e780aac18e9abce9f4d53c90a1c4ebe934d0"
     ),
     "claimed": "75dcecc8adae80ad5980fb812e4d13af3e7f432605c685985a6c2d0e27a67a10",
     "claimed_with_routes": (
@@ -1703,7 +3369,7 @@ _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256 = {
         "a318b9a3e2823381613bf87f911d1efd3721a62d9a6a35e4b2151396672363a5"
     ),
     "post_lane_block": (
-        "c71bddecf7e1a3891256eaf7ced7c37adb7fc196617b4f79a7f17c6fcd6ee902"
+        "1a4be6518deb1d756893951563f23f8017bd840779366054ce9b5a3329531389"
     ),
     "post_durable_lane_certificate_on_reply_routes": (
         "84b9fa1c26b45f636ad7fd2b605b3cb4398a74abb3f515ea9e05034ca7a9e429"
@@ -1721,10 +3387,10 @@ _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256 = {
         "99b0c80af2876f9b92cd9789605a7040d3e6dec0b4ab11f47edf292aeadf5f59"
     ),
     "post_block_message_while_guarded": (
-        "ff12cb7fcc62b94353055da1bab287edca685fdfb4558f8c91872c238ec75b23"
+        "5556a35937aa384b399482ceb30f45cfdbe212c59a10bf10aa9fc6f46e17f670"
     ),
     "post_block_message_on_reply_routes_while_guarded": (
-        "f3386e036a83ba81782e46c9eeb2fe948366907c9bbd510f42b646bf4f1ffaae"
+        "675aa09b492a61169caad3ab2b8de1d3fbbc22491de64d1d9b01f79291682f75"
     ),
     "broadcast_preencoded_to_voters_while_guarded": (
         "1c22c254ba300a86887affe725dd01e126563ac584f791e9da329fe67296bf4f"
@@ -1733,6 +3399,14 @@ _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256 = {
         "bbc43f18d7ee7cc95ecfabc70894ae1b82780edab21ebecb8a60445e68113a4d"
     ),
 }
+
+_EXACT_OUTPUT_ROLLOVER_CLAIM_IMPL_ITEMS = frozenset(
+    (
+        "scope",
+        "validate_fanout",
+        "validate_non_retireable_lane_transport_fanout",
+    )
+)
 
 # The lane authority is the only production witness allowed to supersede or
 # reconstruct lane-local output at global-height retirement.  Bind its exact
@@ -1793,16 +3467,65 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9"
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
     ),
-    "drain_v2_ingress": (
-        "5afe9ea25184f2f95aa5e150bc672c4d2aa70880a4a5021bf7f32f72d37bbfa1"
+    "drain_v2_ingress": _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256,
+    "rollover_finalized_height_outputs": (
+        _RUNNER_ROLLOVER_FINALIZED_HEIGHT_OUTPUTS_ITEM_SHA256
     ),
     "dispatch_lane_work_effects": (
         "7b7c0358e9fa35a05df7acd0c641b693b01b51926be2180ba02efde110ef774c"
     ),
     "dispatch_lane_work_effect": (
         "4f26246db63b064c5b6f6389e9960f36968df9861ae9520d911eedbe4c5b317c"
+    ),
+}
+
+# Exact joint ownership of the two per-height fair-ingress gates. Each pending
+# seal is promoted only after a focused mutation refreshes that exact item
+# digest and the semantic close/validate/atomic-unbind contract still rejects
+# the change.
+_PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256 = {
+    "runner::LeaderWireIngressBinding::bind": (
+        "4c9551aa9af0eea82b0bcf1f248c958d3e52c13f195bdde2f22f2a530d6b669e"
+    ),
+    "runner::LeaderWireIngressBinding::retire": (
+        "7e6730493a8b093e2ac6f125942073158fbc539660c52f97900e12c9ff5012f0"
+    ),
+    "runner::LeaderWireIngressBinding::drop": (
+        "88ddf5ff64ea693fbb027a716505a017236eb44e435eced813a6e4f6fc9bba61"
+    ),
+    "runner::HeightIngressBindings::new": (
+        "48c192241bdc3ea37cf5f12f3322d5d2b52c4a48a52a1cee0b85335da25493a3"
+    ),
+    "runner::HeightIngressBindings::retire": (
+        "50d7b09d0862c3e5bdaca6bdf829c9d851b766f492bf492fd947b9d534e9f94f"
+    ),
+    "runner::HeightIngressBindings::drop": (
+        "ba86ff1b630d46218acf45e32823871f81a47c82ac31bd71988c0d21e53d3cf6"
+    ),
+    "runner::close_ingress_for_rollover": (
+        "61ae9f7cd71bc2576f9330c5874d2018b873d6144514e9f733f5774343ddd1a5"
+    ),
+    "ingress::unbind_leader_wire_lifecycle_gate": (
+        "4a5b25faedea52bea79ac5041b0f643b5baf7bbb0858d9e6953a5f9e9260869c"
+    ),
+    "ingress::unbind_height_ingress_gates": (
+        "966e4feae1f1ca53553abce8847c1a14f8275eb81d4003bedf95e3591f362714"
+    ),
+    "ingress::close": (
+        "24741c2de73120ea5e1a9564203f5d5e0bd9d80a7f1a89d0bca2511e73dee1a7"
+    ),
+}
+_PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256 = {
+    "runner::height_ingress_bindings_retire_both_gates_in_one_closed_cut": (
+        "6f21dffceb9d005825946d6c39f5c02fc8c35c6ffc75fd379a825beb7d765208"
+    ),
+    "runner::height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership": (
+        "e4a8ab5a434808f3cc14752c4fbbfa4d6d9ce7e5fcf63d4da2dbeb2905ddc8d9"
+    ),
+    "worker::closed_height_atomically_retires_serve_and_leader_ingress": (
+        "5c5332520d71be5b2da300c4e4b7c629ad74e8ca42f486df5f33c488479476ca"
     ),
 }
 
@@ -1830,11 +3553,217 @@ _PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256 = {
         "b9ad00e3d2ee76b202fa98f53cab9f7264c63a7d9a3050b0c3d57c0449cfb8f5"
     ),
     "user::Root::parse": (
-        "1d5fb2c92612461d995aea4b517d8d9945c5ed76f5b62721f56baa8275d8dd63"
+        "62ca7de440e955d32002daf28b6c3f8106b3d08ce987f55a1d42efeb5167acfe"
     ),
     "worker::validate_shared_ownership_geometry": (
         "67026793b1424da887ccec0301157480e43b3585d298ab1545fe98e8cb577411"
     ),
+}
+
+# Exact token seals for the serialized runtime's disjoint C/P/K/+1 queue
+# geometry.  The retained certificate is classified from the immutable queued
+# command, so arrival order cannot consume an ordinary Completion or Progress
+# reservation and several distinct certificates still share one physical
+# credit.
+_PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256 = {
+    "RuntimeQueueConfig::validate": (
+        "f2bfef98a26b8817ca45fcc55c5669d215ae0768f8f09425baea4bec1024b52f"
+    ),
+    "RuntimeQueueConfig::normal_limit": (
+        "fb3d747ef54e8a0432a6ff94407135ef68f16fc94773609f3975a93ab043dfa4"
+    ),
+    "RuntimeQueueConfig::progress_limit": (
+        "5e87c00d381779d2e6a9af03a4497f1fc6f5eba07cf802de46d14f24e78bf72c"
+    ),
+    "RuntimeQueueConfig::ordinary_total_limit": (
+        "1180f68279ceb396f9d3bf49d2bc3c79e138bb1d7ce2f64aba17f0f75562c27f"
+    ),
+    "BoundedIngress::certified_fence_escape_credit": (
+        "94d47c1be045f5eb4f4b7840550b242df8471480033cdfc839d2614467c96ff0"
+    ),
+    "BoundedIngress::check_capacity_change_inner": (
+        "b32cae42a3a389680b1d3566c21012b9db3aa19729dcb83d0c6a0e127a10cc0c"
+    ),
+    "BoundedIngress::remaining_capacity": (
+        "533205971ebce432b614faaa4fdcdb8c86285ef7aeef75314eab78c12cd59f93"
+    ),
+    "wire_payload_is_certified_fence_escape": (
+        "01d6853abc2e1b0e5f2a84197ce271fff2c4b71ba7467f64e0d7c85b3da8237a"
+    ),
+    "SerializedV2Runtime::has_certified_fence_escape_credit": (
+        "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
+    ),
+    "test::certified_commit_uses_physical_slot_reserved_from_completions": (
+        "fe5d361fd09f716cca60ceecab8f4c3acfb1ec01080d16b9851af71277f15e53"
+    ),
+    "test::certified_commit_arriving_first_preserves_every_ordinary_reserve": (
+        "5c1aa2de8dfce58415d400d2d4db69988d63fc43d57090ca31f96202625acadd"
+    ),
+    "test::distinct_certificates_share_exactly_one_physical_credit": (
+        "b8a97dace4bd30ba1cac54a69d12e89640ce9b3cbc6b9c15368a7d17c6728630"
+    ),
+    "test::invalid_configuration_is_rejected": (
+        "6ac0e66e597904f6a3b682eeed89bcb2c185b6ce2a402618071fc0490a645d49"
+    ),
+    "test::queue_configuration_excludes_one_certified_credit_from_ordinary_limits": (
+        "e7ddac2312bc5e327d444eb3e24b022d332032d5534a46c56b09857fb50dd3ea"
+    ),
+    "test::prepare_qc_cannot_spend_the_certified_physical_credit": (
+        "aa348cc05ab9331f2b738eeae41cbd4dc74946fb759ab8e3ed1c41c347e9b376"
+    ),
+    "test::retiring_the_sole_certificate_does_not_fake_completion_headroom": (
+        "51a5d55dad394a320c0606a2e57981e8235d2ee5f4cf994693fc0624dcaa87d6"
+    ),
+    "test::unpublished_body_replacement_cannot_overbook_the_certified_slot": (
+        "072ea1652e9a443d701aaad32437f5b135df3563d10205a2e4ebc8dca77104a5"
+    ),
+}
+
+# Exact source seals for the retained certified-body response's one-shot
+# pacemaker escape.  The carrier phase is process-local and deliberately not
+# serialized: Fresh may admit one direct authenticated root, Charged records
+# an already-owned root, and Spent is absorbing until this carrier retires.
+_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
+    "effects::RetainedCertifiedBodyResponse": (
+        "a02346d6e21ac701d7019d6eb235e23d4bdf9551ab01da5123680c9602df0512"
+    ),
+    "effects::accept_certified_body_response_with_ingress_ownership": (
+        "d05e901df51cb12ad89eaeb87a38771d24874288e933604253dad046198216d1"
+    ),
+    "effects::retained_response_may_admit_certified_fence_escape": (
+        "f29a3e106087c871ba0f5f684b4bd47974b783d81085c7751da2c9d314e6c635"
+    ),
+    "effects::reconcile_retained_response_certified_fence_escape_phase": (
+        "4fcb519c7dfd10f164301a0f2342f8be3a771ce9cd6937d8f49f461334762f42"
+    ),
+    "runtime::has_certified_fence_escape_credit": (
+        "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
+    ),
+    "runner::run_inner": (
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+    ),
+    "test::retained_response_certificate_escape_is_charged_only_once": (
+        "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"
+    ),
+}
+
+# Comment-normalized TLA+ seals for the production-corresponding latch,
+# direct-certificate classifier, runner case split, and strictly descending
+# retained-response rank.  File qualification prevents an identically named
+# helper in another shard from satisfying the contract.
+_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_OPERATOR_SHA256 = {
+    "SumeragiV2AsyncNetwork.tla": {
+        "AsyncCertifiedFenceEscapeKinds": (
+            "786d33483ab9bf86aaa0136d745ff96c8328d8d9e36350ec747f1b382966c7ca"
+        ),
+        "AsyncCertifiedFenceEscapeItem": (
+            "bd98c586610ed4fb438fefa1ec50c77d35e7cb79e9761aa648bddbf08893ffad"
+        ),
+        "AsyncAuthenticatedCertifiedFenceEscapeAuthorities": (
+            "7a26804157995e484ebf8f7915a7cde93edf5a14b3a3a94bae59e5a805bdedb5"
+        ),
+        "AsyncQueuedCandidateIsCertifiedFenceEscape": (
+            "5d63ceac0c420a599ff962b17a038a2366deef93f8835fe1d9b9d756a0fbf26b"
+        ),
+        "AsyncCandidateHasCertifiedFenceRoot": (
+            "a3f22434b15e088720a58cf37b7afa9c9b5d90451878440b64eec1646eb23037"
+        ),
+        "RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape": (
+            "6f0f721bafbac4ec2aec426010344a5baa9ca4af56b4a13ce6bc3b26151164d9"
+        ),
+        "AsyncCertifiedResponseClaimStateAfterRetirement": (
+            "a7aff8755d881b501f36057d9afca78185d642821f1cfdeaae7a4c50f7254048"
+        ),
+        "AsyncCertifiedResponseClaimStateAfterAdmission": (
+            "8717fca0467d129da9478a981f060b7648d8a62449d91b19546a9b7192c98d60"
+        ),
+        "RetainedCertifiedFenceEscapePhaseAfter": (
+            "c1dd6b64617c5eee7b4e801985323cd3e43f647a548f8a95fb70c2b08c403508"
+        ),
+        "AsyncCertifiedFenceEscapeStateAfterRuntime": (
+            "f7f3c06acfd57dc457b8abc7487a0e4e1bc9d7d350c7323460a2ab8f900a78bc"
+        ),
+        "EnqueueCandidate": (
+            "8d58a005cea2550753196f96cacc3ed54e62bf2eb1a3e4195215d3b8062754f9"
+        ),
+        "SerializedCertifiedPacemakerStep": (
+            "c1d1fdaf28b0451f5daebde2f068fab93debcdaa77cde0b97c8b69e1cc9b8813"
+        ),
+        "RunNodeWork": (
+            "551f97e97f2ecb6ba67053464f480e2fe1cd6d59290a2b1fed261182e2fd1aab"
+        ),
+        "AsyncControlServiceStateTypeInvariant": (
+            "db13faef3cc8f08ecbbfebb6227bb4847fcbdf0262a0de66f841b66fe78e0577"
+        ),
+        "AsyncControlServiceSlotTransition": (
+            "31d5e5b7a2ecfacc11da4ac09c3c2f54858e7f256096283de3e3f541cd50bfd8"
+        ),
+        "AsyncTransportInit": (
+            "979da4a2d4de28cb42373c1824d5952431d10a78793800a8194e03228ac8eb06"
+        ),
+        "AsyncCompletionReserveInvariant": (
+            "b7756857d8b495cb29494dc89dd3ee626f5999418ec3e37c01dc1ee1216a58c1"
+        ),
+        "AsyncCertifiedFenceEscapeEpisodeInvariant": (
+            "f1a0278402350d50b71621bb4db20ca3b5b785c9243fa5024295983c366351fc"
+        ),
+    },
+    "SumeragiV2AsyncTemporalRankProofs.tla": {
+        "CertifiedResponseClaimDirectPacemakerWorkTokens": (
+            "25b7e46a7d3e7a5d43d7eeff22e5bcb62b818c65f777a5181eacdcb88668fd0f"
+        ),
+        "CertifiedResponseClaimCausalPacemakerWorkTokens": (
+            "1dffc9f727616ff82bca3caf18a6619a304c91c762fa7eb857945dc77ea201e7"
+        ),
+        "CertifiedResponseClaimPacemakerWorkDebt": (
+            "c2215cbc829f79413da4eda26729f6c024d2af7f304ec2ea5754eb14acb39b2b"
+        ),
+        "CertifiedResponseClaimFreshEscapePotential": (
+            "2e58407806507852a2cb2baa1f2c40c27991c04f73cdfa8f200ef43839ba496b"
+        ),
+        "CertifiedResponseClaimPacemakerDebtBound": (
+            "426bfa46b5f8a8421bfa0832d5343f3b2725ef86d38fd794f7d67faf2f884c8b"
+        ),
+        "CertifiedResponseClaimCapacityDebt": (
+            "d9ad22b46691768a71fe0014fc65eb72aafebc37dc620ab556e78e313480a789"
+        ),
+        "CertifiedResponseClaimAuxRank": (
+            "8e2c0484e46949f9dc137b134b621f17d280ef487e581cee7a392422be76a820"
+        ),
+        "CertifiedResponseClaimAuxCarrier": (
+            "31495b77a98cbe265801912add8b51eeff6f99e371598b3cb9e44d65f4a4b731"
+        ),
+        "CertifiedResponseClaimAuxOrdering": (
+            "1d50cd09000834fdc169eff83eb20d88b4e4a79d2d9caa643e7b97bc02e22a90"
+        ),
+    },
+}
+
+_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_THEOREM_SHA256 = {
+    "SumeragiV2AsyncNetwork.tla": {
+        "AsyncInternalCertificateSuccessorsCannotRetainFenceCredit": (
+            "eb6f36a361852fda4e1bf31b4e45efdb28ced19a05d0a0f4dd61a9f3f4264bd7"
+        ),
+    },
+    "SumeragiV2AsyncInstallRunnerProofs.tla": {
+        "SerializedCertifiedPacemakerPreservesClaimIngressOwnership": (
+            "8943a6e12fe98c7a816a0f8229964c2304b0e48a208ad672264ee75329f29890"
+        ),
+        "SerializedCertifiedPacemakerRefinesCoreBracketNext": (
+            "b7352d2bf625ed6732277874a52e357bd4188a37d475da900799cdbe231e34d8"
+        ),
+        "SerializedCertifiedPacemakerPreservesSchedulerType": (
+            "5dc5c0e9994a08bbaa623cea84e8f9f5f04a6f8a114962672095bb0ed784e45d"
+        ),
+        "RunNodeWorkConcreteActionCaseSplit": (
+            "35bd614265c192fb0d22201c20fde0ec55ffc461c449c932c94dfe8088875792"
+        ),
+    },
+    "SumeragiV2AsyncTemporalRankProofs.tla": {
+        "ClaimedResponseSerializedCertifiedPacemakerDecreasesAux": (
+            "4f38a2ed305c71bc8c80ad245dbb4626bf0954e094d4238259509c97abd2b42d"
+        ),
+    },
 }
 
 # Complete token seals for the process-local fair-ingress carrier and every
@@ -1853,19 +3782,19 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "e65283e5924e1dfe938cb69289a35067a01d3835027ba65587a32f515ed90032"
     ),
     "ingress::merge_downstream_with_exact_routes": (
-        "f82878cb726f7549de739045c5d1525dc279461eba8266edf2c0705ae50458d7"
+        "23e937626dd546ae52105bd4e17033d8785e19dfd6ecca7c0d21ebd840d80231"
     ),
     "ingress::same_semantic_request": (
-        "4d965cdcd6431e615b207f488419c4dcb42d2324ea106a5e9264594bbf128476"
+        "b30874c2662dc448ae573d60fb9892310817975b35dde2bfe5d389d08ada7730"
     ),
     "ingress::matches_message": (
-        "6dab8ef36de2046cada66b6aef1a4db08e458e0d43fc3862f794002192c58398"
+        "258d127f5dabef91f22b0d7cca66637770fe3bd607331068ec6f09bd6567f43b"
     ),
     "ingress::matches_semantic_origin": (
         "222fb8e00e39a211f73c88d8c7a41b83a82897c7428f70339aa38e40f78da719"
     ),
     "ingress::process_local_projection_hash": (
-        "e44ebc79f6a425630d9c8bb9a8a280e18bf77dcbe4f23c6ae500097e77bf6989"
+        "8730c337b15b74da9e79b8083d6a524343a32936b002ec90882b74e9fa08f39f"
     ),
     "ingress::matches_reply_routes": (
         "98580b7c9e69cc4c69cc32ec6212459e93fba573a335151fec476659d2772c2f"
@@ -1877,22 +3806,43 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "2be088efc3ff0460b06c0316f7b64062d864d22d8fce286a1474fd1e31af3c82"
     ),
     "ingress::validate_exact": (
-        "874d5c13377384cdf139cfccfac169fc5d57d0d57bc41268a357fec6c7843e8f"
+        "fe23c14b3e612c4e8461912100a22e38a31b9038b06a8948856a6bc3a16bbf58"
     ),
     "effects::accept_payload_chunk_with_ingress_ownership": (
-        "6bc433297ce152cc25f8c67fe66d314f250806a7abf8408a11720cb0480165c8"
+        "04c48786b1db18841d32be400432570fcd268452506af9735c2dc5354a72e5db"
     ),
     "effects::accept_certified_body_response_with_ingress_ownership": (
-        "0f42039eb636c26adf431576ffb70a9cc59885f1bd19355c2a221d2fdbf59322"
+        "d05e901df51cb12ad89eaeb87a38771d24874288e933604253dad046198216d1"
+    ),
+    "effects::classify_payload_chunk_lifecycle": (
+        "e6cdcf1439d8ef97a2912811be1ac65a0feb417b168a5480b9a3d9ec57a02333"
+    ),
+    "effects::begin_apply": (
+        "543995f15fed7b38c3c654598fef678d8f3ca6271bd008fc999d6651ae7195da"
+    ),
+    "effects::complete_application": (
+        "81123640348e9c94a6194d9bbf8c8863731bc46ced273137f6a0851be29cf234"
+    ),
+    "ingress::leader_wire_token_view": (
+        "ef9f78efaa117ac2a787a9791e87d5a199978cf1d5a87d8a9e43b94f12e12b82"
+    ),
+    "ingress::leader_wire_token_matches_chunk_manifest": (
+        "062164107c1c1363e538a4ed827b13510b3b0c2a91505d2b77c097f44dbc7a1b"
+    ),
+    "ingress::leader_wire_token_matches_body_coordinates": (
+        "2bc498a9088c735c18803dde3461d50afd70712ac40f7875457290d9796de385"
+    ),
+    "ingress::leader_wire_token_matches_exact_body": (
+        "645a29b8cff1d68fca203fd037f3c665189ab801c1bbe97eca8b6dfdc04e0b7f"
     ),
     "worker::claimed_with_reply_routes_and_ingress_ownership": (
         "8c95a2604897a3dbf327d36721388bf466784f2203869d1fc6aead594ecd7e44"
     ),
     "worker::serve_certified_request_on_routes": (
-        "7a35d8d5e2cb80ebc789ca18ed502a6bfa945ac4445f45b55fc00eebca9ca41d"
+        "6cfa46d3647ba72ae53fa12585926eb6803ed38dff9d656894ba7e7693dc06ac"
     ),
     "worker::queue_commit_serve": (
-        "b11654626a16eca6c3c76b66012a23218599ae63d7134433872eb32ee7c9b843"
+        "73b2b40e5c2255d557c2e67ccdd58c3593381c5d713b4dd6315e48c350ff7dfb"
     ),
     "worker::io_handle_certified_serve_ingress_gate": (
         "87acd6865d179d3911a66692e063ece997fbf7669a81493b19d9f443e1291735"
@@ -1901,16 +3851,25 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "95906877d32686cc23249747ff5e31f8552d5abb237277f96fd4091da1a92d77"
     ),
     "worker::route_payload_chunk": (
-        "f633a311a20e8964a46d5f6a6542edbad3bcd052fced5038a65d9a471f2a557a"
+        "ed0c01f2a93defb44b23ffa108c622bbdc4550588a859f44ac7313490f52c705"
+    ),
+    "worker::has_exact_reconstructed_completion": (
+        "2d494b9f5ea950b8fa1e24c3b6f1a9d5f8917dc166658660300d9e66b9064bfe"
     ),
     "worker::buffer_orphan_payload_chunk_inner": (
-        "df4b2555d8fda4e356299093d3fa1f41c58ad3c469fb2b4720cdb17da460849b"
+        "03c11a6a6438f3a0f7cf47cac8f5310b262fd684a9df7891ff906b7f2e0d7de8"
+    ),
+    "worker::sweep_buffered_payload_chunk_lifecycles": (
+        "8f2cbe9282b02b1d05b61454faae71ede5abe13e13d70f5278ca35705ae78a05"
     ),
     "worker::replay_buffered_chunks": (
-        "145f9931fea75aed16111a55937abd9d0d821502314d970c4d57106ccceaf900"
+        "1259249ed54174dfcecffbacb6e2f70b3a5fbf31e59bd088f6160d3148648920"
+    ),
+    "worker::retire_buffered_payload_chunk_tail": (
+        "fa77f1610c7d58dd73f05cb353d10a4c2a1db4f28b58777138bcfc2daad475e1"
     ),
     "worker::deliver_payload_chunk": (
-        "6c218a4286b317b43f4fd68240328979714b1d831aae46f80108622c34e77052"
+        "f4341f1f806d10adab9e14b0c4b13c463fc7c6dae22bd7056863548d0912fb5b"
     ),
     "lane::accept_lane_message_owned": (
         "4c3b13ab1d0821d97604c8f9119ecc27d1c5be5c2a635b228027d35ed3adf96c"
@@ -2355,7 +4314,7 @@ _PRODUCTION_SM_DISTID_GEOMETRY_ITEM_SHA256 = {
     ),
 }
 
-# Exact pure geometry and admission items connecting the abstract 4N+2H+2
+# Exact pure geometry and admission items connecting the concrete 5N+3H+2
 # owner model to the authoritative production queue.  Whole-item token seals are
 # intentional here: every numeric term contributes to a progress reservation,
 # and comments or test-only lookalikes cannot satisfy this contract.
@@ -2364,13 +4323,13 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "749f33ce31fcfe4ecf84e2264c181b909d30043bb759a90cbf6e5ebb1a40d0e0"
     ),
     "fair_v2_ingress_required_capacity": (
-        "838df8ad9c809753541a1ee4f75390a763fd4f3362231407626e80102acad249"
+        "eec628b52b06d4e8d2238cc1d05f3b18a53347e186c438723fc4861d442db550"
     ),
     "fair_v2_ingress_current_protected_slots": (
-        "277b32d5a3f4564a998edee5a0267204553f659134fce846de04353bd0ba34d4"
+        "58767f7d72045788225efb6019570df5e4f34d0aa4520a414d225f0ea1449549"
     ),
     "fair_v2_ingress_lane_protected_slots": (
-        "da25270d56a0bd3011ad224033c9b4a5c7a42ca4e86e66f1eb6ca1018415b9ea"
+        "9ded1cd333e6cdb7415aced353a72caca4965fd74c705d11d3916faf251e4af8"
     ),
     "fair_v2_ingress_required_byte_capacity": (
         "f3b4cfc1017778a7d7ba68b1e4c3a24c2f00f5f20252d3375eded1e986bd0799"
@@ -2387,11 +4346,14 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
     "fair_v2_ingress_required_quorum_certificate_bytes": (
         "0335a87586cee9c0d8bf68ba87581f873ccbfdce5c316b1e033ccf0019801629"
     ),
+    "fair_v2_ingress_required_certified_fence_escape_bytes": (
+        "1706b7bac95b09fd83b5f1b111364c47639ec7c74b0ae156c80127277f89838e"
+    ),
     "fair_v2_ingress_required_proposal_bytes": (
         "f87150d121741f99778f8108a82cc95a0811afe51edae3cf06ee8e955337985b"
     ),
     "fair_v2_ingress_network_message_bytes_from_block_message": (
-        "c92a1c58b6296fd3afb040497b3f971ec509ffa2b5408f7c0cb48c5ec0a5b979"
+        "3e9310afc887443851e090698197623e01be8165583d6643b92223119e412573"
     ),
     "fair_v2_ingress_network_message_bytes": (
         "5e605df8dc71ee5961cf2c40b3dc8c6108c1c745662a5249d533b1dc8c9fd6eb"
@@ -2433,6 +4395,134 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "a8816bf106a1a62a8b8c411f5964aeeef1ec14f86d14f2313b5cae353e1b359c"
     ),
 }
+
+# Exact semantic projections complement the complete item digests above. Keep
+# them outside the monolithic checker so the fail-closed source contract can
+# grow without increasing the checker exception budget.
+_PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES = {
+    "fair_ingress_evidence": """
+pub(crate) struct FairV2IngressOwnershipEvidence {
+    first: FairV2IngressOwnershipOccurrence,
+    latest: FairV2IngressOwnershipOccurrence,
+    runtime_physical_cut: Option<u128>,
+    leader_wire_token: Option<FairV2IngressLeaderWireToken>,
+    leader_wire_runtime_receipt: Option<serviced_candidate_store::LeaderWireLifecycleRuntimeReceipt>,
+    admission_count: u128,
+    occurrence_count: u128,
+    action_counts: [u128; FairV2IngressOwnershipAction::COUNT],
+    current_routes: Option<NetworkReplyRoutes>,
+    attempts: Vec<FairV2IngressReplyAttempt>,
+    attempts_hash: CryptoHash,
+}
+""",
+    "fair_ingress_merge": """
+let Some(attempts) = fair_v2_ingress_merge_attempt_cursors(
+    &self.attempts,
+    &candidate.attempts,
+    current_routes.as_ref(),
+) else {
+    return false;
+};
+let attempts_hash = fair_v2_ingress_attempt_cursor_hash(&attempts);
+let merged = Self {
+    first: self.first.clone(),
+    latest: candidate.latest,
+    leader_wire_token: self.leader_wire_token.clone(),
+    leader_wire_runtime_receipt: self.leader_wire_runtime_receipt.clone(),
+    runtime_physical_cut: self.runtime_physical_cut,
+    admission_count,
+    occurrence_count,
+    action_counts,
+    current_routes,
+    attempts,
+    attempts_hash,
+};
+if !merged.validate_exact() {
+    return false;
+}
+*self = merged;
+true
+""",
+    "applied_height_scope": """
+rollover_claim.validate_fanout(messages, peers)?;
+if matches!(
+    rollover_claim,
+    ExactOutputRolloverClaim::NonRetireableLaneTransport { .. }
+) {
+    return Err(
+        "non-retireable lane transport must drain before applied-height handoff".to_owned(),
+    );
+}
+let scope = rollover_claim.scope().ok_or_else(|| {
+    "Sumeragi v2 exact output has no typed applied-height rollover claim".to_owned()
+})?;
+if !scope.covers(artifact) {
+    return Err("Sumeragi v2 output claim belongs to another creation scope".to_owned());
+}
+""",
+    "durable_history_dispatch": """
+if matches!(
+    rollover_claim,
+    ExactOutputRolloverClaim::DurableCommitCertificateResponse { .. }
+        | ExactOutputRolloverClaim::DurableCertifiedBodyResponse { .. }
+        | ExactOutputRolloverClaim::DurableLaneCertificateResponse { .. }
+        | ExactOutputRolloverClaim::HistoricalAutonomousLaneCertification { .. }
+        | ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse { .. }
+) {
+    return durable_history_source_covers(
+        messages,
+        rollover_claim,
+        &artifact.height_context.chain_id,
+        artifact.height,
+        durable_history.ok_or_else(|| {
+            "Sumeragi v2 durable response lacks an independently readable history source"
+                .to_owned()
+        })?,
+    );
+}
+""",
+    "applied_height_handoff": """
+self.validate_applied_height_output_handoff_authority(receipt, artifact)?;
+let (retired, retired_kura_replica_advert_heights) = {
+    let mut pending = self.lock_pending_exact_output()?;
+    if self.exact_output_handoff_owner.is_sealed() {
+        return Err(
+            "Sumeragi v2 applied-height output handoff is already sealed".to_owned(),
+        );
+    }
+    let retired_kura_replica_advert_heights =
+        pending.pending_kura_replica_advert_heights()?;
+    let retired = pending.handoff_applied_height_to_durable_reconstruction(
+        artifact,
+        Some(durable_lane_authority),
+        Some(self.kura.as_ref()),
+    )?;
+    (retired, retired_kura_replica_advert_heights)
+};
+let scheduled_kura_replica_adverts = self
+    .kura_replica_advert_refresh
+    .schedule_retired_exact_output_heights(
+        retired_kura_replica_advert_heights,
+        Instant::now(),
+    )?;
+""",
+    "runner_service_owner": """
+Arc::clone(&output_guard),
+Arc::clone(&block_rx),
+Arc::clone(&kura_replica_advert_refresh),
+exact_output_service_owner,
+)
+.map_err(V2RunnerError::Service)?;
+""",
+    "historical_body_guard": """
+let served = serve_block_sync_while_guarded(
+    output_guard,
+    || {
+        block_sync_server
+            .serve_historical_body(kura, request, &sender, local_key)
+    },
+""",
+}
 _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
     "classify": (
         "4c5af83b512d633256649e19265a22e80ef9d2e5fde50507ec91c075642b98e6"
@@ -2440,21 +4530,29 @@ _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
 }
 _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
     "new_with_source_geometry_and_transport_frame_caps": (
-        "b8d9a480d1cd0e582576891f2af20370ef35f5af4dcdc6c9fe24eafc6e30f3c1"
+        "303393eaa7ab5d1fe034cc7ca90a692fa7e316ed1f870dc5c5c2b50594d6ac49"
     ),
     "configure_roster_for_context": (
-        "13d8e7a240e22e620a6627a6f34c5be856eb22cb9e2f8a38bd2b3e3f95b21334"
+        "d9f224713b9f28a0689baf7b8f9416cec8583931917927eb69bb3f0d06631cfe"
     ),
     "configure_roster_with_byte_requirements": (
-        "193a8e4586cc6ee7689c9cc15e45474c129a217e91be760559027fd1939f9d02"
+        "dd118c20b0f64df0f6c0ff317320c4704bc8376d68c085b493ac763621b59cf9"
     ),
     "open": (
-        "d19623cdc7ad56922f91c7a9c0d2513199ecafa4e6ad26ea2717073d561b41eb"
+        "0a55b773a082a1d72592558a4941355d16d9c2231f9b08d25b778d25749ebcc1"
     ),
     "try_push_at": (
-        "5dc0c2bc91dfedf3972f1d7f13b45c0d8ce923d6e1ba25ea139b77f82285857b"
+        "6ff200873eb6534fbddc5421a267570c82626dbd687958d25f76c8c743c6cb03"
     ),
     "try_recv_if_at_checked": (
-        "f4769c2e4fd24483e1834c0143f4a316be7951b805ff3c41c60ed03486f748f4"
+        "91464514e1d803d746fe2c9713d318082246fb88dd71881403a04b38f6a32884"
+    ),
+    "try_recv_if_at_checked_classified": (
+        "895a03de7f0fa19a4016ad97791b5bf2f9da2b39ccc42a9dc881fd78a1b1328b"
+    ),
+}
+_PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
+    "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions": (
+        "21be2f06d20172b6b2ee4fe324f92723895ad5a4fceb50ce84d50234812881c4"
     ),
 }

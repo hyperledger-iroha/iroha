@@ -2,10 +2,10 @@
 //!
 //! Run `cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures`
 //! to refresh `fixtures/sumeragi_v2/wire_v2.tsv` and
-//! `fixtures/sumeragi_v2/native_amx_v2_grouped.json`. The default mode writes;
-//! pass `--out-dir <path>` to target a cache staging directory and add `--check`
-//! to verify that destination against the current canonical Rust encodings and
-//! JSON models.
+//! `fixtures/sumeragi_v2/native_amx_v2_grouped.json`. The default mode writes.
+//! Pass `--check` to verify a destination against the current canonical Rust
+//! encodings and JSON models, and use `--out-dir <path>` to target a cache
+//! staging directory.
 
 mod native_amx_grouped;
 
@@ -33,14 +33,16 @@ use iroha_data_model::{
         SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
         SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
         SumeragiV2VoteQuorumStatus, SumeragiV2WorkStatus, TimeoutCertificate, TimeoutJustification,
-        TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote,
+        TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote, encode_payload_chunks,
     },
+    merge::MergeLedgerEntry,
     peer::PeerId,
 };
 use norito::codec::{DecodeAll, Encode};
 
 const FIXTURE_DIRECTORY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/sumeragi_v2");
 const WIRE_FIXTURE_BASENAME: &str = "wire_v2.tsv";
+const CANONICAL_BODY: &[u8] = b"body";
 const HEADER: &str = "# Accept rows were generated from iroha_data_model::block::consensus_v2 using Encode::encode.\n\
 # Reject rows are Rust-encoded invalid values or deliberate corruptions of those payloads.\n\
 # Bare Norito v1 layout with COMPACT_LEN; do not regenerate from an SDK codec.\n\
@@ -93,6 +95,20 @@ struct NamedMessage {
     message: ConsensusMessageV2,
 }
 
+#[derive(Encode)]
+struct PreV4ExecutionCommitment {
+    parent_state_root: Hash,
+    post_state_root: Hash,
+    ordinary_writes_root: Hash,
+    topup_anchor_root: Option<Hash>,
+    topup_anchor_count: u32,
+    native_amx_application_manifest_version: u16,
+    native_amx_application_manifest_root: Hash,
+    native_amx_application_manifest_count: u32,
+    executed_block_wire_len: u64,
+    executed_block_wire_hash: Hash,
+}
+
 struct FixtureValues {
     context: HeightContext,
     prepare: QuorumCertificate,
@@ -143,15 +159,20 @@ fn context() -> HeightContext {
         nexus_amx_context_hash: Hash::new(b"nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::Plain,
+            encoding: PayloadEncoding::ReedSolomon16,
             chunk_size_bytes: 4,
-            data_shards: 0,
-            parity_shards: 0,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: 1024,
-            max_chunk_count: 256,
+            max_chunk_count: 512,
         },
         leader_seed: [0xa5; 32],
     }
+}
+
+fn canonical_body_chunks(context: &HeightContext) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    encode_payload_chunks(context.da_layout, CANONICAL_BODY)
+        .map_err(|error| format!("failed to encode canonical fixture body: {error}").into())
 }
 
 fn round(context: &HeightContext, view: u64) -> ConsensusRound {
@@ -171,10 +192,11 @@ fn subject(seed: u8) -> BlockSubject {
 }
 
 fn execution_commitment(seed: u8) -> ExecutionCommitment {
-    ExecutionCommitment::without_topups(
+    ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new([seed, 3]),
         Hash::new([seed, 4]),
         Hash::new([seed, 5]),
+        1,
         Hash::new([seed, 6]),
     )
 }
@@ -192,6 +214,33 @@ fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertifica
     }
 }
 
+fn merge_carrier_entry_hash() -> HashOf<MergeLedgerEntry> {
+    HashOf::from_untyped_unchecked(Hash::new(b"sumeragi-v2-v4-merge-carrier-fixture"))
+}
+
+fn merge_carrier_execution_commitment(seed: u8) -> ExecutionCommitment {
+    ExecutionCommitment::new_with_native_amx_application_manifest_and_merge_carrier(
+        Hash::new([seed, 3]),
+        Hash::new([seed, 4]),
+        Hash::new([seed, 5]),
+        None,
+        0,
+        NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+        native_amx_application_manifest_empty_root(),
+        0,
+        Some(MergeCarrierCommitmentV1::new(merge_carrier_entry_hash())),
+        1,
+        Hash::new([seed, 6]),
+    )
+    .expect("canonical merge-carrier fixture execution commitment")
+}
+
+fn merge_carrier_qc(context: &HeightContext) -> QuorumCertificate {
+    let mut certificate = qc(context, 4, GlobalPhase::Prepare);
+    certificate.execution_commitment = merge_carrier_execution_commitment(5);
+    certificate
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the canonical fixture values are easier to audit when assembled in one deterministic sequence"
@@ -202,6 +251,10 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
         .validate()
         .map_err(|error| format!("fixture context is invalid: {error}"))?;
     let prepare = qc(&context, 1, GlobalPhase::Prepare);
+    let merge_carrier_prepare = merge_carrier_qc(&context);
+    merge_carrier_prepare
+        .validate(&context)
+        .map_err(|error| format!("fixture merge-carrier PrepareQC is invalid: {error}"))?;
     let timeout = TimeoutCertificate {
         round: round(&context, 2),
         groups: vec![TimeoutVoteGroup {
@@ -210,12 +263,13 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             aggregate_signature: vec![0x33; 48],
         }],
     };
+    let encoded_body_chunks = canonical_body_chunks(&context)?;
     let manifest = PayloadManifest::derive(
         &context,
         round(&context, 1),
         subject(9),
-        4,
-        &[b"body".to_vec()],
+        u64::try_from(CANONICAL_BODY.len()).expect("canonical body length fits u64"),
+        &encoded_body_chunks,
     )
     .map_err(|error| format!("fixture manifest is invalid: {error}"))?;
     let body_request = CertifiedBodyRequest {
@@ -288,6 +342,12 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             )),
         },
         NamedMessage {
+            name: "quorum_certificate_merge_carrier",
+            message: ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
+                merge_carrier_prepare,
+            )),
+        },
+        NamedMessage {
             name: "commit_vote_reproposal",
             message: ConsensusMessageV2::new(ConsensusMessageV2Payload::Vote(Vote {
                 round: reproposal_commit.round,
@@ -332,7 +392,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
                 PayloadChunk {
                     manifest_hash: HashOf::new(&manifest),
                     index: 0,
-                    bytes: b"body".to_vec(),
+                    bytes: encoded_body_chunks[0].clone(),
                     sender: 0,
                     signature: vec![0x66; 48],
                 },
@@ -350,7 +410,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
                 CertifiedBodyResponse {
                     request_hash: HashOf::new(&body_request),
                     manifest: manifest.clone(),
-                    body: b"body".to_vec(),
+                    body: CANONICAL_BODY.to_vec(),
                     responder: 0,
                     signature: vec![3],
                 },
@@ -511,6 +571,7 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
     let canonical_vote = values.message("vote")?;
     let canonical_reproposal_vote = values.message("commit_vote_reproposal")?;
     let canonical_reproposal_qc = values.message("commit_quorum_certificate_reproposal")?;
+    let canonical_merge_carrier_qc = values.message("quorum_certificate_merge_carrier")?;
     let canonical_request = values.message("commit_certificate_request")?;
     let canonical_response = values.message("commit_certificate_response")?;
 
@@ -549,6 +610,44 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         .execution_commitment
         .native_amx_application_manifest_count =
         iroha_data_model::block::consensus_v2::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1;
+
+    let mut merge_carrier_wrong_version = canonical_merge_carrier_qc.clone();
+    let ConsensusMessageV2Payload::QuorumCertificate(certificate) =
+        &mut merge_carrier_wrong_version.payload
+    else {
+        return Err("canonical merge-carrier fixture contains the wrong payload".into());
+    };
+    certificate
+        .execution_commitment
+        .merge_carrier
+        .as_mut()
+        .ok_or("canonical merge-carrier fixture is missing its carrier")?
+        .version = MERGE_CARRIER_COMMITMENT_VERSION_V1.saturating_add(1);
+
+    let ConsensusMessageV2Payload::QuorumCertificate(certificate) =
+        &canonical_merge_carrier_qc.payload
+    else {
+        return Err("canonical merge-carrier fixture contains the wrong payload".into());
+    };
+    let commitment = certificate.execution_commitment;
+    let pre_v4_commitment = PreV4ExecutionCommitment {
+        parent_state_root: commitment.parent_state_root,
+        post_state_root: commitment.post_state_root,
+        ordinary_writes_root: commitment.ordinary_writes_root,
+        topup_anchor_root: commitment.topup_anchor_root,
+        topup_anchor_count: commitment.topup_anchor_count,
+        native_amx_application_manifest_version: commitment.native_amx_application_manifest_version,
+        native_amx_application_manifest_root: commitment.native_amx_application_manifest_root,
+        native_amx_application_manifest_count: commitment.native_amx_application_manifest_count,
+        executed_block_wire_len: commitment.executed_block_wire_len,
+        executed_block_wire_hash: commitment.executed_block_wire_hash,
+    };
+    let merge_carrier_missing_field = replace_unique_subsequence(
+        &canonical_merge_carrier_qc.encode(),
+        &commitment.encode(),
+        &pre_v4_commitment.encode(),
+        "merge-carrier execution commitment",
+    )?;
 
     let mut commit_vote = canonical_vote.clone();
     let ConsensusMessageV2Payload::Vote(vote) = &mut commit_vote.payload else {
@@ -671,6 +770,16 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
                 native_manifest_count_over_bound,
             ))
             .encode(),
+        ),
+        FixtureRow::rejected(
+            "negative_message",
+            "execution_commitment_merge_carrier_wrong_version",
+            merge_carrier_wrong_version.encode(),
+        ),
+        FixtureRow::rejected(
+            "negative_message",
+            "execution_commitment_missing_merge_carrier_field",
+            merge_carrier_missing_field,
         ),
         FixtureRow::rejected(
             "negative_message",
@@ -833,6 +942,34 @@ fn replace_single_difference(
     Ok(corrupted)
 }
 
+fn replace_unique_subsequence(
+    bytes: &[u8],
+    needle: &[u8],
+    replacement: &[u8],
+    label: &str,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    if needle.is_empty() {
+        return Err(format!("encoded {label} was unexpectedly empty").into());
+    }
+    let matches = bytes
+        .windows(needle.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == needle).then_some(index))
+        .collect::<Vec<_>>();
+    let [index] = matches.as_slice() else {
+        return Err(format!(
+            "expected exactly one encoded {label}, found {} occurrences",
+            matches.len()
+        )
+        .into());
+    };
+    let mut corrupted = Vec::with_capacity(bytes.len() - needle.len() + replacement.len());
+    corrupted.extend_from_slice(&bytes[..*index]);
+    corrupted.extend_from_slice(replacement);
+    corrupted.extend_from_slice(&bytes[*index + needle.len()..]);
+    Ok(corrupted)
+}
+
 fn replace_first_guarded(
     bytes: &mut [u8],
     needle: &[u8],
@@ -910,6 +1047,7 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
         "commit_request_truncated_signature",
         "commit_response_truncated_signature",
         "commit_request_invalid_chain_utf8",
+        "execution_commitment_missing_merge_carrier_field",
     ] {
         if decode_message(&row(rows, "negative_message", name)?.bytes).is_ok() {
             return Err(format!("negative message {name} unexpectedly decoded").into());
@@ -936,6 +1074,7 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
         "execution_commitment_native_manifest_zero_count_nonempty_root",
         "execution_commitment_native_manifest_nonzero_count_empty_root",
         "execution_commitment_native_manifest_count_1025",
+        "execution_commitment_merge_carrier_wrong_version",
     ] {
         let message = decode_message(&row(rows, "negative_message", name)?.bytes)?;
         let ConsensusMessageV2Payload::QuorumCertificate(certificate) = message.payload else {
@@ -1117,6 +1256,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_body_chunks_cover_the_complete_rs16_stripe() {
+        let context = context();
+        let chunks = canonical_body_chunks(&context).expect("canonical encoded body chunks");
+        assert_eq!(chunks, vec![CANONICAL_BODY.to_vec(); 2]);
+
+        let manifest = PayloadManifest::derive(
+            &context,
+            round(&context, 1),
+            subject(9),
+            u64::try_from(CANONICAL_BODY.len()).expect("canonical body length fits u64"),
+            &chunks,
+        )
+        .expect("complete encoded stripe has a valid manifest");
+        assert_eq!(manifest.chunk_hashes.len(), 2);
+        assert_eq!(manifest.validate(&context), Ok(()));
+    }
 
     #[test]
     fn staged_output_directory_is_explicit() {

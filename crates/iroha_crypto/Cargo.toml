@@ -18,11 +18,8 @@ dev-tools = []
 # General application surface. Consensus-only consumers should use
 # `consensus` so they do not pull PQC and batch-verification helpers.
 application = ["std", "rand", "json", "ecc-batch", "bfv-accel", "pqc"]
-# Tokio adapters for the SoraNet post-handshake record protocol.  Keep this
-# opt-in so non-network crypto consumers do not acquire an async runtime.
-soranet-record-io = ["dep:tokio"]
 # Cryptography required by consensus and canonical node identities.
-consensus = ["std", "rand", "bls", "bls-multi-pairing"]
+consensus = ["std", "rand", "bls"]
 # Complete shipping node surface.
 node-crypto = ["application", "consensus"]
 std = []
@@ -47,8 +44,6 @@ bls = ["bls-backend-w3f", "dep:blstrs", "dep:group", "dep:pairing"]
 bls-backend-blstrs = ["bls", "dep:blstrs", "dep:group", "dep:subtle", "dep:pairing", "dep:w3f-bls"]
 # Baseline backend (enabled when bls is set and bls-backend-blstrs is NOT set)
 bls-backend-w3f = ["bls", "dep:w3f-bls"]
-# Optional: enable single pairing-product for multi-message aggregates via blstrs
-bls-multi-pairing = ["dep:blstrs", "dep:group", "dep:subtle", "dep:pairing"]
 # Replace structures and methods with FFI equivalents to facilitate dynamic linkage (mainly used in smartcontracts)
 #ffi_import = ["iroha_ffi", "iroha_primitives/ffi_import"]
 
@@ -130,7 +125,6 @@ arrayref = { version = "0.3.9", default-features = false }
 
 aead = { version = "0.6.0-rc.3", default-features = false, features = ["alloc"] }
 chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core", "zeroize"] }
-tokio = { workspace = true, optional = true, features = ["io-util", "macros", "rt"] }
 
 elliptic-curve = { version = "0.13.8", default-features = false, features = ["std"] }
 k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecdsa", "sha256", "std"] }

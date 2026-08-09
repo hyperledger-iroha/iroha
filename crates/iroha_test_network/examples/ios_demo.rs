@@ -30,9 +30,9 @@ struct AccountConfig {
     public_key: String,
     #[norito(default)]
     private_key: Option<String>,
-    #[norito(default)]
-    domain: Option<String>,
+    domain: String,
     asset_id: String,
+    asset_name: String,
     initial_balance: String,
 }
 
@@ -246,7 +246,7 @@ fn main() -> Result<()> {
     let telemetry_profile = args.telemetry_profile.clone();
 
     let (network, rt) = NetworkBuilder::new()
-        .with_peers(1)
+        .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(move |layer| {
             layer
@@ -279,18 +279,15 @@ fn main() -> Result<()> {
             private_key,
             domain,
             asset_id,
+            asset_name,
             initial_balance,
         } = entry;
 
         let asset_def_id: AssetDefinitionId = asset_id
             .parse()
             .wrap_err_with(|| eyre!("Failed to parse asset id `{asset_id}`"))?;
-        let domain_id: DomainId = if let Some(domain_str) = domain {
-            DomainId::parse_fully_qualified(&domain_str)
-                .wrap_err_with(|| eyre!("Failed to parse domain `{domain_str}`"))?
-        } else {
-            asset_def_id.domain().clone()
-        };
+        let domain_id = DomainId::parse_fully_qualified(&domain)
+            .wrap_err_with(|| eyre!("Failed to parse domain `{domain}`"))?;
 
         if known_domains.insert(domain_id.clone()) {
             submit_ensure_domain(&client, Domain::new(domain_id.clone()))
@@ -298,7 +295,12 @@ fn main() -> Result<()> {
         }
 
         if known_asset_defs.insert(asset_def_id.clone()) {
-            let definition = AssetDefinition::numeric(asset_def_id.clone());
+            let definition = AssetDefinition::numeric(
+                asset_def_id.clone(),
+                asset_name,
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            );
             client
                 .submit_blocking(
                     Register::asset_definition(definition),

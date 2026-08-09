@@ -43,7 +43,7 @@ resolve_trusted_python312() {
         TMPDIR=/tmp \
         LANG=C.UTF-8 \
         LC_ALL=C.UTF-8 \
-        "$candidate" -I -S -c '
+        "$candidate" -I -S -B -c '
 import os
 import pathlib
 import stat
@@ -90,59 +90,206 @@ run_python312_clean() {
     TMPDIR=/tmp \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    "$PYTHON_BINARY" -I -S "$@"
+    "$PYTHON_BINARY" -I -S -B "$@"
 }
 
 # Build a NoritoBridge.xcframework from the Rust connect_norito_bridge crate.
-# - Produces a static-library XCFramework for every Apple slice so Xcode links it
-#   without trying to embed/sign a framework inside simulator app bundles.
+# - Produces a static-library XCFramework with iOS device, universal iOS
+#   simulator, and universal macOS slices so Xcode links it without trying to
+#   embed/sign a framework inside simulator app bundles.
 # - Bridge packaging skips the broader Norito bindings sync gate because unrelated
 #   Kotlin/Java parity drift should not block rebuilding the Swift bridge artifact.
-# - Requires: Python 3.12, rustup + cargo, xcodebuild, lipo.
+# - Requires: Python 3.12, rustup + cargo, xcodebuild, lipo, and the exact
+#   externally selected Cargo target/rustc/rustdoc build envelope.
 # - MOBILE_SDK_PYTHON_BINARY may select an absolute canonical Python 3.12
 #   executable when the fixed Homebrew/system locators are unavailable.
 #
 # Usage:
 #   scripts/build_norito_xcframework.sh
 #   scripts/build_norito_xcframework.sh --bridge-version 1.0.0
+#   scripts/build_norito_xcframework.sh --archive-output /absolute/NoritoBridge.xcframework.zip
 #   scripts/build_norito_xcframework.sh --privacy-production-enabled
 #   scripts/build_norito_xcframework.sh --privacy-production-enabled --allow-dirty-source
 #
-# Outputs into ./dist/NoritoBridge.xcframework
+# NORITO_BRIDGE_OUT_DIR and NORITO_BRIDGE_BUILD_DIR are mandatory external
+# cache roots. The first-release owner never creates build or artifact output
+# inside the reviewed repository.
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 CRATE_DIR="$ROOT_DIR/crates/connect_norito_bridge"
 INC_DIR="$CRATE_DIR/include"
-OUT_DIR="${NORITO_BRIDGE_OUT_DIR:-$ROOT_DIR/dist}"
-BUILD_DIR="${NORITO_BRIDGE_BUILD_DIR:-$ROOT_DIR/build/norito_bridge}"
-STAGE_DIR="$BUILD_DIR/stage"
+if [[ -z "${NORITO_BRIDGE_OUT_DIR:-}" || -z "${NORITO_BRIDGE_BUILD_DIR:-}" ]]; then
+  echo "[-] NORITO_BRIDGE_OUT_DIR and NORITO_BRIDGE_BUILD_DIR are required external cache directories" >&2
+  exit 1
+fi
+OUT_DIR="$NORITO_BRIDGE_OUT_DIR"
+BUILD_DIR="$NORITO_BRIDGE_BUILD_DIR"
 PUBLISH_ROOT=""
-# CI makes the reviewed source tree read-only, so retain the process-held
-# build/publish lock beside the writable staging tree.
-BUILD_PUBLISH_LOCK="$BUILD_DIR/.NoritoBridge.build-publish.lockfile"
-if [[ "${NORITO_BRIDGE_BUILD_LOCK_HELD:-0}" != "1" ]]; then
-  [[ "$BUILD_PUBLISH_LOCK" == /* ]] || {
-    echo "[-] NoritoBridge build lock path must be absolute: $BUILD_PUBLISH_LOCK" >&2
+
+reject_retired_mode() {
+  local retired_name="$1"
+  local retired_presence="$2"
+  if [[ "$retired_presence" == "set" ]]; then
+    echo "[-] $retired_name is not part of the first-release build contract" >&2
     exit 1
-  }
+  fi
+}
+reject_retired_mode \
+  NORITO_BRIDGE_BUILD_LOCK_HELD "${NORITO_BRIDGE_BUILD_LOCK_HELD+set}"
+reject_retired_mode \
+  NORITO_BRIDGE_PRESERVE_CARGO_TARGETS "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS+set}"
+reject_retired_mode \
+  NORITO_BRIDGE_SKIP_CARGO_BUILDS "${NORITO_BRIDGE_SKIP_CARGO_BUILDS+set}"
+if [[ "${CARGO_BUILD_JOBS:-}" != "1" \
+    || "${CARGO_INCREMENTAL:-}" != "0" \
+    || "${CARGO_NET_OFFLINE:-}" != "true" \
+    || "${RUSTC_BOOTSTRAP:-}" != "1" ]]; then
+  echo "[-] NoritoBridge requires CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0, CARGO_NET_OFFLINE=true, and RUSTC_BOOTSTRAP=1" >&2
+  exit 1
+fi
+if [[ -z "${CARGO_TARGET_DIR:-}" || -z "${RUSTC:-}" || -z "${RUSTDOC:-}" ]]; then
+  echo "[-] NoritoBridge requires explicit CARGO_TARGET_DIR, RUSTC, and RUSTDOC" >&2
+  exit 1
+fi
+CARGO_TARGET_DIR="$(run_python312_clean - "$CARGO_TARGET_DIR" "$ROOT_DIR" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+candidate = Path(sys.argv[1])
+source_root = Path(sys.argv[2])
+if not candidate.is_absolute() or candidate != Path(os.path.abspath(candidate)):
+    raise SystemExit("CARGO_TARGET_DIR must be an absolute canonical directory")
+try:
+    metadata = candidate.lstat()
+    resolved = candidate.resolve(strict=True)
+except OSError:
+    raise SystemExit("CARGO_TARGET_DIR must already exist") from None
+if (
+    resolved != candidate
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or not os.access(candidate, os.R_OK | os.W_OK | os.X_OK)
+    or candidate == source_root
+    or source_root in candidate.parents
+):
+    raise SystemExit(
+        "CARGO_TARGET_DIR must be one writable, non-symbolic canonical directory "
+        "outside the Iroha source tree"
+    )
+print(candidate)
+PY
+)" || exit 1
+export CARGO_TARGET_DIR
+
+canonical_writable_directory() {
+  run_python312_clean - "$1" "$2" "$ROOT_DIR" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+candidate = Path(sys.argv[1])
+label = sys.argv[2]
+source_root = Path(sys.argv[3])
+if not candidate.is_absolute() or candidate != Path(os.path.abspath(candidate)):
+    raise SystemExit(f"{label} must be an absolute canonical directory")
+try:
+    metadata = candidate.lstat()
+    resolved = candidate.resolve(strict=True)
+except OSError:
+    raise SystemExit(f"{label} must already exist") from None
+if (
+    resolved != candidate
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or not os.access(candidate, os.R_OK | os.W_OK | os.X_OK)
+    or candidate == source_root
+    or source_root in candidate.parents
+):
+    raise SystemExit(
+        f"{label} must be a writable, non-symbolic canonical directory "
+        "outside the Iroha source tree"
+    )
+print(candidate)
+PY
+}
+OUT_DIR="$(canonical_writable_directory "$OUT_DIR" NORITO_BRIDGE_OUT_DIR)" || exit 1
+BUILD_DIR="$(canonical_writable_directory "$BUILD_DIR" NORITO_BRIDGE_BUILD_DIR)" || exit 1
+paths_overlap() {
+  [[ "$1" == "$2" || "$1" == "$2"/* || "$2" == "$1"/* ]]
+}
+if paths_overlap "$CARGO_TARGET_DIR" "$BUILD_DIR" \
+    || paths_overlap "$CARGO_TARGET_DIR" "$OUT_DIR" \
+    || paths_overlap "$BUILD_DIR" "$OUT_DIR"; then
+  echo "[-] NoritoBridge Cargo target, build, and output directories must be pairwise disjoint" >&2
+  exit 1
+fi
+STAGE_DIR="$BUILD_DIR/stage"
+
+TARGET_BUILD_LOCK="$CARGO_TARGET_DIR/.NoritoBridge.cargo.lockfile"
+STAGE_BUILD_LOCK="$BUILD_DIR/.NoritoBridge.stage.lockfile"
+OUTPUT_PUBLISH_LOCK="$OUT_DIR/.NoritoBridge.publish.lockfile"
+LOCK_DESCRIPTOR_ENV=NORITO_BRIDGE_BUILD_LOCK_FDS
+if [[ -z "${NORITO_BRIDGE_BUILD_LOCK_FDS:-}" ]]; then
   LOCK_RUNNER="$ROOT_DIR/scripts/exec_with_file_lock.py"
   [[ -f "$LOCK_RUNNER" && ! -L "$LOCK_RUNNER" ]] || {
     echo "[-] NoritoBridge build lock runner is unavailable: $LOCK_RUNNER" >&2
     exit 1
   }
-  mkdir -p -- "$BUILD_DIR"
-  exec "$PYTHON_BINARY" -I -S "$LOCK_RUNNER" \
-    "$BUILD_PUBLISH_LOCK" \
-    "NORITO_BRIDGE_BUILD_LOCK_HELD=1" \
+  exec "$PYTHON_BINARY" -I -S -B "$LOCK_RUNNER" \
+    "$LOCK_DESCRIPTOR_ENV" \
+    "$TARGET_BUILD_LOCK" "$STAGE_BUILD_LOCK" "$OUTPUT_PUBLISH_LOCK" \
+    -- \
     "$SCRIPT_DIR/build_norito_xcframework.sh" "$@"
 fi
+NORITO_BRIDGE_OUTPUT_LOCK_FD="$(run_python312_clean - \
+  "$NORITO_BRIDGE_BUILD_LOCK_FDS" \
+  "$OUTPUT_PUBLISH_LOCK" \
+  "$TARGET_BUILD_LOCK" "$STAGE_BUILD_LOCK" "$OUTPUT_PUBLISH_LOCK" <<'PY'
+import fcntl
+import os
+from pathlib import Path
+import stat
+import sys
+
+
+descriptors = sys.argv[1].split(",")
+output_lock = Path(sys.argv[2])
+lock_paths = sorted((Path(value) for value in sys.argv[3:]), key=os.fspath)
+if len(descriptors) != len(lock_paths) or any(not value.isdecimal() for value in descriptors):
+    raise SystemExit("NoritoBridge build lock descriptor inventory is malformed")
+for raw_descriptor, lock_path in zip(descriptors, lock_paths, strict=True):
+    descriptor = int(raw_descriptor)
+    try:
+        descriptor_metadata = os.fstat(descriptor)
+        path_metadata = lock_path.lstat()
+    except OSError as error:
+        raise SystemExit(f"NoritoBridge build lock is unavailable: {error}") from None
+    if (
+        not stat.S_ISREG(descriptor_metadata.st_mode)
+        or descriptor_metadata.st_nlink != 1
+        or descriptor_metadata.st_uid != os.geteuid()
+        or (descriptor_metadata.st_dev, descriptor_metadata.st_ino)
+        != (path_metadata.st_dev, path_metadata.st_ino)
+    ):
+        raise SystemExit(f"NoritoBridge build lock is not authenticated: {lock_path}")
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as error:
+        raise SystemExit(f"NoritoBridge build lock is not held: {lock_path}: {error}") from None
+print(descriptors[lock_paths.index(output_lock)])
+PY
+)" || exit 1
+export NORITO_BRIDGE_OUTPUT_LOCK_FD
 
 LIB_CRATE_NAME="connect_norito_bridge"
 FRAMEWORK_NAME="NoritoBridge"
 STATIC_LIB_NAME="libNoritoBridge.a"
-FRAMEWORK_BUNDLE_ID="${FRAMEWORK_BUNDLE_ID:-org.hyperledger.iroha.NoritoBridge}"
-
 cleanup_build_state() {
   local status=$?
   trap - EXIT HUP INT TERM
@@ -158,13 +305,36 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-: "${IPHONEOS_DEPLOYMENT_TARGET:=15.0}"
-: "${IPHONESIMULATOR_DEPLOYMENT_TARGET:=15.0}"
-: "${MACOSX_DEPLOYMENT_TARGET:=12.0}"
+set_fixed_deployment_target() {
+  local deployment_name="$1"
+  local deployment_value="$2"
+  local ambient_presence="$3"
+  local ambient_value="$4"
+  if [[ "$ambient_presence" == "set" && "$ambient_value" != "$deployment_value" ]]; then
+    echo "[-] $deployment_name is fixed at $deployment_value for the first release" >&2
+    exit 1
+  fi
+  printf -v "$deployment_name" '%s' "$deployment_value"
+  export "$deployment_name"
+}
+set_fixed_deployment_target \
+  IPHONEOS_DEPLOYMENT_TARGET 15.0 \
+  "${IPHONEOS_DEPLOYMENT_TARGET+set}" "${IPHONEOS_DEPLOYMENT_TARGET-}"
+set_fixed_deployment_target \
+  IPHONESIMULATOR_DEPLOYMENT_TARGET 15.0 \
+  "${IPHONESIMULATOR_DEPLOYMENT_TARGET+set}" "${IPHONESIMULATOR_DEPLOYMENT_TARGET-}"
+set_fixed_deployment_target \
+  MACOSX_DEPLOYMENT_TARGET 12.0 \
+  "${MACOSX_DEPLOYMENT_TARGET+set}" "${MACOSX_DEPLOYMENT_TARGET-}"
+readonly IPHONEOS_DEPLOYMENT_TARGET
+readonly IPHONESIMULATOR_DEPLOYMENT_TARGET
+readonly MACOSX_DEPLOYMENT_TARGET
+export IPHONEOS_DEPLOYMENT_TARGET
 export IPHONESIMULATOR_DEPLOYMENT_TARGET
 export MACOSX_DEPLOYMENT_TARGET
 
 BRIDGE_VERSION=""
+ARCHIVE_OUTPUT=""
 PRIVACY_PRODUCTION_ENABLED=0
 ALLOW_DIRTY_SOURCE=0
 CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
@@ -181,53 +351,98 @@ while [[ $# -gt 0 ]]; do
     --bridge-version=*)
       BRIDGE_VERSION="${1#*=}"
       ;;
+    --archive-output)
+      shift
+      ARCHIVE_OUTPUT="${1:-}"
+      if [[ -z "$ARCHIVE_OUTPUT" ]]; then
+        echo "[-] --archive-output requires a value" >&2
+        exit 1
+      fi
+      ;;
+    --archive-output=*)
+      ARCHIVE_OUTPUT="${1#*=}"
+      if [[ -z "$ARCHIVE_OUTPUT" ]]; then
+        echo "[-] --archive-output requires a value" >&2
+        exit 1
+      fi
+      ;;
     --privacy-production-enabled)
       PRIVACY_PRODUCTION_ENABLED=1
       ;;
     --allow-dirty-source)
       ALLOW_DIRTY_SOURCE=1
       ;;
-    --lockfile-path)
-      shift
-      CARGO_LOCKFILE="${1:-}"
-      if [[ -z "$CARGO_LOCKFILE" ]]; then
-        echo "[-] --lockfile-path requires a value" >&2
-        exit 1
-      fi
-      ;;
-    --lockfile-path=*)
-      CARGO_LOCKFILE="${1#*=}"
-      if [[ -z "$CARGO_LOCKFILE" ]]; then
-        echo "[-] --lockfile-path requires a value" >&2
-        exit 1
-      fi
-      ;;
     *)
       echo "[-] Unknown argument: $1" >&2
-      echo "    Usage: $0 [--bridge-version <version>] [--privacy-production-enabled] [--allow-dirty-source] [--lockfile-path <absolute-Cargo.lock>]" >&2
+      echo "    Usage: $0 [--bridge-version <version>] [--archive-output <absolute-path>] [--privacy-production-enabled] [--allow-dirty-source]" >&2
       exit 1
       ;;
   esac
   shift
 done
 
-if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
-  echo "[-] --privacy-production-enabled cannot be combined with NORITO_BRIDGE_SKIP_CARGO_BUILDS=1" >&2
-  exit 1
+if [[ -n "$ARCHIVE_OUTPUT" ]]; then
+  ARCHIVE_OUTPUT="$(run_python312_clean - \
+    "$ARCHIVE_OUTPUT" "${SOURCE_DATE_EPOCH:-}" "$ROOT_DIR" <<'PY'
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+output = Path(sys.argv[1])
+source_date_epoch = sys.argv[2]
+source_root = Path(sys.argv[3])
+if re.fullmatch(r"0|[1-9][0-9]*", source_date_epoch) is None:
+    raise SystemExit(
+        "SOURCE_DATE_EPOCH must be an explicit canonical unsigned integer "
+        "with --archive-output"
+    )
+epoch = int(source_date_epoch, 10)
+if not 315_532_800 <= epoch <= 4_354_819_199:
+    raise SystemExit("SOURCE_DATE_EPOCH is outside the ZIP timestamp range")
+if (
+    not output.is_absolute()
+    or output != Path(os.path.abspath(output))
+    or output.name in {"", ".", ".."}
+    or output.suffix != ".zip"
+):
+    raise SystemExit("--archive-output must be an absolute canonical .zip filename")
+try:
+    parent_metadata = output.parent.lstat()
+    canonical_parent = output.parent.resolve(strict=True)
+except OSError as error:
+    raise SystemExit(f"--archive-output parent is unavailable: {error}") from None
+if (
+    canonical_parent != output.parent
+    or stat.S_ISLNK(parent_metadata.st_mode)
+    or not stat.S_ISDIR(parent_metadata.st_mode)
+    or not os.access(output.parent, os.R_OK | os.W_OK | os.X_OK)
+    or output.parent == source_root
+    or source_root in output.parent.parents
+):
+    raise SystemExit(
+        "--archive-output parent must be a writable canonical directory "
+        "outside the Iroha source tree"
+    )
+try:
+    metadata = output.lstat()
+except FileNotFoundError:
+    pass
+else:
+    raise SystemExit("--archive-output must not already exist")
+print(output)
+PY
+)" || exit 1
 fi
 
 CARGO_FEATURE_ARGS=()
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   CARGO_FEATURE_ARGS+=(--features privacy-production-enabled)
-  CARGO_FEATURE_PROFILE="privacy-production-enabled"
   echo "[+] Enabling the audited privacy production bridge feature for every Apple slice" >&2
 else
-  CARGO_FEATURE_PROFILE="privacy-production-disabled"
   echo "[+] Privacy proof dispatch remains fail-closed (default bridge build)" >&2
 fi
-# Keep feature variants in disjoint Cargo targets. In particular, the default
-# skip-build fast path must never package libraries left by an enabled build.
-CARGO_BUILD_DIR_BASE="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim${IPHONESIMULATOR_DEPLOYMENT_TARGET//./_}-${CARGO_FEATURE_PROFILE}"
 
 PINNED_RUST_TOOLCHAIN="1.93.1"
 SOURCE_SEAL_SCRIPT="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
@@ -286,21 +501,37 @@ RUSTC_BINARY="$(
   env -i "${RUSTUP_ENV[@]}" \
     "$RUSTUP_BINARY" which --toolchain "$PINNED_RUST_TOOLCHAIN" rustc
 )"
+RUSTDOC_BINARY="$(
+  env -i "${RUSTUP_ENV[@]}" \
+    "$RUSTUP_BINARY" which --toolchain "$PINNED_RUST_TOOLCHAIN" rustdoc
+)"
 CARGO_BINARY="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$CARGO_BINARY")"
 RUSTC_BINARY="$(run_python312_clean -c \
   'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
   "$RUSTC_BINARY")"
-[[ -x "$CARGO_BINARY" && -x "$RUSTC_BINARY" ]] || {
-  echo "[-] Exact Rust $PINNED_RUST_TOOLCHAIN Cargo/rustc executables are unavailable" >&2
+RUSTDOC_BINARY="$(run_python312_clean -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$RUSTDOC_BINARY")"
+[[ -x "$CARGO_BINARY" && -x "$RUSTC_BINARY" && -x "$RUSTDOC_BINARY" ]] || {
+  echo "[-] Exact Rust $PINNED_RUST_TOOLCHAIN Cargo/rustc/rustdoc executables are unavailable" >&2
   exit 1
 }
+for supplied_tool in RUSTC RUSTDOC; do
+  expected_tool="${supplied_tool}_BINARY"
+  if [[ "${!supplied_tool}" != "${!expected_tool}" \
+      || ! -f "${!supplied_tool}" || -L "${!supplied_tool}" \
+      || ! -x "${!supplied_tool}" ]]; then
+    echo "[-] $supplied_tool must be the canonical Rust $PINNED_RUST_TOOLCHAIN executable: ${!expected_tool}" >&2
+    exit 1
+  fi
+done
 
 run_source_seal() {
   env -i \
     HOME="$USER_HOME_DIR" \
-    PATH="${PYTHON_BINARY%/*}:${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${GIT_BINARY%/*}:/usr/bin:/bin" \
+    PATH="${PYTHON_BINARY%/*}:${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:${GIT_BINARY%/*}:/usr/bin:/bin" \
     TMPDIR="$MOBILE_TMPDIR" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
@@ -308,9 +539,11 @@ run_source_seal() {
     NORITO_BRIDGE_SEAL_CARGO_HOME="$MOBILE_CARGO_HOME" \
     NORITO_BRIDGE_SEAL_RUSTUP_HOME="$MOBILE_RUSTUP_HOME" \
     NORITO_BRIDGE_SEAL_TMPDIR="$MOBILE_TMPDIR" \
+    NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
     NORITO_BRIDGE_SEAL_CARGO="$CARGO_BINARY" \
     NORITO_BRIDGE_SEAL_RUSTC="$RUSTC_BINARY" \
-    "$PYTHON_BINARY" -I -S "$SOURCE_SEAL_SCRIPT" "$@"
+    NORITO_BRIDGE_SEAL_RUSTDOC="$RUSTDOC_BINARY" \
+    "$PYTHON_BINARY" -I -S -B "$SOURCE_SEAL_SCRIPT" "$@"
 }
 
 run_source_git() {
@@ -333,7 +566,7 @@ run_isolated_python() {
     TMPDIR="$MOBILE_TMPDIR" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    "$PYTHON_BINARY" -I -S "$@"
+    "$PYTHON_BINARY" -I -S -B "$@"
 }
 
 selected_cargo_lock_sha256() {
@@ -441,7 +674,7 @@ sha256_file() {
     TMPDIR="$MOBILE_TMPDIR" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    "$PYTHON_BINARY" -I -S - "$1" <<'PY'
+    "$PYTHON_BINARY" -I -S -B - "$1" <<'PY'
 from pathlib import Path
 import hashlib
 import sys
@@ -507,19 +740,35 @@ RUSTC_VERSION_VERBOSE="$(
     LC_ALL=C.UTF-8 \
     "$RUSTC_BINARY" --version --verbose
 )"
+RUSTDOC_VERSION_VERBOSE="$(
+  env -i \
+    HOME="$USER_HOME_DIR" \
+    PATH="${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:/usr/bin:/bin" \
+    RUSTUP_HOME="$MOBILE_RUSTUP_HOME" \
+    CARGO_HOME="$MOBILE_CARGO_HOME" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    "$RUSTDOC_BINARY" --version --verbose
+)"
 CARGO_RELEASE="$(sed -n 's/^release: //p' <<<"$CARGO_VERSION_VERBOSE")"
 CARGO_COMMIT_HASH="$(sed -n 's/^commit-hash: //p' <<<"$CARGO_VERSION_VERBOSE")"
 RUSTC_RELEASE="$(sed -n 's/^release: //p' <<<"$RUSTC_VERSION_VERBOSE")"
 RUSTC_COMMIT_HASH="$(sed -n 's/^commit-hash: //p' <<<"$RUSTC_VERSION_VERBOSE")"
+RUSTDOC_RELEASE="$(sed -n 's/^release: //p' <<<"$RUSTDOC_VERSION_VERBOSE")"
+RUSTDOC_COMMIT_HASH="$(sed -n 's/^commit-hash: //p' <<<"$RUSTDOC_VERSION_VERBOSE")"
 if [[ "$CARGO_RELEASE" != "$PINNED_RUST_TOOLCHAIN" \
   || "$RUSTC_RELEASE" != "$PINNED_RUST_TOOLCHAIN" \
+  || "$RUSTDOC_RELEASE" != "$PINNED_RUST_TOOLCHAIN" \
   || ! "$CARGO_COMMIT_HASH" =~ ^[0-9a-f]{40}$ \
-  || ! "$RUSTC_COMMIT_HASH" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "[-] Cargo/rustc identity does not match exact Rust $PINNED_RUST_TOOLCHAIN" >&2
+  || ! "$RUSTC_COMMIT_HASH" =~ ^[0-9a-f]{40}$ \
+  || ! "$RUSTDOC_COMMIT_HASH" =~ ^[0-9a-f]{40}$ \
+  || "$RUSTDOC_COMMIT_HASH" != "$RUSTC_COMMIT_HASH" ]]; then
+  echo "[-] Cargo/rustc/rustdoc identity does not match exact Rust $PINNED_RUST_TOOLCHAIN" >&2
   exit 1
 fi
 CARGO_BINARY_SHA256="$(sha256_file "$CARGO_BINARY")"
 RUSTC_BINARY_SHA256="$(sha256_file "$RUSTC_BINARY")"
+RUSTDOC_BINARY_SHA256="$(sha256_file "$RUSTDOC_BINARY")"
 
 XCODE_SELECT_BINARY="/usr/bin/xcode-select"
 XCRUN_BINARY="/usr/bin/xcrun"
@@ -616,11 +865,7 @@ fi
 echo "[+] Using iOS deployment target (device): $IPHONEOS_DEPLOYMENT_TARGET" >&2
 echo "[+] Using iOS deployment target (simulator): $IPHONESIMULATOR_DEPLOYMENT_TARGET" >&2
 
-if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" == "1" || "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
-  rm -rf "$STAGE_DIR"
-else
-  rm -rf "$CARGO_BUILD_DIR_BASE" "$STAGE_DIR"
-fi
+rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR" "$OUT_DIR"
 PUBLISH_ROOT="$(mktemp -d "$OUT_DIR/.NoritoBridge.publish.XXXXXX")"
 PUBLISH_XCFRAMEWORK="$PUBLISH_ROOT/${FRAMEWORK_NAME}.xcframework"
@@ -633,17 +878,12 @@ CANONICAL_MANIFEST_RELATIVE_TARGET="${FRAMEWORK_NAME}.xcframework/${FRAMEWORK_NA
 DEVICE_TRIPLE="aarch64-apple-ios"
 SIM_ARM_TRIPLE="aarch64-apple-ios-sim"
 SIM_X64_TRIPLE="x86_64-apple-ios"
-MACOS_TRIPLE="aarch64-apple-darwin"
-CARGO_BUILD_DIR_DEVICE="$CARGO_BUILD_DIR_BASE/$DEVICE_TRIPLE"
-CARGO_BUILD_DIR_SIM_ARM="$CARGO_BUILD_DIR_BASE/$SIM_ARM_TRIPLE"
-CARGO_BUILD_DIR_SIM_X64="$CARGO_BUILD_DIR_BASE/$SIM_X64_TRIPLE"
-CARGO_BUILD_DIR_MACOS="$CARGO_BUILD_DIR_BASE/$MACOS_TRIPLE"
-
+MACOS_ARM_TRIPLE="aarch64-apple-darwin"
+MACOS_X64_TRIPLE="x86_64-apple-darwin"
 stage_cargo_library() {
-  local cargo_target_dir="$1"
-  local target_triple="$2"
-  local label="$3"
-  local source_library="$cargo_target_dir/$target_triple/release/lib${LIB_CRATE_NAME}.a"
+  local target_triple="$1"
+  local label="$2"
+  local source_library="$CARGO_TARGET_DIR/$target_triple/release/lib${LIB_CRATE_NAME}.a"
   local staged_library="$STAGE_DIR/cargo-libraries/$target_triple/lib${LIB_CRATE_NAME}.a"
   if [[ ! -f "$source_library" ]]; then
     echo "[-] Missing $label static library after Cargo build: $source_library" >&2
@@ -651,18 +891,13 @@ stage_cargo_library() {
   fi
   mkdir -p "$(dirname "$staged_library")"
   cp "$source_library" "$staged_library"
-  if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" != "1" ]]; then
-    echo "[+] Reclaiming generated $label Cargo intermediates after staging its library" >&2
-    rm -rf "$cargo_target_dir"
-  fi
   printf '%s\n' "$staged_library"
 }
 
 run_hermetic_apple_cargo() {
   local profile="$1"
-  local cargo_target_dir="$2"
-  local sdkroot="$3"
-  shift 3
+  local sdkroot="$2"
+  shift 2
   local cargo_subcommand="$1"
   shift
   local cargo_status
@@ -699,17 +934,19 @@ run_hermetic_apple_cargo() {
   if run_isolated_python "$HERMETIC_RUNNER" \
       --profile "$profile" \
       --set "CARGO=$CARGO_BINARY" \
+      --set "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
       --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
       --set "CARGO_INCREMENTAL=0" \
       --set "CARGO_NET_OFFLINE=true" \
-      --set "CARGO_TARGET_DIR=$cargo_target_dir" \
+      --set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
       --set "HOME=$USER_HOME_DIR" \
       --set "LANG=C.UTF-8" \
       --set "LC_ALL=C.UTF-8" \
       --set "NORITO_SKIP_BINDINGS_SYNC=1" \
-      --set "PATH=${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:/usr/bin:/bin" \
+      --set "PATH=${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:/usr/bin:/bin" \
       --set "RUSTC=$RUSTC_BINARY" \
       --set "RUSTC_BOOTSTRAP=1" \
+      --set "RUSTDOC=$RUSTDOC_BINARY" \
       --set "RUSTUP_HOME=$MOBILE_RUSTUP_HOME" \
       --set "TMPDIR=$MOBILE_TMPDIR" \
       "${platform_environment[@]}" \
@@ -723,53 +960,53 @@ run_hermetic_apple_cargo() {
   return "$cargo_status"
 }
 
-if [[ "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
-  echo "[+] Skipping Rust static library builds; using existing target artifacts" >&2
-  LIB_DEV="$CARGO_BUILD_DIR_DEVICE/$DEVICE_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
-  LIB_SIM_ARM="$CARGO_BUILD_DIR_SIM_ARM/$SIM_ARM_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
-  LIB_SIM_X64="$CARGO_BUILD_DIR_SIM_X64/$SIM_X64_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
-  LIB_MAC="$CARGO_BUILD_DIR_MACOS/$MACOS_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
-else
-  echo "[+] Building Rust static libraries (release)" >&2
-  echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_TRIPLE" >&2
+echo "[+] Building Rust static libraries in the caller's fixed Cargo target (release)" >&2
+echo "    Targets: $DEVICE_TRIPLE, $SIM_ARM_TRIPLE, $SIM_X64_TRIPLE, $MACOS_ARM_TRIPLE, $MACOS_X64_TRIPLE" >&2
 
-  echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_TRIPLE)" >&2
+echo "    (Make sure you have installed targets via: rustup target add $DEVICE_TRIPLE $SIM_ARM_TRIPLE $SIM_X64_TRIPLE $MACOS_ARM_TRIPLE $MACOS_X64_TRIPLE)" >&2
 
-  # Rust uses IPHONEOS_DEPLOYMENT_TARGET for both iOS device and simulator targets,
-  # while cc-based dependencies also honor IPHONESIMULATOR_DEPLOYMENT_TARGET.
-  run_hermetic_apple_cargo \
-    apple-ios-device "$CARGO_BUILD_DIR_DEVICE" "$IPHONEOS_SDKROOT" \
-    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-    --target "$DEVICE_TRIPLE" \
-    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-  assert_bridge_source_seal "the iOS device build"
-  LIB_DEV=$(stage_cargo_library "$CARGO_BUILD_DIR_DEVICE" "$DEVICE_TRIPLE" "iOS device")
-  run_hermetic_apple_cargo \
-    apple-ios-simulator "$CARGO_BUILD_DIR_SIM_ARM" "$IPHONESIMULATOR_SDKROOT" \
-    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-    --target "$SIM_ARM_TRIPLE" \
-    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-  assert_bridge_source_seal "the arm64 simulator build"
-  LIB_SIM_ARM=$(stage_cargo_library "$CARGO_BUILD_DIR_SIM_ARM" "$SIM_ARM_TRIPLE" "arm64 simulator")
-  run_hermetic_apple_cargo \
-    apple-ios-simulator "$CARGO_BUILD_DIR_SIM_X64" "$IPHONESIMULATOR_SDKROOT" \
-    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-    --target "$SIM_X64_TRIPLE" \
-    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-  assert_bridge_source_seal "the x86_64 simulator build"
-  LIB_SIM_X64=$(stage_cargo_library "$CARGO_BUILD_DIR_SIM_X64" "$SIM_X64_TRIPLE" "x86_64 simulator")
-  run_hermetic_apple_cargo \
-    apple-macos "$CARGO_BUILD_DIR_MACOS" "$MACOSX_SDKROOT" \
-    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-    --target "$MACOS_TRIPLE" \
-    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-  assert_bridge_source_seal "the macOS build"
-  LIB_MAC=$(stage_cargo_library "$CARGO_BUILD_DIR_MACOS" "$MACOS_TRIPLE" "macOS")
-fi
+# Rust uses IPHONEOS_DEPLOYMENT_TARGET for both iOS device and simulator targets,
+# while cc-based dependencies also honor IPHONESIMULATOR_DEPLOYMENT_TARGET.
+run_hermetic_apple_cargo \
+  apple-ios-device "$IPHONEOS_SDKROOT" \
+  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+  --target "$DEVICE_TRIPLE" \
+  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+assert_bridge_source_seal "the iOS device build"
+LIB_DEV=$(stage_cargo_library "$DEVICE_TRIPLE" "iOS device")
+run_hermetic_apple_cargo \
+  apple-ios-simulator "$IPHONESIMULATOR_SDKROOT" \
+  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+  --target "$SIM_ARM_TRIPLE" \
+  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+assert_bridge_source_seal "the arm64 simulator build"
+LIB_SIM_ARM=$(stage_cargo_library "$SIM_ARM_TRIPLE" "arm64 simulator")
+run_hermetic_apple_cargo \
+  apple-ios-simulator "$IPHONESIMULATOR_SDKROOT" \
+  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+  --target "$SIM_X64_TRIPLE" \
+  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+assert_bridge_source_seal "the x86_64 simulator build"
+LIB_SIM_X64=$(stage_cargo_library "$SIM_X64_TRIPLE" "x86_64 simulator")
+run_hermetic_apple_cargo \
+  apple-macos "$MACOSX_SDKROOT" \
+  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+  --target "$MACOS_ARM_TRIPLE" \
+  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+assert_bridge_source_seal "the arm64 macOS build"
+LIB_MAC_ARM=$(stage_cargo_library "$MACOS_ARM_TRIPLE" "arm64 macOS")
+run_hermetic_apple_cargo \
+  apple-macos "$MACOSX_SDKROOT" \
+  build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+  --target "$MACOS_X64_TRIPLE" \
+  "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+assert_bridge_source_seal "the x86_64 macOS build"
+LIB_MAC_X64=$(stage_cargo_library "$MACOS_X64_TRIPLE" "x86_64 macOS")
 
 assert_bridge_source_seal "Apple slice staging"
 
-if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" || ! -f "$LIB_MAC" ]]; then
+if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" \
+    || ! -f "$LIB_MAC_ARM" || ! -f "$LIB_MAC_X64" ]]; then
   echo "[-] Missing built libraries. Did the cargo builds succeed?" >&2
   exit 1
 fi
@@ -791,16 +1028,32 @@ if [[ -z "$BRIDGE_BUNDLE_VERSION" ]]; then
   BRIDGE_BUNDLE_VERSION="1"
 fi
 
-echo "[+] Creating simulator universal static library" >&2
 SIM_UNI="$STAGE_DIR/${FRAMEWORK_NAME}-sim-universal.a"
-env -i \
-  HOME="$USER_HOME_DIR" \
-  PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
-  TMPDIR="$MOBILE_TMPDIR" \
-  LANG=C.UTF-8 \
-  LC_ALL=C.UTF-8 \
-  DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
-  "$LIPO_BINARY" -create -output "$SIM_UNI" "$LIB_SIM_ARM" "$LIB_SIM_X64"
+MAC_UNI="$STAGE_DIR/${FRAMEWORK_NAME}-macos-universal.a"
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  cp "$LIB_SIM_ARM" "$SIM_UNI"
+  cp "$LIB_MAC_ARM" "$MAC_UNI"
+else
+  echo "[+] Creating simulator universal static library" >&2
+  env -i \
+    HOME="$USER_HOME_DIR" \
+    PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$MOBILE_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    "$LIPO_BINARY" -create -output "$SIM_UNI" "$LIB_SIM_ARM" "$LIB_SIM_X64"
+
+  echo "[+] Creating macOS universal static library" >&2
+  env -i \
+    HOME="$USER_HOME_DIR" \
+    PATH="${LIPO_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$MOBILE_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    "$LIPO_BINARY" -create -output "$MAC_UNI" "$LIB_MAC_ARM" "$LIB_MAC_X64"
+fi
 
 echo "[+] Staging XCFramework slices" >&2
 HEADERS_DEV="$STAGE_DIR/device-headers"
@@ -812,20 +1065,11 @@ LIB_MAC_STAGED="$STAGE_DIR/macos/${STATIC_LIB_NAME}"
 
 mkdir -p "$HEADERS_DEV" "$HEADERS_SIM" "$HEADERS_MAC" "$(dirname "$LIB_DEV_STAGED")" "$(dirname "$LIB_SIM_STAGED")" "$(dirname "$LIB_MAC_STAGED")"
 
-# Stage iOS static libraries. The normal production path moves the already
-# staged raw libraries and drops the two simulator inputs after `lipo`, keeping
-# only one copy of each final slice while xcodebuild packages the XCFramework.
-if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" != "1" \
-    && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" != "1" ]]; then
-  mv "$LIB_DEV" "$LIB_DEV_STAGED"
-  mv "$SIM_UNI" "$LIB_SIM_STAGED"
-  mv "$LIB_MAC" "$LIB_MAC_STAGED"
-  rm -f "$LIB_SIM_ARM" "$LIB_SIM_X64"
-else
-  cp "$LIB_DEV" "$LIB_DEV_STAGED"
-  cp "$SIM_UNI" "$LIB_SIM_STAGED"
-  cp "$LIB_MAC" "$LIB_MAC_STAGED"
-fi
+# Package only task-owned staging copies. The caller's Cargo target remains intact.
+mv "$LIB_DEV" "$LIB_DEV_STAGED"
+mv "$SIM_UNI" "$LIB_SIM_STAGED"
+mv "$MAC_UNI" "$LIB_MAC_STAGED"
+rm -f "$LIB_SIM_ARM" "$LIB_SIM_X64"
 
 # Copy headers for static-library slices. xcodebuild copies this directory as the
 # slice's Headers bundle, so the modulemap lives at Headers/module.modulemap.
@@ -839,74 +1083,8 @@ cp "$INC_DIR/connect_norito_bridge.h" "$HEADERS_MAC/connect_norito_bridge.h"
 cp "$INC_DIR/NoritoBridge.h" "$HEADERS_MAC/NoritoBridge.h"
 cp "$CRATE_DIR/module.modulemap.template" "$HEADERS_MAC/module.modulemap"
 
-write_static_xcframework_info_plist() {
-  local plist="$PUBLISH_XCFRAMEWORK/Info.plist"
-
-  mkdir -p "$(dirname "$plist")"
-  cat > "$plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>AvailableLibraries</key>
-  <array>
-    <dict>
-      <key>HeadersPath</key>
-      <string>Headers</string>
-      <key>LibraryIdentifier</key>
-      <string>ios-arm64</string>
-      <key>LibraryPath</key>
-      <string>${STATIC_LIB_NAME}</string>
-      <key>SupportedArchitectures</key>
-      <array>
-        <string>arm64</string>
-      </array>
-      <key>SupportedPlatform</key>
-      <string>ios</string>
-    </dict>
-    <dict>
-      <key>HeadersPath</key>
-      <string>Headers</string>
-      <key>LibraryIdentifier</key>
-      <string>ios-arm64_x86_64-simulator</string>
-      <key>LibraryPath</key>
-      <string>${STATIC_LIB_NAME}</string>
-      <key>SupportedArchitectures</key>
-      <array>
-        <string>arm64</string>
-        <string>x86_64</string>
-      </array>
-      <key>SupportedPlatform</key>
-      <string>ios</string>
-      <key>SupportedPlatformVariant</key>
-      <string>simulator</string>
-    </dict>
-    <dict>
-      <key>HeadersPath</key>
-      <string>Headers</string>
-      <key>LibraryIdentifier</key>
-      <string>macos-arm64</string>
-      <key>LibraryPath</key>
-      <string>${STATIC_LIB_NAME}</string>
-      <key>SupportedArchitectures</key>
-      <array>
-        <string>arm64</string>
-      </array>
-      <key>SupportedPlatform</key>
-      <string>macos</string>
-    </dict>
-  </array>
-  <key>CFBundlePackageType</key>
-  <string>XFWK</string>
-  <key>XCFrameworkFormatVersion</key>
-  <string>1.0</string>
-</dict>
-</plist>
-EOF
-}
-
 echo "[+] Creating XCFramework" >&2
-if ! env -i \
+if env -i \
   HOME="$USER_HOME_DIR" \
   PATH=/usr/bin:/bin \
   TMPDIR="$MOBILE_TMPDIR" \
@@ -918,45 +1096,11 @@ if ! env -i \
   -library "$LIB_SIM_STAGED" -headers "$HEADERS_SIM" \
   -library "$LIB_MAC_STAGED" -headers "$HEADERS_MAC" \
   -output "$PUBLISH_XCFRAMEWORK"; then
-  echo "[!] xcodebuild reported a non-zero exit; rebuilding the fallback from an empty candidate" >&2
-  rm -rf -- "$PUBLISH_XCFRAMEWORK"
-  copy_static_xcframework_slice() {
-    local identifier="$1"
-    local source_lib="$2"
-    local source_headers="$3"
-    local slice_dir="$PUBLISH_XCFRAMEWORK/$identifier"
-
-    mkdir -p "$slice_dir/Headers"
-    cp "$source_lib" "$slice_dir/${STATIC_LIB_NAME}"
-    cp "$source_headers/NoritoBridge.h" "$slice_dir/Headers/NoritoBridge.h"
-    cp "$source_headers/connect_norito_bridge.h" "$slice_dir/Headers/connect_norito_bridge.h"
-    cp "$source_headers/module.modulemap" "$slice_dir/Headers/module.modulemap"
-  }
-
-  rm -rf "$PUBLISH_XCFRAMEWORK/ios-arm64-simulator"
-  copy_static_xcframework_slice "ios-arm64" "$LIB_DEV_STAGED" "$HEADERS_DEV"
-  copy_static_xcframework_slice "ios-arm64_x86_64-simulator" "$LIB_SIM_STAGED" "$HEADERS_SIM"
-  copy_static_xcframework_slice "macos-arm64" "$LIB_MAC_STAGED" "$HEADERS_MAC"
-  write_static_xcframework_info_plist
-
-  REQUIRED_OUTPUTS=(
-    "$PUBLISH_XCFRAMEWORK/Info.plist"
-    "$PUBLISH_XCFRAMEWORK/ios-arm64/${STATIC_LIB_NAME}"
-    "$PUBLISH_XCFRAMEWORK/ios-arm64/Headers/NoritoBridge.h"
-    "$PUBLISH_XCFRAMEWORK/ios-arm64/Headers/connect_norito_bridge.h"
-    "$PUBLISH_XCFRAMEWORK/ios-arm64_x86_64-simulator/${STATIC_LIB_NAME}"
-    "$PUBLISH_XCFRAMEWORK/ios-arm64_x86_64-simulator/Headers/NoritoBridge.h"
-    "$PUBLISH_XCFRAMEWORK/ios-arm64_x86_64-simulator/Headers/connect_norito_bridge.h"
-    "$PUBLISH_XCFRAMEWORK/macos-arm64/${STATIC_LIB_NAME}"
-    "$PUBLISH_XCFRAMEWORK/macos-arm64/Headers/NoritoBridge.h"
-    "$PUBLISH_XCFRAMEWORK/macos-arm64/Headers/connect_norito_bridge.h"
-  )
-  for output in "${REQUIRED_OUTPUTS[@]}"; do
-    if [[ ! -f "$output" ]]; then
-      echo "[-] Missing XCFramework output after xcodebuild failure: $output" >&2
-      exit 1
-    fi
-  done
+  :
+else
+  xcodebuild_status=$?
+  echo "[-] xcodebuild failed with status $xcodebuild_status; refusing to publish NoritoBridge" >&2
+  exit "$xcodebuild_status"
 fi
 
 assert_bridge_source_seal "XCFramework packaging"
@@ -965,10 +1109,13 @@ echo "[+] XCFramework staged: $PUBLISH_XCFRAMEWORK" >&2
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   touch "$PUBLISH_XCFRAMEWORK/.privacy-production-enabled"
 fi
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  touch "$PUBLISH_XCFRAMEWORK/.test-only-prebuilt-slices"
+fi
 
 IOS_BIN="$PUBLISH_XCFRAMEWORK/ios-arm64/${STATIC_LIB_NAME}"
 SIM_BIN="$PUBLISH_XCFRAMEWORK/ios-arm64_x86_64-simulator/${STATIC_LIB_NAME}"
-MAC_BIN="$PUBLISH_XCFRAMEWORK/macos-arm64/${STATIC_LIB_NAME}"
+MAC_BIN="$PUBLISH_XCFRAMEWORK/macos-arm64_x86_64/${STATIC_LIB_NAME}"
 if [[ ! -f "$IOS_BIN" || ! -f "$SIM_BIN" || ! -f "$MAC_BIN" ]]; then
   echo "[-] Missing XCFramework binaries needed to emit NoritoBridge.artifacts.json" >&2
   exit 1
@@ -978,17 +1125,40 @@ IOS_HASH=$(shasum -a 256 "$IOS_BIN" | awk '{print $1}')
 SIM_HASH=$(shasum -a 256 "$SIM_BIN" | awk '{print $1}')
 MAC_HASH=$(shasum -a 256 "$MAC_BIN" | awk '{print $1}')
 HEADER_HASH=$(shasum -a 256 "$INC_DIR/connect_norito_bridge.h" | awk '{print $1}')
-BRIDGE_ABI_VERSION=$(sed -nE \
-  's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' \
-  "$CRATE_DIR/src/lib.rs" | head -n1)
-if [[ -z "$BRIDGE_ABI_VERSION" ]]; then
-  echo "[-] Unable to determine native bridge ABI version" >&2
-  exit 1
-fi
-if [[ "$BRIDGE_ABI_VERSION" != "21" ]]; then
-  echo "[-] First-release NoritoBridge artifacts require exact native bridge ABI 21 (found $BRIDGE_ABI_VERSION)" >&2
-  exit 1
-fi
+BRIDGE_ABI_VERSION="$(run_isolated_python - \
+  "$INC_DIR/connect_norito_bridge.h" \
+  "$CRATE_DIR/src/lib.rs" \
+  "$ROOT_DIR/crates/iroha_data_model/src/privacy/protocol.rs" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+header, bridge_source, protocol = (Path(value) for value in sys.argv[1:])
+header_abis = re.findall(
+    r"^#define[ \t]+CONNECT_NORITO_BRIDGE_ABI_VERSION[ \t]+([0-9]+)[ \t]*$",
+    header.read_text(encoding="utf-8"),
+    re.MULTILINE,
+)
+bridge_aliases = re.findall(
+    r"^const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = "
+    r"(PRIVACY_BRIDGE_ABI_VERSION_V1);$",
+    bridge_source.read_text(encoding="utf-8"),
+    re.MULTILINE,
+)
+protocol_abis = re.findall(
+    r"^pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = ([0-9]+);$",
+    protocol.read_text(encoding="utf-8"),
+    re.MULTILINE,
+)
+if header_abis != ["21"]:
+    raise SystemExit("authoritative NoritoBridge public header ABI is not exact 21")
+if bridge_aliases != ["PRIVACY_BRIDGE_ABI_VERSION_V1"]:
+    raise SystemExit("NoritoBridge Rust ABI alias is not exact")
+if protocol_abis != header_abis:
+    raise SystemExit("privacy protocol ABI differs from the public NoritoBridge header")
+print(header_abis[0])
+PY
+)" || exit 1
 SOURCE_COMMIT="$SOURCE_COMMIT_START"
 SOURCE_TREE_DIRTY=false
 if [[ -n "$SOURCE_STATUS_START" ]]; then
@@ -997,13 +1167,18 @@ fi
 SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT_START"
 PRIVACY_PRODUCTION_JSON=false
 CARGO_FEATURES_JSON='[]'
+TEST_ONLY_MANIFEST_FIELD=""
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   PRIVACY_PRODUCTION_JSON=true
   CARGO_FEATURES_JSON='["privacy-production-enabled"]'
 fi
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  TEST_ONLY_MANIFEST_FIELD='  "test_only_prebuilt_slices": true,'
+fi
 
 cat > "$PUBLISH_MANIFEST" <<EOF
 {
+${TEST_ONLY_MANIFEST_FIELD}
   "version": "$BRIDGE_VERSION",
   "native_bridge_abi_version": $BRIDGE_ABI_VERSION,
   "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
@@ -1015,6 +1190,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "environment_profiles": {
       "apple-ios-device": [
         "CARGO",
+        "CARGO_BUILD_JOBS",
         "CARGO_HOME",
         "CARGO_INCREMENTAL",
         "CARGO_NET_OFFLINE",
@@ -1028,12 +1204,14 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "PATH",
         "RUSTC",
         "RUSTC_BOOTSTRAP",
+        "RUSTDOC",
         "RUSTUP_HOME",
         "SDKROOT",
         "TMPDIR"
       ],
       "apple-ios-simulator": [
         "CARGO",
+        "CARGO_BUILD_JOBS",
         "CARGO_HOME",
         "CARGO_INCREMENTAL",
         "CARGO_NET_OFFLINE",
@@ -1048,12 +1226,14 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "PATH",
         "RUSTC",
         "RUSTC_BOOTSTRAP",
+        "RUSTDOC",
         "RUSTUP_HOME",
         "SDKROOT",
         "TMPDIR"
       ],
       "apple-macos": [
         "CARGO",
+        "CARGO_BUILD_JOBS",
         "CARGO_HOME",
         "CARGO_INCREMENTAL",
         "CARGO_NET_OFFLINE",
@@ -1067,11 +1247,13 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "PATH",
         "RUSTC",
         "RUSTC_BOOTSTRAP",
+        "RUSTDOC",
         "RUSTUP_HOME",
         "SDKROOT",
         "TMPDIR"
       ]
     },
+    "cargo_build_jobs": 1,
     "rust_toolchain_channel": "$PINNED_RUST_TOOLCHAIN",
     "cargo_release": "$CARGO_RELEASE",
     "cargo_commit_hash": "$CARGO_COMMIT_HASH",
@@ -1079,6 +1261,9 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "rustc_release": "$RUSTC_RELEASE",
     "rustc_commit_hash": "$RUSTC_COMMIT_HASH",
     "rustc_binary_sha256": "$RUSTC_BINARY_SHA256",
+    "rustdoc_release": "$RUSTDOC_RELEASE",
+    "rustdoc_commit_hash": "$RUSTDOC_COMMIT_HASH",
+    "rustdoc_binary_sha256": "$RUSTDOC_BINARY_SHA256",
     "python_version": "$PYTHON_VERSION",
     "python_binary_sha256": "$PYTHON_BINARY_SHA256",
     "git_version": "$GIT_VERSION",
@@ -1089,7 +1274,10 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "xcode_build_version": "$XCODE_BUILD_VERSION",
     "iphoneos_sdk_version": "$IPHONEOS_SDK_VERSION",
     "iphonesimulator_sdk_version": "$IPHONESIMULATOR_SDK_VERSION",
-    "macosx_sdk_version": "$MACOSX_SDK_VERSION"
+    "macosx_sdk_version": "$MACOSX_SDK_VERSION",
+    "iphoneos_deployment_target": "$IPHONEOS_DEPLOYMENT_TARGET",
+    "iphonesimulator_deployment_target": "$IPHONESIMULATOR_DEPLOYMENT_TARGET",
+    "macosx_deployment_target": "$MACOSX_DEPLOYMENT_TARGET"
   },
   "source_commit": "$SOURCE_COMMIT",
   "source_tree_dirty": $SOURCE_TREE_DIRTY,
@@ -1323,76 +1511,43 @@ cat > "$PUBLISH_MANIFEST" <<EOF
   "hashes": {
     "ios-arm64": "$IOS_HASH",
     "ios-arm64_x86_64-simulator": "$SIM_HASH",
-    "macos-arm64": "$MAC_HASH"
+    "macos-arm64_x86_64": "$MAC_HASH"
   }
 }
 EOF
 echo "[+] Wrote staged artifact manifest: $PUBLISH_MANIFEST" >&2
 ln -s "$CANONICAL_MANIFEST_RELATIVE_TARGET" "$PUBLISH_MANIFEST_LINK"
 PUBLISH_PROSPECTIVE_LOADER="$PUBLISH_ROOT/.NoritoBridge.prospective.NativeBridge.swift"
-run_isolated_python - \
-  "$ROOT_DIR/scripts/norito_bridge_source_seal.py" \
-  "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift" \
-  "$PUBLISH_PROSPECTIVE_LOADER" \
-  "$IOS_HASH" "$SIM_HASH" "$MAC_HASH" <<'PY'
-import importlib.util
-import os
-from pathlib import Path
-import sys
-
-
-seal_script = Path(sys.argv[1]).resolve(strict=True)
-source_loader = Path(sys.argv[2]).resolve(strict=True)
-output_loader = Path(sys.argv[3])
-hashes = {
-    "ios-arm64": sys.argv[4],
-    "ios-arm64_x86_64-simulator": sys.argv[5],
-    "macos-arm64": sys.argv[6],
-}
-if any(len(value) != 64 or any(character not in "0123456789abcdef" for character in value) for value in hashes.values()):
-    raise SystemExit("artifact builder produced a non-canonical slice digest")
-spec = importlib.util.spec_from_file_location("norito_bridge_source_seal", seal_script)
-if spec is None or spec.loader is None:
-    raise SystemExit("unable to load NoritoBridge source-seal rules")
-seal = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = seal
-spec.loader.exec_module(seal)
-contents = source_loader.read_bytes()
-seal.normalize_swift_native_bridge_hash_pins(contents)
-
-
-def replace_digest(match):
-    key = match.group("key").decode("ascii")
-    return (
-        match.group("prefix")
-        + b'"'
-        + match.group("key")
-        + b'": "'
-        + hashes[key].encode("ascii")
-        + b'"'
-        + match.group("suffix")
-    )
-
-
-projected = seal.SWIFT_NATIVE_BRIDGE_HASH_PIN.sub(replace_digest, contents)
-if seal.normalize_swift_native_bridge_hash_pins(projected) != seal.normalize_swift_native_bridge_hash_pins(contents):
-    raise SystemExit("prospective loader changed content beyond the slice digests")
-flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-if hasattr(os, "O_NOFOLLOW"):
-    flags |= os.O_NOFOLLOW
-descriptor = os.open(output_loader, flags, 0o600)
-try:
-    with os.fdopen(descriptor, "wb", closefd=False) as handle:
-        handle.write(projected)
-        handle.flush()
-        os.fsync(handle.fileno())
-finally:
-    os.close(descriptor)
-PY
+SWIFT_PIN_PREIMAGE_SHA256="$(
+  sha256_file "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+)"
+env -i \
+  HOME="$USER_HOME_DIR" \
+  PATH="${PYTHON_BINARY%/*}:${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:${GIT_BINARY%/*}:/usr/bin:/bin" \
+  TMPDIR="$MOBILE_TMPDIR" \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  NORITO_BRIDGE_SEAL_HOME="$USER_HOME_DIR" \
+  NORITO_BRIDGE_SEAL_CARGO_HOME="$MOBILE_CARGO_HOME" \
+  NORITO_BRIDGE_SEAL_RUSTUP_HOME="$MOBILE_RUSTUP_HOME" \
+  NORITO_BRIDGE_SEAL_TMPDIR="$MOBILE_TMPDIR" \
+  NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
+  NORITO_BRIDGE_SEAL_CARGO="$CARGO_BINARY" \
+  NORITO_BRIDGE_SEAL_RUSTC="$RUSTC_BINARY" \
+  NORITO_BRIDGE_SEAL_RUSTDOC="$RUSTDOC_BINARY" \
+  NORITO_BRIDGE_SEAL_RUSTUP="$RUSTUP_BINARY" \
+  NORITO_BRIDGE_SEAL_DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+  "$PYTHON_BINARY" -I -S -B \
+  "$ROOT_DIR/scripts/update_norito_bridge_swift_pins.py" \
+  --root "$ROOT_DIR" \
+  --artifact-dir "$PUBLISH_ROOT" \
+  --output "$PUBLISH_PROSPECTIVE_LOADER" \
+  --expected-preimage-sha256 "$SWIFT_PIN_PREIMAGE_SHA256"
 
 run_isolated_python - \
   "$PUBLISH_XCFRAMEWORK" "$PUBLISH_MANIFEST" \
-  "$PUBLISH_MANIFEST_LINK" "$CANONICAL_MANIFEST_RELATIVE_TARGET" <<'PY'
+  "$PUBLISH_MANIFEST_LINK" "$CANONICAL_MANIFEST_RELATIVE_TARGET" \
+  "$TEST_ONLY_PREBUILT_SLICES" <<'PY'
 import hashlib
 import json
 import os
@@ -1415,6 +1570,7 @@ xcframework = Path(sys.argv[1])
 manifest_path = Path(sys.argv[2])
 manifest_link = Path(sys.argv[3])
 manifest_link_target = sys.argv[4]
+test_only_prebuilt_slices = sys.argv[5] == "1"
 expected_slices = {
     "ios-arm64": {
         "architectures": ["arm64"],
@@ -1426,8 +1582,8 @@ expected_slices = {
         "platform": "ios",
         "variant": "simulator",
     },
-    "macos-arm64": {
-        "architectures": ["arm64"],
+    "macos-arm64_x86_64": {
+        "architectures": ["arm64", "x86_64"],
         "platform": "macos",
         "variant": None,
     },
@@ -1530,6 +1686,13 @@ if manifest.get("privacy_production_enabled") is True:
     expected_top_level.add(privacy_marker.name)
 elif manifest.get("privacy_production_enabled") is not False:
     raise SystemExit("staged NoritoBridge manifest has a non-boolean privacy mode")
+test_only_marker = xcframework / ".test-only-prebuilt-slices"
+if test_only_prebuilt_slices:
+    if manifest.get("test_only_prebuilt_slices") is not True:
+        raise SystemExit("test-only staged NoritoBridge is missing its manifest marker")
+    expected_top_level.add(test_only_marker.name)
+elif "test_only_prebuilt_slices" in manifest or test_only_marker.exists():
+    raise SystemExit("release staged NoritoBridge contains test-only prebuilt slices")
 if {entry.name for entry in xcframework.iterdir()} != expected_top_level:
     raise SystemExit("staged NoritoBridge has unexpected top-level artifacts")
 
@@ -1566,18 +1729,53 @@ for directory in reversed(directories_to_sync):
 fsync_path(xcframework.parent)
 PY
 
+run_isolated_python \
+  "$ROOT_DIR/scripts/validate_norito_bridge_xcframework.py" \
+  --root "$ROOT_DIR" \
+  --xcframework "$PUBLISH_XCFRAMEWORK" \
+  --manifest "$PUBLISH_MANIFEST" \
+  --manifest-link "$PUBLISH_MANIFEST_LINK" \
+  --expected-link-target "$CANONICAL_MANIFEST_RELATIVE_TARGET" \
+  --swift-loader "$PUBLISH_PROSPECTIVE_LOADER"
+
 assert_bridge_source_seal "staged artifact validation"
 
-if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+if [[ "$TEST_ONLY_PREBUILT_SLICES" == "1" ]]; then
+  TEST_CHECKER_MARKER="${NORITO_BRIDGE_CHECKER_MARKER:-}"
+  TEST_CHECKER_EXIT="${NORITO_BRIDGE_CHECKER_EXIT:-0}"
+  if [[ "$TEST_CHECKER_MARKER" != /* \
+    || ! -d "${TEST_CHECKER_MARKER%/*}" \
+    || -e "$TEST_CHECKER_MARKER" \
+    || -L "$TEST_CHECKER_MARKER" ]]; then
+    echo "[-] fallback pytest checker marker must be a new absolute file" >&2
+    exit 1
+  fi
+  case "$TEST_CHECKER_MARKER" in
+    "$ROOT_DIR/"*)
+      echo "[-] fallback pytest checker marker must be outside the repository" >&2
+      exit 1
+      ;;
+  esac
+  if [[ ! "$TEST_CHECKER_EXIT" =~ ^(0|[1-9][0-9]{0,2})$ \
+    || "$TEST_CHECKER_EXIT" -gt 125 ]]; then
+    echo "[-] NORITO_BRIDGE_CHECKER_EXIT must be a canonical value from 0 through 125" >&2
+    exit 1
+  fi
+  if ! (set -o noclobber; printf '%s\n' "$PUBLISH_ROOT" >"$TEST_CHECKER_MARKER"); then
+    echo "[-] fallback pytest checker marker could not be created exclusively" >&2
+    exit 1
+  fi
+  if [[ "$TEST_CHECKER_EXIT" != "0" ]]; then
+    exit "$TEST_CHECKER_EXIT"
+  fi
+elif [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
   MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 \
     MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
-    MOBILE_SDK_APPLE_CARGO_LOCK_PATH="$CARGO_LOCKFILE" \
     MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
     MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
     bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
 else
   MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
-    MOBILE_SDK_APPLE_CARGO_LOCK_PATH="$CARGO_LOCKFILE" \
     MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
     MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
     bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
@@ -1585,11 +1783,8 @@ fi
 
 assert_bridge_source_seal "pre-publication artifact verification"
 
-if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" != "1" \
-  && "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" != "1" ]]; then
-  echo "[+] Removing generated Apple Cargo/staging intermediates before publication" >&2
-  rm -rf "$CARGO_BUILD_DIR_BASE" "$STAGE_DIR"
-fi
+echo "[+] Removing task-owned staging intermediates before publication" >&2
+rm -rf "$STAGE_DIR"
 
 run_isolated_python - \
   "$PUBLISH_XCFRAMEWORK" "$FINAL_XCFRAMEWORK" "$FINAL_MANIFEST" \
@@ -1601,7 +1796,6 @@ import os
 from pathlib import Path
 import stat
 import sys
-import tempfile
 
 
 RENAME_EXCHANGE = 0x00000002
@@ -1609,7 +1803,7 @@ libc = ctypes.CDLL(None, use_errno=True)
 SLICE_PATHS = {
     "ios-arm64": "libNoritoBridge.a",
     "ios-arm64_x86_64-simulator": "libNoritoBridge.a",
-    "macos-arm64": "libNoritoBridge.a",
+    "macos-arm64_x86_64": "libNoritoBridge.a",
 }
 
 
@@ -1657,31 +1851,6 @@ def validate_manifest_bytes(framework: Path, manifest_bytes: bytes) -> None:
             raise RuntimeError(f"live NoritoBridge hash mismatch for {identifier}")
 
 
-def write_embedded_manifest(framework: Path, contents: bytes) -> None:
-    destination = framework / "NoritoBridge.artifacts.json"
-    if os.path.lexists(destination) and (
-        destination.is_symlink() or not destination.is_file()
-    ):
-        raise RuntimeError(f"refusing unexpected embedded manifest: {destination}")
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=".NoritoBridge.artifacts.",
-        suffix=".tmp",
-        dir=framework,
-    )
-    temporary = Path(temporary_name)
-    try:
-        os.fchmod(descriptor, 0o644)
-        with os.fdopen(descriptor, "wb", closefd=True) as handle:
-            handle.write(contents)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, destination)
-        fsync_path(framework)
-    finally:
-        if os.path.lexists(temporary):
-            temporary.unlink()
-
-
 def install_public_manifest_link(link: Path, target: str) -> None:
     temporary = link.parent / f".NoritoBridge.artifacts.link.{os.getpid()}"
     if os.path.lexists(temporary):
@@ -1709,35 +1878,18 @@ def prepare_stable_manifest_link(
                 f"refusing unexpected live XCFramework path: {final_framework}"
             )
         embedded = final_framework / "NoritoBridge.artifacts.json"
-        if manifest_exists and final_manifest.is_symlink():
-            if os.readlink(final_manifest) != relative_target:
-                raise RuntimeError(
-                    f"refusing non-canonical public manifest link: {final_manifest}"
-                )
-            if embedded.is_symlink() or not embedded.is_file():
-                raise RuntimeError("canonical public manifest link has no regular target")
-            contents = embedded.read_bytes()
-            validate_manifest_bytes(final_framework, contents)
-            return
-        if manifest_exists:
-            if not final_manifest.is_file() or final_manifest.is_symlink():
-                raise RuntimeError(
-                    f"refusing unexpected live manifest path: {final_manifest}"
-                )
-            contents = final_manifest.read_bytes()
-            validate_manifest_bytes(final_framework, contents)
-            write_embedded_manifest(final_framework, contents)
-            if embedded.read_bytes() != contents:
-                raise RuntimeError("embedded live manifest differs after migration")
-            install_public_manifest_link(final_manifest, relative_target)
-            return
-        if embedded.is_symlink() or not embedded.is_file():
+        if (
+            not manifest_exists
+            or not final_manifest.is_symlink()
+            or os.readlink(final_manifest) != relative_target
+        ):
             raise RuntimeError(
-                "live XCFramework has neither a public nor an embedded manifest"
+                "live XCFramework requires its canonical public manifest link"
             )
+        if embedded.is_symlink() or not embedded.is_file():
+            raise RuntimeError("canonical public manifest link has no regular target")
         contents = embedded.read_bytes()
         validate_manifest_bytes(final_framework, contents)
-        install_public_manifest_link(final_manifest, relative_target)
         return
 
     if manifest_exists:
@@ -1804,3 +1956,34 @@ PY
 
 echo "[+] Atomically published XCFramework and canonical manifest: $FINAL_XCFRAMEWORK" >&2
 echo "[+] Public manifest link: $FINAL_MANIFEST -> $CANONICAL_MANIFEST_RELATIVE_TARGET" >&2
+
+if [[ -n "$ARCHIVE_OUTPUT" ]]; then
+  ARCHIVE_OWNER="$ROOT_DIR/scripts/archive_norito_xcframework.py"
+  if [[ ! -f "$ARCHIVE_OWNER" || -L "$ARCHIVE_OWNER" ]]; then
+    echo "[-] Deterministic NoritoBridge archive owner is unavailable: $ARCHIVE_OWNER" >&2
+    exit 1
+  fi
+  env -i \
+    HOME="$USER_HOME_DIR" \
+    PATH="${PYTHON_BINARY%/*}:${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:${GIT_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$MOBILE_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+    NORITO_BRIDGE_OUTPUT_LOCK_FD="$NORITO_BRIDGE_OUTPUT_LOCK_FD" \
+    NORITO_BRIDGE_SEAL_HOME="$USER_HOME_DIR" \
+    NORITO_BRIDGE_SEAL_CARGO_HOME="$MOBILE_CARGO_HOME" \
+    NORITO_BRIDGE_SEAL_RUSTUP_HOME="$MOBILE_RUSTUP_HOME" \
+    NORITO_BRIDGE_SEAL_TMPDIR="$MOBILE_TMPDIR" \
+    NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
+    NORITO_BRIDGE_SEAL_CARGO="$CARGO_BINARY" \
+    NORITO_BRIDGE_SEAL_RUSTC="$RUSTC_BINARY" \
+    NORITO_BRIDGE_SEAL_RUSTDOC="$RUSTDOC_BINARY" \
+    NORITO_BRIDGE_SEAL_RUSTUP="$RUSTUP_BINARY" \
+    NORITO_BRIDGE_SEAL_DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    "$PYTHON_BINARY" -I -S -B "$ARCHIVE_OWNER" \
+      --xcframework "$FINAL_XCFRAMEWORK" \
+      --output "$ARCHIVE_OUTPUT" \
+      --scratch-dir "$BUILD_DIR"
+  echo "[+] Deterministic XCFramework archive: $ARCHIVE_OUTPUT" >&2
+fi

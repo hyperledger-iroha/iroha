@@ -28,7 +28,7 @@ fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId 
     let domain_id =
         DomainId::parse_fully_qualified(domain).expect("default asset definition domain");
     let asset_name = Name::from_str(name).expect("default asset definition name");
-    AssetDefinitionId::new(domain_id, asset_name)
+    AssetDefinitionId::derive_from_components(domain_id, asset_name)
 }
 
 fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
@@ -102,15 +102,6 @@ pub mod crypto {
 
 /// Common configuration defaults shared across components.
 pub mod common {
-    /// Default dataspace-qualified domain used when configuration omits the AccountAddress
-    /// selector override.
-    pub fn default_account_domain_label() -> String {
-        format!(
-            "{}.universal",
-            iroha_data_model::account::address::DEFAULT_DOMAIN_NAME
-        )
-    }
-
     /// Default chain discriminant / I105 network prefix (Sora Nexus global).
     pub const CHAIN_DISCRIMINANT: u16 = 0x02F1;
 
@@ -122,8 +113,6 @@ pub mod common {
 
 /// IVM- and banner-related defaults.
 pub mod ivm {
-    use super::Name;
-
     /// Startup banner settings.
     pub mod banner {
         /// Show startup banners by default.
@@ -140,11 +129,6 @@ pub mod ivm {
         pub const fn beep() -> bool {
             BEEP
         }
-    }
-
-    /// Default compute resource profile used to cap IVM guest stack budgets.
-    pub fn memory_budget_profile() -> Name {
-        super::compute::default_resource_profile()
     }
 }
 
@@ -799,7 +783,7 @@ pub mod kura {
 
     use iroha_config_base::util::Bytes;
 
-    use crate::kura::FsyncMode;
+    use crate::{kura::FsyncMode, parameters::actual::KuraReplicaAdvertPolicy};
 
     /// Directory for Kura storage relative to the node working directory.
     pub const STORE_DIR: &str = "./storage";
@@ -811,6 +795,20 @@ pub mod kura {
     pub const ROSTER_SIDECAR_RETENTION: NonZeroUsize = nonzero!(512_usize);
     /// Distinct remote peers that must advertise a canonical block before local body eviction.
     pub const EVICTION_REQUIRED_REPLICAS: NonZeroUsize = nonzero!(3_usize);
+    /// Number of authenticated historical advert keys retained immediately before the protected
+    /// in-memory block tail.
+    pub const REPLICA_ADVERT_EVICTABLE_WINDOW: NonZeroUsize = nonzero!(4_096_usize);
+    /// Default lifetime of one authenticated remote replica observation.
+    pub const REPLICA_ADVERT_TTL: Duration = Duration::from_secs(60 * 60);
+    /// Default cadence for proactively refreshing selected-keeper replica adverts.
+    pub const REPLICA_ADVERT_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
+    /// Complete default authenticated replica-advert policy.
+    pub const REPLICA_ADVERT_POLICY: KuraReplicaAdvertPolicy = KuraReplicaAdvertPolicy {
+        eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
+        evictable_window: REPLICA_ADVERT_EVICTABLE_WINDOW,
+        ttl: REPLICA_ADVERT_TTL,
+        refresh_interval: REPLICA_ADVERT_REFRESH_INTERVAL,
+    };
     /// Default number of merge-ledger entries cached in memory.
     pub const MERGE_LEDGER_CACHE_CAPACITY: usize = 256;
     /// Default fsync policy for block persistence.
@@ -1300,6 +1298,12 @@ pub mod sorafs {
             pub const MAX_SUBMIT_ATTEMPTS: u16 = 8;
             /// Maximum canonical checkpoint size.
             pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(32 * 1024 * 1024);
+            /// Maximum checkpoint-plus-minimal-terminal-wrapper archive artifact size.
+            pub const PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES: Bytes<u64> = Bytes(40 * 1024 * 1024);
+            /// Minimum canonical archive artifact size admitted by V1.
+            pub const PANEL_NOTIFICATION_ARCHIVE_MIN_BYTES_V1: u64 = 1024 * 1024;
+            /// Hard canonical archive artifact ceiling admitted by V1.
+            pub const PANEL_NOTIFICATION_ARCHIVE_MAX_BYTES_LIMIT_V1: u64 = 64 * 1024 * 1024;
             /// Finalized reconciliation and deadline-maintenance cadence.
             pub const WORKER_INTERVAL_MS: u64 = 1_000;
             /// Maximum native maintenance actions emitted in one scan.
@@ -1397,6 +1401,30 @@ pub mod sorafs {
                 PathBuf::from("./storage/sorafs/reputation")
             }
         }
+        /// Finalized reserve-event transparency scanner defaults.
+        pub mod reserve_transparency_runtime {
+            use std::path::PathBuf;
+
+            use iroha_config_base::util::Bytes;
+
+            /// The scanner is opt-in with the committed reputation archive.
+            pub const ENABLED: bool = false;
+            /// Normal exact-anchor scan cadence.
+            pub const POLL_INTERVAL_MS: u64 = 1_000;
+            /// Maximum bounded retry delay after transient unavailability.
+            pub const RETRY_MAX_INTERVAL_MS: u64 = 30_000;
+            /// Maximum reserve events requested from one immutable page.
+            pub const PAGE_ITEMS: u32 = 64;
+            /// Maximum immutable pages consumed by one scanner tick.
+            pub const MAX_PAGES_PER_TICK: u32 = 64;
+            /// Maximum canonical scanner checkpoint bytes.
+            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024);
+
+            /// Default private state root used only while the scanner is disabled.
+            pub fn state_dir() -> PathBuf {
+                PathBuf::from("./storage/sorafs/reserve-transparency")
+            }
+        }
         /// Finalized-ledger hedging/billing supervisor defaults.
         pub mod hedging_billing_runtime {
             use std::path::PathBuf;
@@ -1436,6 +1464,8 @@ pub mod sorafs {
             pub const MAX_SOURCE_JOBS_PER_TICK: usize = 16;
             /// Maximum governed source providers considered for one assignment.
             pub const MAX_SOURCE_PROVIDERS: usize = 1_024;
+            /// Hard deadline ceiling for one authenticated source operation.
+            pub const SOURCE_OPERATION_TIMEOUT_MS_LIMIT_V1: u64 = 24 * 60 * 60 * 1_000;
             /// Timeout for authenticated source fetch, verification, and storage.
             pub const SOURCE_OPERATION_TIMEOUT_MS: u64 = 5 * 60_000;
             /// Durable source-lease renewal cadence.
@@ -1512,7 +1542,8 @@ pub mod sorafs {
                 /// outside the completion transaction payload.
                 pub const COMPLETION_CHAIN_ID_MAX_BYTES_V1: usize = 255;
                 /// Maximum canonical bytes for each retained completion account identity.
-                pub const COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1: u64 = 8 * 1024;
+                pub const COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1: u64 =
+                    iroha_data_model::musubi::MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 as u64;
                 /// Canonical reserve for one immutable finalized authorization.
                 ///
                 /// The provider-ingest runtime validates the largest variable
@@ -1616,6 +1647,8 @@ pub mod sorafs {
         pub const RUNTIME_EVENT_HISTORY_LIMIT: usize = 4_096;
         /// Maximum entries retained in each auxiliary runtime state index.
         pub const RUNTIME_STATE_ENTRY_LIMIT: usize = 65_536;
+        /// First-release hard ceiling shared by node and Torii PoR projections.
+        pub const RUNTIME_STATE_ENTRY_LIMIT_MAX: usize = 65_536;
         /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
         pub const RUNTIME_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
         /// Finalized reconciliation cadence for durable proof-outcome delivery.
@@ -1666,19 +1699,12 @@ pub mod sorafs {
             pub const DNS_TIMEOUT_MS: u64 = 2_000;
             /// Maximum accepted remote response body.
             pub const MAX_RESPONSE_BYTES: Bytes<u64> = Bytes(4 * 1024 * 1024);
-            /// Maximum local block, head, or CAR payload sent in one request.
+            /// Maximum local block, head, CAR, or block-prefix archive request.
             ///
-            /// Keep this synchronized with
-            /// `sorafs_manifest::GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1`:
-            /// 128 MiB of canonical signing payload plus a checked 64 KiB
-            /// block-signature/envelope allowance.
-            pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes((128 * 1024 * 1024) + (64 * 1024));
-            /// Maximum entries retained in the deterministic local IPLD mirror.
-            pub const MIRROR_MAX_ENTRIES: usize = 65_536;
-            /// Maximum canonical block bytes retained by the mirror.
-            pub const MIRROR_MAX_BYTES: Bytes<u64> = Bytes(512 * 1024 * 1024);
-            /// Maximum age accepted for a newly published signed head.
-            pub const MAX_HEAD_AGE_SECS: u64 = 15 * 60;
+            /// Covers the canonical block ceiling (128 MiB plus a 64 KiB
+            /// signature allowance), the 1 MiB archive wrapper, and 64 KiB
+            /// of deterministic multipart framing.
+            pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes((129 * 1024 * 1024) + (128 * 1024));
             /// Maximum future clock skew accepted for blocks and heads.
             pub const MAX_FUTURE_SKEW_SECS: u64 = 60;
             /// Maximum lifetime accepted for one signed outbound request envelope.
@@ -1919,6 +1945,14 @@ pub mod sorafs {
             pub const DEFAULT_RATE_LIMIT_BYTES: u64 = 8 * 1024 * 1024; // 8 MiB/s
             /// Default allowed requests per minute for token refresh.
             pub const DEFAULT_REQUESTS_PER_MINUTE: u32 = 120;
+            /// Maximum durable callback rows admitted by the external gateway owner.
+            pub const ADMISSION_MAX_PENDING: u32 = 65_536;
+            /// Maximum active token quota windows admitted by the external gateway owner.
+            pub const ADMISSION_MAX_TRACKED_TOKENS: u32 = 65_536;
+            /// Maximum ordered callback rows replayed by one reconciliation tick.
+            pub const ADMISSION_RECONCILE_MAX_ITEMS: u32 = 256;
+            /// Maximum lifetime of one external concurrency lease.
+            pub const ADMISSION_LEASE_TTL_MS: u64 = 120_000;
         }
     }
 
@@ -2294,6 +2328,44 @@ pub mod torii {
         }
     }
 
+    /// Native Bootle/Lantern blind-issuance service defaults.
+    pub mod privacy_bootle_lantern_issuer {
+        use std::path::PathBuf;
+
+        use iroha_config_base::util::Bytes;
+
+        /// Issuance is opt-in and fails closed without its runtime provider registry.
+        pub const ENABLED: bool = false;
+        /// Default durable one-shot authorization store directory.
+        pub fn state_dir() -> PathBuf {
+            PathBuf::from("./storage/privacy_bootle_lantern_issuer")
+        }
+        /// Default validity window for one authenticated issuance authorization.
+        pub const AUTHORIZATION_LIFETIME_BLOCKS: u64 = 300;
+        /// Default maximum retained authorization count.
+        pub const MAX_RECORDS: usize = 4_096;
+        /// Exact worst-case ILS1 reservation for every default authorization slot.
+        pub const MAX_TOTAL_BYTES: Bytes<u64> = Bytes(3_310 * MAX_RECORDS as u64);
+        /// Default terminal-record retention after its authoritative horizon.
+        pub const TERMINAL_RETENTION_BLOCKS: u64 = 4_096;
+
+        /// First-release concurrent native-issuance hard ceiling.
+        ///
+        /// There is deliberately no operational default: an enabled issuer
+        /// must choose its deployment-specific bound explicitly.
+        pub const MAX_INFLIGHT_HARD: usize = 64;
+        /// First-release authorization lifetime hard ceiling.
+        pub const AUTHORIZATION_LIFETIME_BLOCKS_MAX: u64 = 4_096;
+        /// First-release durable store record-count hard ceiling.
+        pub const MAX_RECORDS_HARD: usize = 1_000_000;
+        /// Largest canonical ILS1 record, including one exact ILR1 response.
+        pub const MAX_RECORD_BYTES: u64 = 3_310;
+        /// First-release durable store byte hard ceiling.
+        pub const MAX_TOTAL_BYTES_HARD: u64 = MAX_RECORD_BYTES * MAX_RECORDS_HARD as u64;
+        /// First-release terminal-retention hard ceiling.
+        pub const TERMINAL_RETENTION_BLOCKS_MAX: u64 = u32::MAX as u64;
+    }
+
     /// Peer-telemetry geo lookup defaults (disabled unless explicitly enabled).
     pub mod peer_geo {
         use url::Url;
@@ -2533,6 +2605,12 @@ pub mod torii {
     pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(10);
     /// Time to ban IPs that exceed pre-auth rate limits.
     pub const PREAUTH_BAN_DURATION: Duration = Duration::from_secs(60);
+    /// Maximum number of temporary pre-auth bans retained in memory.
+    pub const PREAUTH_BAN_CAPACITY: NonZeroUsize = nonzero!(4096usize);
+    /// Exact transport source hosts trusted for internal Torii reads and privileged routing.
+    pub fn internal_api_trusted_cidrs() -> Vec<String> {
+        vec!["127.0.0.1/32".to_owned(), "::1/128".to_owned()]
+    }
     /// Enable app-facing webhook routes and workers. Disabled by default.
     pub const WEBHOOKS_ENABLED: bool = false;
     /// Enable app-facing ZK attachment routes and workers. Disabled by default.
@@ -2905,6 +2983,11 @@ pub mod torii {
     pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_DEAD_LETTERS: usize = 1_024;
     /// Default maximum canonical appeal-finance checkpoint size.
     pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+    /// Minimum canonical appeal-finance checkpoint size admitted by V1.
+    pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MIN_BYTES_V1: u64 = 4 * 1024;
+    /// Hard canonical appeal-finance checkpoint ceiling admitted by V1.
+    pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES_LIMIT_V1: u64 =
+        512 * 1024 * 1024;
 
     /// Canonical first-release appeal-finance asset and policy defaults.
     pub mod sorafs_appeal_finance {
@@ -3637,12 +3720,6 @@ pub mod concurrency {
     pub const SUMERAGI_STACK_BYTES_MIN: usize = 64 * 1024 * 1024;
     /// Maximum allowed Sumeragi helper-thread stack size.
     pub const SUMERAGI_STACK_BYTES_MAX: usize = 64 * 1024 * 1024;
-    /// Default guest stack size (bytes) for IVM instances.
-    pub const GUEST_STACK_BYTES: u64 = 4 * 1024 * 1024;
-    /// Maximum guest stack size (bytes) allowed by config (guard runaway reservations).
-    pub const GUEST_STACK_BYTES_MAX: u64 = 64 * 1024 * 1024;
-    /// Default gas→stack multiplier (bytes of stack available per unit of gas).
-    pub const GAS_TO_STACK_MULTIPLIER: u64 = 4;
 }
 
 /// Norito codec defaults.
@@ -3826,16 +3903,6 @@ pub mod zk {
         /// If non-zero and the proof size exceeds this budget, `PreverifyBudgetExceeded` is returned.
         pub const BUDGET_BYTES: u64 = 0;
     }
-    /// Shielded ledger/state defaults.
-    pub mod ledger {
-        /// Maximum number of recent Merkle roots to keep for shielded assets.
-        /// Kept modest to bound memory while allowing lookback for typical proofs.
-        pub const ROOT_HISTORY_CAP: usize = 2048;
-        /// Whether to include an explicit empty-tree root in read APIs when an asset has no commitments.
-        pub const EMPTY_ROOT_ON_EMPTY: bool = false;
-        /// Default depth to use when computing the explicit empty-tree root.
-        pub const EMPTY_ROOT_DEPTH: u8 = 0;
-    }
     /// ZK voting/election defaults.
     pub mod vote {
         /// Maximum number of recent ballot ciphertexts to keep per election.
@@ -3872,7 +3939,7 @@ pub mod sumeragi {
     use nonzero_ext::nonzero;
 
     /// Consensus wire/state-machine protocol version required by this release.
-    pub const PROTOCOL_VERSION: u32 = 3;
+    pub const PROTOCOL_VERSION: u32 = 4;
     /// Fresh-network target block cadence selected by genesis.
     pub const BLOCK_CADENCE_MS: u64 = 1_000;
     /// The view-zero round deadline is ten signed block-cadence intervals.
@@ -3893,16 +3960,16 @@ pub mod sumeragi {
     pub const QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY: NonZeroUsize = nonzero!(2_usize);
     /// Certified-body and block-sync outer-ingress message capacity.
     ///
-    /// Every admitted validator owns four protected positions (general source,
-    /// non-timeout progress, timeout vote, and transport completion), while
-    /// each configured authenticated non-validator source owns two positions, and
+    /// Every admitted validator owns five protected positions (general source,
+    /// ordinary progress, certified fence escape, timeout vote, and transport completion), while
+    /// each configured authenticated non-validator source owns three positions, and
     /// anonymous traffic owns two further positions.
     /// Deriving the default from the protocol roster ceiling keeps the queue
     /// count allocation representable for every legal height context; byte
     /// quotas remain explicitly roster-scaled by deployment generators.
     pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!(
-        4 * MAX_VALIDATORS_PER_HEIGHT
-            + 2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
+        5 * MAX_VALIDATORS_PER_HEIGHT
+            + 3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
             + 2
     );
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
@@ -3911,8 +3978,8 @@ pub mod sumeragi {
     /// independently authenticated non-validator lanes, and the anonymous lane.
     pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(231_usize * 1024 * 1024);
     /// Per-ingress-source canonical outer-ingress wire-byte partition. The
-    /// default contains disjoint maximum ordinary-envelope, payload-completion,
-    /// and timeout-vote partitions. The ordinary and completion partitions also
+    /// default contains disjoint maximum ordinary-envelope, certified-fence-escape,
+    /// payload-completion, and timeout-vote partitions. The ordinary and completion partitions also
     /// cover the one-MiB atomic lane-certificate and four-MiB executable-source
     /// protocol floors when deployments choose a smaller global block body.
     pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = nonzero!(33_usize * 1024 * 1024);
@@ -3930,6 +3997,11 @@ pub mod sumeragi {
         8 + RECOMMENDED_DA_MAX_CHUNK_COUNT * 33;
     /// Per-validator source bytes isolated from ordinary traffic for a timeout vote.
     pub const TIMEOUT_VOTE_RESERVE_BYTES: usize = 64 * 1024;
+    /// Per-validator source bytes isolated for a TC, CommitQC, or CommitQC response.
+    ///
+    /// The maximum 31-validator certificate forms fit this bound. Height
+    /// activation derives and checks their exact canonical wire requirement.
+    pub const CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES: usize = 64 * 1024;
     /// Payload-chunk ingress and orphan-buffer capacity.
     pub const QUEUE_CHUNK_CAPACITY: NonZeroUsize = nonzero!(2048_usize);
     /// Reconstructed bodies waiting for reducer delivery.
@@ -4110,8 +4182,8 @@ pub mod sumeragi {
         pub const VRF_COMMIT_WINDOW_BLOCKS: u64 = 100;
         /// VRF reveal window size after the commitment window.
         pub const VRF_REVEAL_WINDOW_BLOCKS: u64 = 40;
-        /// Maximum validators elected for an epoch (`0` means no configured cap).
-        pub const MAX_VALIDATORS: u32 = 128;
+        /// Exact bounded `3f + 1` ceiling for an epoch committee.
+        pub const MAX_VALIDATORS: u32 = 31;
         /// Minimum validator self-bond.
         pub const MIN_SELF_BOND: u64 = 1_000;
         /// Minimum nomination bond.
@@ -4148,11 +4220,7 @@ pub mod governance {
     }
 
     fn account_id_from_public_key(public_key: &str) -> AccountId {
-        let domain =
-            DomainId::parse_fully_qualified(&super::common::default_account_domain_label())
-                .expect("default governance account domain");
         let public_key = public_key.parse().expect("default governance public key");
-        let _ = domain;
         AccountId::new(public_key)
     }
 
@@ -4522,8 +4590,8 @@ pub mod confidential {
     pub const POLICY_TRANSITION_DELAY_BLOCKS: u64 = 100;
     /// Grace window around policy activation for conversions.
     pub const POLICY_TRANSITION_WINDOW_BLOCKS: u64 = 200;
-    /// Commitment tree root history length retained.
-    pub const TREE_ROOTS_HISTORY_LEN: u64 = 10_000;
+    /// Non-zero commitment tree root history length retained.
+    pub const TREE_ROOTS_HISTORY_LEN: NonZeroUsize = nonzero!(10_000_usize);
     /// Commitment tree frontier checkpoint interval.
     pub const TREE_FRONTIER_CHECKPOINT_INTERVAL: u64 = 100;
     /// Maximum verifier entries in registry.
@@ -4617,16 +4685,6 @@ pub mod soranet {
         }
         /// Default settlement grace after disconnect before escrow is refundable.
         pub const SETTLEMENT_GRACE_SECS: u64 = 60;
-
-        /// XOR asset definition used for VPN escrow.
-        pub fn fee_asset_id() -> String {
-            "xor#universal.universal".to_string()
-        }
-
-        /// Account that receives VPN escrow payments before receipt settlement.
-        pub fn escrow_account_id() -> String {
-            super::super::governance::bond_escrow_account()
-        }
 
         /// Default operator account used when an enabled deployment does not override it.
         pub fn operator_account_id() -> String {

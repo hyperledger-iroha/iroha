@@ -25,7 +25,7 @@ def valid_status_snapshot(validator_index: int, blocker: str | None = None) -> d
     snapshot = {
         "validator_index": validator_index,
         "status": {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "restart_required": False,
             "height": 10,
             "view": 0,
@@ -369,6 +369,12 @@ def test_internally_inconsistent_evidence_is_rejected(
                 "restart_required", True
             ),
             "fail-stopped",
+        ),
+        (
+            lambda summary: summary["final_status_snapshots"][0]["status"].__setitem__(
+                "protocol_version", 3
+            ),
+            "wrong protocol version",
         ),
         (
             lambda summary: summary["final_status_snapshots"][0]["status"].pop(

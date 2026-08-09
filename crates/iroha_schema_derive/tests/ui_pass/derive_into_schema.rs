@@ -51,4 +51,10 @@ pub struct WithComplexGeneric<T: Trait> {
     _value: T::Assoc,
 }
 
+#[derive(IntoSchema)]
+pub struct WithRequiredJsonOption {
+    #[norito(required)]
+    value: Option<u32>,
+}
+
 pub fn main() {}

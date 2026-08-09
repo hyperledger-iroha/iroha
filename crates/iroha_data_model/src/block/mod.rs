@@ -459,6 +459,12 @@ impl SignedBlock {
     }
 
     /// Replace durable independent-batch outcomes captured while executing this block.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SetBatchTransferOutcomesError`] when transaction results are absent,
+    /// their count differs from the entrypoint count, or an outcome references an
+    /// entrypoint that is not present in this block.
     #[cfg(feature = "transparent_api")]
     pub fn set_batch_transfer_outcomes(
         &mut self,
@@ -467,11 +473,11 @@ impl SignedBlock {
             Vec<crate::events::data::prelude::AssetBatchTransferOutcome>,
         >,
     ) -> Result<(), SetBatchTransferOutcomesError> {
+        let entrypoint_hashes = self.entrypoint_hashes().collect::<Vec<_>>();
         let result = self
             .result
             .as_mut()
             .ok_or(SetBatchTransferOutcomesError::MissingTransactionResults)?;
-        let entrypoint_hashes = result.merkle.leaves().collect::<Vec<_>>();
         if entrypoint_hashes.len() != result.transaction_results.len() {
             return Err(SetBatchTransferOutcomesError::ResultCountMismatch {
                 entrypoints: entrypoint_hashes.len(),
@@ -555,40 +561,40 @@ impl SignedBlock {
             .find(|(_, hash)| hash == entry_hash)?;
         let idx_u32: u32 = idx.try_into().ok()?;
 
-        let external_count = self.external_entrypoint_count();
-        let (entry_root, entry_merkle_proof) = if idx < external_count {
-            let external_merkle: MerkleTree<TransactionEntrypoint> = self
-                .external_entrypoints_cloned()
-                .map(|entrypoint| entrypoint.hash())
-                .collect();
-            (
-                self.payload.header.merkle_root?,
-                external_merkle.get_proof(idx_u32)?,
-            )
-        } else {
-            (
-                self.full_entry_merkle_root()?,
-                result_state.merkle.get_proof(idx_u32)?,
-            )
-        };
+        // The execution commitment authenticates the exact result-bearing
+        // block wire, so every entrypoint (including external transactions)
+        // uses the same full executed-entry tree. This avoids two proof-root
+        // semantics selected by an untrusted entry index.
+        let expected_entry_root = self.full_entry_merkle_root()?;
+        let entry_commitment = result_state.merkle.commitment()?;
+        if entry_commitment.root() != &expected_entry_root {
+            return None;
+        }
+        let entry_merkle_proof = result_state.merkle.get_proof(idx_u32)?;
         let entry_proof = BlockReceiptProof::new(*entry_hash, entry_merkle_proof);
 
-        let result_root = self.payload.header.result_merkle_root;
-        let result_proof = if result_root.is_some() {
-            let tx_result = result_state.transaction_results.get(idx)?;
-            let result_hash = tx_result.hash();
-            let proof = result_state.result_merkle.get_proof(idx_u32)?;
-            Some(ExecutionReceiptProof::new(result_hash, proof))
-        } else {
-            None
-        };
+        let expected_result_root = self.payload.header.result_merkle_root?;
+        let result_commitment = result_state.result_merkle.commitment()?;
+        if result_commitment.root() != &expected_result_root
+            || result_commitment.leaf_count() != entry_commitment.leaf_count()
+        {
+            return None;
+        }
+        let tx_result = result_state.transaction_results.get(idx)?;
+        let result_hash = tx_result.hash();
+        let proof = result_state.result_merkle.get_proof(idx_u32)?;
+        let result_proof = ExecutionReceiptProof::new(result_hash, proof);
+        let block_hash = self.hash();
+        let executed_block_wire_hash = self.executed_block_wire_hash().ok()?;
 
         Some(crate::block::proofs::BlockProofs {
             block_height: self.payload.header.height(),
+            block_hash,
+            executed_block_wire_hash,
             entry_hash: *entry_hash,
-            entry_root,
+            entry_commitment,
             entry_proof,
-            result_root,
+            result_commitment,
             result_proof,
             fastpq_transcripts: self.fastpq_transcripts().clone(),
         })
@@ -1727,6 +1733,7 @@ mod tests {
     use crate::trigger::TimeTriggerEntrypoint;
     use crate::{
         ChainId,
+        block::consensus::SumeragiLanePayloadOwnership,
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme},
             pin_intent::{DaPinIntent, DaPinIntentBundle},
@@ -1787,6 +1794,25 @@ mod tests {
         )
     }
 
+    fn block_with_execution_context(execution_context: BlockExecutionContextBundle) -> SignedBlock {
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 1, 0);
+        SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: Some(execution_context),
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+                previous_roster_evidence: None,
+                npos_consensus_effects: None,
+            },
+            result: None,
+        }
+    }
+
     #[test]
     fn block_payload_ordering_includes_execution_context() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
@@ -1839,6 +1865,13 @@ mod tests {
     }
 
     #[test]
+    fn signed_block_with_empty_execution_context_is_empty() {
+        let block = block_with_execution_context(BlockExecutionContextBundle::default());
+
+        assert!(block.is_empty());
+    }
+
+    #[test]
     fn signed_block_with_only_certified_merge_reference_is_not_empty() {
         let validators = Vec::<PeerId>::new();
         let entry = MergeLedgerEntry {
@@ -1886,6 +1919,67 @@ mod tests {
             },
             result: None,
         };
+
+        assert!(!block.is_empty());
+    }
+
+    #[test]
+    fn signed_block_with_only_autonomous_lane_payload_is_not_empty() {
+        let producer = PeerId::new(
+            KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::BlsNormal)
+                .expect("generate checked autonomous payload producer")
+                .public_key()
+                .clone(),
+        );
+        let envelope = AutonomousLanePayloadEnvelopeV1 {
+            version: AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
+            chain_id_hash: Hash::new(b"autonomous-only-chain"),
+            epoch: 4,
+            lane_id: LaneId::new(2),
+            dataspace_id: DataSpaceId::new(9),
+            lane_incarnation: Hash::new(b"autonomous-only-incarnation"),
+            proposal_height: 2,
+            lane_block_height: 5,
+            lane_block_view: 0,
+            proposal_hash: Hash::new(b"autonomous-only-proposal"),
+            descriptor_hash: Hash::new(b"autonomous-only-descriptor"),
+            payload_hash: Hash::new(b"autonomous-only-payload"),
+            producer,
+            canonical_payload: vec![1, 2, 3, 4],
+        };
+        let execution_context = BlockExecutionContextBundle::new(Vec::new())
+            .with_autonomous_lane_payloads(vec![envelope]);
+        let block = block_with_execution_context(execution_context);
+
+        assert!(!block.is_empty());
+    }
+
+    #[test]
+    fn signed_block_with_only_lane_payload_ownership_is_not_empty() {
+        let ownership = SumeragiLanePayloadOwnership {
+            proposal_height: 2,
+            proposal_view: 0,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation: Hash::new(b"ownership-only-incarnation"),
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash: Hash::new(b"ownership-only-subject"),
+            qc_mode_tag: "test-lane-qc-mode".to_string(),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::new(b"ownership-only-entrypoint")],
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: Some(Hash::new(b"ownership-only-descriptor")),
+            lane_block_descriptor_validator_set: Vec::new(),
+            lane_block_descriptor_validator_count: 0,
+            lane_block_descriptor_min_quorum: 0,
+            payload_ownership_hash: Hash::new(b"ownership-only-payload"),
+            rbc_instance_hash: Hash::new(b"ownership-only-rbc"),
+        };
+        let execution_context = BlockExecutionContextBundle::new(Vec::new())
+            .with_lane_payload_ownerships(vec![ownership]);
+        let block = block_with_execution_context(execution_context);
 
         assert!(!block.is_empty());
     }
@@ -3315,10 +3409,11 @@ mod tests {
         let domain: DomainId = DomainId::try_new("test", "universal").expect("domain id");
         let from = fixture_account(&domain);
         let to = fixture_account(&domain);
-        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("test", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("test", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
 
         let delta = TransferDeltaTranscript {
             from_account: from,
@@ -3473,10 +3568,11 @@ mod tests {
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
 
-        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("chain", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
+        let asset: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("chain", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
         let delta = TransferDeltaTranscript {
             from_account: authority.clone(),
             to_account: authority,
@@ -3622,6 +3718,11 @@ mod tests {
             .set_transaction_results(vec![time_trigger], &entry_hashes, results_inner)
             .expect("entrypoint hashes should match payload");
 
+        assert_eq!(
+            block.entrypoint_hashes().collect::<Vec<_>>(),
+            entry_hashes,
+            "entrypoint iteration must preserve external-then-trigger execution order"
+        );
         assert_eq!(block.header().merkle_root(), expected_consensus_root);
         assert_eq!(
             block.full_entry_merkle_root(),
@@ -3868,31 +3969,40 @@ mod tests {
         let proofs = block
             .proofs_for_entry_hash(&entry_hash)
             .expect("proofs should exist");
-        let entry_root = proofs.entry_root;
+        assert_eq!(proofs.block_hash, block.hash());
         assert_eq!(
-            entry_root,
-            block.header().merkle_root().expect("entry root"),
-            "entry root should match consensus root for external transactions"
-        );
-        assert!(proofs.entry_proof.verify(&entry_root));
-        assert_eq!(entry_root, expected_entry_root);
-
-        let result_root = proofs.result_root.expect("result root");
-        assert_eq!(
-            result_root,
+            proofs.executed_block_wire_hash,
             block
+                .executed_block_wire_hash()
+                .expect("executed block wire hash")
+        );
+        let entry_commitment = &proofs.entry_commitment;
+        assert_eq!(
+            entry_commitment.root(),
+            &block.header().merkle_root().expect("entry root"),
+            "without scheduled entries the full executed root equals the consensus root"
+        );
+        assert_eq!(entry_commitment.leaf_count().get(), 1);
+        assert!(proofs.entry_proof.verify(entry_commitment));
+        assert_eq!(entry_commitment.root(), &expected_entry_root);
+
+        let result_commitment = &proofs.result_commitment;
+        assert_eq!(
+            result_commitment.root(),
+            &block
                 .header()
                 .result_merkle_root()
                 .expect("result root in header")
         );
-        let result_proof = proofs.result_proof.expect("result proof");
-        assert!(result_proof.verify(&result_root));
-        assert_eq!(result_root, expected_result_root);
+        assert_eq!(result_commitment.leaf_count().get(), 1);
+        let result_proof = &proofs.result_proof;
+        assert!(result_proof.verify(result_commitment));
+        assert_eq!(result_commitment.root(), &expected_result_root);
     }
 
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn proofs_for_external_entry_with_time_trigger_use_consensus_root() {
+    fn proofs_for_external_entry_with_time_trigger_use_full_executed_root() {
         use std::num::NonZeroU64;
 
         use iroha_crypto::MerkleTree;
@@ -3950,13 +4060,20 @@ mod tests {
         let consensus_root = block.header().merkle_root().expect("consensus root");
         let full_root = block.full_entry_merkle_root().expect("full root");
         assert_ne!(consensus_root, full_root);
-        assert_eq!(proofs.entry_root, consensus_root);
-        assert!(proofs.entry_proof.verify(&proofs.entry_root));
+        assert_eq!(proofs.entry_commitment.root(), &full_root);
+        assert_eq!(proofs.entry_commitment.leaf_count().get(), 2);
+        assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
 
-        let result_root = proofs.result_root.expect("result root");
-        assert_eq!(result_root, expected_result_root);
-        let result_proof = proofs.result_proof.expect("result proof");
-        assert!(result_proof.verify(&result_root));
+        let result_commitment = &proofs.result_commitment;
+        assert_eq!(result_commitment.root(), &expected_result_root);
+        assert_eq!(result_commitment.leaf_count().get(), 2);
+        assert_eq!(
+            result_commitment.leaf_count(),
+            proofs.entry_commitment.leaf_count(),
+            "full entry and result geometries must stay aligned"
+        );
+        let result_proof = &proofs.result_proof;
+        assert!(result_proof.verify(result_commitment));
     }
 
     #[cfg(feature = "transparent_api")]
@@ -4032,16 +4149,19 @@ mod tests {
             "time triggers extend the entrypoint root beyond consensus root"
         );
         assert_eq!(
-            proofs.entry_root, full_root,
+            proofs.entry_commitment.root(),
+            &full_root,
             "entry root for time trigger should match extended root"
         );
-        assert!(proofs.entry_proof.verify(&proofs.entry_root));
-        assert_eq!(proofs.entry_root, expected_full_root);
+        assert_eq!(proofs.entry_commitment.leaf_count().get(), 2);
+        assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
+        assert_eq!(proofs.entry_commitment.root(), &expected_full_root);
 
-        let result_root = proofs.result_root.expect("result root");
-        assert_eq!(result_root, expected_result_root);
-        let result_proof = proofs.result_proof.expect("result proof");
-        assert!(result_proof.verify(&result_root));
+        let result_commitment = &proofs.result_commitment;
+        assert_eq!(result_commitment.root(), &expected_result_root);
+        assert_eq!(result_commitment.leaf_count().get(), 2);
+        let result_proof = &proofs.result_proof;
+        assert!(result_proof.verify(result_commitment));
     }
 
     #[cfg(feature = "transparent_api")]

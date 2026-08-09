@@ -696,10 +696,11 @@ QueryPage<T> {
 accept their exact typed ID and return `Option<View>`. Their plural forms
 `accounts`, `assets`, `asset_definitions`, `domains`, and `nfts` require named
 `int offset` and `int limit` arguments and return `QueryPage<View>` with
-`List<View, 64> items` and `Option<int> next_offset`. Offset is non-negative,
-limit is 1 through 64, ordering is canonical ID order, and `next_offset` is
-present only when another page exists. Other specialist query families remain
-explicit byte APIs; the typed balance API is unchanged.
+`List<View, 64> items` and `Option<int> next_offset`. Offset is in
+`0..=i64::MAX`, limit is 1 through 64, and the `offset + limit` page window must
+fit `i64`. Ordering is canonical ID order, and `next_offset` is present only
+when another page exists. Other specialist query families remain explicit byte
+APIs; the typed balance API is unchanged.
 
 ## Durable state
 

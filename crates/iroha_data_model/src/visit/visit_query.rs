@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::Visit;
 // Alias the `query` module for ergonomic type references within this module.
-#[cfg(not(feature = "fast_dsl"))]
 use crate::query as query_mod;
 use crate::{
     prelude::*,
@@ -14,6 +13,27 @@ use crate::{
 
 #[cfg(test)]
 static SINGULAR_QUERY_FALLBACK_HIT: AtomicBool = AtomicBool::new(false);
+
+fn payload_is_exact_query<Q>(payload: &[u8]) -> bool
+where
+    Q: norito::codec::Decode + norito::codec::Encode,
+{
+    let mut input = payload;
+    let Ok(query) = <Q as norito::codec::Decode>::decode(&mut input) else {
+        return false;
+    };
+    input.is_empty() && norito::codec::Encode::encode(&query) == payload
+}
+
+#[cfg(feature = "fast_dsl")]
+fn decode_exact<T>(payload: &[u8]) -> Option<T>
+where
+    T: norito::codec::Decode + norito::codec::Encode,
+{
+    let mut input = payload;
+    let value = <T as norito::codec::Decode>::decode(&mut input).ok()?;
+    (input.is_empty() && norito::codec::Encode::encode(&value) == payload).then_some(value)
+}
 
 macro_rules! try_visit_singular_queries {
     ($visitor:expr, $query:expr; $($method:ident($variant:ident)),+ $(,)?) => {
@@ -63,11 +83,17 @@ fn try_visit_non_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_da_pin_intent_by_lane_epoch_sequence(FindDaPinIntentByLaneEpochSequence),
         visit_find_lane_relay_envelope_by_ref(FindLaneRelayEnvelopeByRef),
         visit_find_dataspace_name_owner_by_id(FindDataspaceNameOwnerById),
-        visit_find_musubi_release_by_ref(FindMusubiReleaseByRef),
-        visit_find_musubi_package_versions(FindMusubiPackageVersions),
-        visit_find_musubi_package_releases(FindMusubiPackageReleases),
-        visit_search_musubi_packages(SearchMusubiPackages),
-        visit_find_musubi_short_alias_by_name(FindMusubiShortAliasByName),
+        visit_find_musubi_exact_package_v1(FindMusubiExactPackageV1),
+        visit_find_musubi_exact_release_v1(FindMusubiExactReleaseV1),
+        visit_find_musubi_provider_bundle_attestation_v1(FindMusubiProviderBundleAttestationV1),
+        visit_find_musubi_resolver_index_v1(FindMusubiResolverIndexV1),
+        visit_find_musubi_versions_v1(FindMusubiVersionsV1),
+        visit_find_musubi_maintainers_v1(FindMusubiMaintainersV1),
+        visit_find_musubi_archive_locations_v1(FindMusubiArchiveLocationsV1),
+        visit_find_musubi_archive_retention_v1(FindMusubiArchiveRetentionV1),
+        visit_find_musubi_alias_v1(FindMusubiAliasV1),
+        visit_find_musubi_alias_history_v1(FindMusubiAliasHistoryV1),
+        visit_find_musubi_ordered_prefix_v1(FindMusubiOrderedPrefixV1),
         visit_find_domain_by_id(FindDomainById),
         visit_find_fee_sponsor_program_by_id(FindFeeSponsorProgramById),
     }
@@ -155,6 +181,29 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
 pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &QueryWithParams) {
     let any = query_with_params.query.erased_as_any();
 
+    // Some iterable queries intentionally return the same item type. Their
+    // erased wrapper therefore cannot be dispatched by `TypeId` alone. Use the
+    // preserved, canonical concrete-query payload before falling back to the
+    // unparameterized query for that result type.
+    if let Some(query) = any.downcast_ref::<query_mod::ErasedIterQuery<crate::account::Account>>() {
+        if payload_is_exact_query::<query_mod::account::FindAccountsWithAsset>(query.payload()) {
+            return visitor.visit_find_accounts_with_asset(query);
+        }
+        if payload_is_exact_query::<query_mod::account::FindAccounts>(query.payload()) {
+            return visitor.visit_find_accounts(query);
+        }
+        return;
+    }
+    if let Some(query) = any.downcast_ref::<query_mod::ErasedIterQuery<crate::role::RoleId>>() {
+        if payload_is_exact_query::<query_mod::role::FindRolesByAccountId>(query.payload()) {
+            return visitor.visit_find_roles_by_account_id(query);
+        }
+        if payload_is_exact_query::<query_mod::role::FindRoleIds>(query.payload()) {
+            return visitor.visit_find_role_ids(query);
+        }
+        return;
+    }
+
     macro_rules! try_visit_erased {
         ($($item:ty => $method:ident),+ $(,)?) => {
             $(
@@ -167,15 +216,11 @@ pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &
 
     try_visit_erased! {
         crate::domain::Domain => visit_find_domains,
-        crate::account::Account => visit_find_accounts,
         crate::asset::value::Asset => visit_find_assets,
         crate::asset::definition::AssetDefinition => visit_find_assets_definitions,
         crate::nft::Nft => visit_find_nfts,
         crate::role::Role => visit_find_roles,
-        crate::role::RoleId => visit_find_role_ids,
         crate::permission::Permission => visit_find_permissions_by_account_id,
-        crate::role::RoleId => visit_find_roles_by_account_id,
-        crate::account::Account => visit_find_accounts_with_asset,
         crate::peer::PeerId => visit_find_peers,
         crate::trigger::TriggerId => visit_find_active_trigger_ids,
         crate::trigger::Trigger => visit_find_triggers,
@@ -194,10 +239,128 @@ pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &
 }
 
 #[cfg(feature = "fast_dsl")]
-/// No-op iterable visitor used when the fast DSL omits query payloads.
-pub fn visit_iter_query<V: Visit + ?Sized>(_visitor: &mut V, _query_with_params: &QueryWithParams) {
-    // In fast DSL mode, the iterable query payload is not carried in `QueryWithParams`.
-    // We cannot perform type-based dispatch here, so this is a no-op.
+/// Reconstruct and dispatch an iterable query from its fast-DSL components.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exhaustive fast-DSL query inventory stays together so new item kinds cannot silently restore no-op dispatch"
+)]
+pub fn visit_iter_query<V: Visit + ?Sized>(visitor: &mut V, query_with_params: &QueryWithParams) {
+    let Some((item, predicate_bytes, selector_bytes, query_payload)) =
+        query_with_params.fast_dsl_parts()
+    else {
+        return;
+    };
+
+    macro_rules! visit_erased {
+        ($item:ty, $method:ident) => {{
+            let Some(predicate) =
+                decode_exact::<query_mod::dsl::CompoundPredicate<$item>>(predicate_bytes)
+            else {
+                return;
+            };
+            let Some(selector) =
+                decode_exact::<query_mod::dsl::SelectorTuple<$item>>(selector_bytes)
+            else {
+                return;
+            };
+            let query = query_mod::ErasedIterQuery::<$item>::new(
+                predicate,
+                selector,
+                query_payload.to_vec(),
+            );
+            visitor.$method(&query);
+        }};
+    }
+
+    match item {
+        query_mod::QueryItemKind::Domain => {
+            visit_erased!(crate::domain::Domain, visit_find_domains)
+        }
+        query_mod::QueryItemKind::Account => {
+            if payload_is_exact_query::<query_mod::account::FindAccountsWithAsset>(query_payload) {
+                visit_erased!(crate::account::Account, visit_find_accounts_with_asset)
+            } else if payload_is_exact_query::<query_mod::account::FindAccounts>(query_payload) {
+                visit_erased!(crate::account::Account, visit_find_accounts)
+            }
+        }
+        query_mod::QueryItemKind::Asset => {
+            visit_erased!(crate::asset::value::Asset, visit_find_assets)
+        }
+        query_mod::QueryItemKind::AssetDefinition => visit_erased!(
+            crate::asset::definition::AssetDefinition,
+            visit_find_assets_definitions
+        ),
+        query_mod::QueryItemKind::Nft => visit_erased!(crate::nft::Nft, visit_find_nfts),
+        query_mod::QueryItemKind::Role => visit_erased!(crate::role::Role, visit_find_roles),
+        query_mod::QueryItemKind::RoleId => {
+            if payload_is_exact_query::<query_mod::role::FindRolesByAccountId>(query_payload) {
+                visit_erased!(crate::role::RoleId, visit_find_roles_by_account_id)
+            } else if payload_is_exact_query::<query_mod::role::FindRoleIds>(query_payload) {
+                visit_erased!(crate::role::RoleId, visit_find_role_ids)
+            }
+        }
+        query_mod::QueryItemKind::Permission => visit_erased!(
+            crate::permission::Permission,
+            visit_find_permissions_by_account_id
+        ),
+        query_mod::QueryItemKind::PeerId => {
+            visit_erased!(crate::peer::PeerId, visit_find_peers)
+        }
+        query_mod::QueryItemKind::TriggerId => {
+            visit_erased!(crate::trigger::TriggerId, visit_find_active_trigger_ids)
+        }
+        query_mod::QueryItemKind::Trigger => {
+            visit_erased!(crate::trigger::Trigger, visit_find_triggers)
+        }
+        query_mod::QueryItemKind::OracleFeedConfig => {
+            visit_erased!(crate::oracle::FeedConfig, visit_find_oracle_feeds)
+        }
+        query_mod::QueryItemKind::OracleFeedEventRecord => visit_erased!(
+            crate::events::data::oracle::FeedEventRecord,
+            visit_find_oracle_history_by_feed_id
+        ),
+        query_mod::QueryItemKind::OracleProviderStatsRecord => visit_erased!(
+            crate::oracle::OracleProviderStatsRecord,
+            visit_find_oracle_provider_stats_by_feed_id
+        ),
+        query_mod::QueryItemKind::OracleDispute => {
+            visit_erased!(crate::oracle::OracleDispute, visit_find_oracle_disputes)
+        }
+        query_mod::QueryItemKind::OracleChangeProposal => visit_erased!(
+            crate::oracle::OracleChangeProposal,
+            visit_find_oracle_changes
+        ),
+        query_mod::QueryItemKind::TwitterBindingRecord => visit_erased!(
+            crate::oracle::TwitterBindingRecord,
+            visit_find_twitter_bindings_by_uaid
+        ),
+        query_mod::QueryItemKind::CommittedTransaction => {
+            visit_erased!(crate::query::CommittedTransaction, visit_find_transactions)
+        }
+        query_mod::QueryItemKind::SignedBlock => {
+            visit_erased!(crate::block::SignedBlock, visit_find_blocks)
+        }
+        query_mod::QueryItemKind::BlockHeader => {
+            visit_erased!(crate::block::BlockHeader, visit_find_block_headers)
+        }
+        query_mod::QueryItemKind::FeeSponsorProgram => visit_erased!(
+            crate::nexus::FeeSponsorProgram,
+            visit_find_fee_sponsor_programs
+        ),
+        query_mod::QueryItemKind::FeeSponsorProgramId => visit_erased!(
+            crate::nexus::FeeSponsorProgramId,
+            visit_find_fee_sponsor_program_ids
+        ),
+        // These item kinds have no visitor hook in `Visit`. Keep this match
+        // exhaustive so adding a new query item cannot silently restore the
+        // former fast-DSL no-op behavior.
+        query_mod::QueryItemKind::AccountId
+        | query_mod::QueryItemKind::RepoAgreement
+        | query_mod::QueryItemKind::Rwa
+        | query_mod::QueryItemKind::ProofRecord
+        | query_mod::QueryItemKind::DefiOracleAttestation
+        | query_mod::QueryItemKind::AssetEscrowRecord => {}
+    }
 }
 
 /// Dispatch a query wrapper to either singular or iterable handlers.
@@ -428,20 +591,38 @@ macro_rules! query_visitors {
             visit_find_dataspace_name_owner_by_id(
                 &$crate::query::sns::prelude::FindDataspaceNameOwnerById
             ),
-            visit_find_musubi_release_by_ref(
-                &$crate::query::musubi::prelude::FindMusubiReleaseByRef
+            visit_find_musubi_exact_package_v1(
+                &$crate::query::musubi::prelude::FindMusubiExactPackageV1
             ),
-            visit_find_musubi_package_versions(
-                &$crate::query::musubi::prelude::FindMusubiPackageVersions
+            visit_find_musubi_exact_release_v1(
+                &$crate::query::musubi::prelude::FindMusubiExactReleaseV1
             ),
-            visit_find_musubi_package_releases(
-                &$crate::query::musubi::prelude::FindMusubiPackageReleases
+            visit_find_musubi_provider_bundle_attestation_v1(
+                &$crate::query::musubi::prelude::FindMusubiProviderBundleAttestationV1
             ),
-            visit_search_musubi_packages(
-                &$crate::query::musubi::prelude::SearchMusubiPackages
+            visit_find_musubi_resolver_index_v1(
+                &$crate::query::musubi::prelude::FindMusubiResolverIndexV1
             ),
-            visit_find_musubi_short_alias_by_name(
-                &$crate::query::musubi::prelude::FindMusubiShortAliasByName
+            visit_find_musubi_versions_v1(
+                &$crate::query::musubi::prelude::FindMusubiVersionsV1
+            ),
+            visit_find_musubi_maintainers_v1(
+                &$crate::query::musubi::prelude::FindMusubiMaintainersV1
+            ),
+            visit_find_musubi_archive_locations_v1(
+                &$crate::query::musubi::prelude::FindMusubiArchiveLocationsV1
+            ),
+            visit_find_musubi_archive_retention_v1(
+                &$crate::query::musubi::prelude::FindMusubiArchiveRetentionV1
+            ),
+            visit_find_musubi_alias_v1(
+                &$crate::query::musubi::prelude::FindMusubiAliasV1
+            ),
+            visit_find_musubi_alias_history_v1(
+                &$crate::query::musubi::prelude::FindMusubiAliasHistoryV1
+            ),
+            visit_find_musubi_ordered_prefix_v1(
+                &$crate::query::musubi::prelude::FindMusubiOrderedPrefixV1
             ),
             visit_find_domain_by_id(&$crate::query::domain::FindDomainById),
             visit_find_fee_sponsor_program_by_id(
@@ -486,7 +667,7 @@ macro_rules! define_query_visitors {
 
 query_visitors!(define_query_visitors);
 
-#[cfg(all(test, not(feature = "fast_dsl")))]
+#[cfg(test)]
 mod tests {
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
@@ -494,10 +675,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{
-        QueryWithFilter, asset::AssetId, prelude::*, query as query_mod,
-        query::parameters::QueryParams,
-    };
+    use crate::{asset::AssetId, prelude::*, query as query_mod, query::parameters::QueryParams};
 
     fn reset_singular_query_fallback_guard() {
         SINGULAR_QUERY_FALLBACK_HIT.store(false, Ordering::Relaxed);
@@ -530,7 +708,6 @@ mod tests {
             SingularQueryBox::FindAssetDefinitionById(_) => {}
             SingularQueryBox::FindNftById(_) => {}
             SingularQueryBox::FindAssetEscrowById(_) => {}
-            SingularQueryBox::FindAnonymousAssetEscrowById(_) => {}
             SingularQueryBox::FindTriggerById(_) => {}
             SingularQueryBox::FindOracleFeedById(_) => {}
             SingularQueryBox::FindOracleDisputeById(_) => {}
@@ -594,11 +771,17 @@ mod tests {
             SingularQueryBox::FindSorafsModerationSnapshot(_) => {}
             SingularQueryBox::FindSorafsModerationEvents(_) => {}
             SingularQueryBox::FindDataspaceNameOwnerById(_) => {}
-            SingularQueryBox::FindMusubiReleaseByRef(_) => {}
-            SingularQueryBox::FindMusubiPackageVersions(_) => {}
-            SingularQueryBox::FindMusubiPackageReleases(_) => {}
-            SingularQueryBox::SearchMusubiPackages(_) => {}
-            SingularQueryBox::FindMusubiShortAliasByName(_) => {}
+            SingularQueryBox::FindMusubiExactPackageV1(_) => {}
+            SingularQueryBox::FindMusubiExactReleaseV1(_) => {}
+            SingularQueryBox::FindMusubiProviderBundleAttestationV1(_) => {}
+            SingularQueryBox::FindMusubiResolverIndexV1(_) => {}
+            SingularQueryBox::FindMusubiVersionsV1(_) => {}
+            SingularQueryBox::FindMusubiMaintainersV1(_) => {}
+            SingularQueryBox::FindMusubiArchiveLocationsV1(_) => {}
+            SingularQueryBox::FindMusubiArchiveRetentionV1(_) => {}
+            SingularQueryBox::FindMusubiAliasV1(_) => {}
+            SingularQueryBox::FindMusubiAliasHistoryV1(_) => {}
+            SingularQueryBox::FindMusubiOrderedPrefixV1(_) => {}
             SingularQueryBox::FindDomainById(_) => {}
             SingularQueryBox::FindFeeSponsorProgramById(_) => {}
             SingularQueryBox::FindFxCorridorPolicyRegistry(_) => {}
@@ -614,6 +797,8 @@ mod tests {
     struct CountingVisitor {
         params: usize,
         domains: usize,
+        roles_by_account: usize,
+        accounts_with_asset: usize,
     }
 
     impl Visit for CountingVisitor {
@@ -624,19 +809,212 @@ mod tests {
         fn visit_find_domains(&mut self, _: &query_mod::ErasedIterQuery<crate::domain::Domain>) {
             self.domains += 1;
         }
+
+        fn visit_find_roles_by_account_id(
+            &mut self,
+            _: &query_mod::ErasedIterQuery<crate::role::RoleId>,
+        ) {
+            self.roles_by_account += 1;
+        }
+
+        fn visit_find_accounts_with_asset(
+            &mut self,
+            _: &query_mod::ErasedIterQuery<crate::account::Account>,
+        ) {
+            self.accounts_with_asset += 1;
+        }
     }
 
     struct NoopVisitor;
 
     impl Visit for NoopVisitor {}
 
+    #[derive(Default)]
+    struct MusubiVisitor {
+        seen: [bool; 11],
+    }
+
+    impl Visit for MusubiVisitor {
+        fn visit_find_musubi_exact_package_v1(
+            &mut self,
+            _: &query_mod::musubi::FindMusubiExactPackageV1,
+        ) {
+            self.seen[0] = true;
+        }
+
+        fn visit_find_musubi_exact_release_v1(
+            &mut self,
+            _: &query_mod::musubi::FindMusubiExactReleaseV1,
+        ) {
+            self.seen[1] = true;
+        }
+
+        fn visit_find_musubi_provider_bundle_attestation_v1(
+            &mut self,
+            _: &query_mod::musubi::FindMusubiProviderBundleAttestationV1,
+        ) {
+            self.seen[10] = true;
+        }
+
+        fn visit_find_musubi_resolver_index_v1(
+            &mut self,
+            _: &query_mod::musubi::FindMusubiResolverIndexV1,
+        ) {
+            self.seen[2] = true;
+        }
+
+        fn visit_find_musubi_versions_v1(&mut self, _: &query_mod::musubi::FindMusubiVersionsV1) {
+            self.seen[3] = true;
+        }
+
+        fn visit_find_musubi_maintainers_v1(
+            &mut self,
+            _: &query_mod::musubi::FindMusubiMaintainersV1,
+        ) {
+            self.seen[4] = true;
+        }
+
+        fn visit_find_musubi_archive_locations_v1(
+            &mut self,
+            _: &query_mod::musubi::FindMusubiArchiveLocationsV1,
+        ) {
+            self.seen[5] = true;
+        }
+
+        fn visit_find_musubi_archive_retention_v1(
+            &mut self,
+            _: &query_mod::musubi::FindMusubiArchiveRetentionV1,
+        ) {
+            self.seen[6] = true;
+        }
+
+        fn visit_find_musubi_alias_v1(&mut self, _: &query_mod::musubi::FindMusubiAliasV1) {
+            self.seen[7] = true;
+        }
+
+        fn visit_find_musubi_alias_history_v1(
+            &mut self,
+            _: &query_mod::musubi::FindMusubiAliasHistoryV1,
+        ) {
+            self.seen[8] = true;
+        }
+
+        fn visit_find_musubi_ordered_prefix_v1(
+            &mut self,
+            _: &query_mod::musubi::FindMusubiOrderedPrefixV1,
+        ) {
+            self.seen[9] = true;
+        }
+    }
+
+    fn musubi_v1_singular_queries() -> Vec<SingularQueryBox> {
+        use crate::musubi::{
+            ArchiveId, MusubiAliasNameV1, MusubiAliasQueryV1, MusubiArchiveLocationQueryV1,
+            MusubiArchiveRetentionQueryV1, MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1,
+            MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1, MusubiPackageIdV1,
+            MusubiPackageNameV1, MusubiPackagePageQueryV1, MusubiPackageScopeV1,
+            MusubiPageRequestV1, MusubiProviderBundleAttestationKeyV1, MusubiReleaseIdV1,
+            MusubiResolverIndexQueryV1, MusubiVersionV1,
+        };
+
+        let package = MusubiPackageIdV1::new(
+            DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            MusubiPackageNameV1::new("ledger-tools").expect("package name"),
+        );
+        let release = MusubiReleaseIdV1::new(
+            package.clone(),
+            "1.2.3".parse::<MusubiVersionV1>().expect("version"),
+        );
+        let alias = "ledger".parse::<MusubiAliasNameV1>().expect("alias");
+        let page = || MusubiPageRequestV1 {
+            limit: 50,
+            cursor: None,
+        };
+
+        vec![
+            query_mod::musubi::FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
+                package: package.clone(),
+            })
+            .into(),
+            query_mod::musubi::FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 { release })
+                .into(),
+            query_mod::musubi::FindMusubiProviderBundleAttestationV1::new(
+                MusubiProviderBundleAttestationKeyV1 {
+                    archive_id: ArchiveId::new([0xA4; 32]),
+                    replication_order: crate::sorafs::pin_registry::ReplicationOrderId::new(
+                        [0xA5; 32],
+                    ),
+                    provider_id: crate::sorafs::capacity::ProviderId::new([0xA6; 32]),
+                },
+            )
+            .into(),
+            query_mod::musubi::FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
+                package: package.clone(),
+                requirement: None,
+                page: page(),
+            })
+            .into(),
+            query_mod::musubi::FindMusubiVersionsV1::new(MusubiPackagePageQueryV1 {
+                package: package.clone(),
+                page: page(),
+            })
+            .into(),
+            query_mod::musubi::FindMusubiMaintainersV1::new(MusubiPackagePageQueryV1 {
+                package,
+                page: page(),
+            })
+            .into(),
+            query_mod::musubi::FindMusubiArchiveLocationsV1::new(MusubiArchiveLocationQueryV1 {
+                archive_id: ArchiveId::new([0xA5; 32]),
+                page: page(),
+            })
+            .into(),
+            query_mod::musubi::FindMusubiArchiveRetentionV1::new(MusubiArchiveRetentionQueryV1 {
+                archive_ids: vec![ArchiveId::new([0xA5; 32])],
+                expected_snapshot: None,
+            })
+            .into(),
+            query_mod::musubi::FindMusubiAliasV1::new(MusubiAliasQueryV1 {
+                alias: alias.clone(),
+                page: page(),
+            })
+            .into(),
+            query_mod::musubi::FindMusubiAliasHistoryV1::new(MusubiAliasQueryV1 {
+                alias,
+                page: page(),
+            })
+            .into(),
+            query_mod::musubi::FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
+                prefix: MusubiOrderedPrefixV1::new("sora/").expect("ordered prefix"),
+                page: page(),
+            })
+            .into(),
+        ]
+    }
+
     const ALICE_ACCOUNT_ID_STR: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
+
+    fn query_with_default_params(
+        query: QueryBox<query_mod::QueryOutputBatchBox>,
+    ) -> QueryWithParams {
+        #[cfg(feature = "fast_dsl")]
+        {
+            QueryWithParams::new(&query, QueryParams::default())
+        }
+        #[cfg(not(feature = "fast_dsl"))]
+        {
+            QueryWithParams::new(query, QueryParams::default())
+        }
+    }
 
     #[test]
     fn visit_find_parameters_dispatches() {
         let mut visitor = CountingVisitor {
             params: 0,
             domains: 0,
+            roles_by_account: 0,
+            accounts_with_asset: 0,
         };
         let query = AnyQueryBox::Singular(SingularQueryBox::FindParameters(FindParameters));
         visit_query(&mut visitor, &query);
@@ -644,25 +1022,105 @@ mod tests {
     }
 
     #[test]
+    fn musubi_v1_singular_query_inventory_dispatches_every_typed_hook() {
+        let queries = musubi_v1_singular_queries();
+        assert_eq!(queries.len(), 11);
+
+        let mut visitor = MusubiVisitor::default();
+        for query in &queries {
+            assert_singular_query_variant(query);
+            visit_singular_query(&mut visitor, query);
+        }
+
+        assert_eq!(visitor.seen, [true; 11]);
+    }
+
+    #[test]
     fn visit_find_domains_dispatches() {
         let mut visitor = CountingVisitor {
             params: 0,
             domains: 0,
+            roles_by_account: 0,
+            accounts_with_asset: 0,
         };
-        let query = AnyQueryBox::Iterable(QueryWithParams::new(
-            {
-                let with_filter = QueryWithFilter::new(
-                    Box::new(FindDomains),
-                    CompoundPredicate::<crate::domain::Domain>::PASS,
-                    SelectorTuple::<crate::domain::Domain>::default(),
-                );
-                let boxed: QueryBox<_> = with_filter.into();
-                boxed
-            },
-            QueryParams::default(),
-        ));
+        let boxed: QueryBox<query_mod::QueryOutputBatchBox> =
+            Box::new(query_mod::ErasedIterQuery::<crate::domain::Domain>::new(
+                CompoundPredicate::<crate::domain::Domain>::PASS,
+                SelectorTuple::<crate::domain::Domain>::default(),
+                norito::codec::Encode::encode(&FindDomains),
+            ));
+        let query = AnyQueryBox::Iterable(query_with_default_params(boxed));
         visit_query(&mut visitor, &query);
         assert_eq!(visitor.domains, 1);
+    }
+
+    #[test]
+    fn visit_parameterized_iterable_queries_dispatches_distinct_policy_hooks() {
+        let account_id = AccountId::parse_encoded(ALICE_ACCOUNT_ID_STR)
+            .map(crate::account::ParsedAccountId::into_account_id)
+            .expect("valid account id");
+        let asset_definition = crate::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("valid domain id"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let roles_payload = norito::codec::Encode::encode(&query_mod::role::FindRolesByAccountId {
+            id: account_id,
+        });
+        let accounts_payload =
+            norito::codec::Encode::encode(&query_mod::account::FindAccountsWithAsset {
+                asset_definition,
+            });
+        let roles = AnyQueryBox::Iterable(query_with_default_params(Box::new(
+            query_mod::ErasedIterQuery::<crate::role::RoleId>::new(
+                CompoundPredicate::PASS,
+                SelectorTuple::default(),
+                roles_payload,
+            ),
+        )));
+        let accounts = AnyQueryBox::Iterable(query_with_default_params(Box::new(
+            query_mod::ErasedIterQuery::<crate::account::Account>::new(
+                CompoundPredicate::PASS,
+                SelectorTuple::default(),
+                accounts_payload,
+            ),
+        )));
+        let mut visitor = CountingVisitor {
+            params: 0,
+            domains: 0,
+            roles_by_account: 0,
+            accounts_with_asset: 0,
+        };
+
+        visit_query(&mut visitor, &roles);
+        visit_query(&mut visitor, &accounts);
+
+        assert_eq!(visitor.roles_by_account, 1);
+        assert_eq!(visitor.accounts_with_asset, 1);
+    }
+
+    #[cfg(feature = "fast_dsl")]
+    #[test]
+    fn fast_dsl_iterable_visitor_rejects_noncanonical_components() {
+        let query = AnyQueryBox::Iterable(QueryWithParams {
+            query: (),
+            query_payload: norito::codec::Encode::encode(&query_mod::domain::FindDomains),
+            item: query_mod::QueryItemKind::Domain,
+            predicate_bytes: vec![0xFF; 4],
+            selector_bytes: norito::codec::Encode::encode(
+                &SelectorTuple::<crate::domain::Domain>::default(),
+            ),
+            params: QueryParams::default(),
+        });
+        let mut visitor = CountingVisitor {
+            params: 0,
+            domains: 0,
+            roles_by_account: 0,
+            accounts_with_asset: 0,
+        };
+
+        visit_query(&mut visitor, &query);
+
+        assert_eq!(visitor.domains, 0);
     }
 
     #[test]
@@ -680,7 +1138,7 @@ mod tests {
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("valid account id");
         let asset_definition: crate::asset::AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );

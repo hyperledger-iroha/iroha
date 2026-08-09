@@ -306,7 +306,7 @@ mod tests {
         let seed = [0x66; 32];
         let signed = sign_artifact(
             &record,
-            "testu123",
+            "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             &seed,
             DEFAULT_PATH,
             Some("http://127.0.0.1:8080"),

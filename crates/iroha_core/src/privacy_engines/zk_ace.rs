@@ -519,7 +519,7 @@ mod tests {
     }
 
     fn asset() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("test domain"),
             Name::from_str("zkace").expect("test asset"),
         )
@@ -554,6 +554,7 @@ mod tests {
             source: account(1),
             destination: account(2),
             asset_definition_id: asset(),
+            public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
             amount: 19,
             authorization_epoch: 7,
             replay_nullifier: PrivacyNullifierV1::new([0; 32]),
@@ -753,7 +754,7 @@ mod tests {
             |value| value.statement.source = account(3),
             |value| value.statement.destination = account(4),
             |value| {
-                value.statement.asset_definition_id = AssetDefinitionId::new(
+                value.statement.asset_definition_id = AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("test domain"),
                     Name::from_str("other").expect("other asset"),
                 );

@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import time
+import unicodedata
 from dataclasses import asdict, dataclass, field, is_dataclass
 from decimal import Decimal
 from enum import Enum
@@ -178,6 +179,7 @@ from iroha_torii_client.client import (
 from iroha_torii_client.client import (
     ToriiClient as _BaseToriiClient,
 )
+from iroha_torii_client.client_status_models import parse_sumeragi_json_object
 from iroha_torii_client.native_amx import (
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
@@ -192,6 +194,13 @@ from ._privacy_backends import (
 )
 from .address import AccountAddress, AccountAddressError, normalize_i105_discriminant
 from .connect import ConnectSessionInfo
+from .connect_models import (
+    ConnectAdmissionManifest,
+    ConnectAdmissionManifestEntry,
+    ConnectAppPolicyControls,
+    ConnectAppRecord,
+    ConnectAppRegistryPage,
+)
 from .dataspaces import (
     DataspacePlan,
     DataspaceSpec,
@@ -232,6 +241,9 @@ from .sorafs import (
 from .sorafs_hedging_billing import (
     encode_sorafs_billing_acknowledgement_proof_v1,
 )
+from .sorafs_por import normalize_cursor as _normalize_sorafs_por_cursor
+from .stream_events import EventCursor, SseEvent, SseStreamError, WebSocketEvent
+from .torii_client_streaming_query import create_torii_client_streaming_query_mixin
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
@@ -352,6 +364,32 @@ def _require_exact_non_empty_string(value: Any, context: str) -> str:
     if trimmed != value:
         raise ValueError(f"{context} must not contain surrounding whitespace")
     return value
+
+
+def _require_exact_token_string(value: Any, context: str) -> str:
+    exact = _require_exact_non_empty_string(value, context)
+    if any(char.isspace() or unicodedata.category(char) == "Cc" for char in exact):
+        raise ValueError(f"{context} must not contain whitespace or control characters")
+    return exact
+
+
+def _require_governance_selector_string(value: Any, context: str) -> str:
+    exact = _require_exact_token_string(value, context)
+    if re.fullmatch(r"[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,127}", exact) is None:
+        raise ValueError(
+            f"{context} must be 1-128 RFC 3986 unreserved ASCII characters "
+            "and must not start with a dot"
+        )
+    return exact
+
+
+def _require_governance_proposal_id(value: Any, context: str) -> str:
+    proposal_id = _require_exact_token_string(value, context)
+    if re.fullmatch(r"[0-9a-f]{64}", proposal_id) is None:
+        raise ValueError(
+            f"{context} must be exactly 64 lowercase hexadecimal characters"
+        )
+    return proposal_id
 
 
 def _normalize_optional_exact_string(value: Any, context: str) -> Optional[str]:
@@ -903,16 +941,6 @@ def _dedupe_strings(values: Iterable[str]) -> List[str]:
         if value not in deduped:
             deduped.append(value)
     return deduped
-
-
-def _response_text(response: requests.Response) -> str:
-    return response.text.strip() if response.text else ""
-
-
-def _response_has_network_prefix_error(response: requests.Response) -> bool:
-    return response.status_code == 400 and "ERR_UNEXPECTED_NETWORK_PREFIX" in _response_text(
-        response
-    )
 
 
 def _extract_page_items(payload: Any) -> List[Mapping[str, Any]]:
@@ -1636,6 +1664,9 @@ def _normalize_sorafs_reputation_provider_id(value: Any, context: str) -> str:
 _SORAFS_REPUTATION_RESPONSE_MAX_BYTES = 4_194_304
 _SORAFS_REPUTATION_SSE_MAX_EVENT_BYTES = 65_536
 _SORAFS_REPUTATION_U64_MAX = (1 << 64) - 1
+_SORAFS_POR_PAGE_DEFAULT_LIMIT = 100
+_SORAFS_POR_PAGE_MAX_LIMIT = 1_000
+_SORAFS_POR_PAGE_MAX_BYTES = 4_194_304
 _SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES = 1_048_576
 _SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES = 23_068_672
 _SORAFS_REPUTATION_SNAPSHOT_FIELDS = frozenset(
@@ -2766,6 +2797,196 @@ def _normalize_required_base64_payload(value: Any, context: str) -> str:
     return base64.b64encode(decoded).decode("ascii")
 
 
+_GOVERNANCE_PRIVATE_KEY_FIELDS = frozenset(
+    {
+        "private_key",
+        "privateKey",
+        "private_key_hex",
+        "privateKeyHex",
+        "private_key_bytes",
+        "privateKeyBytes",
+        "private_key_seed",
+        "privateKeySeed",
+        "private_key_multihash",
+        "privateKeyMultihash",
+        "private_key_algorithm",
+        "privateKeyAlgorithm",
+    }
+)
+
+_GOVERNANCE_DEPLOY_CONTRACT_FIELDS = frozenset(
+    {
+        "contract_address",
+        "contract_alias",
+        "abi_version",
+        "code_hash",
+        "abi_hash",
+        "window",
+        "mode",
+        "manifest_provenance",
+    }
+)
+_GOVERNANCE_WINDOW_FIELDS = frozenset({"lower", "upper"})
+_GOVERNANCE_MANIFEST_PROVENANCE_FIELDS = frozenset({"signer", "signature"})
+_GOVERNANCE_PLAIN_BALLOT_FIELDS = frozenset(
+    {
+        "authority",
+        "chain_id",
+        "referendum_id",
+        "owner",
+        "amount",
+        "duration_blocks",
+        "direction",
+    }
+)
+_GOVERNANCE_PARLIAMENT_BALLOT_FIELDS = frozenset(
+    {"authority", "chain_id", "proposal_id", "body", "decision"}
+)
+_GOVERNANCE_ZK_BALLOT_V1_FIELDS = frozenset(
+    {
+        "authority",
+        "chain_id",
+        "election_id",
+        "backend",
+        "envelope_b64",
+        "root_hint",
+        "owner",
+        "amount",
+        "duration_blocks",
+        "direction",
+        "nullifier",
+    }
+)
+_GOVERNANCE_ZK_BALLOT_PROOF_V1_FIELDS = frozenset(
+    {"authority", "chain_id", "election_id", "ballot"}
+)
+_GOVERNANCE_BALLOT_PROOF_FIELDS = frozenset(
+    {
+        "backend",
+        "envelope_bytes",
+        "root_hint",
+        "owner",
+        "nullifier",
+        "amount",
+        "duration_blocks",
+        "direction",
+    }
+)
+_GOVERNANCE_FINALIZE_FIELDS = frozenset({"referendum_id", "proposal_id"})
+_GOVERNANCE_ENACT_FIELDS = frozenset({"proposal_id"})
+_GOVERNANCE_PARLIAMENT_BODIES = frozenset(
+    {
+        "rules-committee",
+        "agenda-council",
+        "interest-panel",
+        "review-panel",
+        "policy-jury",
+        "oversight-committee",
+        "fma-committee",
+    }
+)
+_GOVERNANCE_PARLIAMENT_DECISIONS = frozenset({"approve", "reject", "abstain"})
+_GOVERNANCE_BALLOT_DIRECTIONS = frozenset({"Aye", "Nay", "Abstain"})
+
+
+def _reject_governance_private_key_fields(
+    payload: Any,
+    *,
+    context: str,
+) -> None:
+    pending: list[tuple[Any, str]] = [(payload, context)]
+    visited: set[int] = set()
+    while pending:
+        candidate, path = pending.pop()
+        if isinstance(candidate, Mapping):
+            identity = id(candidate)
+            if identity in visited:
+                continue
+            visited.add(identity)
+            fields = sorted(
+                key
+                for key in candidate
+                if isinstance(key, str) and key in _GOVERNANCE_PRIVATE_KEY_FIELDS
+            )
+            if fields:
+                raise ValueError(
+                    f"{path} does not accept private-key fields ({', '.join(fields)}); "
+                    "sign the returned transaction draft locally"
+                )
+            pending.extend(
+                (nested, f"{path}.{key}") for key, nested in candidate.items()
+            )
+        elif isinstance(candidate, (list, tuple)):
+            identity = id(candidate)
+            if identity in visited:
+                continue
+            visited.add(identity)
+            pending.extend(
+                (nested, f"{path}[{index}]")
+                for index, nested in enumerate(candidate)
+            )
+
+
+def _copy_exact_governance_payload(
+    payload: Mapping[str, Any],
+    supported_fields: frozenset[str],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = _require_mapping(payload, context)
+    _reject_governance_private_key_fields(record, context=context)
+    if any(not isinstance(key, str) for key in record):
+        raise TypeError(f"{context} field names must be strings")
+    unknown = sorted(set(record).difference(supported_fields))
+    if unknown:
+        raise ValueError(f"{context} contains unknown field `{unknown[0]}`")
+    return dict(record)
+
+
+def _normalize_governance_manifest_provenance(
+    value: Any,
+    *,
+    context: str,
+) -> Dict[str, str]:
+    record = _copy_exact_governance_payload(
+        value,
+        _GOVERNANCE_MANIFEST_PROVENANCE_FIELDS,
+        context=context,
+    )
+    missing = sorted(_GOVERNANCE_MANIFEST_PROVENANCE_FIELDS.difference(record))
+    if missing:
+        raise ValueError(f"{context} is missing required field `{missing[0]}`")
+    return {
+        field: _require_exact_non_empty_string(record[field], f"{context}.{field}")
+        for field in ("signer", "signature")
+    }
+
+
+def _normalize_governance_u64_integer(value: Any, *, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{context} must be a JSON u64 integer")
+    if value < 0 or value > (1 << 64) - 1:
+        raise ValueError(f"{context} must fit in a u64")
+    return value
+
+
+def _normalize_governance_ballot_direction(
+    value: Any,
+    *,
+    context: str,
+    required: bool = False,
+) -> Optional[str]:
+    if value is None:
+        if required:
+            raise ValueError(f"{context} must be Aye, Nay, or Abstain")
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be Aye, Nay, or Abstain")
+    if value not in _GOVERNANCE_BALLOT_DIRECTIONS:
+        raise ValueError(f"{context} must be Aye, Nay, or Abstain")
+    return value
+
+
 def _reject_governance_public_input_key(
     record: Dict[str, Any],
     key: str,
@@ -2797,12 +3018,12 @@ def _normalize_governance_public_hex_hint(
         return
     if not isinstance(value, str):
         raise ValueError(f"{context}.{key} must be a 32-byte hex string")
-    raw = value.strip()
+    raw = value
     if ":" in raw:
         scheme, rest = raw.split(":", 1)
-        if scheme and scheme.lower() != "blake2b32":
+        if not scheme or scheme.lower() != "blake2b32":
             raise ValueError(f"{context}.{key} must be a 32-byte hex string")
-        raw = rest.strip()
+        raw = rest
     if raw.startswith(("0x", "0X")):
         raw = raw[2:]
     if not re.fullmatch(r"[0-9a-fA-F]{64}", raw):
@@ -2850,86 +3071,137 @@ def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
         raise ValueError(f"{context}.owner must be a canonical I105 account id")
 
 
-def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[str, Any]:
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{context} must be an object")
-    normalized = dict(value)
-    _reject_governance_public_input_key(
-        normalized,
-        "durationBlocks",
-        "duration_blocks",
-        context=context,
-    )
-    _reject_governance_public_input_key(
-        normalized,
-        "root_hint_hex",
-        "root_hint",
-        context=context,
-    )
-    _reject_governance_public_input_key(
-        normalized,
-        "rootHintHex",
-        "root_hint",
-        context=context,
-    )
-    _reject_governance_public_input_key(
-        normalized,
-        "rootHint",
-        "root_hint",
-        context=context,
-    )
-    _reject_governance_public_input_key(
-        normalized,
-        "nullifier_hex",
-        "nullifier",
-        context=context,
-    )
-    _reject_governance_public_input_key(
-        normalized,
-        "nullifierHex",
-        "nullifier",
-        context=context,
-    )
-    _normalize_governance_public_hex_hint(
-        normalized,
-        "root_hint",
-        context=context,
-    )
-    _normalize_governance_public_hex_hint(
-        normalized,
-        "nullifier",
-        context=context,
-    )
-    _ensure_governance_lock_hints_complete(
-        normalized.get("owner"),
-        normalized.get("amount"),
-        normalized.get("duration_blocks"),
-        context=context,
-    )
-    if normalized.get("amount") is not None:
-        normalized["amount"] = _canonical_quantity_text(
-            normalized["amount"],
-            f"{context}.amount",
-        )
-    _ensure_governance_owner_canonical(normalized.get("owner"), context=context)
-    return normalized
-
-
-def _normalize_governance_zk_ballot_payload(
+def _normalize_governance_deploy_contract_payload(
     payload: Mapping[str, Any],
     *,
     context: str,
 ) -> Dict[str, Any]:
-    record = dict(payload)
-    if "public" in record:
-        public_inputs = record.get("public")
-        if public_inputs is None:
-            record.pop("public", None)
-        else:
-            record["public"] = _normalize_governance_zk_public_inputs(
-                public_inputs,
-                context=f"{context}.public",
+    record = _copy_exact_governance_payload(
+        payload,
+        _GOVERNANCE_DEPLOY_CONTRACT_FIELDS,
+        context=context,
+    )
+    contract_address = record.get("contract_address")
+    contract_alias = record.get("contract_alias")
+    if (contract_address is None) == (contract_alias is None):
+        raise ValueError(
+            f"{context} requires exactly one of contract_address or contract_alias"
+        )
+    if contract_address is not None:
+        record["contract_address"] = _require_exact_non_empty_string(
+            contract_address,
+            f"{context}.contract_address",
+        )
+        record.pop("contract_alias", None)
+    else:
+        record["contract_alias"] = _require_exact_non_empty_string(
+            contract_alias,
+            f"{context}.contract_alias",
+        )
+        record.pop("contract_address", None)
+
+    abi_version = _require_exact_non_empty_string(
+        record.get("abi_version"),
+        f"{context}.abi_version",
+    )
+    if abi_version != "1":
+        raise ValueError(f"{context}.abi_version must be 1")
+    record["abi_version"] = abi_version
+    for hash_field in ("code_hash", "abi_hash"):
+        if record.get(hash_field) is None:
+            raise ValueError(f"{context} is missing required field `{hash_field}`")
+        _normalize_governance_public_hex_hint(record, hash_field, context=context)
+
+    if record.get("window") is not None:
+        window = _copy_exact_governance_payload(
+            record["window"],
+            _GOVERNANCE_WINDOW_FIELDS,
+            context=f"{context}.window",
+        )
+        missing = sorted(_GOVERNANCE_WINDOW_FIELDS.difference(window))
+        if missing:
+            raise ValueError(
+                f"{context}.window is missing required field `{missing[0]}`"
             )
+        lower = _normalize_governance_u64_integer(
+            window["lower"],
+            context=f"{context}.window.lower",
+        )
+        upper = _normalize_governance_u64_integer(
+            window["upper"],
+            context=f"{context}.window.upper",
+        )
+        if upper < lower:
+            raise ValueError(f"{context}.window.upper must be at least window.lower")
+        record["window"] = {"lower": lower, "upper": upper}
+    if record.get("mode") is not None:
+        mode = _require_exact_non_empty_string(record["mode"], f"{context}.mode")
+        if mode not in {"Zk", "Plain"}:
+            raise ValueError(f"{context}.mode must be Zk or Plain")
+        record["mode"] = mode
+    if record.get("manifest_provenance") is not None:
+        record["manifest_provenance"] = _normalize_governance_manifest_provenance(
+            record["manifest_provenance"],
+            context=f"{context}.manifest_provenance",
+        )
+    return record
+
+
+def _normalize_governance_u64_decimal(value: Any, context: str) -> str:
+    return _normalize_sorafs_reputation_decimal(
+        value,
+        context,
+        allow_zero=True,
+        maximum=(1 << 64) - 1,
+    )
+
+
+def _normalize_governance_plain_ballot_payload(
+    payload: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = _copy_exact_governance_payload(
+        payload,
+        _GOVERNANCE_PLAIN_BALLOT_FIELDS,
+        context=context,
+    )
+    record["referendum_id"] = _require_governance_selector_string(
+        record.get("referendum_id"),
+        f"{context}.referendum_id",
+    )
+    record["amount"] = _canonical_quantity_text(
+        record.get("amount"),
+        f"{context} amount",
+    )
+    record["duration_blocks"] = _normalize_governance_u64_decimal(
+        record.get("duration_blocks"),
+        f"{context}.duration_blocks",
+    )
+    record["direction"] = _normalize_governance_ballot_direction(
+        record.get("direction"),
+        context=f"{context}.direction",
+        required=True,
+    )
+    return record
+
+
+def _normalize_governance_parliament_ballot_payload(
+    payload: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = _copy_exact_governance_payload(
+        payload,
+        _GOVERNANCE_PARLIAMENT_BALLOT_FIELDS,
+        context=context,
+    )
+    if record.get("body") not in _GOVERNANCE_PARLIAMENT_BODIES:
+        raise ValueError(f"{context}.body must name a canonical Parliament body")
+    if record.get("decision") not in _GOVERNANCE_PARLIAMENT_DECISIONS:
+        raise ValueError(
+            f"{context}.decision must be approve, reject, or abstain"
+        )
     return record
 
 
@@ -2938,6 +3210,9 @@ def _normalize_governance_zk_ballot_v1_payload(
     *,
     context: str,
 ) -> Dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"{context} must be a JSON object")
+    _reject_governance_private_key_fields(payload, context=context)
     record = dict(payload)
     _reject_governance_public_input_key(
         record,
@@ -2974,6 +3249,28 @@ def _normalize_governance_zk_ballot_v1_payload(
         "nullifierHex",
         "nullifier",
         context=context,
+    )
+    record = _copy_exact_governance_payload(
+        record,
+        _GOVERNANCE_ZK_BALLOT_V1_FIELDS,
+        context=context,
+    )
+    for field in ("authority", "chain_id"):
+        record[field] = _require_exact_token_string(
+            record.get(field),
+            f"{context}.{field}",
+        )
+    record["election_id"] = _require_governance_selector_string(
+        record.get("election_id"),
+        f"{context}.election_id",
+    )
+    record["backend"] = _require_exact_token_string(
+        record.get("backend"),
+        f"{context}.backend",
+    )
+    record["envelope_b64"] = _normalize_required_base64_payload(
+        record.get("envelope_b64"),
+        f"{context}.envelope_b64",
     )
     _normalize_governance_public_hex_hint(
         record,
@@ -2997,6 +3294,24 @@ def _normalize_governance_zk_ballot_v1_payload(
             f"{context}.amount",
         )
     _ensure_governance_owner_canonical(record.get("owner"), context=context)
+    if record.get("duration_blocks") is not None:
+        record["duration_blocks"] = int(
+            _normalize_governance_u64_decimal(
+                record["duration_blocks"],
+                f"{context}.duration_blocks",
+            )
+        )
+    elif "duration_blocks" in record:
+        record.pop("duration_blocks")
+    if "direction" in record:
+        direction = _normalize_governance_ballot_direction(
+            record["direction"],
+            context=f"{context}.direction",
+        )
+        if direction is None:
+            record.pop("direction")
+        else:
+            record["direction"] = direction
     return record
 
 
@@ -3005,12 +3320,26 @@ def _normalize_governance_zk_ballot_proof_payload(
     *,
     context: str,
 ) -> Dict[str, Any]:
-    record = dict(payload)
+    record = _copy_exact_governance_payload(
+        payload,
+        _GOVERNANCE_ZK_BALLOT_PROOF_V1_FIELDS,
+        context=context,
+    )
+    for field in ("authority", "chain_id"):
+        record[field] = _require_exact_token_string(
+            record.get(field),
+            f"{context}.{field}",
+        )
+    record["election_id"] = _require_governance_selector_string(
+        record.get("election_id"),
+        f"{context}.election_id",
+    )
     ballot = record.get("ballot")
     if ballot is None:
         raise ValueError(f"{context}.ballot must be provided")
     if not isinstance(ballot, Mapping):
         raise TypeError(f"{context}.ballot must be an object")
+    _reject_governance_private_key_fields(ballot, context=f"{context}.ballot")
     ballot_record = dict(ballot)
     ballot_context = f"{context}.ballot"
     _reject_governance_public_input_key(
@@ -3043,6 +3372,19 @@ def _normalize_governance_zk_ballot_proof_payload(
         "nullifier",
         context=ballot_context,
     )
+    ballot_record = _copy_exact_governance_payload(
+        ballot_record,
+        _GOVERNANCE_BALLOT_PROOF_FIELDS,
+        context=ballot_context,
+    )
+    ballot_record["backend"] = _require_exact_token_string(
+        ballot_record.get("backend"),
+        f"{ballot_context}.backend",
+    )
+    ballot_record["envelope_bytes"] = _normalize_required_base64_payload(
+        ballot_record.get("envelope_bytes"),
+        f"{ballot_context}.envelope_bytes",
+    )
     _normalize_governance_public_hex_hint(
         ballot_record,
         "root_hint",
@@ -3065,7 +3407,68 @@ def _normalize_governance_zk_ballot_proof_payload(
             f"{ballot_context}.amount",
         )
     _ensure_governance_owner_canonical(ballot_record.get("owner"), context=ballot_context)
+    if ballot_record.get("duration_blocks") is not None:
+        ballot_record["duration_blocks"] = int(
+            _normalize_governance_u64_decimal(
+                ballot_record["duration_blocks"],
+                f"{ballot_context}.duration_blocks",
+            )
+        )
+    elif "duration_blocks" in ballot_record:
+        ballot_record.pop("duration_blocks")
+    if "direction" in ballot_record:
+        direction = _normalize_governance_ballot_direction(
+            ballot_record["direction"],
+            context=f"{ballot_context}.direction",
+        )
+        if direction is None:
+            ballot_record.pop("direction")
+        else:
+            ballot_record["direction"] = direction
     record["ballot"] = ballot_record
+    return record
+
+
+def _normalize_governance_finalize_payload(
+    payload: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = _copy_exact_governance_payload(
+        payload,
+        _GOVERNANCE_FINALIZE_FIELDS,
+        context=context,
+    )
+    record["referendum_id"] = _require_governance_proposal_id(
+        record.get("referendum_id"),
+        f"{context}.referendum_id",
+    )
+    record["proposal_id"] = _require_governance_proposal_id(
+        record.get("proposal_id"),
+        f"{context}.proposal_id",
+    )
+    if record["referendum_id"] != record["proposal_id"]:
+        raise ValueError(f"{context}.referendum_id must equal proposal_id")
+    return record
+
+
+def _normalize_governance_enact_payload(
+    payload: Mapping[str, Any],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    record = _copy_exact_governance_payload(
+        payload,
+        _GOVERNANCE_ENACT_FIELDS,
+        context=context,
+    )
+    proposal_id = record.get("proposal_id")
+    if proposal_id is None:
+        raise ValueError(f"{context} is missing required field `proposal_id`")
+    if not isinstance(proposal_id, str) or re.fullmatch(r"[0-9a-f]{64}", proposal_id) is None:
+        raise ValueError(
+            f"{context}.proposal_id must be exactly 64 lowercase hexadecimal characters"
+        )
     return record
 
 
@@ -3075,7 +3478,8 @@ def _build_sorafs_por_status_params(
     epoch: Optional[int],
     status: Optional[str],
     limit: Optional[int],
-    page_token_hex: Optional[str],
+    max_bytes: Optional[int],
+    cursor: Optional[str],
 ) -> Optional[Dict[str, Any]]:
     params: Dict[str, Any] = {}
     if manifest_hex is not None:
@@ -3095,22 +3499,46 @@ def _build_sorafs_por_status_params(
         if not trimmed:
             raise ValueError("sorafs_por_status.status must be non-empty")
         params["status"] = trimmed
-    if limit is not None:
-        params["limit"] = _normalize_positive_int(
-            limit, "sorafs_por_status.limit", allow_zero=False
+    normalized_limit = _normalize_positive_int(
+        _SORAFS_POR_PAGE_DEFAULT_LIMIT if limit is None else limit,
+        "sorafs_por_status.limit",
+        allow_zero=False,
+    )
+    if normalized_limit > _SORAFS_POR_PAGE_MAX_LIMIT:
+        raise ValueError(
+            f"sorafs_por_status.limit must be at most {_SORAFS_POR_PAGE_MAX_LIMIT}"
         )
-    if page_token_hex is not None:
-        params["page_token"] = _normalize_hex_string(
-            page_token_hex, "sorafs_por_status.page_token_hex", expected_length=64
+    params["limit"] = normalized_limit
+    normalized_max_bytes = _normalize_positive_int(
+        _SORAFS_POR_PAGE_MAX_BYTES if max_bytes is None else max_bytes,
+        "sorafs_por_status.max_bytes",
+        allow_zero=False,
+    )
+    if normalized_max_bytes > _SORAFS_POR_PAGE_MAX_BYTES:
+        raise ValueError(
+            f"sorafs_por_status.max_bytes must be at most {_SORAFS_POR_PAGE_MAX_BYTES}"
         )
-    return params or None
+    params["max_bytes"] = normalized_max_bytes
+    if cursor is not None:
+        params["cursor"] = _normalize_sorafs_por_cursor(
+            cursor, "sorafs_por_status.cursor"
+        )
+    return params
 
 
 def _build_sorafs_por_export_params(
     start_epoch: Optional[int],
     end_epoch: Optional[int],
+    limit: Optional[int],
+    max_bytes: Optional[int],
+    cursor: Optional[str],
 ) -> Optional[Dict[str, Any]]:
     params: Dict[str, Any] = {}
+    if (start_epoch is None) != (end_epoch is None):
+        raise ValueError(
+            "sorafs_por_export.start_epoch and sorafs_por_export.end_epoch "
+            "must be supplied together"
+        )
     if start_epoch is not None:
         params["start_epoch"] = _normalize_positive_int(
             start_epoch, "sorafs_por_export.start_epoch", allow_zero=False
@@ -3119,7 +3547,31 @@ def _build_sorafs_por_export_params(
         params["end_epoch"] = _normalize_positive_int(
             end_epoch, "sorafs_por_export.end_epoch", allow_zero=False
         )
-    return params or None
+    normalized_limit = _normalize_positive_int(
+        _SORAFS_POR_PAGE_DEFAULT_LIMIT if limit is None else limit,
+        "sorafs_por_export.limit",
+        allow_zero=False,
+    )
+    if normalized_limit > _SORAFS_POR_PAGE_MAX_LIMIT:
+        raise ValueError(
+            f"sorafs_por_export.limit must be at most {_SORAFS_POR_PAGE_MAX_LIMIT}"
+        )
+    params["limit"] = normalized_limit
+    normalized_max_bytes = _normalize_positive_int(
+        _SORAFS_POR_PAGE_MAX_BYTES if max_bytes is None else max_bytes,
+        "sorafs_por_export.max_bytes",
+        allow_zero=False,
+    )
+    if normalized_max_bytes > _SORAFS_POR_PAGE_MAX_BYTES:
+        raise ValueError(
+            f"sorafs_por_export.max_bytes must be at most {_SORAFS_POR_PAGE_MAX_BYTES}"
+        )
+    params["max_bytes"] = normalized_max_bytes
+    if cursor is not None:
+        params["cursor"] = _normalize_sorafs_por_cursor(
+            cursor, "sorafs_por_export.cursor"
+        )
+    return params
 
 
 _CRYPTO_MODULE: Optional[ModuleType] = None
@@ -3491,45 +3943,80 @@ class ExplorerAccountQrSnapshot:
         )
 
 
-@dataclass(frozen=True)
-class ExplorerPaginationMeta:
-    """Pagination metadata returned by explorer list endpoints."""
+_EXPLORER_CURSOR_MAX_LENGTH = 1_424
+_EXPLORER_CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
-    page: int
-    per_page: int
-    total_pages: int
-    total_items: int
+
+def _normalize_explorer_cursor(value: Any, label: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{label} must be a string")
+    if not value or len(value) > _EXPLORER_CURSOR_MAX_LENGTH:
+        raise ValueError(f"{label} must contain 1..{_EXPLORER_CURSOR_MAX_LENGTH} characters")
+    if _EXPLORER_CURSOR_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{label} must be canonical base64url without padding")
+    padding = "=" * ((4 - len(value) % 4) % 4)
+    try:
+        decoded = base64.b64decode(
+            value + padding,
+            altchars=b"-_",
+            validate=True,
+        )
+    except (binascii.Error, ValueError) as error:
+        raise ValueError(f"{label} must be canonical base64url without padding") from error
+    if base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") != value:
+        raise ValueError(f"{label} must be canonical base64url without padding")
+    return value
+
+
+def _normalize_explorer_limit(value: Any, label: str) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{label} must be an integer")
+    if value < 1 or value > 100:
+        raise ValueError(f"{label} must be between 1 and 100")
+    return value
+
+
+@dataclass(frozen=True)
+class ExplorerCursorMeta:
+    """Strict seek-cursor metadata returned by world-backed Explorer lists."""
+
+    limit: int
+    next_cursor: Optional[str]
+    has_more: bool
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerPaginationMeta":
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerCursorMeta":
         if not isinstance(payload, Mapping):
-            raise TypeError("explorer pagination payload must be an object")
-        page = _coerce_int(payload.get("page"), "explorer_pagination.page")
-        per_page = _coerce_int(payload.get("per_page"), "explorer_pagination.per_page")
-        total_pages = _coerce_int(
-            payload.get("total_pages"),
-            "explorer_pagination.total_pages",
-            allow_zero=True,
+            raise TypeError("explorer cursor pagination payload must be an object")
+        expected = {"limit", "next_cursor", "has_more"}
+        actual = set(payload)
+        if actual != expected:
+            unknown = sorted(str(key) for key in actual - expected)
+            missing = sorted(expected - actual)
+            raise TypeError(
+                "explorer cursor pagination fields must be exactly "
+                f"{sorted(expected)}; missing={missing}, unknown={unknown}"
+            )
+        limit = _normalize_explorer_limit(
+            payload["limit"],
+            "explorer_cursor_pagination.limit",
         )
-        total_items = _coerce_int(
-            payload.get("total_items"),
-            "explorer_pagination.total_items",
-            allow_zero=True,
+        if limit is None:
+            raise TypeError("explorer_cursor_pagination.limit must be an integer")
+        next_cursor = _normalize_explorer_cursor(
+            payload["next_cursor"],
+            "explorer_cursor_pagination.next_cursor",
         )
-        if page is None:
-            raise TypeError("explorer pagination missing numeric `page` field")
-        if per_page is None:
-            raise TypeError("explorer pagination missing numeric `per_page` field")
-        if total_pages is None:
-            raise TypeError("explorer pagination missing numeric `total_pages` field")
-        if total_items is None:
-            raise TypeError("explorer pagination missing numeric `total_items` field")
-        return cls(
-            page=page,
-            per_page=per_page,
-            total_pages=total_pages,
-            total_items=total_items,
-        )
+        has_more = payload["has_more"]
+        if not isinstance(has_more, bool):
+            raise TypeError("explorer_cursor_pagination.has_more must be a boolean")
+        if has_more != (next_cursor is not None):
+            raise ValueError("explorer_cursor_pagination.has_more must match next_cursor presence")
+        return cls(limit=limit, next_cursor=next_cursor, has_more=has_more)
 
 
 @dataclass(frozen=True)
@@ -3607,26 +4094,36 @@ class ExplorerRwaRecord:
 
 @dataclass(frozen=True)
 class ExplorerRwasPage:
-    """Paginated explorer RWA list returned by `/v1/explorer/rwas`."""
+    """Bounded cursor page returned by `/v1/explorer/rwas`."""
 
-    pagination: ExplorerPaginationMeta
+    pagination: ExplorerCursorMeta
     items: List[ExplorerRwaRecord]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerRwasPage":
         if not isinstance(payload, Mapping):
             raise TypeError("explorer RWA page payload must be an object")
+        expected = {"pagination", "items"}
+        actual = set(payload)
+        if actual != expected:
+            unknown = sorted(str(key) for key in actual - expected)
+            missing = sorted(expected - actual)
+            raise TypeError(
+                "explorer RWA page fields must be exactly "
+                f"{sorted(expected)}; missing={missing}, unknown={unknown}"
+            )
         pagination_payload = payload.get("pagination")
         if not isinstance(pagination_payload, Mapping):
             raise TypeError("explorer RWA page missing object `pagination` field")
-        items_payload = payload.get("items", [])
-        if items_payload is None:
-            items_payload = []
+        pagination = ExplorerCursorMeta.from_payload(pagination_payload)
+        items_payload = payload.get("items")
         if not isinstance(items_payload, list):
             raise TypeError("explorer RWA page `items` must be a list")
+        if len(items_payload) > pagination.limit:
+            raise ValueError("explorer RWA page contains more items than its limit")
         items = [ExplorerRwaRecord.from_payload(entry) for entry in items_payload]
         return cls(
-            pagination=ExplorerPaginationMeta.from_payload(pagination_payload),
+            pagination=pagination,
             items=items,
         )
 
@@ -6333,131 +6830,6 @@ class PeerTelemetryInfo:
 
 
 @dataclass(frozen=True)
-class SseEvent:
-    """Structured Server-Sent Event returned by Torii SSE endpoints."""
-
-    event: Optional[str]
-    data: Any
-    id: Optional[str]
-    retry: Optional[int]
-    raw: str
-
-
-@dataclass(frozen=True)
-class WebSocketEvent:
-    """Structured JSON event returned by Torii WebSocket event streams."""
-
-    event: Optional[str]
-    data: Any
-    raw: str
-
-
-class SseStreamError(RuntimeError):
-    """Terminal error reported after an SSE response has been established.
-
-    Canonical Torii live streams cannot change their HTTP status after sending
-    the response headers, so they report a terminal ``event: stream_error``
-    frame instead.  The exception keeps the stable server error code and the
-    loss/replay metadata available to callers.
-    """
-
-    MALFORMED_CODE = "malformed_stream_error"
-
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        *,
-        dropped_messages: Optional[int],
-        replay_available: Optional[bool],
-        payload: Any,
-        raw: str,
-        malformed_reason: Optional[str] = None,
-    ) -> None:
-        self.code = code
-        self.message = message
-        self.dropped_messages = dropped_messages
-        self.replay_available = replay_available
-        self.payload = payload
-        self.raw = raw
-        self.malformed_reason = malformed_reason
-        detail = f"{code}: {message}"
-        if dropped_messages is not None:
-            detail = f"{detail} (dropped_messages={dropped_messages})"
-        super().__init__(detail)
-
-    @classmethod
-    def from_event(cls, event: SseEvent) -> "SseStreamError":
-        """Validate and convert a terminal ``stream_error`` SSE frame."""
-
-        payload = event.data
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except json.JSONDecodeError:
-                return cls._malformed(event, "data must be a JSON object")
-        if not isinstance(payload, Mapping):
-            return cls._malformed(event, "data must be a JSON object")
-
-        code = payload.get("code")
-        if not isinstance(code, str) or not code.strip():
-            return cls._malformed(event, "code must be a non-empty string")
-        message = payload.get("message")
-        if not isinstance(message, str) or not message.strip():
-            return cls._malformed(event, "message must be a non-empty string")
-        if "dropped_messages" not in payload:
-            return cls._malformed(event, "dropped_messages is required")
-        dropped_messages = payload["dropped_messages"]
-        if dropped_messages is not None and (
-            isinstance(dropped_messages, bool)
-            or not isinstance(dropped_messages, int)
-            or dropped_messages < 0
-        ):
-            return cls._malformed(
-                event,
-                "dropped_messages must be a non-negative integer or null",
-            )
-        if "replay_available" not in payload:
-            return cls._malformed(event, "replay_available is required")
-        replay_available = payload["replay_available"]
-        if not isinstance(replay_available, bool):
-            return cls._malformed(event, "replay_available must be a boolean")
-        return cls(
-            code,
-            message,
-            dropped_messages=dropped_messages,
-            replay_available=replay_available,
-            payload=dict(payload),
-            raw=event.raw,
-        )
-
-    @classmethod
-    def _malformed(cls, event: SseEvent, reason: str) -> "SseStreamError":
-        return cls(
-            cls.MALFORMED_CODE,
-            f"Torii emitted a malformed stream_error event: {reason}",
-            dropped_messages=None,
-            replay_available=None,
-            payload=event.data,
-            raw=event.raw,
-            malformed_reason=reason,
-        )
-
-
-@dataclass
-class EventCursor:
-    """Track the last event id for an SSE endpoint with a replay log."""
-
-    last_event_id: Optional[str] = None
-
-    def advance(self, event: SseEvent) -> None:
-        """Record the latest event id if present."""
-
-        if event.id is not None:
-            self.last_event_id = event.id
-
-
-@dataclass(frozen=True)
 class NodeSmAcceleration:
     """Acceleration advert nested within :class:`NodeCapabilities`."""
 
@@ -6871,7 +7243,6 @@ class VerifiedCommittedTransaction:
             "External",
             "SealedCommitment",
             "SealedReveal",
-            "PrivateKaigi",
             "Time",
         }:
             raise ValueError("verified transaction entrypoint_kind is not recognized")
@@ -9931,6 +10302,7 @@ class SumeragiV2GlobalPhase(str, Enum):
 
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
+_SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
     "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
 )
@@ -9944,10 +10316,16 @@ def _sumeragi_v2_exact_fields(
         raise TypeError(f"{context} contains unsupported fields: {', '.join(unknown)}")
 
 
-def _sumeragi_v2_uint(value: Any, context: str, maximum: int = (1 << 64) - 1) -> int:
+def _sumeragi_v2_uint(
+    value: Any,
+    context: str,
+    maximum: int = (1 << 64) - 1,
+    *,
+    positive: bool = False,
+) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{context} must be an unsigned integer")
-    if value < 0 or value > maximum:
+    if value < 0 or (positive and value == 0) or value > maximum:
         raise ValueError(f"{context} is outside its unsigned integer range")
     return value
 
@@ -10035,6 +10413,37 @@ class SumeragiV2BlockSubject:
 
 
 @dataclass(frozen=True)
+class SumeragiV2MergeCarrierCommitment:
+    """Exact merge-ledger entry identity authenticated by a v2 QC."""
+
+    version: int
+    entry_hash: str
+
+    @classmethod
+    def from_payload(
+        cls, payload: Any, context: str
+    ) -> "SumeragiV2MergeCarrierCommitment":
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        _sumeragi_v2_exact_fields(payload, ("version", "entry_hash"), context)
+        if "version" not in payload or "entry_hash" not in payload:
+            missing = "version" if "version" not in payload else "entry_hash"
+            raise TypeError(f"{context}.{missing} is required")
+        version = _sumeragi_v2_uint(
+            payload["version"], f"{context}.version", maximum=(1 << 16) - 1
+        )
+        if version != _SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION:
+            raise ValueError(
+                f"{context}.version must equal "
+                f"{_SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION}"
+            )
+        return cls(
+            version=version,
+            entry_hash=_strict_hash_literal(payload, "entry_hash", context),
+        )
+
+
+@dataclass(frozen=True)
 class SumeragiV2ExecutionCommitment:
     """Exact deterministic execution result authenticated by a v2 QC."""
 
@@ -10046,6 +10455,8 @@ class SumeragiV2ExecutionCommitment:
     native_amx_application_manifest_version: int
     native_amx_application_manifest_root: str
     native_amx_application_manifest_count: int
+    merge_carrier: Optional[SumeragiV2MergeCarrierCommitment]
+    executed_block_wire_len: int
     executed_block_wire_hash: str
 
     @classmethod
@@ -10063,10 +10474,14 @@ class SumeragiV2ExecutionCommitment:
                 "native_amx_application_manifest_version",
                 "native_amx_application_manifest_root",
                 "native_amx_application_manifest_count",
+                "merge_carrier",
+                "executed_block_wire_len",
                 "executed_block_wire_hash",
             ),
             context,
         )
+        if "merge_carrier" not in payload:
+            raise TypeError(f"{context}.merge_carrier is required")
         topup_anchor_count = _sumeragi_v2_uint(
             payload.get("topup_anchor_count"),
             f"{context}.topup_anchor_count",
@@ -10110,6 +10525,14 @@ class SumeragiV2ExecutionCommitment:
                 f"{context}.native_amx_application_manifest_count must be zero "
                 "exactly for the canonical empty root"
             )
+        merge_carrier_payload = payload["merge_carrier"]
+        merge_carrier = (
+            None
+            if merge_carrier_payload is None
+            else SumeragiV2MergeCarrierCommitment.from_payload(
+                merge_carrier_payload, f"{context}.merge_carrier"
+            )
+        )
         return cls(
             parent_state_root=_sumeragi_v2_string(
                 payload.get("parent_state_root"), f"{context}.parent_state_root"
@@ -10126,6 +10549,12 @@ class SumeragiV2ExecutionCommitment:
             native_amx_application_manifest_version=native_manifest_version,
             native_amx_application_manifest_root=native_manifest_root,
             native_amx_application_manifest_count=native_manifest_count,
+            merge_carrier=merge_carrier,
+            executed_block_wire_len=_sumeragi_v2_uint(
+                payload.get("executed_block_wire_len"),
+                f"{context}.executed_block_wire_len",
+                positive=True,
+            ),
             executed_block_wire_hash=_sumeragi_v2_string(
                 payload.get("executed_block_wire_hash"),
                 f"{context}.executed_block_wire_hash",
@@ -10266,6 +10695,15 @@ class SumeragiStatusSnapshot:
             native_amx_application_manifest_count=(
                 execution_commitment.native_amx_application_manifest_count
             ),
+            merge_carrier=(
+                None
+                if execution_commitment.merge_carrier is None
+                else SumeragiV2MergeCarrierCommitment(
+                    version=execution_commitment.merge_carrier.version,
+                    entry_hash=execution_commitment.merge_carrier.entry_hash,
+                )
+            ),
+            executed_block_wire_len=execution_commitment.executed_block_wire_len,
             executed_block_wire_hash=execution_commitment.executed_block_wire_hash,
         )
 
@@ -12552,6 +12990,7 @@ __all__ = [
     "SumeragiV2HeightContextId",
     "SumeragiV2ConsensusRound",
     "SumeragiV2BlockSubject",
+    "SumeragiV2MergeCarrierCommitment",
     "SumeragiV2ExecutionCommitment",
     "SumeragiV2QuorumCertificateRef",
     "SumeragiV2TimeoutCertificateRef",
@@ -12605,6 +13044,11 @@ __all__ = [
     "VpnSession",
     "VpnReceipt",
     "VpnReceiptListResponse",
+    "ConnectAppRecord",
+    "ConnectAppRegistryPage",
+    "ConnectAdmissionManifestEntry",
+    "ConnectAdmissionManifest",
+    "ConnectAppPolicyControls",
 ]
 
 
@@ -12662,7 +13106,15 @@ class DataModelMismatchError(RuntimeError):
         self.actual = actual
 
 
-class ToriiClient(_BaseToriiClient):
+_ToriiClientStreamingQueryMixin = create_torii_client_streaming_query_mixin(
+    require_crypto=_require_crypto,
+    expect_sorafs_reputation_status=_expect_sorafs_reputation_status,
+    normalize_count_mode_arg=_normalize_count_mode_arg,
+    normalize_optional_string=_normalize_optional_string,
+)
+
+
+class ToriiClient(_ToriiClientStreamingQueryMixin, _BaseToriiClient):
     """Convenience wrapper that exposes Torii attachment/prover APIs under `iroha_python`.
 
     The implementation delegates to :class:`iroha_torii_client.client.ToriiClient`
@@ -13676,20 +14128,20 @@ class ToriiClient(_BaseToriiClient):
     def list_explorer_rwas(
         self,
         *,
-        page: Optional[int] = None,
-        per_page: Optional[int] = None,
+        cursor: Optional[str] = None,
+        limit: Optional[int] = None,
         owned_by: Optional[str] = None,
         domain: Optional[str] = None,
     ) -> Mapping[str, Any]:
-        """List explorer RWAs via `GET /v1/explorer/rwas`."""
+        """Fetch one bounded seek page from `GET /v1/explorer/rwas`."""
 
         params: Dict[str, Any] = {}
-        page_value = _coerce_int(page, "list_explorer_rwas.page")
-        if page_value is not None:
-            params["page"] = page_value
-        per_page_value = _coerce_int(per_page, "list_explorer_rwas.per_page")
-        if per_page_value is not None:
-            params["per_page"] = per_page_value
+        cursor_value = _normalize_explorer_cursor(cursor, "list_explorer_rwas.cursor")
+        if cursor_value is not None:
+            params["cursor"] = cursor_value
+        limit_value = _normalize_explorer_limit(limit, "list_explorer_rwas.limit")
+        if limit_value is not None:
+            params["limit"] = limit_value
         owned_by_value = _normalize_optional_string(owned_by, "list_explorer_rwas.owned_by")
         if owned_by_value is not None:
             params["owned_by"] = owned_by_value
@@ -13707,21 +14159,22 @@ class ToriiClient(_BaseToriiClient):
             raise RuntimeError("explorer RWA endpoint returned no payload")
         if not isinstance(payload, Mapping):
             raise RuntimeError("explorer RWA endpoint returned malformed payload")
+        ExplorerRwasPage.from_payload(payload)
         return payload
 
     def list_explorer_rwas_typed(
         self,
         *,
-        page: Optional[int] = None,
-        per_page: Optional[int] = None,
+        cursor: Optional[str] = None,
+        limit: Optional[int] = None,
         owned_by: Optional[str] = None,
         domain: Optional[str] = None,
     ) -> ExplorerRwasPage:
         """Typed wrapper for :meth:`list_explorer_rwas`."""
 
         payload = self.list_explorer_rwas(
-            page=page,
-            per_page=per_page,
+            cursor=cursor,
+            limit=limit,
             owned_by=owned_by,
             domain=domain,
         )
@@ -15355,13 +15808,14 @@ class ToriiClient(_BaseToriiClient):
         epoch: Optional[int] = None,
         status: Optional[str] = None,
         limit: Optional[int] = None,
-        page_token_hex: Optional[str] = None,
+        max_bytes: Optional[int] = None,
+        cursor: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> bytes:
         """Return Norito-encoded `PorChallengeStatusV1` records for the given filters."""
 
         params = _build_sorafs_por_status_params(
-            manifest_hex, provider_hex, epoch, status, limit, page_token_hex
+            manifest_hex, provider_hex, epoch, status, limit, max_bytes, cursor
         )
         response = self._request(
             "GET",
@@ -15378,11 +15832,16 @@ class ToriiClient(_BaseToriiClient):
         *,
         start_epoch: Optional[int] = None,
         end_epoch: Optional[int] = None,
+        limit: Optional[int] = None,
+        max_bytes: Optional[int] = None,
+        cursor: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> bytes:
         """Return a Norito-exported history for the supplied epoch range."""
 
-        params = _build_sorafs_por_export_params(start_epoch, end_epoch)
+        params = _build_sorafs_por_export_params(
+            start_epoch, end_epoch, limit, max_bytes, cursor
+        )
         response = self._request(
             "GET",
             "/v1/sorafs/por/export",
@@ -17597,13 +18056,13 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         definition_id: str,
-        owner: str,
-        name: Optional[str] = None,
+        owning_domain: Optional[str],
+        balance_scope_policy: str,
+        name: str,
         description: Optional[str] = None,
         alias: Optional[str] = None,
         scale: Optional[Union[int, str]] = None,
         mintable: Optional[str] = "Infinitely",
-        balance_scope_policy: Optional[str] = None,
         confidential_policy: Optional[str] = None,
         asset_metadata: Optional[Mapping[str, Any]] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
@@ -17611,7 +18070,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Register a quantity asset definition and optionally wait for commit."""
+        """Register an asset owned by ``authority`` and optionally wait for commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
@@ -17621,7 +18080,7 @@ class ToriiClient(_BaseToriiClient):
         )
         draft.register_asset_definition(
             definition_id,
-            self._native_transaction_account_id(owner, "owner"),
+            owning_domain=owning_domain,
             name=name,
             description=description,
             alias=alias,
@@ -18473,7 +18932,6 @@ class ToriiClient(_BaseToriiClient):
         mode: str = "Hybrid",
         allow_shield: bool = True,
         allow_unshield: bool = True,
-        vk_transfer: Optional[Union[str, Mapping[str, Any]]] = None,
         vk_unshield: Optional[Union[str, Mapping[str, Any]]] = None,
         vk_shield: Optional[Union[str, Mapping[str, Any]]] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
@@ -18494,7 +18952,6 @@ class ToriiClient(_BaseToriiClient):
             mode=mode,
             allow_shield=allow_shield,
             allow_unshield=allow_unshield,
-            vk_transfer=vk_transfer,
             vk_unshield=vk_unshield,
             vk_shield=vk_shield,
         )
@@ -18541,205 +18998,19 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
         )
 
-    def shield_asset_and_wait(
-        self,
-        *,
-        chain_id: str,
-        authority: str,
-        fee_payment: Mapping[str, Any],
-        private_key: Optional[bytes] = None,
-        private_key_hex: Optional[str] = None,
-        asset_definition_id: str,
-        from_account_id: str,
-        amount: QuantityLike,
-        note_commitment: Union[str, bytes, bytearray, memoryview],
-        ephemeral_public_key: Union[str, bytes, bytearray, memoryview],
-        nonce: Union[str, bytes, bytearray, memoryview],
-        ciphertext: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        ciphertext_b64: Optional[str] = None,
-        transaction_metadata: Optional[Mapping[str, Any]] = None,
-        wait: bool = True,
-        timeout: Optional[float] = 30.0,
-        interval: float = 1.0,
-    ) -> Mapping[str, Any]:
-        """Shield public funds into an asset's ZK ledger."""
-
-        draft = self._transaction_draft(
-            chain_id=chain_id,
-            authority=authority,
-            fee_payment=fee_payment,
-            metadata=transaction_metadata,
-        )
-        draft.shield_asset(
-            asset_definition_id,
-            self._native_transaction_account_id(from_account_id, "from_account_id"),
-            amount,
-            note_commitment=note_commitment,
-            ephemeral_public_key=ephemeral_public_key,
-            nonce=nonce,
-            ciphertext=ciphertext,
-            ciphertext_b64=ciphertext_b64,
-        )
-        return self._submit_transaction_draft_result(
-            draft,
-            private_key=private_key,
-            private_key_hex=private_key_hex,
-            wait=wait,
-            timeout=timeout,
-            interval=interval,
-        )
-
-    def zk_transfer_prepared_and_wait(
-        self,
-        *,
-        chain_id: str,
-        authority: str,
-        fee_payment: Mapping[str, Any],
-        private_key: Optional[bytes] = None,
-        private_key_hex: Optional[str] = None,
-        asset_definition_id: str,
-        inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
-        outputs: Iterable[Union[str, bytes, bytearray, memoryview]],
-        proof: Mapping[str, Any],
-        root_hint: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        transaction_metadata: Optional[Mapping[str, Any]] = None,
-        wait: bool = True,
-        timeout: Optional[float] = 30.0,
-        interval: float = 1.0,
-    ) -> Mapping[str, Any]:
-        """Submit a prepared private-to-private ZK transfer."""
-
-        draft = self._transaction_draft(
-            chain_id=chain_id,
-            authority=authority,
-            fee_payment=fee_payment,
-            metadata=transaction_metadata,
-        )
-        draft.zk_transfer_prepared(
-            asset_definition_id,
-            inputs=inputs,
-            outputs=outputs,
-            proof=proof,
-            root_hint=root_hint,
-        )
-        return self._submit_transaction_draft_result(
-            draft,
-            private_key=private_key,
-            private_key_hex=private_key_hex,
-            wait=wait,
-            timeout=timeout,
-            interval=interval,
-        )
-
-    def unshield_prepared_and_wait(
-        self,
-        *,
-        chain_id: str,
-        authority: str,
-        fee_payment: Mapping[str, Any],
-        private_key: Optional[bytes] = None,
-        private_key_hex: Optional[str] = None,
-        asset_definition_id: str,
-        to_account_id: str,
-        public_amount: QuantityLike,
-        inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
-        proof: Mapping[str, Any],
-        outputs: Optional[Iterable[Union[str, bytes, bytearray, memoryview]]] = None,
-        root_hint: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        transaction_metadata: Optional[Mapping[str, Any]] = None,
-        wait: bool = True,
-        timeout: Optional[float] = 30.0,
-        interval: float = 1.0,
-    ) -> Mapping[str, Any]:
-        """Submit a prepared ZK unshield transaction."""
-
-        draft = self._transaction_draft(
-            chain_id=chain_id,
-            authority=authority,
-            fee_payment=fee_payment,
-            metadata=transaction_metadata,
-        )
-        draft.unshield_prepared(
-            asset_definition_id,
-            self._native_transaction_account_id(to_account_id, "to_account_id"),
-            public_amount,
-            inputs=inputs,
-            proof=proof,
-            outputs=outputs,
-            root_hint=root_hint,
-        )
-        return self._submit_transaction_draft_result(
-            draft,
-            private_key=private_key,
-            private_key_hex=private_key_hex,
-            wait=wait,
-            timeout=timeout,
-            interval=interval,
-        )
-
-    def account_id_variants(
-        account_id: str,
-        *,
-        include_taira_prefix_variant: bool = False,
-    ) -> List[str]:
-        """Return account-id literals to try for REST reads.
-
-        Taira public ingress has historically exposed both ``testu`` and
-        ``sorau`` I105 sentinels during rollout windows. SDK callers can opt in
-        to trying the alternate sentinel without copying that compatibility
-        rule into application code.
-        """
-
-        literal = _require_non_empty_string(account_id, "account_id")
-        variants = [literal]
-        if include_taira_prefix_variant:
-            if literal.startswith("testu"):
-                variants.append(f"sorau{literal[5:]}")
-            elif literal.startswith("sorau"):
-                variants.append(f"testu{literal[5:]}")
-        return _dedupe_strings(variants)
-
-    @staticmethod
-    def _normalize_account_id_variants(
-        account_id: str,
-        account_id_variants: Optional[Iterable[str]],
-        *,
-        include_taira_prefix_variant: bool,
-    ) -> List[str]:
-        if account_id_variants is None:
-            return ToriiClient.account_id_variants(
-                account_id,
-                include_taira_prefix_variant=include_taira_prefix_variant,
-            )
-        variants = [
-            _require_non_empty_string(item, "account_id_variants[]") for item in account_id_variants
-        ]
-        if account_id not in variants:
-            variants.insert(0, account_id)
-        return _dedupe_strings(variants)
-
     def _account_record_from_listing(
         self,
         account_id: str,
         *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
         limit: int = 200,
     ) -> Optional[Mapping[str, Any]]:
-        candidates = set(
-            self._normalize_account_id_variants(
-                account_id,
-                account_id_variants,
-                include_taira_prefix_variant=include_taira_prefix_variant,
-            )
-        )
         offset = 0
         while True:
             payload = self.list_accounts(limit=limit, offset=offset)
             items = _extract_page_items(payload)
             for item in items:
                 candidate = str(item.get("id") or item.get("account_id") or "")
-                if candidate in candidates:
+                if candidate == account_id:
                     return item
             batch_size = len(items)
             total = _page_total(payload)
@@ -18752,86 +19023,51 @@ class ToriiClient(_BaseToriiClient):
     def find_account(
         self,
         account_id: str,
-        *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
     ) -> Optional[Mapping[str, Any]]:
         """Fetch an account by id, returning ``None`` when it is absent.
 
-        The helper retries supplied account-id variants and falls back to the
-        paginated account list when Torii reports route or network-prefix
-        compatibility errors.
+        The helper falls back to the paginated account list only when the
+        exact-id route is unavailable.
         """
 
-        variants = self._normalize_account_id_variants(
-            account_id,
-            account_id_variants,
-            include_taira_prefix_variant=include_taira_prefix_variant,
+        literal = _require_non_empty_string(account_id, "account_id")
+        response = self._request(
+            "GET",
+            f"/v1/accounts/{quote(literal, safe='')}",
         )
-        saw_network_prefix_error = False
-        for candidate in variants:
-            response = self._request(
-                "GET",
-                f"/v1/accounts/{quote(candidate, safe='')}",
-            )
-            if response.status_code == 404:
-                continue
-            if response.status_code == 200:
-                payload = self._maybe_json(response)
-                if not isinstance(payload, Mapping):
-                    raise RuntimeError("account endpoint returned non-object payload")
-                return payload
-            if (
-                response.status_code == 503
-                and response.headers.get("x-iroha-reject-code") == "route_unavailable"
-            ):
-                return self._account_record_from_listing(
-                    account_id,
-                    account_id_variants=variants,
-                )
-            if _response_has_network_prefix_error(response):
-                saw_network_prefix_error = True
-                continue
-            self._expect_status(response, {200, 404})
-        if saw_network_prefix_error:
-            return self._account_record_from_listing(
-                account_id,
-                account_id_variants=variants,
-            )
+        if response.status_code == 404:
+            return None
+        if response.status_code == 200:
+            payload = self._maybe_json(response)
+            if not isinstance(payload, Mapping):
+                raise RuntimeError("account endpoint returned non-object payload")
+            return payload
+        if (
+            response.status_code == 503
+            and response.headers.get("x-iroha-reject-code") == "route_unavailable"
+        ):
+            return self._account_record_from_listing(literal)
+        self._expect_status(response, {200, 404})
         return None
 
     def account_exists(
         self,
         account_id: str,
-        *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
     ) -> bool:
         """Return whether Torii can see the account."""
 
-        return (
-            self.find_account(
-                account_id,
-                account_id_variants=account_id_variants,
-                include_taira_prefix_variant=include_taira_prefix_variant,
-            )
-            is not None
-        )
+        return self.find_account(account_id) is not None
 
     def find_account_assets(
         self,
         account_id: str,
         *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
         asset_id: Optional[str] = None,
     ) -> Optional[List[Mapping[str, Any]]]:
         """Return raw account asset entries, or ``None`` when the account is absent."""
 
-        result = self._find_account_assets_for_variants(
+        result = self._find_account_assets(
             account_id,
-            account_id_variants=account_id_variants,
-            include_taira_prefix_variant=include_taira_prefix_variant,
             asset_id=asset_id,
         )
         if result is None:
@@ -18839,49 +19075,33 @@ class ToriiClient(_BaseToriiClient):
         _resolved_account_id, items = result
         return items
 
-    def _find_account_assets_for_variants(
+    def _find_account_assets(
         self,
         account_id: str,
         *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
         asset_id: Optional[str] = None,
     ) -> Optional[Tuple[str, List[Mapping[str, Any]]]]:
-        variants = self._normalize_account_id_variants(
-            account_id,
-            account_id_variants,
-            include_taira_prefix_variant=include_taira_prefix_variant,
-        )
+        literal = _require_non_empty_string(account_id, "account_id")
         params: Dict[str, Any] = {}
         asset_id_value = _normalize_optional_string(asset_id, "find_account_assets.asset_id")
         if asset_id_value is not None:
             params["asset_id"] = asset_id_value
-        last_network_prefix_error: Optional[requests.Response] = None
-        for candidate in variants:
-            response = self._request(
-                "GET",
-                f"/v1/accounts/{quote(candidate, safe='')}/assets",
-                params=params or None,
-            )
-            if response.status_code == 404:
-                continue
-            if response.status_code == 200:
-                return candidate, _extract_page_items(self._maybe_json(response))
-            if _response_has_network_prefix_error(response):
-                last_network_prefix_error = response
-                continue
-            self._expect_status(response, {200, 404})
-        if last_network_prefix_error is not None:
-            self._expect_status(last_network_prefix_error, {200, 404})
+        response = self._request(
+            "GET",
+            f"/v1/accounts/{quote(literal, safe='')}/assets",
+            params=params or None,
+        )
+        if response.status_code == 404:
+            return None
+        if response.status_code == 200:
+            return literal, _extract_page_items(self._maybe_json(response))
+        self._expect_status(response, {200, 404})
         return None
 
     def find_account_asset_items(
         self,
         account_id: str,
         asset_definition_id: str,
-        *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
     ) -> List[Mapping[str, Any]]:
         """Return raw asset entries matching an asset definition for an account."""
 
@@ -18889,11 +19109,7 @@ class ToriiClient(_BaseToriiClient):
             asset_definition_id,
             "asset_definition_id",
         )
-        result = self._find_account_assets_for_variants(
-            account_id,
-            account_id_variants=account_id_variants,
-            include_taira_prefix_variant=include_taira_prefix_variant,
-        )
+        result = self._find_account_assets(account_id)
         if result is None:
             return []
         resolved_account_id, items = result
@@ -18907,9 +19123,6 @@ class ToriiClient(_BaseToriiClient):
         self,
         account_id: str,
         asset_definition_id: str,
-        *,
-        account_id_variants: Optional[Iterable[str]] = None,
-        include_taira_prefix_variant: bool = False,
     ) -> Decimal:
         """Return an exact canonical quantity parsed from account asset listings."""
 
@@ -18917,11 +19130,7 @@ class ToriiClient(_BaseToriiClient):
             asset_definition_id,
             "asset_definition_id",
         )
-        result = self._find_account_assets_for_variants(
-            account_id,
-            account_id_variants=account_id_variants,
-            include_taira_prefix_variant=include_taira_prefix_variant,
-        )
+        result = self._find_account_assets(account_id)
         if result is None:
             raise RuntimeError(f"account {account_id} not found via Torii REST")
         resolved_account_id, items = result
@@ -20954,12 +21163,10 @@ class ToriiClient(_BaseToriiClient):
     # ------------------------------------------------------------------
     def get_sumeragi_telemetry(self) -> Optional[Any]:
         """Fetch aggregated consensus telemetry (`GET /v1/sumeragi/telemetry`)."""
-
         return self.request_json("GET", "/v1/sumeragi/telemetry", expected_status=(200,))
 
     def get_sumeragi_telemetry_typed(self) -> SumeragiTelemetrySnapshot:
         """Return `/v1/sumeragi/telemetry` as a structured snapshot."""
-
         payload = self.request_json("GET", "/v1/sumeragi/telemetry", expected_status=(200,))
         if not isinstance(payload, Mapping):
             raise TypeError("telemetry response must be a JSON object")
@@ -20967,30 +21174,31 @@ class ToriiClient(_BaseToriiClient):
 
     def get_sumeragi_status(self) -> Optional[Any]:
         """Fetch the raw authoritative v2 consensus status JSON."""
-
         return self.request_json("GET", "/v1/sumeragi/status", expected_status=(200,))
 
     def get_sumeragi_status_typed(self) -> SumeragiStatusSnapshot:
         """Validate the fail-closed authoritative v2 reducer snapshot."""
-
-        payload = self.request_json("GET", "/v1/sumeragi/status", expected_status=(200,))
-        if not isinstance(payload, Mapping):
-            raise TypeError("sumeragi status response must be a JSON object")
+        payload = self._get_sccp_json_object(
+            "/v1/sumeragi/status",
+            context="sumeragi status",
+            maximum_body_bytes=1 * 1024 * 1024,
+            parser=parse_sumeragi_json_object,
+        )
         return SumeragiStatusSnapshot.from_payload(payload)
 
     def get_sumeragi_diagnostics(self) -> Optional[Any]:
         """Fetch raw bounded Sumeragi operator and lane diagnostics."""
-
         return self.request_json("GET", "/v1/sumeragi/diagnostics", expected_status=(200,))
 
     def get_sumeragi_diagnostics_typed(self) -> SumeragiDiagnosticsSnapshot:
         """Validate `/v1/sumeragi/diagnostics` as a separate typed payload."""
-
-        payload = self.request_json("GET", "/v1/sumeragi/diagnostics", expected_status=(200,))
-        if not isinstance(payload, Mapping):
-            raise TypeError("sumeragi diagnostics response must be a JSON object")
+        payload = self._get_sccp_json_object(
+            "/v1/sumeragi/diagnostics",
+            context="sumeragi diagnostics",
+            maximum_body_bytes=16 * 1024 * 1024,
+            parser=parse_sumeragi_json_object,
+        )
         return SumeragiDiagnosticsSnapshot.from_payload(payload)
-
     def get_sumeragi_pacemaker(self) -> Optional[Any]:
         """Fetch pacemaker configuration (`GET /v1/sumeragi/pacemaker`)."""
 
@@ -21108,17 +21316,6 @@ class ToriiClient(_BaseToriiClient):
             raise RuntimeError("sumeragi evidence endpoint returned non-object payload")
         return SumeragiEvidenceListPage.from_payload(payload)
 
-    def submit_sumeragi_evidence(self, evidence_hex: str) -> Optional[Any]:
-        """Submit a Norito-encoded evidence payload (`POST /v1/sumeragi/evidence`)."""
-
-        return self.request_json(
-            "POST",
-            "/v1/sumeragi/evidence",
-            json_body={"evidence_hex": str(evidence_hex)},
-            expected_status=(200, 202),
-            allow_retry=False,
-        )
-
     def get_sumeragi_phases(self) -> Optional[Any]:
         """Fetch consensus phase durations (`GET /v1/sumeragi/phases`)."""
 
@@ -21152,9 +21349,15 @@ class ToriiClient(_BaseToriiClient):
         """Apply the `gov_protected_namespaces` parameter via `POST /v1/gov/protected-namespaces`."""
 
         if isinstance(namespaces, str):
-            values = [str(namespaces)]
+            raw_values: Sequence[Any] = [namespaces]
         else:
-            values = [str(value) for value in namespaces]
+            raw_values = namespaces
+        values = []
+        for index, value in enumerate(raw_values):
+            namespace = _require_exact_token_string(value, f"namespaces[{index}]")
+            if not namespace.isascii():
+                raise ValueError(f"namespaces[{index}] must contain only ASCII characters")
+            values.append(namespace)
         return self.request_json(
             "POST",
             "/v1/gov/protected-namespaces",
@@ -21206,37 +21409,45 @@ class ToriiClient(_BaseToriiClient):
         return GovernanceContractRecord.from_payload(payload)
 
     def governance_deploy_contract_proposal(self, payload: Mapping[str, Any]) -> Optional[Any]:
-        """POST `/v1/gov/proposals/deploy-contract`."""
+        """POST a closed deploy proposal with optional public manifest provenance.
+
+        The retired opaque ``limits`` field and private-key material are rejected
+        before dispatch.
+        """
 
         return self.request_json(
             "POST",
             "/v1/gov/proposals/deploy-contract",
-            json_body=dict(payload),
+            json_body=_normalize_governance_deploy_contract_payload(
+                payload,
+                context="governance deploy-contract proposal",
+            ),
         )
 
     def governance_submit_plain_ballot(self, payload: Mapping[str, Any]) -> Optional[Any]:
-        """POST `/v1/gov/ballots/plain`."""
+        """POST `/v1/gov/ballots/plain` with a canonical u64 decimal duration."""
 
-        normalized = dict(payload)
-        normalized["amount"] = _canonical_quantity_text(
-            normalized.get("amount"),
-            "governance plain ballot amount",
-        )
         return self.request_json(
             "POST",
             "/v1/gov/ballots/plain",
-            json_body=normalized,
+            json_body=_normalize_governance_plain_ballot_payload(
+                payload,
+                context="governance plain ballot",
+            ),
         )
 
-    def governance_submit_zk_ballot(self, payload: Mapping[str, Any]) -> Optional[Any]:
-        """POST `/v1/gov/ballots/zk`."""
+    def governance_submit_parliament_ballot(
+        self,
+        payload: Mapping[str, Any],
+    ) -> Optional[Any]:
+        """POST a ballot using the canonical hyphenated Parliament body label."""
 
         return self.request_json(
             "POST",
-            "/v1/gov/ballots/zk",
-            json_body=_normalize_governance_zk_ballot_payload(
+            "/v1/gov/parliament/ballots",
+            json_body=_normalize_governance_parliament_ballot_payload(
                 payload,
-                context="governance zk ballot",
+                context="governance parliament ballot",
             ),
         )
 
@@ -21270,24 +21481,35 @@ class ToriiClient(_BaseToriiClient):
         return self.request_json(
             "POST",
             "/v1/gov/finalize",
-            json_body=dict(payload),
+            json_body=_normalize_governance_finalize_payload(
+                payload,
+                context="governance finalize referendum",
+            ),
         )
 
     def governance_enact_proposal(self, payload: Mapping[str, Any]) -> Optional[Any]:
-        """POST `/v1/gov/enact`."""
+        """POST `/v1/gov/enact` with only the canonical proposal fingerprint."""
 
         return self.request_json(
             "POST",
             "/v1/gov/enact",
-            json_body=dict(payload),
+            json_body=_normalize_governance_enact_payload(
+                payload,
+                context="governance enact proposal",
+            ),
         )
 
     def get_governance_proposal(self, proposal_id: str) -> Optional[Any]:
         """GET `/v1/gov/proposals/{proposal_id}`."""
 
+        exact_proposal_id = _require_governance_proposal_id(
+            proposal_id,
+            "proposal_id",
+        )
+
         return self.request_json(
             "GET",
-            f"/v1/gov/proposals/{proposal_id}",
+            f"/v1/gov/proposals/{quote(exact_proposal_id, safe='')}",
             expected_status=(200, 404),
         )
 
@@ -21302,9 +21524,14 @@ class ToriiClient(_BaseToriiClient):
     def get_governance_referendum(self, referendum_id: str) -> Optional[Any]:
         """GET `/v1/gov/referenda/{referendum_id}`."""
 
+        exact_referendum_id = _require_governance_selector_string(
+            referendum_id,
+            "referendum_id",
+        )
+
         return self.request_json(
             "GET",
-            f"/v1/gov/referenda/{referendum_id}",
+            f"/v1/gov/referenda/{quote(exact_referendum_id, safe='')}",
             expected_status=(200, 404),
         )
 
@@ -21322,9 +21549,14 @@ class ToriiClient(_BaseToriiClient):
     def get_governance_tally(self, referendum_id: str) -> Optional[Any]:
         """GET `/v1/gov/tally/{referendum_id}`."""
 
+        exact_referendum_id = _require_governance_selector_string(
+            referendum_id,
+            "referendum_id",
+        )
+
         return self.request_json(
             "GET",
-            f"/v1/gov/tally/{referendum_id}",
+            f"/v1/gov/tally/{quote(exact_referendum_id, safe='')}",
             expected_status=(200, 404),
         )
 
@@ -21344,9 +21576,14 @@ class ToriiClient(_BaseToriiClient):
     def get_governance_locks(self, referendum_id: str) -> Optional[Any]:
         """GET `/v1/gov/locks/{referendum_id}`."""
 
+        exact_referendum_id = _require_governance_selector_string(
+            referendum_id,
+            "referendum_id",
+        )
+
         return self.request_json(
             "GET",
-            f"/v1/gov/locks/{referendum_id}",
+            f"/v1/gov/locks/{quote(exact_referendum_id, safe='')}",
             expected_status=(200, 404),
         )
 
@@ -21925,369 +22162,6 @@ class ToriiClient(_BaseToriiClient):
         )
         return TriggerListPage.from_payload(payload)
 
-    @staticmethod
-    def _maybe_json(response: requests.Response) -> Optional[Any]:
-        if not hasattr(response, "content"):
-            try:
-                return response.json()
-            except ValueError:
-                return getattr(response, "text", "") or None
-        if not response.content:
-            return None
-        try:
-            return response.json()
-        except ValueError:
-            return response.text or None
-
-    @staticmethod
-    def _maybe_transaction_receipt(response: requests.Response) -> Optional[Any]:
-        content_type = response.headers.get("Content-Type", "")
-        if "application/x-norito" not in content_type.lower():
-            return None
-        if not response.content:
-            return None
-        try:
-            crypto = _require_crypto()
-        except RuntimeError:
-            return None
-        if not hasattr(crypto, "decode_transaction_receipt_json"):
-            return None
-        try:
-            receipt_json = crypto.decode_transaction_receipt_json(response.content)
-        except Exception:
-            return None
-        try:
-            return json.loads(receipt_json)
-        except json.JSONDecodeError:
-            return None
-
-    @staticmethod
-    def _parse_sse_event(
-        lines: Iterable[str],
-        *,
-        decode_json: bool = True,
-        json_loader: Optional[Callable[[str], Any]] = None,
-    ) -> Optional[SseEvent]:
-        raw_lines = list(lines)
-        data_chunks: List[str] = []
-        event_name: Optional[str] = None
-        event_id: Optional[str] = None
-        retry_value: Optional[int] = None
-        for entry in raw_lines:
-            if entry.startswith(":"):
-                continue
-            field, sep, value = entry.partition(":")
-            value = value.lstrip() if sep else ""
-            if field == "data":
-                data_chunks.append(value)
-            elif field == "id":
-                event_id = value or None
-            elif field == "event":
-                event_name = value or None
-            elif field == "retry":
-                try:
-                    retry_value = int(value)
-                except ValueError:
-                    retry_value = None
-        if not data_chunks and event_name is None and event_id is None and retry_value is None:
-            return None
-        payload: Any
-        if data_chunks:
-            joined = "\n".join(data_chunks)
-            if decode_json:
-                if json_loader is not None:
-                    payload = json_loader(joined)
-                else:
-                    try:
-                        payload = json.loads(joined)
-                    except json.JSONDecodeError:
-                        payload = joined
-            else:
-                payload = joined
-        else:
-            payload = None
-        return SseEvent(
-            event=event_name,
-            data=payload,
-            id=event_id,
-            retry=retry_value,
-            raw="\n".join(raw_lines),
-        )
-
-    def _stream_sse(
-        self,
-        path: str,
-        *,
-        params: Optional[Mapping[str, Any]] = None,
-        headers: Optional[Mapping[str, str]] = None,
-        headers_factory: Optional[Callable[[], Mapping[str, str]]] = None,
-        timeout: Optional[float] = None,
-        max_retries: Optional[int] = 3,
-        backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
-        decode_json: bool = True,
-        cursor: Optional[EventCursor] = None,
-        allow_resume: bool = False,
-        allow_redirects: bool = True,
-        strict_utf8: bool = False,
-        maximum_event_bytes: Optional[int] = None,
-        json_loader: Optional[Callable[[str], Any]] = None,
-        on_event: Optional[Callable[[SseEvent], None]] = None,
-        expected_content_type: Optional[str] = None,
-        require_identity_encoding: bool = False,
-        payload_free_errors: bool = False,
-    ):
-        url = f"{self._base_url}{path}"
-        if headers is not None and headers_factory is not None:
-            raise ValueError("_stream_sse accepts only one of headers or headers_factory")
-        if not allow_resume and (last_event_id is not None or resume or cursor is not None):
-            raise ValueError(f"{path} does not support SSE replay")
-        active_last_id = (
-            last_event_id
-            if last_event_id is not None
-            else (cursor.last_event_id if cursor is not None else None)
-        )
-        should_resume = allow_resume and (resume or last_event_id is not None or cursor is not None)
-
-        def iterator():
-            nonlocal active_last_id
-
-            def process_event(event: SseEvent) -> SseEvent:
-                nonlocal active_last_id
-                if event.event == "stream_error":
-                    raise SseStreamError.from_event(event)
-                if event.id is not None and allow_resume:
-                    active_last_id = event.id
-                    if cursor is not None:
-                        cursor.advance(event)
-                if on_event is not None:
-                    on_event(event)
-                return event
-
-            attempt = 0
-            backoff = max(backoff_base, 0.0)
-            while True:
-                try:
-                    final_headers: Dict[str, str] = dict(self._default_headers)
-                    final_headers.pop("Accept", None)
-                    attempt_headers = headers_factory() if headers_factory is not None else headers
-                    if attempt_headers:
-                        final_headers.update(attempt_headers)
-                    if not allow_resume:
-                        for name in tuple(final_headers):
-                            if name.lower() == "last-event-id":
-                                final_headers.pop(name)
-                    final_headers.setdefault("Accept", "text/event-stream")
-                    if should_resume and active_last_id:
-                        final_headers["Last-Event-ID"] = active_last_id
-                    with self._session.get(
-                        url,
-                        params=params,
-                        headers=final_headers or None,
-                        stream=True,
-                        timeout=timeout,
-                        allow_redirects=allow_redirects,
-                    ) as response:
-                        if payload_free_errors:
-                            _expect_sorafs_reputation_status(
-                                response,
-                                {200},
-                                path,
-                            )
-                        else:
-                            self._expect_status(response, {200})
-                        if require_identity_encoding:
-                            content_encoding = response.headers.get("Content-Encoding")
-                            if (
-                                content_encoding is not None
-                                and content_encoding.lower() != "identity"
-                            ):
-                                raise ValueError(
-                                    f"{path} Content-Encoding must be identity"
-                                )
-                        if expected_content_type is not None:
-                            content_type = response.headers.get("Content-Type")
-                            if (
-                                content_type is None
-                                or content_type.split(";", 1)[0].strip().lower()
-                                != expected_content_type
-                            ):
-                                raise ValueError(
-                                    f"{path} Content-Type must be "
-                                    f"{expected_content_type}"
-                                )
-                        attempt = 0
-                        backoff = max(backoff_base, 0.0)
-                        buffer: list[str] = []
-                        buffered_bytes = 0
-                        first_line = True
-                        for raw_line in response.iter_lines(decode_unicode=not strict_utf8):
-                            if raw_line is None:
-                                continue
-                            if strict_utf8:
-                                if not isinstance(raw_line, (bytes, bytearray, memoryview)):
-                                    raise ValueError(
-                                        f"{path} SSE body yielded a non-byte line"
-                                    )
-                                raw_bytes = bytes(raw_line)
-                                if first_line and raw_bytes.startswith(b"\xef\xbb\xbf"):
-                                    raise ValueError(
-                                        f"{path} SSE body must not contain a UTF-8 BOM"
-                                    )
-                                try:
-                                    decoded_line = raw_bytes.decode("utf-8", "strict")
-                                except UnicodeDecodeError as exc:
-                                    raise ValueError(
-                                        f"{path} SSE body must be strict UTF-8"
-                                    ) from exc
-                                line_bytes = len(raw_bytes) + 1
-                            else:
-                                decoded_line = raw_line
-                                line_bytes = len(str(raw_line).encode("utf-8")) + 1
-                            first_line = False
-                            buffered_bytes += line_bytes
-                            if (
-                                maximum_event_bytes is not None
-                                and buffered_bytes > maximum_event_bytes
-                            ):
-                                raise ValueError(
-                                    f"{path} SSE event exceeds its "
-                                    f"{maximum_event_bytes}-byte size bound"
-                                )
-                            line = decoded_line if strict_utf8 else decoded_line.strip()
-                            if not line:
-                                if buffer:
-                                    event = self._parse_sse_event(
-                                        buffer,
-                                        decode_json=decode_json,
-                                        json_loader=json_loader,
-                                    )
-                                    buffer.clear()
-                                    if event is None:
-                                        buffered_bytes = 0
-                                        continue
-                                    yield process_event(event)
-                                buffered_bytes = 0
-                                continue
-                            buffer.append(line)
-                        if buffer:
-                            event = self._parse_sse_event(
-                                buffer,
-                                decode_json=decode_json,
-                                json_loader=json_loader,
-                            )
-                            buffer.clear()
-                            if event is not None:
-                                yield process_event(event)
-                        break
-                except requests.RequestException:
-                    attempt += 1
-                    if max_retries is not None and attempt > max_retries:
-                        raise
-                    if backoff > 0.0:
-                        time.sleep(backoff)
-                        backoff *= 2
-                    continue
-
-        return iterator()
-
-    @staticmethod
-    def _build_query_envelope(
-        *,
-        filter: Optional[Mapping[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-        aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        body: Dict[str, Any] = {}
-        if filter is not None:
-            body["filter"] = dict(filter)
-        normalized_select = ToriiClient._normalize_query_select(select)
-        if normalized_select is not None:
-            body["select"] = normalized_select
-        if sort is not None:
-            body["sort"] = sort
-        pagination: Dict[str, int] = {}
-        if limit is not None:
-            pagination["limit"] = int(limit)
-        if offset is not None:
-            pagination["offset"] = int(offset)
-        if pagination:
-            body["pagination"] = pagination
-        if fetch_size is not None:
-            body["fetch_size"] = int(fetch_size)
-        if count_mode is not None:
-            body["count_mode"] = _normalize_count_mode_arg(count_mode)
-        query_name_value = _normalize_optional_string(query_name, "query_name")
-        if query_name_value is not None:
-            body["query"] = query_name_value
-        aggregate_value = ensure_aggregate(aggregate)
-        if aggregate_value is not None:
-            if normalized_select is not None:
-                raise ValueError("select and aggregate are mutually exclusive")
-            body["aggregate"] = aggregate_value
-        return body
-
-    @staticmethod
-    def _normalize_query_select(
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]],
-    ) -> Optional[List[Union[str, Dict[str, Any]]]]:
-        if select is None:
-            return None
-        if isinstance(select, (str, bytes, bytearray)):
-            raise TypeError("select must be a sequence of field paths or objects")
-        normalized: List[Union[str, Dict[str, Any]]] = []
-        for index, entry in enumerate(select):
-            if isinstance(entry, str):
-                field_path = entry.strip()
-                if not field_path:
-                    raise ValueError(f"select[{index}] must be a non-empty field path")
-                normalized.append(field_path)
-            elif isinstance(entry, Mapping):
-                normalized.append(dict(entry))
-            else:
-                raise TypeError(f"select[{index}] must be a field-path string or mapping")
-        return normalized
-
-    @staticmethod
-    def _ensure_no_query_args(
-        *,
-        envelope: Mapping[str, Any],
-        filter: Optional[Mapping[str, Any]],
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]],
-        sort: Optional[Any],
-        limit: Optional[int],
-        offset: Optional[int],
-        fetch_size: Optional[int],
-        count_mode: Optional[str],
-        query_name: Optional[str],
-        aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]],
-    ) -> None:
-        if any(
-            value is not None
-            for value in (
-                filter,
-                select,
-                sort,
-                limit,
-                offset,
-                fetch_size,
-                count_mode,
-                query_name,
-                aggregate,
-            )
-        ):
-            raise ValueError(
-                "provide either `envelope` or builder arguments "
-                "(filter/select/sort/limit/offset/fetch_size/count_mode/query_name/aggregate), "
-                "not both"
-            )
 
 
 def create_torii_client(
@@ -22374,360 +22248,3 @@ def create_torii_client(
         sorafs_alias_warning=sorafs_alias_warning,
         sorafs_alias_logger=sorafs_alias_logger,
     )
-
-
-@dataclass(frozen=True)
-class ConnectAppRecord:
-    """Registered Connect application metadata."""
-
-    app_id: str
-    display_name: Optional[str]
-    description: Optional[str]
-    icon_url: Optional[str]
-    namespaces: Sequence[str]
-    metadata: Mapping[str, Any]
-    policy: Mapping[str, Any]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAppRecord":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect app entry must be an object")
-        data = dict(payload)
-        app_id = data.get("app_id")
-        if not isinstance(app_id, str) or not app_id:
-            raise TypeError("connect app entry requires string `app_id` field")
-
-        def _coerce_optional_str(name: str) -> Optional[str]:
-            value = data.get(name)
-            if value is None:
-                return None
-            if isinstance(value, str):
-                return value
-            raise TypeError(f"connect app entry `{name}` must be a string when present")
-
-        namespaces_raw = data.get("namespaces") or []
-        if namespaces_raw is None:
-            namespaces_raw = []
-        if not isinstance(namespaces_raw, list):
-            raise TypeError("connect app entry `namespaces` must be a list")
-        namespaces: List[str] = []
-        for item in namespaces_raw:
-            if not isinstance(item, str):
-                raise TypeError("connect app entry `namespaces` must contain strings")
-            namespaces.append(item)
-
-        metadata_raw = data.get("metadata") or {}
-        if metadata_raw is None:
-            metadata_raw = {}
-        if not isinstance(metadata_raw, Mapping):
-            raise TypeError("connect app entry `metadata` must be an object")
-
-        policy_raw = data.get("policy") or {}
-        if policy_raw is None:
-            policy_raw = {}
-        if not isinstance(policy_raw, Mapping):
-            raise TypeError("connect app entry `policy` must be an object")
-
-        recognized = {
-            "app_id",
-            "display_name",
-            "description",
-            "icon_url",
-            "namespaces",
-            "metadata",
-            "policy",
-        }
-
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(
-            app_id=app_id,
-            display_name=_coerce_optional_str("display_name"),
-            description=_coerce_optional_str("description"),
-            icon_url=_coerce_optional_str("icon_url"),
-            namespaces=tuple(namespaces),
-            metadata=dict(metadata_raw),
-            policy=dict(policy_raw),
-            extra=extra,
-        )
-
-    def to_payload(self) -> Dict[str, Any]:
-        """Serialize the record back into a JSON-friendly mapping."""
-
-        payload: Dict[str, Any] = dict(self.extra)
-        payload["app_id"] = self.app_id
-        if self.display_name is not None:
-            payload["display_name"] = self.display_name
-        if self.description is not None:
-            payload["description"] = self.description
-        if self.icon_url is not None:
-            payload["icon_url"] = self.icon_url
-        payload["namespaces"] = list(self.namespaces)
-        payload["metadata"] = dict(self.metadata)
-        payload["policy"] = dict(self.policy)
-        return payload
-
-
-@dataclass(frozen=True)
-class ConnectAppRegistryPage:
-    """Paginated Connect application registry results."""
-
-    items: Sequence[ConnectAppRecord]
-    total: Optional[int]
-    next_cursor: Optional[str]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAppRegistryPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect app registry payload must be an object")
-        data = dict(payload)
-        items_raw = data.get("items") or []
-        if items_raw is None:
-            items_raw = []
-        if not isinstance(items_raw, list):
-            raise TypeError("connect app registry `items` must be a list")
-        items = [ConnectAppRecord.from_payload(entry) for entry in items_raw]
-
-        total_raw = data.get("total")
-        total: Optional[int]
-        if total_raw is None:
-            total = None
-        else:
-            try:
-                total = int(total_raw)
-            except (TypeError, ValueError) as exc:
-                raise TypeError(
-                    "connect app registry `total` must be numeric when present"
-                ) from exc
-
-        cursor_raw = data.get("next_cursor")
-        if cursor_raw is not None and not isinstance(cursor_raw, str):
-            raise TypeError("connect app registry cursor must be a string when present")
-
-        recognized = {"items", "total", "next_cursor"}
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(items=tuple(items), total=total, next_cursor=cursor_raw, extra=extra)
-
-
-@dataclass(frozen=True)
-class ConnectAdmissionManifestEntry:
-    """Admission control record for a Connect application."""
-
-    app_id: str
-    namespaces: Sequence[str]
-    metadata: Mapping[str, Any]
-    policy: Mapping[str, Any]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAdmissionManifestEntry":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect admission entry must be an object")
-        data = dict(payload)
-        app_id = data.get("app_id")
-        if not isinstance(app_id, str) or not app_id:
-            raise TypeError("connect admission entry requires string `app_id` field")
-
-        namespaces_raw = data.get("namespaces") or []
-        if namespaces_raw is None:
-            namespaces_raw = []
-        if not isinstance(namespaces_raw, list):
-            raise TypeError("connect admission entry `namespaces` must be a list")
-        namespaces: List[str] = []
-        for item in namespaces_raw:
-            if not isinstance(item, str):
-                raise TypeError("connect admission entry `namespaces` values must be strings")
-            namespaces.append(item)
-
-        metadata_raw = data.get("metadata") or {}
-        if metadata_raw is None:
-            metadata_raw = {}
-        if not isinstance(metadata_raw, Mapping):
-            raise TypeError("connect admission entry `metadata` must be an object")
-
-        policy_raw = data.get("policy") or {}
-        if policy_raw is None:
-            policy_raw = {}
-        if not isinstance(policy_raw, Mapping):
-            raise TypeError("connect admission entry `policy` must be an object")
-
-        recognized = {"app_id", "namespaces", "metadata", "policy"}
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(
-            app_id=app_id,
-            namespaces=tuple(namespaces),
-            metadata=dict(metadata_raw),
-            policy=dict(policy_raw),
-            extra=extra,
-        )
-
-
-@dataclass(frozen=True)
-class ConnectAdmissionManifest:
-    """Connect admission manifest describing allowed applications."""
-
-    version: Optional[int]
-    entries: Sequence[ConnectAdmissionManifestEntry]
-    manifest_hash: Optional[str]
-    updated_at: Optional[str]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAdmissionManifest":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect admission manifest payload must be an object")
-        data = dict(payload)
-        entries_raw = data.get("entries") or []
-        if entries_raw is None:
-            entries_raw = []
-        if not isinstance(entries_raw, list):
-            raise TypeError("connect admission manifest `entries` must be a list")
-        entries = [ConnectAdmissionManifestEntry.from_payload(item) for item in entries_raw]
-
-        version_raw = data.get("version")
-        if version_raw is None:
-            version: Optional[int] = None
-        else:
-            try:
-                version = int(version_raw)
-            except (TypeError, ValueError) as exc:
-                raise TypeError("connect admission manifest `version` must be numeric") from exc
-
-        manifest_hash = data.get("manifest_hash")
-        if manifest_hash is not None and not isinstance(manifest_hash, str):
-            raise TypeError(
-                "connect admission manifest `manifest_hash` must be a string when present"
-            )
-        updated_at = data.get("updated_at")
-        if updated_at is not None and not isinstance(updated_at, str):
-            raise TypeError("connect admission manifest `updated_at` must be a string when present")
-
-        recognized = {"entries", "version", "manifest_hash", "updated_at"}
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(
-            version=version,
-            entries=tuple(entries),
-            manifest_hash=manifest_hash,
-            updated_at=updated_at,
-            extra=extra,
-        )
-
-    def to_payload(self) -> Dict[str, Any]:
-        """Serialize the manifest to a JSON-serializable mapping."""
-
-        payload: Dict[str, Any] = dict(self.extra)
-        payload["entries"] = [
-            {
-                "app_id": entry.app_id,
-                "namespaces": list(entry.namespaces),
-                "metadata": dict(entry.metadata),
-                "policy": dict(entry.policy),
-                **dict(entry.extra),
-            }
-            for entry in self.entries
-        ]
-        if self.version is not None:
-            payload["version"] = self.version
-        if self.manifest_hash is not None:
-            payload["manifest_hash"] = self.manifest_hash
-        if self.updated_at is not None:
-            payload["updated_at"] = self.updated_at
-        return payload
-
-    # ------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ConnectAppPolicyControls:
-    """Runtime-configurable Connect policy toggles."""
-
-    relay_enabled: Optional[bool]
-    ws_max_sessions: Optional[int]
-    ws_per_ip_max_sessions: Optional[int]
-    ws_rate_per_ip_per_min: Optional[int]
-    session_ttl_ms: Optional[int]
-    frame_max_bytes: Optional[int]
-    session_buffer_max_bytes: Optional[int]
-    ping_interval_ms: Optional[int]
-    ping_miss_tolerance: Optional[int]
-    ping_min_interval_ms: Optional[int]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAppPolicyControls":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect app policy payload must be an object")
-        data = dict(payload)
-
-        def _coerce_optional_int(name: str) -> Optional[int]:
-            value = data.get(name)
-            if value is None:
-                return None
-            try:
-                return int(value)
-            except (TypeError, ValueError) as exc:
-                raise TypeError(f"connect app policy field `{name}` must be numeric") from exc
-
-        relay_enabled_raw = data.get("relay_enabled")
-        relay_enabled: Optional[bool]
-        if relay_enabled_raw is None:
-            relay_enabled = None
-        elif isinstance(relay_enabled_raw, bool):
-            relay_enabled = relay_enabled_raw
-        else:
-            raise TypeError("connect app policy `relay_enabled` must be boolean when present")
-
-        recognized = {
-            "relay_enabled",
-            "ws_max_sessions",
-            "ws_per_ip_max_sessions",
-            "ws_rate_per_ip_per_min",
-            "session_ttl_ms",
-            "frame_max_bytes",
-            "session_buffer_max_bytes",
-            "ping_interval_ms",
-            "ping_miss_tolerance",
-            "ping_min_interval_ms",
-        }
-
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(
-            relay_enabled=relay_enabled,
-            ws_max_sessions=_coerce_optional_int("ws_max_sessions"),
-            ws_per_ip_max_sessions=_coerce_optional_int("ws_per_ip_max_sessions"),
-            ws_rate_per_ip_per_min=_coerce_optional_int("ws_rate_per_ip_per_min"),
-            session_ttl_ms=_coerce_optional_int("session_ttl_ms"),
-            frame_max_bytes=_coerce_optional_int("frame_max_bytes"),
-            session_buffer_max_bytes=_coerce_optional_int("session_buffer_max_bytes"),
-            ping_interval_ms=_coerce_optional_int("ping_interval_ms"),
-            ping_miss_tolerance=_coerce_optional_int("ping_miss_tolerance"),
-            ping_min_interval_ms=_coerce_optional_int("ping_min_interval_ms"),
-            extra=extra,
-        )
-
-    def to_payload(self) -> Dict[str, Any]:
-        """Serialize the policy controls back to a JSON-serializable mapping."""
-
-        payload: Dict[str, Any] = dict(self.extra)
-        if self.relay_enabled is not None:
-            payload["relay_enabled"] = self.relay_enabled
-        if self.ws_max_sessions is not None:
-            payload["ws_max_sessions"] = self.ws_max_sessions
-        if self.ws_per_ip_max_sessions is not None:
-            payload["ws_per_ip_max_sessions"] = self.ws_per_ip_max_sessions
-        if self.ws_rate_per_ip_per_min is not None:
-            payload["ws_rate_per_ip_per_min"] = self.ws_rate_per_ip_per_min
-        if self.session_ttl_ms is not None:
-            payload["session_ttl_ms"] = self.session_ttl_ms
-        if self.frame_max_bytes is not None:
-            payload["frame_max_bytes"] = self.frame_max_bytes
-        if self.session_buffer_max_bytes is not None:
-            payload["session_buffer_max_bytes"] = self.session_buffer_max_bytes
-        if self.ping_interval_ms is not None:
-            payload["ping_interval_ms"] = self.ping_interval_ms
-        if self.ping_miss_tolerance is not None:
-            payload["ping_miss_tolerance"] = self.ping_miss_tolerance
-        if self.ping_min_interval_ms is not None:
-            payload["ping_min_interval_ms"] = self.ping_min_interval_ms
-        return payload

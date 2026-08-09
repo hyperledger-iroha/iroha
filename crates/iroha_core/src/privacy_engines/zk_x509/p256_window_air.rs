@@ -18,9 +18,8 @@ use thiserror::Error;
 
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 
-/// Stable descriptor for the first-release 16-way P-256 point selector.
-pub(crate) const ZK_X509_P256_WINDOW_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-window-air-v2-incompatible:four-verifier-positioned-big-endian-scalar-bits:16-candidate-full-scan:four-prefix-match-products:exactly-one-selection:48-running-coordinate-limb-accumulators:x-then-y-then-z-id-contiguous-external-reads:three-external-limbs-per-row:256-candidate-plus16-output-rows:61-base-columns:verifier-preprocessed-fixed27:aggregate-aux1-zero:fixed-constraint-vector232-degree4:value-bus-and-scalar-bit-copy-binding=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
 /// Stable aggregate layout for all selectors in one ECDSA equation.
+#[cfg(test)]
 pub(crate) const ZK_X509_P256_WINDOW_BATCH_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-window-batch-v1-incompatible:one-signature:u1-window0-through63-then-u2-window0-through63:128-verifier-fixed-vertical-blocks:512-rows-per-block:65536-row-single-commitment:no-horizontal-instance-expansion:base61:aux1-zero-before-cross-products:fixed27:constraints232-degree4:cross-trace-address-binding=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
 
 /// Rows used by one 16-way point lookup.
@@ -96,6 +95,7 @@ pub(crate) enum P256WindowCoordinateV1 {
     Z,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256WindowCoordinateV1 {
     const fn index(self) -> usize {
         match self {
@@ -116,6 +116,7 @@ impl P256WindowCoordinateV1 {
 }
 
 /// Exact projective point bytes used to build a selector witness.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256WindowPointV1 {
     /// Canonical x-coordinate.
@@ -127,6 +128,7 @@ pub(crate) struct P256WindowPointV1 {
 }
 
 /// Verifier-fixed phase of one selector row.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256WindowRowKindV1 {
     /// Three consecutive limbs of one candidate point.
@@ -144,6 +146,7 @@ pub(crate) enum P256WindowRowKindV1 {
 }
 
 /// Complete verifier-regenerated row identity.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256WindowFixedRowV1 {
     /// Scalar whose nibble is consumed.
@@ -155,6 +158,7 @@ pub(crate) struct P256WindowFixedRowV1 {
 }
 
 /// Address of one pointwise value-bus read.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256WindowExternalAddressV1 {
     /// One coordinate limb of one table candidate.
@@ -176,6 +180,7 @@ pub(crate) enum P256WindowExternalAddressV1 {
 }
 
 /// One complete 16-way point-selection trace.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct P256WindowTraceV1 {
     /// Verifier-regenerated topology.
@@ -185,6 +190,7 @@ pub(crate) struct P256WindowTraceV1 {
 }
 
 /// One aggregate commitment layout for all 128 verifier-positioned windows.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct P256WindowBatchStarkTraceV1 {
     /// Vertically concatenated and per-window padded selector rows.
@@ -193,6 +199,7 @@ pub(crate) struct P256WindowBatchStarkTraceV1 {
     pub(crate) aux: Vec<[F; P256_WINDOW_STARK_AUX_WIDTH_V1]>,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256WindowTraceV1 {
     /// Overwrite every witness-bearing selector row.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -267,20 +274,24 @@ pub(crate) enum P256WindowAirErrorV1 {
     #[error("zk-X509 P-256 window topology is invalid")]
     Topology,
     /// A bit, table, row, or slot index is invalid.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 window index is invalid")]
     Index,
     /// An external limb is not a canonical 16-bit value.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 external window limb is out of range")]
     ExternalRange,
     /// A local or transition identity is nonzero.
     #[error("zk-X509 P-256 window constraint failed")]
     Constraint,
     /// A bounded fixed-trace allocation failed.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     #[error("zk-X509 P-256 window allocation failed")]
     Allocation,
 }
 
 /// Build one fixed-topology selector witness.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_p256_window_trace_v1(
     scalar: P256WindowScalarV1,
     window: u8,
@@ -355,6 +366,7 @@ pub(crate) fn build_p256_window_trace_v1(
 }
 
 /// Return the fixed pointwise value-bus address for one external row slot.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_window_external_address_v1(
     fixed: P256WindowFixedRowV1,
     slot: usize,
@@ -383,6 +395,7 @@ pub(crate) fn p256_window_external_address_v1(
 }
 
 /// Return one committed external limb for pointwise value-bus equality.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn p256_window_external_limb_v1(
     trace: &P256WindowTraceV1,
     row: usize,
@@ -419,6 +432,7 @@ pub(crate) const fn p256_window_opened_scalar_bits_v1(
 }
 
 /// Evaluate one fixed selector row.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn evaluate_p256_window_row_constraints_v1(
     fixed: P256WindowFixedRowV1,
     base: &[F; P256_WINDOW_BASE_WIDTH_V1],
@@ -508,6 +522,7 @@ pub(crate) fn evaluate_p256_window_row_constraints_v1(
     Ok(residues)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fixed_rows_v1(scalar: P256WindowScalarV1, window: u8) -> Vec<P256WindowFixedRowV1> {
     let mut fixed = Vec::with_capacity(P256_WINDOW_ROWS_V1);
     for candidate in 0..16 {
@@ -533,6 +548,7 @@ fn fixed_rows_v1(scalar: P256WindowScalarV1, window: u8) -> Vec<P256WindowFixedR
 ///
 /// Scalar role and window index are checked here and separately bound by the
 /// scalar-bit/external-copy manifests. They do not become proof metadata.
+#[cfg(test)]
 pub(crate) fn compile_p256_window_stark_fixed_rows_v1(
     scalar: P256WindowScalarV1,
     window: u8,
@@ -636,13 +652,9 @@ impl P256WindowBatchStarkFixedProviderV1 {
         }
         p256_window_stark_fixed_local_row_v1(index % P256_WINDOW_STARK_TRACE_SIZE_V1)
     }
-
-    /// Native row count.
-    pub(crate) const fn trace_size_v1(self) -> usize {
-        self.trace_size
-    }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_window_batch_position_v1(
     index: usize,
 ) -> Result<(P256WindowScalarV1, u8), P256WindowAirErrorV1> {
@@ -662,6 +674,7 @@ fn p256_window_batch_position_v1(
 ///
 /// This is the sole aggregate layout: creating 128 horizontal commitment
 /// instances would exceed both the instance ceiling and the proof-byte cap.
+#[cfg(test)]
 pub(crate) fn compile_p256_window_batch_stark_fixed_rows_v1()
 -> Result<Vec<[F; P256_WINDOW_STARK_FIXED_WIDTH_V1]>, P256WindowAirErrorV1> {
     let provider =
@@ -679,6 +692,7 @@ pub(crate) fn compile_p256_window_batch_stark_fixed_rows_v1()
 }
 
 /// Build the sole vertically packed aggregate witness for one ECDSA equation.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn build_p256_window_batch_stark_trace_v1(
     windows: &[P256WindowTraceV1],
 ) -> Result<P256WindowBatchStarkTraceV1, P256WindowAirErrorV1> {
@@ -823,6 +837,7 @@ pub(crate) fn evaluate_p256_window_stark_residues_v1(
     Ok(residues)
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn packed_limb_v1(
     chunk: usize,
     slot: usize,
@@ -836,6 +851,7 @@ fn packed_limb_v1(
     Ok((coordinate, packed % P256_WINDOW_COORDINATE_LIMBS_V1))
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn match_prefixes_v1(bits: [F; 4], candidate: u8) -> [F; 4] {
     let mut prefix = F::ONE;
     core::array::from_fn(|bit| {
@@ -850,6 +866,7 @@ fn match_prefixes_v1(bits: [F; 4], candidate: u8) -> [F; 4] {
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn append_bit_transition_residues_v1(
     residues: &mut Vec<F>,
     base: &[F; P256_WINDOW_BASE_WIDTH_V1],
@@ -860,6 +877,7 @@ fn append_bit_transition_residues_v1(
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn point_limbs_v1(
     point: P256WindowPointV1,
 ) -> [[u16; P256_WINDOW_COORDINATE_LIMBS_V1]; P256_WINDOW_COORDINATES_V1] {
@@ -870,6 +888,7 @@ fn point_limbs_v1(
     ]
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; P256_WINDOW_COORDINATE_LIMBS_V1] {
     core::array::from_fn(|limb| {
         let low = 31 - 2 * limb;
@@ -877,6 +896,7 @@ fn bytes_be_to_limbs_le_v1(bytes: [u8; 32]) -> [u16; P256_WINDOW_COORDINATE_LIMB
     })
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 fn limbs_le_to_bytes_be_v1(limbs: [u16; P256_WINDOW_COORDINATE_LIMBS_V1]) -> [u8; 32] {
     let mut bytes = [0_u8; 32];
     for (limb, value) in limbs.into_iter().enumerate() {

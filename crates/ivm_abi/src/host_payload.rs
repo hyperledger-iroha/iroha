@@ -53,8 +53,16 @@ pub struct RootsGetResponse {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(schema_name = "iroha.ivm.v1.VoteGetTallyRequest", deny_unknown_fields)]
 pub struct VoteGetTallyRequest {
-    /// Election identifier.
+    /// Canonical governance selector V1 identifying the election.
     pub election_id: String,
+}
+
+impl VoteGetTallyRequest {
+    /// Return whether the request carries a canonical governance selector V1.
+    #[must_use]
+    pub fn is_valid_v1(&self) -> bool {
+        iroha_data_model::governance::is_valid_governance_selector_v1(&self.election_id)
+    }
 }
 
 /// Finalized election tally returned by the ledger host.
@@ -118,4 +126,41 @@ pub struct VrfEpochSeedResponse {
     pub epoch: u64,
     /// Seed bytes, all zero when `found` is false.
     pub seed: [u8; 32],
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VoteGetTallyRequest;
+
+    #[test]
+    fn vote_tally_request_uses_canonical_governance_selector_v1() {
+        for election_id in ["election-1", "A9_selector~with.dots"] {
+            assert!(
+                VoteGetTallyRequest {
+                    election_id: election_id.to_owned(),
+                }
+                .is_valid_v1()
+            );
+        }
+        for election_id in ["", ".hidden", "election/alias", "election\nalias"] {
+            assert!(
+                !VoteGetTallyRequest {
+                    election_id: election_id.to_owned(),
+                }
+                .is_valid_v1()
+            );
+        }
+        assert!(
+            VoteGetTallyRequest {
+                election_id: "a".repeat(128),
+            }
+            .is_valid_v1()
+        );
+        assert!(
+            !VoteGetTallyRequest {
+                election_id: "a".repeat(129),
+            }
+            .is_valid_v1()
+        );
+    }
 }

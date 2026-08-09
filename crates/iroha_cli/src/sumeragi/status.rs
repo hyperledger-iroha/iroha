@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn summarize_status_handles_defaults() {
         let value = norito::json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "height": 7,
             "view": 3,
             "phase": { "phase": "prepare" },
@@ -219,7 +219,7 @@ mod tests {
         });
         assert_eq!(
             summarize_status(&value),
-            "protocol=3 height=7 view=3 phase=prepare leader=4 body=validated pending_persistence=- last_committed=6 restart_required=false"
+            "protocol=4 height=7 view=3 phase=prepare leader=4 body=validated pending_persistence=- last_committed=6 restart_required=false"
         );
     }
 

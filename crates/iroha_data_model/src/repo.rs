@@ -327,14 +327,14 @@ mod tests {
                 .expect("public key"),
         );
         let cash_leg = RepoCashLeg {
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: Quantity::from(1_000u32),
         };
         let collateral_leg = RepoCollateralLeg::new(
-            iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
@@ -346,7 +346,7 @@ mod tests {
             counterparty.clone(),
             cash_leg,
             AssetId::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
@@ -354,7 +354,7 @@ mod tests {
             ),
             collateral_leg,
             AssetId::new(
-                iroha_data_model::asset::AssetDefinitionId::new(
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 ),
@@ -428,8 +428,10 @@ mod tests {
     #[test]
     fn negative_numeric_payloads_cannot_decode_as_repo_leg_quantities() {
         let domain = DomainId::try_new("wonderland", "universal").expect("domain");
-        let cash = AssetDefinitionId::new(domain.clone(), "usd".parse().expect("name"));
-        let collateral = AssetDefinitionId::new(domain, "bond".parse().expect("name"));
+        let cash =
+            AssetDefinitionId::derive_from_components(domain.clone(), "usd".parse().expect("name"));
+        let collateral =
+            AssetDefinitionId::derive_from_components(domain, "bond".parse().expect("name"));
 
         let encoded = ForgedRepoCashLeg {
             asset_definition_id: cash,

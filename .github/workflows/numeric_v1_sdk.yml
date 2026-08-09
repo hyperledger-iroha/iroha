@@ -56,7 +56,7 @@ jobs:
       - name: Verify pure quantity builder boundaries
         run: >-
           node --test
-          --test-name-pattern="smart-contract manifest type declarations reject retired numeric names|CastPlainBallot pure-JS Norito codec preserves strict fractional Quantity|buildShieldInstruction enforces strict canonical Quantity inputs|buildUnshieldInstruction enforces strict canonical Quantity inputs"
+          --test-name-pattern="smart-contract manifest type declarations reject retired numeric names|CastPlainBallot pure-JS Norito codec preserves strict fractional Quantity|retired generic confidential instructions stay absent from builders and codec discriminants"
           test/instructionBuilders.test.js
       - name: Verify packaged quantity boundaries
         run: >-
@@ -231,4 +231,7 @@ jobs:
         run: >-
           dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj
           --configuration Release
-          --filter "FullyQualifiedName~NumericV1Tests|FullyQualifiedName~AssetQuantityInstructionTests|FullyQualifiedName~ContractManifestTests"
+          --
+          --filter-class Hyperledger.Iroha.Sdk.Tests.NumericV1Tests
+          --filter-class Hyperledger.Iroha.Sdk.Tests.AssetQuantityInstructionTests
+          --filter-class Hyperledger.Iroha.Sdk.Tests.ContractManifestTests

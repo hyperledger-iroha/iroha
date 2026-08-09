@@ -18,7 +18,7 @@ use tokio::{
 };
 
 async fn trigger_completion_success_should_produce_event_scenario(network: &Network) -> Result<()> {
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "rose".parse()?,
     );
@@ -36,7 +36,8 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
             ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id.clone())
                 .under_authority(asset_id.account().clone()),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     ));
     let client = network.client();
     let register_tx = client.build_transaction(
@@ -165,7 +166,8 @@ async fn trigger_completion_failure_reports_error_scenario(network: &Network) ->
             ExecuteTriggerEventFilter::new()
                 .for_trigger(trigger_id.clone())
                 .under_authority(account_id),
-        ),
+        )
+        .expect("trigger action fixture satisfies validation invariants"),
     ));
     let client = network.client();
     spawn_blocking(move || {

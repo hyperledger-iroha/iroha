@@ -200,79 +200,7 @@ PROOF
       BY <1>1 DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
                     StrongInductiveInvariant, Safety
     <2>2. CausalCommandCapacityDebt(node)' \in Nat
-      <3>1. /\ AsyncQueueDepth(node)' \in Nat
-             /\ AsyncNormalLimit \in Nat
-             /\ AsyncProgressLimit \in Nat
-             /\ AsyncQueueCapacity \in Nat
-        BY <2>1, LenProperties, SMT
-           DEF AsyncQueueDepth, AsyncNormalLimit,
-               AsyncProgressLimit, AsyncTypeInvariant,
-               AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
-               AsyncRuntimeScalarTypeInvariant, AsyncQueueTyped,
-               AsyncConfiguration
-      <3>2. CausalHeadCommandLimit(node)' \in Nat
-        <4>1. CASE HeadCausalCandidate(node).class' = "Normal"
-          BY <3>1, <4>1 DEF CausalHeadCommandLimit
-        <4>2. CASE HeadCausalCandidate(node).class' = "Progress"
-          BY <3>1, <4>2 DEF CausalHeadCommandLimit
-        <4>3. CASE /\ HeadCausalCandidate(node).class' # "Normal"
-                      /\ HeadCausalCandidate(node).class' # "Progress"
-          BY <3>1, <4>3 DEF CausalHeadCommandLimit
-        <4> QED BY <4>1, <4>2, <4>3
-      <3>3. CASE ~(/\ NonCompletionCausalAdmissionDebt(node)'
-                    /\ ~CandidateInFlight(
-                         HeadCausalCandidate(node))'
-                    /\ ~CanEnqueueClass(
-                         node, HeadCausalCandidate(node).class)')
-        <4>1. CausalCommandCapacityDebt(node)' = 0
-          BY <3>3 DEF CausalCommandCapacityDebt
-        <4> QED BY <4>1
-      <3>4. CASE /\ NonCompletionCausalAdmissionDebt(node)'
-                    /\ ~CandidateInFlight(
-                         HeadCausalCandidate(node))'
-                    /\ ~CanEnqueueClass(
-                         node, HeadCausalCandidate(node).class)'
-        <4>1. /\ NonCompletionCausalAdmissionDebt(node)'
-               /\ ~CandidateInFlight(HeadCausalCandidate(node))'
-               /\ ~CanEnqueueClass(
-                    node, HeadCausalCandidate(node).class)'
-          BY <3>4
-        <4>2. AsyncCandidateTyped(HeadCausalCandidate(node))'
-          <5>1. /\ AsyncQueueTyped(asyncCausalQueues'[node])
-                 /\ Len(asyncCausalQueues'[node]) > 0
-            BY <2>1, <4>1
-               DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
-                   AsyncRuntimeTypeInvariant, AsyncCausalTypeInvariant,
-                   NonCompletionCausalAdmissionDebt,
-                   CausalAdmissionDebtActive, CausalQueueNonempty
-          <5> QED BY <5>1, NonemptyTypedQueueHeadIsTyped
-               DEF HeadCausalCandidate
-        <4>3. HeadCausalCandidate(node).class'
-                   \in {"Normal", "Progress"}
-          BY <4>1, <4>2, SMT
-             DEF AsyncCandidateTyped, AsyncCommandClasses,
-                 NonCompletionCausalAdmissionDebt
-        <4>4. CanEnqueueClass(
-                  node, HeadCausalCandidate(node).class)'
-                  <=> AsyncQueueDepth(node)'
-                        < CausalHeadCommandLimit(node)'
-          <5>1. CASE HeadCausalCandidate(node).class' = "Normal"
-            BY <5>1 DEF CanEnqueueClass, CausalHeadCommandLimit
-          <5>2. CASE HeadCausalCandidate(node).class' = "Progress"
-            BY <5>2 DEF CanEnqueueClass, CausalHeadCommandLimit
-          <5> QED BY <4>3, <5>1, <5>2, SMT
-        <4>5. ~(AsyncQueueDepth(node)'
-                    < CausalHeadCommandLimit(node)')
-          BY <4>1, <4>4
-        <4>6. AsyncQueueDepth(node)'
-                    - CausalHeadCommandLimit(node)' + 1 \in Nat
-          BY <3>1, <3>2, <4>5, SMT
-        <4>7. CausalCommandCapacityDebt(node)' =
-                 AsyncQueueDepth(node)'
-                   - CausalHeadCommandLimit(node)' + 1
-          BY <4>1 DEF CausalCommandCapacityDebt
-        <4> QED BY <4>6, <4>7
-      <3> QED BY <3>3, <3>4
+      BY <2>1, CausalCommandCapacityDebtIsNatural
     <2>3. ReadyFifoDebt(node)' \in 0..1
       BY <2>1, Isa
          DEF ReadyFifoDebt, NodeQueueNonempty,
@@ -750,12 +678,14 @@ PROOF
 THEOREM SerializedFifoRemovesOneCommand ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ SerializedRunnerRuntimeStep(node)
     /\ FifoRuntimeStep(node)
     => AsyncQueueDepth(node)' = AsyncQueueDepth(node) - 1
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 SerializedRunnerRuntimeStep(node),
                 FifoRuntimeStep(node)
          PROVE AsyncQueueDepth(node)' = AsyncQueueDepth(node) - 1
@@ -975,6 +905,7 @@ PROOF
 THEOREM SerializedFifoRetainsExistingCausalHead ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ CausalQueueNonempty(node)
     /\ SerializedRunnerRuntimeStep(node)
     /\ FifoRuntimeStep(node)
@@ -983,6 +914,7 @@ THEOREM SerializedFifoRetainsExistingCausalHead ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 CausalQueueNonempty(node),
                 SerializedRunnerRuntimeStep(node),
                 FifoRuntimeStep(node)
@@ -1050,25 +982,17 @@ THEOREM NonCompletionCausalHeadCapacityFacts ==
     /\ NonCompletionCausalAdmissionDebt(node)
     /\ FifoRuntimeStep(node)
     => /\ AsyncQueueDepth(node) \in Nat \ {0}
-       /\ CausalHeadCommandLimit(node) \in Nat \ {0}
        /\ HeadCausalCandidate(node).class \in {"Normal", "Progress"}
-       /\ (CanEnqueueClass(
-              node, HeadCausalCandidate(node).class)
-             <=> AsyncQueueDepth(node)
-                   < CausalHeadCommandLimit(node))
+       /\ CausalHeadCommandLimit(node) = AsyncQueueCapacity + 1
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
                 NonCompletionCausalAdmissionDebt(node),
                 FifoRuntimeStep(node)
          PROVE /\ AsyncQueueDepth(node) \in Nat \ {0}
-               /\ CausalHeadCommandLimit(node) \in Nat \ {0}
                /\ HeadCausalCandidate(node).class
                     \in {"Normal", "Progress"}
-               /\ (CanEnqueueClass(
-                      node, HeadCausalCandidate(node).class)
-                     <=> AsyncQueueDepth(node)
-                           < CausalHeadCommandLimit(node))
+               /\ CausalHeadCommandLimit(node) = AsyncQueueCapacity + 1
     <2>1. /\ AsyncRuntimeScalarTypeInvariant
            /\ AsyncCausalTypeInvariant
            /\ CausalQueueNonempty(node)
@@ -1088,27 +1012,15 @@ PROOF
       BY <1>1, <2>2, SMT
          DEF AsyncCandidateTyped, AsyncCommandClasses,
              NonCompletionCausalAdmissionDebt
-    <2>5. /\ AsyncNormalLimit \in Nat \ {0}
-           /\ AsyncProgressLimit \in Nat \ {0}
-      BY <2>1, SMT
-         DEF AsyncRuntimeScalarTypeInvariant, AsyncConfiguration,
-             AsyncNormalLimit, AsyncProgressLimit
-    <2>6. CausalHeadCommandLimit(node) \in Nat \ {0}
-      BY <2>4, <2>5, Isa DEF CausalHeadCommandLimit
-    <2>7. CanEnqueueClass(
-             node, HeadCausalCandidate(node).class)
-             <=> AsyncQueueDepth(node) < CausalHeadCommandLimit(node)
-      <3>1. CASE HeadCausalCandidate(node).class = "Normal"
-        BY <3>1 DEF CanEnqueueClass, CausalHeadCommandLimit
-      <3>2. CASE HeadCausalCandidate(node).class = "Progress"
-        BY <3>2 DEF CanEnqueueClass, CausalHeadCommandLimit
-      <3> QED BY <2>4, <3>1, <3>2, SMT
-    <2> QED BY <2>3, <2>4, <2>6, <2>7
+    <2>5. CausalHeadCommandLimit(node) = AsyncQueueCapacity + 1
+      BY DEF CausalHeadCommandLimit
+    <2> QED BY <2>3, <2>4, <2>5
   <1> QED BY <1>1
 
 THEOREM SerializedFifoRetainsNonCompletionCausalDebt ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ NonCompletionCausalAdmissionDebt(node)
     /\ SerializedRunnerRuntimeStep(node)
     /\ FifoRuntimeStep(node)
@@ -1118,6 +1030,7 @@ THEOREM SerializedFifoRetainsNonCompletionCausalDebt ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 NonCompletionCausalAdmissionDebt(node),
                 SerializedRunnerRuntimeStep(node),
                 FifoRuntimeStep(node)
@@ -1151,9 +1064,31 @@ THEOREM NaturalCapacityDebtDropsAfterRemoval ==
     => newDepth - limit + 1 < oldDepth - limit + 1
 BY SMT
 
+THEOREM SerializedFifoCannotCloseExactCausalAdmission ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ NonCompletionCausalAdmissionDebt(node)
+    /\ SerializedRunnerRuntimeStep(node)
+    /\ FifoRuntimeStep(node)
+    /\ CanEnqueueClass(node, HeadCausalCandidate(node).class)
+    => CanEnqueueClass(node, HeadCausalCandidate(node).class)'
+BY SequenceWithoutIndexFacts, FS_CardinalityType, IsaT(7200)
+   DEF CanEnqueueClass, CanEnqueueWithCertifiedFenceCredit,
+       AsyncAdmissionCertifiedFenceCredit, AsyncCertifiedFenceCredit,
+       AsyncQueuedCertifiedFenceEscapeCount,
+       AsyncQueuedCandidateIsCertifiedFenceEscape,
+       AsyncQueuedClassCount, AsyncQueuedNoncompletionCount,
+       AsyncQueueDepth, NonCompletionCausalAdmissionDebt,
+       CausalAdmissionDebtActive, SerializedRunnerRuntimeStep,
+       SerializedRuntimeStep, SerializedRuntimePrecedesServeIngressStep,
+       RuntimeStep, FifoRuntimeStep, RemoveNextNodeCommandAfterDispatch,
+       AsyncTimeoutLifecycleSequenceAfterInstall, SequenceWithoutIndex
+
 THEOREM NonCompletionDebtFifoCapacityProgress ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ NonCompletionCausalAdmissionDebt(node)
     /\ SerializedRunnerRuntimeStep(node)
@@ -1164,6 +1099,7 @@ THEOREM NonCompletionDebtFifoCapacityProgress ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
                 AsyncProgressOwnershipInvariant,
                 NonCompletionCausalAdmissionDebt(node),
                 SerializedRunnerRuntimeStep(node),
@@ -1172,13 +1108,8 @@ PROOF
                \/ CausalCommandCapacityDebt(node)'
                     < CausalCommandCapacityDebt(node)
     <2>1. /\ AsyncQueueDepth(node) \in Nat \ {0}
-           /\ CausalHeadCommandLimit(node) \in Nat \ {0}
            /\ HeadCausalCandidate(node).class
                 \in {"Normal", "Progress"}
-           /\ (CanEnqueueClass(
-                  node, HeadCausalCandidate(node).class)
-                 <=> AsyncQueueDepth(node)
-                       < CausalHeadCommandLimit(node))
       BY <1>1, NonCompletionCausalHeadCapacityFacts
     <2>2. ~CandidateInFlight(HeadCausalCandidate(node))
       BY <1>1, OwnedCausalHeadIsNotInFlight
@@ -1186,9 +1117,7 @@ PROOF
              CausalAdmissionDebtActive
     <2>3. AsyncQueueDepth(node)' = AsyncQueueDepth(node) - 1
       BY <1>1, SerializedFifoRemovesOneCommand
-    <2>4. /\ NonCompletionCausalAdmissionDebt(node)'
-           /\ CausalHeadCommandLimit(node)'
-                = CausalHeadCommandLimit(node)
+    <2>4. NonCompletionCausalAdmissionDebt(node)'
       BY <1>1, SerializedFifoRetainsNonCompletionCausalDebt
     <2>5. /\ CausalQueueNonempty(node)'
            /\ HeadCausalCandidate(node)'
@@ -1197,8 +1126,6 @@ PROOF
          DEF NonCompletionCausalAdmissionDebt,
              CausalAdmissionDebtActive
     <2>6. /\ NonCompletionCausalAdmissionDebt(node)'
-           /\ CausalHeadCommandLimit(node)'
-                = CausalHeadCommandLimit(node)
            /\ CausalQueueNonempty(node)'
            /\ HeadCausalCandidate(node)'
                 = HeadCausalCandidate(node)
@@ -1208,36 +1135,29 @@ PROOF
          DEF CausalHeadCanAdvance
     <2>8. CASE ~CandidateInFlight(HeadCausalCandidate(node))'
       <3>1. CASE CanEnqueueClass(
-                    node, HeadCausalCandidate(node).class)'
-        BY <2>1, <2>6, <3>1, Isa
-           DEF CausalHeadCanAdvance
+                    node, HeadCausalCandidate(node).class)
+        <4>1. CanEnqueueClass(
+                 node, HeadCausalCandidate(node).class)'
+          BY <1>1, <3>1, SerializedFifoCannotCloseExactCausalAdmission
+        <4> QED BY <2>6, <4>1, Isa DEF CausalHeadCanAdvance
       <3>2. CASE ~CanEnqueueClass(
-                    node, HeadCausalCandidate(node).class)'
-        <4>1. /\ ~CanEnqueueClass(
-                       node, HeadCausalCandidate(node).class)
-               /\ AsyncQueueDepth(node)' \in Nat
-               /\ ~(AsyncQueueDepth(node)'
-                      < CausalHeadCommandLimit(node))
-          BY <2>1, <2>3, <2>6, <3>2, Isa
-             DEF CanEnqueueClass, AsyncQueueDepth,
-                 CausalHeadCommandLimit
-        <4>2. CausalCommandCapacityDebt(node) =
-                 AsyncQueueDepth(node)
-                   - CausalHeadCommandLimit(node) + 1
-          BY <1>1, <2>2, <4>1
-             DEF CausalCommandCapacityDebt
-        <4>3. CausalCommandCapacityDebt(node)' =
-                 AsyncQueueDepth(node)'
-                   - CausalHeadCommandLimit(node) + 1
-          BY <2>6, <2>8, <3>2
-             DEF CausalCommandCapacityDebt
-        <4>4. AsyncQueueDepth(node)'
-                   - CausalHeadCommandLimit(node) + 1
-                 < AsyncQueueDepth(node)
-                     - CausalHeadCommandLimit(node) + 1
-          BY <2>1, <2>3, <4>1,
-             NaturalCapacityDebtDropsAfterRemoval
-        <4> QED BY <4>2, <4>3, <4>4
+                    node, HeadCausalCandidate(node).class)
+        <4>1. CASE CanEnqueueClass(
+                      node, HeadCausalCandidate(node).class)'
+          BY <2>6, <4>1, Isa DEF CausalHeadCanAdvance
+        <4>2. CASE ~CanEnqueueClass(
+                      node, HeadCausalCandidate(node).class)'
+          <5>1. /\ CausalCommandCapacityDebt(node) =
+                       AsyncQueueDepth(node) + 1
+                 /\ CausalCommandCapacityDebt(node)' =
+                       AsyncQueueDepth(node)' + 1
+            BY <1>1, <2>2, <2>6, <2>8, <3>2, <4>2
+               DEF CausalCommandCapacityDebt
+          <5>2. AsyncQueueDepth(node)' + 1
+                   < AsyncQueueDepth(node) + 1
+            BY <2>1, <2>3, SMT
+          <5> QED BY <5>1, <5>2
+        <4> QED BY <4>1, <4>2
       <3> QED BY <3>1, <3>2
     <2> QED BY <2>7, <2>8
   <1> QED BY <1>1
@@ -2556,7 +2476,11 @@ BY TypedItemIsInNetworkCarrier, TypedCandidateIsInCarrier, Isa
        NextCandidateGeneration, NormalProposalPrepareNoItemKinds,
        NormalProposalPrepareNetworkKinds, NormalBeginPrepareParentKinds,
        AsyncCandidateTyped, AsyncCandidateSet, AsyncCandidateDomain,
-       AsyncCandidateWithIdentity, AsyncEvidenceTyped, AsyncItemTyped,
+       AsyncCandidateWithIdentity,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateWithIdentityAndOrigin,
+       AsyncCandidateSuccessorProposalRound,
+       AsyncEvidenceTyped, AsyncItemTyped,
        Views, Generations, Heights
 
 THEOREM TypedLiveProtectedServiceIsCanonical ==
@@ -2743,7 +2667,8 @@ PROOF
              /\ CausalCandidate("Normal", "BeginPrepare", command).kind
                   \in NormalProposalPrepareNoItemKinds
         BY DEF CausalCandidate, AsyncCandidateFrom,
-               AsyncCandidateWithIdentity,
+               AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+               AsyncCandidateWithIdentityAndOrigin,
                NormalProposalPrepareNoItemKinds
       <3>2. \E parent \in AsyncCandidateSet,
                    blockHeight \in Heights:
@@ -2757,13 +2682,18 @@ PROOF
         <4> QED BY <1>1, <2>2, <4>2
              DEF CausalCandidate, AsyncCandidateFrom,
                  FrozenNormalBeginPrepareCandidate,
-                 AsyncCandidateWithIdentity
+                 AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+                 AsyncCandidateSuccessorSemanticPhase,
+                 AsyncCandidateSuccessorProposalRound,
+                 AsyncCandidateSemanticPhase,
+                 AsyncCandidateWithIdentityAndOrigin
       <3> QED BY <3>1, <3>2
            DEF NormalProposalPrepareNoItemCandidate
     <2>5. CausalCandidate("Normal", "BeginPrepare", command).class =
              "Normal"
       BY DEF CausalCandidate, AsyncCandidateFrom,
-             AsyncCandidateWithIdentity
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateWithIdentityAndOrigin
     <2>6. NormalProposalPrepareCandidate(
              CausalCandidate("Normal", "BeginPrepare", command))
       BY <2>3, <2>4, <2>5 DEF NormalProposalPrepareCandidate
@@ -2872,8 +2802,10 @@ PROOF
            /\ InstallProposalSubject(command) \in SubjectOrNone
       BY <1>1, <2>1, SMT
          DEF AsyncTypeInvariant, TypeInvariant, AsyncCandidateTyped,
-             InstallProposalSuccessor, AsyncCandidateAtConsumer,
-             AsyncCandidateWithIdentity, NextCandidateGeneration,
+             InstallProposalSuccessor,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateWithIdentityAndOrigin,
+             NextCandidateGeneration,
              Generations
     <2>3. InstallProposalSuccessor(command) \in AsyncCandidateSet
       BY <2>1, TypedCandidateIsInCarrier
@@ -2882,16 +2814,18 @@ PROOF
       <3>1. /\ InstallProposalSuccessor(command).item = NoAsyncItem
              /\ InstallProposalSuccessor(command).kind
                   \in NormalProposalPrepareNoItemKinds
-        BY DEF InstallProposalSuccessor, AsyncCandidateAtConsumer,
-               AsyncCandidateWithIdentity,
+        BY DEF InstallProposalSuccessor,
+               AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+               AsyncCandidateWithIdentityAndOrigin,
                NormalProposalPrepareNoItemKinds
       <3>2. InstallProposalSuccessor(command) =
                FrozenInstallProposalSuccessor(
                  command, context, generation[command.node],
                  InstallProposalSubject(command))
-        BY DEF InstallProposalSuccessor, AsyncCandidateAtConsumer,
+        BY DEF InstallProposalSuccessor,
                FrozenInstallProposalSuccessor,
-               NextCandidateGeneration, AsyncCandidateWithIdentity
+               NextCandidateGeneration,
+               AsyncCandidateCausalSuccessorWithIdentityAndOrigin
       <3>3. \E installCommand \in AsyncCandidateSet,
                    installedContext \in ContextRecords,
                    priorGeneration \in Generations,
@@ -2910,8 +2844,9 @@ PROOF
       <3> QED BY <3>1, <3>3
            DEF NormalProposalPrepareNoItemCandidate
     <2>5. InstallProposalSuccessor(command).class = "Normal"
-      BY DEF InstallProposalSuccessor, AsyncCandidateAtConsumer,
-             AsyncCandidateWithIdentity
+      BY DEF InstallProposalSuccessor,
+             AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+             AsyncCandidateWithIdentityAndOrigin
     <2>6. NormalProposalPrepareCandidate(
              InstallProposalSuccessor(command))
       BY <2>3, <2>4, <2>5 DEF NormalProposalPrepareCandidate
@@ -2940,7 +2875,10 @@ BY Isa
        FrozenNormalDeliveryCandidate, NextCandidateGeneration,
        NormalProposalPrepareNoItemKinds,
        NormalProposalPrepareNetworkKinds,
-       AsyncCandidateWithIdentity
+       AsyncCandidateWithIdentity,
+       AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+       AsyncCandidateWithIdentityAndOrigin,
+       AsyncCandidateSuccessorProposalRound
 
 THEOREM ProtectedRankProgressCoversNormalProposalPrepare ==
   \A initialContext:

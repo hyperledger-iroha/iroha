@@ -476,13 +476,15 @@ fn test_get_merkle_compact_syscall() {
             }
         })
         .collect();
-    let proof = MerkleProof::from_audit_path(leaf_idx, siblings);
+    let proof = MerkleProof::from_audit_path(dirs, siblings);
     let mut chunk = [0u8; 32];
     vm.memory.load_bytes((addr / 32) * 32, &mut chunk).unwrap();
     let leaf_digest = ivm::merkle_utils::compute_memory_leaf_digest(&chunk);
     let leaf_hash = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_digest));
     let expected_root = if depth < path.len() {
-        proof.compute_root_sha256(&leaf_hash, depth).unwrap_or(root)
+        proof
+            .compute_partial_root_sha256(&leaf_hash, depth)
+            .expect("proof height equals compact depth")
     } else {
         root
     };

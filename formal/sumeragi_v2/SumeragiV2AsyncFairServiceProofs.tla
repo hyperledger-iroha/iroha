@@ -88,7 +88,8 @@ THEOREM InstallSchedulesAuthorizedCommitResignBeforeProposal ==
 BY Isa DEF CommandSuccessors, InstallCommandSuccessors,
            InstallLockedFetchSuccessors, InstallCommitSignSuccessors,
            InstallCommitSignSuccessor,
-           AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+           AsyncCandidateCausalSuccessorWithIdentityAndOrigin,
+           AsyncCandidateWithIdentityAndOrigin,
            NoItemCandidate, AsyncCandidate
 
 THEOREM InstallAdvancesDeliveryTag ==
@@ -196,6 +197,43 @@ BY ExpandENABLED, Isa
        PublishEphemeralItems, LeaveCausalQueues,
        AsyncIoQueueDepth, AsyncAllVars, AsyncSchedulerVars,
        AsyncLocalAdmissionVars, AsyncDeferredVars, vars
+
+THEOREM QueuedIoServiceIsNonstuttering ==
+  \A node \in AsyncArchiveIoServiceNodes:
+    /\ AsyncTypeInvariant
+    /\ AsyncIoQueueDepth(node) > 0
+    /\ PostGstServiceIoWorker(node)
+    => <<PostGstServiceIoWorker(node)>>_AsyncAllVars
+PROOF
+  <1>1. ASSUME NEW node \in AsyncArchiveIoServiceNodes,
+                AsyncTypeInvariant,
+                AsyncIoQueueDepth(node) > 0,
+                PostGstServiceIoWorker(node)
+         PROVE <<PostGstServiceIoWorker(node)>>_AsyncAllVars
+    <2>1. /\ node \in ValidatorIds
+           /\ AsyncIoSequenceTyped(asyncIoQueues[node])
+      BY <1>1, AsyncArchiveIoServiceNodesAreValidators
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+             AsyncIoQueueContentTypeInvariant
+    <2>2. /\ asyncIoQueues[node] \in Seq(Range(asyncIoQueues[node]))
+           /\ Len(asyncIoQueues[node]) > 0
+      BY <1>1, <2>1
+         DEF AsyncIoSequenceTyped, AsyncIoQueueDepth
+    <2>3. /\ asyncIoQueues[node] # <<>>
+           /\ Len(Tail(asyncIoQueues[node]))
+                = Len(asyncIoQueues[node]) - 1
+      BY <2>2, PositiveSequenceIsNonempty, HeadTailProperties
+    <2>4. Tail(asyncIoQueues[node]) # asyncIoQueues[node]
+      BY <2>2, <2>3, LenProperties, Isa
+    <2>5. asyncIoQueues'[node] = Tail(asyncIoQueues[node])
+      BY <1>1, <2>1
+         DEF PostGstServiceIoWorker, ServiceIoWorker
+    <2>6. asyncIoQueues' # asyncIoQueues
+      BY <2>4, <2>5, Isa
+    <2> QED BY <1>1, <2>6, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars
+  <1> QED BY <1>1
 
 (***************************************************************************
 The IO worker is the smallest concrete protected-service frontier.  A

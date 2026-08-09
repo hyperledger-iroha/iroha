@@ -36,14 +36,26 @@ impl BuildLine {
 
     /// Canonical first-release CLI binary name.
     #[must_use]
+    #[expect(
+        clippy::unused_self,
+        reason = "both first-release build lines intentionally select the same canonical CLI binary"
+    )]
     pub const fn cli_bin(self) -> &'static str {
-        "iroha"
+        match self {
+            Self::Iroha2 | Self::Iroha3 => "iroha",
+        }
     }
 
     /// Canonical first-release daemon binary name.
     #[must_use]
+    #[expect(
+        clippy::unused_self,
+        reason = "both first-release build lines intentionally select the same canonical daemon binary"
+    )]
     pub const fn daemon_bin(self) -> &'static str {
-        "irohad"
+        match self {
+            Self::Iroha2 | Self::Iroha3 => "irohad",
+        }
     }
 
     /// Whether this selector targets the Iroha 2 line.

@@ -179,7 +179,7 @@ fn validate_minimal_exact_prepare_quorum(
     let quorum = matching[0];
     ensure!(
         is_minimal_exact_prepare_quorum(quorum, &snapshot.height_context, expected),
-        "validator {} reached the PrepareQC reference without the exact minimal count-and-power quorum: pool={quorum:?}, context={:?}",
+        "validator {} reached the PrepareQC reference without the exact minimal equal-vote quorum: pool={quorum:?}, context={:?}",
         snapshot.peer,
         snapshot.height_context,
     );
@@ -330,6 +330,7 @@ fn validate_locked_commit_progress_witness(
                 SumeragiV2LivenessBlocker::CommitQuorumMissing
                     | SumeragiV2LivenessBlocker::TimeoutCertificateMissing
                     | SumeragiV2LivenessBlocker::SchedulerStarvation
+                    | SumeragiV2LivenessBlocker::SuccessorActivationPending
                     | SumeragiV2LivenessBlocker::LocalControlPending
             ),
             "validator {} misclassified an exact validated locked-Commit delay as {blocker:?}",
@@ -888,10 +889,11 @@ mod prepare_qc_split_tests {
                     block_hash: hash_of::<BlockHeader>(subject_seed),
                     payload_hash: hash(subject_seed.wrapping_add(1)),
                 },
-                execution_commitment: ExecutionCommitment::without_topups(
+                execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
                     hash(0x30),
                     hash(0x31),
                     hash(0x32),
+                    1,
                     hash(execution_seed),
                 ),
             },
@@ -1804,16 +1806,7 @@ mod prepare_qc_split_tests {
         }
     }
 
-    #[test]
-    fn restart_scenario_uses_a_contention_tolerant_view_zero_deadline() {
-        let cadence_ms = u64::try_from(RESTART_BLOCK_CADENCE.as_millis())
-            .expect("restart cadence fits the canonical millisecond width");
-        let (base_round_timeout_ms, _) =
-            iroha_config::parameters::actual::sumeragi_v2_timing_ms(cadence_ms)
-                .expect("restart cadence derives valid v2 timing");
-
-        assert_eq!(base_round_timeout_ms, 20_000);
-    }
+    include!("sumeragi_v2_runner/restart_timing_test.rs");
 
     #[test]
     fn distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one() {
@@ -2162,7 +2155,7 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
                     signed_power,
                     artifact.height_context.quorum.total_power,
                 ),
-            "recovered CommitQC lacked the exact four-validator count-and-power quorum: signers={:?}, signed_power={signed_power}, quorum={:?}",
+            "recovered CommitQC lacked the exact four-validator equal-vote quorum: signers={:?}, signed_power={signed_power}, quorum={:?}",
             artifact.commit_qc.signers,
             artifact.height_context.quorum,
         );
@@ -4505,7 +4498,7 @@ fn validate_exact_finality_proof(
             signed_power,
             artifact.height_context.quorum.total_power,
         ),
-        "{} returned a finality artifact without the exact count-and-power Commit quorum: signers={:?}, signed_power={signed_power}, quorum={:?}",
+        "{} returned a finality artifact without the exact equal-vote Commit quorum: signers={:?}, signed_power={signed_power}, quorum={:?}",
         peer.mnemonic(),
         commit_qc.signers,
         artifact.height_context.quorum,
@@ -4548,7 +4541,7 @@ fn validate_exact_prepare_signers_against_frozen_context(
             signed_power,
             context.quorum.total_power,
         ),
-        "exact held Prepare envelopes do not satisfy the frozen count-and-power quorum: signers={exact_signers:?}, signed_power={signed_power}, quorum={:?}",
+        "exact held Prepare envelopes do not satisfy the frozen equal-vote quorum: signers={exact_signers:?}, signed_power={signed_power}, quorum={:?}",
         context.quorum,
     );
     let matching = snapshot
@@ -5194,24 +5187,7 @@ fn optional_prepare_qc(
     Ok(Some(PrepareQcSnapshot { reference: typed }))
 }
 
-fn optional_timeout_view(object: &norito::json::Map, peer: &str) -> Result<Option<u64>> {
-    let Some(certificate) = object
-        .get("last_timeout_certificate")
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(None);
-    };
-    let round = certificate
-        .as_object()
-        .and_then(|certificate| certificate.get("round"))
-        .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("v2 status for {peer} has a malformed timeout-certificate round"))?;
-    let view = round
-        .get("view")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| eyre!("v2 status for {peer} has a timeout certificate without a view"))?;
-    Ok(Some(view))
-}
+include!("sumeragi_v2_runner/status_validation_helpers.rs");
 
 fn validate_v2_status_set(
     snapshots: &[V2StatusSnapshot],
@@ -5251,7 +5227,7 @@ fn validate_v2_status_set(
                     )
                     .expect("non-empty frozen roster has a quorum threshold")
                 && snapshot.height_context.quorum.total_power > 0,
-            "{} reported a malformed frozen count-and-power quorum: {:?}",
+            "{} reported a malformed frozen equal-vote quorum: {:?}",
             snapshot.peer,
             snapshot.height_context,
         );
@@ -5299,7 +5275,7 @@ fn validate_v2_status_set(
                 );
                 ensure!(
                     left.height_context == right.height_context,
-                    "{} and {} disagree on the frozen count-and-power context for height {}",
+                    "{} and {} disagree on the frozen equal-vote context for height {}",
                     left.peer,
                     right.peer,
                     left.height,

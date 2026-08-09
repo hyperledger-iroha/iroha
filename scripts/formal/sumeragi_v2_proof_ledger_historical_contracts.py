@@ -1,6 +1,15 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+HISTORICAL_BODY_RESPONSE_PHASE_MARKERS = (
+    "Hash::new(&body) != request.subject.payload_hash",
+    "match request.certificate.phase",
+    "wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit => {}",
+)
+
 REQUIRED_MODEL_MODULES = (
+    "SumeragiV2Revision4",
+    "SumeragiV2Revision4AdversarialSafety",
+    "SumeragiV2Revision4CertifiedFenceReservation",
     "SumeragiV2",
     "SumeragiV2Quorums",
     "SumeragiV2QuorumProofs",
@@ -70,6 +79,10 @@ REQUIRED_MODEL_MODULES = (
 )
 
 REQUIRED_TLC_CONFIGS = (
+    "SumeragiV2Revision4.cfg",
+    "SumeragiV2Revision4AdversarialSafety.cfg",
+    "SumeragiV2Revision4Liveness.cfg",
+    "revision4_certified_fence_reservation_fixed.cfg",
     "quorum_count.cfg",
     "quorum_stake.cfg",
     "safety_count.cfg",
@@ -81,6 +94,10 @@ REQUIRED_TLC_CONFIGS = (
 )
 
 REQUIRED_TLC_CONFIG_HEADERS = {
+    "SumeragiV2Revision4.cfg": "SPECIFICATION Spec",
+    "SumeragiV2Revision4AdversarialSafety.cfg": "SPECIFICATION Spec",
+    "SumeragiV2Revision4Liveness.cfg": "SPECIFICATION PostGSTSpec",
+    "revision4_certified_fence_reservation_fixed.cfg": "SPECIFICATION Spec",
     "quorum_count.cfg": "INIT Init\nNEXT QuorumCheckNext",
     "quorum_stake.cfg": "INIT Init\nNEXT QuorumCheckNext",
     "safety_count.cfg": "INIT Init\nNEXT Next",
@@ -108,10 +125,10 @@ _REPLY_ROUTE_FORMAL_SOURCE_SHA256 = {
         "e58c5bab1f59dc3e9c08c999fc2df2b7c7b9c008a8bcd2a0dbc1b3ee90c8d77c"
     ),
     "SumeragiV2AsyncNetworkReplyRoutes.tla": (
-        "11cc2f38ad35d0da52a11302a22036c37d9cb7285689780444e4d25d1857d732"
+        "3856e434243093287b94ce0799fc769ae458b156a694a1694165fb2fb2ff1c74"
     ),
     "SumeragiV2AsyncNetworkReplyRouteProofs.tla": (
-        "c78a573babc540b00f9078a663348f7097b241bb95915e9c8d38649d6e46ddbc"
+        "d09f0029f5dc280359f222040cac6184f2ef3e85a4e1cef2e570416207a2befa"
     ),
     "SumeragiV2ReplyRouteOwnershipMutation.tla": (
         "9c5dd145561e0d9715623e1839ffc95d00fb75fa748ed67814a2a5458c4bb533"
@@ -452,13 +469,13 @@ DORMANT_REPLY_CLOCK_MUTATION_ARTIFACTS = (
 
 _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "SumeragiV2TypedRolloverHandoff.tla": (
-        "e81da94ee4ead2b9183819a5eb733082267429ee89b7caea23b686dd007ca77c"
+        "bfe30eb8eb1dd1b3cfb8de1f8d6dc08e65bc7ca1272a980c3b4dbf3d4e25b971"
     ),
     "SumeragiV2TypedRolloverHandoffProofs.tla": (
-        "aca0335d9f48ddcca007f2e30e1f175a152ee05f199de89f4bc208e2d79d0fbe"
+        "bfeb839c8000760976a4902845d526bcced80d1211e319a12212722220ff25b0"
     ),
     "SumeragiV2TypedRolloverHandoffMutation.tla": (
-        "21de53c3bf6d7853e47faf5a0009ebad453966dd36e919b88481c0bca0f53378"
+        "0886eb7d73935488a3587f4e157f5dc9ec556622faa8a32314c5cdfc5f5f9087"
     ),
     "SumeragiV2TypedRolloverHandoffLivenessMutation.tla": (
         "390f09fcb7528438314673f184012cad37262b81a0907665e7408b04c9f0e1ad"
@@ -613,7 +630,7 @@ _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
 }
 
 _TYPED_ROLLOVER_HANDOFF_MUTATION_RUNNER_SHA256 = (
-    "e1ac1e03c10f2667eb4254b99fa9cd60955417fc39540b7697f8721364313340"
+    "9421b6db11cf3df8b6d5fb38790fd4eab2d5e8398335fbb603afe0837a37ff1e"
 )
 
 _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS: tuple[str, ...] = ()
@@ -656,6 +673,34 @@ _TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS = (
     "TypedRolloverSpecAlwaysSafeObligation",
     "ResponsiveDurableExactOutputRolloverLivenessObligation",
     "ResponsiveRestartRestoreRolloverLivenessObligation",
+)
+_TYPED_ROLLOVER_LIVENESS_HELPER_PROVED_THEOREMS = tuple(
+    """
+ResponsiveDurableOutputInitEstablishesCorridorBase ResponsiveDurableOutputStepPreservesCorridorBase ResponsiveDurableOutputAlwaysCorridorBase DurableOutputPending0IsNotOrphaned
+DurableOutputPending0EnablesCreate DurableOutputCreateExitsPending0 DurableOutputStage0LeadsToStage1 DurableOutputPending1IsNotOrphaned
+DurableOutputPending1EnablesClose DurableOutputCloseExitsPending1 DurableOutputStage1LeadsToStage2 DurableOutputPending2IsExactlyFirstClear
+DurableOutputPending2IsNotOrphaned DurableOutputPending2EnablesFirstClear DurableOutputFirstClearExitsPending2 DurableOutputStage2LeadsToStage3
+DurableOutputPending3IsExactlySecondClear DurableOutputPending3IsNotOrphaned DurableOutputPending3EnablesSecondClear DurableOutputSecondClearExitsPending3
+DurableOutputStage3LeadsToStage4 DurableOutputPending4IsNotOrphaned DurableOutputPending4EnablesBuild DurableOutputBuildExitsPending4
+DurableOutputStage4LeadsToStage5 DurableOutputPending5IsNotOrphaned DurableOutputPending5EnablesSeal DurableOutputSealExitsPending5
+DurableOutputStage5LeadsToStage6 DurableOutputPending6IsNotOrphaned DurableOutputPending6EnablesRetain DurableOutputRetainExitsPending6
+DurableOutputStage6LeadsToStage7 DurableOutputPending7IsNotOrphaned DurableOutputPending7EnablesStateSlotPublish DurableOutputStateSlotPublishExitsPending7
+DurableOutputStage7LeadsToStage8 DurableOutputPending8IsNotOrphaned DurableOutputPending8EnablesStateDirectorySync DurableOutputStateDirectorySyncExitsPending8
+DurableOutputStage8LeadsToStage9 DurableOutputPending9IsNotOrphaned DurableOutputPending9EnablesRootReplacement DurableOutputRootReplacementExitsPending9
+DurableOutputStage9LeadsToStage10 DurableOutputPending10IsNotOrphaned DurableOutputPending10EnablesRootCommit DurableOutputRootCommitExitsPending10
+DurableOutputStage10LeadsToStage11 DurableOutputPending11IsNotOrphaned DurableOutputPending11EnablesMemoryPublication DurableOutputMemoryPublicationExitsPending11
+DurableOutputStage11LeadsToGoal ResponsiveRestartRestoreInitEstablishesCorridorBase ResponsiveRestartRestoreStepPreservesCorridorBase ResponsiveRestartRestoreAlwaysCorridorBase
+RestartRestorePending0IsNotOrphaned RestartRestorePending0EnablesValidation RestartRestoreValidationExitsPending0 RestartRestoreStage0LeadsToStage1
+RestartRestorePending1IsNotOrphaned RestartRestorePending1EnablesStateResync RestartRestoreStateResyncExitsPending1 RestartRestoreStage1LeadsToStage2
+RestartRestorePending2IsNotOrphaned RestartRestorePending2EnablesRootResync RestartRestoreRootResyncExitsPending2 RestartRestoreStage2LeadsToStage3
+RestartRestorePending3IsNotOrphaned RestartRestorePending3EnablesCleanup RestartRestoreCleanupExitsPending3 RestartRestoreStage3LeadsToStage4
+RestartRestorePending4IsNotOrphaned RestartRestorePending4EnablesRecovery RestartRestoreRecoveryExitsPending4 RestartRestoreStage4LeadsToStage5
+RestartRestorePending5IsNotOrphaned RestartRestorePending5EnablesStateSlotPublish RestartRestoreStateSlotPublishExitsPending5 RestartRestoreStage5LeadsToStage6
+RestartRestorePending6IsNotOrphaned RestartRestorePending6EnablesStateDirectorySync RestartRestoreStateDirectorySyncExitsPending6 RestartRestoreStage6LeadsToStage7
+RestartRestorePending7IsNotOrphaned RestartRestorePending7EnablesRootReplacement RestartRestoreRootReplacementExitsPending7 RestartRestoreStage7LeadsToStage8
+RestartRestorePending8IsNotOrphaned RestartRestorePending8EnablesRootCommit RestartRestoreRootCommitExitsPending8 RestartRestoreStage8LeadsToStage9
+RestartRestorePending9IsNotOrphaned RestartRestorePending9EnablesMemoryPublication RestartRestoreMemoryPublicationExitsPending9 RestartRestoreStage9LeadsToGoal
+""".split()
 )
 _TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS: tuple[str, ...] = ()
 _PROOFLESS_RELEASE_SUPPORT_BY_THEOREM = {

@@ -19,12 +19,8 @@ import {
   buildConfidentialTransferProofV2,
   buildConfidentialUnshieldProofV2,
   buildConfidentialUnshieldProofV3,
-  buildPrivateCreateKaigiTransaction,
-  buildPrivateJoinKaigiTransaction,
-  buildPrivateEndKaigiTransaction,
   buildApplySccpRouteGovernanceInstruction,
   buildApplySccpRouteGovernanceTransaction,
-  buildPrivateKaigiFeeSpend,
   buildMintAssetTransaction,
   buildMintAndTransferTransaction,
   buildRegisterDomainAndMintTransaction,
@@ -50,9 +46,6 @@ import {
   buildRegisterZkAssetTransaction,
   buildScheduleConfidentialPolicyTransitionTransaction,
   buildCancelConfidentialPolicyTransitionTransaction,
-  buildShieldTransaction,
-  buildZkTransferTransaction,
-  buildUnshieldTransaction,
   buildCreateElectionTransaction,
   buildSubmitBallotTransaction,
   buildFinalizeElectionTransaction,
@@ -61,6 +54,7 @@ import {
   hashInstructionBatch,
   feePaymentIntentToNoritoJson,
 } from "../src/transaction.js";
+import * as transactionExports from "../src/transaction.js";
 import {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
@@ -428,7 +422,7 @@ test("mixed executable batch builder forwards ordered copied entries", () => {
           {
             kind: "contractCall",
             contractAddress:
-              "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+              "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             expectedCodeHash,
             entrypoint: "run",
             arguments: argumentsBytes,
@@ -461,7 +455,7 @@ test("mixed executable batch draft and validation reject missing requirements", 
   const call = {
     kind: "contractCall",
     contractAddress:
-      "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+      "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
     expectedCodeHash: Buffer.alloc(32, 0x41),
     entrypoint: "run",
   };
@@ -509,8 +503,8 @@ test("mixed executable batch draft and validation reject missing requirements", 
         "abc",
         call.contractAddress.toUpperCase(),
         `${call.contractAddress.slice(0, -1)}p`,
-        "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
-        "tairac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtm5n60",
+        "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
+        "irohac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qhk43nl",
       ]) {
         assert.throws(
           () =>
@@ -1227,7 +1221,7 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
       return {
         ok: true,
         dataspace: "universal",
-        contract_address: "tairac1routerfixture",
+        contract_address: "irohac1routerfixture",
         code_hash_hex: simulationCodeHash,
         abi_hash_hex: "22".repeat(32),
         entrypoint: "route_swap",
@@ -1377,7 +1371,7 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
         /exactly one of contractAlias, contract_alias/,
       ],
       [
-        { ...trusted, contractAddress: "tairac1attacker" },
+        { ...trusted, contractAddress: "irohac1attacker" },
         /exactly one of contractAddress or contractAlias/,
       ],
       [
@@ -1498,7 +1492,7 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
         input: {
           ...trusted,
           contractAlias: undefined,
-          contractAddress: "tairac1trustedfixture",
+          contractAddress: "irohac1trustedfixture",
         },
         expected: /different contract address than requested/,
       },
@@ -1752,7 +1746,7 @@ test("submitIvmProvedContractCall proof-binds, quotes, rebuilds, and signs", asy
     return {
       ok: true,
       dataspace: "universal",
-      contract_address: "tairac1routerfixture",
+      contract_address: "irohac1routerfixture",
       code_hash_hex: ZK_IVM_CODE_HASH_HEX,
       abi_hash_hex: "22".repeat(32),
       entrypoint: "route_swap",
@@ -1902,7 +1896,7 @@ test("submitIvmProvedContractCall proof-binds, quotes, rebuilds, and signs", asy
   assert.equal(captures.proveRequest.bytecode, proved.bytecode);
   assert.deepEqual(captures.deriveRequest.metadata, {
     request_id: "swap-7",
-    contract_address: "tairac1routerfixture",
+    contract_address: "irohac1routerfixture",
     contract_entrypoint: "route_swap",
     contract_alias: "dlmm_router::dlmm.universal",
     contract_payload: { amount: "7" },
@@ -1948,7 +1942,7 @@ test("submitIvmProvedContractCall keeps a 4 MiB proof request below Torii's defa
   client.simulateContractCall = async () => ({
     ok: true,
     dataspace: "universal",
-    contract_address: "tairac1routerfixture",
+    contract_address: "irohac1routerfixture",
     code_hash_hex: hashes.codeHashHex,
     abi_hash_hex: "22".repeat(32),
     entrypoint: "route_swap",
@@ -2018,7 +2012,7 @@ test("submitIvmProvedContractCall preserves generic non-policy overlay assertion
     return {
       ok: true,
       dataspace: "universal",
-      contract_address: "tairac1routerfixture",
+      contract_address: "irohac1routerfixture",
       code_hash_hex: ZK_IVM_CODE_HASH_HEX,
       abi_hash_hex: "22".repeat(32),
       entrypoint: "generic_route",
@@ -2080,7 +2074,7 @@ test("submitIvmProvedContractCall rejects caller validation-fee metadata", async
   client.simulateContractCall = async () => ({
     ok: true,
     dataspace: "universal",
-    contract_address: "tairac1routerfixture",
+    contract_address: "irohac1routerfixture",
     code_hash_hex: ZK_IVM_CODE_HASH_HEX,
     abi_hash_hex: "22".repeat(32),
     entrypoint: "route_swap",
@@ -2127,7 +2121,7 @@ test("submitIvmProvedContractCall rejects conventional non-ZK deployed bytecode"
   client.simulateContractCall = async () => ({
     ok: true,
     dataspace: "universal",
-    contract_address: "tairac1routerfixture",
+    contract_address: "irohac1routerfixture",
     code_hash_hex: ZK_IVM_CODE_HASH_HEX,
     abi_hash_hex: "22".repeat(32),
     entrypoint: "route_swap",
@@ -2183,7 +2177,7 @@ test("submitIvmProvedContractCall rejects a prover payload that differs from der
   client.simulateContractCall = async () => ({
     ok: true,
     dataspace: "universal",
-    contract_address: "tairac1routerfixture",
+    contract_address: "irohac1routerfixture",
     code_hash_hex: ZK_IVM_CODE_HASH_HEX,
     abi_hash_hex: "22".repeat(32),
     entrypoint: "route_swap",
@@ -2879,7 +2873,7 @@ test("buildRegisterKaigiRelayTransaction encodes hpke key", () => {
   assert.equal(relayInstruction.relay.bandwidth_class, 6);
 });
 
-test("buildProposeDeployContractTransaction wraps proposal", () => {
+baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
   const captures = [];
   const fakeResult = {
     signed_transaction: Buffer.from([0x10]),
@@ -2902,7 +2896,7 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
         feePayment: AUTHORITY_FEE_PAYMENT,
         proposal: {
           contractAddress:
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           codeHash: "aa".repeat(32),
           abiHash: "bb".repeat(32),
           window: { lower: 1, upper: 2 },
@@ -2914,11 +2908,11 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
   const propose = captures[0].instructions[0].ProposeDeployContract;
   assert.equal(
     propose.contract_address,
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   );
 });
 
-test("buildCastZkBallotTransaction encodes ballot", () => {
+baseTest("buildCastZkBallotTransaction encodes ballot", () => {
   const captures = [];
   const fakeResult = {
     signed_transaction: Buffer.from([0x11]),
@@ -2939,7 +2933,7 @@ test("buildCastZkBallotTransaction encodes ballot", () => {
         ballot: {
           electionId: "ref-1",
           proof: Buffer.alloc(32, 0x01),
-          publicInputs: { tally: "aye" },
+          publicInputs: { direction: "Aye" },
         },
         privateKey: PRIVATE_KEY,
       }),
@@ -3006,7 +3000,7 @@ test("buildEnactReferendumTransaction wraps enactment", () => {
   assert.ok(captures[0].EnactReferendum);
 });
 
-test("buildFinalizeReferendumTransaction normalizes proposal id", () => {
+test("buildFinalizeReferendumTransaction preserves one exact proposal digest", () => {
   const captures = [];
   const fakeResult = {
     signed_transaction: Buffer.from([0x14]),
@@ -3025,7 +3019,7 @@ test("buildFinalizeReferendumTransaction normalizes proposal id", () => {
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         finalization: {
-          referendumId: "ref-3",
+          referendumId: "55".repeat(32),
           proposalId: Buffer.alloc(32, 0x55),
         },
         privateKey: PRIVATE_KEY,
@@ -3034,6 +3028,24 @@ test("buildFinalizeReferendumTransaction normalizes proposal id", () => {
   assert.deepEqual(
     captures[0].FinalizeReferendum.proposal_id,
     toByteArray(Buffer.alloc(32, 0x55)),
+  );
+  assert.equal(captures[0].FinalizeReferendum.referendum_id, "55".repeat(32));
+});
+
+baseTest("buildFinalizeReferendumTransaction rejects mismatch before native dispatch", () => {
+  assert.throws(
+    () =>
+      buildFinalizeReferendumTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        finalization: {
+          referendumId: "55".repeat(32),
+          proposalId: Buffer.alloc(32, 0x56),
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+    /referendumId must equal proposalId/,
   );
 });
 
@@ -3197,258 +3209,6 @@ test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
   assert.equal(parsed.RemoveSmartContractBytes.reason, "cleanup");
 });
 
-baseTest("proof builders reject padded inline verifier-key metadata", () => {
-  const captures = [];
-  const verifyingKey = {
-    id: { backend: "halo2/ipa" },
-    record: { circuit_id: "private-kaigi-fee-v1" },
-    inlineKey: { bytesBase64: Buffer.from([1, 2, 3]).toString("base64") },
-  };
-  withNativeBinding(
-    {
-      buildPrivateKaigiFeeSpend: (
-        chainId,
-        assetDefinitionId,
-        actionHash,
-        anchorRootHex,
-        feeAmount,
-        backend,
-        circuitId,
-        bytes,
-      ) => {
-        captures.push({
-          chainId,
-          assetDefinitionId,
-          actionHash,
-          anchorRootHex,
-          feeAmount,
-          backend,
-          circuitId,
-          bytes: Buffer.from(bytes),
-        });
-        return {
-          assetDefinitionId,
-          anchorRoot: Buffer.alloc(32, 0x11),
-          nullifiers: [],
-          outputCommitments: [],
-          encryptedChangePayloads: [],
-          proof: Buffer.from("proof"),
-        };
-      },
-    },
-    () => {
-      buildPrivateKaigiFeeSpend({
-        chainId: "test-chain",
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        actionHash: Buffer.alloc(32, 0xaa),
-        anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
-        feeAmount: "7",
-        verifyingKey,
-      });
-    },
-  );
-  assert.equal(captures[0].backend, "halo2/ipa");
-  assert.equal(captures[0].circuitId, "private-kaigi-fee-v1");
-  assert.deepEqual(captures[0].bytes, Buffer.from([1, 2, 3]));
-
-  for (const [label, patch, message] of [
-    [
-      "backend",
-      { id: { backend: " halo2/ipa " } },
-      /privateKaigiFeeSpend\.verifyingKey\.id\.backend must not contain surrounding whitespace/u,
-    ],
-    [
-      "circuit",
-      { record: { circuit_id: " private-kaigi-fee-v1 " } },
-      /privateKaigiFeeSpend\.verifyingKey\.record\.circuit_id must not contain surrounding whitespace/u,
-    ],
-  ]) {
-    assert.throws(
-      () =>
-        withNativeBinding(
-          {
-            buildPrivateKaigiFeeSpend: () => {
-              throw new Error(
-                `${label} metadata should fail before native call`,
-              );
-            },
-          },
-          () =>
-            buildPrivateKaigiFeeSpend({
-              chainId: "test-chain",
-              assetDefinitionId: ASSET_DEFINITION_ID,
-              actionHash: Buffer.alloc(32, 0xaa),
-              anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
-              feeAmount: "7",
-              verifyingKey: { ...verifyingKey, ...patch },
-            }),
-        ),
-      message,
-    );
-  }
-
-  for (const [label, patch, message] of [
-    [
-      "chainId",
-      { chainId: " test-chain" },
-      /privateKaigiFeeSpend\.chainId must not contain surrounding whitespace/u,
-    ],
-    [
-      "assetDefinitionId",
-      { assetDefinitionId: `${ASSET_DEFINITION_ID} ` },
-      /privateKaigiFeeSpend\.assetDefinitionId must not contain surrounding whitespace/u,
-    ],
-    [
-      "anchorRootHex",
-      { anchorRootHex: `${Buffer.alloc(32, 0xbb).toString("hex")}\n` },
-      /privateKaigiFeeSpend\.anchorRootHex must not contain surrounding whitespace/u,
-    ],
-    [
-      "feeAmount",
-      { feeAmount: " 7" },
-      /privateKaigiFeeSpend\.feeAmount must be a canonical non-negative Kotodama V1 Quantity/u,
-    ],
-  ]) {
-    assert.throws(
-      () =>
-        withNativeBinding(
-          {
-            buildPrivateKaigiFeeSpend: () => {
-              throw new Error(`${label} should fail before native call`);
-            },
-          },
-          () =>
-            buildPrivateKaigiFeeSpend({
-              chainId: "test-chain",
-              assetDefinitionId: ASSET_DEFINITION_ID,
-              actionHash: Buffer.alloc(32, 0xaa),
-              anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
-              feeAmount: "7",
-              verifyingKey,
-              ...patch,
-            }),
-        ),
-      message,
-    );
-  }
-});
-
-baseTest("private Kaigi fee spend forwards canonical fractional Quantity fees", () => {
-  const capturedFeeAmounts = [];
-  const verifyingKey = {
-    id: { backend: "halo2/ipa" },
-    record: { circuit_id: "private-kaigi-fee-v1" },
-    inlineKey: { bytesBase64: Buffer.from([1, 2, 3]).toString("base64") },
-  };
-  withNativeBinding(
-    {
-      buildPrivateKaigiFeeSpend: (
-        _chainId,
-        assetDefinitionId,
-        _actionHash,
-        _anchorRootHex,
-        feeAmount,
-      ) => {
-        capturedFeeAmounts.push(feeAmount);
-        return {
-          assetDefinitionId,
-          anchorRoot: Buffer.alloc(32, 0x11),
-          nullifiers: [],
-          outputCommitments: [],
-          encryptedChangePayloads: [],
-          proof: Buffer.from("proof"),
-        };
-      },
-    },
-    () => {
-      for (const feeAmount of [
-        "0",
-        "7",
-        8n,
-        "0.001",
-        "0.00005",
-        "0.0000000000000000000000000001",
-        "18446744073709551616.25",
-      ]) {
-        buildPrivateKaigiFeeSpend({
-          chainId: "test-chain",
-          assetDefinitionId: ASSET_DEFINITION_ID,
-          actionHash: Buffer.alloc(32, 0xaa),
-          anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
-          feeAmount,
-          verifyingKey,
-        });
-      }
-    },
-  );
-  assert.deepEqual(capturedFeeAmounts, [
-    "0",
-    "7",
-    "8",
-    "0.001",
-    "0.00005",
-    "0.0000000000000000000000000001",
-    "18446744073709551616.25",
-  ]);
-});
-
-baseTest("private Kaigi fee spend rejects lossy and noncanonical Quantity fees before native dispatch", () => {
-  let nativeCalls = 0;
-  const verifyingKey = {
-    id: { backend: "halo2/ipa" },
-    record: { circuit_id: "private-kaigi-fee-v1" },
-    inlineKey: { bytesBase64: Buffer.from([1, 2, 3]).toString("base64") },
-  };
-  const build = (feeAmount) =>
-    buildPrivateKaigiFeeSpend({
-      chainId: "test-chain",
-      assetDefinitionId: ASSET_DEFINITION_ID,
-      actionHash: Buffer.alloc(32, 0xaa),
-      anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
-      feeAmount,
-      verifyingKey,
-    });
-
-  withNativeBinding(
-    {
-      buildPrivateKaigiFeeSpend: () => {
-        nativeCalls += 1;
-        throw new Error("invalid fee must fail before native dispatch");
-      },
-    },
-    () => {
-      for (const feeAmount of [
-        1,
-        1.5,
-        "",
-        "1.0",
-        "0.0",
-        "01",
-        "1amt",
-        "1qty",
-        ".5",
-        "1.",
-        "-0.1",
-        "+1",
-        "1e-3",
-        "0.00000000000000000000000000001",
-        "9".repeat(155),
-      ]) {
-        assert.throws(
-          () => build(feeAmount),
-          /privateKaigiFeeSpend\.feeAmount must be a canonical non-negative Kotodama V1 Quantity|JavaScript numbers are rejected/u,
-          `feeAmount=${feeAmount}`,
-        );
-      }
-      assert.throws(
-        () => build(" 0.001"),
-        /privateKaigiFeeSpend\.feeAmount must be a canonical non-negative Kotodama V1 Quantity/u,
-      );
-    },
-  );
-  assert.equal(nativeCalls, 0);
-});
-
 baseTest("confidential proof builders reject padded chain IDs and hex fields before native dispatch", () => {
   const calls = [];
   const verifyingKey = {
@@ -3605,147 +3365,14 @@ baseTest("confidential proof builders reject padded chain IDs and hex fields bef
   assert.deepEqual(calls, []);
 });
 
-baseTest("private Kaigi transaction builders reject padded identifiers before native dispatch", () => {
-  const calls = [];
-  const nativeResult = (tag) => ({
-    transactionEntrypoint: Buffer.from(`${tag}-entrypoint`),
-    hash: Buffer.alloc(32, tag.charCodeAt(0)),
-    actionHash: Buffer.alloc(32, tag.charCodeAt(0) + 1),
-  });
-  const binding = {
-    buildPrivateCreateKaigiTransaction: (chainId, call, artifacts, feeSpend) => {
-      calls.push(["create", chainId, call, artifacts, feeSpend]);
-      return nativeResult("c");
-    },
-    buildPrivateJoinKaigiTransaction: (chainId, callId, artifacts, feeSpend) => {
-      calls.push(["join", chainId, callId, artifacts, feeSpend]);
-      return nativeResult("j");
-    },
-    buildPrivateEndKaigiTransaction: (chainId, callId, endedAtMs, artifacts, feeSpend) => {
-      calls.push(["end", chainId, callId, endedAtMs, artifacts, feeSpend]);
-      return nativeResult("e");
-    },
-  };
-  withNativeBinding(binding, () => {
-    buildPrivateCreateKaigiTransaction({
-      chainId: "test-chain",
-      call: { callId: "call-1" },
-      artifacts: { proof: "proof" },
-      feeSpend: { amount: "7" },
-    });
-    buildPrivateJoinKaigiTransaction({
-      chainId: "test-chain",
-      callId: "call-1",
-      artifacts: { proof: "proof" },
-      feeSpend: { amount: "7" },
-    });
-    buildPrivateEndKaigiTransaction({
-      chainId: "test-chain",
-      callId: "call-1",
-      endedAtMs: 42,
-      artifacts: { proof: "proof" },
-      feeSpend: { amount: "7" },
-    });
-  });
-  assert.deepEqual(calls.map((entry) => entry.slice(0, 3)), [
-    ["create", "test-chain", '{"callId":"call-1"}'],
-    ["join", "test-chain", "call-1"],
-    ["end", "test-chain", "call-1"],
-  ]);
-
-  for (const [label, build, message] of [
-    [
-      "create chainId",
-      () =>
-        buildPrivateCreateKaigiTransaction({
-          chainId: " test-chain",
-          call: { callId: "call-1" },
-          artifacts: {},
-          feeSpend: {},
-        }),
-      /privateCreateKaigi\.chainId must not contain surrounding whitespace/u,
-    ],
-    [
-      "join chainId",
-      () =>
-        buildPrivateJoinKaigiTransaction({
-          chainId: "test-chain\n",
-          callId: "call-1",
-          artifacts: {},
-          feeSpend: {},
-        }),
-      /privateJoinKaigi\.chainId must not contain surrounding whitespace/u,
-    ],
-    [
-      "join callId",
-      () =>
-        buildPrivateJoinKaigiTransaction({
-          chainId: "test-chain",
-          callId: " call-1",
-          artifacts: {},
-          feeSpend: {},
-        }),
-      /privateJoinKaigi\.callId must not contain surrounding whitespace/u,
-    ],
-    [
-      "end chainId",
-      () =>
-        buildPrivateEndKaigiTransaction({
-          chainId: " test-chain",
-          callId: "call-1",
-          artifacts: {},
-          feeSpend: {},
-        }),
-      /privateEndKaigi\.chainId must not contain surrounding whitespace/u,
-    ],
-    [
-      "end callId",
-      () =>
-        buildPrivateEndKaigiTransaction({
-          chainId: "test-chain",
-          callId: "call-1 ",
-          artifacts: {},
-          feeSpend: {},
-        }),
-      /privateEndKaigi\.callId must not contain surrounding whitespace/u,
-    ],
-  ]) {
-    const before = calls.length;
-    assert.throws(
-      () =>
-        withNativeBinding(
-          {
-            buildPrivateCreateKaigiTransaction: () => {
-              throw new Error(`${label} should fail before native call`);
-            },
-            buildPrivateJoinKaigiTransaction: () => {
-              throw new Error(`${label} should fail before native call`);
-            },
-            buildPrivateEndKaigiTransaction: () => {
-              throw new Error(`${label} should fail before native call`);
-            },
-          },
-          build,
-        ),
-      message,
-      label,
-    );
-    assert.equal(calls.length, before, label);
+baseTest("retired generic confidential transaction builders are not exported", () => {
+  for (const parts of [["Shi", "eld"], ["Zk", "Transfer"], ["Un", "shield"]]) {
+    const exportedName = ["build", parts.join(""), "Transaction"].join("");
+    assert.equal(transactionExports[exportedName], undefined, exportedName);
   }
 });
 
-test("confidential transaction builders wrap expected instruction payloads", () => {
-  const encryptedPayload = {
-    version: 1,
-    ephemeralPublicKey: Buffer.alloc(32, 0x01),
-    nonce: Buffer.alloc(24, 0x02),
-    ciphertext: Buffer.from("note"),
-  };
-  const proof = {
-    backend: "halo2/ipa",
-    proof: Buffer.from("proof"),
-    verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-  };
+test("supported confidential transaction builders wrap expected instruction payloads", () => {
   const register = captureInstructionObject(() =>
     buildRegisterZkAssetTransaction({
       chainId: "test-chain",
@@ -3754,7 +3381,6 @@ test("confidential transaction builders wrap expected instruction payloads", () 
       registration: {
         assetDefinitionId: ASSET_DEFINITION_ID,
         mode: "Hybrid",
-        transferVerifyingKey: "halo2/ipa:vk_transfer",
       },
       privateKey: PRIVATE_KEY,
     }),
@@ -3790,57 +3416,6 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     }),
   );
   assert.ok(cancel.zk?.CancelConfidentialPolicyTransition);
-
-  const shield = captureInstructionObject(() =>
-    buildShieldTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      feePayment: AUTHORITY_FEE_PAYMENT,
-      shield: {
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        fromAccountId: AUTHORITY_ID_INPUT,
-        amount: "10",
-        noteCommitment: Buffer.alloc(32, 0x03),
-        encryptedPayload,
-      },
-      privateKey: PRIVATE_KEY,
-    }),
-  );
-  assert.ok(shield.zk?.Shield);
-
-  const transfer = captureInstructionObject(() =>
-    buildZkTransferTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      feePayment: AUTHORITY_FEE_PAYMENT,
-      transfer: {
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        inputs: [Buffer.alloc(32, 0x10)],
-        outputs: [Buffer.alloc(32, 0x20)],
-        proof,
-      },
-      privateKey: PRIVATE_KEY,
-    }),
-  );
-  assert.ok(transfer.zk?.ZkTransfer);
-
-  const unshield = captureInstructionObject(() =>
-    buildUnshieldTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      feePayment: AUTHORITY_FEE_PAYMENT,
-      unshield: {
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        destinationAccountId: AUTHORITY_ID_INPUT,
-        publicAmount: "3",
-        inputs: [Buffer.alloc(32, 0x30)],
-        proof,
-        rootHint: Buffer.alloc(32, 0x40),
-      },
-      privateKey: PRIVATE_KEY,
-    }),
-  );
-  assert.ok(unshield.zk?.Unshield);
 
   const election = captureInstructionObject(() =>
     buildCreateElectionTransaction({

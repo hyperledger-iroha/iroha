@@ -218,11 +218,12 @@ DecisionPipelineStagePending(node, qc, kind, candidate) ==
   /\ DecisionPipelineCandidate(node, qc, candidate)
 
 THEOREM DecisionPipelineStagePendingIsProtected ==
-  \A node \in AsyncCurrentResponsiveVoters,
-     qc, kind \in DecisionPipelineKinds,
-     candidate \in AsyncCandidateSet:
-    DecisionPipelineStagePending(node, qc, kind, candidate)
-      => ResponsiveProtectedCandidateOwned(candidate)
+  \A qc:
+    \A node \in AsyncCurrentResponsiveVoters,
+       kind \in DecisionPipelineKinds,
+       candidate \in AsyncCandidateSet:
+      DecisionPipelineStagePending(node, qc, kind, candidate)
+        => ResponsiveProtectedCandidateOwned(candidate)
 BY Isa
    DEF DecisionPipelineStagePending, DecisionPipelineCandidate,
        ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
@@ -236,18 +237,19 @@ dispatch and all six production-model actions; generic ownership or a changed
 consumer epoch is not accepted as a successor.
 ***************************************************************************)
 THEOREM DecisionPipelineStagePersistsUntilExactHandoff ==
-  \A node \in AsyncCurrentResponsiveVoters,
-     qc, kind \in DecisionPipelineKinds,
-     candidate \in AsyncCandidateSet:
-    /\ AsyncStrongTypeInvariant
-    /\ AsyncProgressOwnershipInvariant
-    /\ DecisionTimeoutFrontierInvariant
-    /\ DecisionFrontierUniquenessInvariant
-    /\ PostGstReplayQuarantineExcluded
-    /\ DecisionPipelineStagePending(node, qc, kind, candidate)
-    /\ [AsyncNext]_AsyncAllVars
-    => \/ DecisionPipelineStagePending(node, qc, kind, candidate)'
-       \/ DecisionPipelineStageOutcome(node, qc, kind)'
+  \A qc:
+    \A node \in AsyncCurrentResponsiveVoters,
+       kind \in DecisionPipelineKinds,
+       candidate \in AsyncCandidateSet:
+      /\ AsyncStrongTypeInvariant
+      /\ AsyncProgressOwnershipInvariant
+      /\ DecisionTimeoutFrontierInvariant
+      /\ DecisionFrontierUniquenessInvariant
+      /\ PostGstReplayQuarantineExcluded
+      /\ DecisionPipelineStagePending(node, qc, kind, candidate)
+      /\ [AsyncNext]_AsyncAllVars
+      => \/ DecisionPipelineStagePending(node, qc, kind, candidate)'
+         \/ DecisionPipelineStageOutcome(node, qc, kind)'
 BY CompletionDeferralRetainsCandidate,
    CoreBracketStepPreservesNodeApplication,
    IsaT(600)
@@ -281,13 +283,14 @@ BY CompletionDeferralRetainsCandidate,
 
 THEOREM DecisionPipelineStageReachesExactHandoff ==
   \A initialContext:
-    \A node \in AsyncVotersAt(initialContext), qc,
-       kind \in DecisionPipelineKinds,
-       candidate \in AsyncCandidateSet:
-      /\ AsyncSpecAt(initialContext)
-      /\ StarvationFreedomProperty(AsyncSpecAt(initialContext))
-      => DecisionPipelineStagePending(node, qc, kind, candidate)
-           ~> DecisionPipelineStageOutcome(node, qc, kind)
+    \A qc:
+      \A node \in AsyncVotersAt(initialContext),
+         kind \in DecisionPipelineKinds,
+         candidate \in AsyncCandidateSet:
+        /\ AsyncSpecAt(initialContext)
+        /\ StarvationFreedomProperty(AsyncSpecAt(initialContext))
+        => DecisionPipelineStagePending(node, qc, kind, candidate)
+             ~> DecisionPipelineStageOutcome(node, qc, kind)
 PROOF
   <1>1. ASSUME NEW initialContext,
                 NEW node \in AsyncVotersAt(initialContext),

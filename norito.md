@@ -129,16 +129,23 @@ layout:
 Archive byte limits do not bound collection reservations: an eight-byte
 sequence header can advertise an element count far larger than the containing
 payload, while nested length-delimited fields can amplify otherwise modest
-archives. Exact-slice decoders and all `ArchiveView` decode methods therefore
-install `canonical_decode_limits(payload_len)` automatically. Hosts decoding
-untrusted data with narrower semantic bounds must additionally use
-`decode_from_bytes_with_limits` (or `decode_from_reader_with_limits`) and an
-explicit `DecodeLimits` value. Nested scopes compose by selecting the stricter
-member in every dimension. The budget specifies a per-sequence element count,
-a per-field/blob byte length, cumulative element and allocation-byte totals,
-and a maximum nesting depth. Norito validates declared bodies against the bytes
-remaining before allocating temporary storage and returns typed resource-limit
-errors on violation.
+archives. The root and `core` byte-slice `decode_from_bytes` entry points,
+exact-slice decoders, and all `ArchiveView` decode methods therefore install
+`canonical_decode_limits(frame_or_payload_len)` automatically. This also
+charges a compressed frame's declared uncompressed length before reserving or
+decompressing it, so a tiny frame cannot request an allocation up to the global
+archive ceiling.
+
+Hosts decoding untrusted data with narrower semantic bounds must additionally
+use `decode_from_bytes_with_limits` (or `decode_from_reader_with_limits`) and an
+explicit `DecodeLimits` value. The explicit byte-slice APIs enter a private
+decoder directly instead of recursing through the default, so trusted
+high-compression callers can select a larger but still finite expansion budget.
+Nested scopes compose by selecting the stricter member in every dimension. The
+budget specifies a per-sequence element count, a per-field/blob byte length,
+cumulative element and allocation-byte totals, and a maximum nesting depth.
+Norito validates declared bodies against the bytes remaining before allocating
+temporary storage and returns typed resource-limit errors on violation.
 Compatibility layout fallbacks treat every resource-limit and allocation error
 as terminal: they never retry the same field through an alternate decoder after
 a budget has rejected it.
@@ -153,11 +160,12 @@ and reapplies it for every `next`/`finish` call. No thread-local guard is moved
 with an iterator.
 
 Explicitly unbounded low-level decode scopes remain an internal trusted-data
-concern; public framed and exact-slice boundaries retain their payload-derived
-defaults. A host must choose stricter cumulative budgets with enough headroom
-for temporary alignment copies and container metadata; accounting is
-intentionally conservative and may charge both a declared field body and a
-temporary copy.
+concern; public byte-slice framed and exact-slice boundaries retain their
+payload-derived defaults. Reader-based decoding cannot derive a budget from a
+complete frame slice, so untrusted readers must use the explicit-limit reader
+API. A host must choose cumulative budgets with enough headroom for temporary
+alignment copies and container metadata; accounting is intentionally
+conservative and may charge both a declared field body and a temporary copy.
 
 ## Bounded data-model text leaves
 
@@ -171,6 +179,13 @@ NFC-normalized, is at most 255 UTF-8 bytes, and rejects whitespace, Unicode
 control characters (including NUL), Unicode bidirectional controls, and the
 reserved `@`, `#`, and `$` delimiters.
 
+`Name` normalization is consensus-critical and uses the exact ICU4X NFC
+algorithm and compiled-data profile pinned by `iroha_data_model`. Construction
+and decoding fail closed unless the compiled normalization tables match the
+reviewed semantic fingerprint. Updating either the pinned normalizer or that
+fingerprint is therefore a protocol change and requires a reviewed regression
+corpus update.
+
 A `Json` value is exactly one well-formed Norito JSON document with no
 duplicate object keys or trailing tokens. Its UTF-8 representation is at most
 1,048,576 bytes and its structural depth is at most
@@ -180,6 +195,16 @@ decoders inspect the nested string length before allocating its backing
 storage; malformed, oversized, or over-depth wire values never become a
 `Json`. Raw JSON producers use the fallible `Json::from_raw_json`, while plain
 text that should become a JSON string uses `Json::new` or `Json::from`.
+Each generic or tape-first typed document entry point preflights the complete
+document's maximum value depth once with an allocation-free, quote-aware scalar
+scan before generated `JsonDeserialize` or custom `FastFromJson` recursion
+begins. Generic-to-tape adapters may validate the exact next subtree again to
+find its boundary, but construct their tape over only that non-overlapping
+slice and never rescan unrelated enclosing bytes. The security bound is
+independent of the selected hardware Stage-1 tape, so every node reaches the
+same decision. Unknown fields then use the same strict iterative subtree
+grammar, so an individually valid subtree cannot exceed the global limit by
+hiding beneath a typed outer object or array.
 
 Typed JSON floating-point values must be finite. Norito rejects literals whose
 decimal exponent overflows `f64`; finite values are rendered with Ryu's
@@ -550,6 +575,31 @@ Maps encode deterministically with the same active layout flags:
 - `HashMap` encodes entries in sorted key order for deterministic output;
   `BTreeMap` uses its natural ordering.
 
+## MerkleTree Derived-Cache Encoding
+
+`iroha_crypto::MerkleTree<T>` never serializes its breadth-first internal-node
+cache or cached root. Its V1 payload is the tuple
+`(hash_scheme: u8, leaves: Vec<HashOf<T>>)`, using the ordinary tuple and
+sequence layouts selected by the header flags. `leaves` contains canonical
+leaf-node hashes in left-to-right order and is limited to 65,536 entries.
+
+The V1 hash-scheme discriminants are:
+
+- `1`: application Merkle V1, with the versioned application internal-node
+  domain;
+- `2`: SHA-256 V1, where parents are `SHA-256(left || right)` and a missing
+  right child promotes the left child.
+
+Decoders reject unknown schemes or oversized leaf sets, retain the declared
+scheme as part of the private tree invariant, and deterministically rebuild
+every internal node and the root from the leaves. Encoders reconstruct using
+that retained scheme and reject an in-memory tree whose cached nodes do not
+match it. This also preserves the explicit scheme for empty and singleton
+trees, whose node caches alone are ambiguous. There is no decoder fallback for
+the retired full-node-vector layout. JSON uses the equivalent object
+`{"hash_scheme": <u8>, "leaves": [<HashOf<T>>, ...]}` and follows the same
+reconstruction and bounds.
+
 ## NCB Columnar (internal)
 
 NCB payloads are exact and canonical:
@@ -591,6 +641,14 @@ Field payloads themselves use the active layout flags (e.g., `PACKED_SEQ`,
 Length-framed enum fields are decoded only from the bytes inside their declared
 frame; there is no compatibility retry that can consume following variant
 fields.
+
+Every derive-generated enum tag is a canonical little-endian `u32`. An explicit
+Rust discriminant selects the wire tag, and subsequent implicit variants follow
+Rust's incrementing discriminant sequence. `#[codec(index = N)]` may pin an
+otherwise implicit variant; when used alongside an explicit Rust discriminant,
+the two values must agree. Effective tags must be unique. The encode, decode,
+and schema derives reject disagreements and duplicates at compile time and use
+the same effective tag set.
 
 ### Derive attribute contract
 

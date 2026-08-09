@@ -11,7 +11,7 @@ use iroha_data_model::zk::ZkAcePrivacyPublicInputsV1;
 use iroha_data_model::{
     ChainId,
     account::AccountId,
-    asset::AssetDefinitionId,
+    asset::{AssetBalanceScope, AssetDefinitionId},
     privacy::{
         AnonymousPgcKOutOfNStatementV1, BootleLanternIssuerPolicyLifecycleV1,
         BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
@@ -235,6 +235,7 @@ pub(crate) struct VerifiedZkAceAuthorizationV1 {
     pub(crate) source: AccountId,
     pub(crate) destination: AccountId,
     pub(crate) asset_definition_id: AssetDefinitionId,
+    pub(crate) public_balance_scope: AssetBalanceScope,
     pub(crate) amount: u128,
     pub(crate) replay_nullifier: PrivacyNullifierV1,
 }
@@ -268,6 +269,7 @@ pub(crate) struct VerifiedOrchardLedgerEffectV1 {
     namespace: PrivacyNamespaceV1,
     bootstrap_digest: iroha_data_model::privacy::PrivacyOrchardPoolBootstrapDigestV1,
     asset_definition_id: AssetDefinitionId,
+    public_balance_scope: AssetBalanceScope,
     reserve_account: AccountId,
     anchor: PrivacyRootV1,
     anchor_epoch: u64,
@@ -295,6 +297,11 @@ impl VerifiedOrchardLedgerEffectV1 {
     #[must_use]
     pub(crate) const fn asset_definition_id(&self) -> &AssetDefinitionId {
         &self.asset_definition_id
+    }
+
+    #[must_use]
+    pub(crate) const fn public_balance_scope(&self) -> AssetBalanceScope {
+        self.public_balance_scope
     }
 
     #[must_use]
@@ -382,6 +389,7 @@ pub(crate) struct VerifiedProofManagedPoolLedgerEffectV1 {
     next_epoch: u64,
     transition: VerifiedProofManagedPoolTransitionV1,
     value_balance: Option<PrivacyValueBalanceV1>,
+    public_balance_scope: Option<AssetBalanceScope>,
 }
 
 #[cfg(test)]
@@ -396,6 +404,7 @@ pub(crate) struct VerifiedProofManagedPoolLedgerEffectTestPartsV1 {
     pub(crate) next_epoch: u64,
     pub(crate) transition: VerifiedProofManagedPoolTransitionV1,
     pub(crate) value_balance: Option<PrivacyValueBalanceV1>,
+    pub(crate) public_balance_scope: Option<AssetBalanceScope>,
 }
 
 impl VerifiedProofManagedPoolLedgerEffectV1 {
@@ -411,6 +420,7 @@ impl VerifiedProofManagedPoolLedgerEffectV1 {
             next_epoch,
             transition,
             value_balance,
+            public_balance_scope,
         } = parts;
         Self {
             namespace,
@@ -422,6 +432,7 @@ impl VerifiedProofManagedPoolLedgerEffectV1 {
             next_epoch,
             transition,
             value_balance,
+            public_balance_scope,
         }
     }
 
@@ -470,6 +481,11 @@ impl VerifiedProofManagedPoolLedgerEffectV1 {
     #[must_use]
     pub(crate) const fn value_balance(&self) -> Option<PrivacyValueBalanceV1> {
         self.value_balance
+    }
+
+    #[must_use]
+    pub(crate) const fn public_balance_scope(&self) -> Option<AssetBalanceScope> {
+        self.public_balance_scope
     }
 }
 
@@ -678,6 +694,7 @@ fn verify_privacy_envelope_after_compiled_activation_v1(
                 source: statement.source.clone(),
                 destination: statement.destination.clone(),
                 asset_definition_id: statement.asset_definition_id.clone(),
+                public_balance_scope: statement.public_balance_scope,
                 amount: statement.amount,
                 replay_nullifier: statement.replay_nullifier,
             })
@@ -977,6 +994,11 @@ fn prepare_ivm_private_note_transition_v1(
             PrivacyIvmPrivateNoteStateFailureCodeV1::AssetMismatch,
         ));
     }
+    if snapshot.bootstrap().public_balance_scope() != Some(statement.public_balance_scope) {
+        return Err(ivm_private_note_state_error(
+            PrivacyIvmPrivateNoteStateFailureCodeV1::PublicBalanceScopeMismatch,
+        ));
+    }
     if snapshot.bootstrap().program_id() != Some(statement.program_id) {
         return Err(ivm_private_note_state_error(
             PrivacyIvmPrivateNoteStateFailureCodeV1::ProgramMismatch,
@@ -1087,6 +1109,7 @@ fn verify_ivm_private_note_action_v1(
                 successor_state: prepared.successor_state,
             },
             value_balance: Some(statement.value_balance),
+            public_balance_scope: Some(statement.public_balance_scope),
         },
     ))
 }
@@ -1233,6 +1256,7 @@ fn verify_pq_masp_action_v1(
                 successor_state: prepared.successor_state,
             },
             value_balance: None,
+            public_balance_scope: None,
         },
     ))
 }
@@ -1393,6 +1417,7 @@ fn verify_fcmp_plus_plus_action_v1(
                 successor_state,
             },
             value_balance: None,
+            public_balance_scope: None,
         },
     ))
 }
@@ -1415,6 +1440,11 @@ fn verify_orchard_actions_v1(
     if snapshot.state().asset_definition_id() != &statement.asset_definition_id {
         return Err(orchard_state_error(
             PrivacyOrchardStateFailureCodeV1::AssetMismatch,
+        ));
+    }
+    if snapshot.state().public_balance_scope() != statement.public_balance_scope {
+        return Err(orchard_state_error(
+            PrivacyOrchardStateFailureCodeV1::PublicBalanceScopeMismatch,
         ));
     }
     if !snapshot.contains_retained_anchor(statement.anchor_epoch, statement.anchor) {
@@ -1496,6 +1526,7 @@ fn verify_orchard_actions_v1(
             namespace: snapshot.namespace(),
             bootstrap_digest: snapshot.bootstrap_digest(),
             asset_definition_id: statement.asset_definition_id.clone(),
+            public_balance_scope: statement.public_balance_scope,
             reserve_account: snapshot.state().reserve_account().clone(),
             anchor: statement.anchor,
             anchor_epoch: statement.anchor_epoch,
@@ -1842,7 +1873,7 @@ pub(crate) enum PrivacyVerificationErrorV1 {
     #[error(transparent)]
     Envelope(Box<PrivacyEnvelopeFailureV1>),
     /// The selected protocol has no complete native verifier.
-    #[cfg_attr(feature = "zk-stark", allow(dead_code))]
+    #[cfg(not(feature = "zk-stark"))]
     #[error(transparent)]
     EngineUnavailable(Box<PrivacyEngineUnavailableFailureV1>),
     /// Native VeRange decoding or verification failed.
@@ -1957,6 +1988,7 @@ pub(crate) struct PrivacyEnvelopeFailureV1 {
 }
 
 #[derive(Debug, Error)]
+#[cfg(not(feature = "zk-stark"))]
 #[error("native privacy engine for {protocol_id:?} is not available")]
 pub(crate) struct PrivacyEngineUnavailableFailureV1 {
     protocol_id: PrivacyProtocolIdV1,
@@ -2062,6 +2094,8 @@ pub(crate) enum PrivacyOrchardStateFailureCodeV1 {
     NamespaceMismatch,
     /// The statement selected a different public asset.
     AssetMismatch,
+    /// The statement selected a different transparent reserve partition.
+    PublicBalanceScopeMismatch,
     /// The statement anchor is not in the exact retained root window.
     AnchorNotRetained,
     /// The current block is later than the statement expiry.
@@ -2138,6 +2172,8 @@ pub(crate) enum PrivacyIvmPrivateNoteStateFailureCodeV1 {
     ProtocolOrRoleMismatch,
     /// The statement selected a different public asset.
     AssetMismatch,
+    /// The statement selected a different transparent reserve partition.
+    PublicBalanceScopeMismatch,
     /// The statement selected a different governed private program.
     ProgramMismatch,
     /// The trusted snapshot has no SHA-256 note frontier.
@@ -2398,9 +2434,11 @@ mod tests {
             bootle_lantern::{
                 codec::PROOF_BYTES_V1 as BOOTLE_LANTERN_PROOF_BYTES_V1,
                 issuer::{
-                    BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
-                    holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
-                    issuer_blind_issue_with_rng_v1,
+                    BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
+                    BootleLanternIssuerPolicyMetadataV1, holder_finalize_blind_issuance_v1,
+                    holder_prepare_blind_issuance_with_rng_v1,
+                    issuer_authorize_blind_issuance_with_rng_v1,
+                    issuer_blind_issue_once_with_rng_v1,
                 },
                 prove_bound_presentation_v1,
             },
@@ -2748,7 +2786,7 @@ mod tests {
         let statement =
             PrivacyStatementV1::VeRangeTransparentRangeV1(VeRangeTransparentRangeStatementV1 {
                 context,
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("domain"),
                     Name::from_str("asset").expect("name"),
                 ),
@@ -2827,18 +2865,32 @@ mod tests {
                 },
             ));
             let chain_id = ChainId::from("taira-privacy-jindo-test");
-            let polynomial = vec![
-                jindo_field(3),
-                jindo_field(5),
-                jindo_field(7),
-                jindo_field(11),
+            let polynomials = vec![
+                vec![
+                    jindo_field(3),
+                    jindo_field(5),
+                    jindo_field(7),
+                    jindo_field(11),
+                ],
+                vec![jindo_field(13), jindo_field(17)],
+                vec![jindo_field(19), jindo_field(23)],
+                vec![jindo_field(29), jindo_field(31)],
             ];
             let evaluation_point = jindo_field(13);
-            let claim = evaluate_polynomial_v1(&polynomial, evaluation_point)
-                .expect("canonical Jindo evaluation");
-            let (commitment, opening) =
-                commit_polynomial_v1(&polynomial, &mut KatRng::new([0x6a; 32]))
-                    .expect("Jindo commitment");
+            let claimed_evaluations = polynomials
+                .iter()
+                .map(|polynomial| {
+                    evaluate_polynomial_v1(polynomial, evaluation_point)
+                        .expect("canonical Jindo evaluation")
+                })
+                .collect();
+            let mut commitment_rng = KatRng::new([0x6a; 32]);
+            let (polynomial_commitments, openings): (Vec<_>, Vec<_>) = polynomials
+                .iter()
+                .map(|polynomial| {
+                    commit_polynomial_v1(polynomial, &mut commitment_rng).expect("Jindo commitment")
+                })
+                .unzip();
             let statement = IrohaJindoPolynomialCommitmentStatementV1 {
                 context: PrivacyStatementContextV1 {
                     chain_id: chain_id.clone(),
@@ -2850,9 +2902,9 @@ mod tests {
                     statement_schema_digest: compiled.statement_schema_digest,
                     engine_manifest_digest: compiled.engine_manifest_digest,
                 },
-                polynomial_commitments: vec![commitment],
+                polynomial_commitments,
                 evaluation_point,
-                claimed_evaluations: vec![claim],
+                claimed_evaluations,
             };
             let typed_statement =
                 PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement.clone());
@@ -2870,7 +2922,7 @@ mod tests {
                 generator_digest: jindo_crs_digest_v1(),
             };
             let proof =
-                prove_batched_evaluation_v1(&statement, &[polynomial], &[opening], &transcript)
+                prove_batched_evaluation_v1(&statement, &polynomials, &openings, &transcript)
                     .expect("Jindo proof");
             assert_eq!(proof.len(), JINDO_NATIVE_PROOF_BYTES_V1);
             Self {
@@ -2975,29 +3027,43 @@ mod tests {
                         .collect(),
                 })
                 .expect("canonical initial native issuer policy");
-            let mut attributes = [[0_u8; 8]; 8];
-            attributes[1] = [1; 8];
-            let mut holder_mask_rng = KatRng::new([0xB4; 32]);
-            let mut holder_proof_rng = KatRng::new([0xB5; 32]);
-            let (issuance_request, issuance_state) = holder_prepare_blind_issuance_with_rng_v1(
-                &context,
-                genesis_hash,
-                &policy,
-                attributes,
-                &mut holder_mask_rng,
-                &mut holder_proof_rng,
-            )
-            .expect("holder blind-issuance request");
-            let mut tag_rng = KatRng::new([0xB6; 32]);
-            let mut preimage_rng = KatRng::new([0xB7; 32]);
-            let issuance_response = issuer_blind_issue_with_rng_v1(
+            let issuance_store = BootleLanternInMemoryIssuanceStoreV1::new();
+            let mut authorization_rng = KatRng::new([0xB9; 32]);
+            let authorization = issuer_authorize_blind_issuance_with_rng_v1(
                 &issuer_key_pair,
                 &context,
                 genesis_hash,
                 &policy,
+                [0xBA; 32],
+                10,
+                20,
+                &issuance_store,
+                &mut authorization_rng,
+            )
+            .expect("issuer one-shot authorization");
+            let mut attributes = [[0_u8; 8]; 8];
+            attributes[1] = [1; 8];
+            let mut holder_issuance_rng = KatRng::new([0xB4; 32]);
+            let (issuance_request, issuance_state) = holder_prepare_blind_issuance_with_rng_v1(
+                &context,
+                genesis_hash,
+                &policy,
+                &authorization,
+                attributes,
+                &mut holder_issuance_rng,
+            )
+            .expect("holder blind-issuance request");
+            let mut issuer_issuance_rng = KatRng::new([0xB6; 32]);
+            let issuance_response = issuer_blind_issue_once_with_rng_v1(
+                &issuer_key_pair,
+                &context,
+                genesis_hash,
+                &policy,
+                &authorization,
                 &issuance_request,
-                &mut tag_rng,
-                &mut preimage_rng,
+                10,
+                &issuance_store,
+                &mut issuer_issuance_rng,
             )
             .expect("native blind issuance");
             let credential = holder_finalize_blind_issuance_v1(
@@ -3229,7 +3295,7 @@ mod tests {
                 PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id }),
             );
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("orchard_asset").expect("name"),
             );
@@ -3239,6 +3305,7 @@ mod tests {
                 namespace,
                 PrivacyOrchardPoolBootstrapDigestV1::new([0xB8; 32]),
                 asset_definition_id.clone(),
+                AssetBalanceScope::Global,
                 AccountId::new(reserve_key.public_key().clone()),
             );
             let statement_context = PrivacyStatementContextV1 {
@@ -3278,6 +3345,7 @@ mod tests {
                 PrivacyStatementV1::OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
                     context: statement_context,
                     asset_definition_id,
+                    public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
                     pool_id,
                     anchor: snapshot.current_root(),
                     anchor_epoch: snapshot.current_epoch(),
@@ -3378,6 +3446,7 @@ mod tests {
                 PrivacyIvmPrivateNotePoolBootstrapV1 {
                     pool_id: statement.pool_id,
                     asset_definition_id: statement.asset_definition_id.clone(),
+                    public_balance_scope: statement.public_balance_scope,
                     reserve_account: reserve_account.clone(),
                     program_id: statement.program_id,
                     initial_note_commitments: vec![input_commitment],
@@ -3497,7 +3566,7 @@ mod tests {
             ));
             let chain_id = ChainId::from("taira-privacy-fcmp-test");
             let pool_id = PrivacyPoolIdV1::new([0xC1; 32]);
-            let asset_definition_id = AssetDefinitionId::new(
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("fcmp_asset").expect("name"),
             );
@@ -3780,10 +3849,11 @@ mod tests {
                 policy_digest: PrivacyPolicyDigestV1::new([0x9B; 32]),
                 source: account(0x9C),
                 destination: account(0x9D),
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("privacy domain"),
                     Name::from_str("zkace_runtime").expect("asset name"),
                 ),
+                public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
                 amount: 19,
                 authorization_epoch: 1,
                 replay_nullifier: PrivacyNullifierV1::new([0; 32]),
@@ -4307,7 +4377,7 @@ mod tests {
             let statement =
                 PrivacyStatementV1::AnonymousPgcKOutOfNV1(AnonymousPgcKOutOfNStatementV1 {
                     context: statement_context,
-                    asset_definition_id: AssetDefinitionId::new(
+                    asset_definition_id: AssetDefinitionId::derive_from_components(
                         DomainId::try_new("privacy", "universal").expect("domain"),
                         Name::from_str("asset").expect("name"),
                     ),
@@ -4602,6 +4672,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "release gate: generates and verifies a full masked ZK-AMS batch proof"]
     fn zk_ams_production_dispatch_covers_batch_and_successor_provisioning() {
         let fixture = zk_ams_runtime_fixture_for_test();
         let context = |expected_action_index| PrivacyVerificationContextV1 {
@@ -4969,18 +5040,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn pgc_rejects_cross_suite_proof_replay() {
-        let fixture = PgcFixture::new();
-        let (verange_envelope, _, _) = valid_envelope();
-        let mut replayed = fixture.envelope.clone();
-        replayed.proof = verange_envelope.proof;
-
-        assert!(matches!(
-            verify_privacy_envelope_v1(&replayed, fixture.verification_context()),
-            Err(PrivacyVerificationErrorV1::Envelope(_))
-        ));
-    }
+    include!("privacy_verifier/cross_suite_replay_test.rs");
 
     #[test]
     fn verified_orchard_effect_is_complete_and_derived_from_authoritative_frontier() {
@@ -5109,6 +5169,7 @@ mod tests {
             other_namespace,
             PrivacyOrchardPoolBootstrapDigestV1::new([0xC2; 32]),
             fixture.snapshot.state().asset_definition_id().clone(),
+            fixture.snapshot.state().public_balance_scope(),
             fixture.snapshot.state().reserve_account().clone(),
         );
         let mut context = fixture.verification_context();
@@ -5122,10 +5183,11 @@ mod tests {
         let wrong_asset = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
             fixture.namespace,
             PrivacyOrchardPoolBootstrapDigestV1::new([0xC3; 32]),
-            AssetDefinitionId::new(
+            AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("wrong_orchard_asset").expect("name"),
             ),
+            fixture.snapshot.state().public_balance_scope(),
             fixture.snapshot.state().reserve_account().clone(),
         );
         let mut context = fixture.verification_context();
@@ -5464,6 +5526,7 @@ mod tests {
                         PrivacyIvmPrivateNotePoolBootstrapV1 {
                             pool_id,
                             asset_definition_id: fixture.statement.asset_definition_id.clone(),
+                            public_balance_scope: fixture.statement.public_balance_scope,
                             reserve_account: fixture.reserve_account.clone(),
                             program_id,
                             initial_note_commitments: vec![fixture.input_commitment],
@@ -5486,10 +5549,11 @@ mod tests {
                 PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(
                     PrivacyIvmPrivateNotePoolBootstrapV1 {
                         pool_id: fixture.statement.pool_id,
-                        asset_definition_id: AssetDefinitionId::new(
+                        asset_definition_id: AssetDefinitionId::derive_from_components(
                             DomainId::try_new("privacy", "universal").expect("domain"),
                             Name::from_str("wrong_private_asset").expect("name"),
                         ),
+                        public_balance_scope: fixture.statement.public_balance_scope,
                         reserve_account: fixture.reserve_account.clone(),
                         program_id: fixture.statement.program_id,
                         initial_note_commitments: vec![fixture.input_commitment],
@@ -5677,7 +5741,7 @@ mod tests {
         let wrong_asset = PrivacyProofManagedPoolSnapshotV1::canonical_pq_masp_bootstrap_for_test(
             PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV0(PrivacyPqMaspPoolBootstrapV1 {
                 pool_id: fixture.statement.pool_id,
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("domain"),
                     Name::from_str("wrong_pq_asset").expect("name"),
                 ),
@@ -6016,7 +6080,7 @@ mod tests {
         let wrong_asset = PrivacyProofManagedPoolSnapshotV1::canonical_fcmp_bootstrap_for_test(
             PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1 {
                 pool_id: statement.pool_id,
-                asset_definition_id: AssetDefinitionId::new(
+                asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("domain"),
                     Name::from_str("wrong_fcmp_asset").expect("name"),
                 ),
@@ -6653,10 +6717,11 @@ mod tests {
         assert_rejected(&changed_policy, &activation, &chain_id, "changed-policy");
 
         let mut changed_asset = envelope.clone();
-        verange_statement_mut(&mut changed_asset).asset_definition_id = AssetDefinitionId::new(
-            DomainId::try_new("privacy", "universal").expect("domain"),
-            Name::from_str("other_asset").expect("name"),
-        );
+        verange_statement_mut(&mut changed_asset).asset_definition_id =
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("privacy", "universal").expect("domain"),
+                Name::from_str("other_asset").expect("name"),
+            );
         refresh_statement_digest(&mut changed_asset);
         assert_rejected(&changed_asset, &activation, &chain_id, "changed-asset");
 
@@ -7213,57 +7278,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn bootle_lantern_trusted_policy_is_mandatory_valid_active_and_exact() {
-        let fixture = bootle_lantern_fixture();
-
-        let mut missing = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
-        missing.bootle_lantern_policy = None;
-        assert!(matches!(
-            verify_privacy_envelope_v1(&fixture.envelope, missing),
-            Err(PrivacyVerificationErrorV1::BootleLanternState(detail))
-                if detail.code == PrivacyBootleLanternStateFailureCodeV1::MissingTrustedPolicy
-        ));
-
-        let mut corrupt = fixture.policy.clone();
-        corrupt.record_digest.0[0] ^= 1;
-        let mut corrupt_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
-        corrupt_context.bootle_lantern_policy = Some(&corrupt);
-        assert!(matches!(
-            verify_privacy_envelope_v1(&fixture.envelope, corrupt_context),
-            Err(PrivacyVerificationErrorV1::BootleLanternState(detail))
-                if detail.code == PrivacyBootleLanternStateFailureCodeV1::InvalidTrustedPolicy
-        ));
-
-        let mut revoked = fixture.policy.clone();
-        revoked.epoch += 1;
-        revoked.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
-        redigest_bootle_lantern_policy(&mut revoked);
-        revoked
-            .validate_revocation_successor(&fixture.policy)
-            .expect("canonical terminal successor");
-        let mut revoked_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
-        revoked_context.bootle_lantern_policy = Some(&revoked);
-        assert!(matches!(
-            verify_privacy_envelope_v1(&fixture.envelope, revoked_context),
-            Err(PrivacyVerificationErrorV1::BootleLanternState(detail))
-                if detail.code == PrivacyBootleLanternStateFailureCodeV1::PolicyRevoked
-        ));
-
-        let mut rotated = fixture.policy.clone();
-        rotated.epoch += 1;
-        rotated.required_disclosure_bitmap |= 1;
-        redigest_bootle_lantern_policy(&mut rotated);
-        rotated
-            .validate_rotation_successor(&fixture.policy)
-            .expect("canonical active successor");
-        let mut rotated_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
-        rotated_context.bootle_lantern_policy = Some(&rotated);
-        assert!(matches!(
-            verify_privacy_envelope_v1(&fixture.envelope, rotated_context),
-            Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
-        ));
-    }
+    include!("privacy_verifier/bootle_lantern_policy_test.rs");
 
     #[test]
     fn bootle_lantern_wire_rejects_truncation_extension_malleation_and_cross_suite_replay() {
@@ -7419,62 +7434,5 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn every_governed_envelope_binding_fails_closed_when_tampered() {
-        let (envelope, activation, chain_id) = valid_envelope();
-        let mutations: [(&str, fn(&mut PrivacyProofEnvelopeV1)); 9] = [
-            ("protocol", |value| {
-                value.protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
-            }),
-            ("parameter-id", |value| value.parameter_id.0[0] ^= 1),
-            ("parameter-digest", |value| value.parameter_digest.0[0] ^= 1),
-            ("verifier-digest", |value| value.verifier_digest.0[0] ^= 1),
-            ("schema-digest", |value| {
-                value.statement_schema_digest.0[0] ^= 1
-            }),
-            ("engine-manifest", |value| {
-                value.engine_manifest_digest.0[0] ^= 1
-            }),
-            ("statement-digest", |value| value.statement_digest.0[0] ^= 1),
-            ("proof-system", |value| {
-                value.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks
-            }),
-            ("engine", |value| {
-                value.engine_id = PrivacyEngineIdV1::NativeGoldilocksStarkFri
-            }),
-        ];
-        for (label, mutate) in mutations {
-            let mut candidate = envelope.clone();
-            mutate(&mut candidate);
-            assert_rejected(&candidate, &activation, &chain_id, label);
-        }
-    }
-
-    #[test]
-    fn every_statement_context_artifact_binding_fails_closed_when_tampered() {
-        let (envelope, activation, chain_id) = valid_envelope();
-        let mutations: [(&str, fn(&mut PrivacyStatementContextV1)); 5] = [
-            ("statement-parameter-id", |context| {
-                context.parameter_id.0[0] ^= 1
-            }),
-            ("statement-parameter-digest", |context| {
-                context.parameter_digest.0[0] ^= 1
-            }),
-            ("statement-verifier-digest", |context| {
-                context.verifier_digest.0[0] ^= 1
-            }),
-            ("statement-schema-digest", |context| {
-                context.statement_schema_digest.0[0] ^= 1
-            }),
-            ("statement-engine-manifest", |context| {
-                context.engine_manifest_digest.0[0] ^= 1
-            }),
-        ];
-        for (label, mutate) in mutations {
-            let mut candidate = envelope.clone();
-            mutate(&mut verange_statement_mut(&mut candidate).context);
-            refresh_statement_digest(&mut candidate);
-            assert_rejected(&candidate, &activation, &chain_id, label);
-        }
-    }
+    include!("privacy_verifier/governed_binding_tests.rs");
 }

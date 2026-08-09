@@ -1,10 +1,20 @@
-from pathlib import Path
+import importlib.util
 import re
 import subprocess
+import sys
+from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "run_izanami_communication_vulnerability_matrix.sh"
+LIVENESS_SCRIPT = ROOT / "scripts" / "run_izanami_liveness_matrix.py"
+LIVENESS_SPEC = importlib.util.spec_from_file_location(
+    "run_izanami_liveness_matrix", LIVENESS_SCRIPT
+)
+assert LIVENESS_SPEC is not None and LIVENESS_SPEC.loader is not None
+LIVENESS = importlib.util.module_from_spec(LIVENESS_SPEC)
+sys.modules[LIVENESS_SPEC.name] = LIVENESS
+LIVENESS_SPEC.loader.exec_module(LIVENESS)
 
 
 def _classifier_degraded_pattern() -> str:
@@ -12,6 +22,30 @@ def _classifier_degraded_pattern() -> str:
     match = re.search(r"^acceptance_failure_regex='([^']+)'", source, re.MULTILINE)
     assert match is not None
     return match.group(1)
+
+
+def test_liveness_rows_reject_retired_v1_consensus_dimensions() -> None:
+    rows = LIVENESS.parse_rows("baseline:1024:1:300")
+    assert rows == [LIVENESS.MatrixRow("baseline", 1024, 1, 300)]
+
+    try:
+        LIVENESS.parse_rows("legacy:1024:1:300:2:2")
+    except ValueError as error:
+        assert "revision-4" in str(error)
+    else:
+        raise AssertionError("retired collector dimensions must fail closed")
+
+    source = LIVENESS_SCRIPT.read_text(encoding="utf-8")
+    assert "--sumeragi-collectors-k" not in source
+    assert "--sumeragi-inline-block-created-backup-rbc" not in source
+
+
+def test_liveness_matrix_accepts_only_revision4_committee_geometry() -> None:
+    assert [
+        peers
+        for peers in range(1, 33)
+        if LIVENESS.is_revision4_committee_size(peers)
+    ] == [4, 7, 10, 13, 16, 19, 22, 25, 28, 31]
 
 
 def test_matrix_classifier_ignores_retryable_endpoint_refusals() -> None:
@@ -89,6 +123,7 @@ def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
     assert "consensus_pressure" in evidence.read_text().splitlines()[0]
     assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
     assert (out_dir / "root-cause.md").exists()
+    assert "--peers 19" in (out_dir / "permissioned-targeted-load.log").read_text()
 
     report.unlink()
     (out_dir / "summary.md").unlink()
@@ -117,6 +152,33 @@ def test_matrix_stress_mode_writes_paper_style_report(tmp_path: Path) -> None:
     assert "submit_latency_p95_ms" in evidence.read_text().splitlines()[0]
 
 
+def test_stopping_matrix_stays_within_revision4_fault_budget(tmp_path: Path) -> None:
+    for mode, peers, faulty in (("quick", 4, 1), ("paper", 19, 6)):
+        out_dir = tmp_path / mode
+        subprocess.run(
+            [
+                "bash",
+                str(SCRIPT),
+                "--out",
+                str(out_dir),
+                "--mode",
+                mode,
+                "--only",
+                "stopping",
+                "--sumeragi-mode",
+                "permissioned",
+                "--izanami-cmd",
+                "true",
+            ],
+            check=True,
+            cwd=ROOT,
+        )
+
+        command_log = (out_dir / "permissioned-stopping.log").read_text()
+        assert f"--peers {peers}" in command_log
+        assert f"--faulty {faulty}" in command_log
+
+
 def test_stress_matrix_marks_driver_saturation_and_consensus_stall(tmp_path: Path) -> None:
     out_dir = tmp_path / "matrix"
     fake_izanami = tmp_path / "fake_izanami.sh"
@@ -129,7 +191,7 @@ def test_stress_matrix_marks_driver_saturation_and_consensus_stall(tmp_path: Pat
         "final_quorum_min_height=Some(1) final_strict_min_height=Some(1) "
         "final_max_peer_height_skew=Some(0) "
         "sumeragi_status_delta=Some(SumeragiStatusDigest { "
-        "protocol_version: 3, height: 2, view: 5, phase: \"Prepare\", "
+        "protocol_version: 4, height: 2, view: 5, phase: \"Prepare\", "
         "body_state: \"Missing\", last_committed_height: 1, "
         "committed_height_advance: 0, mode: \"Permissioned\", epoch: 0, "
         "epoch_end_height: 100, validator_count: 4, min_signers: 3, "
@@ -185,7 +247,7 @@ def test_stress_matrix_marks_driver_saturation_and_consensus_stall(tmp_path: Pat
     assert "status=driver-saturated" in evidence
     assert "driver-saturated,consensus-stalled,overload-admission" in evidence
     assert "\tbusy-deferral\t" in evidence
-    assert row[header.index("protocol_version")] == "3"
+    assert row[header.index("protocol_version")] == "4"
     assert row[header.index("commit_qc_present")] == "true"
     assert row[header.index("tx_queue_saturated_by_bytes")] == "true"
     assert "view_change_cause_total" not in header

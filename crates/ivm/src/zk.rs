@@ -22,13 +22,14 @@ pub const MAX_CYCLES: u64 = 1 << 17; // 131_072 cycles
 
 use std::{
     cell::RefCell,
+    num::NonZeroU64,
     sync::{
         LazyLock, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
 
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree};
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
@@ -483,8 +484,11 @@ pub fn verify_trace(
                     root,
                 } => (*addr, *value, *size as usize, path, root),
             };
+            let leaf_index = u32::try_from(addr / CHUNK as u64)
+                .map_err(|_| crate::error::VMError::AssertionFailed)?;
             let mut chunk = [0u8; CHUNK];
-            let offset = (addr as usize) % CHUNK;
+            let offset = usize::try_from(addr % CHUNK as u64)
+                .expect("memory chunk offset always fits usize");
             let bytes = &value.to_le_bytes()[..size.min(16)];
             let Some(end) = offset.checked_add(bytes.len()) else {
                 return Err(crate::error::VMError::AssertionFailed);
@@ -498,10 +502,16 @@ pub fn verify_trace(
             let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_hash));
             let siblings: Vec<Option<HashOf<[u8; 32]>>> = path
                 .iter()
-                .map(|sib| Some(HashOf::from_untyped_unchecked(Hash::prehashed(*sib))))
+                .map(|sib| {
+                    (*sib != [0u8; 32])
+                        .then(|| HashOf::from_untyped_unchecked(Hash::prehashed(*sib)))
+                })
                 .collect();
-            let proof = MerkleProof::from_audit_path((addr as usize / CHUNK) as u32, siblings);
-            match proof.compute_root_sha256(&leaf, path.len()) {
+            let proof = MerkleProof::from_audit_path(leaf_index, siblings);
+            // MemEvent currently carries no authenticated memory leaf count.
+            // This checks only that the supplied path fragment hashes to the
+            // supplied root; it is not a Merkle membership verification.
+            match proof.compute_partial_root_sha256(&leaf, path.len()) {
                 Some(r) if *r.as_ref() == *root.as_ref() => Ok(()),
                 _ => Err(crate::error::VMError::AssertionFailed),
             }
@@ -525,6 +535,10 @@ pub fn verify_trace(
                     root,
                 } => (*index, *value, *tag, path, root),
             };
+            let leaf_index = u32::try_from(idx)
+                .ok()
+                .filter(|index| *index < 256)
+                .ok_or(crate::error::VMError::AssertionFailed)?;
             let mut leaf = [0u8; 9];
             leaf[0] = if tag { 1 } else { 0 };
             leaf[1..].copy_from_slice(&value.to_le_bytes());
@@ -533,12 +547,20 @@ pub fn verify_trace(
             let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(leaf_hash));
             let siblings: Vec<Option<HashOf<[u8; 32]>>> = path
                 .iter()
-                .map(|sib| Some(HashOf::from_untyped_unchecked(Hash::prehashed(*sib))))
+                .map(|sib| {
+                    (*sib != [0u8; 32])
+                        .then(|| HashOf::from_untyped_unchecked(Hash::prehashed(*sib)))
+                })
                 .collect();
-            let proof = MerkleProof::from_audit_path(idx as u32, siblings);
-            match proof.compute_root_sha256(&leaf, path.len()) {
-                Some(r) if *r.as_ref() == *root.as_ref() => Ok(()),
-                _ => Err(crate::error::VMError::AssertionFailed),
+            let proof = MerkleProof::from_audit_path(leaf_index, siblings);
+            let commitment = MerkleTreeCommitment::new(
+                *root,
+                NonZeroU64::new(256).expect("register tree leaf count is non-zero"),
+            );
+            if proof.verify_sha256(&leaf, &commitment) {
+                Ok(())
+            } else {
+                Err(crate::error::VMError::AssertionFailed)
             }
         })?;
 

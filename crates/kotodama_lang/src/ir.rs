@@ -541,35 +541,6 @@ pub enum Instr {
         seller_amount: Temp,
         evidence_hashes: Option<Temp>,
     },
-    /// Open and fund a native anonymous asset escrow from an opaque request payload.
-    AnonymousEscrowOpenOffer {
-        request: Temp,
-    },
-    /// Accept a native anonymous asset escrow.
-    AnonymousEscrowAccept {
-        escrow: Temp,
-    },
-    /// Mark anonymous escrow off-chain payment as sent.
-    AnonymousEscrowMarkPaymentSent {
-        escrow: Temp,
-    },
-    /// Release a paid anonymous escrow from an opaque request payload.
-    AnonymousEscrowRelease {
-        request: Temp,
-    },
-    /// Cancel an anonymous escrow from an opaque request payload.
-    AnonymousEscrowCancel {
-        request: Temp,
-    },
-    /// Open an anonymous escrow dispute.
-    AnonymousEscrowOpenDispute {
-        escrow: Temp,
-        evidence_hashes: Option<Temp>,
-    },
-    /// Resolve a disputed anonymous escrow from an opaque request payload.
-    AnonymousEscrowResolveDispute {
-        request: Temp,
-    },
     /// Begin a FASTPQ transfer batch scope.
     TransferBatchBegin,
     /// End the current FASTPQ transfer batch scope.
@@ -1255,18 +1226,6 @@ pub enum Instr {
         proof: Temp,
         vk: Temp,
     },
-    /// Build a Norito-encoded Unshield InstructionBox from a literal nominal quantity.
-    BuildUnshieldInline {
-        dest: Temp,
-        asset: Temp,
-        to: Temp,
-        amount: Temp,
-        inputs: Temp,
-        outputs: Option<Temp>,
-        backend: Temp,
-        proof: Temp,
-        vk: Temp,
-    },
     /// Compare two pointer-ABI values for deep equality by content.
     PointerEq {
         dest: Temp,
@@ -1318,8 +1277,6 @@ pub enum Instr {
 pub enum VendorInstructionKind {
     /// Governance `SubmitBallot`.
     SubmitBallot,
-    /// ZK `Unshield`.
-    Unshield,
     /// Bridge `RecordSccpMessage`.
     RecordSccpMessage,
 }
@@ -5362,13 +5319,8 @@ fn lower_direct_helper_call(
 ) -> Temp {
     let syscall = direct_builtin_syscall(builtin);
     let mut lowered_args = Vec::with_capacity(args.len());
-    for (idx, arg) in args.iter().enumerate() {
-        let temp = if builtin == Builtin::JsonSetIntDirect && idx == 2 {
-            lower_expr_as_i64(ctx, arg, vars)
-        } else {
-            lower_expr(ctx, arg, vars)
-        };
-        lowered_args.push(temp);
+    for arg in args {
+        lowered_args.push(lower_expr(ctx, arg, vars));
     }
     let dest = ctx.new_temp();
     ctx.current_instr(Instr::DirectHelperSyscall {
@@ -5542,22 +5494,7 @@ fn lower_surface_builtin_call(
         Builtin::PointerConstructor(constructor) => {
             lower_pointer_constructor_call(ctx, constructor, args, vars)
         }
-        Builtin::JsonSetIntDirect
-        | Builtin::JsonSetAccountIdDirect
-        | Builtin::JsonGetIntDirect
-        | Builtin::JsonGetDecimalDirect
-        | Builtin::JsonGetQuantityDirect
-        | Builtin::JsonGetJsonDirect
-        | Builtin::JsonGetNameDirect
-        | Builtin::JsonGetAccountIdDirect
-        | Builtin::JsonGetAssetDefinitionIdDirect
-        | Builtin::JsonGetNftIdDirect
-        | Builtin::JsonGetBlobHexDirect
-        | Builtin::BuildPathKeyNoritoDirect
-        | Builtin::SchemaEncodeDirect
-        | Builtin::SchemaDecodeDirect
-        | Builtin::SchemaInfoDirect
-        | Builtin::NumericToIntDirect
+        Builtin::NumericToIntDirect
         | Builtin::NumericAddDirect
         | Builtin::NumericSubDirect
         | Builtin::NumericMulDirect
@@ -6158,7 +6095,7 @@ fn lower_surface_builtin_call(
         | Builtin::QueryPageAssetDefinitions
         | Builtin::QueryPageDomains
         | Builtin::QueryPageNfts => {
-            let offset = lower_expr_as_u64(ctx, &args[0], vars);
+            let offset = lower_expr_as_i64(ctx, &args[0], vars);
             let limit = lower_expr_as_u64(ctx, &args[1], vars);
             let entity = match builtin {
                 Builtin::QueryPageAccounts => ivm_abi::core_query::CoreQueryEntityTagV1::Account,
@@ -6217,45 +6154,11 @@ fn lower_surface_builtin_call(
             });
             dest
         }
-        Builtin::BuildUnshieldInline => {
-            let asset = lower_expr(ctx, &args[0], vars);
-            let to = lower_expr(ctx, &args[1], vars);
-            // Keep the canonical nominal `quantity` pointer through IR.
-            // Code generation requires a literal and validates the narrower
-            // exact scale-0/u128 V1 proof-scalar boundary without changing the
-            // public instruction field's source type.
-            let amount = lower_expr(ctx, &args[2], vars);
-            let inputs = lower_expr(ctx, &args[3], vars);
-            let (outputs, backend_idx) = if args.len() == 8 {
-                (Some(lower_expr(ctx, &args[4], vars)), 5)
-            } else {
-                (None, 4)
-            };
-            let backend = lower_expr(ctx, &args[backend_idx], vars);
-            let proof = lower_expr(ctx, &args[backend_idx + 1], vars);
-            let vk = lower_expr(ctx, &args[backend_idx + 2], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::BuildUnshieldInline {
-                dest,
-                asset,
-                to,
-                amount,
-                inputs,
-                outputs,
-                backend,
-                proof,
-                vk,
-            });
-            dest
-        }
-        Builtin::RecordSccpMessage
-        | Builtin::ScExecuteSubmitBallot
-        | Builtin::ScExecuteUnshield => {
+        Builtin::RecordSccpMessage | Builtin::ScExecuteSubmitBallot => {
             let payload = lower_expr(ctx, &args[0], vars);
             let kind = match builtin {
                 Builtin::RecordSccpMessage => VendorInstructionKind::RecordSccpMessage,
                 Builtin::ScExecuteSubmitBallot => VendorInstructionKind::SubmitBallot,
-                Builtin::ScExecuteUnshield => VendorInstructionKind::Unshield,
                 _ => unreachable!("matched operation-specific instruction bridge"),
             };
             ctx.current_instr(Instr::VendorExecuteInstruction { payload, kind });
@@ -6584,14 +6487,14 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
             t
         }
-        Builtin::CreateTrigger | Builtin::RegisterTrigger => {
+        Builtin::RegisterTrigger => {
             let json = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::CreateTrigger { json });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
             t
         }
-        Builtin::RemoveTrigger | Builtin::UnregisterTrigger => {
+        Builtin::UnregisterTrigger => {
             let name = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::RemoveTrigger { name });
             let t = ctx.new_temp();
@@ -6744,59 +6647,6 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
             t
         }
-        Builtin::AnonymousEscrowOpenOffer => {
-            let request = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::AnonymousEscrowOpenOffer { request });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowAccept => {
-            let escrow = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::AnonymousEscrowAccept { escrow });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowMarkPaymentSent => {
-            let escrow = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::AnonymousEscrowMarkPaymentSent { escrow });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowRelease => {
-            let request = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::AnonymousEscrowRelease { request });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowCancel => {
-            let request = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::AnonymousEscrowCancel { request });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowOpenDispute => {
-            let escrow = lower_expr(ctx, &args[0], vars);
-            let evidence_hashes = args.get(1).map(|arg| lower_expr(ctx, arg, vars));
-            ctx.current_instr(Instr::AnonymousEscrowOpenDispute {
-                escrow,
-                evidence_hashes,
-            });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
-        Builtin::AnonymousEscrowResolveDispute => {
-            let request = lower_expr(ctx, &args[0], vars);
-            ctx.current_instr(Instr::AnonymousEscrowResolveDispute { request });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
-        }
         Builtin::Alloc => {
             let bytes = lower_expr_as_u64(ctx, &args[0], vars);
             let scalar = ctx.new_temp();
@@ -6928,9 +6778,7 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::ZkVoteGetTally { dest, payload });
             dest
         }
-        builtin @ (Builtin::ZkVerifyTransfer
-        | Builtin::ZkVerifyUnshield
-        | Builtin::ZkVerifyBatch
+        builtin @ (Builtin::ZkVerifyBatch
         | Builtin::ZkVoteVerifyBallot
         | Builtin::ZkVoteVerifyTally) => {
             let payload = lower_expr(ctx, &args[0], vars);
@@ -9493,187 +9341,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn public_wrapper_decodes_one_complete_norito_argument_record() {
-        let src = r#"
-            seiyaku Demo {
-                kotoage fn run(
-                    int count,
-                    int total,
-                    bool ready,
-                    string text,
-                    Name label,
-                    AssetId asset,
-                    DomainId domain,
-                    DataSpaceId dataspace,
-                    bytes bytes
-                ) authorize("Entry") {
-                    let _count = count;
-                    let _total = total;
-                    let _ready = ready;
-                    let _text = text;
-                    let _label = label;
-                    let _asset = asset;
-                    let _domain = domain;
-                    let _dataspace = dataspace;
-                    let _bytes = bytes;
-                }
-            }
-        "#;
-        let prog = parse(src).expect("parse parameterized entrypoint");
-        let typed = analyze(&prog).expect("analyze parameterized entrypoint");
-        let ir = lower(&typed).expect("lower parameterized entrypoint");
-        let wrapper = ir
-            .functions
-            .iter()
-            .find(|function| function.name == "run")
-            .expect("wrapper function");
-
-        let mut record_decodes = 0;
-        let mut table_loads = 0;
-        let mut json_field_getters = 0;
-        let mut decoded_schema = None;
-        for block in &wrapper.blocks {
-            for instr in &block.instrs {
-                match instr {
-                    Instr::DirectHelperSyscall { syscall, .. }
-                        if *syscall == ivm_abi::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD =>
-                    {
-                        record_decodes += 1;
-                    }
-                    Instr::Load64Imm { .. } => table_loads += 1,
-                    Instr::JsonGetNumeric { .. }
-                    | Instr::JsonGetJson { .. }
-                    | Instr::JsonGetName { .. }
-                    | Instr::JsonGetAccountId { .. }
-                    | Instr::JsonGetAssetDefinitionId { .. }
-                    | Instr::JsonGetNftId { .. }
-                    | Instr::JsonGetBlobHex { .. } => json_field_getters += 1,
-                    Instr::DataRef {
-                        kind: DataRefKind::NoritoBytes,
-                        value,
-                        ..
-                    } => {
-                        let bytes = hex::decode(value.strip_prefix("0x").expect("hex schema"))
-                            .expect("decode schema hex");
-                        decoded_schema = Some(
-                            norito::decode_from_bytes::<
-                                ivm_abi::entrypoint::EntrypointArgumentSchemaV1,
-                            >(&bytes)
-                            .expect("decode argument schema"),
-                        );
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        assert_eq!(record_decodes, 1, "wrapper must decode the payload once");
-        assert_eq!(table_loads, 9, "one fixed table load per parameter");
-        assert_eq!(
-            json_field_getters, 0,
-            "wrapper must not re-decode JSON per field"
-        );
-        let schema = decoded_schema.expect("compiler-emitted Norito schema");
-        assert_eq!(
-            schema
-                .fields
-                .iter()
-                .map(|field| {
-                    let [ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Leaf(kind)] =
-                        field.ty.nodes.as_slice()
-                    else {
-                        panic!("scalar test parameter must use one leaf node");
-                    };
-                    (&*field.name, *kind)
-                })
-                .collect::<Vec<_>>(),
-            vec![
-                ("count", ivm_abi::entrypoint::EntrypointValueKindV1::Int),
-                ("total", ivm_abi::entrypoint::EntrypointValueKindV1::Int),
-                ("ready", ivm_abi::entrypoint::EntrypointValueKindV1::Bool),
-                ("text", ivm_abi::entrypoint::EntrypointValueKindV1::String),
-                ("label", ivm_abi::entrypoint::EntrypointValueKindV1::Name),
-                ("asset", ivm_abi::entrypoint::EntrypointValueKindV1::AssetId),
-                (
-                    "domain",
-                    ivm_abi::entrypoint::EntrypointValueKindV1::DomainId
-                ),
-                (
-                    "dataspace",
-                    ivm_abi::entrypoint::EntrypointValueKindV1::DataSpaceId
-                ),
-                ("bytes", ivm_abi::entrypoint::EntrypointValueKindV1::Blob),
-            ]
-        );
-    }
-
-    #[test]
-    fn public_aggregate_arguments_cross_internal_calls_as_flat_words() {
-        let src = r#"
-            seiyaku Demo {
-                struct Request { int count, bool ready }
-
-                view fn run(
-                    Request request,
-                    (int, bool) pair,
-                    Option<int> maybe,
-                    Result<int, bool> outcome
-                ) -> int {
-                    return request.count + pair.0
-                        + maybe.unwrap_or(0) + outcome.unwrap_or(0);
-                }
-            }
-        "#;
-        let prog = parse(src).expect("parse aggregate entrypoint");
-        let typed = analyze(&prog).expect("analyze aggregate entrypoint");
-        let ir = lower(&typed).expect("lower aggregate entrypoint");
-        let wrapper = ir
-            .functions
-            .iter()
-            .find(|function| function.name == "run")
-            .expect("wrapper function");
-        let implementation = ir
-            .functions
-            .iter()
-            .find(|function| function.name == "__entrypoint_impl__run")
-            .expect("implementation function");
-
-        let call_args = wrapper
-            .blocks
-            .iter()
-            .flat_map(|block| &block.instrs)
-            .find_map(|instr| match instr {
-                Instr::Call { callee, args, .. } if callee == "__entrypoint_impl__run" => {
-                    Some(args)
-                }
-                _ => None,
-            })
-            .expect("wrapper implementation call");
-        assert_eq!(
-            call_args.len(),
-            6,
-            "products flatten recursively while each sum crosses as one raw handle"
-        );
-        assert_eq!(implementation.params.len(), 6);
-        assert!(
-            implementation
-                .params
-                .iter()
-                .all(|name| name.starts_with("$abi$")),
-            "aggregate implementation parameters must use collision-proof compiler names"
-        );
-        assert_eq!(
-            implementation
-                .blocks
-                .iter()
-                .flat_map(|block| &block.instrs)
-                .filter(|instr| matches!(instr, Instr::TuplePack { .. }))
-                .count(),
-            2,
-            "only product shapes are rebuilt; Option and Result remain raw handles"
-        );
-    }
+    include!("ir/tests/public_argument_record_abi.rs");
 
     #[test]
     fn nested_aggregate_returns_use_every_flattened_abi_word() {
@@ -9871,6 +9539,70 @@ mod tests {
     }
 
     #[test]
+    fn exhaustive_result_match_reads_only_the_selected_sum_payload() {
+        let source = r#"
+            fn project(Result<int, (int, int)> value) -> int {
+                match value {
+                    Result::ok(item) => item,
+                    Result::err(pair) => pair.0,
+                }
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse Result match")).expect("analyze Result match"),
+        )
+        .expect("lower Result match");
+        let function = &lowered.functions[0];
+        let entry = function
+            .blocks
+            .iter()
+            .find(|block| block.label == function.entry)
+            .expect("Result match entry block");
+        let (ok_label, err_label) = match entry.terminator {
+            Terminator::Branch {
+                then_bb, else_bb, ..
+            } => (then_bb, else_bb),
+            _ => panic!("Result match entry must branch on the discriminant"),
+        };
+        let payload_offsets = |label| {
+            function
+                .blocks
+                .iter()
+                .find(|block| block.label == label)
+                .expect("Result match arm block")
+                .instrs
+                .iter()
+                .filter_map(|instruction| match instruction {
+                    Instr::Load64Imm { imm, .. } => Some(*imm),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            entry
+                .instrs
+                .iter()
+                .filter_map(|instruction| match instruction {
+                    Instr::Load64Imm { imm, .. } => Some(*imm),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            [0],
+            "Result match reads only the discriminant before selecting an arm"
+        );
+        assert_eq!(
+            payload_offsets(ok_label),
+            [8],
+            "the selected ok arm reads only its scalar payload"
+        );
+        assert_eq!(
+            payload_offsets(err_label),
+            [8, 16],
+            "the selected err arm reads only its pair payload"
+        );
+    }
+
+    #[test]
     fn propagation_returns_original_error_handle_without_conversion() {
         let source = r#"
             fn propagate(Result<int, bool> value) -> Result<int, bool> {
@@ -10026,8 +9758,9 @@ mod tests {
                     items_dest,
                     next_offset_dest,
                     entity,
-                    ..
-                } => Some((*items_dest, *next_offset_dest, *entity)),
+                    offset,
+                    limit,
+                } => Some((*items_dest, *next_offset_dest, *entity, *offset, *limit)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -10035,6 +9768,30 @@ mod tests {
         assert_eq!(
             pages[0].2,
             ivm_abi::core_query::CoreQueryEntityTagV1::Account
+        );
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instrs)
+                .filter(|instruction| {
+                    matches!(instruction, Instr::IntTryToI64 { dest, .. } if *dest == pages[0].3)
+                })
+                .count(),
+            1,
+            "dynamic page offsets cross the existing signed i64 host boundary exactly once"
+        );
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instrs)
+                .filter(|instruction| {
+                    matches!(instruction, Instr::IntTryToU64 { dest, .. } if *dest == pages[0].4)
+                })
+                .count(),
+            1,
+            "dynamic page limits cross the unsigned bounded host boundary exactly once"
         );
         assert!(function.blocks.iter().any(|block| {
             block.instrs.iter().any(|instruction| {
@@ -10675,16 +10432,23 @@ mod tests {
     }
 
     #[test]
-    fn failed_list_mutation_branches_have_no_stores() {
+    fn multiword_failed_list_mutation_branches_have_no_stores_or_allocations() {
         let source = r#"
+            struct Pair { int first, int second }
+
             fn set(int index) -> bool {
-                var List<int, 1> values = [1];
-                values.try_set(index: index, value: 2)
+                var List<Pair, 1> values = [Pair { first: 1, second: 2 }];
+                let Pair replacement = Pair { first: 3, second: 4 };
+                values.try_set(
+                    index: index,
+                    value: replacement,
+                )
             }
 
             fn push() -> bool {
-                var List<int, 1> values = [1];
-                values.try_push(2)
+                var List<Pair, 1> values = [Pair { first: 1, second: 2 }];
+                let Pair replacement = Pair { first: 3, second: 4 };
+                values.try_push(replacement)
             }
         "#;
         let lowered = lower(
@@ -10693,23 +10457,70 @@ mod tests {
         )
         .expect("lower failed mutation paths");
         for function in &lowered.functions {
-            let branch = function
+            let (success_label, failure_label) = function
                 .blocks
                 .iter()
                 .find_map(|block| match block.terminator {
-                    Terminator::Branch { else_bb, .. } => Some(else_bb),
+                    Terminator::Branch {
+                        then_bb, else_bb, ..
+                    } => {
+                        let success = function
+                            .blocks
+                            .iter()
+                            .find(|candidate| candidate.label == then_bb)
+                            .expect("mutation success block exists");
+                        success
+                            .instrs
+                            .iter()
+                            .any(|instruction| {
+                                matches!(
+                                    instruction,
+                                    Instr::Store64 { .. } | Instr::Store64Imm { .. }
+                                )
+                            })
+                            .then_some((then_bb, else_bb))
+                    }
                     _ => None,
                 })
                 .expect("mutation has a bounds branch");
+            let success = function
+                .blocks
+                .iter()
+                .find(|block| block.label == success_label)
+                .expect("mutation success block exists");
+            let expected_store_count = if function.name == "set" { 2 } else { 3 };
+            assert_eq!(
+                success
+                    .instrs
+                    .iter()
+                    .filter(|instruction| matches!(
+                        instruction,
+                        Instr::Store64 { .. } | Instr::Store64Imm { .. }
+                    ))
+                    .count(),
+                expected_store_count,
+                "{} must write both Pair words{} only on success",
+                function.name,
+                if function.name == "push" {
+                    " and then commit the length"
+                } else {
+                    ""
+                }
+            );
             let failure = function
                 .blocks
                 .iter()
-                .find(|block| block.label == branch)
+                .find(|block| block.label == failure_label)
                 .expect("failure block exists");
-            assert!(failure.instrs.iter().all(|instruction| !matches!(
-                instruction,
-                Instr::Store64 { .. } | Instr::Store64Imm { .. }
-            )));
+            assert!(
+                failure.instrs.iter().all(|instruction| !matches!(
+                    instruction,
+                    Instr::Alloc { .. } | Instr::Store64 { .. } | Instr::Store64Imm { .. }
+                )),
+                "{} failure block must be allocation- and store-free: {:?}",
+                function.name,
+                failure.instrs
+            );
         }
     }
 
@@ -12275,11 +12086,11 @@ seiyaku RangeOffsetBits {{
     }
 
     #[test]
-    fn lower_trigger_aliases() {
+    fn lower_canonical_trigger_operations() {
         let src = r#"
             fn main() {
                 ledger::trigger::register(Json::parse("{}"));
-                ledger::trigger::remove(Name::parse("wake"));
+                ledger::trigger::unregister(Name::parse("wake"));
             }
         "#;
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
@@ -12547,14 +12358,9 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn named_struct_literal_lowers_in_declaration_order() {
-        let program = parse(
-            r#"
-            module NamedStruct {
-                struct Pair { int first; int second; }
-                fn main() -> Pair { return Pair { second: 2, first: 1 }; }
-            }
-            "#,
-        )
+        let program = parse(include_str!(
+            "ir/test_sources/named_struct_literal_lowers_in_declaration_order_1.ko"
+        ))
         .expect("parse named struct literal");
         let typed = analyze(&program).expect("analyze named struct literal");
         let lowered = lower(&typed).expect("lower named struct literal");
@@ -12592,14 +12398,7 @@ seiyaku RangeOffsetBits {{
     #[test]
     fn named_struct_literal_evaluates_fields_in_source_order_before_layout() {
         let program = parse(
-            r#"
-            module NamedStructEffects {
-                struct Pair { int first; int second; }
-                fn first() -> int { 1 }
-                fn second() -> int { 2 }
-                fn main() -> Pair { Pair { second: second(), first: first() } }
-            }
-            "#,
+            include_str!("ir/test_sources/named_struct_literal_evaluates_fields_in_source_order_before_layout_1.ko"),
         )
         .expect("parse effectful named struct literal");
         let lowered = lower(&analyze(&program).expect("analyze named struct effects"))
@@ -13173,103 +12972,5 @@ seiyaku RangeOffsetBits {{
         }
     }
 
-    #[test]
-    fn rounded_numeric_division_is_constant_folded_or_one_numeric_round_instruction() {
-        let dynamic = parse(
-            "fn rounded(quantity value, decimal divisor, int scale) -> quantity { \
-                return value.div_round( \
-                    divisor: divisor, \
-                    scale: scale, \
-                    mode: Rounding::nearest_even, \
-                ); \
-            }",
-        )
-        .expect("parse dynamic rounded quantity division");
-        let dynamic = lower(&analyze(&dynamic).expect("analyze rounded quantity division"))
-            .expect("lower rounded quantity division");
-        let calls = dynamic.functions[0]
-            .blocks
-            .iter()
-            .flat_map(|block| &block.instrs)
-            .filter(|instruction| {
-                matches!(
-                    instruction,
-                    Instr::NumericRound {
-                        op: NumericRoundOp::QuantityDiv,
-                        ..
-                    }
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(calls.len(), 1);
-
-        let folded = parse(
-            "fn rounded() -> decimal { \
-                return 1.0.div_round( \
-                    divisor: 8.0, \
-                    scale: 2, \
-                    mode: Rounding::nearest_even, \
-                ); \
-            }",
-        )
-        .expect("parse constant rounded decimal division");
-        let folded = lower(&analyze(&folded).expect("analyze constant rounded decimal division"))
-            .expect("lower constant rounded decimal division");
-        assert!(folded.functions[0].blocks.iter().any(|block| {
-            block.instrs.iter().any(|instruction| {
-                matches!(
-                    instruction,
-                    Instr::DataRef {
-                        kind: DataRefKind::Decimal,
-                        value,
-                        ..
-                    } if value == "0.12"
-                )
-            })
-        }));
-        assert!(folded.functions[0].blocks.iter().all(|block| {
-            block
-                .instrs
-                .iter()
-                .all(|instruction| !matches!(instruction, Instr::NumericRound { .. }))
-        }));
-    }
-
-    #[test]
-    fn wrapping_builtins_have_distinct_ir() {
-        let program = parse(
-            r#"
-fn main(int left, int right) -> (int, int, int, int) {
-    return (
-        math::wrapping_add(left: left, right: right),
-        math::wrapping_sub(left: left, right: right),
-        math::wrapping_mul(left: left, right: right),
-        math::wrapping_neg(left)
-    );
-}
-"#,
-        )
-        .expect("parse wrapping builtins");
-        let program = lower(&analyze(&program).expect("analyze wrapping builtins"))
-            .expect("lower wrapping builtins");
-        let instructions = program.functions[0]
-            .blocks
-            .iter()
-            .flat_map(|block| block.instrs.iter())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            instructions
-                .iter()
-                .filter(|instr| matches!(instr, Instr::WrappingBinary { .. }))
-                .count(),
-            3
-        );
-        assert_eq!(
-            instructions
-                .iter()
-                .filter(|instr| matches!(instr, Instr::WrappingNeg { .. }))
-                .count(),
-            1
-        );
-    }
+    include!("ir_tail_tests.rs");
 }

@@ -521,8 +521,12 @@ mod tests {
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         };
-        let envelope =
-            LaneRelayEnvelope::new(header, None, None, settlement, 0).expect("valid envelope");
+        let envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+            .expect("valid envelope")
+            .with_lane_block_descriptor_hash(Some(UntypedHash::new(
+                b"lane-relay-broadcaster-test-descriptor",
+            )))
+            .with_manifest_root(Some([0x44; 32]));
         let verified_at_height = height;
         let proof_digest = UntypedHash::new(
             format!("lane-relay-test-proof:{height}:{lane}:{verified_at_height}").as_bytes(),
@@ -544,7 +548,9 @@ mod tests {
             epoch: 0,
             chain_order_hash: UntypedHash::prehashed([0x13; UntypedHash::LENGTH]),
             rechain_seq: 0,
-            mode_tag: envelope.lane_qc_mode_tag("test-mode"),
+            mode_tag: envelope
+                .lane_finality_qc_mode_tag("test-mode")
+                .expect("complete test finality statement"),
             highest_qc: None,
             validator_set_hash: HashOf::from_untyped_unchecked(UntypedHash::prehashed(
                 [0x14; UntypedHash::LENGTH],

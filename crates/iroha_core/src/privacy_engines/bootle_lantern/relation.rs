@@ -571,17 +571,64 @@ mod tests {
         PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
         PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
-    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use sha2::{Digest as _, Sha256};
 
     use super::*;
     use crate::privacy_engines::bootle_lantern::{
         issuer::{
-            BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
-            holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
-            issuer_blind_issue_with_rng_v1,
+            BootleLanternInMemoryIssuanceStoreV1, BootleLanternIssuerKeyPairV1,
+            BootleLanternIssuerPolicyMetadataV1, holder_finalize_blind_issuance_v1,
+            holder_prepare_blind_issuance_with_rng_v1, issuer_authorize_blind_issuance_with_rng_v1,
+            issuer_blind_issue_once_with_rng_v1,
         },
         transcript::matrix_seed_v1,
     };
+
+    struct TestRng {
+        seed: [u8; 32],
+        counter: u64,
+    }
+
+    impl TestRng {
+        const fn new(seed: [u8; 32]) -> Self {
+            Self { seed, counter: 0 }
+        }
+    }
+
+    impl RngCore for TestRng {
+        fn next_u32(&mut self) -> u32 {
+            let mut bytes = [0; 4];
+            self.fill_bytes(&mut bytes);
+            u32::from_be_bytes(bytes)
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            let mut bytes = [0; 8];
+            self.fill_bytes(&mut bytes);
+            u64::from_be_bytes(bytes)
+        }
+
+        fn fill_bytes(&mut self, destination: &mut [u8]) {
+            self.try_fill_bytes(destination)
+                .expect("relation test RNG is infallible");
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            for chunk in destination.chunks_mut(32) {
+                let mut hash = Sha256::new();
+                hash.update(b"iroha.privacy.bootle-lantern.relation-test-rng.v1");
+                hash.update(self.seed);
+                hash.update(self.counter.to_be_bytes());
+                self.counter = self.counter.wrapping_add(1);
+                let block: [u8; 32] = hash.finalize().into();
+                chunk.copy_from_slice(&block[..chunk.len()]);
+            }
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for TestRng {}
 
     fn raw(seed: u8) -> [u8; 32] {
         [seed; 32]
@@ -632,7 +679,7 @@ mod tests {
     fn issued_fixture() -> &'static IssuedFixture {
         static FIXTURE: OnceLock<IssuedFixture> = OnceLock::new();
         FIXTURE.get_or_init(|| {
-            let mut keygen_rng = StdRng::from_seed([0x11; 32]);
+            let mut keygen_rng = TestRng::new([0x11; 32]);
             let issuer_key_pair = BootleLanternIssuerKeyPairV1::generate_with_rng_v1(
                 PrivacyParameterIdV1::new(raw(13)),
                 &mut keygen_rng,
@@ -656,29 +703,43 @@ mod tests {
                 })
                 .expect("active native issuer policy");
             let context = context();
-            let mut attributes = [[0_u8; 8]; ATTRIBUTE_POLYNOMIALS_V1];
-            attributes[1] = [1; 8];
-            let mut holder_mask_rng = StdRng::from_seed([0x12; 32]);
-            let mut holder_proof_rng = StdRng::from_seed([0x13; 32]);
-            let (request, state) = holder_prepare_blind_issuance_with_rng_v1(
-                &context,
-                genesis_hash(),
-                &policy,
-                attributes,
-                &mut holder_mask_rng,
-                &mut holder_proof_rng,
-            )
-            .expect("holder blind-issuance request");
-            let mut tag_rng = StdRng::from_seed([0x14; 32]);
-            let mut preimage_rng = StdRng::from_seed([0x15; 32]);
-            let response = issuer_blind_issue_with_rng_v1(
+            let issuance_store = BootleLanternInMemoryIssuanceStoreV1::new();
+            let mut authorization_rng = TestRng::new([0x16; 32]);
+            let authorization = issuer_authorize_blind_issuance_with_rng_v1(
                 &issuer_key_pair,
                 &context,
                 genesis_hash(),
                 &policy,
+                raw(16),
+                10,
+                20,
+                &issuance_store,
+                &mut authorization_rng,
+            )
+            .expect("issuer one-shot authorization");
+            let mut attributes = [[0_u8; 8]; ATTRIBUTE_POLYNOMIALS_V1];
+            attributes[1] = [1; 8];
+            let mut holder_issuance_rng = TestRng::new([0x12; 32]);
+            let (request, state) = holder_prepare_blind_issuance_with_rng_v1(
+                &context,
+                genesis_hash(),
+                &policy,
+                &authorization,
+                attributes,
+                &mut holder_issuance_rng,
+            )
+            .expect("holder blind-issuance request");
+            let mut issuer_issuance_rng = TestRng::new([0x14; 32]);
+            let response = issuer_blind_issue_once_with_rng_v1(
+                &issuer_key_pair,
+                &context,
+                genesis_hash(),
+                &policy,
+                &authorization,
                 &request,
-                &mut tag_rng,
-                &mut preimage_rng,
+                10,
+                &issuance_store,
+                &mut issuer_issuance_rng,
             )
             .expect("native blind issuance");
             let credential = holder_finalize_blind_issuance_v1(

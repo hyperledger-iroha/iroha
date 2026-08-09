@@ -90,58 +90,48 @@ def _normalized_absolute(path: Path, label: str, *, must_exist: bool) -> Path:
     return path
 
 
-def _workspace_target(repo_root: Path, *, create: bool) -> Path:
-    """Resolve the one repository-authorized Cargo target root.
+def _external_root(repo_root: Path, path: Path, label: str) -> Path:
+    """Authenticate one private, owner-bound real root outside source."""
 
-    A sealed release uses ``repo_root/target`` as a symlink to its isolated
-    output volume. Development callers may use a real directory at the same
-    lexical path. All bundle/cache paths are constructed from the resolved
-    directory so no published manifest contains a symlinked component.
-    """
-
-    alias = repo_root / "target"
+    path = _normalized_absolute(path, label, must_exist=True)
     try:
-        alias_metadata = alias.lstat()
-    except FileNotFoundError:
-        if not create:
-            raise PrebuiltBundleError("repository target authority is unavailable")
-        try:
-            alias.mkdir(mode=_BUILD_DIRECTORY_MODE)
-        except FileExistsError:
-            pass
-        try:
-            alias_metadata = alias.lstat()
-        except OSError as error:
-            raise PrebuiltBundleError(
-                "repository target authority could not be created"
-            ) from error
-    except OSError as error:
-        raise PrebuiltBundleError("repository target authority is unavailable") from error
-
-    if not (stat.S_ISDIR(alias_metadata.st_mode) or stat.S_ISLNK(alias_metadata.st_mode)):
-        raise PrebuiltBundleError(
-            "repository target authority must be a directory or one directory symlink"
-        )
-    try:
-        resolved = alias.resolve(strict=True)
-        resolved_metadata = resolved.lstat()
-    except (OSError, RuntimeError) as error:
-        raise PrebuiltBundleError(
-            "repository target authority does not resolve to a directory"
-        ) from error
+        metadata = path.lstat()
+        contained = os.path.commonpath((str(path), str(repo_root))) == str(repo_root)
+    except (OSError, ValueError) as error:
+        raise PrebuiltBundleError(f"{label} cannot be authenticated") from error
     if (
-        Path(os.path.abspath(resolved)) != resolved
-        or resolved.resolve(strict=True) != resolved
-        or stat.S_ISLNK(resolved_metadata.st_mode)
-        or not stat.S_ISDIR(resolved_metadata.st_mode)
-        or resolved_metadata.st_uid != os.geteuid()
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != _BUILD_DIRECTORY_MODE
+        or contained
     ):
         raise PrebuiltBundleError(
-            "repository target authority must resolve to one owner-owned real directory"
+            f"{label} must be a private owner directory outside repository source"
         )
-    if not stat.S_ISLNK(alias_metadata.st_mode) and resolved != alias:
-        raise PrebuiltBundleError("repository target directory is not canonical")
-    return resolved
+    return path
+
+
+def _external_roots(
+    repo_root: Path,
+    cargo_target_dir: Path,
+    artifact_root: Path,
+) -> tuple[Path, Path]:
+    cargo_target_dir = _external_root(
+        repo_root, cargo_target_dir, "Cargo target root"
+    )
+    artifact_root = _external_root(
+        repo_root, artifact_root, "release artifact root"
+    )
+    if (
+        cargo_target_dir == artifact_root
+        or cargo_target_dir in artifact_root.parents
+        or artifact_root in cargo_target_dir.parents
+    ):
+        raise PrebuiltBundleError(
+            "Cargo target and release artifact roots must be disjoint"
+        )
+    return cargo_target_dir, artifact_root
 
 
 def _require_digest(value: str, label: str) -> str:
@@ -265,11 +255,11 @@ def _hash_file(path: Path, label: str, *, max_bytes: int) -> tuple[str, int]:
     return digest.hexdigest(), total
 
 
-def _ensure_directory_tree(repo_root: Path, path: Path) -> None:
-    if path != repo_root and repo_root not in path.parents:
-        raise PrebuiltBundleError("release build path escaped the repository")
-    relative = path.relative_to(repo_root)
-    current = repo_root
+def _ensure_directory_tree(authority_root: Path, path: Path) -> None:
+    if path != authority_root and authority_root not in path.parents:
+        raise PrebuiltBundleError("release output path escaped its authenticated root")
+    relative = path.relative_to(authority_root)
+    current = authority_root
     for part in relative.parts:
         if part in {"", ".", ".."}:
             raise PrebuiltBundleError("release build path is not canonical")
@@ -298,6 +288,7 @@ def _ensure_directory_tree(repo_root: Path, path: Path) -> None:
 def prepare_cache(
     repo_root: Path,
     source_manifest_sha256: str,
+    cargo_target_dir: Path,
     default_cache: Path,
     message_control_cache: Path,
 ) -> None:
@@ -305,9 +296,11 @@ def prepare_cache(
 
     repo_root = _normalized_absolute(repo_root, "repository root", must_exist=True)
     _require_digest(source_manifest_sha256, "source manifest")
-    workspace_target = _workspace_target(repo_root, create=True)
+    cargo_target_dir = _external_root(
+        repo_root, cargo_target_dir, "Cargo target root"
+    )
     expected_root = (
-        workspace_target
+        cargo_target_dir
         / "sumeragi-v2-release"
         / source_manifest_sha256
         / "program-build-cache"
@@ -316,8 +309,8 @@ def prepare_cache(
     expected_message = expected_root / "message-control"
     if default_cache != expected_default or message_control_cache != expected_message:
         raise PrebuiltBundleError("release build caches escaped their fixed source root")
-    _ensure_directory_tree(workspace_target, expected_default)
-    _ensure_directory_tree(workspace_target, expected_message)
+    _ensure_directory_tree(cargo_target_dir, expected_default)
+    _ensure_directory_tree(cargo_target_dir, expected_message)
 
 
 def _read_tool_version(path: Path, label: str) -> bytes:
@@ -442,6 +435,8 @@ def _fsync_directory(path: Path) -> None:
 def create_bundle(
     repo_root: Path,
     source_manifest_sha256: str,
+    cargo_target_dir: Path,
+    artifact_root: Path,
     default_cache: Path,
     message_control_cache: Path,
     programs_root: Path,
@@ -452,17 +447,22 @@ def create_bundle(
 
     repo_root = _normalized_absolute(repo_root, "repository root", must_exist=True)
     _require_digest(source_manifest_sha256, "source manifest")
-    workspace_target = _workspace_target(repo_root, create=False)
-    expected_source_root = (
-        workspace_target / "sumeragi-v2-release" / source_manifest_sha256
+    cargo_target_dir, artifact_root = _external_roots(
+        repo_root, cargo_target_dir, artifact_root
     )
-    expected_programs_root = expected_source_root / "programs"
+    expected_programs_root = (
+        artifact_root / "sumeragi-v2-release" / source_manifest_sha256 / "programs"
+    )
     if programs_root != expected_programs_root:
-        raise PrebuiltBundleError("programs root escaped its source-manifest directory")
+        raise PrebuiltBundleError("programs root escaped its authenticated artifact root")
     prepare_cache(
-        repo_root, source_manifest_sha256, default_cache, message_control_cache
+        repo_root,
+        source_manifest_sha256,
+        cargo_target_dir,
+        default_cache,
+        message_control_cache,
     )
-    _ensure_directory_tree(workspace_target, programs_root)
+    _ensure_directory_tree(artifact_root, programs_root)
 
     cargo_version = _read_tool_version(cargo_version_file, "Cargo version")
     rustc_version = _read_tool_version(rustc_version_file, "rustc version")
@@ -558,6 +558,8 @@ def create_bundle(
         validate_bundle(
             repo_root,
             source_manifest_sha256,
+            cargo_target_dir,
+            artifact_root,
             bundle,
             manifest_sha256,
         )
@@ -678,6 +680,8 @@ def _validate_exact_bundle_tree(bundle: Path) -> None:
 def validate_bundle(
     repo_root: Path,
     source_manifest_sha256: str,
+    cargo_target_dir: Path,
+    artifact_root: Path,
     bundle: Path,
     manifest_sha256: str,
 ) -> None:
@@ -687,9 +691,11 @@ def validate_bundle(
     _require_digest(source_manifest_sha256, "source manifest")
     _require_digest(manifest_sha256, "prebuilt manifest")
     bundle = _normalized_absolute(bundle, "release invocation bundle", must_exist=True)
-    workspace_target = _workspace_target(repo_root, create=False)
+    _cargo_target_dir, artifact_root = _external_roots(
+        repo_root, cargo_target_dir, artifact_root
+    )
     expected_parent = (
-        workspace_target
+        artifact_root
         / "sumeragi-v2-release"
         / source_manifest_sha256
         / "programs"
@@ -793,12 +799,15 @@ def _parser() -> argparse.ArgumentParser:
     prepare = subparsers.add_parser("prepare-cache")
     prepare.add_argument("--repo-root", type=_path_argument, required=True)
     prepare.add_argument("--source-manifest", required=True)
+    prepare.add_argument("--cargo-target-dir", type=_path_argument, required=True)
     prepare.add_argument("--default-cache", type=_path_argument, required=True)
     prepare.add_argument("--message-control-cache", type=_path_argument, required=True)
 
     create = subparsers.add_parser("create")
     create.add_argument("--repo-root", type=_path_argument, required=True)
     create.add_argument("--source-manifest", required=True)
+    create.add_argument("--cargo-target-dir", type=_path_argument, required=True)
+    create.add_argument("--artifact-root", type=_path_argument, required=True)
     create.add_argument("--default-cache", type=_path_argument, required=True)
     create.add_argument("--message-control-cache", type=_path_argument, required=True)
     create.add_argument("--programs-root", type=_path_argument, required=True)
@@ -808,6 +817,8 @@ def _parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate")
     validate.add_argument("--repo-root", type=_path_argument, required=True)
     validate.add_argument("--source-manifest", required=True)
+    validate.add_argument("--cargo-target-dir", type=_path_argument, required=True)
+    validate.add_argument("--artifact-root", type=_path_argument, required=True)
     validate.add_argument("--bundle-dir", type=_path_argument, required=True)
     validate.add_argument("--manifest-sha256", required=True)
     return parser
@@ -820,6 +831,7 @@ def main(argv: list[str] | None = None) -> int:
             prepare_cache(
                 arguments.repo_root,
                 arguments.source_manifest,
+                arguments.cargo_target_dir,
                 arguments.default_cache,
                 arguments.message_control_cache,
             )
@@ -827,6 +839,8 @@ def main(argv: list[str] | None = None) -> int:
             bundle, manifest_sha256 = create_bundle(
                 arguments.repo_root,
                 arguments.source_manifest,
+                arguments.cargo_target_dir,
+                arguments.artifact_root,
                 arguments.default_cache,
                 arguments.message_control_cache,
                 arguments.programs_root,
@@ -839,6 +853,8 @@ def main(argv: list[str] | None = None) -> int:
             validate_bundle(
                 arguments.repo_root,
                 arguments.source_manifest,
+                arguments.cargo_target_dir,
+                arguments.artifact_root,
                 arguments.bundle_dir,
                 arguments.manifest_sha256,
             )

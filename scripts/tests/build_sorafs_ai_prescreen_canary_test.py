@@ -117,9 +117,6 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "2",
             ]
         )
-    elif kind == "transparency_publication":
-        for source_kind in MODULE.REQUIRED_TRANSPARENCY_SOURCE_KINDS:
-            args.extend(["--transparency-source-kind", source_kind])
     elif kind == "governance_dag":
         args.extend(["--policy-digest-hex", POLICY_DIGEST])
         for producer in MODULE.REQUIRED_GOVERNANCE_PRODUCERS:
@@ -253,7 +250,7 @@ def test_notification_identity_arguments_reject_unicode_controls_before_write(
 
 
 def test_generated_non_live_canaries_pass_their_kind_contract(tmp_path: Path) -> None:
-    assert set(MODULE.CANARY_KINDS).isdisjoint(MODULE.LIVE_PROBE_ONLY_KINDS)
+    assert set(MODULE.CANARY_KINDS).isdisjoint(MODULE.EXTERNAL_EVIDENCE_ONLY_KINDS)
     for kind in MODULE.CANARY_KINDS:
         assert MODULE.main(args_for(kind, tmp_path)) == 0
         payload = json.loads(canary_path(tmp_path, kind).read_text("utf-8"))
@@ -267,7 +264,9 @@ def test_generated_non_live_canaries_pass_their_kind_contract(tmp_path: Path) ->
 
 def test_runner_status_kind_inventory_matches_generated_statuses(tmp_path: Path) -> None:
     assert MODULE.RUNNER_STATUS_KINDS == {"runner", "committee"}
-    assert set(MODULE.RUNNER_STATUS_KINDS) == set(MODULE.LIVE_PROBE_ONLY_KINDS)
+    assert set(MODULE.RUNNER_STATUS_KINDS).issubset(
+        MODULE.EXTERNAL_EVIDENCE_ONLY_KINDS
+    )
 
     for kind in MODULE.CANARY_KINDS:
         assert MODULE.main(args_for(kind, tmp_path)) == 0
@@ -331,8 +330,8 @@ def test_workflow_id_accepts_future_production_label(tmp_path: Path) -> None:
     assert payload["workflow_id"] == "sfm-4a-prod-canary-20260715"
 
 
-@pytest.mark.parametrize("kind", MODULE.LIVE_PROBE_ONLY_KINDS)
-def test_builder_rejects_live_probe_only_kinds(
+@pytest.mark.parametrize("kind", MODULE.EXTERNAL_EVIDENCE_ONLY_KINDS)
+def test_builder_rejects_external_evidence_only_kinds(
     kind: str, tmp_path: Path, capsys
 ) -> None:
     args = args_for(kind, tmp_path)
@@ -680,12 +679,6 @@ def test_governance_edge_inventory_rejects_placeholder_marker(
             "--operator-route",
             MODULE.REQUIRED_OPERATOR_ROUTES[0],
             "unreviewed-operator-route",
-        ),
-        (
-            "transparency_publication",
-            "--transparency-source-kind",
-            MODULE.REQUIRED_TRANSPARENCY_SOURCE_KINDS[0],
-            "unreviewed-transparency-source",
         ),
         (
             "governance_dag",

@@ -83,7 +83,7 @@ mod app_api_integration_tests {
         domain_id: DomainId,
         authority: AccountId,
         accounts: Vec<AccountId>,
-        asset_definitions: Vec<AssetDefinitionId>,
+        asset_definitions: Vec<(AssetDefinitionId, String)>,
         assets: Vec<Asset>,
     ) -> Arc<State> {
         let domain = Domain::new(domain_id.clone()).build(&authority);
@@ -93,7 +93,15 @@ mod app_api_integration_tests {
             .collect();
         let asset_definitions: Vec<AssetDefinition> = asset_definitions
             .into_iter()
-            .map(|id| AssetDefinition::numeric(id).build(&authority))
+            .map(|(id, name)| {
+                AssetDefinition::numeric(
+                    id,
+                    name,
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&authority)
+            })
             .collect();
         let world = World::with_assets([domain], accounts, asset_definitions, assets, []);
         Arc::new(iroha_core::state::State::new_for_testing(
@@ -112,8 +120,10 @@ mod app_api_integration_tests {
         let bob_id =
             checked_app_api_account_id(0x76, "derive projected account assets Bob fixture key");
         let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
-        let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-        let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
+        let rose_def =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "rose".parse().unwrap());
+        let lily_def =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -132,7 +142,10 @@ mod app_api_integration_tests {
             domain_id,
             alice_id.clone(),
             vec![alice_id.clone(), bob_id],
-            vec![rose_def.clone(), lily_def],
+            vec![
+                (rose_def.clone(), "rose".to_owned()),
+                (lily_def, "lily".to_owned()),
+            ],
             assets,
         );
         let world = state.world_view();
@@ -158,7 +171,8 @@ mod app_api_integration_tests {
         let account_id =
             checked_app_api_account_id(0x77, "derive asset holder quantity fixture account key");
         let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
-        let asset_def = AssetDefinitionId::new(domain_id, "rose".parse().unwrap());
+        let asset_def =
+            AssetDefinitionId::derive_from_components(domain_id, "rose".parse().unwrap());
         let global_asset_id = AssetId::new(asset_def.clone(), account_id.clone());
         let scoped_asset_id = AssetId::with_scope(
             asset_def,
@@ -727,8 +741,10 @@ mod app_api_integration_tests {
             "derive account assets query pagination fixture account key",
         );
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-        let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
+        let rose_def =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "rose".parse().unwrap());
+        let lily_def =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -743,7 +759,10 @@ mod app_api_integration_tests {
             domain_id,
             alice_id.clone(),
             vec![alice_id.clone()],
-            vec![rose_def, lily_def],
+            vec![
+                (rose_def, "rose".to_owned()),
+                (lily_def, "lily".to_owned()),
+            ],
             assets,
         );
 
@@ -794,8 +813,10 @@ mod app_api_integration_tests {
             "derive account assets query sort fixture account key",
         );
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-        let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
+        let rose_def =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "rose".parse().unwrap());
+        let lily_def =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -810,7 +831,10 @@ mod app_api_integration_tests {
             domain_id,
             alice_id.clone(),
             vec![alice_id.clone()],
-            vec![rose_def, lily_def],
+            vec![
+                (rose_def, "rose".to_owned()),
+                (lily_def, "lily".to_owned()),
+            ],
             assets,
         );
 
@@ -1136,8 +1160,10 @@ mod app_api_integration_tests {
             "derive account assets GET pagination fixture account key",
         );
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-        let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
+        let rose_def =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "rose".parse().unwrap());
+        let lily_def =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -1152,7 +1178,10 @@ mod app_api_integration_tests {
             domain_id,
             alice_id.clone(),
             vec![alice_id.clone()],
-            vec![rose_def, lily_def],
+            vec![
+                (rose_def, "rose".to_owned()),
+                (lily_def, "lily".to_owned()),
+            ],
             assets,
         );
 
@@ -1197,8 +1226,10 @@ mod app_api_integration_tests {
             "derive account assets GET filter fixture account key",
         );
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
-        let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
+        let rose_def =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "rose".parse().unwrap());
+        let lily_def =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -1213,7 +1244,10 @@ mod app_api_integration_tests {
             domain_id,
             alice_id.clone(),
             vec![alice_id.clone()],
-            vec![rose_def.clone(), lily_def],
+            vec![
+                (rose_def.clone(), "rose".to_owned()),
+                (lily_def, "lily".to_owned()),
+            ],
             assets,
         );
 
@@ -1286,7 +1320,7 @@ mod app_api_integration_tests {
             domain_id,
             authority_id,
             Vec::new(),
-            vec![kina_def.clone()],
+            vec![(kina_def.clone(), "kina".to_owned())],
             assets,
         );
 
@@ -1378,7 +1412,8 @@ mod app_api_integration_tests {
             "derive account assets GET limit validation fixture account key",
         );
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
+        let rose_def =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "rose".parse().unwrap());
         let assets = vec![Asset::new(
             AssetId::new(rose_def.clone(), alice_id.clone()),
             Quantity::from(1_u32),
@@ -1387,7 +1422,7 @@ mod app_api_integration_tests {
             domain_id,
             alice_id.clone(),
             vec![alice_id.clone()],
-            vec![rose_def],
+            vec![(rose_def, "rose".to_owned())],
             assets,
         );
         let cap = app_query_limits().max_page_limit;
@@ -1716,11 +1751,10 @@ mod app_api_integration_tests {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let account = Account::new(alice_id.clone()).build(&alice_id);
-        let asset_def = AssetDefinition::numeric(AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        ))
-        .with_name("rose".to_owned())
+        let asset_def = AssetDefinition::numeric(AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ), "rose".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
         .confidential_policy(policy)
         .build(&alice_id);
         let asset_def_id = asset_def.id().clone();
@@ -2197,8 +2231,7 @@ mod app_api_integration_tests {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
-        let rose_definition = AssetDefinition::numeric(rose_def.clone())
-            .with_name("rose".to_owned())
+        let rose_definition = AssetDefinition::numeric(rose_def.clone(), "rose".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
             .build(&alice_id);
         let assets = vec![
             Asset::new(
@@ -2244,8 +2277,7 @@ mod app_api_integration_tests {
         let domain_id: DomainId = DomainId::try_new("aggregate-holders", "universal").unwrap();
         let pkr_def: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400de");
-        let pkr_definition = AssetDefinition::numeric(pkr_def.clone())
-            .with_name("pkr".to_owned())
+        let pkr_definition = AssetDefinition::numeric(pkr_def.clone(), "pkr".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
             .build(&alice_id);
         let paynet_dataspace_id = iroha_data_model::nexus::DataSpaceId::new(92);
         let assets = vec![
@@ -2278,14 +2310,18 @@ mod app_api_integration_tests {
                 Quantity::from(75_u32),
             ),
         ];
+        let hbl_domain_id = DomainId::try_new("hbl", "paynet").expect("HBL domain");
+        let ubl_domain_id = DomainId::try_new("ubl", "paynet").expect("UBL domain");
         let domain = Domain::new(domain_id).build(&alice_id);
+        let hbl_domain = Domain::new(hbl_domain_id.clone()).build(&alice_id);
+        let ubl_domain = Domain::new(ubl_domain_id.clone()).build(&alice_id);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let bob_account = Account::new(bob_id.clone()).build(&alice_id);
         let hbl_settlement_account = Account::new(hbl_settlement_id.clone()).build(&alice_id);
         let ubl_settlement_account = Account::new(ubl_settlement_id.clone()).build(&alice_id);
         let ubl_user_account = Account::new(ubl_user_id.clone()).build(&alice_id);
-        let world = World::with_assets(
-            [domain],
+        let mut world = World::with_assets(
+            [domain, hbl_domain, ubl_domain],
             [
                 alice_account,
                 bob_account,
@@ -2296,6 +2332,12 @@ mod app_api_integration_tests {
             [pkr_definition],
             assets,
             [],
+        );
+        install_asset_holder_alias_parent_leases_for_test(
+            &mut world,
+            &alice_id,
+            paynet_dataspace_id,
+            &[&hbl_domain_id, &ubl_domain_id],
         );
         let mut state = Arc::new(iroha_core::state::State::new_for_testing(
             world,
@@ -2343,6 +2385,62 @@ mod app_api_integration_tests {
         bind_account_alias_for_test(&state, &ubl_settlement_id, "cbdc@ubl.paynet");
 
         (state, alice_id, bob_id)
+    }
+
+    fn install_asset_holder_alias_parent_leases_for_test(
+        world: &mut World,
+        owner: &AccountId,
+        dataspace_id: iroha_data_model::nexus::DataSpaceId,
+        domains: &[&DomainId],
+    ) {
+        let controller = iroha_data_model::sns::NameControllerV1::account(
+            &iroha_data_model::account::AccountAddress::from_account_id(owner)
+                .expect("parent lease owner address"),
+        );
+        let dataspace_selector =
+            iroha_core::sns::selector_for_dataspace_alias("paynet").expect("paynet selector");
+        let mut dataspace_metadata = iroha_data_model::metadata::Metadata::default();
+        dataspace_metadata.insert(
+            iroha_core::sns::SNS_DATASPACE_ID_METADATA_KEY
+                .parse()
+                .expect("dataspace metadata key"),
+            iroha_primitives::json::Json::new(dataspace_id.as_u64()),
+        );
+        let dataspace_record = iroha_data_model::sns::NameRecordV1::new(
+            dataspace_selector.clone(),
+            owner.clone(),
+            vec![controller.clone()],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            dataspace_metadata,
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            iroha_core::sns::record_storage_key(&dataspace_selector),
+            norito::codec::Encode::encode(&dataspace_record),
+        );
+
+        for domain in domains {
+            let selector =
+                iroha_core::sns::selector_for_domain(domain).expect("parent domain selector");
+            let record = iroha_data_model::sns::NameRecordV1::new(
+                selector.clone(),
+                owner.clone(),
+                vec![controller.clone()],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                iroha_data_model::metadata::Metadata::default(),
+            );
+            world.smart_contract_state_mut_for_testing().insert(
+                iroha_core::sns::record_storage_key(&selector),
+                norito::codec::Encode::encode(&record),
+            );
+        }
     }
 
     fn asset_holder_alias_aggregate_query() -> QueryEnvelope {
@@ -2785,8 +2883,12 @@ mod app_api_integration_tests {
             ],
             Arc::new(admission),
         );
+        let prepared = cache
+            .validation_policy()
+            .prepare(fixture.advert.clone(), fixture.issued_at())
+            .expect("prepare fixture advert");
         cache
-            .ingest(fixture.advert.clone(), fixture.issued_at())
+            .commit_prepared(prepared, fixture.issued_at())
             .expect("ingest fixture advert");
 
         let (node, dir) = projection_query_sorafs_node_with_temp_storage();

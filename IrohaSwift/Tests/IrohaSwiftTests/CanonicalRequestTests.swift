@@ -15,9 +15,6 @@ final class CanonicalRequestTests: XCTestCase {
     }
 
     func testSigningHeadersAreVerifiable() throws {
-        guard #available(macOS 10.15, iOS 13.0, *) else {
-            throw XCTSkip("CryptoKit not available")
-        }
         let seed = Data(repeating: 5, count: 32)
         let signingKey = try SigningKey.ed25519(privateKey: seed)
         let timestampMs: UInt64 = 1_717_171_717_000
@@ -49,9 +46,6 @@ final class CanonicalRequestTests: XCTestCase {
     }
 
     func testSigningRejectsPaddedAccountAndNonce() throws {
-        guard #available(macOS 10.15, iOS 13.0, *) else {
-            throw XCTSkip("CryptoKit not available")
-        }
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 6, count: 32))
 
         XCTAssertThrowsError(

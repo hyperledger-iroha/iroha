@@ -2,6 +2,14 @@ import XCTest
 import IrohaSwift
 @testable import IrohaSwiftMobileTransports
 
+private final class WeakReference<Value: AnyObject> {
+    weak var value: Value?
+
+    init(_ value: Value?) {
+        self.value = value
+    }
+}
+
 final class IrohaPeerNearbyDeliveryBarrierV1Tests: XCTestCase {
     func testDefaultNearbyAdapterUsesExactThirtyTwoKiBRecordCeiling() {
         let configuration = IrohaPeerNearbyConnectionsConfigurationV1()
@@ -829,13 +837,13 @@ final class IrohaPeerNearbyDeliveryBarrierV1Tests: XCTestCase {
                 maximumPendingCompletionCount: 1,
                 callbackQueue: callbackQueue
             )
-        weak var retainedDispatcher = dispatcher
+        let retainedDispatcher = WeakReference(dispatcher)
         dispatcher?.executeCritical {
             XCTAssertEqual(DispatchQueue.getSpecific(key: queueKey), true)
             callbackFinished.fulfill()
         }
         dispatcher = nil
-        XCTAssertNotNil(retainedDispatcher)
+        XCTAssertNotNil(retainedDispatcher.value)
 
         releaseBlocker.signal()
         wait(for: [callbackFinished], timeout: 1)

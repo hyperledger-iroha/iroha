@@ -42,10 +42,6 @@ pub(crate) const MAX_FIELD_REJECTION_ATTEMPTS_V1: u64 = 16;
 pub(crate) const GOLDILOCKS_FP4_DEGREE_V1: usize = 4;
 /// Canonical encoded size of one quartic-extension value.
 pub(crate) const GOLDILOCKS_FP4_WIRE_BYTES_V1: usize = GOLDILOCKS_FP4_DEGREE_V1 * 8;
-/// Profile binding for the extension polynomial and coefficient encoding.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) const GOLDILOCKS_FP4_PARAMETER_LABEL_V1: &[u8] =
-    b"goldilocks-fp4:x4-minus-7:coefficients-c0-through-c3:u64be:v1";
 const GOLDILOCKS_FP4_NONRESIDUE_V1: GoldilocksFieldV1 = GoldilocksFieldV1(GOLDILOCKS_GENERATOR_V1);
 
 /// Checked zero-knowledge masking geometry for the canonical DEEP-ALI flow.
@@ -447,10 +443,6 @@ pub(crate) enum TransparentStarkErrorV1 {
     /// A Merkle tree or opening has an invalid shape.
     #[error("transparent STARK Merkle shape is invalid")]
     InvalidMerkleShape,
-    /// A Merkle opening does not match its root.
-    #[error("transparent STARK Merkle opening is invalid")]
-    #[cfg_attr(not(test), allow(dead_code))]
-    InvalidMerkleOpening,
     /// Canonical transcript framing overflowed.
     #[error("transparent STARK transcript frame length overflow")]
     FrameLengthOverflow,
@@ -828,7 +820,7 @@ pub(crate) fn random_goldilocks_fp4_v1<R: TryRngCore>(
 }
 
 /// Draw one uniform nonzero quartic-extension element.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn random_nonzero_goldilocks_fp4_v1<R: TryRngCore>(
     rng: &mut R,
 ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
@@ -969,6 +961,7 @@ pub(crate) fn sample_trace_mask_v1<R: TryRngCore>(
 }
 
 /// Interpolate, sample a fresh mask, and evaluate one trace column's LDE.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn masked_trace_lde_column_v1<R: TryRngCore>(
     base_column: &[GoldilocksFieldV1],
     base_log_size: u8,
@@ -989,8 +982,6 @@ pub(crate) fn masked_trace_lde_column_v1<R: TryRngCore>(
 #[derive(Clone, Debug)]
 pub(crate) struct Sha256MerkleTreeV1 {
     levels: Vec<Vec<[u8; 32]>>,
-    #[cfg_attr(not(test), allow(dead_code))]
-    node_domain: &'static [u8],
 }
 
 impl Sha256MerkleTreeV1 {
@@ -1013,10 +1004,7 @@ impl Sha256MerkleTreeV1 {
                 .collect();
             levels.push(next);
         }
-        Ok(Self {
-            levels,
-            node_domain,
-        })
+        Ok(Self { levels })
     }
 
     /// Root digest.
@@ -1038,12 +1026,6 @@ impl Sha256MerkleTreeV1 {
         }
         Ok(path)
     }
-
-    /// Domain used for internal nodes.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) const fn node_domain(&self) -> &'static [u8] {
-        self.node_domain
-    }
 }
 
 /// Hash one binary Merkle node with an engine-fixed role domain.
@@ -1057,7 +1039,7 @@ pub(crate) fn sha256_merkle_node_v1(
 }
 
 /// Verify one exact binary Merkle path.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn verify_sha256_merkle_path_v1(
     node_domain: &[u8],
     root: &[u8; 32],
@@ -1078,7 +1060,7 @@ pub(crate) fn verify_sha256_merkle_path_v1(
         index >>= 1;
     }
     if index != 0 || leaf != *root {
-        return Err(TransparentStarkErrorV1::InvalidMerkleOpening);
+        return Err(TransparentStarkErrorV1::InvalidMerkleShape);
     }
     Ok(())
 }
@@ -1227,7 +1209,7 @@ impl TransparentTranscriptV1 {
         )
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn challenge_fp4_with_oracle(
         &mut self,
         label: &[u8],
@@ -1302,7 +1284,7 @@ pub(crate) fn derive_unique_query_indices_v1(
 }
 
 /// Compute one binary FRI fold.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn fri_fold_pair_v1(
     low: GoldilocksFieldV1,
     high: GoldilocksFieldV1,
@@ -1319,7 +1301,7 @@ pub(crate) fn fri_fold_pair_v1(
 /// inverse point with one multiplication per entry.  Keeping that optimization
 /// here avoids duplicating the consensus-critical fold equation in each
 /// relation-specific engine.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn fri_fold_pair_with_inverse_x_v1(
     low: GoldilocksFieldV1,
     high: GoldilocksFieldV1,
@@ -1374,7 +1356,7 @@ pub(crate) fn fri_fold_pair_with_inverse_x_fp4_v1(
 }
 
 /// Check the entire terminal FRI polynomial against an exact degree bound.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn ensure_fri_terminal_degree_v1(
     values: &[GoldilocksFieldV1],
     log_size: u8,
@@ -2218,11 +2200,11 @@ mod tests {
         path[0][0] ^= 1;
         assert_eq!(
             verify_sha256_merkle_path_v1(domain, &tree.root(), leaves[3], 3, &path, 3),
-            Err(TransparentStarkErrorV1::InvalidMerkleOpening)
+            Err(TransparentStarkErrorV1::InvalidMerkleShape)
         );
         assert_eq!(
             verify_sha256_merkle_path_v1(b"other", &tree.root(), leaves[3], 3, &path, 3),
-            Err(TransparentStarkErrorV1::InvalidMerkleOpening)
+            Err(TransparentStarkErrorV1::InvalidMerkleShape)
         );
     }
 

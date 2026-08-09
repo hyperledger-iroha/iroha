@@ -15,6 +15,7 @@ public static class PrivacyExact12FixtureCodecV1
     public const uint Version = 1;
     public const int RowCount = 12;
     public const int HashBytes = 32;
+    public const int SubmitProofWireIdUtf8Bytes = 29;
     public const int MaxArchiveBytes = 2 * 1024 * 1024;
     public const long MaxAggregateNestedBytes = 2L * 1024 * 1024;
     public const int MaxStatementBytes = 256 * 1024;
@@ -29,7 +30,7 @@ public static class PrivacyExact12FixtureCodecV1
     private const int HeaderPayloadLengthOffset = 23;
     private const int HeaderFlagsOffset = NoritoHeader.EncodedLength - 1;
     private const int MaximumRowEncodedBytes = MaxArchiveBytes;
-    private const int MaximumWireIdEncodedBytes = 128;
+    private const int CanonicalWireIdEncodedBytes = 1 + SubmitProofWireIdUtf8Bytes;
     private const int MaximumPayloadBytes = MaxArchiveBytes - NoritoHeader.EncodedLength;
 
     private static readonly UTF8Encoding StrictUtf8 = new(
@@ -484,12 +485,11 @@ public static class PrivacyExact12FixtureCodecV1
     private static string ReadWireId(ref CanonicalReader reader, DecodeBudget budget)
     {
         var fieldReader = reader.ReadSizedField(
-            MaximumWireIdEncodedBytes,
+            CanonicalWireIdEncodedBytes,
             "submit-proof wire ID",
-            minimum: 1);
+            minimum: CanonicalWireIdEncodedBytes);
         var byteLength = fieldReader.ReadCompactLength("submit-proof wire ID byte length");
-        if (byteLength == 0
-            || byteLength > MaximumWireIdEncodedBytes
+        if (byteLength != SubmitProofWireIdUtf8Bytes
             || byteLength != (ulong)fieldReader.Remaining)
         {
             throw new ArgumentException(

@@ -22,6 +22,33 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
+def test_default_tracked_fixture_uses_repository_local_specs() -> None:
+    """The replay writer must not recreate the retired public-docs tree."""
+
+    assert MODULE.DEFAULT_TRACKED_FIXTURE == (
+        MODULE.REPO_ROOT
+        / "specs"
+        / "sdk"
+        / "android"
+        / "generated"
+        / "fixtures"
+        / "sorafs_register_pin_manifest_multi_peer_parity_v1.json"
+    )
+
+
+def test_cargo_policy_proxy_rejects_caller_selected_executable(tmp_path: Path) -> None:
+    alternate = tmp_path / "cargo"
+    alternate.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    alternate.chmod(0o700)
+
+    try:
+        MODULE.require_policy_cargo_proxy(alternate)
+    except ValueError as error:
+        assert "exact source-bound policy proxy" in str(error)
+    else:
+        raise AssertionError("caller-selected Cargo executable bypassed the policy proxy")
+
+
 def test_load_json_uses_no_follow_descriptor_open(
     tmp_path: Path,
     monkeypatch,
@@ -385,7 +412,7 @@ def test_manifest_builder_receives_only_ephemeral_signing_key_path(
 
     assert len(calls) == 1
     command, check, cwd = calls[0]
-    assert command[:4] == ["cargo", "run", "--locked", "--quiet"]
+    assert command[:5] == ["cargo", "run", "--locked", "--offline", "--quiet"]
     assert f"--council-signing-key-file={key_path}" in command
     assert MODULE.ANDROID_CODEGEN_TEST_COUNCIL_SIGNING_SEED.hex() not in " ".join(
         command

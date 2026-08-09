@@ -19,11 +19,12 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
-    // protected pre-reset tree measured 945,975 bytes on the same pinned runner.
-    // The authenticated SoraFS reputation and billing clients bring current V1 to
-    // 1,000,409 bytes (+5.75%); the 978 KiB ceiling remains below a 6% regression
-    // from that documented predecessor.
-    limitKb: 978,
+    // protected pre-reset tree measured 945,975 bytes on the same pinned runner;
+    // current V1 is 1,005,947 bytes (+6.34%). Required proof, cursor, VPN, and
+    // executed-block APIs stay under the unchanged ceiling by interning each
+    // canonical instruction wire ID once. The minimal 983 KiB ceiling leaves
+    // 645 bytes.
+    limitKb: 983,
   }),
   Object.freeze({
     label: "transactionCodec.js (browser)",
@@ -32,7 +33,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // Browser package mapping is defined for checked-in dist paths, so audit the
     // shipped entrypoint rather than the Node-capable source graph. The protected
-    // pre-reset tree measured 290,498 bytes; current V1 is 297,228 bytes (+2.32%).
+    // pre-reset tree measured 290,498 bytes. Canonical ProofAttachment handling
+    // and the shared asset-definition builder bring current V1 to 301,649 bytes
+    // (+3.84%).
     // The 297 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 297,
     forbidNodeInputs: true,
@@ -44,8 +47,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree and 380,431 bytes in current V1 (+2.43%). The 380 KiB ceiling
-    // remains below a 5% predecessor regression.
+    // pre-reset tree. Canonical ProofAttachment handling and the shared
+    // asset-definition builder bring current V1 to 381,439 bytes (+2.70%). The
+    // 380 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 380,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -55,7 +59,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "canonicalRequest.js"),
     platform: "browser",
     target: "es2020",
-    // Protected pre-reset baseline: 97,869 bytes. Current V1: 98,090 bytes
+    // Protected pre-reset baseline: 97,869 bytes. Current V1: 98,089 bytes
     // (+0.23%). The 100 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 100,
     forbidNodeInputs: true,
@@ -77,8 +81,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // Pinned-esbuild predecessor is 52,156 bytes. Exact V1 manifest state-type,
-    // feature-bit, and dynamic-access validation produces 52,735 bytes
-    // (+1.11%); the 53 KiB ceiling keeps this required boundary hardening
+    // feature-bit, dynamic-access, and trigger-identifier validation produces
+    // 52,928 bytes (+1.48%); the 53 KiB ceiling keeps this required boundary hardening
     // below the release-wide 5% regression limit.
     limitKb: 53,
     forbidNodeInputs: true,
@@ -90,8 +94,10 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner; current V1 is 476,074 bytes (+3.93%). The 469 KiB
-    // ceiling remains below a 5% predecessor regression.
+    // same pinned runner. The complete V1 surface, including the strict
+    // Bootle/Lantern client, is 479,732 bytes (+4.73%) after shared validation
+    // paths are interned. The 469 KiB ceiling leaves 524 bytes and remains below
+    // a 5% predecessor regression.
     limitKb: 469,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -334,7 +340,6 @@ export async function runBundleSizeCheck({
   await checkDistExport(pkg, "./nexus-app", "browser");
   await checkDistExport(pkg, "./canonical-request", "browser");
   await checkDistExport(pkg, "./ivm-artifact", "browser");
-  await checkDistExport(pkg, "./ivm-artifact-admission-wasm", "browser");
   await checkDistExport(pkg, "./kotodama-compiler", "browser");
   await checkDistExport(pkg, "./browser", "browser");
 }

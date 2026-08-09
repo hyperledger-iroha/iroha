@@ -6,8 +6,6 @@
 
 use norito::{NoritoDeserialize, NoritoSerialize};
 
-use crate::hash::sha3_256;
-
 /// Curve identifier for wire payloads.
 ///
 /// These codes disambiguate encodings across backends. The current crate uses
@@ -46,8 +44,11 @@ impl ZkCurveId {
     }
 }
 
-/// IPA parameters (transparent, deterministic generators).
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+/// Selector for the canonical transparent IPA parameters.
+///
+/// The generator vectors are never accepted from the wire. The verifier derives
+/// the one canonical V1 parameter set for this `(curve_id, n)` pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct IpaParams {
     /// Reserved for format evolution; set to 1.
@@ -56,12 +57,6 @@ pub struct IpaParams {
     pub curve_id: u16,
     /// Vector length `n` (power of two).
     pub n: u32,
-    /// G generators, encoded as compressed curve points.
-    pub g: Vec<[u8; 32]>,
-    /// H generators, encoded as compressed curve points.
-    pub h: Vec<[u8; 32]>,
-    /// U generator, encoded as a compressed curve point.
-    pub u: [u8; 32],
 }
 
 impl IpaParams {
@@ -83,11 +78,6 @@ impl IpaParams {
     /// or resource-limit-exceeding payloads.
     pub fn decode_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
         norito::codec::decode_exact_from_slice(bytes)
-    }
-
-    /// Compute a deterministic fingerprint of the parameter set.
-    pub fn fingerprint(&self) -> [u8; 32] {
-        fingerprint_bytes(self.curve_id, self.n, &self.g, &self.h, &self.u)
     }
 }
 
@@ -201,26 +191,6 @@ where
     Ok((value, used))
 }
 
-pub(crate) fn fingerprint_bytes(
-    curve_id: u16,
-    n: u32,
-    g: &[[u8; 32]],
-    h: &[[u8; 32]],
-    u: &[u8; 32],
-) -> [u8; 32] {
-    let mut buf = Vec::with_capacity(4 + 4 + (g.len() + h.len() + 1) * 32);
-    buf.extend_from_slice(&curve_id.to_le_bytes());
-    buf.extend_from_slice(&n.to_le_bytes());
-    for elem in g {
-        buf.extend_from_slice(elem);
-    }
-    for elem in h {
-        buf.extend_from_slice(elem);
-    }
-    buf.extend_from_slice(u);
-    sha3_256(&buf)
-}
-
 impl<'a> norito::core::DecodeFromSlice<'a> for IpaParams {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         decode_from_slice_checked(bytes)
@@ -246,7 +216,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for IpaProofData {
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct OpenVerifyEnvelope {
-    /// Transparent IPA parameters (deterministic generator vectors).
+    /// Selector for the canonical transparent IPA parameters.
     pub params: IpaParams,
     /// Public inputs (evaluation point, value, and commitment).
     pub public: PolyOpenPublic,

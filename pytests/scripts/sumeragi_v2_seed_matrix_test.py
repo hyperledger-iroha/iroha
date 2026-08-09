@@ -6,11 +6,14 @@ are not evidence that any real validator process started or made progress.
 
 from __future__ import annotations
 
+import atexit
 import csv
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -29,18 +32,17 @@ SOURCE_MANIFEST = "a" * 64
 HEAD_COMMIT = "1" * 40
 HEAD_TREE = "2" * 40
 CARGO_LOCK_SHA256 = "3" * 64
-PROGRAM_TARGET = (
-    ROOT_DIR
-    / "target"
-    / "sumeragi-v2-release"
-    / SOURCE_MANIFEST
-    / "programs"
-    / "invocation.seedmatrixfixture"
-)
+_EXTERNAL_ROOTS: list[Path] = []
+
+
+@atexit.register
+def _cleanup_external_roots() -> None:
+    for root in _EXTERNAL_ROOTS:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _install_source_bound_fake_localnet_binaries(
-    program_target: Path = PROGRAM_TARGET,
+    program_target: Path,
 ) -> tuple[Path, str]:
     attestation = program_target / ".sumeragi-v2-prebuilt-binaries.tsv"
     if attestation.is_file():
@@ -117,8 +119,22 @@ def _stubbed_environment(
     tmp_path: Path,
     *,
     run_mode: str = "pass",
-    program_target: Path = PROGRAM_TARGET,
 ) -> tuple[dict[str, str], Path, Path]:
+    external_root = Path(
+        tempfile.mkdtemp(prefix="iroha-seed-matrix-test-", dir="/private/tmp")
+    )
+    _EXTERNAL_ROOTS.append(external_root)
+    cargo_target = external_root / "target"
+    artifact_root = external_root / "artifacts"
+    cargo_target.mkdir(mode=0o700)
+    artifact_root.mkdir(mode=0o700)
+    program_target = (
+        artifact_root
+        / "sumeragi-v2-release"
+        / SOURCE_MANIFEST
+        / "programs"
+        / "invocation.seedmatrixfixture"
+    )
     program_target, manifest_sha256 = _install_source_bound_fake_localnet_binaries(
         program_target
     )
@@ -316,11 +332,15 @@ if [[ $# -eq 3 \
   printf '%s\n' '{SOURCE_MANIFEST}'
   exit 0
 fi
+if [[ "${{1-}}" == "scripts/seal_workspace_source.py" ]]; then
+  printf '%s\n' "$*" >>"$SEED_MATRIX_SEAL_CAPTURE"
+  exit 0
+fi
 if [[ "${{1-}}" == "scripts/sumeragi_v2_localnet_manifest.py" \
   || "${{1-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py \
   || ( "${{1-}}" == "-I" \
     && "${{2-}}" == "-S" \
-    && "${{3-}}" == "-c" ) \
+    && ( "${{3-}}" == "-c" || "${{3-}}" == "-" ) ) \
   || ( "${{1-}}" == "-I" \
     && "${{2-}}" == "-S" \
     && "${{3-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py ) ]]; then
@@ -354,9 +374,15 @@ exit 65
         ROOT_DIR / "scripts" / "publish_release_marker.py"
     )
     env["SEED_MATRIX_MARKER_FAILURE_HARNESS"] = str(marker_failure_harness)
+    env["SEED_MATRIX_SEAL_CAPTURE"] = str(tmp_path / "seal-invocations.log")
+    env["CARGO_TARGET_DIR"] = str(cargo_target)
+    env["IROHA_RELEASE_ARTIFACT_ROOT"] = str(artifact_root)
+    env["IROHA_RELEASE_CANCEL_REQUEST_PATH"] = str(
+        external_root / "cancel-request.json"
+    )
     env["IROHA_TEST_TARGET_DIR"] = str(program_target)
     env["IROHA_RELEASE_PREBUILT_MANIFEST_SHA256"] = manifest_sha256
-    evidence = tmp_path / "mocked-command-evidence"
+    evidence = artifact_root / "mocked-command-evidence"
     env["SUMERAGI_V2_SEED_MATRIX_EVIDENCE_DIR"] = str(evidence)
     return env, capture, evidence
 
@@ -401,14 +427,14 @@ def _expected_seed_command(
     scenario: str,
     seed: str,
     run_index: int,
+    cargo_target: Path,
+    program_target: Path,
 ) -> str:
-    source_root = ROOT_DIR / "target" / "sumeragi-v2-release" / source_manifest
-    program_target = PROGRAM_TARGET
     manifest_sha256 = hashlib.sha256(
         (program_target / ".sumeragi-v2-prebuilt-binaries.tsv").read_bytes()
     ).hexdigest()
     return (
-        f"CARGO_TARGET_DIR={source_root / 'test-suite'} "
+        f"CARGO_TARGET_DIR={cargo_target} "
         f"IROHA_TEST_TARGET_DIR={program_target} "
         f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={source_manifest} "
         f"IROHA_RELEASE_PREBUILT_MANIFEST_SHA256={manifest_sha256} "
@@ -456,7 +482,10 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     env["TEST_NETWORK_BIN_IROHAD"] = "/tmp/inherited-stale-irohad"
     env["IROHA_TEST_SKIP_BUILD"] = "1"
     env["IROHA_TEST_ALLOW_REENTRANT_BUILD"] = "0"
-    completion_pointer = tmp_path / "seed-completion-path"
+    env["IROHA_RELEASE_SEALED_WORKTREE"] = "1"
+    completion_pointer = (
+        Path(env["IROHA_RELEASE_ARTIFACT_ROOT"]) / "seed-completion-path"
+    )
     env["IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"] = str(completion_pointer)
 
     result = _run_launcher(env)
@@ -476,7 +505,7 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     ):
         assert (" --ignored" in row[0]) == (scenario in IGNORED_SCENARIOS)
     assert all(row[1:3] == ["1", "1"] for row in rows)
-    expected_program_target = PROGRAM_TARGET
+    expected_program_target = Path(env["IROHA_TEST_TARGET_DIR"])
     assert all(
         row[4:7]
         == [str(expected_program_target / "release" / "irohad"), "1", "0"]
@@ -485,9 +514,14 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     source_manifests = {row[7] for row in rows}
     assert source_manifests == {SOURCE_MANIFEST}
     source_manifest = SOURCE_MANIFEST
-    expected_source_root = ROOT_DIR / "target" / "sumeragi-v2-release" / source_manifest
-    assert all(row[8] == str(expected_source_root / "test-suite") for row in rows)
-    assert all(row[9] == str(PROGRAM_TARGET) for row in rows)
+    expected_source_root = (
+        Path(env["IROHA_RELEASE_ARTIFACT_ROOT"])
+        / "sumeragi-v2-release"
+        / source_manifest
+    )
+    expected_cargo_target = Path(env["CARGO_TARGET_DIR"])
+    assert all(row[8] == str(expected_cargo_target) for row in rows)
+    assert all(row[9] == str(expected_program_target) for row in rows)
     assert all(row[10:] == ["3600", "300", "300"] for row in rows)
     expected_seeds = [
         seed
@@ -531,6 +565,8 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
             row["scenario"],
             row["seed"],
             index,
+            expected_cargo_target,
+            expected_program_target,
         )
         assert str(invocation) not in row["command"]
         assert (" --ignored" in row["command"]) == (
@@ -551,8 +587,8 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
         "profile": "pr",
         "source_manifest_sha256": source_manifest,
         "source_bound_root": str(expected_source_root),
-        "cargo_target_dir": str(expected_source_root / "test-suite"),
-        "iroha_test_target_dir": str(PROGRAM_TARGET),
+        "cargo_target_dir": str(expected_cargo_target),
+        "iroha_test_target_dir": str(expected_program_target),
         "prebuilt_manifest_sha256": env[
             "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256"
         ],
@@ -603,6 +639,12 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     assert completion_pointer.read_text(encoding="utf-8").strip() == str(
         invocation / "COMPLETED.tsv"
     )
+    seal_invocations = Path(env["SEED_MATRIX_SEAL_CAPTURE"]).read_text(
+        encoding="utf-8"
+    )
+    assert "--verify --root" in seal_invocations
+    assert "--no-writable-paths" in seal_invocations
+    assert "--writable target" not in seal_invocations
     assert not (evidence / ".seed-matrix.lock").exists()
 
 
@@ -663,6 +705,8 @@ def test_mocked_seed_matrix_release_profile_uses_32_seeds_per_scenario(
             row["scenario"],
             row["seed"],
             index,
+            Path(env["CARGO_TARGET_DIR"]),
+            Path(env["IROHA_TEST_TARGET_DIR"]),
         )
         for index, row in enumerate(summary_rows)
     )
@@ -777,17 +821,17 @@ def test_mocked_seed_matrix_preserves_cargo_failure_through_tee(
 def test_mocked_seed_matrix_rejects_bundle_tampering_before_completion(
     tmp_path: Path,
 ) -> None:
-    invocation_suffix = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:16]
-    program_target = PROGRAM_TARGET.parent / f"invocation.S{invocation_suffix}"
     env, _capture, evidence = _stubbed_environment(
         tmp_path,
         run_mode="tamper-bundle",
-        program_target=program_target,
     )
+    program_target = Path(env["IROHA_TEST_TARGET_DIR"])
     binary = program_target / "release" / "irohad"
     original = binary.read_bytes()
     env["SEED_MATRIX_TAMPER_BINARY"] = str(binary)
-    completion_pointer = tmp_path / "seed-completion-path"
+    completion_pointer = (
+        Path(env["IROHA_RELEASE_ARTIFACT_ROOT"]) / "seed-completion-path"
+    )
     env["IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"] = str(completion_pointer)
     try:
         result = _run_launcher(env)
@@ -813,7 +857,9 @@ def test_mocked_seed_matrix_rejects_symlinked_marker_temp_without_completion(
     escape = tmp_path / "marker-temp-escape"
     escape.write_text("must remain unchanged\n", encoding="utf-8")
     env["SEED_MATRIX_ESCAPE_TARGET"] = str(escape)
-    completion_pointer = tmp_path / "seed-completion-path"
+    completion_pointer = (
+        Path(env["IROHA_RELEASE_ARTIFACT_ROOT"]) / "seed-completion-path"
+    )
     env["IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"] = str(completion_pointer)
 
     result = _run_launcher(env)
@@ -833,7 +879,9 @@ def test_mocked_seed_matrix_marker_durability_failure_is_not_terminal(
 ) -> None:
     env, _capture, evidence = _stubbed_environment(tmp_path)
     env["SEED_MATRIX_FAIL_MARKER_PUBLISH"] = "1"
-    completion_pointer = tmp_path / "seed-completion-path"
+    completion_pointer = (
+        Path(env["IROHA_RELEASE_ARTIFACT_ROOT"]) / "seed-completion-path"
+    )
     env["IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"] = str(completion_pointer)
 
     result = _run_launcher(env)
@@ -874,7 +922,7 @@ if [[ "${{1-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py \
   || "${{1-}}" == "scripts/sumeragi_v2_localnet_manifest.py" \
   || ( "${{1-}}" == "-I" \
     && "${{2-}}" == "-S" \
-    && "${{3-}}" == "-c" ) \
+    && ( "${{3-}}" == "-c" || "${{3-}}" == "-" ) ) \
   || ( "${{1-}}" == "-I" \
     && "${{2-}}" == "-S" \
     && "${{3-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py ) ]]; then
@@ -892,7 +940,7 @@ if [[ -f "$SEED_MATRIX_MANIFEST_COUNTER" ]]; then
 fi
 count=$((count + 1))
 printf '%s\n' "$count" >"$SEED_MATRIX_MANIFEST_COUNTER"
-if ((count <= 3)); then
+if ((count <= 4)); then
   printf '%s\n' '{SOURCE_MANIFEST}'
 else
   printf '%s\n' '{"b" * 64}'
@@ -903,7 +951,9 @@ fi
     python3.chmod(0o755)
     env["SEED_MATRIX_MANIFEST_COUNTER"] = str(manifest_counter)
     env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = SOURCE_MANIFEST
-    completion_pointer = tmp_path / "seed-completion-path"
+    completion_pointer = (
+        Path(env["IROHA_RELEASE_ARTIFACT_ROOT"]) / "seed-completion-path"
+    )
     env["IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"] = str(completion_pointer)
 
     result = _run_launcher(env)
@@ -931,13 +981,21 @@ def test_mocked_seed_matrix_rejects_concurrent_writer_without_clobbering(
     second_root.mkdir()
     first_env, first_capture, _ = _stubbed_environment(first_root, run_mode="hold")
     second_env, second_capture, _ = _stubbed_environment(second_root)
-    evidence = tmp_path / "shared-evidence"
+    evidence = Path(first_env["IROHA_RELEASE_ARTIFACT_ROOT"]) / "shared-evidence"
     hold_started = tmp_path / "hold-started"
     hold_release = tmp_path / "hold-release"
     first_env["SUMERAGI_V2_SEED_MATRIX_EVIDENCE_DIR"] = str(evidence)
     first_env["SEED_MATRIX_HOLD_STARTED"] = str(hold_started)
     first_env["SEED_MATRIX_HOLD_RELEASE"] = str(hold_release)
     second_env["SUMERAGI_V2_SEED_MATRIX_EVIDENCE_DIR"] = str(evidence)
+    for inherited_name in (
+        "CARGO_TARGET_DIR",
+        "IROHA_RELEASE_ARTIFACT_ROOT",
+        "IROHA_RELEASE_CANCEL_REQUEST_PATH",
+        "IROHA_TEST_TARGET_DIR",
+        "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256",
+    ):
+        second_env[inherited_name] = first_env[inherited_name]
 
     first = subprocess.Popen(
         [str(SCRIPT), "--pr"],
@@ -974,6 +1032,35 @@ def test_mocked_seed_matrix_refuses_uninspected_stale_lock(
     tmp_path: Path,
 ) -> None:
     env, capture, evidence = _stubbed_environment(tmp_path)
+
+    partial_env = env.copy()
+    partial_env.pop("IROHA_RELEASE_ARTIFACT_ROOT")
+    partial_env.pop("IROHA_RELEASE_CANCEL_REQUEST_PATH")
+    partial = _run_launcher(partial_env)
+    assert partial.returncode == 2
+    assert "must be supplied all-or-none" in partial.stderr
+    assert not evidence.exists()
+
+    escaped_env = env.copy()
+    escaped = tmp_path / "escaped-evidence"
+    escaped_env["SUMERAGI_V2_SEED_MATRIX_EVIDENCE_DIR"] = str(escaped)
+    escaped_result = _run_launcher(escaped_env)
+    assert escaped_result.returncode == 2
+    assert "escapes its authenticated root" in escaped_result.stderr
+    assert not escaped.exists()
+
+    cancel_path = Path(env["IROHA_RELEASE_CANCEL_REQUEST_PATH"])
+    cancel_path.write_text(
+        '{"reason":"operator-request","schema_version":1}\n',
+        encoding="utf-8",
+    )
+    cancel_path.chmod(0o600)
+    cancelled = _run_launcher(env)
+    assert cancelled.returncode == 125
+    assert "seed-matrix:entry" in cancelled.stderr
+    assert not evidence.exists()
+    cancel_path.unlink()
+
     lock = evidence / ".seed-matrix.lock"
     lock.mkdir(parents=True)
     (lock / "owner").write_text(

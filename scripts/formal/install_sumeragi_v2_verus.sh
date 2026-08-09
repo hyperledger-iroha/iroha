@@ -37,8 +37,12 @@ esac
 
 readonly ARCHIVE="verus-${VERSION}-${PLATFORM}.zip"
 readonly URL="${RELEASE_BASE}/${ARCHIVE}"
-readonly INSTALL_ROOT="${VERUS_INSTALL_ROOT:-${REPO_ROOT}/target/verus/toolchains}"
+readonly INSTALL_ROOT="${VERUS_INSTALL_ROOT:?VERUS_INSTALL_ROOT must be an explicitly authorized external directory}"
 readonly INSTALL_DIR="${INSTALL_ROOT}/${VERSION}/${PLATFORM}"
+
+source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
+require_external_private_directory \
+  "$REPO_ROOT" "$INSTALL_ROOT" "Verus install" || exit $?
 
 verify_install() {
   [[ -x "${INSTALL_DIR}/verus" && -x "${INSTALL_DIR}/cargo-verus" ]] || return 1

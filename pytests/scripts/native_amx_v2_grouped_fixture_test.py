@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from python.iroha_torii_client.native_amx import (
+    compute_native_amx_application_manifest_singleton_root,
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
     compute_native_amx_proposal_hash,
@@ -421,6 +422,10 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
     group = golden["receipt_group"]
     evidence = golden["application_evidence"]
     execution = evidence["execution_commitment"]
+    merge_carrier = execution["merge_carrier"]
+    assert set(merge_carrier) == {"entry_hash", "version"}
+    assert merge_carrier["version"] == 1
+    assert merge_carrier["entry_hash"].startswith("hash:")
     artifacts = evidence["manifest_artifacts"]
     assert execution["native_amx_application_manifest_version"] == 1
     assert execution["native_amx_application_manifest_count"] == len(artifacts) == 1
@@ -430,13 +435,20 @@ def _validate_application_evidence(document: dict[str, Any]) -> None:
     assert artifact["version"] == leaf["version"] == 1
     assert artifact["leaf_index"] == proof["leaf_index"] == 0
     assert proof["audit_path"] == []
-    assert artifact["manifest_leaf_count"] == 1
+    assert (
+        artifact["manifest_leaf_count"]
+        == execution["native_amx_application_manifest_count"]
+    )
+    expected_manifest_root = compute_native_amx_application_manifest_singleton_root(
+        artifact["leaf_hash"]
+    )
     assert (
         artifact["manifest_root"]
         == execution["native_amx_application_manifest_root"]
-        == artifact["leaf_hash"]
+        == expected_manifest_root
     )
     assert leaf["executed_block_wire_hash"] == execution["executed_block_wire_hash"]
+    assert execution["executed_block_wire_len"] == 49
     assert leaf["predecessor_height"] + 1 == leaf["participant_height"]
     assert evidence["active_lane_incarnations"] == [
         {
@@ -827,17 +839,21 @@ def test_grouped_native_amx_v2_negative_control_contract_is_bounded() -> None:
         for mutation in control["mutations"]
     } <= {"replace", "remove", "copy", "swap", "repeat"}
     assert all(
-        mutation["path"].startswith(
-            (
-                "/golden/receipt_group/",
-                "/golden/application_evidence/",
-            )
+        mutation["path"]
+        in {
+            "/golden/application_evidence",
+            "/golden/expected_diagnostics",
+        }
+        or mutation["path"].startswith(
+            ("/golden/receipt_group/", "/golden/application_evidence/")
         )
         for control in controls
         for mutation in control["mutations"]
     )
     assert {
         "coherent_unordered_validator_set",
+        "coherent_duplicate_validator_set",
+        "coherent_over_quorum_requirement",
         "under_quorum_bitmap",
         "out_of_range_bitmap",
         "zero_pop",
@@ -860,10 +876,28 @@ def test_grouped_native_amx_v2_negative_control_contract_is_bounded() -> None:
         "same_route_participant_application_marker",
         "unanchored_mixed_role_participant",
         "manifest_root_tampering",
+        "manifest_leaf_hash_tampering",
         "manifest_proof_path_tampering",
         "manifest_proof_position_tampering",
         "application_block_substitution",
     } <= {control["id"] for control in controls}
+    coherent_committee_paths = {
+        "/golden/receipt_group/native_amx_receipts/0/legs/1",
+        "/golden/receipt_group/native_amx_receipts/1/legs/1",
+        "/golden/application_evidence",
+        "/golden/expected_diagnostics",
+    }
+    for control in controls:
+        if control["id"] in {
+            "coherent_duplicate_validator_set",
+            "coherent_over_quorum_requirement",
+        }:
+            assert {mutation["op"] for mutation in control["mutations"]} == {
+                "replace"
+            }
+            assert {
+                mutation["path"] for mutation in control["mutations"]
+            } == coherent_committee_paths
 
 
 def test_receipt_group_negative_controls_fail_closed_semantically() -> None:
@@ -876,6 +910,16 @@ def test_receipt_group_negative_controls_fail_closed_semantically() -> None:
         mutated = deepcopy(canonical)
         for mutation in control["mutations"]:
             _apply_mutation(mutated, mutation)
+        if control["id"] in {
+            "coherent_duplicate_validator_set",
+            "coherent_over_quorum_requirement",
+        }:
+            # These controls rebuild the shared participant identity and
+            # manifest evidence; only the named committee invariant may fail.
+            assert mutated["golden"]["expected_diagnostics"][
+                "lane_settlement_commitments"
+            ] == [mutated["golden"]["receipt_group"]]
+            _validate_application_evidence(mutated)
         try:
             _validate_receipt_group(mutated)
         except (AssertionError, KeyError, TypeError, ValueError):

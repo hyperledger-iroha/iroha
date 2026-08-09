@@ -1,6 +1,6 @@
 //! Utilities for working with Merkle proofs emitted by the VM.
 
-use iroha_crypto::{CompactMerkleProof, Hash, HashOf};
+use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleError, MerkleProof};
 use norito::codec::{Decode, Encode};
 use sha2::Digest as _;
 
@@ -51,6 +51,13 @@ pub fn decode_compact_proof_bytes(
         }
     }
     let proof = CompactMerkleProof::from_parts(depth as u8, dirs, siblings);
+    // This is an externally supplied protocol encoding. Reject unused
+    // direction bits here instead of allowing malleable encodings to flow
+    // into later verification code.
+    proof
+        .clone()
+        .try_into_full()
+        .map_err(|_| "non-canonical compact proof")?;
     Ok((proof, need))
 }
 
@@ -106,7 +113,11 @@ pub fn compute_register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
 
 /// A compact proof bundle suitable for IPC: includes the compact proof header
 /// (depth, dirs), the sibling list encoded as raw bytes (32‑zero indicates a
-/// missing sibling), and the Merkle root bytes.
+/// missing sibling), and the proof-local root bytes.
+///
+/// When a builder is given a depth cap shorter than the complete audit path,
+/// `root` is a partial-path root. Such a root does not authenticate a leaf
+/// count and must not be treated as a Merkle membership commitment.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct CompactProofBundle {
     /// Number of levels in the proof (≤ 32).
@@ -115,7 +126,7 @@ pub struct CompactProofBundle {
     pub dirs: u32,
     /// Sibling list (leaf→root), with 32‑byte zero indicating a missing node.
     pub siblings: Vec<[u8; 32]>,
-    /// Merkle root bytes associated with this proof.
+    /// Full-tree root, or a partial-path root when the proof was depth-capped.
     pub root: [u8; 32],
 }
 
@@ -137,18 +148,22 @@ impl CompactProofBundle {
         CompactMerkleProof::from_parts(self.depth, self.dirs, siblings)
     }
 
-    /// Convert this bundle into a full Merkle proof by first converting to a
-    /// typed compact proof and then expanding with the given `leaf_index`.
-    pub fn into_full_proof(self, leaf_index: u32) -> iroha_crypto::MerkleProof<[u8; 32]> {
+    /// Expand the canonical compact encoding into a full proof.
+    ///
+    /// The direction bitset already is the proof's leaf index; accepting a
+    /// second caller-provided index would permit the path and index to diverge.
+    ///
+    /// # Errors
+    /// Returns [`MerkleError::NonCanonicalCompactProof`] when the encoded
+    /// depth, sibling count, or unused direction bits are inconsistent.
+    pub fn try_into_full_proof(self) -> Result<MerkleProof<[u8; 32]>, MerkleError> {
         if crate::dev_env::debug_compact_enabled() {
             eprintln!(
-                "[bundle→full] depth={} dirs=0x{:08x} leaf_index={}",
-                self.depth, self.dirs, leaf_index
+                "[bundle→full] depth={} dirs=0x{:08x}",
+                self.depth, self.dirs
             );
         }
-        // Build directly from raw sibling bytes to avoid any ambiguity in
-        // direction-bit interpretation across crates.
-        iroha_crypto::MerkleProof::<[u8; 32]>::from_audit_path_bytes(leaf_index, self.siblings)
+        self.to_compact_proof().try_into_full()
     }
 }
 

@@ -569,7 +569,7 @@ pub struct BridgeProofRecord {
 }
 
 /// Current schema version of [`BridgeFinalityProof`].
-pub const BRIDGE_FINALITY_PROOF_VERSION_V1: u8 = 1;
+pub const BRIDGE_FINALITY_PROOF_VERSION_V2: u8 = 2;
 
 /// Current schema version of [`BridgeFinalityAttestationBodyV1`].
 pub const BRIDGE_FINALITY_ATTESTATION_VERSION_V1: u8 = 1;
@@ -593,7 +593,7 @@ pub const BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
 #[norito(deny_unknown_fields)]
 pub struct BridgeFinalityProof {
     /// Proof schema version. The first release requires
-    /// [`BRIDGE_FINALITY_PROOF_VERSION_V1`].
+    /// [`BRIDGE_FINALITY_PROOF_VERSION_V2`].
     pub version: u8,
     /// Block header for the finalized block.
     pub block_header: crate::block::BlockHeader,
@@ -996,8 +996,8 @@ pub enum BridgeFinalityBundleVerifyError {
 ///
 /// The first proof must match an explicitly trusted Sumeragi-v2 height-context
 /// id. Every later proof must be the immediate, cryptographically linked
-/// successor of the last accepted artifact. This preserves count-and-power
-/// quorum, epoch transitions, and parent finality without trusting a
+/// successor of the last accepted artifact. This preserves the exact
+/// equal-vote quorum, epoch transitions, and parent finality without trusting a
 /// proof-controlled roster.
 #[derive(Debug, Clone)]
 pub struct BridgeFinalityVerifier {
@@ -1145,9 +1145,9 @@ fn validate_bridge_finality_proof_structure(
     proof: &BridgeFinalityProof,
     expected_chain_id: &ChainId,
 ) -> Result<(), BridgeFinalityVerifyError> {
-    if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V1 {
+    if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V2 {
         return Err(BridgeFinalityVerifyError::UnsupportedProofVersion {
-            expected: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            expected: BRIDGE_FINALITY_PROOF_VERSION_V2,
             actual: proof.version,
         });
     }
@@ -1273,7 +1273,7 @@ mod tests {
     }
 
     fn make_v2_fixture(chain_id: &str) -> V2Fixture {
-        make_v2_fixture_config(chain_id, &[40, 30, 20, 10], &[0, 1, 2], false)
+        make_v2_fixture_config(chain_id, &[1, 1, 1, 1], &[0, 1, 2], false)
     }
 
     fn make_v2_fixture_with_quorum(
@@ -1285,7 +1285,7 @@ mod tests {
     }
 
     fn make_boundary_v2_fixture(chain_id: &str) -> V2Fixture {
-        make_v2_fixture_config(chain_id, &[40, 30, 20, 10], &[0, 1, 2], true)
+        make_v2_fixture_config(chain_id, &[1, 1, 1, 1], &[0, 1, 2], true)
     }
 
     fn attestation_for_fixture(fixture: &V2Fixture) -> BridgeFinalityAttestationV1 {
@@ -1463,17 +1463,17 @@ mod tests {
             mode: ConsensusMode::Npos,
             parent_commit_qc: None,
             snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("valid powered roster"),
+            quorum: DualQuorum::from_roster(&roster).expect("valid roster"),
             roster,
             nexus_amx_context_hash: Hash::new(b"bridge v2 test nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::Plain,
+                encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x5A; 32],
         };
@@ -1487,12 +1487,14 @@ mod tests {
             height: 1,
             view: 0,
         };
-        let execution_commitment = crate::block::consensus_v2::ExecutionCommitment::without_topups(
-            Hash::new(b"bridge v2 parent state"),
-            Hash::new(b"bridge v2 post state"),
-            Hash::new(b"bridge v2 ordinary writes"),
-            Hash::new(b"bridge v2 executed block wire"),
-        );
+        let execution_commitment =
+            crate::block::consensus_v2::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"bridge v2 parent state"),
+                Hash::new(b"bridge v2 post state"),
+                Hash::new(b"bridge v2 ordinary writes"),
+                1,
+                Hash::new(b"bridge v2 executed block wire"),
+            );
         let mut commit_qc = QuorumCertificate {
             round,
             proposal_round: round,
@@ -1539,7 +1541,7 @@ mod tests {
         );
         V2Fixture {
             proof: BridgeFinalityProof {
-                version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+                version: BRIDGE_FINALITY_PROOF_VERSION_V2,
                 block_header: header,
                 finality_artifact: artifact,
             },
@@ -1619,10 +1621,11 @@ mod tests {
             height,
             view: 0,
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups(
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"bridge v2 successor parent state"),
             Hash::new(b"bridge v2 successor post state"),
             Hash::new(b"bridge v2 successor ordinary writes"),
+            1,
             Hash::new(b"bridge v2 successor executed block wire"),
         );
         let commit_qc = wire::QuorumCertificate {
@@ -1641,7 +1644,7 @@ mod tests {
             validator_set_pops,
         );
         let mut proof = BridgeFinalityProof {
-            version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            version: BRIDGE_FINALITY_PROOF_VERSION_V2,
             block_header: header,
             finality_artifact: artifact,
         };
@@ -2747,7 +2750,7 @@ mod tests {
     }
 
     #[test]
-    fn verifier_accepts_weighted_npos_quorum_with_context_anchor() {
+    fn verifier_accepts_equal_vote_npos_quorum_with_context_anchor() {
         let fixture = make_v2_fixture("chain-a");
         let proof = fixture.proof;
         let mut verifier = BridgeFinalityVerifier::with_context(
@@ -2788,11 +2791,22 @@ mod tests {
         let context_id = fixture.proof.finality_artifact.context_id();
 
         let mut wrong_version = fixture.proof.clone();
-        wrong_version.version = BRIDGE_FINALITY_PROOF_VERSION_V1 + 1;
+        wrong_version.version = BRIDGE_FINALITY_PROOF_VERSION_V2 + 1;
         let mut verifier = BridgeFinalityVerifier::with_context(expected_chain.clone(), context_id);
         assert!(matches!(
             verifier.verify(&wrong_version),
             Err(BridgeFinalityVerifyError::UnsupportedProofVersion { .. })
+        ));
+
+        let mut legacy_v1 = fixture.proof.clone();
+        legacy_v1.version = 1;
+        let mut verifier = BridgeFinalityVerifier::with_context(expected_chain.clone(), context_id);
+        assert!(matches!(
+            verifier.verify(&legacy_v1),
+            Err(BridgeFinalityVerifyError::UnsupportedProofVersion {
+                expected: BRIDGE_FINALITY_PROOF_VERSION_V2,
+                actual: 1,
+            })
         ));
 
         let mut verifier = BridgeFinalityVerifier::with_context(
@@ -3196,18 +3210,18 @@ mod tests {
     }
 
     #[test]
-    fn verifier_enforces_both_npos_signer_count_and_voting_power() {
+    fn verifier_enforces_equal_vote_npos_quorum_and_context() {
         use crate::block::consensus_v2::{
             ValidationError,
             finality::{V2FinalityValidationError, V2QuorumCertificateVerificationError},
         };
 
-        let too_few = make_v2_fixture_with_quorum("chain-a", &[70, 10, 10, 10], &[0]);
+        let too_few = make_v2_fixture_with_quorum("chain-a", &[1, 1, 1, 1], &[0, 1]);
         let err = too_few
             .proof
             .finality_artifact
             .verify()
-            .expect_err("power alone cannot satisfy signer-count quorum");
+            .expect_err("two validators cannot satisfy a three-vote quorum");
         assert!(matches!(
             err,
             V2QuorumCertificateVerificationError::InvalidArtifact(
@@ -3217,19 +3231,16 @@ mod tests {
             )
         ));
 
-        let too_little_power =
-            make_v2_fixture_with_quorum("chain-a", &[70, 10, 10, 10], &[1, 2, 3]);
-        let err = too_little_power
+        let weighted = make_v2_fixture_with_quorum("chain-a", &[70, 10, 10, 10], &[0, 1, 2]);
+        let err = weighted
             .proof
             .finality_artifact
             .verify()
-            .expect_err("signer count alone cannot satisfy powered quorum");
+            .expect_err("protocol v4 rejects weighted consensus votes");
         assert!(matches!(
             err,
             V2QuorumCertificateVerificationError::InvalidArtifact(
-                V2FinalityValidationError::InvalidCommitCertificate(
-                    ValidationError::InsufficientVotingPower
-                )
+                V2FinalityValidationError::InvalidHeightContext(ValidationError::VotingPowerNotOne)
             )
         ));
     }

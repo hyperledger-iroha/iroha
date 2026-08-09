@@ -640,7 +640,7 @@ mod tests {
 
     #[test]
     fn request_snapshot_preserves_utf8_header_bytes_used_by_account_ids() {
-        let account = "sorauﾛ1PﾒJrﾚbﾛzgTE";
+        let account = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
         let request = DefaultRequestBuilder::new(
             crate::http::Method::GET,
             Url::parse("http://127.0.0.1/status").expect("url"),

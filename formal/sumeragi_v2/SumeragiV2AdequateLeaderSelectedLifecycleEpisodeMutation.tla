@@ -12,8 +12,8 @@ unchanged physical rank; only servicing that route reaches physical rank 1.
 
 The repaired model keeps A's selected-lifecycle episode active despite B.
 The mutation reinstates the old `~StrictOccurrenceDescentGoal` gate, so the
-episode disappears in the initial state even though no lower physical rank
-exists.  No production fairness or transition is modeled here.
+episode disappears as soon as selection occurs even though no lower physical
+rank exists.  No production fairness is modeled here.
 ***************************************************************************)
 
 CONSTANT PreserveSelectedLifecycleEpisode
@@ -27,7 +27,7 @@ LowerOccurrenceRank == 1
 SourcePhysicalRank == 2
 LowerPhysicalRank == 3
 
-Stages == {"Selected", "Route", "Done"}
+Stages == {"Fresh", "Selected", "Route", "Done"}
 NoToken == "None"
 
 VARIABLES stage, routeToken, routeOrdinal
@@ -66,6 +66,7 @@ SelectedLifecycleEpisodeActive ==
 \* selected token/cut reaches a lower physical rank, its episode must remain
 \* active.
 SelectedLifecycleEpisodeOrPhysicalDescent ==
+  \/ stage = "Fresh"
   \/ PhysicalStrictRankGoal
   \/ SelectedLifecycleEpisodeActive
 
@@ -75,9 +76,14 @@ ExactSelectedTokenCutCarry ==
        /\ routeOrdinal = SourceOrdinal
 
 Init ==
-  /\ stage = "Selected"
+  /\ stage = "Fresh"
   /\ routeToken = NoToken
   /\ routeOrdinal = 0
+
+SelectLifecycleEpisode ==
+  /\ stage = "Fresh"
+  /\ stage' = "Selected"
+  /\ UNCHANGED <<routeToken, routeOrdinal>>
 
 DrainSelectedToExactRoute ==
   /\ stage = "Selected"
@@ -91,6 +97,7 @@ ServiceExactRoute ==
   /\ UNCHANGED <<routeToken, routeOrdinal>>
 
 Next ==
+  \/ SelectLifecycleEpisode
   \/ DrainSelectedToExactRoute
   \/ ServiceExactRoute
 

@@ -56,13 +56,17 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
     let destination_asset = gen_account_in(&domain).0;
     let destination_nft = gen_account_in(&domain).0;
 
-    let asset_definition_id =
-        iroha_data_model::asset::AssetDefinitionId::new(domain.clone(), "coin".parse()?);
+    let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+        domain.clone(),
+        "coin".parse()?,
+    );
     client.submit_blocking(
-        Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(asset_definition_id.name().to_string()),
-        ),
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "coin".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     let source_asset_id = AssetId::new(asset_definition_id.clone(), source_account.clone());

@@ -9,12 +9,12 @@ readme = "README.md"
 python = "^3.11"
 faker = "*"
 allure-python-commons = "*"
-cryptography = "*"
+cryptography = "^48.0.1"
 python-dotenv = "*"
 tomlkit = "^0.14.0"
 
 [tool.poetry.dev-dependencies]
-pytest = "*"
+pytest = "^9.0.3"
 allure-pytest = "*"
 pytest-xdist = "*"
 mypy = "*"
@@ -28,6 +28,5 @@ isort = "^8.0.1"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
-
 
 

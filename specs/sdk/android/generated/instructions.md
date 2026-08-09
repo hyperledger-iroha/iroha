@@ -256,7 +256,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha.transfer_batch`
 
-> Schema summary: struct fields: entries: Vec<TransferAssetBatchEntry>.
+> Schema summary: struct fields: mode: BatchMode, entries: Vec<TransferAssetBatchEntry>.
 
 - Rust type: `iroha_data_model::isi::transfer::TransferAssetBatch`
 - Schema hash: `d76a8b607909812061b62dff5922a7cc`
@@ -265,6 +265,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 | Field | Type |
 |-------|------|
+| `mode` | `BatchMode` |
 | `entries` | `Vec<TransferAssetBatchEntry>` |
 
 ## `iroha.unregister`
@@ -362,7 +363,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha_data_model::isi::governance::PersistCouncilForEpoch`
 
-> Schema summary: struct fields: epoch: u64, members: Vec<AccountId>, alternates: Vec<AccountId>, verified: u32, candidates_count: u32, derived_by: CouncilDerivationKind.
+> Schema summary: struct fields: epoch: u64, members: Vec<AccountId>, alternates: Vec<AccountId>.
 
 - Rust type: `iroha_data_model::isi::governance::PersistCouncilForEpoch`
 - Schema hash: `e883e2ba76ced91134fc5d7faab8caa2`
@@ -374,9 +375,6 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 | `epoch` | `u64` |
 | `members` | `Vec<AccountId>` |
 | `alternates` | `Vec<AccountId>` |
-| `verified` | `u32` |
-| `candidates_count` | `u32` |
-| `derived_by` | `CouncilDerivationKind` |
 
 ## `iroha_data_model::isi::governance::ProposeDeployContract`
 
@@ -790,7 +788,7 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 
 ## `iroha_data_model::isi::repo::ReverseRepoIsi`
 
-> Schema summary: struct fields: agreement_id: RepoAgreementId, initiator: AccountId, counterparty: AccountId, cash_leg: RepoCashLeg, collateral_leg: RepoCollateralLeg, settlement_timestamp_ms: u64.
+> Schema summary: struct fields: agreement_id: RepoAgreementId.
 
 - Rust type: `iroha_data_model::isi::repo::ReverseRepoIsi`
 - Schema hash: `eaaee02ec8bf5e55318885b656065fbb`
@@ -800,11 +798,6 @@ This file is generated from `instruction_manifest.json`. Do not edit manually.
 | Field | Type |
 |-------|------|
 | `agreement_id` | `RepoAgreementId` |
-| `initiator` | `AccountId` |
-| `counterparty` | `AccountId` |
-| `cash_leg` | `RepoCashLeg` |
-| `collateral_leg` | `RepoCollateralLeg` |
-| `settlement_timestamp_ms` | `u64` |
 
 ## `iroha_data_model::isi::settlement::DvpIsi`
 
@@ -1080,7 +1073,7 @@ Alias binding payload approved alongside a manifest.
 
 ## `iroha_data_model::isi::sorafs::CompleteReplicationOrder`
 
-> Schema summary: struct fields: order_id: ReplicationOrderId, completion_epoch: u64.
+> Schema summary: struct fields: order_id: ReplicationOrderId, provider_id: ProviderId, completion_epoch: u64, expected_authority: ProviderIngestCompletionAuthorityV1, expected_assignment_revision: u64, finalized_anchor: ProviderIngestFinalizedAnchorV1.
 
 - Rust type: `iroha_data_model::isi::sorafs::CompleteReplicationOrder`
 - Schema hash: `b12e141f6fa82d6538e77613bc8f848c`
@@ -1090,7 +1083,25 @@ Alias binding payload approved alongside a manifest.
 | Field | Type |
 |-------|------|
 | `order_id` | `ReplicationOrderId` |
+| `provider_id` | `ProviderId` |
 | `completion_epoch` | `u64` |
+| `expected_authority` | `ProviderIngestCompletionAuthorityV1` |
+| `expected_assignment_revision` | `u64` |
+| `finalized_anchor` | `ProviderIngestFinalizedAnchorV1` |
+
+## `iroha_data_model::isi::sorafs::ExpireReplicationOrder`
+
+> Schema summary: struct fields: order_id: ReplicationOrderId, expiration_epoch: u64.
+
+- Rust type: `iroha_data_model::isi::sorafs::ExpireReplicationOrder`
+- Schema hash: `c3c08d50e73972a3f5136d7031c1a309`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `order_id` | `ReplicationOrderId` |
+| `expiration_epoch` | `u64` |
 
 ## `iroha_data_model::isi::sorafs::IssueReplicationOrder`
 
@@ -1175,6 +1186,20 @@ Alias binding payload approved alongside a manifest.
 | `namespace` | `String` | Canonical ASCII alias namespace matching `[a-z0-9._-]{1,128}`. |
 | `proof` | `Vec<u8>` | Non-empty canonical Norito alias proof bytes (canonical padded base64 in JSON; decoded size at most 1 MiB). |
 
+## `iroha_data_model::isi::sorafs::RegisterProviderOwner`
+
+> Schema summary: struct fields: provider_id: ProviderId, owner: AccountId.
+
+- Rust type: `iroha_data_model::isi::sorafs::RegisterProviderOwner`
+- Schema hash: `6226ce0ecda49b712bb0bb166d2ae864`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `provider_id` | `ProviderId` |
+| `owner` | `AccountId` |
+
 ## `iroha_data_model::isi::sorafs::RetirePinManifest`
 
 > Schema summary: struct fields: digest: ManifestDigest, retired_epoch: u64, reason: Option<String>.
@@ -1189,6 +1214,64 @@ Alias binding payload approved alongside a manifest.
 | `digest` | `ManifestDigest` |
 | `retired_epoch` | `u64` |
 | `reason` | `Option<String>` |
+
+## `iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignments`
+
+> Schema summary: struct fields: order_id: ReplicationOrderId, expected_assignment_revision: u64, next_assignment_revision: u64, assignments: Vec<ReplicationAssignmentV1>.
+
+- Rust type: `iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignments`
+- Schema hash: `6e875bf7dae8680dd05c61ab4f98c6fc`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `order_id` | `ReplicationOrderId` |
+| `expected_assignment_revision` | `u64` |
+| `next_assignment_revision` | `u64` |
+| `assignments` | `Vec<ReplicationAssignmentV1>` |
+
+## `iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority`
+
+> Schema summary: struct fields: provider_id: ProviderId, expected_current: ProviderIngestCompletionAuthorityV1.
+
+- Rust type: `iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority`
+- Schema hash: `e61fa4476187f68a02d9a6d987eb36a1`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `provider_id` | `ProviderId` |
+| `expected_current` | `ProviderIngestCompletionAuthorityV1` |
+
+## `iroha_data_model::isi::sorafs::SetProviderIngestCompletionAuthority`
+
+> Schema summary: struct fields: provider_id: ProviderId, expected_current: Option<ProviderIngestCompletionAuthorityV1>, next: ProviderIngestCompletionAuthorityV1.
+
+- Rust type: `iroha_data_model::isi::sorafs::SetProviderIngestCompletionAuthority`
+- Schema hash: `21eee4c57c81e23ba5aef896cedc1c86`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `provider_id` | `ProviderId` |
+| `expected_current` | `Option<ProviderIngestCompletionAuthorityV1>` |
+| `next` | `ProviderIngestCompletionAuthorityV1` |
+
+## `iroha_data_model::isi::sorafs::UnregisterProviderOwner`
+
+> Schema summary: struct fields: provider_id: ProviderId.
+
+- Rust type: `iroha_data_model::isi::sorafs::UnregisterProviderOwner`
+- Schema hash: `eda3efbef86870e64d3cd07ea2d60ab9`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `provider_id` | `ProviderId` |
 
 ## `iroha_data_model::isi::transfer::Transfer<iroha_data_model::account::model::Account, iroha_data_model::asset::id::model::AssetDefinitionId, iroha_data_model::account::model::Account>`
 
@@ -1590,23 +1673,6 @@ Alias binding payload approved alongside a manifest.
 | `vk_unshield` | `Option<VerifyingKeyId>` |
 | `vk_shield` | `Option<VerifyingKeyId>` |
 
-## `iroha_data_model::isi::zk::Shield`
-
-> Schema summary: struct fields: asset: AssetDefinitionId, from: AccountId, amount: Quantity, note_commitment: Array<u8, 32>, enc_payload: ConfidentialEncryptedPayload.
-
-- Rust type: `iroha_data_model::isi::zk::Shield`
-- Schema hash: `f6640dce7cdf2a695403dd2f3f71d93e`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `asset` | `AssetDefinitionId` |
-| `from` | `AccountId` |
-| `amount` | `Quantity` |
-| `note_commitment` | `Array<u8, 32>` |
-| `enc_payload` | `ConfidentialEncryptedPayload` |
-
 ## `iroha_data_model::isi::zk::SubmitBallot`
 
 > Schema summary: struct fields: election_id: String, ciphertext: Vec<u8>, ballot_proof: ProofAttachment, nullifier: Array<u8, 32>.
@@ -1623,25 +1689,6 @@ Alias binding payload approved alongside a manifest.
 | `ballot_proof` | `ProofAttachment` |
 | `nullifier` | `Array<u8, 32>` |
 
-## `iroha_data_model::isi::zk::Unshield`
-
-> Schema summary: struct fields: asset: AssetDefinitionId, to: AccountId, public_amount: Quantity, inputs: Vec<Array<u8, 32>>, outputs: Vec<Array<u8, 32>>, proof: ProofAttachment, root_hint: Option<Array<u8, 32>>.
-
-- Rust type: `iroha_data_model::isi::zk::Unshield`
-- Schema hash: `1cb55ecc7fd92625b2bee33e491a4a0c`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `asset` | `AssetDefinitionId` |
-| `to` | `AccountId` |
-| `public_amount` | `Quantity` |
-| `inputs` | `Vec<Array<u8, 32>>` |
-| `outputs` | `Vec<Array<u8, 32>>` |
-| `proof` | `ProofAttachment` |
-| `root_hint` | `Option<Array<u8, 32>>` |
-
 ## `iroha_data_model::isi::zk::VerifyProof`
 
 > Schema summary: struct fields: attachment: ProofAttachment.
@@ -1654,23 +1701,6 @@ Alias binding payload approved alongside a manifest.
 | Field | Type |
 |-------|------|
 | `attachment` | `ProofAttachment` |
-
-## `iroha_data_model::isi::zk::ZkTransfer`
-
-> Schema summary: struct fields: asset: AssetDefinitionId, inputs: Vec<Array<u8, 32>>, outputs: Vec<Array<u8, 32>>, proof: ProofAttachment, root_hint: Option<Array<u8, 32>>.
-
-- Rust type: `iroha_data_model::isi::zk::ZkTransfer`
-- Schema hash: `47144daf134fc01da511d50f913c7b80`
-
-**Layout:** `struct`
-
-| Field | Type |
-|-------|------|
-| `asset` | `AssetDefinitionId` |
-| `inputs` | `Vec<Array<u8, 32>>` |
-| `outputs` | `Vec<Array<u8, 32>>` |
-| `proof` | `ProofAttachment` |
-| `root_hint` | `Option<Array<u8, 32>>` |
 
 ## `zk::CancelConfidentialPolicyTransition`
 

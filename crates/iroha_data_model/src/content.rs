@@ -49,23 +49,24 @@ impl ContentFileEntry {
     }
 }
 
-/// Cache policy applied when serving bundle files.
+/// Cache policy applied when serving publicly readable bundle files.
+///
+/// Protected bundles always disable storage at the HTTP boundary so a shared
+/// cache cannot bypass current role or sponsor authorization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ContentCachePolicy {
-    /// Maximum cache lifetime in seconds (used for Cache-Control max-age).
+    /// Maximum public-cache lifetime in seconds (used for `Cache-Control` max-age).
     pub max_age_seconds: u32,
-    /// Whether the bundle is immutable (adds the `immutable` directive).
+    /// Whether a public bundle is immutable (adds the `immutable` directive).
     pub immutable: bool,
 }
 
 impl ContentCachePolicy {
-    /// Build the Cache-Control directive string.
-    #[must_use]
-    pub fn cache_control_value(&self) -> String {
+    fn public_cache_control_value(self) -> String {
         if self.immutable {
             format!("public, max-age={}, immutable", self.max_age_seconds)
         } else {
@@ -119,6 +120,23 @@ pub struct ContentBundleManifest {
     pub stripe_layout: DaStripeLayout,
     /// Optional MIME overrides per file path.
     pub mime_overrides: BTreeMap<String, String>,
+}
+
+impl ContentBundleManifest {
+    /// Build the HTTP `Cache-Control` value for this manifest's authorization mode.
+    ///
+    /// Role- and sponsor-gated responses are never cacheable. In particular,
+    /// their configured public cache lifetime and immutable bit cannot turn an
+    /// authenticated response into reusable shared-cache content.
+    #[must_use]
+    pub fn cache_control_value(&self) -> String {
+        match &self.auth {
+            ContentAuthMode::Public => self.cache.public_cache_control_value(),
+            ContentAuthMode::RoleGate(_) | ContentAuthMode::Sponsor(_) => {
+                "private, no-store".to_owned()
+            }
+        }
+    }
 }
 
 /// Metadata and chunk layout for a published content bundle.
@@ -255,4 +273,49 @@ pub mod prelude {
         ContentAuthMode, ContentBundleId, ContentBundleManifest, ContentBundleRecord,
         ContentCachePolicy, ContentChunk, ContentDaReceipt, ContentFileEntry, ContentRange,
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest_with_auth(auth: ContentAuthMode) -> ContentBundleManifest {
+        ContentBundleManifest {
+            bundle_id: Hash::new(b"content cache policy test bundle"),
+            index_hash: [0x11; 32],
+            dataspace: DataSpaceId::UNIVERSAL,
+            lane: LaneId::SINGLE,
+            blob_class: BlobClass::GovernanceArtifact,
+            retention: RetentionPolicy::default(),
+            cache: ContentCachePolicy {
+                max_age_seconds: 600,
+                immutable: true,
+            },
+            auth,
+            stripe_layout: DaStripeLayout::default(),
+            mime_overrides: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn cache_control_never_marks_protected_content_public() {
+        let public = manifest_with_auth(ContentAuthMode::Public);
+        assert_eq!(
+            public.cache_control_value(),
+            "public, max-age=600, immutable"
+        );
+        let mut mutable_public = public;
+        mutable_public.cache.immutable = false;
+        assert_eq!(mutable_public.cache_control_value(), "public, max-age=600");
+
+        let role_gated = manifest_with_auth(ContentAuthMode::RoleGate(RoleId::new(
+            "content_reader".parse().expect("role name"),
+        )));
+        assert_eq!(role_gated.cache_control_value(), "private, no-store");
+
+        let sponsor = manifest_with_auth(ContentAuthMode::Sponsor(UniversalAccountId::from_hash(
+            Hash::new(b"content sponsor"),
+        )));
+        assert_eq!(sponsor.cache_control_value(), "private, no-store");
+    }
 }

@@ -2,7 +2,8 @@
 
 use std::{
     collections::BTreeMap,
-    sync::RwLock,
+    fmt,
+    sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
     vec::Vec,
 };
@@ -10,7 +11,7 @@ use std::{
 use iroha_crypto::{
     BfvIdentifierCiphertext, BfvIdentifierPublicParameters, BfvProgrammedPublicParameters,
     BfvRamProgramProfile, ClientRequest, EvalResponse, Hash, HiddenRamFheProgram, KeyPair,
-    RamLfeBackend, RamLfeError, RamLfeVerificationMode, Signature, SignatureOf,
+    RamLfeBackend, RamLfeError, RamLfeSecret, RamLfeVerificationMode, Signature, SignatureOf,
     decode_bfv_programmed_public_parameters, evaluate_commitment_with_hidden_program,
     identifier_hashes_from_output_hash, ram_lfe_output_hash,
 };
@@ -29,18 +30,43 @@ use iroha_data_model::{
 };
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
 struct ProgramRuntime {
-    secret: Vec<u8>,
+    secret: RamLfeSecret,
     hidden_program: HiddenRamFheProgram,
     signer: KeyPair,
     receipt_ttl_ms: Option<u64>,
 }
 
+impl fmt::Debug for ProgramRuntime {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProgramRuntime")
+            .field("secret", &self.secret)
+            .field("hidden_program", &"[REDACTED hidden RAM-FHE program]")
+            .field("signer", &"[REDACTED RAM-LFE signer]")
+            .field("receipt_ttl_ms", &self.receipt_ttl_ms)
+            .finish()
+    }
+}
+
 /// In-process RAM-LFE runtime used by Torii app endpoints.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct IdentifierResolutionService {
-    program_runtimes: RwLock<BTreeMap<RamLfeProgramId, ProgramRuntime>>,
+    program_runtimes: RwLock<BTreeMap<RamLfeProgramId, Arc<ProgramRuntime>>>,
+}
+
+impl fmt::Debug for IdentifierResolutionService {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let program_count = self
+            .program_runtimes
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        formatter
+            .debug_struct("IdentifierResolutionService")
+            .field("program_count", &program_count)
+            .finish()
+    }
 }
 
 /// Draft returned by RAM-LFE execution before route-specific projection.
@@ -130,7 +156,7 @@ impl IdentifierResolutionService {
     pub fn register_program_runtime(
         &self,
         program_id: RamLfeProgramId,
-        secret: Vec<u8>,
+        secret: RamLfeSecret,
         hidden_program: HiddenRamFheProgram,
         signer: KeyPair,
         receipt_ttl_ms: Option<u64>,
@@ -140,12 +166,12 @@ impl IdentifierResolutionService {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(
                 program_id,
-                ProgramRuntime {
+                Arc::new(ProgramRuntime {
                     secret,
                     hidden_program,
                     signer,
                     receipt_ttl_ms,
-                },
+                }),
             );
     }
 
@@ -184,7 +210,7 @@ impl IdentifierResolutionService {
             receipt_hash,
             backend,
         } = evaluate_commitment_with_hidden_program(
-            &runtime.secret,
+            runtime.secret.as_ref(),
             &program_policy.commitment,
             &request,
             Some(&runtime.hidden_program),
@@ -389,7 +415,7 @@ impl IdentifierResolutionService {
     fn runtime(
         &self,
         program_policy: &RamLfeProgramPolicy,
-    ) -> Result<ProgramRuntime, IdentifierResolutionError> {
+    ) -> Result<Arc<ProgramRuntime>, IdentifierResolutionError> {
         self.program_runtimes
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -906,7 +932,8 @@ mod tests {
         let service = IdentifierResolutionService::new();
         service.register_program_runtime(
             program_policy.program_id.clone(),
-            b"shared-identifier-receipt-fixture".to_vec(),
+            RamLfeSecret::try_from(b"shared-identifier-receipt-fixture".to_vec())
+                .expect("valid RAM-LFE test secret"),
             default_bfv_programmed_hidden_program(),
             signer.clone(),
             None,
@@ -1001,12 +1028,46 @@ mod tests {
     }
 
     #[test]
+    fn runtime_lookup_shares_allocation_and_debug_redacts_runtime_material() {
+        let service = IdentifierResolutionService::new();
+        let owner = checked_fixture_account(0x41);
+        let signer = checked_fixture_ed25519_keypair(0x42);
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
+        let (_, program_policy) = sample_policy_bundle(policy_id, owner, &signer, secret.as_ref());
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            secret,
+            default_bfv_programmed_hidden_program(),
+            signer,
+            Some(30_000),
+        );
+
+        let first = service
+            .runtime(&program_policy)
+            .expect("registered runtime");
+        let second = service
+            .runtime(&program_policy)
+            .expect("registered runtime");
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let runtime_debug = format!("{first:?}");
+        assert!(runtime_debug.contains("REDACTED RAM-LFE secret"));
+        assert!(!runtime_debug.contains("hidden-phone-policy"));
+        let service_debug = format!("{service:?}");
+        assert!(service_debug.contains("program_count: 1"));
+        assert!(!service_debug.contains("hidden-phone-policy"));
+    }
+
+    #[test]
     fn derive_and_sign_receipt_roundtrip() {
         let service = IdentifierResolutionService::new();
         let owner = checked_fixture_account(0x51);
         let signer = checked_fixture_ed25519_keypair(0x52);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (policy, program_policy) =
             sample_policy_bundle(policy_id.clone(), owner.clone(), &signer, &secret);
         service.register_program_runtime(
@@ -1084,7 +1145,8 @@ mod tests {
         let owner = checked_fixture_account(0x55);
         let signer = checked_fixture_ed25519_keypair(0x56);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (_, program_policy) = sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
         let mut mismatched_program = default_bfv_programmed_hidden_program();
         mismatched_program
@@ -1119,7 +1181,8 @@ mod tests {
         let owner = checked_fixture_account(0x57);
         let signer = checked_fixture_ed25519_keypair(0x58);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
         service.register_program_runtime(
             program_policy.program_id.clone(),
@@ -1159,7 +1222,8 @@ mod tests {
         let owner = checked_fixture_account(0x59);
         let signer = checked_fixture_ed25519_keypair(0x5A);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
         service.register_program_runtime(
             program_policy.program_id.clone(),
@@ -1209,7 +1273,8 @@ mod tests {
             let owner = checked_fixture_account(0x5D);
             let signer = checked_fixture_ed25519_keypair(0x5E);
             let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-            let secret = b"hidden-phone-policy".to_vec();
+            let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+                .expect("valid RAM-LFE test secret");
             let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
             service.register_program_runtime(
                 program_policy.program_id.clone(),
@@ -1248,7 +1313,8 @@ mod tests {
         let owner = checked_fixture_account(0x5B);
         let signer = checked_fixture_ed25519_keypair(0x5C);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
         service.register_program_runtime(
             program_policy.program_id.clone(),
@@ -1283,7 +1349,8 @@ mod tests {
         let owner = checked_fixture_account(0x5D);
         let signer = checked_fixture_ed25519_keypair(0x5E);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
         service.register_program_runtime(
             program_policy.program_id.clone(),
@@ -1319,7 +1386,8 @@ mod tests {
         let signer = checked_fixture_ed25519_keypair(0x60);
         let wrong_opening_verifier = checked_fixture_ed25519_keypair(0x61);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (policy, mut program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
         program_policy.output_opening_public_key = wrong_opening_verifier.public_key().clone();
         service.register_program_runtime(
@@ -1355,7 +1423,8 @@ mod tests {
         let owner = checked_fixture_account(0x62);
         let signer = checked_fixture_ed25519_keypair(0x63);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
         service.register_program_runtime(
             program_policy.program_id.clone(),
@@ -1389,7 +1458,8 @@ mod tests {
         let owner = checked_fixture_account(0x64);
         let signer = checked_fixture_ed25519_keypair(0x65);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
         service.register_program_runtime(
             program_policy.program_id.clone(),
@@ -1427,7 +1497,8 @@ mod tests {
         let owner = checked_fixture_account(0x66);
         let signer = checked_fixture_ed25519_keypair(0x67);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (_, mut program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
         service.register_program_runtime(
             program_policy.program_id.clone(),
@@ -1482,7 +1553,8 @@ mod tests {
         let owner = checked_fixture_account(0x68);
         let signer = checked_fixture_ed25519_keypair(0x69);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (_, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
         service.register_program_runtime(
             program_policy.program_id.clone(),
@@ -1526,7 +1598,8 @@ mod tests {
         let signer = checked_fixture_ed25519_keypair(0x6B);
         let wrong_signer = checked_fixture_ed25519_keypair(0x6C);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (_, mut program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
         service.register_program_runtime(
             program_policy.program_id.clone(),
@@ -1557,7 +1630,8 @@ mod tests {
         let owner = checked_fixture_account(0x6D);
         let signer = checked_fixture_ed25519_keypair(0x6E);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (policy, program_policy) =
             sample_policy_bundle(policy_id, owner.clone(), &signer, &secret);
         service.register_program_runtime(
@@ -1602,7 +1676,8 @@ mod tests {
         let owner = checked_fixture_account(0x6F);
         let signer = checked_fixture_ed25519_keypair(0x70);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (policy, program_policy) =
             sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
         service.register_program_runtime(
@@ -1639,7 +1714,8 @@ mod tests {
         let owner = checked_fixture_account(0x71);
         let signer = checked_fixture_ed25519_keypair(0x72);
         let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-        let secret = b"hidden-phone-policy".to_vec();
+        let secret = RamLfeSecret::try_from(b"hidden-phone-policy".to_vec())
+            .expect("valid RAM-LFE test secret");
         let (policy, program_policy) =
             sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
         service.register_program_runtime(

@@ -15,7 +15,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./gradlew :core-jvm:build --quiet
 ./gradlew :client-android:assembleRelease --quiet
 
-# Build the default generated native .so files and provenance from Rust source
+# Build generated native .so files and provenance outside the source tree
+export MOBILE_SDK_ANDROID_ARTIFACT_DIR=/absolute/non-symlink/path/to/android-artifacts
+mkdir -p "$MOBILE_SDK_ANDROID_ARTIFACT_DIR"
 ./gradlew :client-android:buildNativeLibs
 
 # Build the production-featured generated native artifacts
@@ -79,18 +81,23 @@ All mutable collections and byte arrays are copied on construction and access. U
 - **Source layout**: main sources under `src/main/java/` (Kotlin files, retained path from Java migration), tests under `src/test/kotlin/`
 - **Native libraries**: `.so` files built from Rust via
   `./gradlew :client-android:buildNativeLibs`, not tracked in git. Raw cargo-ndk
-  output is isolated under `client-android/build/native/cargo-ndk/<mode>/`;
-  compiler state is separately isolated under
-  `client-android/build/native/cargo-target/<mode>/` via `CARGO_TARGET_DIR`;
-  canonically stripped authoritative bytes live under
-  `client-android/build/generated/jniLibs/<mode>/`, with matching provenance in
-  `build/generated/nativeProvenance/<mode>/`. Cargo-ndk output first lands in a
+  output is isolated below
+  `$MOBILE_SDK_ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk/client-android/native/cargo-ndk/<mode>/`;
+  compiler state is separately isolated in the sibling
+  `native/cargo-target/<mode>/` via `CARGO_TARGET_DIR`; canonically stripped
+  authoritative bytes and provenance live in the sibling `generated/` tree.
+  Cargo-ndk output first lands in a
   transient per-ABI staging directory so unrelated workspace `cdylib` outputs
   cannot enter the exact raw inventory. The build verifies its race-stable
   Android source seal after every ABI and immediately before and after each raw
   or stripped/provenance promotion, and binds the dependency-closure fingerprint
   into provenance. AGP packages those generated outputs and explicitly excludes
-  `src/main/jniLibs`.
+  `src/main/jniLibs`. Every ABI uses canonical Rust 1.93.1 `cargo`, `rustc`, and
+  `rustdoc`, plus `CARGO_BUILD_JOBS=1`, `CARGO_INCREMENTAL=0`,
+  `CARGO_NET_OFFLINE=true`, and `RUSTC_BOOTSTRAP=1`. The Cargo command always
+  includes `--locked --offline --jobs 1 -Z unstable-options --lockfile-path`
+  with the canonical repository-root `Cargo.lock`; alternate locks and legacy
+  overrides are rejected.
 
 ## Testing
 

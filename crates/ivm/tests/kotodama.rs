@@ -479,7 +479,7 @@ fn trigger_management_requires_permission() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn add() {
-                ledger::trigger::create(Json::parse("{\"id\":\"t1\"}"));
+                ledger::trigger::register(Json::parse("{\"id\":\"t1\"}"));
                 ledger::trigger::set_enabled(Name::parse("t1"), 1);
             }
         }
@@ -630,8 +630,8 @@ fn compile_register_domain_emits_syscall_0x10() {
 }
 
 #[test]
-fn compile_zk_verify_batch_emits_syscall_0x68() {
-    // Ensure the kotodama intrinsic lowers to SCALL 0x68
+fn compile_zk_verify_batch_emits_syscall_0x64() {
+    // Ensure the Kotodama intrinsic lowers to SCALL 0x64.
     let src = r#"
         seiyaku VerifyBatch {
             kotoage fn verify(bytes p) authorize("ZkVerifier") {
@@ -641,11 +641,11 @@ fn compile_zk_verify_batch_emits_syscall_0x68() {
     "#;
     let compiler = Compiler::new();
     let bytes = compiler.compile_source(src).expect("compile ok");
-    let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, 0x68);
+    let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, 0x64);
     let needle = word.to_le_bytes();
     assert!(
         bytes.windows(4).any(|w| w == needle),
-        "expected SCALL imm8=0x68 (zk_verify_batch) in compiled bytecode"
+        "expected SCALL imm8=0x64 (zk_verify_batch) in compiled bytecode"
     );
 }
 
@@ -1829,7 +1829,6 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
             .expect("parse encoded account literal");
     let asset_def =
         AssetDefinitionId::parse_address_literal(asset_literal).expect("parse canonical asset");
-    assert!(asset_def.is_opaque_canonical());
     let asset_id = AssetId::of(asset_def.clone(), account.clone());
 
     assert!(hints.read_keys.contains(&format!("account:{account}")));
@@ -1839,7 +1838,7 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
     assert!(hints.write_keys.contains(&format!("asset:{asset_id}")));
     assert!(
         !hints.read_keys.iter().any(|key| key.starts_with("domain:")),
-        "opaque canonical asset definitions should not synthesize domain hints",
+        "canonical asset-definition ids must not synthesize domain hints",
     );
 
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");

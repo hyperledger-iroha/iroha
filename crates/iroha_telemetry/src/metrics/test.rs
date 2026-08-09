@@ -1993,6 +1993,7 @@ fn sample_status() -> Status {
         build: BuildStatus {
             version: "2.0.0-rc.test".to_owned(),
             git_commit_sha: "deadbeef".to_owned(),
+            dpn_validator_release_commit: "feedface".to_owned(),
             cargo_features: "telemetry,zk-halo2".to_owned(),
             target_triple: "aarch64-apple-darwin".to_owned(),
         },
@@ -2233,6 +2234,7 @@ fn serialize_status_json() {
         "build": {
             "version": "2.0.0-rc.test",
             "git_commit_sha": "deadbeef",
+            "dpn_validator_release_commit": "feedface",
             "cargo_features": "telemetry,zk-halo2",
             "target_triple": "aarch64-apple-darwin"
         },
@@ -2403,12 +2405,13 @@ fn serialize_status_json() {
         .replace("[\n    \n  ]", "[\n  ]")
         .replace("[\n      \n    ]", "[\n  ]");
     // CAUTION: if this is outdated, make sure to update the documentation:
-    // https://docs.iroha.tech/reference/torii-endpoints.html#status
+    // https://docs.iroha.tech/reference/torii-endpoints.html#status-and-metrics
     let expected = expect_test::expect![[r#"
         {
           "build": {
             "version": "2.0.0-rc.test",
             "git_commit_sha": "deadbeef",
+            "dpn_validator_release_commit": "feedface",
             "cargo_features": "telemetry,zk-halo2",
             "target_triple": "aarch64-apple-darwin"
           },

@@ -585,7 +585,7 @@ mod tests {
         KagemushaActiveReceiverKeyV1 {
             account_id: AccountId::new(public_key),
             device_id: device.to_owned(),
-            asset_definition_id: AssetDefinitionId::new(
+            asset_definition_id: AssetDefinitionId::derive_from_components(
                 crate::domain::DomainId::try_new("wonderland", "universal").expect("asset domain"),
                 "sbd".parse().expect("asset name"),
             ),

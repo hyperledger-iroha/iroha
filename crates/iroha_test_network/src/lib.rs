@@ -8,6 +8,7 @@ pub mod fslock_ports;
 pub use consensus_message_control::{
     ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
     ConsensusMessageControlHeld, ConsensusMessageControlKind, ConsensusMessageControlRule,
+    NativeAmxFaultAck, NativeAmxFaultPhase,
 };
 
 use core::{fmt, future::Future, time::Duration};
@@ -37,7 +38,10 @@ pub use config::chain_id;
 use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
-use iroha::data_model::block::consensus_v2::{QuorumCertificateRef, SumeragiV2Status};
+use iroha::data_model::block::consensus_v2::{
+    MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, QuorumCertificateRef, SumeragiV2Status,
+    is_valid_committee_size,
+};
 use iroha::{client::Client, data_model::prelude::*};
 use iroha_config::base::{
     ParameterOrigin,
@@ -45,8 +49,11 @@ use iroha_config::base::{
     read::ConfigReader,
     toml::{TomlSource, WriteExt as _, Writer as TomlWriter},
 };
-use iroha_core::sumeragi::consensus::{
-    NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
+use iroha_core::sumeragi::{
+    consensus::{
+        NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
+    },
+    signed_genesis_voting_peers,
 };
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey, sha256,
@@ -126,6 +133,23 @@ const TEST_SNS_LEASE_VISIBILITY_POLL: Duration = Duration::from_millis(250);
 fn checked_key_pair_from_seed(seed: impl Into<Vec<u8>>, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(seed.into(), algorithm)
         .expect("fixture seed must derive a valid keypair")
+}
+
+const P2P_SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b":p2p-soranet-transport";
+
+fn checked_soranet_transport_key_pair_from_seed(mut seed: Vec<u8>) -> KeyPair {
+    seed.extend_from_slice(P2P_SORANET_TRANSPORT_SEED_DOMAIN);
+    checked_key_pair_from_seed(seed, Algorithm::Ed25519)
+}
+
+fn random_soranet_transport_key_pair_distinct_from(streaming: &KeyPair) -> KeyPair {
+    loop {
+        let candidate = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked random SoraNet transport keypair");
+        if candidate.public_key() != streaming.public_key() {
+            return candidate;
+        }
+    }
 }
 
 pub use crate::config::genesis as genesis_factory;
@@ -475,6 +499,26 @@ const STATUS_FALLBACK_INTERVAL: Duration = Duration::from_secs(2);
 type GenesisBuilderFn = Arc<
     dyn Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
 >;
+
+fn revision4_committee_at_least(min_peers: usize) -> Option<usize> {
+    (MIN_VALIDATORS_PER_HEIGHT..=MAX_VALIDATORS_PER_HEIGHT)
+        .step_by(3)
+        .find(|peers| *peers >= min_peers)
+}
+
+fn assert_genesis_voting_roster_matches_network(genesis: &GenesisBlock, expected_peers: &[PeerId]) {
+    let actual = signed_genesis_voting_peers(genesis)
+        .unwrap_or_else(|error| {
+            panic!("test-network genesis has an invalid voting roster: {error}")
+        })
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let expected = expected_peers.iter().cloned().collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual, expected,
+        "signed test-network genesis voting roster must exactly match the guarded validator topology"
+    );
+}
 
 fn read_env_duration(var: &str, default: Duration) -> Duration {
     if let Ok(val) = std::env::var(var) {
@@ -3317,28 +3361,6 @@ impl Network {
         );
     }
 
-    /// Add a validator peer to the network and its genesis topology.
-    pub fn add_peer(&mut self, peer: &NetworkPeer) {
-        self.peers.push(peer.clone());
-        if let Some(pop) = peer.genesis_pop() {
-            self.topology_entries.push(pop);
-        }
-        self.cached_genesis = OnceLock::new();
-        self.cached_genesis_augmented = OnceLock::new();
-    }
-
-    /// Remove a validator peer from the network and its genesis topology.
-    pub fn remove_peer(&mut self, peer: &NetworkPeer) {
-        self.peers.retain(|x| x != peer);
-        if let Some(bls_pk) = peer.bls_public_key() {
-            let bls_pk = bls_pk.clone();
-            self.topology_entries
-                .retain(|entry| entry.peer.public_key != bls_pk);
-        }
-        self.cached_genesis = OnceLock::new();
-        self.cached_genesis_augmented = OnceLock::new();
-    }
-
     /// Access voting validator peers.
     ///
     /// This preserves the pre-observer meaning of `peers()`: callers may use
@@ -4034,8 +4056,12 @@ impl Network {
     ///
     /// It uses the basic [`genesis_factory`] with [`Self::genesis_isi`],
     /// post-topology bootstrap instructions, and the network peer topology.
+    /// The signed voting roster is rechecked against the guarded validator
+    /// topology before any cached or newly generated block is returned.
     pub fn genesis(&self) -> GenesisBlock {
+        let peer_topology: Vec<PeerId> = self.peers.iter().map(NetworkPeer::id).collect();
         if let Some(augmented) = self.cached_genesis_augmented.get() {
+            assert_genesis_voting_roster_matches_network(augmented, &peer_topology);
             return augmented.clone();
         }
         let config_layers: Vec<Table> = self.config_layers().map(Cow::into_owned).collect();
@@ -4058,7 +4084,6 @@ impl Network {
         ));
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
         let genesis_account_id = AccountId::new(self.genesis_key_pair.public_key().clone());
-        let peer_topology: Vec<PeerId> = self.peers.iter().map(NetworkPeer::id).collect();
         let recompute_staged_hashes = |block: &GenesisBlock| {
             config::staged_genesis_policy_hashes(
                 block,
@@ -4100,6 +4125,7 @@ impl Network {
                 cached_genesis,
                 &consensus_handshake_meta,
             ) {
+                assert_genesis_voting_roster_matches_network(cached_genesis, &peer_topology);
                 assert_signed_staged_hashes(recompute_staged_hashes(cached_genesis));
                 return cached_genesis.clone();
             }
@@ -4128,6 +4154,7 @@ impl Network {
                 zk_config.as_ref(),
                 actual_config.as_ref(),
             );
+            assert_genesis_voting_roster_matches_network(&augmented, &peer_topology);
             assert_signed_staged_hashes(recompute_staged_hashes(&augmented));
             let _ = self.cached_genesis_augmented.set(augmented.clone());
             return augmented;
@@ -4151,6 +4178,7 @@ impl Network {
                 None,
                 confidential_policy_hash,
             );
+        assert_genesis_voting_roster_matches_network(&genesis, &peer_topology);
         assert_signed_staged_hashes(staged_hash);
         let _ = self.cached_genesis.set(genesis.clone());
         genesis
@@ -5833,6 +5861,34 @@ const SORA_PROFILE_STREAM_PUBLIC_KEY: &str =
 const SORA_PROFILE_STREAM_PRIVATE_KEY: &str =
     "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
 static SORA_PROFILE_STREAM_KEYPAIR: OnceLock<KeyPair> = OnceLock::new();
+static SORA_PROFILE_SORANET_TRANSPORT_KEYPAIR: OnceLock<KeyPair> = OnceLock::new();
+
+// Schema-completion sentinel used only while projecting genesis-dependent
+// runtime configuration before the signed genesis block exists. It is never
+// emitted into a peer run config and must not be treated as a trust anchor.
+const NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION: &str =
+    "0000000000000000000000000000000000000000000000000000000000000001";
+
+fn genesis_expected_hash_config_literal(hash_body: &str) -> String {
+    norito::literal::format("hash", &hash_body.to_ascii_uppercase())
+}
+
+fn ensure_non_runtime_genesis_expected_hash_for_config_projection(table: &mut Table) {
+    let genesis = table
+        .entry("genesis".to_owned())
+        .or_insert_with(|| Value::Table(Table::new()));
+    let Some(genesis) = genesis.as_table_mut() else {
+        // Preserve an invalid non-table value so normal config parsing reports it.
+        return;
+    };
+    genesis
+        .entry("expected_hash".to_owned())
+        .or_insert_with(|| {
+            Value::String(genesis_expected_hash_config_literal(
+                NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION,
+            ))
+        });
+}
 
 fn sora_profile_bls_pop_hex() -> &'static str {
     SORA_PROFILE_BLS_POP_HEX.get_or_init(|| {
@@ -5902,6 +5958,8 @@ fn sora_profile_detection_defaults() -> Table {
             .expect("sora profile streaming private key should parse");
         KeyPair::new(public_key, private_key).expect("sora profile streaming keypair should match")
     });
+    let soranet_transport_keypair = SORA_PROFILE_SORANET_TRANSPORT_KEYPAIR
+        .get_or_init(|| checked_soranet_transport_key_pair_from_seed(b"sora-profile".to_vec()));
     let p2p_literal = socket_addr!(127.0.0.1:1337).to_literal();
     let torii_literal = socket_addr!(127.0.0.1:8080).to_literal();
     let mut table = Table::new()
@@ -5910,6 +5968,14 @@ fn sora_profile_detection_defaults() -> Table {
         .write(
             "private_key",
             ExposedPrivateKey(bls_keypair.private_key().clone()).to_string(),
+        )
+        .write(
+            "soranet_transport_public_key",
+            soranet_transport_keypair.public_key().to_string(),
+        )
+        .write(
+            "soranet_transport_private_key",
+            ExposedPrivateKey(soranet_transport_keypair.private_key().clone()).to_string(),
         )
         .write(
             ["streaming", "identity_public_key"],
@@ -5926,13 +5992,15 @@ fn sora_profile_detection_defaults() -> Table {
             ["genesis", "public_key"],
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().to_string(),
         );
+    ensure_non_runtime_genesis_expected_hash_for_config_projection(&mut table);
     ensure_sora_profile_trusted_peer_pop(&mut table);
     table
 }
 
-fn apply_streaming_identity_defaults_for_detection(merged: &mut Table) {
-    // Profile detection does not depend on streaming identity, but config parsing does.
-    // Always force the deterministic Ed25519 keys so BLS identities never trip validation here.
+fn apply_identity_defaults_for_detection(merged: &mut Table) {
+    // Profile detection does not depend on the streaming or SoraNet transport identities, but
+    // config parsing does. Force distinct deterministic Ed25519 keys so the BLS node identity
+    // never leaks into either transport-specific role during profile projection.
     let mut streaming = match merged.remove("streaming") {
         Some(Value::Table(table)) => table,
         _ => Table::new(),
@@ -5946,6 +6014,19 @@ fn apply_streaming_identity_defaults_for_detection(merged: &mut Table) {
         Value::String(SORA_PROFILE_STREAM_PRIVATE_KEY.to_string()),
     );
     merged.insert("streaming".into(), Value::Table(streaming));
+
+    let soranet_transport_keypair = SORA_PROFILE_SORANET_TRANSPORT_KEYPAIR
+        .get_or_init(|| checked_soranet_transport_key_pair_from_seed(b"sora-profile".to_vec()));
+    merged.insert(
+        "soranet_transport_public_key".into(),
+        Value::String(soranet_transport_keypair.public_key().to_string()),
+    );
+    merged.insert(
+        "soranet_transport_private_key".into(),
+        Value::String(
+            ExposedPrivateKey(soranet_transport_keypair.private_key().clone()).to_string(),
+        ),
+    );
 }
 
 fn merged_sora_profile_detection_config(config_layers: &[Table]) -> Table {
@@ -5953,7 +6034,7 @@ fn merged_sora_profile_detection_config(config_layers: &[Table]) -> Table {
     for layer in config_layers {
         merge_tables(&mut merged, layer);
     }
-    apply_streaming_identity_defaults_for_detection(&mut merged);
+    apply_identity_defaults_for_detection(&mut merged);
     ensure_sora_profile_trusted_peer_pop(&mut merged);
     merged
 }
@@ -6095,9 +6176,10 @@ fn resolve_kura_store_dir(
 }
 
 fn parse_actual_config_for_genesis(
-    merged: Table,
+    mut merged: Table,
     config_layers: &[Table],
 ) -> Option<iroha_config::parameters::actual::Root> {
+    ensure_non_runtime_genesis_expected_hash_for_config_projection(&mut merged);
     let reader = ConfigReader::new()
         .with_env(MockEnv::default())
         .with_toml_source(TomlSource::inline(merged));
@@ -6601,11 +6683,15 @@ impl NetworkBuilder {
         builder
     }
 
-    /// Set the number of peers in the network.
+    /// Set the exact revision-4 `3f + 1` validator count for the network.
     ///
-    /// One by default.
+    /// Four by default. Invalid or out-of-range committee sizes panic before
+    /// any peer, signed genesis, or runtime configuration is constructed.
     pub fn with_peers(mut self, n_peers: usize) -> Self {
-        assert_ne!(n_peers, 0);
+        assert!(
+            is_valid_committee_size(n_peers),
+            "validator peer count must be an exact revision-4 3f + 1 committee in {MIN_VALIDATORS_PER_HEIGHT}..={MAX_VALIDATORS_PER_HEIGHT}, got {n_peers}"
+        );
         if let Some(bootstrap) = self.observer_p2p_bootstrap {
             bootstrap
                 .validate_for_validators(n_peers, ObserverP2pBootstrap::connection_capacity())
@@ -6685,20 +6771,29 @@ impl NetworkBuilder {
         self
     }
 
-    /// Ensure the network has at least `min_peers` peers.
+    /// Ensure the network has the smallest revision-4 committee with at least `min_peers` peers.
     ///
-    /// If the current peer count is below `min_peers`, it is raised to that value.
+    /// Values between valid committee sizes round up. A zero minimum or a
+    /// minimum above the protocol ceiling panics before construction.
     pub fn with_min_peers(mut self, min_peers: usize) -> Self {
         assert_ne!(min_peers, 0);
-        if self.n_peers < min_peers {
+        let target_peers = revision4_committee_at_least(min_peers).unwrap_or_else(|| {
+            panic!(
+                "minimum validator peer count must not exceed revision-4 ceiling {MAX_VALIDATORS_PER_HEIGHT}, got {min_peers}"
+            )
+        });
+        if self.n_peers < target_peers {
             if let Some(bootstrap) = self.observer_p2p_bootstrap {
                 bootstrap
-                    .validate_for_validators(min_peers, ObserverP2pBootstrap::connection_capacity())
+                    .validate_for_validators(
+                        target_peers,
+                        ObserverP2pBootstrap::connection_capacity(),
+                    )
                     .unwrap_or_else(|error| {
                         panic!("invalid observer bootstrap after minimum peer change: {error}")
                     });
             }
-            self.n_peers = min_peers;
+            self.n_peers = target_peers;
         }
         self
     }
@@ -6906,7 +7001,9 @@ impl NetworkBuilder {
     /// re-signs the affected transactions and block with the configured genesis
     /// key, and pre-executes under the exact final pipeline, Nexus, and ZK runtime
     /// configuration. It then binds the staged Nexus/AMX context and caches the
-    /// identical final bytes supplied to every peer.
+    /// identical final bytes supplied to every peer. A custom block whose signed
+    /// voting roster differs from the guarded builder topology is rejected before
+    /// consensus parameters are derived.
     pub fn with_genesis_block<F>(mut self, build: F) -> Self
     where
         F: Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
@@ -7132,6 +7229,9 @@ impl NetworkBuilder {
         let custom_genesis_block = custom_genesis
             .as_ref()
             .map(|builder_fn| builder_fn(peer_ids.clone(), topology_entries.clone()));
+        if let Some(custom) = custom_genesis_block.as_ref() {
+            assert_genesis_voting_roster_matches_network(custom, &peer_topology);
+        }
         let cached_genesis = OnceLock::new();
         let cached_genesis_augmented = OnceLock::new();
 
@@ -7203,10 +7303,11 @@ impl NetworkBuilder {
             let ivm_domain = DomainId::try_new("ivm", "universal").expect("ivm domain");
             let universal_domain =
                 DomainId::try_new("universal", "universal").expect("universal domain");
-            let stake_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("nexus", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            );
+            let stake_asset_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("nexus", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                );
             let fee_asset_id: AssetDefinitionId =
                 iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
                     .parse()
@@ -7237,12 +7338,22 @@ impl NetworkBuilder {
                 );
             config_layers.push(bootstrap_layer);
 
-            let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
-                .with_name("NPOS Stake".to_owned())
-                .with_metadata(Metadata::default());
-            let fee_definition = AssetDefinition::new(fee_asset_id.clone(), NumericSpec::default())
-                .with_name("Nexus Fee".to_owned())
-                .with_metadata(Metadata::default());
+            let definition = AssetDefinition::new(
+                stake_asset_id.clone(),
+                "NPOS Stake".to_owned(),
+                NumericSpec::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(Metadata::default());
+            let fee_definition = AssetDefinition::new(
+                fee_asset_id.clone(),
+                "Nexus Fee".to_owned(),
+                NumericSpec::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .with_metadata(Metadata::default());
             let fee_seed_amount = 1_000_000_u32;
 
             let mut bootstrap_tx = vec![
@@ -7469,6 +7580,7 @@ impl NetworkBuilder {
                         }),
                         confidential_policy_hash,
                     );
+                    assert_genesis_voting_roster_matches_network(&preview_genesis, &peer_topology);
                     (
                         consensus_parameters_from_genesis(&preview_genesis),
                         Some(staged_hash),
@@ -7621,7 +7733,7 @@ impl NetworkBuilder {
                 .expect("final custom genesis should be cached exactly once");
         }
 
-        Network {
+        let mut network = Network {
             env,
             peers,
             observers,
@@ -7642,7 +7754,22 @@ impl NetworkBuilder {
             topology_entries,
             auto_populate_trusted_peer_pops,
             _permit: permit,
-        }
+        };
+
+        // The test-network generator is the operator provisioning both the
+        // signed in-memory genesis and its independent runtime trust anchor.
+        // Insert this generated layer before caller layers so deliberate
+        // wrong-hash configurations remain observable by negative tests.
+        let expected_hash_layer = Table::new().write(
+            ["genesis", "expected_hash"],
+            genesis_expected_hash_config_literal(&network.genesis().0.hash().to_string()),
+        );
+        debug_assert!(
+            !network.config_layers.is_empty(),
+            "test network must retain its generated base config layer"
+        );
+        network.config_layers.insert(1, expected_hash_layer);
+        network
     }
 
     /// Same as [`Self::build`], but also creates a [`Runtime`].
@@ -7810,6 +7937,7 @@ pub struct NetworkPeer {
     span: tracing::Span,
     key_pair: KeyPair,
     streaming_key_pair: KeyPair,
+    soranet_transport_key_pair: KeyPair,
     bls_key_pair: Option<KeyPair>,
     bls_pop: Option<Vec<u8>>,
     dir: PathBuf,
@@ -8866,6 +8994,16 @@ impl NetworkPeer {
         self.streaming_key_pair.public_key()
     }
 
+    /// Return the dedicated Ed25519 key pair used by this peer's SoraNet transport.
+    pub fn soranet_transport_key_pair(&self) -> &KeyPair {
+        &self.soranet_transport_key_pair
+    }
+
+    /// Return the dedicated SoraNet transport public key.
+    pub fn soranet_transport_public_key(&self) -> &PublicKey {
+        self.soranet_transport_key_pair.public_key()
+    }
+
     pub fn bls_key_pair(&self) -> Option<&KeyPair> {
         self.bls_key_pair.as_ref()
     }
@@ -9022,12 +9160,10 @@ impl NetworkPeer {
         let status_timeout = client_status_timeout_env();
         let request_timeout = client_request_timeout_env();
         let ttl = client_ttl_env(status_timeout);
-        let default_account_domain = iroha_data_model::domain::DomainId::try_new(
-            iroha::account_address::default_domain_name().as_ref(),
-            "universal",
-        )
-        .expect("default account domain should be fully qualified")
-        .to_string();
+        let default_account_domain =
+            iroha_data_model::domain::DomainId::try_new("default", "universal")
+                .expect("explicit client convenience domain")
+                .to_string();
         let config = ConfigReader::new()
             .with_toml_source(TomlSource::inline(
                 Table::new()
@@ -9262,6 +9398,15 @@ impl NetworkPeer {
                 ExposedPrivateKey(self.key_pair.private_key().clone()).to_string(),
             )
             .write(
+                "soranet_transport_public_key",
+                self.soranet_transport_public_key().to_string(),
+            )
+            .write(
+                "soranet_transport_private_key",
+                ExposedPrivateKey(self.soranet_transport_key_pair.private_key().clone())
+                    .to_string(),
+            )
+            .write(
                 ["streaming", "identity_public_key"],
                 self.streaming_public_key().to_string(),
             )
@@ -9463,8 +9608,22 @@ impl NetworkPeerBuilder {
             .as_ref()
             .map(|seed_bytes| checked_key_pair_from_seed(seed_bytes.clone(), Algorithm::Ed25519))
             .unwrap_or_else(|| {
-                KeyPair::try_random().expect("generate checked random streaming keypair")
+                KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+                    .expect("generate checked random streaming keypair")
             });
+        let soranet_transport_key_pair = seed.as_ref().map_or_else(
+            || random_soranet_transport_key_pair_distinct_from(&streaming_key_pair),
+            |seed_bytes| {
+                let pair =
+                    checked_soranet_transport_key_pair_from_seed(seed_bytes.clone());
+                assert_ne!(
+                    pair.public_key(),
+                    streaming_key_pair.public_key(),
+                    "domain-separated SoraNet transport identity must differ from streaming identity"
+                );
+                pair
+            },
+        );
 
         let bls_key = if let Some(mut seed_bytes) = seed.clone() {
             seed_bytes.extend_from_slice(b":bls");
@@ -9509,6 +9668,7 @@ impl NetworkPeerBuilder {
             span,
             key_pair,
             streaming_key_pair,
+            soranet_transport_key_pair,
             bls_key_pair,
             bls_pop,
             dir,
@@ -9672,569 +9832,7 @@ impl Drop for PeerStderrBuffer {
 }
 
 #[cfg(test)]
-mod post_genesis_liveness_tests {
-    use tokio::sync::broadcast;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn detects_none_when_timer_expires() {
-        let (_tx, rx) = broadcast::channel(4);
-        assert!(
-            detect_peer_termination(rx, Duration::from_millis(25))
-                .await
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn detects_killed_event() {
-        let (tx, rx) = broadcast::channel(4);
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            let _ = tx.send(PeerLifecycleEvent::Killed);
-        });
-
-        assert_eq!(
-            detect_peer_termination(rx, Duration::from_secs(1)).await,
-            Some(TerminationKind::Killed)
-        );
-    }
-
-    #[test]
-    fn advances_next_height_for_each_block() {
-        let mut block_height = BlockHeight {
-            total: 1,
-            non_empty: 1,
-        };
-        let mut next_height = block_height.total.checked_add(1).expect("setup overflow");
-
-        advance_block_height(&mut block_height, &mut next_height, 2, false);
-        advance_block_height(&mut block_height, &mut next_height, 3, true);
-
-        assert_eq!(block_height.total, 3);
-        assert_eq!(block_height.non_empty, 2);
-        assert_eq!(next_height, 4);
-    }
-}
-
-#[cfg(test)]
-mod start_event_tests {
-    use tokio::sync::broadcast;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn waits_until_server_started_event() {
-        let (tx, rx) = broadcast::channel(4);
-        tokio::spawn(async move {
-            let _ = tx.send(PeerLifecycleEvent::Spawned);
-            let _ = tx.send(PeerLifecycleEvent::BlockApplied { height: 1 });
-            let _ = tx.send(PeerLifecycleEvent::ServerStarted);
-        });
-
-        let event = wait_for_start_event(rx).await;
-        assert!(matches!(event, Some(PeerLifecycleEvent::ServerStarted)));
-    }
-
-    #[test]
-    fn storage_fallback_requires_bootstrap_grace_running_and_block_1() {
-        let grace = START_CHECKED_STORAGE_FALLBACK_GRACE;
-        assert!(!start_checked_storage_fallback_ready(
-            false, grace, true, true
-        ));
-        assert!(!start_checked_storage_fallback_ready(
-            true,
-            grace.saturating_sub(Duration::from_millis(1)),
-            true,
-            true
-        ));
-        assert!(!start_checked_storage_fallback_ready(
-            true, grace, false, true
-        ));
-        assert!(!start_checked_storage_fallback_ready(
-            true, grace, true, false
-        ));
-    }
-
-    #[test]
-    fn storage_fallback_allows_ready_bootstrap_peer() {
-        assert!(start_checked_storage_fallback_ready(
-            true,
-            START_CHECKED_STORAGE_FALLBACK_GRACE,
-            true,
-            true
-        ));
-    }
-}
-
-#[cfg(test)]
-mod diagnostics_tests {
-    use tempfile::tempdir;
-
-    use super::*;
-
-    #[test]
-    fn snapshot_dir_entries_are_sorted_and_truncated() {
-        let dir = tempdir().expect("tempdir");
-        for name in ["z", "a", "c", "b", "y", "x"] {
-            let path = dir.path().join(name);
-            std::fs::write(path, name).expect("create file");
-        }
-        let entries = snapshot_dir_entries(dir.path(), 3);
-        assert_eq!(entries[0], "a");
-        assert_eq!(entries[1], "b");
-        assert_eq!(entries[2], "c");
-        assert!(
-            entries.last().unwrap().starts_with("(+"),
-            "should include truncation marker"
-        );
-    }
-
-    #[test]
-    fn snapshot_snippet_keeps_short_strings_intact() {
-        let message = "ok";
-        assert_eq!(snapshot_snippet(message), message);
-    }
-
-    #[test]
-    fn snapshot_snippet_truncates_and_marks_long_messages() {
-        let message = "a".repeat(SNAPSHOT_MESSAGE_SNIPPET_MAX_CHARS + 5);
-        let snippet = snapshot_snippet(&message);
-        assert_eq!(
-            snippet.len(),
-            SNAPSHOT_MESSAGE_SNIPPET_MAX_CHARS + '…'.len_utf8()
-        );
-        assert!(
-            snippet.ends_with('…'),
-            "snippet should mark truncation with an ellipsis"
-        );
-    }
-
-    #[test]
-    fn storage_snapshot_detects_existing_pipeline_entries() {
-        let dir = tempdir().expect("tempdir");
-        let storage = dir.path().join("storage");
-        let blocks = storage.join("blocks").join("lane_000_default");
-        let pipeline = blocks.join("pipeline");
-        std::fs::create_dir_all(&pipeline).expect("pipeline dir");
-        std::fs::create_dir_all(&blocks).expect("block dir");
-        std::fs::write(pipeline.join(PIPELINE_SIDECARS_DATA_FILE), b"genesis")
-            .expect("pipeline data file");
-        std::fs::write(
-            pipeline.join(PIPELINE_SIDECARS_INDEX_FILE),
-            vec![0u8; PIPELINE_INDEX_ENTRY_SIZE_U64 as usize],
-        )
-        .expect("pipeline index file");
-
-        let snapshot = PeerStorageSnapshot::capture(storage.clone(), true);
-        assert!(snapshot.store_exists);
-        assert!(snapshot.has_block_1_artifact);
-        assert!(
-            snapshot
-                .pipeline_entries
-                .iter()
-                .any(|entry| entry == PIPELINE_SIDECARS_DATA_FILE),
-            "expected pipeline snapshot to include sidecar data file"
-        );
-    }
-}
-
-#[cfg(test)]
-mod shutdown_tests {
-    use std::process::Stdio;
-
-    use tempfile::tempdir;
-    use tokio::fs::File;
-    use tokio::io::{AsyncWriteExt, duplex};
-    use tokio::process::Command;
-
-    use super::*;
-
-    #[cfg(target_family = "unix")]
-    #[tokio::test]
-    async fn shutdown_prefers_sigterm_before_sigquit() {
-        let dir = tempdir().expect("tempdir");
-        let signal_log = dir.path().join("signals.log");
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(
-            r#": > "$SIGNAL_LOG"; trap 'echo SIGTERM >> "$SIGNAL_LOG"; exit 0' TERM; trap 'echo SIGQUIT >> "$SIGNAL_LOG"; exit 0' QUIT; while true; do sleep 1; done"#,
-        );
-        cmd.env("SIGNAL_LOG", &signal_log);
-        cmd.stdout(Stdio::null()).stderr(Stdio::null());
-        let child = cmd.spawn().expect("spawn signal trapper");
-
-        let (events, _rx) = broadcast::channel(4);
-        let (block_height, _rx) = watch::channel(None);
-        let (_fatal_tx, fatal_rx) = watch::channel(false);
-        let mut peer_exit = PeerExit {
-            child,
-            span: tracing::Span::none(),
-            is_running: Arc::new(AtomicBool::new(true)),
-            is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
-            events,
-            block_height,
-            fatal_rx,
-            stderr_log_ready: Arc::new(Notify::new()),
-            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
-        };
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let _status = peer_exit
-            .shutdown_or_kill()
-            .await
-            .expect("shutdown should complete");
-
-        let log = std::fs::read_to_string(&signal_log).expect("read signal log");
-        assert!(
-            log.contains("SIGTERM"),
-            "expected SIGTERM handler to run, log: {log:?}"
-        );
-        assert!(
-            !log.contains("SIGQUIT"),
-            "SIGQUIT should not be used for a responsive shutdown, log: {log:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn shutdown_treats_already_exited_child_as_graceful_completion() {
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg("exit 0");
-        cmd.stdout(Stdio::null()).stderr(Stdio::null());
-        let child = cmd.spawn().expect("spawn short-lived child");
-
-        let (events, _rx) = broadcast::channel(4);
-        let (block_height, _rx) = watch::channel(None);
-        let (_fatal_tx, fatal_rx) = watch::channel(false);
-        let mut peer_exit = PeerExit {
-            child,
-            span: tracing::Span::none(),
-            is_running: Arc::new(AtomicBool::new(true)),
-            is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
-            events,
-            block_height,
-            fatal_rx,
-            stderr_log_ready: Arc::new(Notify::new()),
-            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
-        };
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let status = peer_exit
-            .shutdown_or_kill()
-            .await
-            .expect("already-exited child should be handled cleanly");
-
-        assert!(
-            status.success(),
-            "expected successful exit status, got {status:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn monitor_handles_shutdown_race_after_child_already_exited() {
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg("exit 0");
-        cmd.stdout(Stdio::null()).stderr(Stdio::null());
-        let child = cmd.spawn().expect("spawn short-lived child");
-
-        let (events, _rx) = broadcast::channel(4);
-        let (block_height, _rx) = watch::channel(None);
-        let (_fatal_tx, fatal_rx) = watch::channel(false);
-        let stderr_log_ready = Arc::new(Notify::new());
-        let peer_exit = PeerExit {
-            child,
-            span: tracing::Span::none(),
-            is_running: Arc::new(AtomicBool::new(true)),
-            is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
-            events,
-            block_height,
-            fatal_rx,
-            stderr_log_ready: Arc::clone(&stderr_log_ready),
-            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
-        };
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            stderr_log_ready.notify_waiters();
-        });
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        shutdown_tx
-            .send(())
-            .expect("shutdown signal should be delivered");
-
-        tokio::time::timeout(Duration::from_secs(1), peer_exit.monitor(shutdown_rx))
-            .await
-            .expect("peer monitor should complete")
-            .expect("already-exited child should be treated as graceful during shutdown race");
-    }
-
-    #[tokio::test]
-    async fn log_drain_exits_on_shutdown_notify() {
-        let dir = tempdir().expect("tempdir");
-        let log_path = dir.path().join("stdout.log");
-        let file = File::create(&log_path).await.expect("create log file");
-        let (mut writer, reader) = duplex(64);
-        let (fatal_tx, fatal_rx) = watch::channel(false);
-        let is_running = Arc::new(AtomicBool::new(true));
-        let handle = tokio::spawn(drain_log_lines(
-            reader,
-            file,
-            fatal_rx,
-            is_running.clone(),
-            |_| {},
-            None,
-            "stdout",
-        ));
-
-        writer.write_all(b"hello\n").await.expect("write line");
-        writer.flush().await.expect("flush");
-        is_running.store(false, Ordering::Relaxed);
-        let _ = fatal_tx.send(true);
-
-        tokio::time::timeout(Duration::from_secs(1), handle)
-            .await
-            .expect("log task should exit")
-            .expect("log task should not panic");
-    }
-}
-
-#[cfg(test)]
-mod sora_profile_tests {
-    use super::*;
-
-    #[test]
-    fn sora_profile_detection_defaults_parse_with_bls_keys() {
-        let defaults = sora_profile_detection_defaults();
-        let config =
-            iroha_config::parameters::actual::Root::from_toml_source(TomlSource::inline(defaults))
-                .expect("sora profile detection defaults should parse");
-        assert_eq!(
-            config.streaming.key_material.identity().algorithm(),
-            iroha_crypto::Algorithm::Ed25519
-        );
-        let trusted = config.common.trusted_peers.value();
-        let myself_pk = trusted.myself.id().public_key().clone();
-        let pop = trusted
-            .pops
-            .get(&myself_pk)
-            .expect("sora profile default must provide PoP for self");
-        iroha_crypto::bls_normal_pop_verify(&myself_pk, pop)
-            .expect("sora profile default PoP should verify");
-    }
-
-    #[test]
-    fn sora_profile_detection_overrides_streaming_identity_keys() {
-        let mut streaming = Table::new();
-        streaming.insert(
-            "identity_public_key".into(),
-            Value::String(SORA_PROFILE_BLS_PUBLIC_KEY.to_string()),
-        );
-        streaming.insert(
-            "identity_private_key".into(),
-            Value::String(SORA_PROFILE_BLS_PRIVATE_KEY.to_string()),
-        );
-        let mut layer = Table::new();
-        layer.insert("streaming".into(), Value::Table(streaming));
-
-        let merged = merged_sora_profile_detection_config(&[layer]);
-        let config =
-            iroha_config::parameters::actual::Root::from_toml_source(TomlSource::inline(merged))
-                .expect("merged sora profile detection config should parse");
-        assert_eq!(
-            config.streaming.key_material.identity().algorithm(),
-            iroha_crypto::Algorithm::Ed25519
-        );
-    }
-
-    #[test]
-    fn sora_profile_detection_pop_survives_trusted_peers_pop_override() {
-        let other =
-            checked_key_pair_from_seed(b"sora-profile-pop-merge".to_vec(), Algorithm::BlsNormal);
-        let other_pop =
-            iroha_crypto::bls_normal_pop_prove(other.private_key()).expect("BLS PoP generation");
-        let other_pk = other.public_key().to_string();
-
-        let mut pop_entry = Table::new();
-        pop_entry.insert("public_key".into(), Value::String(other_pk.clone()));
-        pop_entry.insert(
-            "pop_hex".into(),
-            Value::String(format!("0x{}", hex_lower(&other_pop))),
-        );
-        let mut layer = Table::new();
-        layer.insert(
-            "trusted_peers_pop".into(),
-            Value::Array(vec![Value::Table(pop_entry)]),
-        );
-
-        let merged = merged_sora_profile_detection_config(&[layer]);
-        let entries = merged
-            .get("trusted_peers_pop")
-            .and_then(Value::as_array)
-            .expect("trusted_peers_pop array");
-        let mut has_default = false;
-        let mut has_other = false;
-        for entry in entries {
-            let Some(table) = entry.as_table() else {
-                continue;
-            };
-            if let Some(pk) = table.get("public_key").and_then(Value::as_str) {
-                if pk == SORA_PROFILE_BLS_PUBLIC_KEY {
-                    has_default = true;
-                }
-                if pk == other_pk {
-                    has_other = true;
-                }
-            }
-        }
-        assert!(has_default, "sora profile PoP should be retained");
-        assert!(has_other, "caller-supplied PoP should be retained");
-    }
-
-    #[test]
-    fn sora_profile_detection_is_false_for_defaults() {
-        assert!(!config_requires_sora_profile(&[Table::new()]));
-    }
-
-    #[test]
-    fn sora_profile_detection_allows_enabled_nexus_without_overrides() {
-        let mut nexus = toml::map::Map::new();
-        nexus.insert("enabled".into(), toml::Value::Boolean(true));
-
-        let mut table = Table::new();
-        table.insert("nexus".into(), toml::Value::Table(nexus));
-
-        assert!(!config_requires_sora_profile(&[table]));
-    }
-
-    #[test]
-    fn sora_profile_detection_flags_nexus_lane_overrides() {
-        let mut lane = toml::map::Map::new();
-        lane.insert("alias".into(), toml::Value::String("lane0".into()));
-        lane.insert("index".into(), toml::Value::Integer(0));
-        let mut metadata = toml::map::Map::new();
-        metadata.insert(
-            "scheduler.teu_capacity".into(),
-            toml::Value::String("262144".into()),
-        );
-        lane.insert("metadata".into(), toml::Value::Table(metadata));
-
-        let mut fusion = toml::map::Map::new();
-        fusion.insert("floor_teu".into(), toml::Value::Integer(131_072));
-        fusion.insert("exit_teu".into(), toml::Value::Integer(262_144));
-
-        let mut audit = toml::map::Map::new();
-        audit.insert("sample_size".into(), toml::Value::Integer(1));
-        audit.insert("window_count".into(), toml::Value::Integer(1));
-        audit.insert("interval_ms".into(), toml::Value::Integer(60_000));
-
-        let mut da = toml::map::Map::new();
-        da.insert("q_in_slot_total".into(), toml::Value::Integer(1));
-        da.insert("q_in_slot_per_ds_min".into(), toml::Value::Integer(1));
-        da.insert("sample_size_base".into(), toml::Value::Integer(1));
-        da.insert("sample_size_max".into(), toml::Value::Integer(1));
-        da.insert("threshold_base".into(), toml::Value::Integer(1));
-        da.insert("per_attester_shards".into(), toml::Value::Integer(1));
-        da.insert("audit".into(), toml::Value::Table(audit));
-
-        let mut nexus = toml::map::Map::new();
-        nexus.insert("enabled".into(), toml::Value::Boolean(true));
-        nexus.insert("lane_count".into(), toml::Value::Integer(1));
-        nexus.insert(
-            "lane_catalog".into(),
-            toml::Value::Array(vec![toml::Value::Table(lane)]),
-        );
-        nexus.insert("fusion".into(), toml::Value::Table(fusion));
-        nexus.insert("da".into(), toml::Value::Table(da));
-
-        let mut table = Table::new();
-        table.insert("nexus".into(), toml::Value::Table(nexus));
-
-        assert!(config_requires_sora_profile(&[table]));
-    }
-
-    #[test]
-    fn sora_profile_detection_ignores_default_routing_policy() {
-        let mut policy = toml::map::Map::new();
-        policy.insert("default_lane".into(), toml::Value::Integer(0));
-        policy.insert(
-            "default_dataspace".into(),
-            toml::Value::String("universal".into()),
-        );
-
-        let mut nexus = toml::map::Map::new();
-        nexus.insert("routing_policy".into(), toml::Value::Table(policy));
-
-        let mut table = Table::new();
-        table.insert("nexus".into(), toml::Value::Table(nexus));
-
-        assert!(!config_requires_sora_profile(&[table]));
-    }
-
-    #[test]
-    fn raw_nexus_overrides_ignores_default_routing_policy() {
-        let mut policy = toml::map::Map::new();
-        policy.insert(
-            "default_lane".into(),
-            toml::Value::Integer(i64::from(
-                iroha_config::parameters::defaults::nexus::DEFAULT_ROUTING_LANE_INDEX,
-            )),
-        );
-        policy.insert(
-            "default_dataspace".into(),
-            toml::Value::String(
-                iroha_config::parameters::defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_string(),
-            ),
-        );
-
-        let mut nexus = toml::map::Map::new();
-        nexus.insert("routing_policy".into(), toml::Value::Table(policy));
-
-        let mut table = Table::new();
-        table.insert("nexus".into(), toml::Value::Table(nexus));
-
-        assert!(!raw_nexus_overrides(&table));
-    }
-}
-
-#[cfg(test)]
-mod retry_backoff_tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use super::*;
-
-    #[tokio::test]
-    async fn retry_with_backoff_for_succeeds_before_timeout() {
-        let attempts = AtomicUsize::new(0);
-        let result = retry_with_backoff_for(Duration::from_millis(500), || {
-            let count = attempts.fetch_add(1, Ordering::Relaxed);
-            async move {
-                if count < 2 {
-                    Err::<usize, ()>(())
-                } else {
-                    Ok(count)
-                }
-            }
-        })
-        .await
-        .expect("should not time out");
-
-        assert!(result >= 2);
-    }
-
-    #[tokio::test]
-    async fn retry_with_backoff_for_times_out() {
-        let attempts = AtomicUsize::new(0);
-        let result = retry_with_backoff_for(Duration::from_millis(75), || {
-            let _ = attempts.fetch_add(1, Ordering::Relaxed);
-            async move { Err::<(), ()>(()) }
-        })
-        .await;
-
-        assert!(result.is_err());
-        assert!(attempts.load(Ordering::Relaxed) > 0);
-    }
-}
+include!("lib/peer_runtime_tests.rs");
 
 struct PeerExit {
     child: Child,
@@ -10400,32 +9998,7 @@ fn pipeline_dirs(storage_dir: &Path) -> Vec<PathBuf> {
 }
 
 #[cfg(test)]
-fn advance_block_height(
-    block_height: &mut BlockHeight,
-    next_height: &mut u64,
-    observed_height: u64,
-    is_empty: bool,
-) {
-    if observed_height != *next_height {
-        warn!(
-            expected = *next_height,
-            observed = observed_height,
-            "missed block height update; resynchronising block watcher"
-        );
-    }
-
-    block_height.total = observed_height;
-    if !is_empty {
-        block_height.non_empty = block_height.non_empty.saturating_add(1);
-        if block_height.non_empty > block_height.total {
-            block_height.non_empty = block_height.total;
-        }
-    }
-    *next_height = block_height
-        .total
-        .checked_add(1)
-        .expect("block height overflow when subscribing to blocks");
-}
+include!("lib/block_height_test_support.rs");
 
 /// Composite block height representation
 #[derive(Debug, Copy, Clone)]
@@ -11042,13 +10615,17 @@ mod tests {
         let (block_height, _rx) = tokio::sync::watch::channel(None);
 
         let storage_root = dir.path().to_path_buf();
+        let streaming_key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate once-block fallback streaming key");
+        let soranet_transport_key_pair =
+            random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
 
         let peer = NetworkPeer {
             mnemonic: "once-block-fallback".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate once-block fallback peer key"),
-            streaming_key_pair: KeyPair::try_random()
-                .expect("generate once-block fallback streaming key"),
+            streaming_key_pair,
+            soranet_transport_key_pair,
             bls_key_pair: None,
             bls_pop: None,
             dir: storage_root,
@@ -11084,13 +10661,17 @@ mod tests {
         let (block_height, _rx) = tokio::sync::watch::channel(None);
 
         let storage_root = dir.path().to_path_buf();
+        let streaming_key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate wait-block watchdog streaming key");
+        let soranet_transport_key_pair =
+            random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
 
         let peer = NetworkPeer {
             mnemonic: "wait-block-watchdog".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate wait-block watchdog peer key"),
-            streaming_key_pair: KeyPair::try_random()
-                .expect("generate wait-block watchdog streaming key"),
+            streaming_key_pair,
+            soranet_transport_key_pair,
             bls_key_pair: None,
             bls_pop: None,
             dir: storage_root,
@@ -11128,13 +10709,17 @@ mod tests {
             total: 1,
             non_empty: 1,
         }));
+        let streaming_key_pair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate wait-block best-effort streaming key");
+        let soranet_transport_key_pair =
+            random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
 
         let peer = NetworkPeer {
             mnemonic: "wait-block-best-effort".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate wait-block best-effort peer key"),
-            streaming_key_pair: KeyPair::try_random()
-                .expect("generate wait-block best-effort streaming key"),
+            streaming_key_pair,
+            soranet_transport_key_pair,
             bls_key_pair: None,
             bls_pop: None,
             dir: dir.path().to_path_buf(),
@@ -11839,7 +11424,7 @@ mod tests {
 
     #[test]
     fn trusted_peers_use_addr_literals() {
-        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(2));
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let mut layers = network.config_layers();
         let base_layer = layers
             .next()
@@ -11871,14 +11456,72 @@ mod tests {
     }
 
     #[test]
-    fn with_min_peers_clamps_builder() {
-        let network =
-            build_with_isolated_permit(NetworkBuilder::new().with_peers(2).with_min_peers(4));
+    fn with_min_peers_rounds_up_to_revision4_committee() {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_min_peers(2));
         assert_eq!(network.peers().len(), 4);
 
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_min_peers(5));
+        assert_eq!(network.peers().len(), 7);
+
         let network =
-            build_with_isolated_permit(NetworkBuilder::new().with_peers(5).with_min_peers(4));
-        assert_eq!(network.peers().len(), 5);
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(7).with_min_peers(4));
+        assert_eq!(network.peers().len(), 7);
+    }
+
+    #[test]
+    fn revision4_committee_rounding_covers_protocol_bounds() {
+        for (minimum, expected) in [
+            (1, Some(4)),
+            (4, Some(4)),
+            (5, Some(7)),
+            (7, Some(7)),
+            (8, Some(10)),
+            (30, Some(31)),
+            (31, Some(31)),
+            (32, None),
+            (usize::MAX, None),
+        ] {
+            assert_eq!(revision4_committee_at_least(minimum), expected);
+        }
+
+        for minimum in [0, MAX_VALIDATORS_PER_HEIGHT + 1, usize::MAX] {
+            assert!(
+                std::panic::catch_unwind(|| NetworkBuilder::new().with_min_peers(minimum)).is_err(),
+                "invalid minimum {minimum} must panic before construction"
+            );
+        }
+    }
+
+    #[test]
+    fn with_peers_rejects_non_revision4_validator_counts() {
+        for peers in [0, 1, 2, 3, 5, 6, 8, 30, 32, usize::MAX] {
+            assert!(
+                std::panic::catch_unwind(|| NetworkBuilder::new().with_peers(peers)).is_err(),
+                "invalid {peers}-peer validator committee must panic before construction"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_genesis_roster_must_match_guarded_network_topology() {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        let genesis = network.genesis();
+        let expected = network
+            .peers()
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+
+        assert_genesis_voting_roster_matches_network(&genesis, &expected);
+
+        let incomplete = expected[..expected.len() - 1].to_vec();
+        assert!(
+            std::panic::catch_unwind(|| {
+                assert_genesis_voting_roster_matches_network(&genesis, &incomplete);
+            })
+            .is_err(),
+            "a custom signed roster that differs from the guarded topology must fail closed"
+        );
     }
 
     #[test]
@@ -13656,7 +13299,7 @@ exit 0
         for layer in &config_layers {
             merge_tables(&mut merged, layer);
         }
-        apply_streaming_identity_defaults_for_detection(&mut merged);
+        apply_identity_defaults_for_detection(&mut merged);
         ensure_sora_profile_trusted_peer_pop(&mut merged);
 
         let actual = parse_actual_config_for_genesis(merged, &config_layers)
@@ -13761,12 +13404,12 @@ exit 0
             }
         }
 
-        let default_network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
+        let default_network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         assert_trusted_entries(&default_network);
 
         let explicit_network = build_with_isolated_permit(
             NetworkBuilder::new()
-                .with_peers(2)
+                .with_peers(4)
                 .with_auto_populated_trusted_peers(),
         );
         assert_trusted_entries(&explicit_network);
@@ -13774,7 +13417,7 @@ exit 0
 
     #[test]
     fn config_layers_with_additional_peers_include_pop() {
-        let network = NetworkBuilder::new().with_peers(1).build();
+        let network = NetworkBuilder::new().with_peers(4).build();
         let extra_peer = NetworkPeerBuilder::new().build(network.env());
 
         let mut layers = network.config_layers_with_additional_peers([&extra_peer]);
@@ -13982,8 +13625,12 @@ exit 0
             .to_string();
             let streaming_secret =
                 ExposedPrivateKey(peer.streaming_key_pair().private_key().clone()).to_string();
+            let soranet_transport_secret =
+                ExposedPrivateKey(peer.soranet_transport_key_pair().private_key().clone())
+                    .to_string();
             assert!(!serialized.contains(&consensus_secret));
             assert!(!serialized.contains(&streaming_secret));
+            assert!(!serialized.contains(&soranet_transport_secret));
         }
         drop(first);
 
@@ -14047,17 +13694,25 @@ exit 0
                 capacity,
             })
         );
+        let exact_cap_observers = capacity
+            .checked_sub(MAX_VALIDATORS_PER_HEIGHT - 1)
+            .expect("connection cap accommodates the maximum revision-4 committee");
+        let exact_cap_bootstrap =
+            ObserverP2pBootstrap::new(exact_cap_observers).expect("exact-cap observer recipe");
         assert!(
             NetworkBuilder::new()
-                .with_peers(capacity)
-                .with_observer_p2p_bootstrap(bootstrap)
+                .with_peers(MAX_VALIDATORS_PER_HEIGHT)
+                .with_observer_p2p_bootstrap(exact_cap_bootstrap)
                 .is_ok(),
-            "one validator-facing connection at the exact cap remains valid"
+            "maximum revision-4 committee plus exact-cap observers remains valid"
         );
+
+        let over_cap_bootstrap = ObserverP2pBootstrap::new(exact_cap_observers + 1)
+            .expect("one-over-fanout observer count remains below the raw observer cap");
         assert!(
             NetworkBuilder::new()
-                .with_peers(above_capacity)
-                .with_observer_p2p_bootstrap(bootstrap)
+                .with_peers(MAX_VALIDATORS_PER_HEIGHT)
+                .with_observer_p2p_bootstrap(over_cap_bootstrap)
                 .is_err(),
             "one participant above the full-fanout cap must be rejected"
         );
@@ -14474,10 +14129,100 @@ exit 0
         );
         layers.extend(config_layers);
 
-        let actual = resolve_actual_config(&peer, &layers);
+        let actual = resolve_actual_config(&peer, &layers)
+            .expect("builder config layers should parse once chain/genesis are provided");
+        assert_eq!(
+            actual.genesis.expected_hash.to_string(),
+            NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION,
+            "pre-genesis projection must receive only the non-runtime schema sentinel"
+        );
+    }
+
+    fn assert_network_config_binds_exact_signed_genesis_hash(network: &Network) {
+        let layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let actual = resolve_actual_config(&network.peers()[0], &layers)
+            .expect("generated network configuration must parse");
+        let exact_hash = network.genesis().0.hash();
+        assert_eq!(
+            actual.genesis.expected_hash, exact_hash,
+            "runtime config must bind the exact signed in-memory genesis header"
+        );
+        assert_ne!(
+            actual.genesis.expected_hash.to_string(),
+            NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION,
+            "the projection sentinel must never escape into runtime network layers"
+        );
+        let projection_sentinel_literal = genesis_expected_hash_config_literal(
+            NON_RUNTIME_GENESIS_EXPECTED_HASH_BODY_FOR_CONFIG_PROJECTION,
+        );
         assert!(
-            actual.is_some(),
-            "builder config layers should parse once chain/genesis are provided"
+            layers.iter().all(|layer| {
+                get_nested_value(layer, &["genesis", "expected_hash"]).and_then(Value::as_str)
+                    != Some(projection_sentinel_literal.as_str())
+            }),
+            "no emitted network config layer may contain the projection sentinel"
+        );
+    }
+
+    #[test]
+    fn network_config_layers_bind_default_and_custom_signed_genesis_expected_hashes() {
+        init_instruction_registry();
+        {
+            let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(1));
+            assert_network_config_binds_exact_signed_genesis_hash(&network);
+        }
+
+        let custom =
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(1).with_genesis_block(
+                |topology, topology_entries| {
+                    genesis_factory(Vec::new(), topology, topology_entries)
+                },
+            ));
+        assert_network_config_binds_exact_signed_genesis_hash(&custom);
+    }
+
+    #[test]
+    fn caller_wrong_genesis_expected_hash_remains_effective_for_adversarial_startup() {
+        // Iroha hashes carry an odd final-byte marker; keep this wrong anchor
+        // canonical so the daemon reaches the hash-agreement check.
+        const WRONG_HASH_BODY: &str =
+            "0000000000000000000000000000000000000000000000000000000000000003";
+        let wrong_hash_literal = genesis_expected_hash_config_literal(WRONG_HASH_BODY);
+        let caller_wrong_hash_literal = wrong_hash_literal.clone();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(1).with_config_layer(
+                move |layer| {
+                    layer.write(["genesis", "expected_hash"], caller_wrong_hash_literal);
+                },
+            ));
+        let layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let anchors = layers
+            .iter()
+            .filter_map(|layer| {
+                get_nested_value(layer, &["genesis", "expected_hash"]).and_then(Value::as_str)
+            })
+            .collect::<Vec<_>>();
+        let exact_hash_literal =
+            genesis_expected_hash_config_literal(&network.genesis().0.hash().to_string());
+        assert_eq!(
+            anchors,
+            [exact_hash_literal.as_str(), wrong_hash_literal.as_str()],
+            "the generated anchor must precede a caller override"
+        );
+
+        let actual = resolve_actual_config(&network.peers()[0], &layers)
+            .expect("a canonical wrong hash must remain syntactically valid");
+        assert_eq!(actual.genesis.expected_hash.to_string(), WRONG_HASH_BODY);
+        assert_ne!(
+            actual.genesis.expected_hash,
+            network.genesis().0.hash(),
+            "the harness must not repair an adversarial caller override"
         );
     }
 
@@ -14486,7 +14231,7 @@ exit 0
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .without_auto_populated_trusted_peers()
-                .with_peers(2),
+                .with_peers(4),
         );
         let mut layers = network.config_layers();
         let _trusted = layers.next().expect("trusted peers layer");
@@ -14714,7 +14459,7 @@ exit 0
         init_instruction_registry();
         let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
         let network = NetworkBuilder::new()
-            .with_peers(2)
+            .with_peers(4)
             .with_auto_populated_trusted_peers()
             .with_npos_genesis_bootstrap(stake_amount)
             .build();
@@ -14757,7 +14502,7 @@ exit 0
         init_instruction_registry();
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
-                .with_peers(2)
+                .with_peers(4)
                 .with_auto_populated_trusted_peers()
                 .with_npos_consensus(),
         );
@@ -14795,7 +14540,7 @@ exit 0
         init_instruction_registry();
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
-                .with_peers(2)
+                .with_peers(4)
                 .with_auto_populated_trusted_peers()
                 .with_npos_consensus()
                 .without_npos_genesis_bootstrap(),
@@ -14836,7 +14581,7 @@ exit 0
             DomainId::try_new("post_topology_test", "universal").expect("domain");
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
-                .with_peers(1)
+                .with_peers(4)
                 .with_genesis_post_topology_isi(vec![
                     Register::domain(Domain::new(domain_id.clone())).into(),
                 ]),
@@ -14876,7 +14621,7 @@ exit 0
         let expected = npos_params.min_self_bond.clone();
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
-                .with_peers(1)
+                .with_peers(4)
                 .with_auto_populated_trusted_peers()
                 .with_genesis_instruction(SetParameter::new(Parameter::Custom(
                     npos_params.into_custom_parameter(),
@@ -14966,7 +14711,7 @@ exit 0
     fn npos_bootstrap_overrides_stake_accounts_in_config() {
         let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
         let network = NetworkBuilder::new()
-            .with_peers(1)
+            .with_peers(4)
             .with_auto_populated_trusted_peers()
             .with_npos_genesis_bootstrap(stake_amount)
             .build();
@@ -14998,7 +14743,7 @@ exit 0
     fn npos_bootstrap_seeds_default_fee_asset_for_runtime_signers() {
         init_instruction_registry();
         let network = NetworkBuilder::new()
-            .with_peers(2)
+            .with_peers(4)
             .with_auto_populated_trusted_peers()
             .with_npos_consensus()
             .build();
@@ -15063,7 +14808,7 @@ exit 0
         init_instruction_registry();
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
-                .with_peers(2)
+                .with_peers(4)
                 .with_auto_populated_trusted_peers(),
         );
         let genesis = network.genesis();
@@ -15296,6 +15041,18 @@ exit 0
             Algorithm::Ed25519,
             "streaming identity should remain Ed25519 even with BLS peers"
         );
+        assert_eq!(
+            peer.soranet_transport_public_key()
+                .try_algorithm()
+                .expect("fixture SoraNet transport public key must be well-formed"),
+            Algorithm::Ed25519,
+            "SoraNet transport identity must be Ed25519"
+        );
+        assert_ne!(
+            peer.soranet_transport_public_key(),
+            peer.streaming_public_key(),
+            "SoraNet transport and streaming identities must be distinct"
+        );
         assert!(
             peer.bls_public_key().is_some(),
             "expected BLS key material to remain available"
@@ -15331,6 +15088,55 @@ exit 0
             identity_private.starts_with("8026"),
             "private key should be hex-like multihash"
         );
+
+        let transport_public = table
+            .get("soranet_transport_public_key")
+            .and_then(toml::Value::as_str)
+            .expect("SoraNet transport public key string");
+        let transport_public: PublicKey = transport_public
+            .parse()
+            .expect("SoraNet transport public key parses");
+        assert_eq!(transport_public, *peer.soranet_transport_public_key());
+        assert_eq!(transport_public.algorithm(), Algorithm::Ed25519);
+        assert_ne!(transport_public, parsed);
+        let transport_private = table
+            .get("soranet_transport_private_key")
+            .and_then(toml::Value::as_str)
+            .expect("SoraNet transport private key string");
+        assert!(
+            transport_private.starts_with("8026"),
+            "SoraNet transport private key should be hex-like multihash"
+        );
+        let transport_private: PrivateKey = transport_private
+            .parse()
+            .expect("SoraNet transport private key parses");
+        let transport_pair = KeyPair::new(transport_public, transport_private)
+            .expect("base config SoraNet transport key pair must match");
+        assert_eq!(&transport_pair, peer.soranet_transport_key_pair());
+    }
+
+    #[test]
+    fn seeded_peer_derives_domain_separated_soranet_transport_identity() {
+        let seed = b"deterministic-peer-identity".to_vec();
+        let expected = checked_soranet_transport_key_pair_from_seed(seed.clone());
+        let raw_seed_identity = checked_key_pair_from_seed(seed.clone(), Algorithm::Ed25519);
+        let first_env = Environment::new();
+        let first = NetworkPeerBuilder::new()
+            .with_seed(Some(seed.clone()))
+            .build(&first_env);
+        let second_env = Environment::new();
+        let second = NetworkPeerBuilder::new()
+            .with_seed(Some(seed))
+            .build(&second_env);
+
+        assert_eq!(first.soranet_transport_key_pair(), &expected);
+        assert_eq!(second.soranet_transport_key_pair(), &expected);
+        assert_ne!(
+            first.soranet_transport_public_key(),
+            raw_seed_identity.public_key(),
+            "transport derivation must never consume the raw streaming seed"
+        );
+        assert_eq!(P2P_SORANET_TRANSPORT_SEED_DOMAIN, b":p2p-soranet-transport");
     }
 
     #[test]
@@ -15561,7 +15367,7 @@ exit 0
 
     #[test]
     fn network_torii_urls_match_peers() {
-        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let urls = network.torii_urls();
         assert_eq!(urls.len(), network.peers().len());
         for (peer, url) in network.peers().iter().zip(urls.iter()) {
@@ -15574,13 +15380,13 @@ exit 0
 
     #[test]
     fn network_peer_round_robins_deterministically() {
-        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let peers = network.peers();
         let expected = [
             peers[0].api_address(),
             peers[1].api_address(),
             peers[2].api_address(),
-            peers[0].api_address(),
+            peers[3].api_address(),
         ];
         let actual = [
             network.peer().api_address(),
@@ -15594,7 +15400,7 @@ exit 0
 
     #[test]
     fn network_client_uses_first_peer() {
-        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let expected = network
             .peers()
             .first()
@@ -15688,6 +15494,16 @@ exit 0
             1,
             "decoded genesis must be a version 1 signed block"
         );
+        assert_eq!(
+            decoded.header(),
+            block.0.header(),
+            "canonical genesis wire must preserve the exact signed header",
+        );
+        assert_eq!(
+            decoded.hash(),
+            block.0.hash(),
+            "canonical genesis wire must preserve the configured trust-anchor hash",
+        );
     }
 
     #[test]
@@ -15700,7 +15516,7 @@ exit 0
         let callback_pops = Arc::clone(&seen_pops);
 
         let network =
-            build_with_isolated_permit(NetworkBuilder::new().with_peers(2).with_genesis_block(
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_genesis_block(
                 move |topology, pops| {
                     *callback_topology
                         .lock()
@@ -15732,6 +15548,31 @@ exit 0
         );
         let expected_handshake = consensus_handshake_parameter(&network.consensus_profile);
         assert_exactly_one_consensus_handshake(&produced, &expected_handshake);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "signed test-network genesis voting roster must exactly match the guarded validator topology"
+    )]
+    fn with_genesis_block_rejects_a_different_signed_voting_roster() {
+        init_instruction_registry();
+
+        let _ = build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_genesis_block(
+            |mut topology, mut topology_entries| {
+                for index in 0..3 {
+                    let key_pair = checked_key_pair_from_seed(
+                        format!("foreign-custom-genesis-voter-{index}"),
+                        Algorithm::BlsNormal,
+                    );
+                    let peer = PeerId::new(key_pair.public_key().clone());
+                    let pop = iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                        .expect("derive foreign custom-genesis voter PoP");
+                    let _ = topology.push(peer.clone());
+                    topology_entries.push(GenesisTopologyEntry::new(peer, pop));
+                }
+                genesis_factory(Vec::new(), topology, topology_entries)
+            },
+        ));
     }
 
     #[test]
@@ -15827,7 +15668,7 @@ exit 0
                         .clone();
                     let nexus_domain =
                         DomainId::try_new("nexus", "universal").expect("nexus domain");
-                    let stake_asset_id = AssetDefinitionId::new(
+                    let stake_asset_id = AssetDefinitionId::derive_from_components(
                         nexus_domain.clone(),
                         "xor".parse().expect("stake asset name"),
                     );
@@ -15835,9 +15676,14 @@ exit 0
                     let bootstrap = vec![
                         Register::domain(Domain::new(nexus_domain)).into(),
                         Register::asset_definition(
-                            AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
-                                .with_name("Custom Genesis Stake".to_owned())
-                                .with_metadata(Metadata::default()),
+                            AssetDefinition::new(
+                                stake_asset_id.clone(),
+                                "Custom Genesis Stake".to_owned(),
+                                NumericSpec::default(),
+                                iroha_data_model::asset::AssetBalancePolicy::Global,
+                                None,
+                            )
+                            .with_metadata(Metadata::default()),
                         )
                         .into(),
                         Mint::asset_quantity(
@@ -15898,14 +15744,7 @@ exit 0
         );
     }
 
-    #[test]
-    fn kura_storage_dir_is_not_cleared_on_restart_when_genesis_is_provided() -> Result<()> {
-        assert!(NetworkPeer::should_reset_kura_for_bootstrap(true, 1));
-        assert!(!NetworkPeer::should_reset_kura_for_bootstrap(true, 2));
-        assert!(!NetworkPeer::should_reset_kura_for_bootstrap(false, 1));
-        assert!(!NetworkPeer::should_reset_kura_for_bootstrap(false, 2));
-        Ok(())
-    }
+    include!("lib/kura_restart_storage_test.rs");
 
     #[test]
     fn kura_storage_dir_is_not_cleared_when_reset_for_bootstrap_is_false() -> Result<()> {
@@ -15960,6 +15799,86 @@ exit 0
 
         assert_eq!(peer.restart_genesis_file(false), Some(later_genesis_path));
 
+        Ok(())
+    }
+
+    fn parse_peer_run_config(path: &Path) -> Result<iroha_config::parameters::actual::Root> {
+        let reader = ConfigReader::new()
+            .with_env(MockEnv::default())
+            .read_toml_with_extends(path)
+            .map_err(|error| eyre!("read peer run config {}: {error:?}", path.display()))?;
+        let user = iroha_config::parameters::user::Root::read_and_complete(reader)
+            .map_err(|error| eyre!("complete peer run config {}: {error:?}", path.display()))?;
+        user.parse()
+            .map_err(|error| eyre!("parse peer run config {}: {error:?}", path.display()))
+    }
+
+    #[tokio::test]
+    async fn peer_run_configs_reuse_exact_genesis_expected_hash_without_hashing_restart_artifact()
+    -> Result<()> {
+        let network = NetworkBuilder::new().with_peers(1).build();
+        let peer = network.peers()[0].clone();
+        let genesis = network.genesis();
+        let expected_hash = genesis.0.hash();
+        let layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+
+        let no_local_genesis_config = peer
+            .write_run_config(layers.iter().map(Cow::Borrowed), None, None, 0)
+            .await?;
+        assert_eq!(
+            parse_peer_run_config(&no_local_genesis_config)?
+                .genesis
+                .expected_hash,
+            expected_hash,
+            "a first start without a local artifact must still receive the operator anchor"
+        );
+
+        let bootstrap_config = peer
+            .write_run_config(layers.iter().map(Cow::Borrowed), Some(&genesis), None, 1)
+            .await?;
+        assert_eq!(
+            parse_peer_run_config(&bootstrap_config)?
+                .genesis
+                .expected_hash,
+            expected_hash
+        );
+
+        let genesis_path = peer
+            .restart_genesis_file(false)
+            .expect("bootstrap must persist a restart genesis artifact");
+        // This test isolates config provenance. `irohad` separately tests that a
+        // well-formed local genesis with a different hash is rejected.
+        fs::write(&genesis_path, b"attacker-controlled replacement")?;
+        let restart_config = peer
+            .write_run_config(
+                layers.iter().map(Cow::Borrowed),
+                None,
+                Some(&genesis_path),
+                2,
+            )
+            .await?;
+        assert_eq!(
+            parse_peer_run_config(&restart_config)?
+                .genesis
+                .expected_hash,
+            expected_hash,
+            "restart must reuse the independently provisioned anchor"
+        );
+
+        let restart_table: Table = toml::from_str(&fs::read_to_string(&restart_config)?)?;
+        let configured_file = get_nested_value(&restart_table, &["genesis", "file"])
+            .and_then(Value::as_str)
+            .expect("restart run config must select the persisted genesis artifact");
+        let expected_file = genesis_path.to_string_lossy();
+        assert_eq!(configured_file, expected_file.as_ref());
+        assert_eq!(
+            fs::read(&genesis_path)?,
+            b"attacker-controlled replacement",
+            "the harness must neither rewrite nor authenticate restart bytes from themselves"
+        );
         Ok(())
     }
 

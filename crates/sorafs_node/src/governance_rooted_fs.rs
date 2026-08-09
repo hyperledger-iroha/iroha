@@ -8,11 +8,17 @@
 
 use std::{
     ffi::{OsStr, OsString},
+    fmt,
     fs::{self, File},
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
+
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt as _;
@@ -25,6 +31,28 @@ unsafe extern "C" {
 }
 
 const DEFAULT_CHILD_ENTRY_LIMIT: usize = 1_000_000;
+const TWO_SLOT_FORMAT_VERSION_V1: u8 = 1;
+const TWO_SLOT_HEADER_RESERVED_BYTES_V1: usize = 128;
+const TWO_SLOT_RECORD_HEADER_RESERVED_BYTES_V1: usize = 64;
+const TWO_SLOT_COMMIT_TRAILER_RESERVED_BYTES_V1: usize = 64;
+pub(super) const TWO_SLOT_MAX_PAYLOAD_BYTES_V1: usize = 196 * 1024 * 1024;
+const TWO_SLOT_STORE_NAME_MAX_BYTES_V1: usize = 128;
+const TWO_SLOT_STAGE_ENTRY_HARD_CAP_V1: usize = 16;
+const TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1: usize = 16;
+const TWO_SLOT_LOST_FOUND_TOTAL_MAX_BYTES_V1: u64 = 1024 * 1024 * 1024;
+const TWO_SLOT_NAMES_V1: [&str; 2] = ["slot-0.v1", "slot-1.v1"];
+const TWO_SLOT_COMMIT_MARKER_V1: [u8; 16] = *b"iroha-slot-v1-ok";
+const TWO_SLOT_ZERO_DIGEST: [u8; 32] = [0; 32];
+static TWO_SLOT_STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
+const ATOMIC_RETAINED_SUFFIX_V1: &str = ".retained-v1-";
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+/// Number of canonical V1 predecessor slots reserved per atomic target.
+pub(super) const ATOMIC_RETAINED_SLOT_COUNT_V1: usize = 1_024;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+const ATOMIC_RETAINED_SLOT_WIDTH_V1: usize = 4;
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+/// Aggregate retained-predecessor byte ceiling for one directory.
+pub(super) const ATOMIC_RETAINED_TOTAL_MAX_BYTES_V1: u64 = 1024 * 1024 * 1024;
 
 #[cfg(any(windows, test))]
 mod windows_dacl {
@@ -448,891 +476,7 @@ pub(super) struct FileIdentity {
     file_index: u64,
 }
 
-/// One exact opened regular-file binding retained across later verification.
-#[derive(Debug, Clone)]
-pub(super) struct FileBinding {
-    handle: Arc<File>,
-    identity: FileIdentity,
-    parent: RootedDirectory,
-    name: OsString,
-    max_bytes: usize,
-    private: bool,
-}
-
-impl FileBinding {
-    /// Return the stable identity of the retained object.
-    pub(super) fn identity(&self) -> FileIdentity {
-        self.identity
-    }
-
-    /// Revalidate the retained object and its parent-relative name.
-    pub(super) fn verify(&self) -> io::Result<()> {
-        self.parent.verify_file_binding(
-            &self.name,
-            &self.handle,
-            self.identity,
-            self.max_bytes,
-            self.private,
-        )
-    }
-}
-
-/// Bytes and an exact retained binding read through one opened file.
-#[derive(Debug, Clone)]
-pub(super) struct FileSnapshot {
-    bytes: Vec<u8>,
-    binding: FileBinding,
-}
-
-impl FileSnapshot {
-    /// Borrow the authenticated bytes.
-    pub(super) fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    /// Consume the snapshot and return its bytes.
-    pub(super) fn into_bytes(self) -> Vec<u8> {
-        self.bytes
-    }
-
-    /// Clone the exact opened binding for later snapshot-wide verification.
-    pub(super) fn binding(&self) -> FileBinding {
-        self.binding.clone()
-    }
-}
-
-/// Required destination state for one atomic replacement.
-#[derive(Debug, Clone)]
-pub(super) enum ExpectedFile {
-    /// The destination must not exist at promotion time.
-    Missing,
-    /// The destination must still be this exact object at promotion time.
-    Identity(FileBinding),
-}
-
-/// One exact regular file retained below a rooted directory.
-#[derive(Debug)]
-pub(super) struct RetainedFile {
-    binding: FileBinding,
-}
-
-impl RetainedFile {
-    /// Borrow the exact opened file handle.
-    pub(super) fn handle(&self) -> &File {
-        &self.binding.handle
-    }
-
-    /// Revalidate the handle and its current parent-relative binding.
-    pub(super) fn verify(&self) -> io::Result<()> {
-        self.binding.verify()
-    }
-}
-
-#[derive(Debug, Clone)]
-struct DirectoryBinding {
-    parent: Arc<File>,
-    parent_identity: FileIdentity,
-    name: OsString,
-}
-
-/// One retained, stable directory capability.
-#[derive(Debug, Clone)]
-pub(super) struct RootedDirectory {
-    handle: Arc<File>,
-    identity: FileIdentity,
-    /// Exact initial Windows owner SID; ownership changes are authority changes
-    /// and therefore invalidate this retained capability.
-    #[cfg(windows)]
-    owner_sid: Vec<u8>,
-    display_path: PathBuf,
-    binding: Option<DirectoryBinding>,
-    writable: bool,
-}
-
-impl RootedDirectory {
-    /// Wrap a directory handle already retained by the Governance root guard.
-    pub(super) fn from_retained(
-        display_path: PathBuf,
-        handle: Arc<File>,
-        writable: bool,
-    ) -> io::Result<Self> {
-        platform::ensure_supported()?;
-        let metadata = handle.metadata()?;
-        validate_directory_metadata(&display_path, &metadata)?;
-        #[cfg(windows)]
-        let owner_sid = platform::directory_owner_sid(&handle, &display_path)?;
-        let directory = Self {
-            identity: file_identity(&metadata)?,
-            handle,
-            #[cfg(windows)]
-            owner_sid,
-            display_path,
-            binding: None,
-            writable,
-        };
-        directory.verify_handle()?;
-        Ok(directory)
-    }
-
-    /// Open and retain a release-qualified root directory.
-    #[cfg(windows)]
-    pub(super) fn open_root(path: &Path, writable: bool) -> io::Result<Self> {
-        platform::ensure_supported()?;
-        let handle = Arc::new(platform::open_root(path, writable)?);
-        Self::from_retained(path.to_path_buf(), handle, writable)
-    }
-
-    /// Revalidate the retained object and its current pathname binding.
-    pub(super) fn verify_path_binding(&self, path: &Path) -> io::Result<()> {
-        self.verify_handle()?;
-        let linked = fs::symlink_metadata(path)?;
-        validate_directory_metadata(path, &linked)?;
-        if file_identity(&linked)? != self.identity {
-            return Err(io::Error::other(format!(
-                "governance directory path `{}` no longer names its retained object",
-                path.display()
-            )));
-        }
-        Ok(())
-    }
-
-    /// Revalidate this directory's retained handle and parent-relative binding.
-    pub(super) fn verify(&self) -> io::Result<()> {
-        self.verify_handle()?;
-        if let Some(binding) = &self.binding {
-            let parent_metadata = binding.parent.metadata()?;
-            validate_directory_metadata(&self.display_path, &parent_metadata)?;
-            if file_identity(&parent_metadata)? != binding.parent_identity {
-                return Err(io::Error::other(format!(
-                    "retained parent for governance directory `{}` changed identity",
-                    self.display_path.display()
-                )));
-            }
-            let linked = platform::open_directory(&binding.parent, &binding.name, self.writable)?;
-            let linked_metadata = linked.metadata()?;
-            validate_directory_metadata(&self.display_path, &linked_metadata)?;
-            if file_identity(&linked_metadata)? != self.identity {
-                return Err(io::Error::other(format!(
-                    "governance directory binding `{}` was substituted",
-                    self.display_path.display()
-                )));
-            }
-        }
-        self.verify_handle()
-    }
-
-    fn verify_handle(&self) -> io::Result<()> {
-        let before = self.handle.metadata()?;
-        validate_directory_metadata(&self.display_path, &before)?;
-        if file_identity(&before)? != self.identity {
-            return Err(io::Error::other(format!(
-                "retained governance directory `{}` changed identity",
-                self.display_path.display()
-            )));
-        }
-        #[cfg(windows)]
-        if platform::directory_owner_sid(&self.handle, &self.display_path)? != self.owner_sid {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "retained governance directory `{}` changed owner SID",
-                    self.display_path.display()
-                ),
-            ));
-        }
-        #[cfg(not(windows))]
-        platform::validate_directory_acl(&self.handle, &self.display_path)?;
-        let after = self.handle.metadata()?;
-        validate_directory_metadata(&self.display_path, &after)?;
-        if file_identity(&after)? != self.identity {
-            return Err(io::Error::other(format!(
-                "retained governance directory `{}` changed identity during ACL inspection",
-                self.display_path.display()
-            )));
-        }
-        Ok(())
-    }
-
-    /// Validate descriptor-bound ACL policy for this exact directory.
-    #[cfg(windows)]
-    pub(super) fn validate_acl(&self) -> io::Result<()> {
-        self.verify_handle()?;
-        validate_retained_directory_acl(&self.handle, &self.display_path)?;
-        self.verify_handle()
-    }
-
-    /// Flush this exact directory handle.
-    pub(super) fn sync_all(&self) -> io::Result<()> {
-        if !self.writable {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "read-only governance directory cannot be flushed as a writer",
-            ));
-        }
-        self.verify()?;
-        self.handle.sync_all()?;
-        self.verify()
-    }
-
-    /// Open one direct child directory without following links/reparse points.
-    pub(super) fn open_directory(&self, name: &OsStr) -> io::Result<Self> {
-        validate_component(name)?;
-        self.verify()?;
-        let handle = Arc::new(platform::open_directory(&self.handle, name, self.writable)?);
-        let metadata = handle.metadata()?;
-        let display_path = self.display_path.join(name);
-        validate_directory_metadata(&display_path, &metadata)?;
-        #[cfg(windows)]
-        let owner_sid = platform::directory_owner_sid(&handle, &display_path)?;
-        let child = Self {
-            handle,
-            identity: file_identity(&metadata)?,
-            #[cfg(windows)]
-            owner_sid,
-            display_path,
-            binding: Some(DirectoryBinding {
-                parent: Arc::clone(&self.handle),
-                parent_identity: self.identity,
-                name: name.to_os_string(),
-            }),
-            writable: self.writable,
-        };
-        self.verify()?;
-        child.verify()?;
-        Ok(child)
-    }
-
-    /// Open or durably create one direct child directory.
-    pub(super) fn open_or_create_directory(&self, name: &OsStr) -> io::Result<Self> {
-        if !self.writable {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "read-only governance directory cannot create children",
-            ));
-        }
-        match self.open_directory(name) {
-            Ok(directory) => Ok(directory),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                self.verify()?;
-                match platform::create_directory(&self.handle, name) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                    Err(error) => return Err(error),
-                }
-                let directory = self.open_directory(name)?;
-                self.handle.sync_all()?;
-                self.verify()?;
-                directory.verify()?;
-                Ok(directory)
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    /// Resolve a relative target below this retained directory.
-    pub(super) fn resolve_parent(
-        &self,
-        relative: &Path,
-        create_directories: bool,
-    ) -> io::Result<(Self, OsString)> {
-        if relative.is_absolute() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "rooted governance path must be relative",
-            ));
-        }
-        let mut components = relative.components().peekable();
-        let mut directory = self.clone();
-        while let Some(component) = components.next() {
-            let Component::Normal(name) = component else {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "rooted governance path contains a non-canonical component",
-                ));
-            };
-            validate_component(name)?;
-            if components.peek().is_none() {
-                return Ok((directory, name.to_os_string()));
-            }
-            directory = if create_directories {
-                directory.open_or_create_directory(name)?
-            } else {
-                directory.open_directory(name)?
-            };
-        }
-        Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "rooted governance target is empty",
-        ))
-    }
-
-    /// Read one direct child through a no-follow handle.
-    pub(super) fn read_file(&self, name: &OsStr, max_bytes: usize) -> io::Result<FileSnapshot> {
-        self.read_file_with_policy(name, max_bytes, false)
-    }
-
-    /// Read one private direct child through a no-follow handle.
-    pub(super) fn read_private_file(
-        &self,
-        name: &OsStr,
-        max_bytes: usize,
-    ) -> io::Result<FileSnapshot> {
-        self.read_file_with_policy(name, max_bytes, true)
-    }
-
-    fn read_file_with_policy(
-        &self,
-        name: &OsStr,
-        max_bytes: usize,
-        private: bool,
-    ) -> io::Result<FileSnapshot> {
-        validate_component(name)?;
-        self.verify()?;
-        let mut file = platform::open_file(&self.handle, name, false)?;
-        let before = file.metadata()?;
-        let path = self.display_path.join(name);
-        validate_file_metadata(&path, &before, max_bytes, private)?;
-        let identity = file_identity(&before)?;
-        let max_bytes_u64 = u64::try_from(max_bytes)
-            .map_err(|_| io::Error::other("governance file byte limit exceeds u64"))?;
-        let mut bytes = Vec::with_capacity(usize::try_from(before.len()).unwrap_or(max_bytes));
-        (&mut file)
-            .take(max_bytes_u64.saturating_add(1))
-            .read_to_end(&mut bytes)?;
-        if bytes.len() > max_bytes {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "governance state `{}` exceeds {max_bytes} bytes",
-                    path.display()
-                ),
-            ));
-        }
-        let after = file.metadata()?;
-        validate_file_metadata(&path, &after, max_bytes, private)?;
-        if !metadata_stable_during_read(&before, &after) {
-            return Err(io::Error::other(format!(
-                "governance state `{}` changed while reading",
-                path.display()
-            )));
-        }
-        let linked = platform::open_file(&self.handle, name, false)?;
-        let linked_metadata = linked.metadata()?;
-        validate_file_metadata(&path, &linked_metadata, max_bytes, private)?;
-        if file_identity(&linked_metadata)? != identity {
-            return Err(io::Error::other(format!(
-                "governance state `{}` changed while reading",
-                path.display()
-            )));
-        }
-        self.verify()?;
-        Ok(FileSnapshot {
-            bytes,
-            binding: FileBinding {
-                handle: Arc::new(file),
-                identity,
-                parent: self.clone(),
-                name: name.to_os_string(),
-                max_bytes,
-                private,
-            },
-        })
-    }
-
-    /// Open or create one private direct child and retain its exact binding.
-    pub(super) fn open_or_create_private_file(
-        &self,
-        name: &OsStr,
-        max_bytes: usize,
-    ) -> io::Result<RetainedFile> {
-        validate_component(name)?;
-        if !self.writable {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "read-only governance directory cannot create private files",
-            ));
-        }
-        self.verify()?;
-        let handle = match platform::open_read_write_file(&self.handle, name) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                match platform::create_file(&self.handle, name) {
-                    Ok(file) => file,
-                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                        platform::open_read_write_file(&self.handle, name)?
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-            Err(error) => return Err(error),
-        };
-        let metadata = handle.metadata()?;
-        let path = self.display_path.join(name);
-        validate_file_metadata(&path, &metadata, max_bytes, true)?;
-        let identity = file_identity(&metadata)?;
-        self.verify_file_binding(name, &handle, identity, max_bytes, true)?;
-        Ok(RetainedFile {
-            binding: FileBinding {
-                handle: Arc::new(handle),
-                identity,
-                parent: self.clone(),
-                name: name.to_os_string(),
-                max_bytes,
-                private: true,
-            },
-        })
-    }
-
-    fn verify_file_binding(
-        &self,
-        name: &OsStr,
-        handle: &File,
-        expected: FileIdentity,
-        max_bytes: usize,
-        private: bool,
-    ) -> io::Result<()> {
-        validate_component(name)?;
-        self.verify()?;
-        let path = self.display_path.join(name);
-        let retained_metadata = handle.metadata()?;
-        validate_file_metadata(&path, &retained_metadata, max_bytes, private)?;
-        if file_identity(&retained_metadata)? != expected {
-            return Err(io::Error::other(format!(
-                "retained governance file `{}` changed identity",
-                path.display()
-            )));
-        }
-        let linked = platform::open_file(&self.handle, name, false)?;
-        let linked_metadata = linked.metadata()?;
-        validate_file_metadata(&path, &linked_metadata, max_bytes, private)?;
-        if file_identity(&linked_metadata)? != expected {
-            return Err(io::Error::other(format!(
-                "governance file binding `{}` was substituted",
-                path.display()
-            )));
-        }
-        self.verify()
-    }
-
-    /// Return the stable identity of a direct regular child, if present.
-    pub(super) fn file_identity(&self, name: &OsStr) -> io::Result<Option<FileIdentity>> {
-        self.file_identity_with_policy(name, false)
-    }
-
-    /// Retain one direct regular child and its exact name binding, if present.
-    pub(super) fn file_binding(
-        &self,
-        name: &OsStr,
-        max_bytes: usize,
-    ) -> io::Result<Option<FileBinding>> {
-        self.file_binding_with_policy(name, max_bytes, false)
-    }
-
-    /// Retain one private direct child and its exact name binding, if present.
-    pub(super) fn private_file_binding(
-        &self,
-        name: &OsStr,
-        max_bytes: usize,
-    ) -> io::Result<Option<FileBinding>> {
-        self.file_binding_with_policy(name, max_bytes, true)
-    }
-
-    fn file_binding_with_policy(
-        &self,
-        name: &OsStr,
-        max_bytes: usize,
-        private: bool,
-    ) -> io::Result<Option<FileBinding>> {
-        validate_component(name)?;
-        self.verify()?;
-        let handle = match platform::open_file(&self.handle, name, false) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                self.verify()?;
-                return Ok(None);
-            }
-            Err(error) => return Err(error),
-        };
-        let metadata = handle.metadata()?;
-        let path = self.display_path.join(name);
-        validate_file_metadata(&path, &metadata, max_bytes, private)?;
-        let identity = file_identity(&metadata)?;
-        self.verify_file_binding(name, &handle, identity, max_bytes, private)?;
-        Ok(Some(FileBinding {
-            handle: Arc::new(handle),
-            identity,
-            parent: self.clone(),
-            name: name.to_os_string(),
-            max_bytes,
-            private,
-        }))
-    }
-
-    /// Return the stable identity of a private direct regular child, if present.
-    pub(super) fn private_file_identity(&self, name: &OsStr) -> io::Result<Option<FileIdentity>> {
-        self.file_identity_with_policy(name, true)
-    }
-
-    fn file_identity_with_policy(
-        &self,
-        name: &OsStr,
-        private: bool,
-    ) -> io::Result<Option<FileIdentity>> {
-        validate_component(name)?;
-        self.verify()?;
-        match platform::open_file(&self.handle, name, false) {
-            Ok(file) => {
-                let metadata = file.metadata()?;
-                let path = self.display_path.join(name);
-                if private {
-                    validate_private_regular_file_metadata(&path, &metadata)?;
-                } else {
-                    validate_regular_file_metadata(&path, &metadata)?;
-                }
-                let identity = file_identity(&metadata)?;
-                self.verify()?;
-                Ok(Some(identity))
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                self.verify()?;
-                Ok(None)
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    /// Atomically replace the target only if its stable identity is unchanged.
-    pub(super) fn atomic_write(
-        &self,
-        name: &OsStr,
-        temporary_name: &OsStr,
-        data: &[u8],
-        expected: ExpectedFile,
-    ) -> io::Result<()> {
-        self.atomic_write_with_sync(
-            name,
-            temporary_name,
-            data,
-            expected,
-            |file| file.sync_all(),
-            |directory| directory.sync_all(),
-        )
-    }
-
-    fn atomic_write_with_sync<FileSync, DirectorySync>(
-        &self,
-        name: &OsStr,
-        temporary_name: &OsStr,
-        data: &[u8],
-        expected: ExpectedFile,
-        mut sync_file: FileSync,
-        mut sync_directory: DirectorySync,
-    ) -> io::Result<()>
-    where
-        FileSync: FnMut(&File) -> io::Result<()>,
-        DirectorySync: FnMut(&File) -> io::Result<()>,
-    {
-        validate_component(name)?;
-        validate_component(temporary_name)?;
-        if name == temporary_name {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "governance atomic target and temporary name must differ",
-            ));
-        }
-        if !self.writable {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "read-only governance directory cannot write",
-            ));
-        }
-        self.verify().map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!(
-                    "verify governance atomic directory `{}`: {error}",
-                    self.display_path.display()
-                ),
-            )
-        })?;
-        verify_expected_file(self, name, &expected).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!(
-                    "verify governance atomic predecessor `{}`: {error}",
-                    self.display_path.join(name).display()
-                ),
-            )
-        })?;
-        let mut temporary =
-            platform::create_file(&self.handle, temporary_name).map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "create governance atomic temporary `{}`: {error}",
-                        self.display_path.join(temporary_name).display()
-                    ),
-                )
-            })?;
-        let temporary_path = self.display_path.join(temporary_name);
-        let mut renamed = false;
-        let result = (|| {
-            temporary.write_all(data).map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "write governance atomic temporary `{}`: {error}",
-                        temporary_path.display()
-                    ),
-                )
-            })?;
-            sync_file(&temporary).map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "sync governance atomic temporary `{}`: {error}",
-                        temporary_path.display()
-                    ),
-                )
-            })?;
-            let temporary_metadata = temporary.metadata()?;
-            validate_regular_file_metadata(&temporary_path, &temporary_metadata)?;
-            #[cfg(unix)]
-            if temporary_metadata.mode() & 0o600 != 0o600 {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!(
-                        "governance atomic temporary `{}` lacks owner read/write mode: {:o}",
-                        temporary_path.display(),
-                        temporary_metadata.mode() & 0o7777
-                    ),
-                ));
-            }
-            let temporary_identity = file_identity(&temporary_metadata)?;
-            verify_expected_file(self, name, &expected).map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "reverify governance atomic predecessor `{}`: {error}",
-                        self.display_path.join(name).display()
-                    ),
-                )
-            })?;
-            self.verify().map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "reverify governance atomic directory `{}`: {error}",
-                        self.display_path.display()
-                    ),
-                )
-            })?;
-            platform::rename_open_file(
-                &self.handle,
-                &temporary,
-                temporary_name,
-                name,
-                matches!(&expected, ExpectedFile::Identity(_)),
-            )
-            .map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "promote governance atomic temporary `{}` to `{}`: {error}",
-                        temporary_path.display(),
-                        self.display_path.join(name).display()
-                    ),
-                )
-            })?;
-            renamed = true;
-            let promoted = platform::open_file(&self.handle, name, false).map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "open promoted governance atomic target `{}`: {error}",
-                        self.display_path.join(name).display()
-                    ),
-                )
-            })?;
-            let promoted_metadata = promoted.metadata()?;
-            validate_regular_file_metadata(&self.display_path.join(name), &promoted_metadata)?;
-            if file_identity(&promoted_metadata)? != temporary_identity {
-                return Err(io::Error::other(format!(
-                    "governance atomic target `{}` is not the promoted temporary object",
-                    self.display_path.join(name).display()
-                )));
-            }
-            sync_directory(&self.handle).map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "sync governance atomic directory `{}`: {error}",
-                        self.display_path.display()
-                    ),
-                )
-            })?;
-            self.verify().map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "verify durable governance atomic directory `{}`: {error}",
-                        self.display_path.display()
-                    ),
-                )
-            })?;
-            let durable = platform::open_file(&self.handle, name, false).map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "open durable governance atomic target `{}`: {error}",
-                        self.display_path.join(name).display()
-                    ),
-                )
-            })?;
-            let durable_metadata = durable.metadata()?;
-            validate_regular_file_metadata(&self.display_path.join(name), &durable_metadata)?;
-            if file_identity(&durable_metadata)? != temporary_identity {
-                return Err(io::Error::other(format!(
-                    "governance atomic target `{}` changed before durable readback",
-                    self.display_path.join(name).display()
-                )));
-            }
-            Ok(())
-        })();
-        if result.is_err() && !renamed {
-            let _ = platform::remove_open_file(
-                &self.handle,
-                &temporary,
-                temporary_name,
-                file_identity(&temporary.metadata()?).ok(),
-            );
-        }
-        result
-    }
-
-    /// Atomically write, binding replacement to the currently opened target.
-    pub(super) fn atomic_replace_current(
-        &self,
-        name: &OsStr,
-        temporary_name: &OsStr,
-        data: &[u8],
-    ) -> io::Result<()> {
-        let expected = match self.file_binding(name, usize::MAX)? {
-            Some(binding) => ExpectedFile::Identity(binding),
-            None => ExpectedFile::Missing,
-        };
-        self.atomic_write(name, temporary_name, data, expected)
-    }
-
-    /// Enumerate direct child names while retaining this exact directory.
-    pub(super) fn child_names(&self) -> io::Result<Vec<OsString>> {
-        self.child_names_bounded(DEFAULT_CHILD_ENTRY_LIMIT)
-    }
-
-    /// Enumerate at most `max_entries` direct child names.
-    pub(super) fn child_names_bounded(&self, max_entries: usize) -> io::Result<Vec<OsString>> {
-        if max_entries == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "governance directory enumeration bound must be positive",
-            ));
-        }
-        self.verify()?;
-        let mut names = platform::child_names(self, max_entries)?;
-        names.sort();
-        self.verify()?;
-        Ok(names)
-    }
-
-    /// Remove matching atomic crash temporaries below this exact directory.
-    pub(super) fn remove_atomic_temps_for(&self, target_name: &str) -> io::Result<usize> {
-        validate_component(OsStr::new(target_name))?;
-        let mut removed = 0usize;
-        for name in self.child_names()? {
-            let Some(name_utf8) = name.to_str() else {
-                continue;
-            };
-            if !is_atomic_temp_for_target(name_utf8, target_name) {
-                continue;
-            }
-            self.verify()?;
-            let file = platform::open_file(&self.handle, &name, true)?;
-            let metadata = file.metadata()?;
-            validate_regular_file_metadata(&self.display_path.join(&name), &metadata)?;
-            let identity = file_identity(&metadata)?;
-            let linked = platform::open_file(&self.handle, &name, false)?;
-            let linked_metadata = linked.metadata()?;
-            validate_regular_file_metadata(&self.display_path.join(&name), &linked_metadata)?;
-            if file_identity(&linked_metadata)? != identity {
-                return Err(io::Error::other(format!(
-                    "governance atomic temporary `{}` changed before recovery",
-                    self.display_path.join(&name).display()
-                )));
-            }
-            platform::remove_open_file(&self.handle, &file, &name, Some(identity))?;
-            removed = removed.saturating_add(1);
-        }
-        if removed != 0 {
-            self.handle.sync_all()?;
-        }
-        self.verify()?;
-        Ok(removed)
-    }
-
-    /// Remove one direct regular child by exact opened identity.
-    pub(super) fn remove_file_if_exists(&self, name: &OsStr) -> io::Result<bool> {
-        validate_component(name)?;
-        self.verify()?;
-        let file = match platform::open_file(&self.handle, name, true) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(error),
-        };
-        let metadata = file.metadata()?;
-        validate_regular_file_metadata(&self.display_path.join(name), &metadata)?;
-        let identity = file_identity(&metadata)?;
-        let linked = platform::open_file(&self.handle, name, false)?;
-        let linked_metadata = linked.metadata()?;
-        validate_regular_file_metadata(&self.display_path.join(name), &linked_metadata)?;
-        if file_identity(&linked_metadata)? != identity {
-            return Err(io::Error::other(format!(
-                "governance state `{}` changed before deletion",
-                self.display_path.join(name).display()
-            )));
-        }
-        platform::remove_open_file(&self.handle, &file, name, Some(identity))?;
-        drop(linked);
-        drop(file);
-        self.handle.sync_all()?;
-        self.verify()?;
-        Ok(true)
-    }
-
-    #[cfg(test)]
-    fn atomic_write_with_test_sync<FileSync, DirectorySync>(
-        &self,
-        name: &OsStr,
-        temporary_name: &OsStr,
-        data: &[u8],
-        expected: ExpectedFile,
-        sync_file: FileSync,
-        sync_directory: DirectorySync,
-    ) -> io::Result<()>
-    where
-        FileSync: FnMut(&File) -> io::Result<()>,
-        DirectorySync: FnMut(&File) -> io::Result<()>,
-    {
-        self.atomic_write_with_sync(
-            name,
-            temporary_name,
-            data,
-            expected,
-            sync_file,
-            sync_directory,
-        )
-    }
-}
-
+include!("governance_rooted_fs/two_slot_store.rs");
 fn verify_expected_file(
     directory: &RootedDirectory,
     name: &OsStr,
@@ -1397,6 +541,13 @@ fn validate_regular_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::R
     }
     #[cfg(unix)]
     if metadata.nlink() != 1 {
+        return Err(io::Error::other(format!(
+            "governance state `{}` must have exactly one hard link",
+            path.display()
+        )));
+    }
+    #[cfg(windows)]
+    if metadata.number_of_links() != Some(1) {
         return Err(io::Error::other(format!(
             "governance state `{}` must have exactly one hard link",
             path.display()
@@ -1499,17 +650,74 @@ fn metadata_stable_during_read(_before: &fs::Metadata, _after: &fs::Metadata) ->
     false
 }
 
-fn is_atomic_temp_for_target(name: &str, target_name: &str) -> bool {
-    let Some(suffix) = name.strip_prefix(&format!(".{target_name}.tmp-")) else {
-        return false;
-    };
+/// Return whether a name claims the legacy atomic-temporary namespace for
+/// `target`, including malformed names that require offline inspection.
+pub(super) fn is_atomic_temp_candidate_for(name: &str, target: &str) -> bool {
+    name.strip_prefix('.')
+        .and_then(|name| name.strip_prefix(target))
+        .is_some_and(|suffix| suffix.starts_with(".tmp-"))
+}
+
+#[cfg(any(windows, test))]
+fn atomic_temp_target_name(name: &str) -> Option<&str> {
+    let name = name.strip_prefix('.')?;
+    let (target_name, suffix) = name.rsplit_once(".tmp-")?;
+    if target_name.is_empty() {
+        return None;
+    }
     let Some((pid, counter)) = suffix.split_once('-') else {
-        return false;
+        return None;
     };
-    !pid.is_empty()
-        && !counter.is_empty()
-        && pid.bytes().all(|byte| byte.is_ascii_digit())
-        && counter.bytes().all(|byte| byte.is_ascii_digit())
+    if pid.is_empty()
+        || counter.is_empty()
+        || !pid.bytes().all(|byte| byte.is_ascii_digit())
+        || !counter.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(target_name)
+}
+
+/// Return one bounded V1 sibling slot used to retain an exact predecessor.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn atomic_retained_name(name: &OsStr, slot: usize) -> io::Result<OsString> {
+    if slot >= ATOMIC_RETAINED_SLOT_COUNT_V1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "governance atomic retained-generation slot exceeds the V1 bound",
+        ));
+    }
+    let name = name.to_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "governance atomic retention target is not canonical UTF-8",
+        )
+    })?;
+    validate_component(OsStr::new(name))?;
+    let retained = OsString::from(format!(".{name}{ATOMIC_RETAINED_SUFFIX_V1}{slot:04}"));
+    validate_component(&retained)?;
+    Ok(retained)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn atomic_retained_target_and_slot(name: &str) -> Option<(&str, usize)> {
+    let name = name.strip_prefix('.')?;
+    let (target, slot) = name.rsplit_once(ATOMIC_RETAINED_SUFFIX_V1)?;
+    if target.is_empty()
+        || slot.len() != ATOMIC_RETAINED_SLOT_WIDTH_V1
+        || !slot.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let slot = slot.parse::<usize>().ok()?;
+    (slot < ATOMIC_RETAINED_SLOT_COUNT_V1).then_some((target, slot))
+}
+
+/// Return whether a name claims the V1 retained namespace for `target`.
+pub(super) fn is_atomic_retained_candidate_for(name: &str, target: &str) -> bool {
+    name.strip_prefix('.')
+        .and_then(|name| name.strip_prefix(target))
+        .is_some_and(|suffix| suffix.starts_with(ATOMIC_RETAINED_SUFFIX_V1))
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1528,7 +736,9 @@ mod platform {
         path::Path,
     };
 
-    use super::{FileIdentity, RootedDirectory, file_identity};
+    #[cfg(test)]
+    use super::FileIdentity;
+    use super::{RootedDirectory, file_identity};
 
     #[cfg(target_os = "linux")]
     const O_CREATE: c_int = 0x40;
@@ -1552,20 +762,23 @@ mod platform {
     const O_DIRECTORY: c_int = 0x10_0000;
     const O_READ_ONLY: c_int = 0;
     const O_READ_WRITE: c_int = 2;
+    #[cfg(all(test, target_os = "linux"))]
+    const AT_REMOVE_DIRECTORY: c_int = 0x200;
+    #[cfg(all(test, target_os = "macos"))]
+    const AT_REMOVE_DIRECTORY: c_int = 0x80;
     #[cfg(target_os = "linux")]
-    const RENAME_NO_REPLACE: c_uint = 1;
+    const RENAME_NOREPLACE: c_uint = 1;
+    #[cfg(target_os = "linux")]
+    const RENAME_EXCHANGE: c_uint = 2;
     #[cfg(target_os = "macos")]
-    const RENAME_EXCLUSIVE: c_uint = 0x0000_0004;
+    const RENAME_EXCL: c_uint = 0x0000_0004;
+    #[cfg(target_os = "macos")]
+    const RENAME_SWAP: c_uint = 0x0000_0002;
 
     unsafe extern "C" {
         fn openat(directory: c_int, path: *const c_char, flags: c_int, ...) -> c_int;
         fn mkdirat(directory: c_int, path: *const c_char, mode: c_uint) -> c_int;
-        fn renameat(
-            source_directory: c_int,
-            source: *const c_char,
-            destination_directory: c_int,
-            destination: *const c_char,
-        ) -> c_int;
+        #[cfg(test)]
         fn unlinkat(directory: c_int, path: *const c_char, flags: c_int) -> c_int;
     }
 
@@ -1964,50 +1177,40 @@ mod platform {
         _temporary: &File,
         temporary_name: &OsStr,
         target_name: &OsStr,
-        replace: bool,
+    ) -> io::Result<()> {
+        rename_exclusive(parent, temporary_name, parent, target_name)
+    }
+
+    pub(super) fn exchange_open_file(
+        parent: &File,
+        _temporary: &File,
+        temporary_name: &OsStr,
+        target_name: &OsStr,
     ) -> io::Result<()> {
         let temporary_name = c_name(temporary_name)?;
         let target_name = c_name(target_name)?;
-        let result = if replace {
-            // SAFETY: both names are direct components below the retained
-            // directory descriptor and remain valid for the call.
-            unsafe {
-                renameat(
-                    parent.as_raw_fd(),
-                    temporary_name.as_ptr(),
-                    parent.as_raw_fd(),
-                    target_name.as_ptr(),
-                )
-            }
-        } else {
-            #[cfg(target_os = "linux")]
-            {
-                // SAFETY: as above; RENAME_NOREPLACE gives atomic create-only
-                // promotion when recovery expects an absent destination.
-                unsafe {
-                    renameat2(
-                        parent.as_raw_fd(),
-                        temporary_name.as_ptr(),
-                        parent.as_raw_fd(),
-                        target_name.as_ptr(),
-                        RENAME_NO_REPLACE,
-                    )
-                }
-            }
-            #[cfg(target_os = "macos")]
-            {
-                // SAFETY: as above; RENAME_EXCL is the macOS create-only
-                // counterpart of Linux RENAME_NOREPLACE.
-                unsafe {
-                    renameatx_np(
-                        parent.as_raw_fd(),
-                        temporary_name.as_ptr(),
-                        parent.as_raw_fd(),
-                        target_name.as_ptr(),
-                        RENAME_EXCLUSIVE,
-                    )
-                }
-            }
+        #[cfg(target_os = "linux")]
+        // SAFETY: both names are direct components below the same retained
+        // directory descriptor. RENAME_EXCHANGE preserves both bindings.
+        let result = unsafe {
+            renameat2(
+                parent.as_raw_fd(),
+                temporary_name.as_ptr(),
+                parent.as_raw_fd(),
+                target_name.as_ptr(),
+                RENAME_EXCHANGE,
+            )
+        };
+        #[cfg(target_os = "macos")]
+        // SAFETY: as above; RENAME_SWAP is the macOS atomic exchange primitive.
+        let result = unsafe {
+            renameatx_np(
+                parent.as_raw_fd(),
+                temporary_name.as_ptr(),
+                parent.as_raw_fd(),
+                target_name.as_ptr(),
+                RENAME_SWAP,
+            )
         };
         if result == 0 {
             Ok(())
@@ -2016,24 +1219,106 @@ mod platform {
         }
     }
 
+    pub(super) fn rename_exclusive(
+        source_parent: &File,
+        source_name: &OsStr,
+        destination_parent: &File,
+        destination_name: &OsStr,
+    ) -> io::Result<()> {
+        let source_name = c_name(source_name)?;
+        let destination_name = c_name(destination_name)?;
+        #[cfg(target_os = "linux")]
+        // SAFETY: both names are direct components below retained directory
+        // descriptors. RENAME_NOREPLACE prevents destination substitution or
+        // overwrite while atomically isolating the current source binding.
+        let result = unsafe {
+            renameat2(
+                source_parent.as_raw_fd(),
+                source_name.as_ptr(),
+                destination_parent.as_raw_fd(),
+                destination_name.as_ptr(),
+                RENAME_NOREPLACE,
+            )
+        };
+        #[cfg(target_os = "macos")]
+        // SAFETY: as above; RENAME_EXCL is the macOS create-only counterpart
+        // of Linux RENAME_NOREPLACE.
+        let result = unsafe {
+            renameatx_np(
+                source_parent.as_raw_fd(),
+                source_name.as_ptr(),
+                destination_parent.as_raw_fd(),
+                destination_name.as_ptr(),
+                RENAME_EXCL,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    #[cfg(test)]
     pub(super) fn remove_open_file(
         parent: &File,
-        _file: &File,
+        file: &File,
         name: &OsStr,
         expected: Option<FileIdentity>,
     ) -> io::Result<()> {
-        let linked = open_file(parent, name, false)?;
-        let linked_identity = file_identity(&linked.metadata()?)?;
-        if expected.is_some_and(|expected| expected != linked_identity) {
+        let actual = file_identity(&file.metadata()?)?;
+        if expected.is_some_and(|expected| expected != actual) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
-                "governance temporary changed before unlink",
+                "retained governance file changed before unlink",
+            ));
+        }
+        let linked = open_file(parent, name, false)?;
+        let linked_identity = file_identity(&linked.metadata()?)?;
+        if linked_identity != actual {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance file binding changed before unlink",
             ));
         }
         let name = c_name(name)?;
         // SAFETY: the direct component and retained directory descriptor are
         // valid. Identity was checked immediately above; failure is propagated.
         if unsafe { unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn remove_open_directory(
+        parent: &File,
+        directory: &File,
+        name: &OsStr,
+        expected: Option<FileIdentity>,
+    ) -> io::Result<()> {
+        let actual = file_identity(&directory.metadata()?)?;
+        if expected.is_some_and(|expected| expected != actual) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance directory changed before removal",
+            ));
+        }
+        let linked = open_directory(parent, name, true)?;
+        let linked_identity = file_identity(&linked.metadata()?)?;
+        if linked_identity != actual {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance directory binding changed before removal",
+            ));
+        }
+        let name = c_name(name)?;
+        // SAFETY: the direct component and retained parent descriptor are
+        // valid, and both the supplied and freshly opened child identities
+        // were checked immediately above. The kernel requires the child to be
+        // empty for `AT_REMOVEDIR`.
+        if unsafe { unlinkat(parent.as_raw_fd(), name.as_ptr(), AT_REMOVE_DIRECTORY) } == 0 {
             Ok(())
         } else {
             Err(io::Error::last_os_error())
@@ -2621,6 +1906,24 @@ mod platform {
         disposition: u32,
         options: u32,
     ) -> io::Result<File> {
+        nt_open_relative_with_share(
+            parent,
+            name,
+            desired_access,
+            disposition,
+            options,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        )
+    }
+
+    fn nt_open_relative_with_share(
+        parent: &File,
+        name: &OsStr,
+        desired_access: u32,
+        disposition: u32,
+        options: u32,
+        share_access: u32,
+    ) -> io::Result<File> {
         validate_component(name)?;
         let mut name_wide = name.encode_wide().collect::<Vec<_>>();
         let byte_len = name_wide
@@ -2662,7 +1965,7 @@ mod platform {
                 &mut status_block,
                 ptr::null_mut(),
                 FILE_ATTRIBUTE_NORMAL,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                share_access,
                 disposition,
                 options | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT,
                 ptr::null_mut(),
@@ -2682,7 +1985,13 @@ mod platform {
     }
 
     pub(super) fn open_directory(parent: &File, name: &OsStr, writable: bool) -> io::Result<File> {
-        let access = GENERIC_READ | SYNCHRONIZE | if writable { GENERIC_WRITE } else { 0 };
+        let access = GENERIC_READ
+            | SYNCHRONIZE
+            | if writable {
+                GENERIC_WRITE | DELETE_ACCESS
+            } else {
+                0
+            };
         nt_open_relative(
             parent,
             name,
@@ -2738,7 +2047,6 @@ mod platform {
         temporary: &File,
         _temporary_name: &OsStr,
         target_name: &OsStr,
-        replace: bool,
     ) -> io::Result<()> {
         validate_component(target_name)?;
         let target_wide = target_name.encode_wide().collect::<Vec<_>>();
@@ -2767,7 +2075,7 @@ mod platform {
         // SAFETY: `storage` is aligned for every field, has at least
         // `total_bytes`, and `file_name_offset` is the actual repr(C) offset.
         unsafe {
-            (*info).replace_or_flags = u32::from(replace);
+            (*info).replace_or_flags = 0;
             (*info).root_directory = parent.as_raw_handle();
             (*info).file_name_length = target_byte_len;
             ptr::copy_nonoverlapping(
@@ -2829,6 +2137,47 @@ mod platform {
             )
         };
         if result != 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    pub(super) fn remove_open_directory(
+        parent: &File,
+        directory: &File,
+        name: &OsStr,
+        expected: Option<FileIdentity>,
+    ) -> io::Result<()> {
+        let actual = file_identity(&directory.metadata()?)?;
+        if expected.is_some_and(|expected| expected != actual) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Windows governance directory handle changed identity",
+            ));
+        }
+        let linked = open_directory(parent, name, true)?;
+        let linked_identity = file_identity(&linked.metadata()?)?;
+        if linked_identity != actual {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Windows governance directory binding changed before removal",
+            ));
+        }
+        let info = FileDispositionInfo { delete_file: 1 };
+        // SAFETY: disposition applies to the exact retained, reparse-free
+        // directory handle. Windows refuses the operation unless it is empty.
+        let result = unsafe {
+            set_file_information_by_handle(
+                directory.as_raw_handle(),
+                FILE_DISPOSITION_INFO_CLASS,
+                ptr::from_ref(&info).cast(),
+                u32::try_from(size_of::<FileDispositionInfo>())
+                    .expect("FILE_DISPOSITION_INFO fits u32"),
+            )
+        };
+        if result != 0 {
+            drop(linked);
             Ok(())
         } else {
             Err(io::Error::last_os_error())
@@ -3208,7 +2557,6 @@ mod platform {
         _temporary: &File,
         _temporary_name: &OsStr,
         _target_name: &OsStr,
-        _replace: bool,
     ) -> io::Result<()> {
         Err(unsupported())
     }
@@ -3216,6 +2564,15 @@ mod platform {
     pub(super) fn remove_open_file(
         _parent: &File,
         _file: &File,
+        _name: &OsStr,
+        _expected: Option<FileIdentity>,
+    ) -> io::Result<()> {
+        Err(unsupported())
+    }
+
+    pub(super) fn remove_open_directory(
+        _parent: &File,
+        _directory: &File,
         _name: &OsStr,
         _expected: Option<FileIdentity>,
     ) -> io::Result<()> {
@@ -3230,517 +2587,4 @@ mod platform {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::{
-        ffi::{OsStr, OsString},
-        fs, io,
-    };
-
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt as _;
-    #[cfg(target_os = "macos")]
-    use std::process::Command;
-    #[cfg(not(windows))]
-    use std::sync::Arc;
-    #[cfg(target_os = "linux")]
-    use std::{
-        ffi::{CString, c_char, c_int, c_void},
-        os::fd::AsRawFd as _,
-    };
-
-    use tempfile::tempdir;
-
-    use super::{ExpectedFile, RootedDirectory};
-
-    fn test_root(path: &std::path::Path) -> RootedDirectory {
-        #[cfg(windows)]
-        {
-            RootedDirectory::open_root(path, true).expect("retain rooted Windows test directory")
-        }
-        #[cfg(not(windows))]
-        {
-            let handle = Arc::new(fs::File::open(path).expect("open test root"));
-            RootedDirectory::from_retained(path.to_path_buf(), handle, true)
-                .expect("retain rooted test directory")
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    unsafe extern "C" {
-        fn fsetxattr(
-            fd: c_int,
-            name: *const c_char,
-            value: *const c_void,
-            size: usize,
-            flags: c_int,
-        ) -> c_int;
-        fn fremovexattr(fd: c_int, name: *const c_char) -> c_int;
-    }
-
-    #[cfg(target_os = "linux")]
-    fn install_linux_default_acl(handle: &fs::File) -> CString {
-        fn push_acl_entry(bytes: &mut Vec<u8>, tag: u16, permissions: u16, id: u32) {
-            bytes.extend_from_slice(&tag.to_le_bytes());
-            bytes.extend_from_slice(&permissions.to_le_bytes());
-            bytes.extend_from_slice(&id.to_le_bytes());
-        }
-
-        let name = CString::new("system.posix_acl_default").expect("ACL xattr name");
-        let mut acl = 2_u32.to_le_bytes().to_vec();
-        let undefined_id = u32::MAX;
-        push_acl_entry(&mut acl, 0x01, 0o7, undefined_id);
-        push_acl_entry(&mut acl, 0x02, 0o7, 65_534);
-        push_acl_entry(&mut acl, 0x04, 0o0, undefined_id);
-        push_acl_entry(&mut acl, 0x10, 0o7, undefined_id);
-        push_acl_entry(&mut acl, 0x20, 0o0, undefined_id);
-        // SAFETY: the descriptor and NUL-terminated name are valid and the
-        // ACL buffer follows Linux's fixed little-endian POSIX ACL xattr ABI.
-        let installed = unsafe {
-            fsetxattr(
-                handle.as_raw_fd(),
-                name.as_ptr(),
-                acl.as_ptr().cast(),
-                acl.len(),
-                0,
-            )
-        };
-        assert_eq!(
-            installed,
-            0,
-            "install descriptor-bound POSIX default ACL: {}",
-            io::Error::last_os_error()
-        );
-        name
-    }
-
-    #[cfg(target_os = "linux")]
-    fn remove_linux_default_acl(handle: &fs::File, name: &CString) {
-        // SAFETY: the retained descriptor and NUL-terminated xattr name remain
-        // valid for this cleanup call.
-        assert_eq!(
-            unsafe { fremovexattr(handle.as_raw_fd(), name.as_ptr()) },
-            0
-        );
-    }
-
-    #[test]
-    fn windows_dacl_qualification_source_contract_is_handle_bound() {
-        let source = include_str!("governance_rooted_fs.rs");
-        assert!(source.contains("#[link_name = \"GetSecurityInfo\"]"));
-        assert!(source.contains("#[link_name = \"GetSecurityDescriptorControl\"]"));
-        assert!(source.contains("#[link_name = \"LocalFree\"]"));
-        assert!(source.contains("handle.as_raw_handle(),"));
-        let pathname_api = ["GetNamed", "SecurityInfo"].concat();
-        assert!(!source.contains(&pathname_api));
-    }
-
-    #[test]
-    fn linux_acl_stability_contract_rejects_equal_length_churn() {
-        let mut snapshots = std::collections::VecDeque::from([
-            b"user.a\0".to_vec(),
-            b"user.b\0".to_vec(),
-            b"user.a\0".to_vec(),
-            b"user.b\0".to_vec(),
-            b"user.a\0".to_vec(),
-            b"user.b\0".to_vec(),
-        ]);
-        let error = super::stable_linux_acl_attribute_names(
-            std::path::Path::new("synthetic-linux-directory"),
-            || {
-                Ok(Some(
-                    snapshots
-                        .pop_front()
-                        .expect("bounded stability reader call"),
-                ))
-            },
-        )
-        .expect_err("equal-length ACL-name substitution must fail closed");
-        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-        assert!(
-            snapshots.is_empty(),
-            "both snapshots in every retry are read"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn rooted_directory_pins_initial_windows_owner_sid() {
-        let temp = tempdir().expect("tempdir");
-        let mut root = test_root(temp.path());
-        root.owner_sid[0] ^= 1;
-        assert_eq!(
-            root.verify()
-                .expect_err("substituted pinned owner SID must fail closed")
-                .kind(),
-            io::ErrorKind::PermissionDenied
-        );
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn retained_directory_acl_policy_accepts_plain_directory() {
-        let temp = tempdir().expect("tempdir");
-        let handle = fs::File::open(temp.path()).expect("open plain directory");
-        super::validate_retained_directory_acl(&handle, temp.path())
-            .expect("plain descriptor has no ACL mutation grant");
-    }
-
-    #[cfg(target_os = "macos")]
-    fn change_macos_acl(path: &std::path::Path, operation: &str, acl: Option<&str>) {
-        let mut command = Command::new("chmod");
-        command.arg(operation);
-        if let Some(acl) = acl {
-            command.arg(acl);
-        }
-        let status = command
-            .arg(path)
-            .status()
-            .expect("execute macOS chmod ACL operation");
-        assert!(status.success(), "macOS chmod ACL operation must succeed");
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn retained_directory_acl_policy_rejects_mutation_allow_entry() {
-        let temp = tempdir().expect("tempdir");
-        change_macos_acl(temp.path(), "+a", Some("everyone allow add_file"));
-        let handle = fs::File::open(temp.path()).expect("open ACL directory");
-        let result = super::validate_retained_directory_acl(&handle, temp.path());
-        change_macos_acl(temp.path(), "-RN", None);
-        let error = result.expect_err("ACL add-file grant must fail closed");
-        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn retained_directory_acl_policy_accepts_deny_only_entry() {
-        let temp = tempdir().expect("tempdir");
-        change_macos_acl(temp.path(), "+a", Some("everyone deny delete"));
-        let handle = fs::File::open(temp.path()).expect("open deny-ACL directory");
-        let result = super::validate_retained_directory_acl(&handle, temp.path());
-        change_macos_acl(temp.path(), "-RN", None);
-        result.expect("deny-only ACL must not grant mutation authority");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn retained_directory_acl_policy_rejects_posix_default_acl() {
-        let temp = tempdir().expect("tempdir");
-        let handle = fs::File::open(temp.path()).expect("open ACL directory");
-        let name = install_linux_default_acl(&handle);
-        let result = super::validate_retained_directory_acl(&handle, temp.path());
-        remove_linux_default_acl(&handle, &name);
-        let error = result.expect_err("POSIX ACL attribute must fail closed");
-        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn rooted_descendant_rejects_post_capture_acl_mutation() {
-        let temp = tempdir().expect("tempdir");
-        fs::create_dir(temp.path().join("child")).expect("create child");
-        let root = test_root(temp.path());
-        let child = root
-            .open_directory(OsStr::new("child"))
-            .expect("retain child");
-        let name = install_linux_default_acl(&child.handle);
-        let result = child.verify();
-        remove_linux_default_acl(&child.handle, &name);
-        assert_eq!(
-            result
-                .expect_err("post-capture descendant ACL must fail closed")
-                .kind(),
-            io::ErrorKind::PermissionDenied
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn rooted_descendant_rejects_post_capture_acl_mutation() {
-        let temp = tempdir().expect("tempdir");
-        let child_path = temp.path().join("child");
-        fs::create_dir(&child_path).expect("create child");
-        let root = test_root(temp.path());
-        let child = root
-            .open_directory(OsStr::new("child"))
-            .expect("retain child");
-        change_macos_acl(&child_path, "+a", Some("everyone allow add_file"));
-        let result = child.verify();
-        change_macos_acl(&child_path, "-RN", None);
-        assert_eq!(
-            result
-                .expect_err("post-capture descendant ACL must fail closed")
-                .kind(),
-            io::ErrorKind::PermissionDenied
-        );
-    }
-
-    #[test]
-    fn rooted_atomic_write_rejects_equal_length_identity_substitution() {
-        let temp = tempdir().expect("tempdir");
-        let root = test_root(temp.path());
-        fs::write(temp.path().join("state"), b"first").expect("seed target");
-        let snapshot = root
-            .read_file(OsStr::new("state"), 16)
-            .expect("read original target");
-        fs::remove_file(temp.path().join("state")).expect("remove original target");
-        fs::write(temp.path().join("state"), b"other").expect("replace with equal length");
-        let error = root
-            .atomic_write(
-                OsStr::new("state"),
-                OsStr::new(".state.tmp-1-1"),
-                b"next",
-                ExpectedFile::Identity(snapshot.binding()),
-            )
-            .expect_err("identity substitution must fail");
-        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-        assert_eq!(
-            fs::read(temp.path().join("state")).expect("read target"),
-            b"other"
-        );
-    }
-
-    #[test]
-    fn rooted_atomic_write_replaces_the_exact_existing_destination() {
-        let temp = tempdir().expect("tempdir");
-        let root = test_root(temp.path());
-        fs::write(temp.path().join("state"), b"predecessor").expect("seed predecessor");
-        let predecessor = root
-            .read_file(OsStr::new("state"), 32)
-            .expect("read predecessor");
-        root.atomic_write(
-            OsStr::new("state"),
-            OsStr::new(".state.tmp-1-10"),
-            b"successor",
-            ExpectedFile::Identity(predecessor.binding()),
-        )
-        .expect("replace the exact existing destination");
-        assert_eq!(
-            fs::read(temp.path().join("state")).expect("read successor"),
-            b"successor"
-        );
-        assert!(!temp.path().join(".state.tmp-1-10").exists());
-    }
-
-    #[test]
-    fn rooted_child_binding_rejects_ancestor_replacement() {
-        let temp = tempdir().expect("tempdir");
-        fs::create_dir(temp.path().join("child")).expect("create child");
-        let root = test_root(temp.path());
-        let child = root
-            .open_directory(OsStr::new("child"))
-            .expect("retain child");
-        fs::rename(temp.path().join("child"), temp.path().join("original"))
-            .expect("rename retained child");
-        fs::create_dir(temp.path().join("child")).expect("create replacement child");
-        let error = child
-            .atomic_replace_current(
-                OsStr::new("state"),
-                OsStr::new(".state.tmp-1-2"),
-                b"must-not-land",
-            )
-            .expect_err("substituted ancestor must fail");
-        assert!(!temp.path().join("child/state").exists());
-        assert!(!temp.path().join("original/state").exists());
-        assert!(error.to_string().contains("substituted"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rooted_child_open_rejects_symlink() {
-        let temp = tempdir().expect("tempdir");
-        fs::create_dir(temp.path().join("outside")).expect("create outside");
-        std::os::unix::fs::symlink(temp.path().join("outside"), temp.path().join("child"))
-            .expect("create child symlink");
-        let root = test_root(temp.path());
-        assert!(
-            root.open_directory(OsStr::new("child")).is_err(),
-            "no-follow traversal must reject symlinks"
-        );
-    }
-
-    #[test]
-    fn rooted_atomic_write_propagates_directory_sync_failure() {
-        let temp = tempdir().expect("tempdir");
-        let root = test_root(temp.path());
-        let error = root
-            .atomic_write_with_test_sync(
-                OsStr::new("state"),
-                OsStr::new(".state.tmp-1-3"),
-                b"durability-uncertain",
-                ExpectedFile::Missing,
-                |file| file.sync_all(),
-                |_directory| Err(io::Error::other("injected directory sync failure")),
-            )
-            .expect_err("directory sync failure must propagate");
-        assert!(
-            error
-                .to_string()
-                .contains("injected directory sync failure")
-        );
-    }
-
-    #[test]
-    fn rooted_recovery_removes_only_matching_atomic_temporaries() {
-        let temp = tempdir().expect("tempdir");
-        let root = test_root(temp.path());
-        fs::write(temp.path().join(".state.tmp-42000-1"), b"stale").expect("seed stale temp");
-        fs::write(temp.path().join(".other.tmp-42000-1"), b"other").expect("seed unrelated temp");
-        assert_eq!(
-            root.remove_atomic_temps_for("state")
-                .expect("recover matching temp"),
-            1
-        );
-        assert!(!temp.path().join(".state.tmp-42000-1").exists());
-        assert!(temp.path().join(".other.tmp-42000-1").exists());
-    }
-
-    #[test]
-    fn rooted_child_enumeration_is_deterministically_sorted() {
-        let temp = tempdir().expect("tempdir");
-        let root = test_root(temp.path());
-        fs::write(temp.path().join("zeta"), b"z").expect("seed zeta");
-        fs::write(temp.path().join("alpha"), b"a").expect("seed alpha");
-        fs::write(temp.path().join("middle"), b"m").expect("seed middle");
-
-        assert_eq!(
-            root.child_names().expect("enumerate retained directory"),
-            ["alpha", "middle", "zeta"].map(OsString::from)
-        );
-    }
-
-    #[test]
-    fn rooted_child_enumeration_rejects_bound_overflow() {
-        let temp = tempdir().expect("tempdir");
-        let root = test_root(temp.path());
-        for name in ["one", "two", "three"] {
-            fs::write(temp.path().join(name), name.as_bytes()).expect("seed bounded child");
-        }
-
-        let error = root
-            .child_names_bounded(2)
-            .expect_err("enumeration overflow must fail closed");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    }
-
-    #[test]
-    fn rooted_read_enforces_its_byte_bound() {
-        let temp = tempdir().expect("tempdir");
-        let root = test_root(temp.path());
-        fs::write(temp.path().join("state"), b"12345").expect("seed bounded state");
-
-        let exact = root
-            .read_file(OsStr::new("state"), 5)
-            .expect("read at exact byte bound");
-        assert_eq!(exact.bytes(), b"12345");
-        let error = root
-            .read_file(OsStr::new("state"), 4)
-            .expect_err("oversized state must fail closed");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    }
-
-    #[test]
-    fn retained_private_file_rejects_name_substitution() {
-        let temp = tempdir().expect("tempdir");
-        let root = test_root(temp.path());
-        let retained = root
-            .open_or_create_private_file(OsStr::new(".service.lock"), 4096)
-            .expect("retain private file");
-        fs::rename(
-            temp.path().join(".service.lock"),
-            temp.path().join("original.lock"),
-        )
-        .expect("detach retained file");
-        fs::write(temp.path().join(".service.lock"), b"replacement")
-            .expect("install name replacement");
-        #[cfg(unix)]
-        fs::set_permissions(
-            temp.path().join(".service.lock"),
-            fs::Permissions::from_mode(0o600),
-        )
-        .expect("secure replacement mode");
-
-        let error = retained
-            .verify()
-            .expect_err("retained file substitution must fail closed");
-        assert!(error.to_string().contains("substituted"));
-        assert_eq!(
-            fs::read(temp.path().join(".service.lock")).expect("read replacement"),
-            b"replacement"
-        );
-    }
-
-    #[test]
-    fn rooted_recovery_is_idempotent_across_restart() {
-        let temp = tempdir().expect("tempdir");
-        fs::write(temp.path().join(".state.tmp-42000-7"), b"crash").expect("seed crash temporary");
-        {
-            let first = test_root(temp.path());
-            assert_eq!(
-                first
-                    .remove_atomic_temps_for("state")
-                    .expect("first restart recovery"),
-                1
-            );
-        }
-        let restarted = test_root(temp.path());
-        assert_eq!(
-            restarted
-                .remove_atomic_temps_for("state")
-                .expect("second restart recovery"),
-            0
-        );
-        restarted
-            .atomic_replace_current(
-                OsStr::new("state"),
-                OsStr::new(".state.tmp-42000-8"),
-                b"restarted",
-            )
-            .expect("write after restart recovery");
-        assert_eq!(
-            fs::read(temp.path().join("state")).expect("read restarted state"),
-            b"restarted"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn rooted_file_open_rejects_reparse_point() {
-        let temp = tempdir().expect("tempdir");
-        fs::write(temp.path().join("target"), b"target").expect("seed target");
-        std::os::windows::fs::symlink_file(temp.path().join("target"), temp.path().join("linked"))
-            .expect("create Windows file symlink");
-        let root = test_root(temp.path());
-        root.read_file(OsStr::new("linked"), 16)
-            .expect_err("reparse-backed file must fail closed");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_disposition_deletes_the_opened_object_after_name_replacement() {
-        let temp = tempdir().expect("tempdir");
-        let root = test_root(temp.path());
-        let name = OsStr::new(".state.tmp-42000-2");
-        let stale = temp.path().join(name);
-        let moved = temp.path().join("opened-stale-object");
-        fs::write(&stale, b"opened-object").expect("seed stale object");
-        let opened =
-            super::platform::open_file(&root.handle, name, true).expect("open exact stale object");
-        let identity = super::file_identity(&opened.metadata().expect("inspect opened object"))
-            .expect("capture Windows file identity");
-        fs::rename(&stale, &moved).expect("move opened stale object");
-        fs::write(&stale, b"name-replacement").expect("replace stale pathname");
-
-        super::platform::remove_open_file(&root.handle, &opened, name, Some(identity))
-            .expect("mark exact opened object for deletion");
-        drop(opened);
-
-        assert!(!moved.exists(), "the opened stale object must be deleted");
-        assert_eq!(
-            fs::read(&stale).expect("read replacement"),
-            b"name-replacement",
-            "a later pathname replacement must remain untouched"
-        );
-    }
-}
+include!("governance_rooted_fs/tests.rs");

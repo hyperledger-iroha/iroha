@@ -13,6 +13,92 @@ from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 
+from scripts.tests.sorafs_hedging_billing_freshness_contract import (
+    assert_shipped_hedging_billing_freshness_contract,
+)
+from scripts.tests.sorafs_proof_stream_contract_support import (
+    assert_pdp_and_potr_proof_streams_use_exact_finalized_chain_projections,
+    assert_sorafs_cli_proof_stream_uses_authenticated_native_pin_projection,
+)
+from scripts.tests.sorafs_rollout_gate_contract_inventory import (
+    bounded_json_checkers,
+    standard_json_error_checkers,
+    fingerprint_checkers,
+    standard_artifact_checkers,
+    string_coverage_checkers,
+    basic_validation_checkers,
+    checker_names_without,
+    timestamp_validation_checkers,
+    environment_validation_checkers,
+    deployment_id_validation_checkers,
+    iroha_config_binding_checkers,
+    iroha_config_bound_checkers,
+    governance_approval_validation_checkers,
+    config_backed_governance_approval_validation_checkers,
+    policy_digest_validation_checkers,
+    hex_validation_checkers,
+    direct_hex_validation_checkers,
+    optional_hex_validation_checkers,
+    hex_string_array_validation_checkers,
+    score_bps_validation_checkers,
+    int_range_validation_checkers,
+    advancing_int_pair_validation_checkers,
+    count_match_validation_checkers,
+    count_value_equal_validation_checkers,
+    count_length_match_validation_checkers,
+    sum_equal_validation_checkers,
+    zero_count_validation_checkers,
+    minimum_int_validation_checkers,
+    minimum_value_validation_checkers,
+    maximum_value_validation_checkers,
+    maximum_number_validation_checkers,
+    maximum_int_validation_checkers,
+    passed_status_validation_checkers,
+    status_in_validation_checkers,
+    string_in_validation_checkers,
+    string_not_equal_validation_checkers,
+    string_value_equal_validation_checkers,
+    schema_string_type_validation_checkers,
+    tuple_binding_validation_checkers,
+    tuple_binding_error_recorder_checkers,
+    tuple_bound_reference_checkers,
+    scalar_binding_validation_checkers,
+    scalar_bound_digest_reference_checkers,
+    scalar_binding_error_recorder_checkers,
+    http_status_validation_checkers,
+    route_probe_object_array_checkers,
+    generic_object_array_checkers,
+    positive_int_arg_checkers,
+    non_negative_int_arg_checkers,
+    positive_int_arg_runners,
+    non_negative_int_arg_runners,
+    false_validation_checkers,
+    false_or_absent_validation_checkers,
+    false_or_governed_validation_checkers,
+    non_negative_number_validation_checkers,
+    artifact_error_checkers,
+    required_summary_checkers,
+    runner_example_candidates,
+    checker_example,
+    runner_example,
+    runner_collection_example,
+    runner_plan_example,
+    required_source_entry_kinds,
+    required_field_contract_is_canonical,
+    render_runner_plan_json,
+    command_option_values,
+    argfile_option_values,
+    comma_split_argfile_values,
+    command_output_values,
+    evidence_path_from_cli_spec,
+    evidence_kind_from_cli_spec,
+    rendered_external_evidence_values,
+    rendered_plan_steps,
+    rendered_gate_steps,
+    expected_rendered_plan_steps,
+    runner_inventory_constant_fields,
+)
+
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = SCRIPTS_DIR.parent
@@ -32,6 +118,10 @@ SORAFS_GOVERNANCE_DAG_PLAN = DOCS_SOURCE_DIR / "sorafs_governance_dag_plan.md"
 SORAFS_GOVERNANCE_DAG_SERVICE_RS = (
     REPO_ROOT / "crates" / "sorafs_node" / "src" / "governance_service.rs"
 )
+SORAFS_GOVERNANCE_RS = REPO_ROOT / "crates" / "sorafs_node" / "src" / "governance.rs"
+SORAFS_GOVERNANCE_DAG_KUBO_WORKFLOW = (
+    REPO_ROOT / ".github" / "workflows" / "sorafs-governance-dag-kubo.yml"
+)
 SORAFS_HEDGING_PLAN = DOCS_SOURCE_DIR / "sorafs_hedging_plan.md"
 SORAFS_MODERATION_PANEL_PLAN = DOCS_SOURCE_DIR / "sorafs_moderation_panel_plan.md"
 SORAFS_ORDERBOOK_PLAN = DOCS_SOURCE_DIR / "sorafs_orderbook_plan.md"
@@ -49,6 +139,16 @@ SORAFS_REPUTATION_PLAN = DOCS_SOURCE_DIR / "sorafs_reputation_plan.md"
 SORAFS_REPUTATION_RUNTIME_RS = (
     REPO_ROOT / "crates" / "sorafs_node" / "src" / "reputation" / "runtime.rs"
 )
+SORAFS_REPUTATION_PUBLICATION_TEST_RS = (
+    REPO_ROOT
+    / "crates"
+    / "sorafs_node"
+    / "src"
+    / "reputation"
+    / "runtime"
+    / "tests"
+    / "publication_admission.rs"
+)
 IROHAD_REPUTATION_RUNTIME_RS = (
     REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_reputation_runtime.rs"
 )
@@ -59,6 +159,9 @@ PRODUCTION_READINESS_RUNNER = SCRIPTS_DIR / "run_sorafs_production_readiness.py"
 EXAMPLES_DIR = SCRIPTS_DIR / "examples"
 DASHBOARDS_DIR = REPO_ROOT / "dashboards"
 TELEMETRY_METRICS_RS = REPO_ROOT / "crates" / "iroha_telemetry" / "src" / "metrics.rs"
+TELEMETRY_METRICS_TEST_RS = (
+    REPO_ROOT / "crates" / "iroha_telemetry" / "src" / "metrics" / "test.rs"
+)
 HEDGING_FIXTURE_GENERATOR_RS = (
     REPO_ROOT
     / "crates"
@@ -359,6 +462,8 @@ ACTIVE_SORAFS_TODO_SCAN_ROOTS = (
     REPO_ROOT / "crates" / "sorafs_manifest",
     REPO_ROOT / "crates" / "sorafs_node",
     REPO_ROOT / "crates" / "sorafs_orchestrator",
+    REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_broker",
+    REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_registry",
     REPO_ROOT / "crates" / "iroha_torii" / "src" / "sorafs",
     REPO_ROOT / "crates" / "iroha_data_model" / "src" / "sorafs",
     REPO_ROOT
@@ -395,7 +500,7 @@ ACTIVE_SORAFS_TODO_DISCOVERY_ROOTS = (
     SCRIPTS_DIR,
     REPO_ROOT / "ci",
 )
-ACTIVE_SORAFS_TODO_CONTENT_DISCOVERY_ROOTS = (SCRIPTS_DIR,)
+ACTIVE_SORAFS_TODO_CONTENT_DISCOVERY_ROOTS = ACTIVE_SORAFS_TODO_DISCOVERY_ROOTS[1:-1]
 ACTIVE_SORAFS_TODO_DISCOVERY_EXCLUDED_PARTS = {
     "build",
     "docs",
@@ -406,6 +511,9 @@ ACTIVE_SORAFS_TODO_DISCOVERY_EXCLUDED_PARTS = {
     "tests",
 }
 ACTIVE_SORAFS_TODO_SCAN_FILES = (
+    IROHAD_MAIN_RS,
+    REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_broker.rs",
+    REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_registry.rs",
     IROHA_CLI_SORAFS_RS,
     SORAFS_CLI_RS,
     TORII_OPENAPI_RS,
@@ -849,13 +957,15 @@ TEST_SOURCE_COMPONENTS = {
     "check_sorafs_production_readiness_test.py": (
         "sorafs_production_foundational_cases.py",
     ),
+    "check_sorafs_rollout_gate_contract_test.py": ("sorafs_rollout_gate_contract_inventory.py",),
+    "actual.rs": ("actual/sorafs_pop_credentials.rs",),
 }
 
 
 def read(path: Path) -> str:
     source = path.read_text(encoding="utf-8")
     for component_name in TEST_SOURCE_COMPONENTS.get(path.name, ()):
-        source += "\n" + path.with_name(component_name).read_text(encoding="utf-8")
+        source += "\n" + (path.parent / component_name).read_text(encoding="utf-8")
     return source
 
 
@@ -1753,6 +1863,20 @@ def test_active_sorafs_todo_scan_configuration_paths_exist() -> None:
     assert missing_files == []
 
 
+def test_active_sorafs_todo_scan_covers_runtime_provider_entrypoints() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
+    required = {
+        Path("crates/irohad/src/main.rs"),
+        Path("crates/irohad/src/runtime_provider_broker.rs"),
+        Path("crates/irohad/src/runtime_provider_broker/api.rs"),
+        Path("crates/irohad/src/runtime_provider_broker/launcher.rs"),
+        Path("crates/irohad/src/runtime_provider_registry.rs"),
+        Path("crates/irohad/src/runtime_provider_registry/binding_collection.rs"),
+    }
+
+    assert required <= scanned
+
+
 def test_active_sorafs_todo_scan_covers_swift_sorafs_entrypoints() -> None:
     scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
     required = {
@@ -1889,6 +2013,56 @@ def test_active_sorafs_source_todos_stay_closed() -> None:
     assert find_active_sorafs_todo_markers(active_sorafs_todo_scan_paths()) == []
 
 
+def test_moderation_local_snapshot_reads_have_no_empty_projection_fallback() -> None:
+    api = read(TORII_SORAFS_API_RS)
+    handlers = {
+        name: api.split(f"pub(crate) async fn {name}", 1)[1].split(
+            "\npub(crate) async fn", 1
+        )[0]
+        for name in (
+            "handle_get_sorafs_moderation_model_registry",
+            "handle_get_sorafs_moderation_screening_results",
+            "handle_get_sorafs_moderation_quarantine",
+            "handle_get_sorafs_moderation_quarantine_operator_panel",
+            "handle_post_sorafs_moderation_quarantine_appeal_handoff",
+        )
+    }
+    required = {
+        "handle_get_sorafs_moderation_model_registry": (
+            ("export_moderation_model_registry_snapshot", "moderation_model_registry_error_response"),
+        ),
+        "handle_get_sorafs_moderation_screening_results": (
+            ("export_moderation_screening_snapshot", "moderation_screening_error_response"),
+        ),
+        "handle_get_sorafs_moderation_quarantine": (
+            ("export_moderation_screening_snapshot", "moderation_screening_error_response"),
+        ),
+        "handle_get_sorafs_moderation_quarantine_operator_panel": (
+            ("export_moderation_screening_snapshot", "moderation_screening_error_response"),
+            (
+                "export_moderation_quarantine_object_snapshot",
+                "moderation_quarantine_object_error_response",
+            ),
+        ),
+        "handle_post_sorafs_moderation_quarantine_appeal_handoff": (
+            ("export_moderation_screening_snapshot", "moderation_screening_error_response"),
+        ),
+    }
+    for name, checks in required.items():
+        for export, error_mapper in checks:
+            assert export in handlers[name]
+            assert f"Err(err) => return {error_mapper}(err)" in handlers[name]
+
+    node = read(SORAFS_NODE_LIB_RS)
+    for snapshot in (
+        "model_registry",
+        "screening",
+        "quarantine_object",
+        "evidence_viewer",
+    ):
+        assert f"pub fn moderation_{snapshot}_snapshot(" not in node
+
+
 def test_sorafs_incentives_service_has_no_missing_budget_override() -> None:
     cli = read(IROHA_CLI_SORAFS_RS)
     reward_engine = read(SORAFS_ORCHESTRATOR_INCENTIVES_RS)
@@ -2020,7 +2194,10 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "raw_ticket_rejected_with_signed_key_present" in peer
     assert "SignedTicket::decode(bytes).map_err(ChallengeVerifyError::Pow)?" in verify_challenge_ticket
     assert "bytes.len() == pow::TICKET_LEN" not in verify_challenge_ticket
-    assert "self.verify_unsigned_ticket_bytes(bytes)" in verify_challenge_ticket
+    assert (
+        "self.verify_unsigned_ticket_bytes(bytes, transcript_hash)"
+        in verify_challenge_ticket
+    )
 
     assert "handshake_update_accepts_pow_overrides" in cli
     assert "soranet_handshake_update_applies" in kiso
@@ -3796,776 +3973,6 @@ def test_sorafs_inventory_constants_are_named_by_local_tests() -> None:
             missing[source_path.name] = missing_constants
 
     assert missing == {}
-
-
-def bounded_json_checkers() -> list[Path]:
-    return CHECKERS
-
-
-def standard_json_error_checkers() -> list[Path]:
-    return [
-        path
-        for path in CHECKERS
-        if path.name != "check_sorafs_reputation_rollout_evidence.py"
-    ]
-
-
-def fingerprint_checkers() -> list[Path]:
-    return bounded_json_checkers()
-
-
-def standard_artifact_checkers() -> list[Path]:
-    return [
-        path
-        for path in CHECKERS
-        if path.name != "check_sorafs_reputation_rollout_evidence.py"
-    ]
-
-
-def string_coverage_checkers() -> list[Path]:
-    return CHECKERS
-
-
-def basic_validation_checkers() -> list[Path]:
-    return CHECKERS
-
-
-def checker_names_without(*excluded: str) -> set[str]:
-    return {path.name for path in CHECKERS if path.name not in excluded}
-
-
-def timestamp_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-        "check_sorafs_transparency_rollout_evidence.py",
-    }
-
-
-def environment_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-        "check_sorafs_transparency_rollout_evidence.py",
-    }
-
-
-def deployment_id_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-        "check_sorafs_transparency_rollout_evidence.py",
-    }
-
-
-def iroha_config_binding_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-    }
-
-
-def iroha_config_bound_checkers() -> set[str]:
-    return iroha_config_binding_checkers() - {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-    }
-
-
-def governance_approval_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-    }
-
-
-def config_backed_governance_approval_validation_checkers() -> set[str]:
-    return governance_approval_validation_checkers() - {
-        "check_sorafs_reference_sdk_release_evidence.py"
-    }
-
-
-def policy_digest_validation_checkers() -> set[str]:
-    return governance_approval_validation_checkers() | {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-    }
-
-
-def hex_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reputation_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-        "check_sorafs_transparency_rollout_evidence.py",
-    }
-
-
-def direct_hex_validation_checkers() -> set[str]:
-    return set()
-
-
-def optional_hex_validation_checkers() -> set[str]:
-    return set()
-
-
-def hex_string_array_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_reputation_rollout_evidence.py",
-    }
-
-
-def score_bps_validation_checkers() -> set[str]:
-    return {"check_sorafs_ai_prescreen_rollout_evidence.py"}
-
-
-def int_range_validation_checkers() -> set[str]:
-    return {"check_sorafs_reputation_rollout_evidence.py"}
-
-
-def advancing_int_pair_validation_checkers() -> set[str]:
-    return {"check_sorafs_reputation_rollout_evidence.py"}
-
-
-def count_match_validation_checkers() -> set[str]:
-    return {"check_sorafs_transparency_rollout_evidence.py"}
-
-
-def count_value_equal_validation_checkers() -> set[str]:
-    return {"check_sorafs_moderation_panel_rollout_evidence.py"}
-
-
-def count_length_match_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_reputation_rollout_evidence.py",
-    }
-
-
-def sum_equal_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-    }
-
-
-def zero_count_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-    }
-
-
-def minimum_int_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reputation_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-    }
-
-
-def minimum_value_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-        "check_sorafs_transparency_rollout_evidence.py",
-    }
-
-
-def maximum_value_validation_checkers() -> set[str]:
-    return {"check_sorafs_moderation_panel_rollout_evidence.py"}
-
-
-def maximum_number_validation_checkers() -> set[str]:
-    return set()
-
-
-def maximum_int_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reputation_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-    }
-
-
-def passed_status_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reputation_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-        "check_sorafs_transparency_rollout_evidence.py",
-    }
-
-
-def status_in_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_reputation_rollout_evidence.py",
-    }
-
-
-def string_in_validation_checkers() -> set[str]:
-    return set()
-
-
-def string_not_equal_validation_checkers() -> set[str]:
-    return {"check_sorafs_pop_credentials_rollout_evidence.py"}
-
-
-def string_value_equal_validation_checkers() -> set[str]:
-    return {"check_sorafs_reputation_rollout_evidence.py"}
-
-
-def schema_string_type_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-        "check_sorafs_transparency_rollout_evidence.py",
-    }
-
-
-def tuple_binding_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_reputation_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-    }
-
-
-def tuple_binding_error_recorder_checkers() -> set[str]:
-    return set()
-
-
-def tuple_bound_reference_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-    }
-
-
-def scalar_binding_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-        "check_sorafs_transparency_rollout_evidence.py",
-    }
-
-
-def scalar_bound_digest_reference_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-        "check_sorafs_transparency_rollout_evidence.py",
-    }
-
-
-def scalar_binding_error_recorder_checkers() -> set[str]:
-    return scalar_binding_validation_checkers()
-
-
-def http_status_validation_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-        "check_sorafs_transparency_rollout_evidence.py",
-    }
-
-
-def route_probe_object_array_checkers() -> set[str]:
-    return http_status_validation_checkers()
-
-
-def generic_object_array_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_reputation_rollout_evidence.py",
-    }
-
-
-def positive_int_arg_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reputation_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-        "check_sorafs_transparency_rollout_evidence.py",
-        "check_sorafs_production_readiness.py",
-    }
-
-
-def non_negative_int_arg_checkers() -> set[str]:
-    return {
-        "check_sorafs_ai_prescreen_rollout_evidence.py",
-        "check_sorafs_appeal_finance_rollout_evidence.py",
-        "check_sorafs_gateway_compliance_rollout_evidence.py",
-        "check_sorafs_gateway_load_rollout_evidence.py",
-        "check_sorafs_governance_dag_rollout_evidence.py",
-        "check_sorafs_hedging_rollout_evidence.py",
-        "check_sorafs_moderation_panel_rollout_evidence.py",
-        "check_sorafs_orderbook_rollout_evidence.py",
-        "check_sorafs_pdp_rollout_evidence.py",
-        "check_sorafs_pop_credentials_rollout_evidence.py",
-        "check_sorafs_por_rollout_evidence.py",
-        "check_sorafs_potr_rollout_evidence.py",
-        "check_sorafs_reference_sdk_release_evidence.py",
-        "check_sorafs_repair_rollout_evidence.py",
-        "check_sorafs_reserve_rent_rollout_evidence.py",
-        "check_sorafs_transparency_rollout_evidence.py",
-        "check_sorafs_production_readiness.py",
-    }
-
-
-def positive_int_arg_runners() -> set[str]:
-    return {path.name for path in COLLECTION_RUNNERS}
-
-
-def non_negative_int_arg_runners() -> set[str]:
-    return {
-        "run_sorafs_ai_prescreen_rollout_evidence.py",
-        "run_sorafs_appeal_finance_rollout_evidence.py",
-        "run_sorafs_gateway_compliance_rollout_evidence.py",
-        "run_sorafs_gateway_load_rollout_evidence.py",
-        "run_sorafs_governance_dag_rollout_evidence.py",
-        "run_sorafs_hedging_rollout_evidence.py",
-        "run_sorafs_moderation_panel_rollout_evidence.py",
-        "run_sorafs_orderbook_rollout_evidence.py",
-        "run_sorafs_pdp_rollout_evidence.py",
-        "run_sorafs_pop_credentials_rollout_evidence.py",
-        "run_sorafs_por_rollout_evidence.py",
-        "run_sorafs_potr_rollout_evidence.py",
-        "run_sorafs_reference_sdk_release_evidence.py",
-        "run_sorafs_repair_rollout_evidence.py",
-        "run_sorafs_reputation_rollout_evidence.py",
-        "run_sorafs_reserve_rent_rollout_evidence.py",
-        "run_sorafs_transparency_rollout_evidence.py",
-        "run_sorafs_production_readiness.py",
-    }
-
-
-def false_validation_checkers() -> set[str]:
-    return checker_names_without("check_sorafs_reputation_rollout_evidence.py")
-
-
-def false_or_absent_validation_checkers() -> set[str]:
-    return set()
-
-
-def false_or_governed_validation_checkers() -> set[str]:
-    return {"check_sorafs_hedging_rollout_evidence.py"}
-
-
-def non_negative_number_validation_checkers() -> set[str]:
-    return set()
-
-
-def artifact_error_checkers() -> list[Path]:
-    return CHECKERS
-
-
-def required_summary_checkers() -> list[Path]:
-    return standard_artifact_checkers()
-
-
-def runner_example_candidates(path: Path) -> list[Path]:
-    name = path.name.removeprefix("run_").removesuffix(".py")
-    if name.endswith("_rollout_evidence"):
-        stem = name.removesuffix("_rollout_evidence")
-        return [
-            EXAMPLES_DIR / f"{stem}_rollout_collection.args.example",
-            EXAMPLES_DIR / f"{stem}_rollout_evidence.args.example",
-        ]
-    if name.endswith("_release_evidence"):
-        stem = name.removesuffix("_release_evidence")
-        return [
-            EXAMPLES_DIR / f"{stem}_release_collection.args.example",
-            EXAMPLES_DIR / f"{stem}_release_evidence.args.example",
-        ]
-    raise AssertionError(f"unexpected runner name: {path.name}")
-
-
-def checker_example(path: Path) -> Path:
-    name = path.name.removeprefix("check_").removesuffix(".py")
-    if name.endswith("_rollout_evidence"):
-        stem = name.removesuffix("_rollout_evidence")
-        return EXAMPLES_DIR / f"{stem}_rollout_evidence.args.example"
-    if name.endswith("_release_evidence"):
-        stem = name.removesuffix("_release_evidence")
-        return EXAMPLES_DIR / f"{stem}_release_evidence.args.example"
-    raise AssertionError(f"unexpected checker name: {path.name}")
-
-
-def runner_example(path: Path) -> Path | None:
-    return next(
-        (candidate for candidate in runner_example_candidates(path) if candidate.is_file()),
-        None,
-    )
-
-
-def runner_collection_example(path: Path) -> Path:
-    if path == PRODUCTION_READINESS_RUNNER:
-        return EXAMPLES_DIR / "sorafs_production_readiness_collection.args.example"
-    return runner_example_candidates(path)[0]
-
-
-def runner_plan_example(path: Path) -> Path | None:
-    if path == PRODUCTION_READINESS_RUNNER:
-        return next(
-            (
-                candidate
-                for candidate in (
-                    EXAMPLES_DIR / "sorafs_production_readiness_collection.args.example",
-                    EXAMPLES_DIR / "sorafs_production_readiness.args.example",
-                )
-                if candidate.is_file()
-            ),
-            None,
-        )
-    return runner_example(path)
-
-
-def required_source_entry_kinds(module: object) -> set[str]:
-    for attribute in (
-        "DEFAULT_REQUIRED_SOURCE_KINDS",
-        "REQUIRED_TRANSPARENCY_SOURCE_KINDS",
-    ):
-        value = getattr(module, attribute, None)
-        if value is not None:
-            return set(value)
-    return set()
-
-
-def required_field_contract_is_canonical(required_fields: object) -> bool:
-    if not isinstance(required_fields, tuple) or not required_fields:
-        return False
-    seen: set[str] = set()
-    for field in required_fields:
-        if (
-            not isinstance(field, str)
-            or not field
-            or field != field.strip()
-            or any(ord(char) < 32 for char in field)
-            or field in seen
-        ):
-            return False
-        seen.add(field)
-    return True
-
-
-def render_runner_plan_json(module: object, plan: object, args: object) -> object:
-    plan_json_parameters = inspect.signature(module.plan_json).parameters
-    if len(plan_json_parameters) == 1:
-        return module.plan_json(plan)
-    if len(plan_json_parameters) == 2:
-        return module.plan_json(plan, args)
-    raise AssertionError("unexpected plan_json signature")
-
-
-def command_option_values(command: object, option: str) -> list[str]:
-    assert isinstance(command, list)
-    values: list[str] = []
-    prefix = f"{option}="
-    index = 0
-    while index < len(command):
-        if command[index] == option:
-            assert index + 1 < len(command)
-            values.append(command[index + 1])
-            index += 2
-            continue
-        if isinstance(command[index], str) and command[index].startswith(prefix):
-            values.append(command[index].split("=", 1)[1])
-        index += 1
-    return values
-
-
-def argfile_option_values(path: Path, option: str) -> list[str]:
-    lines = path.read_text(encoding="utf-8").splitlines()
-    values: list[str] = []
-    prefix = f"{option}="
-    spaced_prefix = f"{option} "
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        if line == option:
-            assert index + 1 < len(lines), f"{path.name} has dangling {option}"
-            values.append(lines[index + 1])
-            index += 2
-            continue
-        if line.startswith(prefix):
-            values.append(line.split("=", 1)[1])
-        elif line.startswith(spaced_prefix):
-            values.append(line.split(maxsplit=1)[1])
-        index += 1
-    return values
-
-
-def comma_split_argfile_values(values: list[str]) -> list[str]:
-    return [
-        item.strip()
-        for value in values
-        for item in value.split(",")
-        if item.strip()
-    ]
-
-
-def command_output_values(command: object) -> list[str]:
-    values: list[str] = []
-    for option in ("--out", "--json-out", "--summary-out", "--output"):
-        values.extend(command_option_values(command, option))
-    return values
-
-
-def evidence_path_from_cli_spec(spec: str) -> str:
-    return spec.split("=", 1)[1] if "=" in spec else spec
-
-
-def evidence_kind_from_cli_spec(spec: str) -> str | None:
-    return spec.split("=", 1)[0] if "=" in spec else None
-
-
-def rendered_external_evidence_values(rendered: dict[str, object]) -> list[str]:
-    external_evidence = rendered.get("external_evidence", {})
-    assert isinstance(external_evidence, dict)
-    values: list[str] = []
-    for value in external_evidence.values():
-        if isinstance(value, str):
-            values.append(value)
-        elif isinstance(value, list):
-            values.extend(item for item in value if isinstance(item, str))
-    return values
-
-
-def rendered_plan_steps(rendered: dict[str, object]) -> list[dict[str, object]]:
-    steps = rendered.get("steps")
-    assert isinstance(steps, list)
-    return [step for step in steps if isinstance(step, dict)]
-
-
-def rendered_gate_steps(rendered: dict[str, object]) -> list[dict[str, object]]:
-    return [
-        step
-        for step in rendered_plan_steps(rendered)
-        if step.get("label") in {"rollout_evidence_gate", "release_evidence_gate"}
-    ]
-
-
-def expected_rendered_plan_steps(plan: object) -> list[dict[str, object]]:
-    return [
-        {
-            "label": step.label,
-            "artifact": None if step.artifact is None else str(step.artifact),
-            "command": step.command,
-        }
-        for step in plan
-    ]
-
-
-def runner_inventory_constant_fields(
-    module: object,
-    constant_name: str,
-    failures: list[str],
-) -> set[str] | None:
-    value = getattr(module, constant_name, None)
-    if not isinstance(value, frozenset):
-        failures.append(f"{constant_name}:shape")
-        return None
-    malformed = [
-        field
-        for field in value
-        if (
-            not isinstance(field, str)
-            or not field
-            or field != field.strip()
-            or any(ord(character) < 32 for character in field)
-        )
-    ]
-    if malformed:
-        failures.append(f"{constant_name}:field")
-        return None
-    return set(value)
 
 
 def test_rollout_gate_contract_fixtures_cover_every_checker() -> None:
@@ -6664,32 +6071,27 @@ def test_rollout_runner_step_artifacts_match_command_outputs() -> None:
     assert failures == {}
 
 
-def test_source_entry_runner_examples_cover_required_source_entry_kinds() -> None:
-    missing: dict[str, list[str]] = {}
-    checked: list[str] = []
-    for runner in RUNNERS:
+def test_transparency_runners_require_precollected_producer_evidence() -> None:
+    requirements = {
+        "run_sorafs_ai_prescreen_rollout_evidence.py": (
+            "--transparency-producer-evidence",
+            "validate_transparency_producer_evidence",
+        ),
+        "run_sorafs_transparency_rollout_evidence.py": (
+            "--source-entry-producer-evidence",
+            "validate_source_entry_producer_evidence",
+        ),
+    }
+
+    for runner_name, (option, validator) in requirements.items():
+        runner = SCRIPTS_DIR / runner_name
         source = read(runner)
-        if "--source-entry" not in source:
-            continue
-        module = load_script_module(runner, f"sorafs_source_entry_runner_{runner.stem}")
-        required_kinds = required_source_entry_kinds(module)
-        if not required_kinds:
-            continue
         example = runner_example(runner)
         assert example is not None
-        example_source = read(example)
-        checked.append(runner.name)
-        missing_kinds = sorted(
-            source_kind
-            for source_kind in required_kinds
-            if f"{source_kind}=" not in example_source
-        )
-        if missing_kinds:
-            missing[runner.name] = missing_kinds
-        assert example_source.count("--source-entry") >= len(required_kinds)
-
-    assert checked
-    assert missing == {}
+        assert 'parser.add_argument("--source-entry",' not in source
+        assert option in source
+        assert validator in source
+        assert option in read(example)
 
 
 def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
@@ -6753,22 +6155,12 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
     )
     assert "test_response_file_rejects_duplicate_auth_options_without_values" in reputation_test
     assert "test_auth_option_prefix_abbreviations_fail_without_values" in reputation_test
-    assert "--source-entry must use KIND=PATH form" in ai_runner
-    assert "--source-entry must use KIND=PATH form" in transparency_runner
-    assert "diagnostic_text_is_canonical" in ai_runner
-    assert "diagnostic_text_is_canonical" in transparency_runner
-    assert "not diagnostic_text_is_canonical(source_kind)" in ai_runner
-    assert "not diagnostic_text_is_canonical(source_kind)" in transparency_runner
-    assert "not diagnostic_text_is_canonical(path)" in ai_runner
-    assert "not diagnostic_text_is_canonical(path)" in transparency_runner
-    assert "source_kind.strip()" not in ai_runner
-    assert "source_kind.strip()" not in transparency_runner
-    assert "path.strip()" not in ai_runner
-    assert "path.strip()" not in transparency_runner
-    assert "source-entry supplied for unsupported kind" in ai_runner
-    assert "source-entry supplied for unsupported kind" in transparency_runner
-    assert "duplicate source-entry kind" in ai_runner
-    assert "duplicate source-entry kind" in transparency_runner
+    assert "validate_transparency_producer_evidence" in ai_runner
+    assert "validate_source_entry_producer_evidence" in transparency_runner
+    assert "Generic live source-entry submission is not supported" in ai_runner
+    assert "Generic live source-entry submission is not supported" in transparency_runner
+    assert "TRANSPARENCY_PRODUCER_EVIDENCE_INVALID_DIAGNOSTIC" in ai_runner
+    assert "SOURCE_PRODUCER_EVIDENCE_INVALID_DIAGNOSTIC" in transparency_runner
     assert "CYCLE_ID_HEX_PATTERN" in transparency_runner
     assert "--cycle-id must be a 16-byte lowercase hex string" in transparency_runner
     assert "got `{spec}`" not in ai_runner
@@ -6782,26 +6174,12 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
     assert "got `{existing}`" not in transparency_runner
     assert "test_malformed_provider_proof_does_not_echo_spec" in reputation_test
     assert "test_duplicate_provider_proof_does_not_echo_provider_id" in reputation_test
-    assert "test_malformed_source_entry_does_not_echo_spec" in ai_test
-    assert "test_malformed_source_entry_does_not_echo_spec" in transparency_test
-    assert (
-        "test_source_entry_rejects_padded_or_unicode_components_without_trimming"
-        in ai_test
-    )
-    assert (
-        "test_source_entry_rejects_padded_or_unicode_components_without_trimming"
-        in transparency_test
-    )
-    assert "test_unknown_source_kind_fails_before_plan_without_leaking" in ai_test
-    assert (
-        "test_unknown_source_kind_fails_before_plan_without_leaking"
-        in transparency_test
-    )
-    assert "test_duplicate_source_kind_fails_before_plan_without_leaking" in ai_test
-    assert (
-        "test_duplicate_source_kind_fails_before_plan_without_leaking"
-        in transparency_test
-    )
+    assert "test_transparency_producer_evidence_read_error_is_sanitized" in ai_test
+    assert "test_source_producer_evidence_read_error_is_sanitized" in transparency_test
+    assert "test_transparency_producer_evidence_rejects_generic_public_ingress" in ai_test
+    assert "test_source_producer_evidence_rejects_generic_public_ingress" in transparency_test
+    assert "test_missing_transparency_producer_evidence_fails_before_plan" in ai_test
+    assert "test_missing_source_producer_evidence_fails_before_plan" in transparency_test
     assert (
         "test_generated_artifact_context_conflict_does_not_echo_existing_value"
         in transparency_test
@@ -6835,14 +6213,18 @@ def test_runner_missing_input_diagnostics_are_payload_free() -> None:
         "release evidence supplied for unrequired kind"
         in runner_sources["run_sorafs_reference_sdk_release_evidence.py"]
     )
-    assert (
-        "missing required source-entry coverage"
-        in runner_sources["run_sorafs_ai_prescreen_rollout_evidence.py"]
+    assert "--transparency-producer-evidence" in runner_sources[
+        "run_sorafs_ai_prescreen_rollout_evidence.py"
+    ]
+    assert "pre-collected moderation transparency producer evidence is invalid" in (
+        runner_sources["run_sorafs_ai_prescreen_rollout_evidence.py"]
     )
-    assert (
-        "missing required source-entry coverage"
-        in runner_sources["run_sorafs_transparency_rollout_evidence.py"]
-    )
+    assert "--source-entry-producer-evidence" in runner_sources[
+        "run_sorafs_transparency_rollout_evidence.py"
+    ]
+    assert "pre-collected source-entry producer evidence is invalid" in runner_sources[
+        "run_sorafs_transparency_rollout_evidence.py"
+    ]
     assert (
         "missing --provider-proof for requested provider"
         in runner_sources["run_sorafs_reputation_rollout_evidence.py"]
@@ -6860,11 +6242,11 @@ def test_runner_missing_input_diagnostics_are_payload_free() -> None:
     helper_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_ai_prescreen_rollout_evidence_test.py"
     )
-    assert "dataset_manifest\" not in captured.err" in helper_test
+    assert '"missing-producer-evidence.json" not in captured.err' in helper_test
     helper_test = read(
         SCRIPTS_DIR / "tests" / "run_sorafs_transparency_rollout_evidence_test.py"
     )
-    assert "feed_source\" not in captured.err" in helper_test
+    assert '"missing-producer-evidence.json" not in captured.err' in helper_test
 
 
 def test_sorafs_hedging_billing_observability_pack_is_checked_in() -> None:
@@ -6880,6 +6262,7 @@ def test_sorafs_hedging_billing_observability_pack_is_checked_in() -> None:
 
 def test_sorafs_hedging_billing_observability_metrics_are_registered() -> None:
     source = read(TELEMETRY_METRICS_RS)
+    test_source = read(TELEMETRY_METRICS_TEST_RS)
     expected_names = [
         "torii_sorafs_hedging_xor_usd_reference_price_micro_usd",
         "torii_sorafs_hedging_feed_lag_seconds",
@@ -6899,12 +6282,15 @@ def test_sorafs_hedging_billing_observability_metrics_are_registered() -> None:
         "record_sorafs_billing_statement_generation",
         "set_sorafs_billing_statement_ack_backlog",
         "set_sorafs_billing_escrow_runway_seconds",
-        "records_hedging_billing_metrics_used_by_dashboard_and_alerts",
     ]
     missing_helpers = [helper for helper in expected_helpers if helper not in source]
 
     assert missing_names == []
     assert missing_helpers == []
+    assert (
+        "records_hedging_billing_metrics_used_by_dashboard_and_alerts"
+        in test_source
+    )
 
 
 def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
@@ -7591,8 +6977,7 @@ def test_rollout_runners_use_shared_caught_argument_error_reporting() -> None:
     assert collected_raw_errors == []
     for script_name in collected_error_runners:
         source = read(SCRIPTS_DIR / script_name)
-        assert "from sorafs_path_identity import error_diagnostic_label" in source
-        assert "errors.append(error_diagnostic_label(error))" in source
+        assert "emit_runner_exception(error)" in source
     assert local_parser_error_handlers == []
     assert missing_shared_raises == []
 
@@ -8147,6 +7532,9 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     assert 'prepare_output_directory_path "release output directory"' in packager
     assert packager.count("scripts/copy_release_file.py") == 2
     assert "scripts/capture_release_command.py" in packager
+    assert packager.count("--require-validation-outcome-ok-v1") == 2
+    assert "--expected-validation-code SFS-OK-000" in packager
+    assert "--expected-validation-code SFS-PDP-DIAG-000" in packager
     assert "scripts/build_release_tar_gz.py" in packager
     assert packager.count("scripts/write_release_checksum.py") == 3
     assert "canonical_json_bytes" in packager
@@ -8154,6 +7542,10 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     assert '"commit": os.environ["SORAFS_VALIDATE_PACKAGE_COMMIT"]' in packager
     assert "--source-commit" in packager
     assert "--source-date-epoch" in packager
+    assert "--skip-smoke" not in packager
+    assert '"smoke_checks": True' in packager
+    assert packager.count('"smoke.advert.json"') >= 3
+    assert packager.count('"smoke.bundle.json"') >= 3
     assert "resolve_release_epoch.py" not in packager
     assert "openssl" not in packager.lower()
     for retired in (
@@ -8494,6 +7886,7 @@ def test_sorafs_orchestrator_sdk_parity_gate_uses_no_follow_io() -> None:
 
 def test_sorafs_reference_ffi_header_gate_uses_no_follow_io() -> None:
     header_gate = read(REPO_ROOT / "ci" / "check_sorafs_reference_ffi_header.sh")
+    bridge_gate = read(REPO_ROOT / "ci" / "check_connect_norito_bridge_header.sh")
 
     assert "def read_open_flags() -> int" in header_gate
     assert "def write_open_flags() -> int" in header_gate
@@ -8517,6 +7910,19 @@ def test_sorafs_reference_ffi_header_gate_uses_no_follow_io() -> None:
     assert "os.write(write_fd, chunk)" not in header_gate
     assert 'cp "${RUST_FFI}"' not in header_gate
     assert 'cp "${HEADER}"' not in header_gate
+    for gate, label in (
+        (header_gate, "sorafs-reference-header"),
+        (bridge_gate, "connect-norito-header"),
+    ):
+        assert f'''if ! command -v "${{CC:-cc}}" >/dev/null 2>&1; then
+  echo "[{label}] required C compiler not found: ${{CC:-cc}}" >&2
+  exit 1
+fi''' in gate
+        assert f'''if ! command -v "${{CXX:-c++}}" >/dev/null 2>&1; then
+  echo "[{label}] required C++ compiler not found: ${{CXX:-c++}}" >&2
+  exit 1
+fi''' in gate
+        assert "skipping c" not in gate.lower()
 
 
 def test_sorafs_fixtures_gate_uses_no_follow_alias_json_reads() -> None:
@@ -8943,7 +8349,11 @@ def test_sorafs_operator_helpers_do_not_reintroduce_plain_file_io() -> None:
         for path in sorted(root.rglob("*sorafs*")):
             if not path.is_file():
                 continue
-            if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+            if (
+                "__pycache__" in path.parts
+                or "target" in path.parts
+                or path.suffix in {".pyc", ".pyo"}
+            ):
                 continue
             if SCRIPTS_DIR / "tests" in path.parents:
                 continue
@@ -8972,7 +8382,11 @@ def test_sorafs_operator_helpers_use_shared_path_identity_for_resolution() -> No
         for path in sorted(root.rglob("*sorafs*")):
             if not path.is_file():
                 continue
-            if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+            if (
+                "__pycache__" in path.parts
+                or "target" in path.parts
+                or path.suffix in {".pyc", ".pyo"}
+            ):
                 continue
             if SCRIPTS_DIR / "tests" in path.parents:
                 continue
@@ -15279,6 +14693,30 @@ def test_public_storage_ingest_surface_cannot_be_resurrected() -> None:
     assert all(".ingest_manifest(" not in source for source in torii_storage_writers)
 
 
+def test_synthetic_stored_manifest_compatibility_surface_stays_retired() -> None:
+    store = read(REPO_ROOT / "crates/sorafs_node/src/store.rs")
+    blinded_resolver = read(
+        REPO_ROOT / "crates/iroha_torii/src/sorafs/blinded.rs"
+    )
+
+    for retired_surface in (
+        "StoredManifestParts",
+        "StoredPorTree",
+        "StoredManifest::from_parts",
+        "pub fn from_parts(parts:",
+    ):
+        assert retired_surface not in store
+        assert retired_surface not in blinded_resolver
+
+    for production_path in (
+        "StorageBackend::new(",
+        "ManifestBuilder::new()",
+        ".ingest_manifest(&manifest, &plan, &mut reader)",
+        ".manifest(&manifest_id)",
+    ):
+        assert production_path in blinded_resolver
+
+
 def test_provider_ingest_persists_and_reconciles_governed_signer_policy() -> None:
     pin_registry = read(
         REPO_ROOT
@@ -15340,6 +14778,22 @@ def test_provider_ingest_persists_and_reconciles_governed_signer_policy() -> Non
     assert "newer finalized owner/policy" in closure
     assert "invalidates only `Signing` or provably never-exposed `Signed`" in closure
     assert "What remains is a persisted governed signer-policy" not in closure
+
+
+def test_irohad_runtime_provider_docs_record_stream_token_qualification() -> None:
+    readme = read(REPO_ROOT / "crates" / "irohad" / "README.md")
+    normalized = " ".join(readme.split())
+
+    assert "adapter revision or policy digest" not in normalized
+    assert "stream-token identity gap above remains" not in normalized
+    for marker in (
+        "non-zero adapter revision",
+        "public-policy digest",
+        "Both startup qualification probes are individually identity-fenced",
+        "before and after the external call",
+        "genuine deployment-owned signer matching that exact public binding",
+    ):
+        assert marker in normalized
 
 
 def test_sorafs_node_storage_docs_track_current_readback_routes() -> None:
@@ -15485,29 +14939,76 @@ def test_pop_credentials_docs_do_not_publish_unshipped_operator_commands() -> No
     assert violations == {}
 
 
-def test_pop_credentials_runtime_services_stay_open_in_docs() -> None:
+def test_pop_credentials_docs_match_stock_broker_and_open_deployment_backend() -> None:
     source = read(SORAFS_POP_CREDENTIALS_PLAN)
     normalized = re.sub(r"\s+", " ", source)
-
     required_open = (
-        "SFM-4b1 now has canonical PoP credential payloads, a production cryptographic membership-proof backend, a consensus-owned issuer/registry foundation, a durable issuer/wallet service, and the canonical authenticated Torii V1 API, but it is not yet deployable from the standard `irohad` binary.",
+        "SFM-4b1 now has canonical PoP credential payloads, a production cryptographic membership-proof backend, a consensus-owned issuer/registry foundation, a durable issuer/wallet service, and the canonical authenticated Torii V1 API, plus the standard-`irohad` runtime-broker injection path and public broker server launcher.",
         "`crates/sorafs_node/src/pop_credentials.rs` now owns encrypted enrollment, dual-control approval, HSM-backed issuance, durable registry outbox/dead-letter and finalized reconciliation, encrypted wallet custody, witness synchronization, local proof generation, and exactly-once nullifier consumption.",
         "`crates/iroha_torii/src/sorafs/pop_api.rs` exposes the exact 14-route V1 family for enrollment, approval, issuance, revocation, registry, wallet, proof generation, and verification.",
-        "The remaining local release blocker is `V1-BLOCK-POP-RUNTIME-01`: the standard `irohad` entrypoint does not yet construct and inject a concrete governed production provider registry, and the repository has no deployable shared external-runtime or sidecar adapter implementing that registry.",
-        "This checker is a rollout gate; it does not replace the missing standard-`irohad` external-runtime adapter, HSM/KMS integration, or deployed verifier evidence.",
-        "Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API and durable encrypted workflow are shipped; operator UI, WebAuthn enrollment ceremony, and the deployable external authenticator adapter remain open.",
-        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, HSM interface, strict policy binding, issuance/revocation APIs, and retry-safe outbox are shipped; standard-`irohad` HSM/KMS/provider wiring and deployment evidence remain open.",
-        "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, and durable reconciliation are shipped; standard-daemon transaction/reader adapters and multi-peer evidence remain open.",
-        "Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, and local proof APIs are shipped; a deployable KMS/witness adapter and operator client remain open.",
-        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, and SDK/bridge reference gate are shipped; the external runtime adapter and reviewed deployment evidence remain open.",
-        "`V1-BLOCK-POP-RUNTIME-01` blocks local completion and promotion.",
-        "Until those checks pass, operators must leave `sorafs.storage.pop_credentials.enabled = false`; the intentional enabled-without-runtime startup failure must not be bypassed.",
-        "Resolve `V1-BLOCK-POP-RUNTIME-01` with the shared deployable external-runtime adapter described above; do not add a software-key, file-key, environment, or process-clock fallback.",
-        "Publish operator and juror command documentation only after the still-open CLI and shared external-runtime adapter exist.",
+        "The remaining release blocker is `V1-BLOCK-POP-RUNTIME-01`, but it is no longer a missing standard-daemon injection or shared sidecar transport.",
+        "Stock `irohad` projects the exact public PoP binding into its fixed local broker client, and `RuntimeProviderBrokerDeploymentV1` is the public sidecar launcher.",
+        "The missing deployment package must implement `RuntimeProviderBrokerBackendRegistryV1`, attach a genuine PoP registry to `RuntimeProviderBrokerBackendsV1`, and resolve:",
+        "This checker is a rollout gate; it does not replace the deployment-owned broker executable, genuine HSM/KMS and authentication backends, or deployed verifier evidence.",
+        "Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API, durable encrypted workflow, and broker authentication operation are shipped; operator UI, WebAuthn enrollment ceremony, and a genuine deployment-owned authenticator backend remain open.",
+        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, HSM interface, strict policy binding, issuance/revocation APIs, retry-safe outbox, and standard-daemon broker wiring are shipped; a genuine HSM/KMS backend and deployment evidence remain open.",
+        "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, durable reconciliation, and broker transaction/read operations are shipped; a deployment-owned committed-state backend and multi-peer evidence remain open.",
+        "Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, local proof APIs, and broker wallet operations are shipped; a genuine deployment-owned KMS/witness backend and operator client remain open.",
+        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, SDK/bridge reference gate, and standard broker adapter are shipped; a genuine runtime backend and reviewed deployment evidence remain open.",
+        "`V1-BLOCK-POP-RUNTIME-01` blocks production completion and promotion, not the standard-daemon source integration.",
+        "Operators without that qualified deployment backend must leave `sorafs.storage.pop_credentials.enabled = false`; the intentional enabled-without-runtime startup failure must not be bypassed.",
+        "Resolve `V1-BLOCK-POP-RUNTIME-01` by packaging and supervising the genuine deployment-owned backend through the shipped broker launcher; do not add a software-key, file-key, environment, or process-clock fallback.",
+        "Publish operator and juror command documentation only after the still-open CLI and genuine deployment-owned broker backend exist.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
-
     assert missing == []
+    for stale_claim in (
+        "but it is not yet deployable from the standard `irohad` binary",
+        "the standard `irohad` entrypoint does not yet construct and inject",
+        "no deployable shared external-runtime or sidecar adapter",
+        "no production caller currently supplies",
+        "missing standard-`irohad` external-runtime adapter",
+    ):
+        assert stale_claim not in normalized
+    daemon = read(REPO_ROOT / "crates" / "irohad" / "src" / "main.rs")
+    broker = read(REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_broker.rs")
+    launcher = read(
+        REPO_ROOT
+        / "crates"
+        / "irohad"
+        / "src"
+        / "runtime_provider_broker"
+        / "launcher.rs"
+    )
+    for marker in (
+        "StockRuntimeProviderBrokerRegistryV1::new",
+        "sorafs_pop_runtime::build",
+        "runtime_provider_registry::resolve_runtime_deps",
+    ):
+        assert marker in daemon
+    for marker in (
+        "OPERATION_POP_RUNTIME_OPEN_V1",
+        "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1",
+        "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1",
+        "OPERATION_POP_ISSUER_SIGN_V1",
+        "OPERATION_POP_AUTHENTICATE_V1",
+        "OPERATION_POP_REGISTRY_SUBMIT_V1",
+        "OPERATION_POP_REGISTRY_NEXT_V1",
+        "OPERATION_POP_ISSUANCE_DRAFT_V1",
+        "OPERATION_POP_WALLET_WRAP_DEK_V1",
+        "OPERATION_POP_WALLET_UNWRAP_DEK_V1",
+        "OPERATION_POP_WALLET_WITNESS_V1",
+        "OPERATION_POP_FINALIZED_TIME_V1",
+        "PopCredentialProviderRegistry",
+    ):
+        assert marker in broker
+    assert "OPERATION_POP_RUNTIME_RESOLVE_V1" not in broker
+    for marker in (
+        "RuntimeProviderBrokerBackendRegistryV1",
+        "RuntimeProviderBrokerDeploymentV1",
+        "serve_runtime_provider_broker_with_lifecycle_v1",
+    ):
+        assert marker in launcher
 
 
 def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
@@ -16535,7 +16036,7 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`.",
         "its dry-run JSON includes the checker-backed `evidence_contract` map with the schema and required payload fields for every SFM-4a evidence kind, and the runner validates the schema-closed collection plan, external evidence map, evidence contract, and command steps before dry-run output or live canaries.",
-        "It also rejects duplicate or unsupported `--source-entry` kinds before dry-run output or live canaries.",
+        "It requires a pre-collected `--transparency-producer-evidence` artifact and validates its schema, freshness, deployment context, durable provenance, and absence of generic public ingress before dry-run output or live canaries.",
         "cross-artifact runner/workflow binding failures are reflected on the offending artifacts in the emitted summary.",
         "Committee artifacts also bind `result_count` to the unique canonical `results[].name` inventory, require reviewed `ai-prescreen-committee-result-*` labels without non-production markers, and reject duplicate committee-result entries before promotion can report ready.",
         "Runner and committee artifacts must use reviewed `cid:*` subject references without non-production markers",
@@ -16544,9 +16045,9 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
         "The AI prescreen gate fail-closes when more than one valid runner, workflow, notification manifest, executor summary, or policy anchor appears, and clears the mixed `valid_runner_bindings`, `valid_workflow_digests`, `valid_notification_manifest_digests`, `valid_executor_summary_digests`, or `valid_policy_digests` set before aggregate promotion can report ready.",
         "Operator workflow artifacts also bind `route_count` and `passed_route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready.",
         "Juror notification transport artifacts also bind `probe_count` and `accepted_count` to the unique canonical `probes[].delivery_id` inventory and require reviewed `ai-prescreen-notification-delivery-*` labels without non-production markers, at least one accepted notification delivery, and coverage for both shipped `submit_commit` and `submit_reveal` actions before promotion can report ready.",
-        "Transparency publication artifacts also bind `probe_count`, `passed_probe_count`, and `source_entry_probe_count` to the unique canonical `probes[].source_kind` inventory, require source-entry probe coverage for every required transparency source kind, and reject duplicate or unknown source-entry probes before promotion can report ready.",
-        "Transparency publication artifacts must explicitly set `payload_bytes_included`, `private_payloads_included`, and `response_bodies_included` to `false` before promotion can report ready.",
-        "AI pre-screen payload-safety artifacts must also explicitly set `payload_bytes_included` and `private_payloads_included` to `false` on operator workflow, juror notification transport, commit/reveal executor, transparency publication, Governance DAG, end-to-end workflow, and their nested route, probe, artifact, and execution-summary records; executor artifacts must set `private_payload_files_copied` to `false`, and transparency probes must set `response_body_included` to `false` before promotion can report ready.",
+        "Moderation transparency producer evidence binds `producer_count` to the unique canonical `producers[].source_kind` inventory, requires every reviewed moderation source kind, and rejects duplicate or unknown producers before promotion can report ready.",
+        "Transparency publication artifacts must explicitly set `payload_bytes_included` and `private_payloads_included` to `false` before promotion can report ready.",
+        "AI pre-screen payload-safety artifacts must also explicitly set `payload_bytes_included` and `private_payloads_included` to `false` on operator workflow, juror notification transport, commit/reveal executor, transparency publication, Governance DAG, end-to-end workflow, and their nested route, producer, artifact, and execution-summary records; executor artifacts must set `private_payload_files_copied` to `false` before promotion can report ready.",
         "Commit/reveal executor artifacts also bind `artifact_count` and `passed_artifact_count` to the unique canonical `artifacts[].name` inventory and require the reviewed executor bundle to cover `executor.env` and `run.sh`.",
         "Commit/reveal executor evidence must also use the reviewed `sorafs-moderation-ballots-executor` service identity before promotion can report ready.",
         "Duplicate or unknown artifact entries are rejected before promotion can report ready.",
@@ -16696,19 +16197,18 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     )
     assert "every route response must include a `body_blake3_hex` digest" in normalized_plan
     assert 'require_minimum_int(payload, "accepted_count", 1, errors)' in checker
+    assert 'require_bool_true(payload, "generic_public_ingress_absent", errors)' in checker
     assert (
-        "require_minimum_int(\n"
+        "require_string_inventory_count_match(\n"
         "        payload,\n"
-        "        \"source_entry_probe_count\",\n"
-        "        len(REQUIRED_TRANSPARENCY_SOURCE_KINDS),"
+        "        \"producers\",\n"
+        "        \"producer_count\","
     ) in checker
     assert 'require_false(payload, "payload_bytes_included", errors)' in checker
     assert 'require_false(payload, "private_payloads_included", errors)' in checker
-    assert 'require_false(payload, "response_bodies_included", errors)' in checker
     assert 'require_false(payload, "private_payload_files_copied", errors)' in checker
     assert 'require_false(record, "payload_bytes_included", errors)' in checker
     assert 'require_false(record, "private_payloads_included", errors)' in checker
-    assert 'require_false(record, "response_body_included", errors)' in checker
     assert 'require_false(summary, "payload_bytes_included", errors)' in checker
     assert 'require_false(summary, "private_payloads_included", errors)' in checker
     assert (
@@ -16758,13 +16258,14 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     assert "test_executor_artifacts_must_not_include_unknown_values" in checker_test
     assert "test_executor_artifacts_must_cover_required_bundle_files" in checker_test
     assert "test_executor_service_name_must_match_reviewed_service" in checker_test
-    assert "test_transparency_probe_count_must_match_unique_source_kinds" in checker_test
-    assert "test_transparency_probes_must_not_duplicate_source_kind" in checker_test
+    assert "test_transparency_producer_count_must_match_inventory" in checker_test
+    assert "test_transparency_producers_must_not_duplicate_source_kind" in checker_test
     assert (
         "test_transparency_source_kinds_must_not_include_unknown_values"
         in checker_test
     )
-    assert "test_transparency_source_entry_probe_count_must_match_probe_count" in checker_test
+    assert "test_transparency_producer_evidence_rejects_generic_public_ingress" in checker_test
+    assert "test_transparency_producer_provenance_is_required" in checker_test
     assert "test_governance_producer_count_must_match_unique_producers" in checker_test
     assert "test_governance_producers_must_not_duplicate" in checker_test
     assert "test_governance_producers_must_not_include_unknown_values" in checker_test
@@ -16803,15 +16304,15 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     roadmap = read(REPO_ROOT / "roadmap.md")
 
     assert "Build payload-free non-runner SoraFS AI pre-screening canary artifacts." in builder
-    assert 'LIVE_PROBE_ONLY_KINDS = ("runner", "committee")' in builder
-    assert "if kind not in LIVE_PROBE_ONLY_KINDS" in builder
-    assert "Runner and committee evidence must come from deployed live-probe commands." in builder
+    assert 'EXTERNAL_EVIDENCE_ONLY_KINDS = ("runner", "committee", "transparency_publication")' in builder
+    assert "kind not in EXTERNAL_EVIDENCE_ONLY_KINDS" in builder
+    assert "transparency producer evidence must come from trusted internal producers" in builder
     assert "validate_evidence_payload(" in builder
     assert "ValidationOptions(" in builder
     assert "now_unix=args.now_unix" in builder
     assert 'parser.add_argument("--now-unix", type=positive_int_arg, required=True)' in builder
     assert "REQUIRED_OPERATOR_ROUTES" in builder
-    assert "REQUIRED_TRANSPARENCY_SOURCE_KINDS" in builder
+    assert "REQUIRED_TRANSPARENCY_SOURCE_KINDS" not in builder
     assert "REQUIRED_GOVERNANCE_PRODUCERS" in builder
     assert "REQUIRED_E2E_STEPS" in builder
     assert "REQUIRED_EXECUTOR_SERVICE_NAME" in builder
@@ -16908,7 +16409,7 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
         "test_path_arguments_reject_encoded_or_platform_values_without_leaking"
         in builder_tests
     )
-    assert "test_builder_rejects_live_probe_only_kinds" in builder_tests
+    assert "test_builder_rejects_external_evidence_only_kinds" in builder_tests
     assert "test_generated_non_live_canaries_pass_their_kind_contract" in builder_tests
     assert "test_operator_workflow_canary_records_passed_route_count" in builder_tests
     assert "test_governance_edge_inventory_must_match_edge_count" in builder_tests
@@ -17198,7 +16699,7 @@ def test_moderation_panel_parent_services_stay_open_in_docs() -> None:
     required_open = (
         "The process-local sorafs_node ballot runtime, checkpoint, event stream, and caller-fed projection have been deleted.",
         "Torii transports exact signed native instructions and serves only reconciled finalized-chain projections.",
-        "the repository still lacks a real store adapter and reviewed reference-deployment evidence for multi-replica CAS, the complete moderation service, evidence viewer, juror notification/portal workflow, downstream settlement/publication, and four-validator recovery scenarios.",
+        "The repository still lacks those deployment adapters and reviewed evidence for multi-replica CAS, the complete moderation service, evidence viewer, juror notification/portal workflow, downstream settlement/publication, and four-validator recovery scenarios.",
         "The production service still needs deployed integrations that bind:",
         "evidence access attestation",
         "decision publication and appeal cache updates.",
@@ -18185,6 +17686,7 @@ def test_reputation_bootstrap_view_uses_full_exact_request_validation() -> None:
 
 def test_reputation_external_publication_dependencies_are_fenced() -> None:
     node_source = read(SORAFS_REPUTATION_RUNTIME_RS)
+    publication_test_source = read(SORAFS_REPUTATION_PUBLICATION_TEST_RS)
     daemon_source = read(IROHAD_REPUTATION_RUNTIME_RS)
 
     signing_call = node_source.index(
@@ -18210,9 +17712,13 @@ def test_reputation_external_publication_dependencies_are_fenced() -> None:
         "hasher.update(publisher_peer_id);",
         "hasher.update(&publisher_public_key);",
         "governance_dag_policy_digest",
-        "publication_construction_rejects_same_key_different_peer_qualification",
     ):
         assert phrase in node_source
+    assert "mod publication_admission;" in node_source
+    assert (
+        "publication_construction_rejects_same_key_different_peer_qualification"
+        in publication_test_source
+    )
 
     assert (
         "assembly_rejects_same_key_different_governance_peer_before_state_open"
@@ -20579,7 +20085,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "Remaining SF-11 work is release evidence and SDK distribution: per-target published archives, signed release manifests, published downstream binding packages, and live operator smoke records.",
+        "Remaining SF-11 work is native qualification, release evidence, and SDK distribution: clean five-target ABI-21 rebuilds, skip-free parity replay, published archives and bindings, signed manifests, and live operator smokes.",
         "Remaining downstream work is signed release packaging, publication, and live SDK smoke evidence for those bindings.",
         "Cross-target release evidence is still a production gate; archive published checksums and smoke outputs for each supported release target and require the SF-11 release evidence gate to pass before declaring those artifacts production-ready.",
         "Final release-specific URLs, signatures, and package versions remain SF-11 release evidence.",
@@ -20598,7 +20104,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "Aggregate promotion also rechecks the lane-proven reference SDK release digest relationships: manifest-bound artifact fingerprints must match `valid_release_manifest_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`, and governance-approval release-key fingerprints must match `valid_release_key_fingerprints` before final promotion can report ready.",
         "The reference SDK release gate fail-closes when more than one valid release manifest, policy, or release key anchor appears, and clears the mixed `valid_release_manifest_digests`, `valid_policy_digests`, or `valid_release_key_fingerprints` set before aggregate promotion can report ready.",
         "Release-manifest, policy, and release-key binding failures are recorded on the offending artifact before required-kind validity is computed, so the JSON summary matches the fail-closed release decision.",
-        "digests, an explicit `external_ed25519_hsm` provider and positive revision, governance approval policy and `--public-key-fingerprint-hex` inputs",
+        "digests, an explicit `authenticated_external_signer` provider, exact `software` backend, and positive revision, governance approval policy and `--public-key-fingerprint-hex` inputs",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
         "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, Swift, and C# wrappers",
         "Archive live operator smoke evidence for the published `sorafs-validate` archives and cookbook replay before declaring SF-11 fully released",
@@ -20673,7 +20179,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
     )
     assert "test_signed_manifest_rejects_rsa_sha256_signature_algorithm" in checker_test
     assert "test_signed_manifest_rejects_unsupported_signature_algorithm" in checker_test
-    assert "test_signed_manifest_requires_external_hsm_provider" in checker_test
+    assert "test_signed_manifest_rejects_legacy_or_unapproved_provider" in checker_test
     assert "test_supply_chain_requires_all_five_targets" in checker_test
     assert "test_supply_chain_rejects_high_vulnerabilities" in checker_test
     assert "sorafs.reference_sdk.supply_chain_canary.v1" in checker
@@ -21599,9 +21105,9 @@ def test_pdp_provider_protocol_exposes_only_the_canonical_v1_api_family() -> Non
     assert exposed == {}
 
 
-def test_governance_dag_ipfs_ipns_service_is_documented_as_shipped() -> None:
+def test_governance_dag_publication_service_is_documented_as_shipped() -> None:
     source = read(SORAFS_GOVERNANCE_DAG_PLAN)
-    service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
+    service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS) + read(SORAFS_GOVERNANCE_DAG_SERVICE_RS.parent / "governance_service/tests/restart_and_live_kubo.rs")
 
     outstanding_start = source.index("Still outstanding:")
     outstanding_end = source.index("\n## Goals & Scope", outstanding_start)
@@ -21614,44 +21120,127 @@ def test_governance_dag_ipfs_ipns_service_is_documented_as_shipped() -> None:
         "authenticated HTTP compare-and-swap or IPNS resolve/publish/",
         "A service-specific authenticated checkpoint and write-ahead publish intent",
         "bounded public mirror, head, block, node, checkpoint, health, and Prometheus surface",
+        "The standard outbound path already consumes verified nonces through separate sealed IPFS and signed-head slots",
+        "receiver-side sealed cross-replica replay adapter",
     )
     normalized_source = re.sub(r"\s+", " ", source)
     assert [phrase for phrase in required_shipped if phrase not in normalized_source] == []
-    assert "unimplemented IPFS/IPNS publisher" in normalized_source
-    assert "deployment/package integration" in normalized_source
+    assert "reconciled SF-12 rollout gate" in normalized_outstanding
     assert "RocksDB/IPLD backend only if" in normalized_outstanding
-    assert "IPFS Cluster pinning and IPNS head publication" not in normalized_outstanding
+    assert "Reconcile the rollout checker" not in normalized_outstanding
 
     for marker in (
         "async fn ipfs_add_verified(",
         "async fn ipfs_pin(",
         "async fn ipfs_verify_pin(",
         "async fn ipfs_cat(",
-        "async fn publish_ipns_head(",
+        "async fn put_signed_http_head(",
+        "async fn fetch_signed_http_head(",
         "GovernanceDagSealedCheckpointStore",
         "GovernanceDagSealedStateSlot::PublishIntent",
+        "GovernanceDagSealedStateSlot::IpfsRequestReplay",
+        "GovernanceDagSealedStateSlot::SignedHeadRequestReplay",
+        "consume_sealed_request_auth_nonce",
         "run_governance_dag_service",
         '"/v1/sorafs/governance/dag/checkpoint"',
         "sorafs_governance_dag_ipfs_pin_lag_seconds",
-        "real_kubo_publication_ipns_restart_and_tamper_lane",
+        "real_kubo_publication_signed_head_restart_and_tamper_lane",
     ):
         assert marker in service
+
+
+def test_governance_dag_rollout_constants_and_bindings_are_source_bound() -> None:
+    checker = read(SCRIPTS_DIR / "check_sorafs_governance_dag_rollout_evidence.py")
+    service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
+    governance = read(SORAFS_GOVERNANCE_RS)
+    kubo_workflow = read(SORAFS_GOVERNANCE_DAG_KUBO_WORKFLOW)
+
+    for checker_marker, source_marker in (
+        (
+            "KUBO_UNIXFS_CHUNK_SIZE_BYTES = 1024 * 1024",
+            "const IPFS_UNIXFS_CHUNK_BYTES: usize = 1024 * 1024;",
+        ),
+        (
+            "KUBO_UNIXFS_MAX_LINKS_PER_NODE = 1024",
+            "const IPFS_UNIXFS_MAX_FILE_LINKS: usize = 1024;",
+        ),
+        (
+            "MIRROR_RETENTION_MAX_ENTRIES = 65_536",
+            "pub const GOVERNANCE_DAG_MIRROR_MAX_ENTRIES_V1: usize = 65_536;",
+        ),
+        (
+            "MIRROR_RETENTION_MAX_BYTES = 512 * 1024 * 1024",
+            "pub const GOVERNANCE_DAG_MIRROR_MAX_BYTES_V1: u64 = 512 * 1024 * 1024;",
+        ),
+        (
+            "STEADY_AUDIT_MAX_ENTRIES_PER_POLL = 64",
+            "const STEADY_IPFS_AUDIT_MAX_ENTRIES_PER_POLL: usize = 64;",
+        ),
+        (
+            "STEADY_AUDIT_MAX_BYTES_PER_POLL = 16 * 1024 * 1024",
+            "const STEADY_IPFS_AUDIT_MAX_BYTES_PER_POLL: u64 = 16 * 1024 * 1024;",
+        ),
+    ):
+        assert checker_marker in checker
+        assert source_marker in service
+
+    for marker in (
+        '("cid-version", "1")',
+        '("hash", "sha2-256")',
+        '("chunker", "size-1048576")',
+        '("max-file-links", "1024")',
+        '("raw-leaves", "true")',
+        'const KUBO_CONFORMANCE_VERSION_V1: &str = "0.42.0";',
+        '("below-chunk", IPFS_UNIXFS_CHUNK_BYTES - 1)',
+        '("at-chunk", IPFS_UNIXFS_CHUNK_BYTES)',
+        '("over-chunk", IPFS_UNIXFS_CHUNK_BYTES + 1)',
+        '("max-object", GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1)',
+    ):
+        assert marker in service
+    for marker in (
+        "GOVERNANCE_DAG_REQUEST_INGRESS_BINDING_DOMAIN_V1",
+        "pub fn binding_digest(self) -> [u8; 32]",
+        "pub struct GovernanceDagVerifiedHttpRequestV1",
+        "pub fn verify_http_request<B: AsRef<[u8]>>",
+        "request_receiver_accepts_real_http1_host_and_blocks_boundary_bypasses",
+    ):
+        assert marker in governance
+    for marker in (
+        "state.metrics.mirror_drift = 1;",
+        "failed_object_repair_latches_mirror_drift_until_coherent_retry",
+    ):
+        assert marker in service
+    for marker in (
+        '"kubo_ingress_binding_digest_hex"',
+        '"signed_head_ingress_binding_digest_hex"',
+    ):
+        assert marker in checker
+    for marker in (
+        "KUBO_VERSION: v0.42.0",
+        "KUBO_LINUX_AMD64_SHA512:",
+        "sha512sum --check --strict",
+        "SORAFS_RUN_KUBO_INTEGRATION: \"1\"",
+        "real_kubo_publication_signed_head_restart_and_tamper_lane",
+        "-- --ignored --exact --nocapture",
+    ):
+        assert marker in kubo_workflow
 
 
 def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "the runner dry-run emits the checker-backed `evidence_contract` map for selected SF-12 evidence kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
-        "Mirror datastore, checkpoint recovery, dashboard, observability, IPFS/IPNS end-to-end, and governance approval artifacts must carry the same `public_head_cid_hex` as a valid publisher-service artifact",
-        "Ingest-service artifacts also bind `source_count` to the unique canonical `payload_kinds` inventory and reject duplicate or unknown payload-kind entries before promotion can report ready",
-        "Publisher-service and IPFS/IPNS end-to-end artifacts also bind `block_count` to the unique canonical `block_refs` inventory, bind `payload_kind_count` to the unique canonical `payload_kinds` inventory, require reviewed `governance-dag-block-*` block-reference labels without non-production markers, and reject duplicate block-reference entries and duplicate or unknown payload-kind entries before promotion can report ready",
+        "Evidence payloads and nested dashboard route rows are schema-closed.",
+        "Mirror datastore, checkpoint recovery, dashboard, observability, `publication_e2e`, and governance approval artifacts must carry the same `public_head_cid_hex` as a valid publisher-service artifact",
+        "governance approval artifacts must match that publisher policy digest plus its receiver-policy, replay-namespace, and replica-set qualification digests and the complete per-Kubo and per-signed- head ingress-binding digests before promotion.",
+        "Publisher evidence must prove the deterministic 1 MiB/raw-leaf/balanced Kubo UnixFS profile, locally derived CIDv1 SHA-256 roots, strong single-ETag signed-HTTP CAS and readback, and the exact exclusive receiver/shared sealed atomic replay qualification.",
+        "Mirror and governance evidence must bind the protocol-fixed 65,536-block/512 MiB suffix.",
+        "Recovery, observability, dashboard, and `publication_e2e` evidence respectively prove same-CID post-loss repair, the full-first then 64-entry/16 MiB rotating audit, fresh checkpoint-coherent reads, and reader withdrawal after service liveness ends.",
         "Dashboard API artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready",
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metric entries before promotion can report ready",
-        "Governance DAG payload-safety artifacts must explicitly set `payload_bytes_included`, `raw_head_included`, `raw_car_included`, `mirror_drift_detected`, `raw_blocks_included`, `raw_checkpoint_included`, `response_bodies_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
         "Governance DAG aggregate promotion also rechecks the lane-proven relationships: public-head bound artifact fingerprints must match `valid_public_head_cids`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
-        "Governance DAG rollout summaries must expose exactly one active public head CID, one active publisher policy digest, and one active checkpoint digest; mixed valid public-head, policy, or checkpoint anchors fail closed before final promotion can report ready.",
-        "collection planner with dry-run evidence-contract export and schema-closed plan validation",
+        "Governance DAG rollout summaries must expose exactly one active public head CID, publisher policy digest, checkpoint digest, receiver-policy digest, replay-namespace digest, replica-set digest, Kubo ingress-binding digest, and signed-head ingress-binding digest; mixed valid anchors fail closed before final promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -21702,13 +21291,16 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
     assert "value.strip() not in REQUIRED_PAYLOAD_KIND_SET" not in checker
     assert "value not in REQUIRED_PAYLOAD_KIND_SET" in checker
     assert "def require_only_required_values(" in checker
+    assert "def require_exact_fields(" in checker
+    assert "EVIDENCE_REQUIRED_FIELDS[kind.name]" in checker
+    assert "ROUTE_REQUIRED_FIELDS" in checker
     assert "BLOCK_REF_LABEL_PATTERN" in checker
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in checker
     assert "require_scalar_inventory_labels(" in checker
     assert "pattern=BLOCK_REF_LABEL_PATTERN" in checker
     assert 'require_false(payload, "payload_bytes_included", errors)' in checker
     assert 'require_false(payload, "raw_head_included", errors)' in checker
-    assert 'require_false(payload, "raw_car_included", errors)' in checker
+    assert '"raw_car",' in checker
     assert 'require_false(payload, "mirror_drift_detected", errors)' in checker
     assert 'require_false(payload, "raw_blocks_included", errors)' in checker
     assert 'require_false(payload, "raw_checkpoint_included", errors)' in checker
@@ -21753,10 +21345,16 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
         "test_publisher_payload_kinds_must_not_include_unknown_values"
         in checker_test
     )
-    assert "test_ipfs_block_refs_must_not_duplicate" in checker_test
-    assert "test_ipfs_block_refs_must_use_production_family" in checker_test
-    assert "test_ipfs_payload_kinds_must_not_duplicate" in checker_test
-    assert "test_ipfs_payload_kinds_must_not_include_unknown_values" in checker_test
+    assert "test_publication_block_refs_must_not_duplicate" in checker_test
+    assert "test_publication_block_refs_must_use_production_family" in checker_test
+    assert "test_publication_payload_kinds_must_not_duplicate" in checker_test
+    assert "test_publication_payload_kinds_must_not_include_unknown_values" in checker_test
+    assert "test_evidence_payloads_are_schema_closed" in checker_test
+    assert "test_publisher_requires_fixed_unixfs_and_signed_http_contract" in checker_test
+    assert "test_publisher_requires_qualified_exclusive_ingress_and_shared_replay" in checker_test
+    assert "test_governance_approval_must_bind_publisher_ingress_qualification" in checker_test
+    assert "test_fixed_retention_contract_is_exact_across_mirror_and_approval" in checker_test
+    assert "test_rotating_audit_budgets_are_fixed_v1_values" in checker_test
     assert (
         "test_payload_kinds_reject_trim_normalized_and_unicode_variants"
         in checker_test
@@ -21831,7 +21429,11 @@ def test_governance_dag_canary_builder_is_checked_in() -> None:
     assert "write_payload_atomic" in builder
     assert "must not be a symlink" in builder
     assert "raw_head_included" in builder
-    assert "raw_car_included" in builder
+    assert "KUBO_UNIXFS_PROFILE" in builder
+    assert "MIRROR_RETENTION_MAX_ENTRIES" in builder
+    assert "STEADY_AUDIT_MAX_ENTRIES_PER_POLL" in builder
+    assert "INGRESS_QUALIFICATION_DIGEST_KINDS" in builder
+    assert "--receiver-policy-digest-hex" in builder
     assert "raw_checkpoint_included" in builder
     assert "response_bodies_included" in builder
     assert "test_generated_canaries_pass_full_governance_dag_gate" in builder_test
@@ -21846,11 +21448,13 @@ def test_governance_dag_canary_builder_is_checked_in() -> None:
         "test_publisher_block_ref_inventory_rejects_placeholder_marker"
         in builder_test
     )
-    assert "test_ipfs_block_ref_inventory_must_match_block_count" in builder_test
+    assert "test_publication_block_ref_inventory_must_match_block_count" in builder_test
     assert (
-        "test_ipfs_block_ref_inventory_must_use_production_family"
+        "test_publication_block_ref_inventory_must_use_production_family"
         in builder_test
     )
+    assert "test_generated_canaries_encode_fixed_first_release_constants" in builder_test
+    assert "test_ingress_qualification_digests_are_required_before_write" in builder_test
     assert "test_missing_dashboard_route_coverage_fails_closed" in builder_test
     assert "test_dashboard_canary_requires_route_body_digest" in builder_test
     assert "test_unknown_verified_claim_fails_before_write" in builder_test
@@ -21868,14 +21472,17 @@ def test_governance_dag_canary_builder_is_checked_in() -> None:
     assert "test_output_symlink_is_rejected" in builder_test
     assert "--kind publisher_service" in publisher_example
     assert "--policy-digest-hex" in publisher_example
+    assert "--receiver-policy-digest-hex" in publisher_example
     assert "--block-ref governance-dag-block-07" in publisher_example
-    assert "--verified-claim car_segments_pinned" in publisher_example
+    assert "--verified-claim strong_single_etag_verified" in publisher_example
+    assert "--verified-claim authenticated_ingress_qualified" in publisher_example
     assert "--payload-kind orderbook-settlement-receipt" in publisher_example
     assert "--kind dashboard_api" in dashboard_example
     assert "--route checkpoint" in dashboard_example
     assert "--route-body-blake3-hex" in dashboard_example
+    assert "--verified-claim reader_withdrawal_verified" in dashboard_example
     assert "build_sorafs_governance_dag_canary.py" in docs
-    assert "payload-free Governance DAG canary builder" in docs
+    assert "payload-free canary JSON" in docs
     assert "--route-body-blake3-hex" in docs
 
 
@@ -23447,18 +23054,10 @@ def test_shipped_hedging_billing_service_surface_is_exact_and_authenticated() ->
     assert "runtime.daemon_status()" in status_handler
     assert "require_billing_manager" not in status_handler
 
-    daemon_status_struct = service_source[
-        service_source.index(
-            "pub struct HedgingBillingDaemonStatusV1"
-        ) : service_source.index("pub struct HedgingBillingDaemonMetricsV1")
-    ]
-    for required_field in (
-        "pub anchor: HedgingBillingProjectionAnchorV1",
-        "pub last_tick_fresh: bool",
-        "pub finalized_projection_ready: bool",
-        "pub ready: bool",
-    ):
-        assert required_field in daemon_status_struct
+    assert_shipped_hedging_billing_freshness_contract(
+        service_source=service_source,
+        runtime_source=runtime_source,
+    )
 
     assert "struct BillingAcknowledgementProofBodyV1" not in api_source
     assert "struct SorafsBillingAcknowledgementProof" not in client_source
@@ -23523,25 +23122,6 @@ def test_shipped_hedging_billing_service_surface_is_exact_and_authenticated() ->
         assert required_preimage in digest_function
     assert "request_nonce == [0; 32]" in digest_function
     assert "authentication_proof" not in digest_function
-
-    runtime_status = runtime_source[
-        runtime_source.index("pub fn status(") : runtime_source.index(
-            "pub fn metrics("
-        )
-    ]
-    normalized_runtime_status = re.sub(r"\s+", " ", runtime_status)
-    for readiness_guard in (
-        "last_tick_fresh",
-        "finalized_projection_ready",
-        "cursor.height != 0",
-        "finalized_head_height >= cursor.height",
-        "finalized_lag_blocks <= self.inner.config.max_finalized_lag_blocks",
-        "&& last_tick_fresh",
-        "&& finalized_projection_ready",
-    ):
-        assert readiness_guard in normalized_runtime_status
-    assert "READINESS_STALE_TICK_MULTIPLIER_V1" in normalized_runtime_status
-    assert "*freshness_guard = Some(Instant::now());" in runtime_source
 
     method_guard = api_source[
         api_source.index("fn require_method(") : api_source.index(
@@ -23792,6 +23372,32 @@ def test_production_evidence_viewer_service_surface_is_exposed_once() -> None:
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-access"
         not in catalog
     )
+    retired_viewer_routes = (
+        "/v1/sorafs/moderation/viewer-audit-reports",
+        "/v1/sorafs/moderation/viewer-audit-reports/publish-due",
+    )
+    for route in retired_viewer_routes:
+        assert route not in catalog
+        assert route not in torii
+        assert f'paths.insert(\n        "{route}".to_owned(),' not in openapi
+
+    authenticated_appeal_finance_publication_routes = (
+        "/v1/sorafs/appeals/finance/reports",
+        "/v1/sorafs/appeals/finance/weekly-rollups",
+    )
+    openapi_artifacts = REPO_ROOT / "artifacts" / "openapi"
+    for spec_path in (
+        openapi_artifacts / "torii.json",
+        openapi_artifacts / "versions" / "current" / "torii.json",
+    ):
+        paths = json.loads(read(spec_path))["paths"]
+        for route in retired_viewer_routes:
+            assert route not in paths
+        for route in authenticated_appeal_finance_publication_routes:
+            operations = paths[route]
+            assert set(operations) == {"get", "post"}
+            post = operations["post"]
+            assert post["security"] and "202" in post["responses"] and "200" not in post["responses"]
 
 
 def test_evidence_viewer_canary_builder_is_checked_in() -> None:
@@ -23963,7 +23569,26 @@ def test_commit_reveal_torii_no_show_plan_readback_regressions_are_pinned() -> N
     source = read(TORII_SORAFS_API_RS)
     openapi = read(TORII_OPENAPI_RS)
     router = read(TORII_LIB_RS)
-    orchestrator = read(SORAFS_MODERATION_ORCHESTRATOR_RS)
+    orchestrator = "\n".join(
+        (
+            read(SORAFS_MODERATION_ORCHESTRATOR_RS),
+            read(
+                SORAFS_MODERATION_ORCHESTRATOR_RS.parent
+                / "moderation_orchestrator"
+                / "support_and_provider_tests.rs"
+            ),
+            read(
+                SORAFS_MODERATION_ORCHESTRATOR_RS.parent
+                / "moderation_orchestrator"
+                / "operation_tests.rs"
+            ),
+            read(
+                SORAFS_MODERATION_ORCHESTRATOR_RS.parent
+                / "moderation_orchestrator"
+                / "panel_notification_tests.rs"
+            ),
+        )
+    )
 
     handler_start = source.find(
         "pub(crate) async fn handle_get_sorafs_moderation_ballot_no_show_plan"
@@ -25401,9 +25026,9 @@ def test_transparency_deployed_services_stay_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "It does not yet ship deployed GAR/moderation/appeal producers that call the source-entry route, captured deployed aggregate producer/scheduler rollout evidence, proof service hardening, deployed public receipt explorer rollout evidence, deployed proof-token issuance producers/explorer-linking rollout evidence, or deployed moderation ledger publication service described by the original plan.",
-        "The local ledger layer now covers bundle materialization and readback; remaining deployed-service work is to wire live producer, anchoring, explorer, proof-token, and hardening evidence for:",
-        "deployed GAR/moderation/appeal/legal-hold/redaction/evidence-viewer/proof-token issuance service producers and captured rollout evidence remain open",
+        "It does not yet ship deployed GAR/moderation/appeal producers wired through trusted internal adapters, captured deployed aggregate producer/scheduler rollout evidence, proof service hardening, deployed public receipt explorer rollout evidence, deployed proof-token issuance producers/explorer-linking rollout evidence, or deployed moderation ledger publication service described by the original plan.",
+        "trusted in-process producer boundary with no generic public source-entry write route",
+        "deployed trusted GAR/moderation/appeal/legal-hold/redaction/evidence-viewer/proof-token producers and captured rollout evidence remain open",
         "deployed anchoring and captured service rollout evidence remain open",
         "deployed service hardening and captured public rollout evidence are not shipped",
         "captured deployed public rollout evidence is not shipped",
@@ -25420,6 +25045,241 @@ def test_transparency_deployed_services_stay_open_in_docs() -> None:
     assert missing == []
 
 
+def test_transparency_stock_broker_wiring_is_complete_and_deployment_backends_stay_open() -> None:
+    registry_root = REPO_ROOT / "crates" / "irohad" / "src"
+    registry = re.sub(
+        r"\s+",
+        "",
+        "\n".join(
+            (
+                read(registry_root / "runtime_provider_registry.rs"),
+                read(
+                    registry_root
+                    / "runtime_provider_registry"
+                    / "registry_tail_tests.rs"
+                ),
+            )
+        ),
+    )
+    binding_collection = re.sub(
+        r"\s+",
+        "",
+        read(
+            REPO_ROOT
+            / "crates"
+            / "irohad"
+            / "src"
+            / "runtime_provider_registry"
+            / "binding_collection.rs"
+        ),
+    )
+    dependency_scope = re.sub(
+        r"\s+",
+        "",
+        read(
+            REPO_ROOT
+            / "crates"
+            / "irohad"
+            / "src"
+            / "runtime_provider_registry"
+            / "dependency_scope.rs"
+        ),
+    )
+    broker_root = REPO_ROOT / "crates" / "irohad" / "src"
+    broker = re.sub(
+        r"\s+",
+        "",
+        "\n".join(
+            (
+                read(broker_root / "runtime_provider_broker.rs"),
+                read(
+                    broker_root
+                    / "runtime_provider_broker"
+                    / "server_source_tests.rs"
+                ),
+                read(
+                    broker_root
+                    / "runtime_provider_broker"
+                    / "codec_signer_tests.rs"
+                ),
+            )
+        ),
+    )
+    broker_api = re.sub(
+        r"\s+",
+        "",
+        read(
+            REPO_ROOT
+            / "crates"
+            / "irohad"
+            / "src"
+            / "runtime_provider_broker"
+            / "api.rs"
+        ),
+    )
+    broker_operations = re.sub(
+        r"\s+",
+        "",
+        read(
+            REPO_ROOT
+            / "crates"
+            / "irohad"
+            / "src"
+            / "runtime_provider_broker"
+            / "protocol_primitives.rs"
+        ),
+    )
+    daemon = re.sub(r"\s+", "", read(IROHAD_MAIN_RS))
+
+    slots = (
+        ("PrivacyCyclePrfProvider", 2, "privacy_cycle_prf_provider"),
+        ("PrivacyReleaseAnchor", 3, "privacy_release_anchor"),
+        ("TransparencyLeaderLease", 4, "transparency_leader_lease_provider"),
+        (
+            "FencedPrivacyPublisher",
+            5,
+            "sorafs_fenced_transparency_publisher",
+        ),
+        (
+            "FencedPrivacyHeadReader",
+            6,
+            "sorafs_fenced_transparency_head_reader",
+        ),
+        ("GovernanceDagSigner", 7, "sorafs_governance_dag_signer"),
+        (
+            "GovernanceDagIpfsAuthenticator",
+            8,
+            "sorafs_governance_dag_ipfs_authenticator",
+        ),
+        (
+            "GovernanceDagHeadAuthenticator",
+            9,
+            "sorafs_governance_dag_head_authenticator",
+        ),
+        (
+            "GovernanceDagCheckpointStore",
+            10,
+            "sorafs_governance_dag_checkpoint_store",
+        ),
+    )
+    for catalog_guard in (
+        "constfnstock_runtime_provider_slot_is_supported(slot:IrohaRuntimeProviderSlotV1)->bool",
+        "wire_id>=IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id()",
+        "wire_id<=IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id()",
+        "any(|binding|!stock_runtime_provider_slot_is_supported(binding.slot()))",
+        "protocol::resolve(bindings)",
+    ):
+        assert catalog_guard in broker_api
+    for slot, wire_id, dependency in slots:
+        assert f"{slot}={wire_id}," in registry
+        assert f"IrohaRuntimeProviderSlotV1::{slot}" in binding_collection
+        direct_presence = f"Slot::{slot}=>deps.{dependency}.is_some()"
+        braced_presence = f"Slot::{slot}=>{{deps.{dependency}.is_some()}}"
+        assert direct_presence in dependency_scope or braced_presence in dependency_scope
+        assert f"dependency_is_unrequested(bindings,Slot::{slot}," in dependency_scope
+
+    for marker in (
+        "storage.privacy_aggregates.cycle_prf_provider.as_ref()",
+        "storage.privacy_aggregates.release_anchor_provider.as_ref()",
+        "storage.privacy_aggregates.leader_lease_provider.as_ref()",
+        "storage.privacy_aggregates.fenced_privacy_publisher.as_ref()",
+        "storage.governance_dag_signer_handle.as_deref()",
+        "governance_service.ipfs_authenticator_handle.as_deref()",
+        "governance_service.head_authenticator_handle.as_deref()",
+        "governance_service.checkpoint_store_handle.as_deref()",
+    ):
+        assert marker in binding_collection
+
+    operations = (
+        ("OPERATION_PRIVACY_CYCLE_PRF_DERIVE_V1", 74),
+        ("OPERATION_PRIVACY_RELEASE_ANCHOR_FINALIZED_HEAD_V1", 75),
+        ("OPERATION_PRIVACY_RELEASE_ANCHOR_COMPARE_AND_SET_V1", 76),
+        ("OPERATION_TRANSPARENCY_LEADER_LEASE_ACQUIRE_V1", 77),
+        ("OPERATION_TRANSPARENCY_LEADER_LEASE_RENEW_V1", 78),
+        ("OPERATION_TRANSPARENCY_LEADER_LEASE_RELEASE_V1", 79),
+        ("OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1", 80),
+        ("OPERATION_FENCED_PRIVACY_READ_HEAD_WITH_ANCESTRY_V1", 81),
+    )
+    for operation, wire_id in operations:
+        assert f"const{operation}:u16={wire_id};" in broker_operations
+        assert operation in broker
+
+    for marker in (
+        "structPrivacyCyclePrfBrokerProvider",
+        "structPrivacyReleaseAnchorBroker",
+        "structTransparencyLeaderLeaseBroker",
+        "structFencedPrivacyPublisherBroker",
+        "structFencedPrivacyHeadReaderBroker",
+        "structGovernanceDagBrokerSigner",
+        "structGovernanceDagBrokerRequestAuthenticator",
+        "structGovernanceDagBrokerCheckpointStore",
+        "fnprivacy_cycle_prf_operation_is_canonical_bounded_and_read_only()",
+        "fnprivacy_release_anchor_operations_are_canonical_and_read_back_cas()",
+        "fntransparency_leader_lease_operations_are_canonical_fenced_and_bounded()",
+        "fnfenced_privacy_publisher_operation_is_canonical_bounded_and_read_back()",
+        "fnfenced_privacy_head_reader_operation_is_canonical_bounded_and_exact()",
+        "fngovernance_request_auth_round_trips_over_the_stock_broker()",
+        "fngovernance_checkpoint_broker_enforces_monotonic_cas_and_transient_delete()",
+    ):
+        assert marker in broker
+
+    for builder in (
+        "with_privacy_cycle_prf_provider",
+        "with_privacy_release_anchor",
+        "with_transparency_leader_lease_provider",
+        "with_fenced_privacy_publisher",
+        "with_fenced_privacy_head_reader",
+        "with_governance_dag_signer",
+        "with_governance_dag_ipfs_authenticator",
+        "with_governance_dag_head_authenticator",
+        "with_governance_dag_checkpoint_store",
+    ):
+        assert f"pubfn{builder}(" in broker_api
+    for marker in (
+        "fntransparency_leader_lease_catalog_and_resolution_are_exactly_scoped()",
+        "fnfenced_privacy_catalog_projects_two_exact_roles_from_one_binding()",
+        "fnfenced_privacy_resolution_requires_the_complete_role_pair()",
+        "fnfenced_privacy_resolution_rejects_substituted_stale_and_test_marked_roles()",
+        "fngovernance_service_resolution_rejects_missing_and_unrequested_adapters()",
+    ):
+        assert marker in registry
+    for marker in (
+        "StockRuntimeProviderBrokerRegistryV1::new",
+        "runtime_provider_registry::resolve_runtime_deps",
+        ".with_privacy_cycle_prf_provider(Arc::clone(provider))",
+        ".with_privacy_release_anchor(Arc::clone(anchor))",
+        ".with_transparency_leader_lease_provider(Arc::clone(provider))",
+        ".with_fenced_transparency_publisher(Arc::clone(publisher))",
+        ".with_fenced_transparency_head_reader(Arc::clone(reader))",
+        ".with_governance_dag_signer(Arc::clone(signer))",
+        ".with_governance_dag_checkpoint_store(Arc::clone(checkpoint_store))",
+        "fnstandard_launcher_resolves_and_forwards_deployment_runtime_dependencies()",
+        "fnstandard_launcher_forwards_both_fenced_privacy_roles_to_the_node()",
+        "fnstandard_launcher_qualifies_and_supervises_governance_dag_service_adapters()",
+    ):
+        assert marker in daemon
+
+    closure = re.sub(
+        r"\s+", " ", read(REPO_ROOT / "specs" / "sorafs" / "v1_closure_ledger.md")
+    )
+    roadmap = re.sub(r"\s+", " ", read(REPO_ROOT / "roadmap.md"))
+    status = re.sub(r"\s+", " ", read(REPO_ROOT / "status.md"))
+    assert (
+        "The stock daemon registry and broker cover transparency slots 2–6 and the directly required Governance DAG slots 7–10"
+        in closure
+    )
+    assert (
+        "The local stock registry/broker client/server transport for transparency slots 2–10 is complete"
+        in roadmap
+    )
+    assert "SoraFS transparency stock-broker source closure" in status
+    for stale_claim in (
+        "but every transparency slot still fails closed",
+        "Extend and package it with independently administered threshold-PRF",
+    ):
+        assert stale_claim not in closure
+
+
 def test_transparency_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
@@ -25427,11 +25287,11 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
         "binds publication and explorer `route_count` to the unique canonical `routes[].name` inventories with duplicate route rejection",
         "binds publication `cycle_detail_probe_count` to the unique canonical `cycle_detail_probes[].name` inventory using reviewed `transparency-cycle-detail-*` probe labels without non-production markers, with duplicate cycle-detail probe rejection",
         "keeps probe-based `probe_count` values equal to the `probes[]` inventory length",
-        "requires source-entry, source-event, publish-due, and proof-token issuance sub-counts to match the corresponding `probes[]` role inventory",
+        "requires source-event, publish-due, and proof-token issuance sub-counts to match the corresponding `probes[]` role inventory",
         "binds privacy aggregate and proof-token issuance `probe_count` values to the unique canonical `probes[].action` inventory with duplicate action rejection",
         "rejects unknown values outside the reviewed source-kind, route, cycle-detail-probe, privacy-action, and proof-token action inventories",
         "`--dry-run` emits the command plan plus the checker-backed `evidence_contract` field map without contacting live services.",
-        "It also rejects duplicate or unsupported `--source-entry` kinds before rendering the plan or contacting live services.",
+        "The collection runner accepts only a pre-collected `--source-entry-producer-evidence` artifact and validates it before contacting live services.",
         "transparency rollout collection runner reject non-lowercase, wrong-length, or otherwise malformed `--cycle-id` values before rendering dry-run command plans or contacting deployed cycle-detail routes.",
         "emits `valid_publication_bindings` so aggregate promotion can prove every ready cycle digest came from a source-bound publication. Aggregate promotion also rechecks source-bound artifact fingerprints against `valid_source_batch_digests` and cycle-bound artifact fingerprints against `valid_cycle_digests` before final promotion can report ready.",
         "The transparency gate fail-closes when more than one valid source batch, publication cycle, or publication binding anchor appears, and clears the mixed `valid_source_batch_digests`, `valid_cycle_digests`, or `valid_publication_bindings` set before aggregate promotion can report ready.",
@@ -25455,11 +25315,8 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
     assert 'label="valid_cycle_digests"' in checker
     assert 'label="valid_publication_bindings"' in checker
     assert '        "probe_count",' in checker
-    assert (
-        "source_entry_probe_count\""
-        in checker
-        and "field=\"source_kind\"" in checker
-    )
+    assert '"generic_public_ingress_absent"' in checker
+    assert '"producer_count"' in checker and 'field="source_kind"' in checker
     assert "field=\"action\"" in checker
     assert "REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES" in checker
     assert "CYCLE_DETAIL_PROBE_LABEL_PATTERN" in checker
@@ -25485,11 +25342,13 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
     assert "test_route_count_must_match_unique_routes_for_route_artifacts" in checker_test
     assert "test_routes_must_not_duplicate_for_route_artifacts" in checker_test
     assert "test_routes_must_not_include_unknown_values_for_route_artifacts" in checker_test
-    assert "test_source_entry_probes_must_not_duplicate_source_kind" in checker_test
+    assert "test_source_entry_producers_must_not_duplicate_source_kind" in checker_test
     assert (
-        "test_source_entry_probe_kinds_must_not_include_unknown_values"
+        "test_source_entry_producer_kinds_must_not_include_unknown_values"
         in checker_test
     )
+    assert "test_source_entry_producer_evidence_rejects_public_generic_ingress" in checker_test
+    assert "test_source_entry_producer_evidence_requires_durable_provenance" in checker_test
     assert "test_privacy_aggregate_actions_must_not_duplicate" in checker_test
     assert (
         "test_privacy_aggregate_actions_must_not_include_unknown_values"
@@ -25533,7 +25392,7 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
     assert "test_specific_probe_counts_must_match_probe_roles" in checker_test
     assert "test_privacy_aggregate_probe_role_counts_must_sum_to_probe_count" in checker_test
     docs = re.sub(r"\s+", " ", read(SORAFS_TRANSPARENCY_PLAN))
-    assert "unique canonical `probes[].source_kind` inventory" in docs
+    assert "unique canonical `producers[].source_kind` inventory" in docs
     assert "duplicate source-kind rejection" in docs
     assert "proof-token issuance `probe_count` values" in docs
     assert "unique canonical `probes[].action` inventory" in docs
@@ -25562,7 +25421,7 @@ def test_transparency_canary_builder_is_checked_in() -> None:
     assert "ValidationOptions(" in builder
     assert "now_unix=args.now_unix" in builder
     assert 'parser.add_argument("--now-unix", type=positive_int_arg, required=True)' in builder
-    assert "DEFAULT_REQUIRED_SOURCE_KINDS" in builder
+    assert 'CANARY_KINDS = tuple(kind for kind in KIND_BY_NAME if kind != "source_entry")' in builder
     assert "REQUIRED_PUBLICATION_ROUTES" in builder
     assert "REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES" in builder
     assert "REQUIRED_EXPLORER_ROUTES" in builder
@@ -25575,8 +25434,7 @@ def test_transparency_canary_builder_is_checked_in() -> None:
     assert "default=len(REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES)" in builder
     assert "test_builds_payload_free_proof_token_issuance_canary" in builder_tests
     assert "test_generated_canaries_pass_full_transparency_gate" in builder_tests
-    assert "test_duplicate_source_kind_coverage_fails_closed" in builder_tests
-    assert "test_unknown_source_kind_coverage_fails_closed" in builder_tests
+    assert "write_source_producer_evidence" in builder_tests
     assert "test_duplicate_publication_route_coverage_fails_closed" in builder_tests
     assert "test_unknown_publication_route_coverage_fails_closed" in builder_tests
     assert "test_missing_cycle_detail_probe_coverage_fails_closed" in builder_tests
@@ -25608,11 +25466,11 @@ def test_transparency_canary_builder_is_checked_in() -> None:
     )
     assert "scripts/build_sorafs_transparency_canary.py" in roadmap
     assert "--cycle-detail-probe\ntransparency-cycle-detail-readback" in publication_example
-    assert (
+    assert not (
         SCRIPTS_DIR
         / "examples"
         / "sorafs_transparency_source_entry_canary.args.example"
-    ).is_file()
+    ).exists()
     assert (
         SCRIPTS_DIR
         / "examples"
@@ -25640,7 +25498,6 @@ def test_transparency_deployed_surface_matcher_has_negative_controls() -> None:
         "/v1/sorafs/transparency/cycles",
         "/v1/sorafs/transparency/explorer",
         "/v1/sorafs/transparency/explorer/ui",
-        "/v1/sorafs/transparency/source-entries/{source_kind}",
         "/v1/sorafs/transparency/privacy-aggregates/source-events",
         "/v1/sorafs/transparency/privacy-aggregates/publish-due",
         "/v1/sorafs/transparency/tokens",
@@ -25678,7 +25535,6 @@ def test_transparency_deployed_surface_matcher_has_negative_controls() -> None:
         "explorer",
         "explorer-canary",
         "publication-canary",
-        "source-entry",
         "privacy-aggregate",
         "token-issuance",
         "tokens",
@@ -25686,8 +25542,6 @@ def test_transparency_deployed_surface_matcher_has_negative_controls() -> None:
         "transparency explorer",
         "transparency explorer-canary",
         "transparency publication-canary",
-        "transparency source-entry",
-        "transparency source-entry canary",
         "transparency privacy-aggregate source-event",
         "transparency privacy-aggregate publish-due",
         "transparency privacy-aggregate canary",
@@ -26242,7 +26096,6 @@ def test_gateway_fixture_d1_is_governed_compliance_refusal() -> None:
 
 def test_gateway_compliance_service_surface_matcher_has_negative_controls() -> None:
     shipped_local_routes = (
-        "/v1/sorafs/transparency/source-entries/{source_kind}",
         "/v1/sorafs/transparency/tokens",
         "/v1/sorafs/transparency/tokens/verify",
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff",
@@ -26269,7 +26122,6 @@ def test_gateway_compliance_service_surface_matcher_has_negative_controls() -> N
         "gateway compliance feed-sync-proof",
         "gateway compliance promotion-canary",
         "gar proof-token",
-        "transparency source-entry",
         "transparency publication-canary",
     )
 
@@ -29072,165 +28924,15 @@ def test_unshipped_sorafs_proto_release_surface_is_not_exposed() -> None:
 
 
 def test_pdp_and_potr_proof_streams_use_exact_finalized_chain_projections() -> None:
-    api = read(TORII_SORAFS_API_RS)
-    openapi = read(TORII_OPENAPI_RS)
-
-    renderer_start = api.index("fn render_finalized_proof_stream_response(")
-    renderer_end = api.index(
-        "\npub(crate) async fn handle_post_sorafs_pdp_challenge(",
-        renderer_start,
+    assert_pdp_and_potr_proof_streams_use_exact_finalized_chain_projections(
+        read=read,
+        api_path=TORII_SORAFS_API_RS,
+        openapi_path=TORII_OPENAPI_RS,
     )
-    renderer = re.sub(r"\s+", " ", api[renderer_start:renderer_end])
-    assert "outcome.manifest_digest.as_bytes() != &request.manifest_digest" in renderer
-    assert "outcome.provider_id.as_bytes() != &request.provider_id" in renderer
-    assert "request.challenge_id != Some(outcome.identity_digest)" in renderer
-    assert "receipt.request_id != Some(expected_job_id)" in renderer
-    assert "proof_outcome_request_mismatch_response(proof_kind_label)" in renderer
-
-    pdp_dispatch_start = api.index("ProofStreamKind::Pdp => {")
-    pdp_dispatch_end = api.index("\n    }\n}", pdp_dispatch_start)
-    pdp_dispatch = re.sub(r"\s+", " ", api[pdp_dispatch_start:pdp_dispatch_end])
-    assert ".expect(\"validation guarantees challenge id for PDP\")" in pdp_dispatch
-    assert (
-        "FindSorafsProofOutcome::new( ProofOutcomeKindV1::Pdp, challenge_id, expected_finalized_cursor, )"
-        in pdp_dispatch
-    )
-    assert "ProofOutcomeFinalizedCursorV1" in pdp_dispatch
-    assert "validated finalized cursor is complete" in pdp_dispatch
-    assert "query.execute(&state.state.query_view())" in pdp_dispatch
-    assert (
-        "render_finalized_proof_stream_response(&state, &finalized, &request)"
-        in pdp_dispatch
-    )
-    assert "challenge_status" not in pdp_dispatch
-
-    potr_dispatch_start = api.index("ProofStreamKind::Potr => {")
-    potr_dispatch_end = api.index("ProofStreamKind::Pdp => {", potr_dispatch_start)
-    potr_dispatch = re.sub(r"\s+", " ", api[potr_dispatch_start:potr_dispatch_end])
-    assert (
-        ".expect(\"validation guarantees orchestrator job id for PoTR\")"
-        in potr_dispatch
-    )
-    assert (
-        "potr_request_scope_digest_v1(request.manifest_digest, provider_id, job_id)"
-        in potr_dispatch
-    )
-    assert (
-        "FindSorafsProofOutcome::new( ProofOutcomeKindV1::Potr, identity_digest, expected_finalized_cursor, )"
-        in potr_dispatch
-    )
-    assert "ProofOutcomeFinalizedCursorV1" in potr_dispatch
-    assert "validated finalized cursor is complete" in potr_dispatch
-    assert "query.execute(&state.state.query_view())" in potr_dispatch
-    assert (
-        "render_finalized_proof_stream_response(&state, &finalized, &request)"
-        in potr_dispatch
-    )
-
-    pdp_schema_start = openapi.index('"SorafsProofStreamPdpRequestV1".to_owned()')
-    pdp_schema_end = openapi.index(
-        '"SorafsProofStreamPotrRequestV1".to_owned()',
-        pdp_schema_start,
-    )
-    pdp_schema = openapi[pdp_schema_start:pdp_schema_end]
-    pdp_required_start = pdp_schema.index('"required": [')
-    pdp_required_end = pdp_schema.index("],", pdp_required_start)
-    pdp_required = pdp_schema[pdp_required_start:pdp_required_end]
-    assert '"challenge_id_hex"' in pdp_required
-    assert '"additionalProperties": false' in pdp_schema
-
-    potr_schema_start = pdp_schema_end
-    potr_schema_end = openapi.index(
-        '"SorafsProofStreamHttpRequestV1".to_owned()',
-        potr_schema_start,
-    )
-    potr_schema = openapi[potr_schema_start:potr_schema_end]
-    potr_required_start = potr_schema.index('"required": [')
-    potr_required_end = potr_schema.index("],", potr_required_start)
-    potr_required = potr_schema[potr_required_start:potr_required_end]
-    assert '"orchestrator_job_id_hex"' in potr_required
-    assert '"additionalProperties": false' in potr_schema
-    assert (
-        "chain-authoritative request-scope identity with the manifest and provider"
-        in potr_schema
-    )
-
-    assert "`proof_kind=pdp` is reserved for future SF-13 work" not in openapi
-    assert "rejected as an unsupported proof kind" not in openapi
 
 
 def test_sorafs_cli_proof_stream_uses_authenticated_native_pin_projection() -> None:
-    cli = read(SORAFS_CLI_RS)
-    command_start = cli.index("fn proof_stream(raw_args: Vec<String>)")
-    command_end = cli.index("\nfn write_proof_stream_evidence(", command_start)
-    command = cli[command_start:command_end]
-    endpoint_start = cli.index("fn proof_stream_endpoint(")
-    endpoint_end = cli.index("\nfn proof_stream_pin_manifest_endpoint(", endpoint_start)
-    endpoint_policy = cli[endpoint_start:endpoint_end]
-    fetch_start = cli.index("fn fetch_finalized_pin_manifest(")
-    fetch_end = cli.index("\nfn validate_finalized_pin_manifest(", fetch_start)
-    native_fetch = cli[fetch_start:fetch_end]
-    validation_start = fetch_end + 1
-    validation_end = cli.index("\nfn payload_free_proof_stream_event(", validation_start)
-    validation = cli[validation_start:validation_end]
-    event_start = validation_end + 1
-    event_end = cli.index("\nfn proof_stream(raw_args: Vec<String>)", event_start)
-    event_projection = cli[event_start:event_end]
-
-    assert 'const PROOF_STREAM_ROUTE_V1: &str = "/v1/sorafs/proof/stream";' in cli
-    assert 'const PIN_MANIFEST_ROUTE_PREFIX_V1: &str = "/v1/sorafs/pin/";' in cli
-    assert 'parsed.scheme() != "https"' in endpoint_policy
-    for rejected_component in (
-        "parsed.username().is_empty()",
-        "parsed.password().is_some()",
-        "parsed.query().is_some()",
-        "parsed.fragment().is_some()",
-    ):
-        assert rejected_component in endpoint_policy
-    assert "raw != canonical_endpoint" in endpoint_policy
-    assert "raw != canonical_origin && raw != canonical_origin_with_slash" in endpoint_policy
-    assert ".https_only(true)" in cli
-    assert ".redirect(RedirectPolicy::none())" in cli
-    assert ".no_proxy()" in cli
-    assert native_fetch.count(".bearer_auth(bearer_token)") == 1
-    assert command.count(".bearer_auth(&bearer_token)") == 1
-    assert "fetch_finalized_pin_manifest(" in command
-    assert "validate_finalized_pin_manifest(" in command
-    assert "PinStatus::Approved(_)" in validation
-    for manifest_binding in (
-        "record.digest.as_bytes() != local_manifest_digest",
-        "record.root_cid.as_bytes().as_slice() != local_manifest.root_cid.as_slice()",
-        "record.chunker != chunker_handle_from_profile(&local_manifest.chunking)",
-        "record.chunk_digest_sha3_256 != local_manifest.chunk_digest_sha3_256",
-        "record.por_root != local_manifest.por_root",
-        "record.content_length != local_manifest.content_length",
-        "record.policy != convert_pin_policy(&local_manifest.pin_policy)",
-        "finalized.finalized_cursor.height == 0",
-        ".finalized_cursor\n        .block_hash",
-    ):
-        assert manifest_binding in validation
-    assert "MAX_PROOF_STREAM_SAMPLE_COUNT" in command
-    assert "read_file_bounded(&manifest_path, manifest_byte_limit, \"manifest\")" in command
-    assert "expected_finalized_height: Some(validated_pin.finalized_height)" in command
-    assert (
-        "expected_finalized_block_hash: Some(validated_pin.finalized_block_hash)"
-        in command
+    assert_sorafs_cli_proof_stream_uses_authenticated_native_pin_projection(
+        read=read,
+        cli_path=SORAFS_CLI_RS,
     )
-    assert "ProofStreamNdjsonReader::new(reader, &verification_context)" in command
-    assert "payload_free_proof_stream_event(&item)" in command
-    assert "item.to_json()" not in command
-    for secret_payload in (
-        '"proof"',
-        '"leaf_bytes_hex"',
-        '"receipt_b64"',
-        '"trace_id"',
-        '"nonce_b64"',
-        '"authorization"',
-        '"credential"',
-    ):
-        assert secret_payload not in event_projection
-    assert '"--stream-token" =>' not in command
-    assert '"--max-failures" =>' not in command
-    assert "sorafs_cli/stream/v2" not in command
-    assert "redacted_endpoint(&endpoint)" in command
-    assert "&manifest_bytes," in command

@@ -79,10 +79,11 @@ fn balance_syscall_with_tlv_pointers() {
         .unwrap();
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-        "asset".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
 
     let wsv = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
     let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
@@ -130,10 +131,11 @@ fn transfer_syscall_with_tlv_pointers() {
         .unwrap();
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-        "asset".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
 
     let wsv = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), num(50)),
@@ -196,10 +198,11 @@ fn mint_syscall_with_tlv_pointers() {
         .parse()
         .unwrap();
     let bob = test_account(domain, pk);
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-        "asset".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
 
     let wsv = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
     let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
@@ -248,10 +251,11 @@ fn transfer_batch_syscalls_buffer_entries() {
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain.clone(), pk2);
     let carol = test_account(domain, pk3);
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-        "asset".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
 
     let mut wsv = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), num(50)),
@@ -324,10 +328,11 @@ fn transfer_batch_apply_syscall_executes_batch() {
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain.clone(), pk2);
     let carol = test_account(domain, pk3);
-    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
-        "asset".parse().unwrap(),
-    );
+    let asset: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
 
     let mut wsv = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset.clone()), num(50)),

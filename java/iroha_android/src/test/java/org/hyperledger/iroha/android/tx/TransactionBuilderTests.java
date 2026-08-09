@@ -153,7 +153,7 @@ public final class TransactionBuilderTests {
             NoritoCodec.encode("last", "iroha.test.Batch", NoritoAdapters.stringAdapter()));
     final ContractInvocation invocation =
         new ContractInvocation(
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             repeatedByte(0x51, 32),
             "run",
             new byte[] {0x01, 0x02});

@@ -1225,6 +1225,29 @@ fn reserve_event_stream(
     initial_after: Option<ReserveFinalizedEventCursorV1>,
     limit: u32,
 ) -> impl futures::Stream<Item = Result<SseEvent, Infallible>> {
+    reserve_event_frame_stream(state, caller, initial, initial_after, limit).map(|frame| {
+        Ok(match frame {
+            ReserveEventStreamFrameV1::Event(event) => reserve_sse_event(&event),
+            ReserveEventStreamFrameV1::TerminalError(error) => {
+                SseEvent::default().event("error").data(error)
+            }
+        })
+    })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ReserveEventStreamFrameV1 {
+    Event(ReserveFinalizedEventV1),
+    TerminalError(String),
+}
+
+fn reserve_event_frame_stream(
+    state: SharedAppState,
+    caller: AccountId,
+    initial: ReserveFinalizedEventPageV1,
+    initial_after: Option<ReserveFinalizedEventCursorV1>,
+    limit: u32,
+) -> impl futures::Stream<Item = ReserveEventStreamFrameV1> {
     struct PollState {
         state: SharedAppState,
         caller: AccountId,
@@ -1251,10 +1274,9 @@ fn reserve_event_stream(
                         revalidate_reserve_stream_operator(&poll.state, &poll.caller)
                     {
                         poll.terminal = true;
-                        return Some((Ok(SseEvent::default().event("error").data(error)), poll));
+                        return Some((ReserveEventStreamFrameV1::TerminalError(error), poll));
                     }
-                    let frame = reserve_sse_event(&event);
-                    return Some((Ok(frame), poll));
+                    return Some((ReserveEventStreamFrameV1::Event(event), poll));
                 }
                 if poll.terminal {
                     return None;
@@ -1270,7 +1292,7 @@ fn reserve_event_stream(
                     }
                     Err(message) => {
                         poll.terminal = true;
-                        return Some((Ok(SseEvent::default().event("error").data(message)), poll));
+                        return Some((ReserveEventStreamFrameV1::TerminalError(message), poll));
                     }
                 }
             }
@@ -1286,7 +1308,34 @@ async fn reserve_event_websocket(
     initial_after: Option<ReserveFinalizedEventCursorV1>,
     limit: u32,
 ) -> Result<(), String> {
-    let (mut sender, mut receiver) = socket.split();
+    let (sender, receiver) = socket.split();
+    reserve_event_websocket_io(
+        sender,
+        receiver,
+        state,
+        caller,
+        initial,
+        initial_after,
+        limit,
+    )
+    .await
+}
+
+async fn reserve_event_websocket_io<S, R, SendError, ReceiveError>(
+    mut sender: S,
+    mut receiver: R,
+    state: SharedAppState,
+    caller: AccountId,
+    initial: ReserveFinalizedEventPageV1,
+    initial_after: Option<ReserveFinalizedEventCursorV1>,
+    limit: u32,
+) -> Result<(), String>
+where
+    S: futures::Sink<WsMessage, Error = SendError> + Unpin,
+    R: futures::Stream<Item = Result<WsMessage, ReceiveError>> + Unpin,
+    SendError: std::fmt::Display,
+    ReceiveError: std::fmt::Display,
+{
     let mut after = reserve_event_resume_cursor(&initial.events, initial_after);
     for event in initial.events {
         revalidate_reserve_stream_operator(&state, &caller)?;
@@ -1673,16 +1722,41 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
+    use std::{
+        num::NonZeroU32,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        task::{Context, Poll},
+    };
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use futures::{Sink, channel::mpsc, task::AtomicWaker};
+    use iroha_core::{smartcontracts::Execute, state::World};
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
-        isi::{InstructionBox, sorafs::RequestSorafsReserveMovement},
+        ChainId, Registrable,
+        account::Account,
+        asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
+        block::BlockHeader,
+        domain::{Domain, DomainId},
+        isi::{
+            InstructionBox,
+            sorafs::{RequestSorafsReserveMovement, SetSorafsReservePolicy},
+        },
         metadata::Metadata,
-        sorafs::{capacity::ProviderId, reserve::ReserveMovementKindV1},
+        permission::{Permission, Permissions},
+        sorafs::{
+            capacity::ProviderId,
+            reserve::{
+                RESERVE_AUTHORITY_POLICY_VERSION_V1, ReserveAuthorityPolicyV1,
+                ReserveMovementKindV1, ReservePolicyV1,
+            },
+        },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
+    use iroha_primitives::json::Json;
     use sorafs_manifest::deal::XorQuantity;
 
     use super::*;
@@ -1724,6 +1798,170 @@ mod tests {
             [0x33; 32],
         )
         .into()
+    }
+
+    fn reserve_test_account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("reserve stream account key");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn reserve_test_asset_definition() -> AssetDefinitionId {
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("reserve", "universal").expect("reserve domain"),
+            "xor".parse().expect("reserve asset name"),
+        )
+    }
+
+    fn reserve_stream_test_app(
+        governance: &AccountId,
+        custody: &AccountId,
+        treasury: &AccountId,
+        caller: &AccountId,
+        replacement: &AccountId,
+    ) -> SharedAppState {
+        let definition_id = reserve_test_asset_definition();
+        let domain =
+            Domain::new(DomainId::try_new("reserve", "universal").expect("reserve domain"))
+                .build(governance);
+        let definition = AssetDefinition::numeric(
+            definition_id,
+            "XOR".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(governance);
+        let mut world = World::with_assets(
+            [domain],
+            [
+                Account::new(governance.clone()).build(governance),
+                Account::new(custody.clone()).build(governance),
+                Account::new(treasury.clone()).build(governance),
+                Account::new(caller.clone()).build(governance),
+                Account::new(replacement.clone()).build(governance),
+            ],
+            [definition],
+            [],
+            [],
+        );
+        let mut permissions = Permissions::new();
+        permissions.insert(Permission::new(
+            "CanSetSorafsReservePolicy".to_owned(),
+            Json::new(()),
+        ));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(governance.clone(), permissions);
+        crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(world)
+    }
+
+    fn reserve_stream_policy(
+        revision: u64,
+        predecessor_policy_digest: Option<[u8; 32]>,
+        custody: &AccountId,
+        treasury: &AccountId,
+        operator: &AccountId,
+    ) -> ReserveAuthorityPolicyV1 {
+        ReserveAuthorityPolicyV1 {
+            version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
+            revision,
+            predecessor_policy_digest,
+            economics: ReservePolicyV1::default(),
+            asset_definition: reserve_test_asset_definition(),
+            custody_account: custody.clone(),
+            treasury_account: treasury.clone(),
+            operations_authority: operator.clone(),
+            decision_authority: operator.clone(),
+            grace_period_days: 7,
+            default_after_days: 30,
+            max_provider_debt: "1".parse::<XorQuantity>().expect("reserve debt cap"),
+            max_pending_movements_per_provider: 4,
+            max_open_appeals_per_provider: 2,
+        }
+    }
+
+    fn commit_reserve_stream_policies(
+        state: &SharedAppState,
+        governance: &AccountId,
+        policies: impl IntoIterator<Item = ReserveAuthorityPolicyV1>,
+        now_unix: u64,
+    ) {
+        let height = u64::try_from(state.state.view().block_hashes().len())
+            .expect("reserve test height")
+            .checked_add(1)
+            .expect("reserve test height overflow");
+        let header = BlockHeader::new(
+            height.try_into().expect("non-zero reserve test height"),
+            None,
+            None,
+            None,
+            now_unix.checked_mul(1_000).expect("reserve test time"),
+            0,
+        );
+        let block_hash = HashOf::new(&header);
+        let mut block = state.state.block(header);
+        let mut transaction = block.transaction();
+        for policy in policies {
+            SetSorafsReservePolicy::new(policy)
+                .execute(governance, &mut transaction)
+                .expect("commit reserve stream policy");
+        }
+        transaction.apply();
+        block.block_hashes.push_for_tests(block_hash);
+        block.commit().expect("commit reserve stream test block");
+    }
+
+    struct FirstFrameFlushGateSink {
+        output: mpsc::UnboundedSender<WsMessage>,
+        release_first_flush: Arc<AtomicBool>,
+        flush_waker: Arc<AtomicWaker>,
+        sent: usize,
+        first_flush_pending: bool,
+    }
+
+    impl Sink<WsMessage> for FirstFrameFlushGateSink {
+        type Error = String;
+
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(self: Pin<&mut Self>, item: WsMessage) -> Result<(), Self::Error> {
+            let this = self.get_mut();
+            this.output
+                .unbounded_send(item)
+                .map_err(|error| error.to_string())?;
+            this.sent = this.sent.checked_add(1).expect("test frame count");
+            if this.sent == 1 {
+                this.first_flush_pending = true;
+            }
+            Ok(())
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            let this = self.get_mut();
+            if this.first_flush_pending && !this.release_first_flush.load(Ordering::Acquire) {
+                this.flush_waker.register(context.waker());
+                if !this.release_first_flush.load(Ordering::Acquire) {
+                    return Poll::Pending;
+                }
+            }
+            this.first_flush_pending = false;
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            self.poll_flush(context)
+        }
     }
 
     #[test]
@@ -1848,5 +2086,155 @@ mod tests {
             event_index: 2,
         };
         assert_eq!(reserve_event_resume_cursor(&[], Some(after)), Some(after));
+    }
+
+    #[tokio::test]
+    async fn policy_rotation_revokes_buffered_and_future_sse_and_websocket_events() {
+        const AUTHORIZATION_REVOKED: &str =
+            "SoraFS reserve stream authorization is no longer valid";
+
+        let governance = reserve_test_account(0xB1);
+        let custody = reserve_test_account(0xB2);
+        let treasury = reserve_test_account(0xB3);
+        let caller = reserve_test_account(0xB4);
+        let replacement = reserve_test_account(0xB5);
+        let state =
+            reserve_stream_test_app(&governance, &custody, &treasury, &caller, &replacement);
+
+        let first = reserve_stream_policy(1, None, &custody, &treasury, &caller);
+        let first_digest = first.digest().expect("first reserve policy digest");
+        let second = reserve_stream_policy(2, Some(first_digest), &custody, &treasury, &caller);
+        let second_digest = second.digest().expect("second reserve policy digest");
+        commit_reserve_stream_policies(&state, &governance, [first, second], 10);
+
+        let buffered = query_reserve_events(&state, &caller, None, None, 100)
+            .expect("authorized initial reserve page");
+        assert_eq!(buffered.events.len(), 2, "two frames must be buffered");
+        let buffered_after = buffered
+            .events
+            .last()
+            .map(ReserveFinalizedEventV1::cursor)
+            .expect("buffered cursor");
+        let future = query_reserve_events(&state, &caller, None, Some(buffered_after), 100)
+            .expect("authorized empty continuation page");
+        assert!(future.events.is_empty());
+
+        let buffered_sse = reserve_event_frame_stream(
+            Arc::clone(&state),
+            caller.clone(),
+            buffered.clone(),
+            None,
+            100,
+        );
+        futures::pin_mut!(buffered_sse);
+        assert!(matches!(
+            buffered_sse.next().await,
+            Some(ReserveEventStreamFrameV1::Event(event)) if event.sequence == 1
+        ));
+        let future_sse = reserve_event_frame_stream(
+            Arc::clone(&state),
+            caller.clone(),
+            future.clone(),
+            Some(buffered_after),
+            100,
+        );
+        futures::pin_mut!(future_sse);
+
+        let (buffered_ws_output, mut buffered_ws_frames) = mpsc::unbounded();
+        let release_first_flush = Arc::new(AtomicBool::new(false));
+        let flush_waker = Arc::new(AtomicWaker::new());
+        let buffered_ws = tokio::spawn(reserve_event_websocket_io(
+            FirstFrameFlushGateSink {
+                output: buffered_ws_output,
+                release_first_flush: Arc::clone(&release_first_flush),
+                flush_waker: Arc::clone(&flush_waker),
+                sent: 0,
+                first_flush_pending: false,
+            },
+            stream::pending::<Result<WsMessage, String>>(),
+            Arc::clone(&state),
+            caller.clone(),
+            buffered,
+            None,
+            100,
+        ));
+        let first_ws_frame =
+            tokio::time::timeout(Duration::from_secs(1), buffered_ws_frames.next())
+                .await
+                .expect("first buffered WebSocket frame timeout")
+                .expect("first buffered WebSocket frame");
+        assert!(matches!(first_ws_frame, WsMessage::Text(_)));
+
+        let (future_ws_output, mut future_ws_frames) = mpsc::unbounded();
+        let future_ws = tokio::spawn(reserve_event_websocket_io(
+            future_ws_output,
+            stream::pending::<Result<WsMessage, String>>(),
+            Arc::clone(&state),
+            caller.clone(),
+            future,
+            Some(buffered_after),
+            100,
+        ));
+        tokio::task::yield_now().await;
+
+        let third =
+            reserve_stream_policy(3, Some(second_digest), &custody, &treasury, &replacement);
+        commit_reserve_stream_policies(&state, &governance, [third], 11);
+        let replacement_page =
+            query_reserve_events(&state, &replacement, None, Some(buffered_after), 100)
+                .expect("replacement authority sees finalized post-rotation event");
+        assert_eq!(
+            replacement_page
+                .events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![3],
+            "the policy rotation event must exist as a future frame"
+        );
+
+        assert_eq!(
+            buffered_sse.next().await,
+            Some(ReserveEventStreamFrameV1::TerminalError(
+                AUTHORIZATION_REVOKED.to_owned()
+            )),
+            "SSE must suppress its second already-buffered event"
+        );
+        assert!(buffered_sse.next().await.is_none());
+
+        release_first_flush.store(true, Ordering::Release);
+        flush_waker.wake();
+        let buffered_ws_error = tokio::time::timeout(Duration::from_secs(1), buffered_ws)
+            .await
+            .expect("buffered WebSocket revocation timeout")
+            .expect("buffered WebSocket task")
+            .expect_err("buffered WebSocket must close after revocation");
+        assert_eq!(buffered_ws_error, AUTHORIZATION_REVOKED);
+        assert!(
+            buffered_ws_frames.next().await.is_none(),
+            "WebSocket must suppress its second already-buffered event"
+        );
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), future_sse.next())
+                .await
+                .expect("future SSE revocation timeout"),
+            Some(ReserveEventStreamFrameV1::TerminalError(
+                AUTHORIZATION_REVOKED.to_owned()
+            )),
+            "SSE must suppress events finalized after revocation"
+        );
+        assert!(future_sse.next().await.is_none());
+
+        let future_ws_error = tokio::time::timeout(Duration::from_secs(2), future_ws)
+            .await
+            .expect("future WebSocket revocation timeout")
+            .expect("future WebSocket task")
+            .expect_err("future WebSocket must close after revocation");
+        assert_eq!(future_ws_error, AUTHORIZATION_REVOKED);
+        assert!(
+            future_ws_frames.next().await.is_none(),
+            "WebSocket must suppress events finalized after revocation"
+        );
     }
 }

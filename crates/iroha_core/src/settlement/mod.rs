@@ -447,7 +447,7 @@ mod tests {
             HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
         let record = PendingSettlement {
             source_id: [0x22; 32],
-            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),

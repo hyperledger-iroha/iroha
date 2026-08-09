@@ -1153,7 +1153,7 @@ public final class SccpJsonParser {
     if (!TAIRA_CHAIN_ID_HASH.equals(anchorRoles.get(0))) {
       throw new IllegalArgumentException(label + " Taira chain id hash mismatch");
     }
-    final int protocolVersion = requiredInt(anchor, "protocol_version", 3, 3);
+    final int protocolVersion = requiredInt(anchor, "protocol_version", 3, 4);
     final BigInteger checkpointHeight =
         requiredUnsignedInteger(anchor, "checkpoint_height", MAX_U64, true);
     requireDistinctRawHashes(anchorRoles, label + " finality anchor");

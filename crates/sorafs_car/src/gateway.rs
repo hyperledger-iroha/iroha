@@ -67,6 +67,7 @@ const MAX_MANIFEST_ENVELOPE_BASE64_BYTES: usize = 64 * 1024;
 const MAX_CLIENT_ID_BYTES: usize = 128;
 const MAX_CACHE_VERSION_BYTES: usize = 128;
 const MAX_GATEWAY_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_GATEWAY_ERROR_BODY_BYTES: usize = 4 * 1024;
 const MAX_STREAM_TOKEN_ID_BYTES: usize = 128;
 const MAX_MANIFEST_CID_BYTES: usize = 128;
 const STREAM_TOKEN_CLOCK_SKEW_SECS: u64 = 60;
@@ -77,6 +78,7 @@ const GATEWAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) struct HttpRequest {
     pub url: Url,
     pub headers: HeaderMap,
+    pub max_response_bytes: usize,
 }
 
 /// HTTP response returned by the engine.
@@ -133,6 +135,7 @@ impl HttpEngine for ReqwestEngine {
     fn get(&self, request: HttpRequest) -> HttpFuture {
         let client = self.client.clone();
         Box::pin(async move {
+            let max_response_bytes = request.max_response_bytes.min(MAX_GATEWAY_RESPONSE_BYTES);
             let mut builder = client.get(request.url);
             builder = builder.headers(request.headers);
             let mut response = builder.send().await.map_err(HttpError::Transport)?;
@@ -140,28 +143,28 @@ impl HttpEngine for ReqwestEngine {
             let headers = response.headers().clone();
             if response
                 .content_length()
-                .is_some_and(|length| length > MAX_GATEWAY_RESPONSE_BYTES as u64)
+                .is_some_and(|length| length > max_response_bytes as u64)
             {
                 return Err(HttpError::ResponseTooLarge {
-                    limit: MAX_GATEWAY_RESPONSE_BYTES,
+                    limit: max_response_bytes,
                 });
             }
             let initial_capacity = response
                 .content_length()
                 .and_then(|length| usize::try_from(length).ok())
                 .unwrap_or(0)
-                .min(MAX_GATEWAY_RESPONSE_BYTES);
+                .min(max_response_bytes);
             let mut body = Vec::with_capacity(initial_capacity);
             while let Some(chunk) = response.chunk().await.map_err(HttpError::Body)? {
                 let next_len =
                     body.len()
                         .checked_add(chunk.len())
                         .ok_or(HttpError::ResponseTooLarge {
-                            limit: MAX_GATEWAY_RESPONSE_BYTES,
+                            limit: max_response_bytes,
                         })?;
-                if next_len > MAX_GATEWAY_RESPONSE_BYTES {
+                if next_len > max_response_bytes {
                     return Err(HttpError::ResponseTooLarge {
-                        limit: MAX_GATEWAY_RESPONSE_BYTES,
+                        limit: max_response_bytes,
                     });
                 }
                 body.extend_from_slice(&chunk);
@@ -252,6 +255,35 @@ impl GatewayFetchContext {
         config: GatewayFetchConfig,
         providers: impl IntoIterator<Item = GatewayProviderInput>,
     ) -> Result<Self, GatewayBuildError> {
+        Self::new_with_timeouts(
+            config,
+            providers,
+            GATEWAY_CONNECT_TIMEOUT,
+            GATEWAY_REQUEST_TIMEOUT,
+        )
+    }
+
+    /// Build a gateway fetch context with explicit connect and whole-request timeouts.
+    ///
+    /// This is intended for clients whose platform configuration owns a tighter
+    /// end-to-end network bound than the generic gateway defaults.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GatewayBuildError`] when either timeout is zero, the connect
+    /// timeout exceeds the request timeout, or the provider context is invalid.
+    pub fn new_with_timeouts(
+        config: GatewayFetchConfig,
+        providers: impl IntoIterator<Item = GatewayProviderInput>,
+        connect_timeout: Duration,
+        request_timeout: Duration,
+    ) -> Result<Self, GatewayBuildError> {
+        if connect_timeout.is_zero()
+            || request_timeout.is_zero()
+            || connect_timeout > request_timeout
+        {
+            return Err(GatewayBuildError::InvalidTimeouts);
+        }
         let mut inputs = Vec::new();
         for input in providers {
             if inputs.len() >= MAX_GATEWAY_PROVIDERS {
@@ -287,10 +319,14 @@ impl GatewayFetchContext {
 
         let mut client_builder = Client::builder()
             .no_proxy()
+            .no_gzip()
+            .no_brotli()
+            .no_deflate()
+            .no_zstd()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(GATEWAY_CONNECT_TIMEOUT)
-            .timeout(GATEWAY_REQUEST_TIMEOUT);
+            .connect_timeout(connect_timeout)
+            .timeout(request_timeout);
         for (host, addresses) in &resolved_hosts {
             client_builder = client_builder.resolve_to_addrs(host, addresses);
         }
@@ -516,9 +552,17 @@ impl GatewayFetcherInner {
             );
         }
 
+        let max_response_bytes = usize::try_from(request.spec.length)
+            .unwrap_or(usize::MAX)
+            .saturating_add(MAX_GATEWAY_ERROR_BODY_BYTES)
+            .min(MAX_GATEWAY_RESPONSE_BYTES);
         let response = self
             .engine
-            .get(HttpRequest { url, headers })
+            .get(HttpRequest {
+                url,
+                headers,
+                max_response_bytes,
+            })
             .await
             .map_err(|error| match error {
                 HttpError::Transport(source) => GatewayFetchError::Request {
@@ -617,7 +661,15 @@ impl GatewayFetcherInner {
                 }
             }
 
-            let response = match self.engine.get(HttpRequest { url, headers }).await {
+            let response = match self
+                .engine
+                .get(HttpRequest {
+                    url,
+                    headers,
+                    max_response_bytes: MAX_GATEWAY_RESPONSE_BYTES,
+                })
+                .await
+            {
                 Ok(response) => response,
                 Err(err) => {
                     let error = match err {
@@ -1415,6 +1467,8 @@ fn decode_stream_token(value: &str) -> Result<StreamTokenV1, StreamTokenDecodeEr
 pub enum GatewayBuildError {
     #[error("failed to construct HTTP client: {0}")]
     ClientBuild(reqwest::Error),
+    #[error("gateway timeouts must be nonzero and connect must not exceed request")]
+    InvalidTimeouts,
     #[error("failed to obtain secure random bytes for gateway nonces: {message}")]
     RandomBytes { message: String },
     #[error("gateway DNS resolution returned no exclusively public addresses")]
@@ -2232,6 +2286,29 @@ mod tests {
     }
 
     #[test]
+    fn gateway_context_rejects_invalid_explicit_timeouts_before_network_access() {
+        let config = gateway_config(&"11".repeat(32), &chunker_handle());
+        assert!(matches!(
+            GatewayFetchContext::new_with_timeouts(
+                config.clone(),
+                [],
+                Duration::ZERO,
+                Duration::from_secs(1),
+            ),
+            Err(GatewayBuildError::InvalidTimeouts)
+        ));
+        assert!(matches!(
+            GatewayFetchContext::new_with_timeouts(
+                config,
+                [],
+                Duration::from_secs(2),
+                Duration::from_secs(1),
+            ),
+            Err(GatewayBuildError::InvalidTimeouts)
+        ));
+    }
+
+    #[test]
     fn provider_configuration_rejects_duplicate_canonical_provider_ids() {
         let manifest_id = "11".repeat(32);
         let profile = chunker_handle();
@@ -2612,6 +2689,12 @@ mod tests {
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
         assert_eq!(request.path, path);
+        assert_eq!(
+            request.max_response_bytes,
+            usize::try_from(plan.chunks[0].length)
+                .expect("chunk length fits usize")
+                .saturating_add(MAX_GATEWAY_ERROR_BODY_BYTES)
+        );
         assert_eq!(
             request
                 .headers
@@ -3263,6 +3346,7 @@ mod tests {
     struct RecordedRequest {
         path: String,
         headers: HeaderMap,
+        max_response_bytes: usize,
     }
 
     struct MockHttpEngine {
@@ -3290,6 +3374,7 @@ mod tests {
             self.recorded.lock().unwrap().push(RecordedRequest {
                 path: path.clone(),
                 headers,
+                max_response_bytes: request.max_response_bytes,
             });
 
             let maybe = self.responses.get(&path).cloned();

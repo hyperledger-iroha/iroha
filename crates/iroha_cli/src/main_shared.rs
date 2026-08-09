@@ -2781,7 +2781,8 @@ mod asset {
                             .wrap_err("invalid confidential policy arguments")?;
                         let alias = register_alias_from_args(&args)?;
                         let spec = numeric_spec_from_scale(args.scale)?;
-                        let mut entry = AssetDefinition::new(args.id, spec).with_name(args.name);
+                        let mut entry =
+                            AssetDefinition::new(args.id, args.name, spec, iroha_data_model::asset::AssetBalancePolicy::Global, None);
                         if let Some(description) = args.description {
                             entry = entry.with_description(Some(description));
                         }
@@ -3067,7 +3068,7 @@ mod asset {
 
             fn base_register_args() -> Register {
                 Register {
-                    id: AssetDefinitionId::new(
+                    id: AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").expect("domain"),
                         "rose".parse().expect("asset name"),
                     ),
@@ -3367,7 +3368,7 @@ mod asset {
             let dest = fixture_key_pair(2);
             let owner = AccountId::new(src.public_key().clone());
             let to = AccountId::new(dest.public_key().clone());
-            let asset_def_id = AssetDefinitionId::new(
+            let asset_def_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").expect("domain id"),
                 "rose".parse().expect("asset name"),
             );
@@ -6636,7 +6637,7 @@ mod trigger {
 
             let action = iroha::data_model::trigger::action::Action::new(
                 executable, repeats, authority, filter_box,
-            );
+            )?;
             let trigger = iroha::data_model::trigger::Trigger::new(self.id, action);
             let instruction = iroha::data_model::isi::Register::trigger(trigger);
             context.finish([instruction])
@@ -8199,17 +8200,10 @@ mod settlement {
             format!("IROA{country}{location}")
         }
 
-        fn settlement_currency_code(asset: &AssetDefinitionId) -> String {
-            if let Some(name) = asset.try_name() {
-                let candidate = name.as_ref().to_ascii_uppercase();
-                if candidate.len() == 3 && candidate.chars().all(|ch| ch.is_ascii_uppercase()) {
-                    return candidate;
-                }
-                return candidate;
-            }
-            // Offline previews only see the canonical asset-definition address, so
-            // preserve a schema-valid placeholder when the original currency label
-            // is no longer recoverable from the identifier alone.
+        fn settlement_currency_code(_asset: &AssetDefinitionId) -> String {
+            // Offline previews only see the canonical asset-definition address. The
+            // human currency label belongs to the registered definition, so use a
+            // schema-valid placeholder instead of trying to recover it from the id.
             "XXX".to_owned()
         }
 
@@ -8278,7 +8272,7 @@ mod settlement {
                 let receiver = account_with_seed(&domain, 0x44);
 
                 let delivery_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "bond".parse().unwrap(),
                     ),
@@ -8287,7 +8281,7 @@ mod settlement {
                     buyer,
                 );
                 let payment_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "usd".parse().unwrap(),
                     ),
@@ -8316,7 +8310,7 @@ mod settlement {
                 let counter_receiver = account_with_seed(&domain, 0x88);
 
                 let primary_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "usd".parse().unwrap(),
                     ),
@@ -8325,7 +8319,7 @@ mod settlement {
                     receiver,
                 );
                 let counter_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").unwrap(),
                         "eur".parse().unwrap(),
                     ),
@@ -8411,78 +8405,26 @@ mod settlement {
             }
 
             #[test]
-            fn dvp_preview_reports_currency_validation_error() {
-                let snapshots = crosswalk_snapshot(
-                    r#"{
-                        "version":"2024-05-01",
-                        "source":"ANNA",
-                        "entries":[{"isin":"US0378331005"}]
-                    }"#,
-                );
-
-                let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-                let dvp = DvpIsi {
-                    settlement_id: "dvp_settlement".parse().unwrap(),
-                    delivery_leg: SettlementLeg::new(
-                        iroha_data_model::asset::AssetDefinitionId::new(
-                            DomainId::try_new("wonderland", "universal").unwrap(),
-                            "bond".parse().unwrap(),
-                        ),
-                        Quantity::from(100_u32),
-                        account_with_seed(&domain, 0x55),
-                        account_with_seed(&domain, 0x66),
-                    ),
-                    payment_leg: SettlementLeg::new(
-                        iroha_data_model::asset::AssetDefinitionId::new(
-                            DomainId::try_new("wonderland", "universal").unwrap(),
-                            "doge".parse().unwrap(),
-                        ),
-                        Quantity::from(1_000_u32),
-                        account_with_seed(&domain, 0x77),
-                        account_with_seed(&domain, 0x88),
-                    ),
-                    plan: SettlementPlan::new(
-                        SettlementExecutionOrder::DeliveryThenPayment,
-                        SettlementAtomicity::AllOrNothing,
-                    ),
-                    metadata: Metadata::default(),
-                };
-
-                let err = dvp_to_sese023(
-                    &dvp,
-                    Some("US0378331005"),
-                    Some(&snapshots),
-                    &SettlementPreviewOptions::default(),
-                )
-                .expect_err("invalid currency must be rejected");
-                let msg = err.to_string();
-                assert!(
-                    msg.contains("invalid ISO 4217 currency value for field `CashLeg/Ccy`"),
-                    "unexpected error message: {msg}"
-                );
-            }
-
-            #[test]
-            fn dvp_preview_uses_placeholder_currency_for_opaque_asset_ids() {
+            fn dvp_preview_uses_placeholder_currency_without_definition_context() {
                 let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
                 let seller = account_with_seed(&domain, 0x11);
                 let buyer = account_with_seed(&domain, 0x22);
                 let payer = account_with_seed(&domain, 0x33);
                 let receiver = account_with_seed(&domain, 0x44);
-                let named_payment_asset = iroha_data_model::asset::AssetDefinitionId::new(
-                    DomainId::try_new("wonderland", "universal").unwrap(),
-                    "usd".parse().unwrap(),
-                );
-                let opaque_payment_asset: AssetDefinitionId = named_payment_asset
+                let named_payment_asset =
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("wonderland", "universal").unwrap(),
+                        "usd".parse().unwrap(),
+                    );
+                let canonical_payment_asset: AssetDefinitionId = named_payment_asset
                     .to_string()
                     .parse()
                     .expect("canonical asset id should parse");
-                assert!(opaque_payment_asset.is_opaque_canonical());
 
                 let dvp = DvpIsi {
                     settlement_id: "dvp_settlement".parse().unwrap(),
                     delivery_leg: SettlementLeg::new(
-                        iroha_data_model::asset::AssetDefinitionId::new(
+                        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                             DomainId::try_new("wonderland", "universal").unwrap(),
                             "bond".parse().unwrap(),
                         ),
@@ -8491,7 +8433,7 @@ mod settlement {
                         buyer,
                     ),
                     payment_leg: SettlementLeg::new(
-                        opaque_payment_asset,
+                        canonical_payment_asset,
                         Quantity::from(1_000_u32),
                         payer,
                         receiver,
@@ -9301,6 +9243,8 @@ mod tests {
                 "fixture-authority",
                 "--deploy-nonce",
                 "1",
+                "--chain-id",
+                "local-contract-test",
             ],
             vec![
                 "iroha",
@@ -9821,7 +9765,7 @@ mod tests {
 
     #[test]
     fn parse_asset_definition_literal_accepts_base58() {
-        let expected = AssetDefinitionId::new(
+        let expected = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
@@ -9933,7 +9877,7 @@ mod tests {
     fn validate_executable_fee_payment_rejects_missing_contract_call_gas_limit() {
         let executable = Executable::ContractCall(
             iroha::data_model::transaction::executable::ContractInvocation {
-                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
                     .parse()
                     .expect("contract address"),
                 expected_code_hash: Hash::new(b"cli-contract-code"),
@@ -9993,7 +9937,7 @@ mod tests {
         let quoted = FeePaymentIntent::authority(
             vec![FeeChargeLimit::new(
                 FeeChargeKind::Nexus,
-                AssetDefinitionId::new(
+                AssetDefinitionId::derive_from_components(
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     "rose".parse().expect("name"),
                 ),
@@ -11167,36 +11111,42 @@ mod cli_integration_harness_tests {
 
             let _domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let owner = sample_account_id("land", 0x30);
-            let id1: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("land", "universal").unwrap(),
-                "gold".parse().unwrap(),
-            );
-            let id2: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("land", "universal").unwrap(),
-                "silver".parse().unwrap(),
-            );
-            let id3: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("land", "universal").unwrap(),
-                "bronze".parse().unwrap(),
-            );
+            let id1: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("land", "universal").unwrap(),
+                    "gold".parse().unwrap(),
+                );
+            let id2: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("land", "universal").unwrap(),
+                    "silver".parse().unwrap(),
+                );
+            let id3: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("land", "universal").unwrap(),
+                    "bronze".parse().unwrap(),
+                );
 
-            let mut ad1 = {
-                let __asset_definition_id = id1;
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
+            let mut ad1 = AssetDefinition::numeric(
+                id1,
+                "gold".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(owner.account());
-            let mut ad2 = {
-                let __asset_definition_id = id2;
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
+            let mut ad2 = AssetDefinition::numeric(
+                id2,
+                "silver".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(owner.account());
-            let ad3 = {
-                let __asset_definition_id = id3;
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            }
+            let ad3 = AssetDefinition::numeric(
+                id3,
+                "bronze".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
             .build(owner.account());
 
             // Insert ranks: ad1=2, ad2=1, ad3=None
@@ -12115,16 +12065,23 @@ mod cli_integration_harness_tests {
 
             // Build asset defs ad0..ad4 with ranks: ad0=2, ad1=4, ad2=None, ad3=1, ad4=3
             let ids: Vec<AssetDefinitionId> = (0..5)
-                .map(|i| AssetDefinitionId::new(domain.clone(), format!("ad{i}").parse().unwrap()))
+                .map(|i| {
+                    AssetDefinitionId::derive_from_components(
+                        domain.clone(),
+                        format!("ad{i}").parse().unwrap(),
+                    )
+                })
                 .collect();
             let mut defs: Vec<AssetDefinition> = ids
                 .into_iter()
-                .map(|id| {
-                    {
-                        let __asset_definition_id = id;
-                        AssetDefinition::numeric(__asset_definition_id.clone())
-                            .with_name(__asset_definition_id.name().to_string())
-                    }
+                .enumerate()
+                .map(|(index, id)| {
+                    AssetDefinition::numeric(
+                        id,
+                        format!("ad{index}"),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        None,
+                    )
                     .build(owner.account())
                 })
                 .collect();
@@ -12291,17 +12248,22 @@ mod cli_integration_harness_tests {
                 let owner = sample_account_id("land", 0x61);
                 let ids: Vec<AssetDefinitionId> = (0..5)
                     .map(|i| {
-                        AssetDefinitionId::new(domain.clone(), format!("ad{i}").parse().unwrap())
+                        AssetDefinitionId::derive_from_components(
+                            domain.clone(),
+                            format!("ad{i}").parse().unwrap(),
+                        )
                     })
                     .collect();
                 let mut defs: Vec<AssetDefinition> = ids
                     .into_iter()
-                    .map(|id| {
-                        {
-                            let __asset_definition_id = id;
-                            AssetDefinition::numeric(__asset_definition_id.clone())
-                                .with_name(__asset_definition_id.name().to_string())
-                        }
+                    .enumerate()
+                    .map(|(index, id)| {
+                        AssetDefinition::numeric(
+                            id,
+                            format!("ad{index}"),
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        )
                         .build(owner.account())
                     })
                     .collect();
@@ -13084,13 +13046,16 @@ mod cli_integration_harness_tests {
             // Build 5 defs ad0..ad4 and tag pos metadata
             let mut defs = Vec::new();
             for i in 0..5 {
-                let id: AssetDefinitionId =
-                    AssetDefinitionId::new(domain.clone(), format!("ad{i}").parse().unwrap());
-                let mut ad = {
-                    let __asset_definition_id = id;
-                    AssetDefinition::numeric(__asset_definition_id.clone())
-                        .with_name(__asset_definition_id.name().to_string())
-                }
+                let id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+                    domain.clone(),
+                    format!("ad{i}").parse().unwrap(),
+                );
+                let mut ad = AssetDefinition::numeric(
+                    id,
+                    format!("ad{i}"),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
                 .build(owner.account());
                 ad.metadata_mut()
                     .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
@@ -13966,21 +13931,21 @@ mod cli_integration_harness {
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    DomainId::try_new("w", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                );
-                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-                    .with_name(__asset_definition_id.name().to_string())
+                let __asset_definition_id =
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("w", "universal").unwrap(),
+                        "rose".parse().unwrap(),
+                    );
+                AssetDefinition::new(__asset_definition_id.clone(), "rose".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
             }
             .build(owner_w.account()),
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    DomainId::try_new("w", "universal").unwrap(),
-                    "tulip".parse().unwrap(),
-                );
-                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-                    .with_name(__asset_definition_id.name().to_string())
+                let __asset_definition_id =
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("w", "universal").unwrap(),
+                        "tulip".parse().unwrap(),
+                    );
+                AssetDefinition::new(__asset_definition_id.clone(), "tulip".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
             }
             .build(owner_w.account()),
         ];
@@ -13999,12 +13964,12 @@ mod cli_integration_harness {
         };
         assert_eq!(ids.len(), 2);
         assert!(ids.iter().any(|id| id
-            == &AssetDefinitionId::new(
+            == &AssetDefinitionId::derive_from_components(
                 DomainId::try_new("w", "universal").unwrap(),
                 "rose".parse().unwrap()
             )));
         assert!(ids.iter().any(|id| id
-            == &AssetDefinitionId::new(
+            == &AssetDefinitionId::derive_from_components(
                 DomainId::try_new("w", "universal").unwrap(),
                 "tulip".parse().unwrap()
             )));
@@ -14024,30 +13989,30 @@ mod cli_integration_harness {
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    DomainId::try_new("w", "universal").unwrap(),
-                    "rose".parse().unwrap(),
-                );
-                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-                    .with_name(__asset_definition_id.name().to_string())
+                let __asset_definition_id =
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("w", "universal").unwrap(),
+                        "rose".parse().unwrap(),
+                    );
+                AssetDefinition::new(__asset_definition_id.clone(), "rose".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
             }
             .build(owner_w.account()),
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    DomainId::try_new("w", "universal").unwrap(),
-                    "tulip".parse().unwrap(),
-                );
-                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-                    .with_name(__asset_definition_id.name().to_string())
+                let __asset_definition_id =
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("w", "universal").unwrap(),
+                        "tulip".parse().unwrap(),
+                    );
+                AssetDefinition::new(__asset_definition_id.clone(), "tulip".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
             }
             .build(owner_w.account()),
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    DomainId::try_new("w", "universal").unwrap(),
-                    "peony".parse().unwrap(),
-                );
-                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-                    .with_name(__asset_definition_id.name().to_string())
+                let __asset_definition_id =
+                    iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("w", "universal").unwrap(),
+                        "peony".parse().unwrap(),
+                    );
+                AssetDefinition::new(__asset_definition_id.clone(), "peony".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
             }
             .build(owner_w.account()),
         ];
@@ -14067,11 +14032,11 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&AssetDefinitionId::new(
+        assert!(ids1.contains(&AssetDefinitionId::derive_from_components(
             DomainId::try_new("w", "universal").unwrap(),
             "rose".parse().unwrap()
         )));
-        assert!(ids1.contains(&AssetDefinitionId::new(
+        assert!(ids1.contains(&AssetDefinitionId::derive_from_components(
             DomainId::try_new("w", "universal").unwrap(),
             "tulip".parse().unwrap()
         )));
@@ -14086,7 +14051,7 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&AssetDefinitionId::new(
+        assert!(ids2.contains(&AssetDefinitionId::derive_from_components(
             DomainId::try_new("w", "universal").unwrap(),
             "peony".parse().unwrap()
         )));
@@ -14252,7 +14217,7 @@ mod cli_integration_harness {
         };
 
         let mut server = MockQueryServer::default();
-        let asset_def_id = AssetDefinitionId::new(
+        let asset_def_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
@@ -14315,7 +14280,8 @@ mod cli_integration_harness {
             Repeats::Exactly(1),
             authority.account().clone(),
             ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         let trigger = Trigger::new(trigger_id.clone(), action);
 
         let mut server = MockQueryServer::default();

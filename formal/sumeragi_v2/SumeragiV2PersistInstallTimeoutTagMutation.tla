@@ -40,10 +40,10 @@ Init ==
   /\ view = 0
   /\ now = 4
   /\ deadline = 4
-  /\ timeoutElapsed
-  /\ ~timeoutEmitted
-  /\ ~freshWindowEntered
-  /\ ~deferredTimeoutStarted
+  /\ timeoutElapsed = TRUE
+  /\ timeoutEmitted = FALSE
+  /\ freshWindowEntered = FALSE
+  /\ deferredTimeoutStarted = FALSE
   /\ lastTransition = "Init"
 
 PersistInstallTC ==
@@ -79,10 +79,15 @@ DeferredTimeoutStep ==
   /\ lastTransition' = "DeferredTimeoutStep"
   /\ UNCHANGED <<view, now, deadline, freshWindowEntered>>
 
+TerminalFreshWindow ==
+  /\ stage = "Fresh"
+  /\ UNCHANGED vars
+
 Next ==
   \/ PersistInstallTC
   \/ EnterFreshWindow
   \/ DeferredTimeoutStep
+  \/ TerminalFreshWindow
 
 Spec ==
   /\ Init

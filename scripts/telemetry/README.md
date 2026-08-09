@@ -59,7 +59,8 @@ Utility scripts for Android telemetry readiness and SoraFS chaos drill tracking.
   admission (`dashboards/alerts/tests/sorafs_provider_admission_rules.test.yml`),
   orderbook (`dashboards/alerts/tests/sorafs_orderbook_rules.test.yml`),
   Governance DAG (`dashboards/alerts/tests/sorafs_governance_dag_rules.test.yml`),
-  and SoraNet privacy (`dashboards/alerts/tests/soranet_privacy_rules.test.yml`)
+  SoraNet privacy (`dashboards/alerts/tests/soranet_privacy_rules.test.yml`),
+  and Musubi registry (`dashboards/alerts/tests/musubi_registry_rules.test.yml`)
   suites keep their rule sets in sync with the dashboards.
 - `run_privacy_dp.py`: generates deterministic differential-privacy calibration
   artefacts (`artifacts/soranet_privacy_dp/`) and the accompanying notebook

@@ -1459,7 +1459,8 @@ mod tests {
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
-            );
+            )
+            .expect("trigger action fixture satisfies validation invariants");
 
             let error = Register::trigger(Trigger::new(trigger_id.clone(), action))
                 .execute(&ALICE_ID, &mut stx)
@@ -1528,7 +1529,8 @@ mod tests {
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(trig)
             .execute(&ALICE_ID, &mut stx)
@@ -1606,7 +1608,8 @@ mod tests {
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(trig)
             .execute(&ALICE_ID, &mut stx)
@@ -1704,7 +1707,8 @@ mod tests {
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(trig)
             .execute(&ALICE_ID, &mut stx)
@@ -1754,7 +1758,8 @@ mod tests {
                 Repeats::Indefinitely,
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new(),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
 
         let err = Register::trigger(trig)
@@ -1806,7 +1811,8 @@ mod tests {
                 Repeats::Indefinitely,
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new(),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
 
         let payload = norito::json::object([("authority", ALICE_ID.to_string())])
@@ -1855,7 +1861,8 @@ mod tests {
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(trig)
             .execute(&ALICE_ID, &mut stx)
@@ -1932,6 +1939,7 @@ mod tests {
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(metadata),
         );
         Register::trigger(trigger)
@@ -1986,6 +1994,7 @@ mod tests {
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(metadata),
         );
         Register::trigger(trigger)
@@ -2038,6 +2047,7 @@ mod tests {
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(metadata),
         );
         Register::trigger(trigger)
@@ -2111,6 +2121,7 @@ mod tests {
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(metadata),
         );
         Register::trigger(trigger)
@@ -2181,7 +2192,8 @@ mod tests {
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
         Register::trigger(trigger)
             .execute(&ALICE_ID, &mut stx)
@@ -2254,6 +2266,7 @@ mod tests {
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(metadata),
         );
         Register::trigger(trigger)
@@ -2403,7 +2416,8 @@ mod tests {
                     Repeats::Exactly(1),
                     ALICE_ID.clone(),
                     filter,
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             );
 
             Register::trigger(trigger)
@@ -2445,7 +2459,8 @@ mod tests {
                     Repeats::Indefinitely,
                     ALICE_ID.clone(),
                     ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
-                ),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
             );
             Register::trigger(trigger)
                 .execute(&ALICE_ID, &mut stx)
@@ -2549,7 +2564,8 @@ mod tests {
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
                 TimeEventFilter(schedule),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
 
         let err = Register::trigger(trigger)
@@ -2596,7 +2612,8 @@ mod tests {
                 Repeats::Indefinitely,
                 ALICE_ID.clone(),
                 TimeEventFilter(schedule),
-            ),
+            )
+            .expect("trigger action fixture satisfies validation invariants"),
         );
 
         let err = Register::trigger(trigger)
@@ -2693,6 +2710,7 @@ mod tests {
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new(),
             )
+            .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(metadata),
         );
 

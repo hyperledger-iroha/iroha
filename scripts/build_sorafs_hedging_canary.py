@@ -37,6 +37,7 @@ from check_sorafs_hedging_rollout_evidence import (  # noqa: E402
     NATIVE_BRIDGE_ARTIFACT_FAMILY_PREFIXES,
     NATIVE_BRIDGE_ARTIFACT_ID_PATTERN,
     REQUIRED_METRICS,
+    REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
     REQUIRED_PRICE_FEEDS,
     REQUIRED_PUBLICATION_ROUTES,
     REQUIRED_RECONCILIATION_SOURCES,
@@ -660,6 +661,14 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             errors,
             (("--bridge-abi-version", args.bridge_abi_version),),
         )
+        if (
+            args.bridge_abi_version is not None
+            and args.bridge_abi_version != REQUIRED_NATIVE_BRIDGE_ABI_VERSION
+        ):
+            errors.append(
+                "--bridge-abi-version must equal the sole first-release ABI "
+                f"{REQUIRED_NATIVE_BRIDGE_ABI_VERSION}"
+            )
         args.artifacts = parse_artifacts(args.artifact, errors)
     elif args.kind == "governance_approval":
         if args.hedge_execution_enabled and not args.hedge_execution_governed:

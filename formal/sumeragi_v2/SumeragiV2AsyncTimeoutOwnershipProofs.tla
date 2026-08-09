@@ -612,7 +612,7 @@ BY IsaM("blast")
    DEF AsyncStrongTypeInvariant,
        StrongInductiveInvariant, Safety, TypeInvariant,
        ReducerProvenanceInvariant, HonestTimeoutTransportBacked,
-       TimeoutSigningProvenanceInvariant,
+       AsyncSerializedBusyKernelInvariant, AsyncBusyReadinessInvariant,
        TimeoutViewOwnershipKernelInvariant,
        ResponsiveRetainedTimeoutOwnershipControlSound,
        ResponsiveRetainedTimeoutVoteControlSound,
@@ -828,10 +828,10 @@ ExactTimeoutInstallCandidate(command) ==
 
 THEOREM TimeoutFormingCommandCreatesExactInstallAuthority ==
   \A command:
-    /\ \/ /\ ExecuteSignTimeout(command)
-              /\ SignTimeoutFormsTC(command)
-           \/ /\ ExecuteCoreDelivery(command)
-              /\ DeliverTimeoutFormsTC(command)
+    /\ (\/ /\ ExecuteSignTimeout(command)
+             /\ SignTimeoutFormsTC(command)
+        \/ /\ ExecuteCoreDelivery(command)
+             /\ DeliverTimeoutFormsTC(command))
     /\ AppendCausalSuccessors(command)
     => LET tc == ExactFormedTcForTimeoutCommand(command)
            candidate == ExactTimeoutInstallCandidate(command)
@@ -1346,7 +1346,7 @@ BY RestartRetainedControlRestoresLastTcAuthority,
    DEF AsyncStrongTypeInvariant,
        StrongInductiveInvariant, Safety, TypeInvariant,
        ReducerProvenanceInvariant, HonestTimeoutUnique,
-       TimeoutSigningProvenanceInvariant,
+       AsyncSerializedBusyKernelInvariant, AsyncBusyReadinessInvariant,
        DecisionFrontierUniquenessInvariant,
        DecisionsUniqueByNodeContext,
        TimeoutViewOwnershipKernelInvariant,

@@ -3,6 +3,8 @@ package org.hyperledger.iroha.android.client;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
@@ -19,12 +21,25 @@ public final class HttpClientRejectCodeTests {
 
   @Test
   public void submitSurfacesRejectHeader() {
+    final List<String> requests = new ArrayList<>();
     final HttpTransportExecutor executor =
         request -> {
+          requests.add(request.method() + " " + request.uri().getPath());
+          if ("GET".equals(request.method())
+              && "/v1/node/capabilities".equals(request.uri().getPath())) {
+            return CompletableFuture.completedFuture(compatibleCapabilitiesResponse());
+          }
+          assert "POST".equals(request.method()) : "submission must use POST";
+          assert "/v1/pipeline/transactions".equals(request.uri().getPath())
+              : "submission must target the transaction endpoint";
           final byte[] body = "{\"error\":\"rejected\"}".getBytes(StandardCharsets.UTF_8);
           final TransportResponse response =
               new TransportResponse(
-                  400, body, "bad_request", Map.of("x-iroha-reject-code", java.util.List.of("PRTRY:TX_SIGNATURE_MISSING")));
+                  400,
+                  body,
+                  "bad_request",
+                  Map.of(
+                      "x-iroha-reject-code", List.of("PRTRY:TX_SIGNATURE_MISSING")));
           return CompletableFuture.completedFuture(response);
         };
 
@@ -65,5 +80,20 @@ public final class HttpClientRejectCodeTests {
     assert response.statusCode() == 400 : "status should propagate from executor";
     assert "PRTRY:TX_SIGNATURE_MISSING".equals(response.rejectCode().orElse(null))
         : "reject header must propagate to ClientResponse";
+    assert requests.equals(
+            List.of(
+                "GET /v1/node/capabilities", "POST /v1/pipeline/transactions"))
+        : "capabilities probe must immediately precede transaction submission: " + requests;
+  }
+
+  private static TransportResponse compatibleCapabilitiesResponse() {
+    final byte[] body =
+        ("{\"data_model_version\":"
+                + ToriiTransactionCompatibility.EXPECTED_DATA_MODEL_VERSION
+                + ",\"signed_transaction_schema_hash_hex\":\""
+                + ToriiTransactionCompatibility.EXPECTED_SIGNED_TRANSACTION_SCHEMA_HASH_HEX
+                + "\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    return new TransportResponse(200, body, "ok", Map.of());
   }
 }

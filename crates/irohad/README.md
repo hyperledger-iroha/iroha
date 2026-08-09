@@ -65,7 +65,7 @@ config selector that dynamically loads executable provider code.
 The stock `irohad` binary does not embed deployment providers. With the default
 empty binding catalog it starts without external adapters. With a non-empty
 catalog it uses the stock local-broker client and
-fail before subsystem startup if the broker or any exact requested role is
+fails before subsystem startup if the broker or any exact requested role is
 missing, substituted, stale, or unsupported.
 
 There are two supported injection boundaries. A deployment-owned embedding
@@ -78,12 +78,50 @@ An explicitly injected registry remains authoritative. There is no
 process-global registry, plugin loader, environment selector, or executable
 provider selector in configuration.
 
-The source tree provides `serve_runtime_provider_broker_v1` as an injected
-broker-server library boundary, but no checked-in executable calls it and no
-HSM, KMS, sealed-store, credential loader, or production backend is packaged.
-Deployments using the stock client must therefore supervise a separately
-owned broker process that injects every requested backend. Client wiring alone
-is not production-adapter or deployment qualification.
+When finalized moderation is enabled, that same catalog projection also
+qualifies the configured strict-ingress handle, revision, and public-policy
+digest against Torii's fixed V1 ingress binding. This happens before the stock
+broker client or an injected registry is invoked, and therefore before Tokio
+or node-owned durable state exists. The in-process ingress is intentionally not
+an external broker slot; missing, substituted, stale, zero-qualified, or
+test-marked configuration fails the common launcher preflight, while the live
+adapter remains requalified at Torii construction and around every operation.
+
+The source tree provides `RuntimeProviderBrokerDeploymentV1` as the standard
+deployment assembly around the injected `serve_runtime_provider_broker_v1`
+server boundary. `RuntimeProviderBrokerExecutableV1` adds the common process
+shell: a one-argument `RuntimeProviderBrokerExecutableArgsV1` CLI, secure
+bounded canonical-catalog loading, redacted failures, supervisor-owned
+readiness/lifecycle hooks, and SIGINT/SIGTERM shutdown. Its
+`RuntimeProviderBrokerBackendRegistryV1` receives only the sanitized non-empty
+public catalog, and the assembled launch performs exact live server
+qualification before readiness.
+The server accepts canonical non-empty client subsets of that catalog so the
+stock daemon and packaged standalone services can share the fixed endpoint;
+the handshake still requires every binding byte-for-byte, and a session cannot
+invoke a provider outside its authenticated subset. Deployment launchers can
+handoff that projection without sharing `actual::Config` by calling
+`IrohaRuntimeProviderBindingsV1::export_canonical_v1`; the broker side loads it
+with `load_canonical_v1`, or uses
+`load_runtime_provider_broker_catalog_file_v1` for the process shell's secure
+absolute-path handoff. The explicitly versioned canonical Norito artifact is
+bounded, non-empty, strictly ordered, and contains only the chain identity plus
+public handles, identities, revisions, bounds, and policy digests already held
+by the sanitized projection. The common CLI has no socket override, plugin,
+private-key, credential, or test-provider argument; Linux and macOS use the
+platform-fixed authenticated endpoint, while Windows and other platforms fail
+before catalog filesystem access because V1 has no equivalent authenticated
+transport.
+
+No checked-in binary or registry supplies vendor HSM, KMS, WebAuthn, sealed
+store, network, or immutable-query implementations. Under the current static
+injection architecture, a deployment must link its reviewed concrete registry
+into a thin owned binary that parses `RuntimeProviderBrokerExecutableArgsV1`
+and calls `RuntimeProviderBrokerExecutableV1`; credentials remain inside those
+provider objects. A generic in-tree binary would first require an explicitly
+approved and versioned authenticated provider-plugin/IPC ABI, which V1 does not
+define. Client wiring, the common executable shell, or an empty/dummy registry
+alone is not production-adapter or deployment qualification.
 
 Registry resolution itself validates the sanitized binding catalog and rejects
 missing or unrequested dependency objects. It cannot independently attest to a
@@ -120,10 +158,11 @@ qualification:
   any subsystem receives it. Missing, unexpected, role-confused, substituted,
   stale, test-marked, or drifting providers fail resolution.
 
-- Stream-token signing checks the configured production handle and Ed25519
-  public key and verifies every returned signature. Its configuration and
-  provider trait do not yet expose an adapter revision or policy digest, so
-  independent stale/revoked-provider detection remains a V1 production blocker.
+- Stream-token signing checks the configured production handle, Ed25519 public
+  key, non-zero adapter revision, and public-policy digest.
+  Both startup qualification probes are individually identity-fenced, and every signing
+  operation rechecks the exact qualification and handle/key binding before and
+  after the external call before verifying the returned signature.
 
 - Provider-ingest source and resolver adapters check independently configured
   production handles, non-zero revisions and public-policy digests, the fixed
@@ -131,19 +170,50 @@ qualification:
   every worker probe, each fetch, and each signer resolution recheck the exact
   role-specific qualification before and after provider work.
 
-Governance DAG IPFS/IPNS authentication, signed-head authentication, and sealed
-monotonic checkpoint/publish-intent storage are separate registry slots. When
-the service is enabled, irohad qualifies their exact stable handles, revisions,
-and public-policy digests before Sumeragi startup, then prepares and supervises
-the service from the already resolved config view. The same service boundary
-rechecks identity around every authenticated request and sealed CAS operation.
+Governance DAG Kubo request authentication, signed-HTTP head CAS
+authentication, and sealed monotonic checkpoint/publish-intent storage are
+separate required registry slots. When the service is enabled, irohad qualifies
+their exact stable handles, revisions, and public-policy digests before Sumeragi
+startup, then prepares and supervises the service from the already resolved
+config view. The Kubo and head adapters must each return a live
+`GovernanceDagRequestIngressQualificationV1` matching the exact configured
+`GovernanceDagRequestIngressBindingV1`, exposed by
+`ipfs_request_ingress_binding()` and `head_request_ingress_binding()`. The only
+accepted ingress contract is an exclusive authenticated receiver backed by one
+shared sealed atomic replay namespace for the complete replica set through
+envelope expiry. The service rechecks identity around every authenticated
+request and sealed CAS operation.
+
+The publisher uses one fixed Kubo UnixFS profile, locally derives every expected
+CID, and publishes the public head only through signed-HTTP strong-ETag CAS.
+Its mirror retains the protocol-fixed suffix of at most 65,536 blocks and 512
+MiB of canonical source bytes. A sealed intent owns the derived mirror candidate;
+checkpoint/source recovery must reproduce its exact digest. All referenced Kubo
+objects are verified or repaired before the public-head CAS, each checkpoint
+generation receives a full first audit, and later polls rotate through the
+retained objects. A missing post-CAS pin or object is restored from authenticated
+bytes only when it reproduces the same deterministic CID.
+
+Preparation also yields the service-owned authenticated mirror-read capability.
+The launcher installs it into the embedded `NodeHandle` exactly once, before
+spawning the service task or sharing the first node clone. Installation checks
+the logical and retained physical producer root, the configured and retained
+signer identity/qualification/peer/key, the sealed-checkpoint-store binding,
+the reader-retained service-state root, and the existing typed mirror store.
+Any mismatch is startup-fatal. Every mirror read authenticates the current typed
+store and sealed checkpoint under the runner's readiness epoch; reconciliation
+failure or runner exit withdraws all retained readers. Torii reads publication,
+runtime, and mirror authority through these path-free typed snapshots.
 The stock Governance DAG binary likewise has no built-in credential loader;
 deployment launchers inject a
 `GovernanceDagServiceRuntimeProviderRegistryV1` through the library entrypoint.
 
-Moderation strict ingress and the stream-token identity gap above remain
-production blockers; this registry wiring alone is not a claim that the
-embedding launcher or a deployment is production-complete.
+The stream-token source-side identity gap is closed. Production readiness still
+requires a genuine deployment-owned signer matching that exact public binding
+and multi-replica rotation/revocation/failover evidence. Likewise, moderation
+strict-ingress preflight does not provide the real external moderation signer,
+settlement, publication, notification, archive, or multi-replica deployment
+evidence required for production readiness.
 
 ## Configuration
 
@@ -234,7 +304,7 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       ```bash
       cargo run --release -p iroha_kagami -- \
         genesis generate default \
-        --genesis-public-key <PEER_PUBLIC_KEY> \
+        --genesis-public-key <GENESIS_PUBLIC_KEY> \
         > deploy/peer/genesis.json
       ```
 
@@ -244,9 +314,11 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       ```bash
       cargo run --release -p iroha_kagami -- \
         genesis sign deploy/peer/genesis.json \
-        --public-key <PEER_PUBLIC_KEY> \
-        --private-key <PEER_PRIVATE_KEY> \
-        --out-file deploy/peer/genesis.signed.nrt
+        --private-key-file <MODE_0600_GENESIS_PRIVATE_KEY_FILE> \
+        --expected-public-key <GENESIS_PUBLIC_KEY> \
+        --bound-manifest-out deploy/peer/genesis.json \
+        --out-file deploy/peer/genesis.signed.nrt \
+        --expected-hash-out deploy/peer/genesis.expected_hash
       ```
 
       Then edit `config.toml` so that the `[genesis]` section references the
@@ -255,7 +327,9 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       ```toml
       [genesis]
       file = "genesis.signed.nrt"
-      public_key = "<PEER_PUBLIC_KEY>"
+      manifest_json = "genesis.json"
+      public_key = "<GENESIS_PUBLIC_KEY>"
+      expected_hash = "<EXACT_HASH_FROM_genesis.expected_hash>"
       ```
 
       See `crates/iroha_kagami/CommandLineHelp.md` and the
@@ -272,29 +346,45 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
     ./irohad --sora --config ./config.toml
     ```
 
-    Repeat the configuration/key/genesis steps for every peer. Remember that to
-    tolerate _f_ Byzantine faults the network must contain at least _3f + 1_
-    peers with mutually listed `trusted_peers` entries.
+    Repeat the validator configuration/key steps for every peer and provision
+    the same signed genesis block plus exact bound manifest on every peer with
+    empty storage. Genesis is a local startup trust artifact and is not fetched
+    from another validator. To tolerate _f_ Byzantine faults the network must
+    contain exactly _3f + 1_ validators with mutually listed `trusted_peers`
+    entries.
 
 ### Docker
 
-We provide a development-only sample configuration in
+We provide an explicitly seeded development-only sample configuration in
 [`docker-compose.yml`](../../defaults/docker-compose.yml). It contains no
-genesis signing key. Create fresh owner-only custody and export only its paths
-before evaluating the manifest:
+genesis signing key or runtime signer. Provision the signed body, verifier key,
+and independently approved exact hash for that exact sample roster before
+evaluating the manifest:
 
 ```bash
-cargo run --bin kagami -- keys --out-dir target/compose-genesis
-export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/compose-genesis/public.key"
-export IROHA_GENESIS_PRIVATE_KEY_FILE="$PWD/target/compose-genesis/private.key"
+cargo run --bin kagami -- localnet \
+  --seed Iroha --peers 4 --sora-profile nexus --consensus-mode npos \
+  --out-dir target/compose-genesis
+export IROHA_GENESIS_SIGNED_FILE="$PWD/target/compose-genesis/genesis.signed.nrt"
+export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/compose-genesis/genesis.public_key"
+export IROHA_GENESIS_EXPECTED_HASH_FILE="$PWD/target/compose-genesis/genesis.expected_hash"
 docker compose -f defaults/docker-compose.yml up --build
 ```
 
-Compose mounts the verifier key into every peer and the signing key into only
-the genesis-submitting peer. Missing files and mismatched keys fail closed. For
-a deployed network, generate validator identities and matching
-`TRUSTED_PEERS_POP` entries with Kagami rather than inheriting the sample
-validator credentials. To keep containers running after closing the terminal,
+The checked seeded Compose mounts all three runtime inputs read-only into every
+validator. Prepared seedless Compose validates each exact `peerN.toml`, derives
+a content-addressed container-safe projection, proves that its consensus and
+deterministic execution fingerprints are unchanged, and mounts that projection
+as `/config/peer.toml` through a file-backed Compose secret. Validator keys do
+not appear in Compose YAML or environment variables. Neither mode mounts the
+genesis signing key, client credentials, source manifest, or source peer config.
+Host-only account-onboarding and faucet services are omitted from the
+validator-only projection. Missing files and trust-root mismatches fail closed.
+For a deployed network, generate one authoritative `kagami localnet` bundle and
+run `kagami docker` without `--seed`; Kagami validates and reuses its identities,
+PoPs, signed body, verifier key, hash, and policy-equivalent configs rather than
+inheriting the sample validator credentials.
+To keep containers running after closing the terminal,
 use the `-d` (*detached*) flag:
 
 ```bash

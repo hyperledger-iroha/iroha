@@ -7,33 +7,51 @@ import argparse
 import base64
 import csv
 from dataclasses import dataclass
+from datetime import datetime
 import hashlib
+import importlib.util
 import io
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
 import secrets
 import selectors
-import signal
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import time
-from typing import Any
+from typing import Any, BinaryIO
 
+
+_LOCALNET_MANIFEST_MODULE_PATH = Path(__file__).resolve(strict=True).with_name(
+    "sumeragi_v2_localnet_manifest.py"
+)
+_LOCALNET_MANIFEST_SPEC = importlib.util.spec_from_file_location(
+    "_sumeragi_v2_release_localnet_manifest",
+    _LOCALNET_MANIFEST_MODULE_PATH,
+)
+if _LOCALNET_MANIFEST_SPEC is None or _LOCALNET_MANIFEST_SPEC.loader is None:
+    raise RuntimeError("could not load the adjacent localnet manifest validator")
+_LOCALNET_MANIFEST_MODULE = importlib.util.module_from_spec(
+    _LOCALNET_MANIFEST_SPEC
+)
+_PREVIOUS_DONT_WRITE_BYTECODE = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
 try:
-    from sumeragi_v2_localnet_manifest import (
-        LocalnetManifestError,
-        canonical_localnet_manifest,
-    )
-except ModuleNotFoundError:
-    from scripts.sumeragi_v2_localnet_manifest import (
-        LocalnetManifestError,
-        canonical_localnet_manifest,
-    )
+    _LOCALNET_MANIFEST_SPEC.loader.exec_module(_LOCALNET_MANIFEST_MODULE)
+finally:
+    sys.dont_write_bytecode = _PREVIOUS_DONT_WRITE_BYTECODE
+LocalnetManifestError = _LOCALNET_MANIFEST_MODULE.LocalnetManifestError
+canonical_localnet_manifest = _LOCALNET_MANIFEST_MODULE.canonical_localnet_manifest
+
+_RELEASE_RECEIPT_COMPONENT_FILES = (
+    "write_sumeragi_v2_release_receipt_formal_artifacts.py",
+    "write_sumeragi_v2_release_receipt_corridor_log.py",
+)
 
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
@@ -87,6 +105,7 @@ _MAX_PREBUILT_BINARY_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_RELEASE_TSV_BYTES = 16 * 1024 * 1024
 _MAX_RELEASE_TEXT_BYTES = 256 * 1024 * 1024
 _MAX_RELEASE_JSON_BYTES = 128 * 1024 * 1024
+_MAX_TLAPS_RESOURCE_RECORDS = 1_000_000
 _PREBUILT_MANIFEST_NAME = ".sumeragi-v2-prebuilt-binaries.tsv"
 _PREBUILT_INVOCATION_RE = re.compile(r"invocation\.[A-Za-z0-9]+")
 _PREBUILT_TRIPLE_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_.]+)+")
@@ -127,7 +146,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "8cfc4849cccede44b70644cc536e8a7298eb70495b193adba24f05a28201a3fd"
+    "c9c49999950dfd6e7c74869bec49f42222fee2a9d3ad4f24d913cedc5012fa9d"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -139,6 +158,10 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
     "manifest_helper": ("compute-manifest.py", _SIGNATURE_DATA_MODE),
     "python": ("python3", _SIGNATURE_TOOL_MODE),
     "receipt_validator": ("validate-receipt.py", _SIGNATURE_DATA_MODE),
+    "receipt_validator_support": (
+        "sumeragi_v2_localnet_manifest.py",
+        _SIGNATURE_DATA_MODE,
+    ),
     "revocation": ("bootstrap-revocation", _SIGNATURE_DATA_MODE),
     "runner_tool_manifest": ("runner-tool-manifest.json", _SIGNATURE_DATA_MODE),
     "ssh_keygen": ("ssh-keygen", _SIGNATURE_TOOL_MODE),
@@ -158,11 +181,13 @@ _BOOTSTRAP_RUNNER_ENV_ALLOWLIST = {
     "CARGO_HOME",
     "CARGO_NET_GIT_FETCH_WITH_CLI",
     "CARGO_NET_OFFLINE",
+    "IROHA_RELEASE_CANCEL_REQUEST_PATH",
     "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
     "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
     "IROHA_RELEASE_SCALING_IROHAD_SHA256",
     "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
     "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
+    "IROHA_RELEASE_TLA2TOOLS_JAR",
     "NIX_SSL_CERT_FILE",
     "RUSTUP_HOME",
     "RUSTUP_TOOLCHAIN",
@@ -182,6 +207,13 @@ _FORMAL_FINAL_MARKER = (
     "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered "
     "adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/"
     "recovery/ownership mutations, bounded TLC, trace replay, and production Verus"
+)
+_TLAPS_RESOURCE_MEMORY_LIMIT_BYTES = 2 * 1024 * 1024 * 1024
+_TLAPS_RESOURCE_SAMPLE_INTERVAL_SECONDS = 0.25
+_TLAPS_RESOURCE_PHYSICAL_FOOTPRINT_INTERVAL_SECONDS = 5.0
+_TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE = "max_rss_physical_footprint"
+_TLAPS_RESOURCE_TIMESTAMP_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z"
 )
 _SCALING_REPORT_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.validation.v1"
 _SCALING_SAFE_PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -203,7 +235,7 @@ _APALACHE_REFINEMENT_RESULTS = (
         "native-application-evidence",
         "SumeragiV2NativeApplicationEvidence",
         "multilane_native_application_evidence_fixed.cfg",
-        "5",
+        "8",
     ),
     (
         "autonomous-reservation-carrier",
@@ -215,6 +247,12 @@ _APALACHE_REFINEMENT_RESULTS = (
         "queue-plan-admission-registry",
         "SumeragiV2QueuePlanAdmissionRegistry",
         "multilane_queue_plan_admission_registry_fixed.cfg",
+        "8",
+    ),
+    (
+        "kura-replica-retention",
+        "SumeragiV2KuraReplicaRetention",
+        "kura_replica_retention_fixed.cfg",
         "8",
     ),
 )
@@ -353,28 +391,28 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 813
-_G_UNIT_TEST_COUNT = 309
+_PRODUCTION_TEST_COUNT = 845
+_G_UNIT_TEST_COUNT = 524
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        115,
+        318,
         "lib",
     ),
     (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        137,
+        143,
         "lib",
     ),
     (
         "required_multilane_config_lib_focus_tests",
         "g-unit-iroha-config-lib",
         "iroha_config",
-        3,
+        9,
         "lib",
     ),
     (
@@ -424,7 +462,7 @@ _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
         "kura::tests",
-        13,
+        14,
     ),
     (
         "production-kura-lane-geometry",
@@ -439,7 +477,7 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        41,
+        43,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
@@ -468,13 +506,18 @@ _PRODUCTION_MODULES = (
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 66),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 57),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 60),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 129),
+    (
+        "production-v2-lifecycle-recovery",
+        "sumeragi::v2_lifecycle_recovery::tests",
+        5,
+    ),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 132),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -546,11 +589,6 @@ _PRODUCTION_MODULES = (
         7,
     ),
     (
-        "production-irohad-genesis-reply-geometry",
-        "genesis_bootstrap::tests",
-        5,
-    ),
-    (
         "production-config-v2-exact-output-geometry",
         "parameters::actual::tests",
         2,
@@ -581,20 +619,21 @@ _TAIRA_CONTRACT_TESTS = (
     "taira_public_localnet::release_execution_profile_rejects_non_exact_offline_values",
     "taira_public_localnet::simulation_summary_json_records_release_profile_and_status_evidence",
 )
-_JS_STATUS_PATTERN = (
-    "getSumeragiStatusTyped (validates and normalizes authoritative v2 status|"
-    "accepts the local-control liveness blocker|accepts the unsafe-proposal ignore reason|"
-    "accepts all twelve ignore reasons at the bound)"
-)
-_PYTHON_STATUS_TESTS = (
-    "python/iroha_torii_client/tests/test_client.py::"
-    "test_get_sumeragi_status_parses_authoritative_v2_snapshot",
-    "python/iroha_torii_client/tests/test_client.py::"
-    "test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker",
-    "python/iroha_torii_client/tests/test_client.py::"
-    "test_get_sumeragi_status_accepts_unsafe_proposal_ignore_reason",
-    "python/iroha_torii_client/tests/test_client.py::"
-    "test_get_sumeragi_status_accepts_all_twelve_ignore_reasons_at_the_bound",
+_RUST_SDK_DIAGNOSTICS_TESTS = (
+    "client::tests::get_sumeragi_status_prefers_norito_and_handles_json",
+    "client::tests::get_sumeragi_status_rejects_unknown_json_fields",
+    "client::tests::get_sumeragi_status_rejects_structurally_impossible_norito_and_json",
+    "client::tests::get_sumeragi_status_json_requires_exact_json_media_type",
+    "client::tests::get_sumeragi_diagnostics_verifies_lane_relay_envelopes",
+    "client::tests::get_sumeragi_diagnostics_rejects_invalid_lane_relay_hash",
+    "client::tests::get_sumeragi_diagnostics_rejects_malformed_autonomous_execution",
+    "client::tests::get_sumeragi_diagnostics_rejects_duplicate_autonomous_execution_identity",
+    "client::tests::get_sumeragi_diagnostics_rejects_malformed_native_amx_receipts_in_every_container",
+    "client::tests::get_sumeragi_diagnostics_rejects_malformed_json_payload",
+    "client::tests::get_sumeragi_diagnostics_rejects_json_payload_missing_required_fields",
+    "client::tests::get_sumeragi_diagnostics_rejects_unknown_json_fields",
+    "client::tests::get_sumeragi_diagnostics_rejects_zero_npos_seed",
+    "client::tests::get_sumeragi_diagnostics_requires_declared_current_media_type",
 )
 _CROSS_SDK_TESTS = (
     "sumeragi_v2_cross_sdk_fixtures::shared_sdk_accept_fixtures_are_exact_current_rust_encodings",
@@ -602,85 +641,33 @@ _CROSS_SDK_TESTS = (
 )
 _NATIVE_AMX_GROUPED_PARITY_HARNESS = "ci/run_native_amx_v2_grouped_sdk_parity.sh"
 _NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 50
+_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 55
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
     ("openapi", 7),
-    ("python", 56),
-    ("javascript", 54),
-    ("swift", 3),
+    ("python", 62),
+    ("javascript", 60),
+    ("swift", 4),
     ("kotlin", 6),
     ("java", 5),
 )
-_NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
-    "ci/run_native_amx_v2_grouped_sdk_parity.sh",
-    "ci/native_amx_v2_grouped_gradle_init.gradle",
-    "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
-    "pytests/scripts/native_amx_v2_grouped_fixture_test.py",
-    "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
-    "python/iroha_python/src/iroha_python/client.py",
-    "python/iroha_python/src/iroha_python/__init__.py",
-    "python/iroha_torii_client/client.py",
-    "python/iroha_torii_client/native_amx.py",
-    "javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js",
-    "javascript/iroha_js/src/toriiClient.js",
-    "javascript/iroha_js/scripts/build-dist.mjs",
-    "javascript/iroha_js/index.d.ts",
-    "javascript/iroha_js/package.json",
-    "javascript/iroha_js/package-lock.json",
-    "IrohaSwift/Tests/IrohaSwiftTests/NativeAmxV2GroupedFixtureTests.swift",
-    "IrohaSwift/Sources/IrohaSwift/CanonicalNoritoEncoding.swift",
-    "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
-    "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
-    "IrohaSwift/Sources/IrohaSwift/Norito.swift",
-    "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
-    "IrohaSwift/Package.swift",
-    "IrohaSwift/Package.resolved",
-    "crates/connect_norito_bridge/include/connect_norito_bridge.h",
-    "crates/connect_norito_bridge/src/lib.rs",
-    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/"
-    "NativeAmxV2GroupedFixtureTest.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
-    "NativeAmxV2.kt",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
-    "SumeragiDiagnosticsModels.kt",
-    "kotlin/core-jvm/build.gradle.kts",
-    "kotlin/settings.gradle.kts",
-    "kotlin/gradlew",
-    "kotlin/gradle/wrapper/gradle-wrapper.jar",
-    "kotlin/gradle/wrapper/gradle-wrapper.properties",
-    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/"
-    "NativeAmxV2GroupedFixtureTests.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
-    "NativeAmxV2Models.java",
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
-    "SumeragiDiagnosticsModels.java",
-    "java/iroha_android/core/build.gradle.kts",
-    "java/iroha_android/settings.gradle.kts",
-    "java/iroha_android/gradlew",
-    "java/iroha_android/gradle/wrapper/gradle-wrapper.jar",
-    "java/iroha_android/gradle/wrapper/gradle-wrapper.properties",
-    "artifacts/openapi/torii.json",
-    "artifacts/openapi/versions/current/torii.json",
+_SUMERAGI_SDK_DIAGNOSTICS_HARNESS = "ci/run_sumeragi_v2_sdk_diagnostics.sh"
+_SUMERAGI_SDK_DIAGNOSTICS_SUITES = (
+    ("python", 121),
+    ("javascript", 88),
+    ("swift", 17),
+    ("kotlin", 26),
+    ("java", 24),
 )
-_JS_STATUS_TESTS = (
-    "getSumeragiStatusTyped validates and normalizes authoritative v2 status",
-    "getSumeragiStatusTyped accepts the local-control liveness blocker",
-    "getSumeragiStatusTyped accepts the unsafe-proposal ignore reason",
-    "getSumeragiStatusTyped accepts all twelve ignore reasons at the bound",
+_SDK_SOURCE_CLOSURE_RESOLVER = "ci/resolve_sumeragi_v2_sdk_source_closure.py"
+_SDK_SOURCE_CLOSURE_MANIFEST = "ci/sumeragi_v2_sdk_source_closure.json"
+_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE = "native-amx-v2-grouped"
+_SUMERAGI_SDK_DIAGNOSTICS_SOURCE_CLOSURE_SUITE = "sumeragi-v2-sdk-diagnostics"
+_SDK_SOURCE_CLOSURE_SUITES = frozenset(
+    {
+        _NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE,
+        _SUMERAGI_SDK_DIAGNOSTICS_SOURCE_CLOSURE_SUITE,
+    }
 )
-
-
-def _native_amx_grouped_suite_source_manifest(repo_root: Path) -> str:
-    digest = hashlib.sha256()
-    for relative_path in _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS:
-        source = _bounded_path_contract(
-            repo_root / relative_path,
-            f"grouped Native AMX V2 suite source {relative_path}",
-            maximum_bytes=_MAX_TOOL_BYTES,
-            require_single_link=False,
-        )
-        digest.update(f"{relative_path}\t{source.sha256}\n".encode())
-    return digest.hexdigest()
 
 
 def _canonical_production_tests(
@@ -719,7 +706,6 @@ def _canonical_production_tests(
                     "consensus_message_control::tests::",
                     "network_relay_tests::",
                     "tests::relay_fairness::",
-                    "genesis_bootstrap::tests::",
                     "parameters::",
                 )
             )
@@ -825,7 +811,6 @@ def _production_module_command(module: str) -> str:
         "consensus_message_control::tests",
         "network_relay_tests",
         "tests::relay_fairness",
-        "genesis_bootstrap::tests",
     }:
         return (
             "cargo test --locked --offline -p irohad --bin irohad "
@@ -890,42 +875,35 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
     legs.extend(
         (
             (
+                "source-sealed-workspace-build",
+                "command",
+                0,
+                "cargo +1.93.1 build -j1 --locked --offline --workspace",
+            ),
+            (
+                "source-sealed-workspace-tests",
+                "command",
+                0,
+                "cargo +1.93.1 test -j1 --locked --offline --workspace",
+            ),
+            (
+                "source-sealed-workspace-clippy",
+                "command",
+                0,
+                "cargo +1.93.1 clippy -j1 --locked --offline --workspace "
+                "--all-targets -- -D warnings",
+            ),
+            (
                 "source-sealed-workspace-format",
                 "command",
                 0,
-                "cargo fmt --all -- --check",
+                "cargo +1.93.1 fmt --all -- --check",
             ),
             (
                 "source-sealed-legacy-codec-guard",
                 "command",
                 0,
                 "bash scripts/check_no_legacy_codec.sh",
-            ),
-            (
-                "source-sealed-workspace-build",
-                "command",
-                0,
-                "cargo build --locked --offline --workspace",
-            ),
-            (
-                "source-sealed-workspace-clippy",
-                "command",
-                0,
-                "cargo clippy --locked --offline --workspace --all-targets "
-                "-- -D warnings",
-            ),
-            (
-                "source-sealed-workspace-tests",
-                "command",
-                0,
-                "cargo test --locked --offline --workspace",
-            ),
-            (
-                "source-sealed-irohad-tests",
-                "command",
-                0,
-                "cargo test --locked --offline -p irohad --bin irohad "
-                "--features test-network-message-control",
             ),
         )
     )
@@ -968,23 +946,26 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
         )
         for surface, count in _NATIVE_AMX_GROUPED_PARITY_SUITES
     )
+    legs.append(
+        (
+            "sumeragi-diagnostics-rust",
+            "cargo-exact",
+            len(_RUST_SDK_DIAGNOSTICS_TESTS),
+            "cargo test --locked --offline -p iroha --lib "
+            "client::tests::get_sumeragi_ -- --test-threads=1",
+        )
+    )
     legs.extend(
         (
-            (
-                "status-javascript",
-                "node",
-                4,
-                "node --test --test-reporter=tap "
-                f"--test-name-pattern={_JS_STATUS_PATTERN} "
-                "javascript/iroha_js/test/toriiClient.test.js",
-            ),
-            (
-                "status-python",
-                "pytest",
-                4,
-                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
-                "-q -p no:cacheprovider " + " ".join(_PYTHON_STATUS_TESTS),
-            ),
+            f"sumeragi-diagnostics-{surface}",
+            "sdk-diagnostics",
+            count,
+            f"bash {_SUMERAGI_SDK_DIAGNOSTICS_HARNESS} {surface}",
+        )
+        for surface, count in _SUMERAGI_SDK_DIAGNOSTICS_SUITES
+    )
+    legs.extend(
+        (
             (
                 "preflight-source-seal",
                 "pytest",
@@ -1047,10 +1028,11 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-bootstrap",
                 "pytest",
-                82,
+                257,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
-                "pytests/scripts/sumeragi_v2_release_bootstrap_test.py",
+                "pytests/scripts/sumeragi_v2_release_bootstrap_test.py "
+                "pytests/scripts/sumeragi_v2_release_bootstrap_cancellation_test.py",
             ),
             (
                 "preflight-release-bootstrap-validator",
@@ -1063,12 +1045,14 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                316,
+                362,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_receipt_test.py "
+                "pytests/scripts/sumeragi_v2_release_receipt_components_test.py "
                 "pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py "
-                "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py",
+                "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py "
+                "pytests/scripts/sumeragi_v2_release_process_policy_test.py",
             ),
             (
                 "preflight-multilane-scaling",
@@ -1082,12 +1066,29 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                1730,
+                4819,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
                 "pytests/scripts/sumeragi_v2_verus_evidence_test.py "
-                "pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py",
+                "pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py "
+                "pytests/scripts/sumeragi_v2_reviewed_rust_source_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_native_merge_manifest_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_passive_recovery_contract_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_composed_contract_rejects_legacy_layout_only_claim "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_composed_contract_rejects_state_order_weakening "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_layout_contract_rejects_action_inventory_weakening "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_composed_contract_rejects_per_key_prefix_skip_weakening "
+                "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::"
+                "test_inflight_composed_contract_rejects_tla_snapshot_nonstutter_mapping "
+                "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::"
+                "test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_layout_contract_rejects_membership_only_lane_authorship",
             ),
             (
                 "preflight-formal-launcher",
@@ -1947,20 +1948,6 @@ def _closed_replay_environment(directory: Path) -> dict[str, str]:
     return environment
 
 
-def _abort_replay(process: subprocess.Popen[bytes]) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except (OSError, ProcessLookupError):
-        try:
-            process.kill()
-        except OSError:
-            pass
-    try:
-        process.wait(timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-
-
 def _execution_contract(
     value: EvidenceSnapshot | PathContract,
 ) -> PathContract:
@@ -2125,6 +2112,45 @@ def _run_bounded_replay(
         raise ReceiptError(f"{name} executable path does not match its contract")
     descriptors, directory_contracts = _capture_execution_inputs(contracts)
     try:
+        selector = selectors.DefaultSelector()
+        deadline = time.monotonic() + _REPLAY_TIMEOUT_SECONDS
+        buffers = {"stdout": bytearray(), "stderr": bytearray()}
+        # Bounds determine the eventual verdict; they never control the child.
+        # Retain only the capped prefix while draining both streams through EOF.
+        retained_output_bytes = 0
+        output_limit_exceeded = False
+        runtime_limit_exceeded = False
+        pending_violation: BaseException | None = None
+
+        def latch(violation: BaseException) -> None:
+            nonlocal pending_violation
+            if pending_violation is None:
+                pending_violation = violation
+
+        def register_stream(
+            stream: BinaryIO,
+            events: int,
+            data: tuple[str, BinaryIO],
+        ) -> None:
+            while True:
+                descriptor: int | None = None
+                try:
+                    descriptor = stream.fileno()
+                    os.set_blocking(descriptor, False)
+                    selector.register(descriptor, events, data)
+                    return
+                except BaseException as error:
+                    latch(error)
+                    if descriptor is not None:
+                        try:
+                            selector.get_key(descriptor)
+                        except KeyError:
+                            pass
+                        except BaseException as lookup_error:
+                            latch(lookup_error)
+                        else:
+                            return
+
         try:
             process = subprocess.Popen(
                 (str(executable), *arguments),
@@ -2138,103 +2164,177 @@ def _run_bounded_replay(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 close_fds=True,
-                start_new_session=True,
             )
         except OSError as error:
+            selector.close()
             raise ReceiptError(f"{name} could not be started") from error
-        assert process.stdout is not None and process.stderr is not None
-        selector = selectors.DefaultSelector()
-        streams = {
-            process.stdout.fileno(): ("stdout", process.stdout),
-            process.stderr.fileno(): ("stderr", process.stderr),
-        }
-        buffers = {"stdout": bytearray(), "stderr": bytearray()}
-        for descriptor, item in streams.items():
-            os.set_blocking(descriptor, False)
-            selector.register(descriptor, selectors.EVENT_READ, item)
+        output_streams = tuple(
+            (stream, label)
+            for stream, label in (
+                (process.stdout, "stdout"),
+                (process.stderr, "stderr"),
+            )
+            if stream is not None
+        )
+        if len(output_streams) != 2:
+            latch(ReceiptError(f"{name} output pipes are unavailable"))
+        for stream, label in output_streams:
+            register_stream(
+                stream,
+                selectors.EVENT_READ,
+                (label, stream),
+            )
         stdin_offset = 0
         if process.stdin is not None:
-            os.set_blocking(process.stdin.fileno(), False)
             if stdin_data:
-                selector.register(
-                    process.stdin.fileno(),
+                register_stream(
+                    process.stdin,
                     selectors.EVENT_WRITE,
                     ("stdin", process.stdin),
                 )
             else:
-                process.stdin.close()
-        deadline = time.monotonic() + _REPLAY_TIMEOUT_SECONDS
-        try:
-            while selector.get_map():
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    _abort_replay(process)
-                    raise ReceiptError(f"{name} exceeded its timeout")
-                for key, _ in selector.select(min(remaining, 0.25)):
-                    stream_name, stream = key.data
-                    if stream_name == "stdin":
-                        assert stdin_data is not None
-                        try:
-                            written = os.write(
-                                key.fd,
-                                stdin_data[
-                                    stdin_offset : stdin_offset + 64 * 1024
-                                ],
-                            )
-                        except BlockingIOError:
-                            continue
-                        except BrokenPipeError:
-                            selector.unregister(key.fd)
-                            stream.close()
-                            continue
-                        if written <= 0:
-                            _abort_replay(process)
-                            raise ReceiptError(
-                                f"{name} stdin write made no progress"
-                            )
-                        stdin_offset += written
-                        if stdin_offset == len(stdin_data):
-                            selector.unregister(key.fd)
-                            stream.close()
-                        continue
+                while True:
                     try:
-                        chunk = os.read(key.fd, 64 * 1024)
+                        process.stdin.close()
+                        break
+                    except BaseException as error:
+                        latch(error)
+        while True:
+            try:
+                if not selector.get_map():
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 and not runtime_limit_exceeded:
+                    runtime_limit_exceeded = True
+                    latch(ReceiptError(f"{name} exceeded its timeout"))
+                events = selector.select(
+                    0.25 if runtime_limit_exceeded else min(remaining, 0.25)
+                )
+            except BaseException as error:
+                latch(error)
+                continue
+            for key, _ in events:
+                stream_name, stream = key.data
+                if stream_name == "stdin":
+                    assert stdin_data is not None
+                    try:
+                        written = os.write(
+                            key.fd,
+                            stdin_data[
+                                stdin_offset : stdin_offset + 64 * 1024
+                            ],
+                        )
                     except BlockingIOError:
                         continue
-                    if not chunk:
-                        selector.unregister(key.fd)
-                        stream.close()
-                        continue
-                    buffers[stream_name].extend(chunk)
-                    if (
-                        sum(len(value) for value in buffers.values())
-                        > maximum_output_bytes
-                    ):
-                        _abort_replay(process)
-                        raise ReceiptError(
-                            f"{name} output exceeds its closed limit"
+                    except BrokenPipeError:
+                        try:
+                            selector.unregister(key.fd)
+                        except BaseException as error:
+                            latch(error)
+                            continue
+                        try:
+                            stream.close()
+                        except BaseException as error:
+                            latch(error)
+                        latch(
+                            ReceiptError(
+                                f"{name} cancelled its bounded stdin replay"
+                            )
                         )
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                _abort_replay(process)
-                raise ReceiptError(f"{name} exceeded its timeout")
+                        continue
+                    except BaseException as error:
+                        latch(error)
+                        continue
+                    if written <= 0:
+                        try:
+                            selector.unregister(key.fd)
+                        except BaseException as error:
+                            latch(error)
+                            continue
+                        try:
+                            stream.close()
+                        except BaseException as error:
+                            latch(error)
+                        latch(
+                            ReceiptError(
+                                f"{name} stdin write made no progress"
+                            )
+                        )
+                        continue
+                    stdin_offset += written
+                    if stdin_offset == len(stdin_data):
+                        try:
+                            selector.unregister(key.fd)
+                        except BaseException as error:
+                            latch(error)
+                            continue
+                        try:
+                            stream.close()
+                        except BaseException as error:
+                            latch(error)
+                    continue
+                try:
+                    chunk = os.read(key.fd, 64 * 1024)
+                except BlockingIOError:
+                    continue
+                except BaseException as error:
+                    latch(error)
+                    continue
+                if not chunk:
+                    try:
+                        selector.unregister(key.fd)
+                    except BaseException as error:
+                        latch(error)
+                    continue
+                try:
+                    retained_capacity = max(
+                        maximum_output_bytes - retained_output_bytes, 0
+                    )
+                    retained = chunk[:retained_capacity]
+                    buffers[stream_name].extend(retained)
+                    retained_output_bytes += len(retained)
+                    if (
+                        len(retained) != len(chunk)
+                        and not output_limit_exceeded
+                    ):
+                        output_limit_exceeded = True
+                        latch(
+                            ReceiptError(
+                                f"{name} output exceeds its closed limit"
+                            )
+                        )
+                except BaseException as error:
+                    latch(error)
+        while True:
             try:
-                status = process.wait(timeout=remaining)
-            except subprocess.TimeoutExpired as error:
-                _abort_replay(process)
-                raise ReceiptError(f"{name} exceeded its timeout") from error
-        except BaseException:
-            if process.poll() is None:
-                _abort_replay(process)
-            raise
-        finally:
+                status = process.wait()
+                break
+            except BaseException as error:
+                latch(error)
+        try:
+            if time.monotonic() > deadline and not runtime_limit_exceeded:
+                runtime_limit_exceeded = True
+                latch(ReceiptError(f"{name} exceeded its timeout"))
+        except BaseException as error:
+            latch(error)
+        try:
             selector.close()
-            for stream in (process.stdin, process.stdout, process.stderr):
-                if stream is not None and not stream.closed:
+        except BaseException as error:
+            latch(error)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                try:
                     stream.close()
-        _revalidate_execution_inputs(
-            contracts, descriptors, directory_contracts
-        )
+                except BaseException as error:
+                    latch(error)
+        try:
+            _revalidate_execution_inputs(
+                contracts, descriptors, directory_contracts
+            )
+        except BaseException as error:
+            latch(error)
+        if pending_violation is not None:
+            raise pending_violation
         return status, bytes(buffers["stdout"]), bytes(buffers["stderr"])
     finally:
         for descriptor in descriptors:
@@ -2252,6 +2352,7 @@ def _run_bounded_python_validator(
     environment: dict[str, str],
     name: str,
     maximum_output_bytes: int = _MAX_REPLAY_OUTPUT_BYTES,
+    watched_contracts: tuple[EvidenceSnapshot | PathContract, ...] = (),
 ) -> tuple[int, bytes, bytes]:
     checker_snapshot = _bounded_evidence_snapshot(
         checker,
@@ -2287,7 +2388,7 @@ def _run_bounded_python_validator(
         name=name,
         maximum_output_bytes=maximum_output_bytes,
         executable_contract=interpreter_contract,
-        watched_contracts=(checker_snapshot,),
+        watched_contracts=(checker_snapshot, *watched_contracts),
         stdin_data=checker_snapshot.data,
     )
 
@@ -4072,531 +4173,392 @@ def _artifact(snapshot: EvidenceSnapshot | PathContract) -> dict[str, str]:
     return {"path": str(snapshot.path), "sha256": snapshot.sha256}
 
 
-def _validate_multilane_apalache_evidence(
-    snapshot: EvidenceSnapshot, sealed_source_manifest: str
-) -> None:
-    data = snapshot.data
+def _execute_release_receipt_component(filename: str) -> None:
+    """Execute one reviewed receipt component in this module namespace."""
+
     if (
-        len(data) > _MAX_SCALING_JSON_BYTES
-        or not data.endswith(b"\n")
-        or b"\r" in data
-        or b"\0" in data
+        filename not in _RELEASE_RECEIPT_COMPONENT_FILES
+        or Path(filename).name != filename
     ):
-        raise ReceiptError(
-            "formal multilane Apalache evidence is not bounded LF-only TSV"
-        )
+        raise RuntimeError(f"invalid release receipt component: {filename!r}")
+    path = Path(__file__).with_name(filename)
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"release receipt component is unavailable: {path}")
     try:
-        lines = data.decode("utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise ReceiptError(
-            "formal multilane Apalache evidence is not UTF-8"
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise RuntimeError(
+            f"release receipt component could not be read: {path}"
         ) from error
-    expected_header = [
-        "schema_version\t1",
-        "backend\tapalache",
-        f"version\t{_APALACHE_VERSION}",
-        f"launcher_sha256\t{_APALACHE_LAUNCHER_SHA256}",
-        f"jar_sha256\t{_APALACHE_JAR_SHA256}",
-        f"source_manifest_sha256\t{sealed_source_manifest}",
-        f"result_count\t{len(_APALACHE_RESULTS)}",
-    ]
-    if len(lines) != len(expected_header) + len(_APALACHE_RESULTS):
-        raise ReceiptError(
-            "formal multilane Apalache evidence has the wrong result inventory"
-        )
-    if lines[: len(expected_header)] != expected_header:
-        raise ReceiptError(
-            "formal multilane Apalache evidence header is not the exact pinned profile"
-        )
-    for index, expected in enumerate(_APALACHE_RESULTS):
-        fields = lines[len(expected_header) + index].split("\t")
-        expected_prefix = ("result", *expected, "NoError")
-        if (
-            len(fields) != 9
-            or tuple(fields[:6]) != expected_prefix
-            or any(_DIGEST_RE.fullmatch(value) is None for value in fields[6:])
-        ):
-            raise ReceiptError(
-                "formal multilane Apalache evidence result "
-                f"{index} is not exact source-bound NoError evidence"
-            )
+    exec(compile(source, str(path), "exec"), globals())
 
 
-def _validate_formal_snapshot_replays(
-    *,
-    snapshots: dict[str, EvidenceSnapshot],
-    checker: Path,
-    checker_environment: dict[str, str],
-    repo_root: Path,
+for _release_receipt_component in _RELEASE_RECEIPT_COMPONENT_FILES:
+    _execute_release_receipt_component(_release_receipt_component)
+
+for _release_receipt_symbol in (
+    "_validate_multilane_apalache_evidence",
+    "_validate_formal_snapshot_replays",
+    "_formal_artifacts",
+    "_sdk_suite_source_manifest",
+    "_test_count_from_log",
+    "_prebuilt_artifact_root",
+    "_prebuilt_release_roots",
+    "_prebuilt_directory",
+):
+    if not callable(globals().get(_release_receipt_symbol)):
+        raise RuntimeError(
+            "release receipt component lacks required symbol "
+            f"{_release_receipt_symbol}"
+        )
+def _tlaps_resource_int(value: Any, name: str, *, minimum: int = 0) -> int:
+    if type(value) is not int or value < minimum:
+        raise ReceiptError(f"{name} is not one bounded integer")
+    return value
+
+def _tlaps_resource_float(value: Any, name: str) -> float:
+    if type(value) is not float or not math.isfinite(value) or value < 0.0:
+        raise ReceiptError(f"{name} is not one finite non-negative decimal")
+    return value
+
+def _tlaps_resource_timestamp(value: Any, name: str) -> datetime:
+    if (
+        not isinstance(value, str)
+        or _TLAPS_RESOURCE_TIMESTAMP_RE.fullmatch(value) is None
+    ):
+        raise ReceiptError(f"{name} is not one canonical UTC timestamp")
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError as error:
+        raise ReceiptError(f"{name} is not one valid UTC timestamp") from error
+
+def _validate_tlaps_resource_evidence(
+    jsonl_snapshot: EvidenceSnapshot,
+    summary_snapshot: EvidenceSnapshot,
 ) -> None:
-    """Run retained formal validators over private copies of captured bytes."""
+    """Validate the exact successful resource-guard stream and its summary."""
 
-    replay_keys = (
-        "ledger",
-        "evidence",
-        "verus_evidence",
-        "verus_log",
-        "cross_tool_evidence",
+    data = jsonl_snapshot.data
+    if not data or not data.endswith(b"\n") or b"\r" in data or b"\0" in data:
+        raise ReceiptError("TLAPS resource samples are not canonical LF-only JSONL")
+    lines = data.splitlines(keepends=True)
+    if len(lines) > _MAX_TLAPS_RESOURCE_RECORDS:
+        raise ReceiptError("TLAPS resource samples exceed the record-count bound")
+    records = [
+        _decode_canonical_json(line, f"TLAPS resource record {index}")
+        for index, line in enumerate(lines)
+    ]
+    if len(records) < 4:
+        raise ReceiptError(
+            "TLAPS resource samples lack start, spawn, sample, and summary records"
+        )
+
+    summary = _decode_canonical_json(
+        summary_snapshot.data, "TLAPS resource summary"
     )
-    with tempfile.TemporaryDirectory(
-        prefix="sumeragi-v2-formal-snapshot-replay-"
-    ) as temporary:
-        replay_root = Path(temporary).resolve(strict=True)
-        replay_paths: dict[str, Path] = {}
-        for key in replay_keys:
-            snapshot = snapshots[key]
-            destination = replay_root / snapshot.path.name
-            try:
-                destination.write_bytes(snapshot.data)
-                destination.chmod(0o400)
-            except OSError as error:
-                raise ReceiptError(
-                    "formal snapshot replay could not materialize captured evidence"
-                ) from error
-            replay_paths[key] = destination
-
-        cross_tool_status, cross_tool_stdout, _ = _run_bounded_python_validator(
-            checker,
-            [
-                "--ledger",
-                str(replay_paths["ledger"]),
-                "--print-cross-tool-obligations",
-            ],
-            cwd=repo_root,
-            environment=checker_environment,
-            name="archived formal cross-tool validator",
-        )
-        if cross_tool_status != 0:
-            raise ReceiptError(
-                "archived formal ledger has an invalid cross-tool evidence requirement"
-            )
-        if not cross_tool_stdout.strip():
-            raise ReceiptError(
-                "archived formal release ledger does not require cross-tool evidence"
-            )
-
-        verus_checker = (
-            repo_root / "scripts" / "formal" / "sumeragi_v2_verus_evidence.py"
-        )
-        verus_status, _, _ = _run_bounded_python_validator(
-            verus_checker,
-            [
-                "validate",
-                "--root",
-                str(repo_root),
-                "--evidence",
-                str(replay_paths["verus_evidence"]),
-                "--log",
-                str(replay_paths["verus_log"]),
-            ],
-            cwd=repo_root,
-            environment=checker_environment,
-            name="archived formal Verus validator",
-        )
-        if verus_status != 0:
-            raise ReceiptError("archived formal Verus evidence failed validation")
-
-        status, _, _ = _run_bounded_python_validator(
-            checker,
-            [
-                "--ledger",
-                str(replay_paths["ledger"]),
-                "--release",
-                "--evidence",
-                str(replay_paths["evidence"]),
-                "--verus-evidence",
-                str(replay_paths["verus_evidence"]),
-                "--verus-log",
-                str(replay_paths["verus_log"]),
-                "--cross-tool-evidence",
-                str(replay_paths["cross_tool_evidence"]),
-            ],
-            cwd=repo_root,
-            environment=checker_environment,
-            name="archived formal release validator",
-        )
-        if status != 0:
-            raise ReceiptError(
-                "archived formal ledger/evidence failed release validation"
-            )
-
-
-def _formal_artifacts(
-    completion: EvidenceSnapshot,
-    fields: dict[str, str],
-    sealed: dict[str, Any],
-    checker_environment: dict[str, str],
-    repo_root: Path,
-) -> tuple[
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-    PathContract,
-]:
-    completion_path = completion.path
-    checker = repo_root / "scripts" / "formal" / "check_sumeragi_v2_proof_ledger.py"
-    expected_completion_fields = {
+    summary_fields = {
+        "child_exit_code",
+        "ended_utc",
+        "event",
+        "exit_reason",
+        "exit_status",
+        "evidence_peak_rss_bytes",
+        "kernel_peak_rss_bytes",
+        "kernel_peak_rss_method",
+        "kernel_peak_rss_scope",
+        "memory_limit_bytes",
+        "memory_enforcement_mode",
+        "physical_footprint_interval_seconds",
+        "peak_memory_bytes",
+        "peak_physical_footprint_bytes",
+        "peak_rss_bytes",
+        "report_context",
+        "sample_count",
+        "sample_interval_seconds",
         "schema_version",
-        "head_commit",
-        "head_tree",
-        "source_manifest_sha256",
-        "cargo_lock_sha256",
-        "formal_gate_log_sha256",
-        "proof_coverage_sha256",
-        "proof_evidence_sha256",
-        "verus_evidence_sha256",
-        "verus_log_sha256",
-        "multilane_apalache_evidence_sha256",
-        "cross_tool_evidence_sha256",
-        "harness_cargo_lock_sha256",
-        "formal_toolchain_sha256",
-        "tlaps_resource_jsonl_sha256",
-        "tlaps_resource_summary_sha256",
+        "started_utc",
+        "supervisor_pid",
     }
-    _require_fields(
-        fields,
-        expected_completion_fields,
-        "formal completion",
-    )
-    expected = {
-        "schema_version": "1",
-        "head_commit": sealed["head_commit"],
-        "head_tree": sealed["head_tree"],
-        "source_manifest_sha256": sealed["workspace_source_manifest_sha256"],
-        "cargo_lock_sha256": sealed["cargo_lock_sha256"],
-    }
-    if any(fields.get(name) != value for name, value in expected.items()):
-        raise ReceiptError("formal completion is not bound to the release identity")
-
-    artifact_specs = (
-        (
-            "gate_log",
-            completion_path.with_name("formal-gate.log"),
-            "formal_gate_log_sha256",
-            "formal gate log",
-            _MAX_RELEASE_TEXT_BYTES,
-        ),
-        (
-            "ledger",
-            completion_path.with_name("proof_coverage.json"),
-            "proof_coverage_sha256",
-            "formal proof ledger",
-            _MAX_RELEASE_JSON_BYTES,
-        ),
-        (
-            "evidence",
-            completion_path.with_name("proof_evidence.json"),
-            "proof_evidence_sha256",
-            "formal proof evidence",
-            _MAX_RELEASE_JSON_BYTES,
-        ),
-        (
-            "verus_evidence",
-            completion_path.with_name("verus_evidence.json"),
-            "verus_evidence_sha256",
-            "formal Verus evidence",
-            _MAX_RELEASE_JSON_BYTES,
-        ),
-        (
-            "verus_log",
-            completion_path.with_name("verus.log"),
-            "verus_log_sha256",
-            "formal Verus log",
-            _MAX_RELEASE_TEXT_BYTES,
-        ),
-        (
-            "multilane_apalache_evidence",
-            completion_path.with_name("multilane_apalache_evidence.tsv"),
-            "multilane_apalache_evidence_sha256",
-            "formal multilane Apalache evidence",
-            _MAX_RELEASE_TSV_BYTES,
-        ),
-        (
-            "cross_tool_evidence",
-            completion_path.with_name("cross_tool_evidence.json"),
-            "cross_tool_evidence_sha256",
-            "formal cross-tool evidence",
-            _MAX_RELEASE_JSON_BYTES,
-        ),
-        (
-            "harness_lock",
-            completion_path.with_name("harness-Cargo.lock"),
-            "harness_cargo_lock_sha256",
-            "formal harness lock",
-            _MAX_LOCK_BYTES,
-        ),
-        (
-            "toolchain",
-            completion_path.with_name("formal-toolchain.tsv"),
-            "formal_toolchain_sha256",
-            "formal toolchain",
-            _MAX_RELEASE_TSV_BYTES,
-        ),
-        (
-            "tlaps_resource_jsonl",
-            completion_path.with_name("tlaps_resource.jsonl"),
-            "tlaps_resource_jsonl_sha256",
-            "TLAPS resource samples",
-            _MAX_RELEASE_TEXT_BYTES,
-        ),
-        (
-            "tlaps_resource_summary",
-            completion_path.with_name("tlaps_resource_summary.json"),
-            "tlaps_resource_summary_sha256",
-            "TLAPS resource summary",
-            _MAX_RELEASE_JSON_BYTES,
-        ),
-    )
-    snapshots: dict[str, EvidenceSnapshot] = {}
-    for key, path, digest_field, name, maximum_bytes in artifact_specs:
-        snapshot = _bounded_evidence_snapshot(
-            path,
-            name,
-            maximum_bytes=maximum_bytes,
+    _require_exact_json_fields(summary, summary_fields, "TLAPS resource summary")
+    if records[-1] != summary:
+        raise ReceiptError(
+            "TLAPS resource samples do not terminate in the exact published summary"
         )
-        if snapshot.sha256 != fields[digest_field]:
-            raise ReceiptError(f"{name} digest mismatch")
-        snapshots[key] = snapshot
-    gate_log = snapshots["gate_log"]
-    ledger = snapshots["ledger"]
-    evidence = snapshots["evidence"]
-    verus_evidence = snapshots["verus_evidence"]
-    verus_log = snapshots["verus_log"]
-    multilane_apalache_evidence = snapshots["multilane_apalache_evidence"]
-    cross_tool_evidence = snapshots["cross_tool_evidence"]
-    harness_lock = snapshots["harness_lock"]
-    toolchain_snapshot = snapshots["toolchain"]
-    tlaps_resource_jsonl = snapshots["tlaps_resource_jsonl"]
-    tlaps_resource_summary = snapshots["tlaps_resource_summary"]
-    _validate_multilane_apalache_evidence(
-        multilane_apalache_evidence,
-        sealed["workspace_source_manifest_sha256"],
-    )
-    resource_summary = _decode_canonical_json(
-        tlaps_resource_summary.data, "TLAPS resource summary"
-    )
-    if (
-        resource_summary.get("schema_version") != 1
-        or resource_summary.get("event") != "summary"
-        or resource_summary.get("exit_reason") != "completed"
-        or resource_summary.get("exit_status") != 0
-        or resource_summary.get("memory_limit_bytes") != 2 * 1024 * 1024 * 1024
-        or resource_summary.get("sample_interval_seconds") != 0.25
-        or not isinstance(resource_summary.get("peak_memory_bytes"), int)
-        or resource_summary["peak_memory_bytes"] < 0
-        or resource_summary["peak_memory_bytes"]
-        > resource_summary["memory_limit_bytes"]
-    ):
-        raise ReceiptError("TLAPS resource summary is not a successful bounded release run")
-    if fields["harness_cargo_lock_sha256"] != _HARNESS_LOCK_SHA256:
-        raise ReceiptError("formal harness lock is not the pinned dependency graph")
-    toolchain = _tsv_fields_from_snapshot(
-        toolchain_snapshot, "formal toolchain"
-    )
-    _require_fields(
-        toolchain,
+
+    start = _require_exact_json_fields(
+        records[0],
         {
+            "event",
+            "memory_limit_bytes",
+            "memory_enforcement_mode",
+            "physical_footprint_interval_seconds",
+            "report_context",
+            "sample_interval_seconds",
             "schema_version",
-            "java_path",
-            "java_sha256",
-            "tlapm_path",
-            "tlapm_sha256",
-            "tla2tools_path",
-            "tla2tools_sha256",
-            "verus_path",
-            "verus_sha256",
-            "cargo_verus_path",
-            "cargo_verus_sha256",
-            "tlc_profile",
-            "tlaps_threads",
+            "started_utc",
+            "supervisor_pid",
         },
-        "formal toolchain",
+        "TLAPS resource start record",
+    )
+    spawn = _require_exact_json_fields(
+        records[1],
+        {
+            "event",
+            "process_group_id",
+            "schema_version",
+            "timestamp_utc",
+            "wrapper_pid",
+        },
+        "TLAPS resource spawn record",
+    )
+    sample_records = records[2:-1]
+    sample_fields = {
+        "accounting_method",
+        "elapsed_seconds",
+        "event",
+        "memory_bytes",
+        "memory_limit_bytes",
+        "physical_footprint_bytes",
+        "process_count",
+        "process_group_id",
+        "rss_bytes",
+        "schema_version",
+        "timestamp_utc",
+    }
+
+    summary_schema = _tlaps_resource_int(
+        summary.get("schema_version"), "TLAPS resource summary.schema_version"
+    )
+    summary_child_status = _tlaps_resource_int(
+        summary.get("child_exit_code"), "TLAPS resource summary.child_exit_code"
+    )
+    summary_exit_status = _tlaps_resource_int(
+        summary.get("exit_status"), "TLAPS resource summary.exit_status"
+    )
+    summary_limit = _tlaps_resource_int(
+        summary.get("memory_limit_bytes"),
+        "TLAPS resource summary.memory_limit_bytes",
+        minimum=1,
+    )
+    summary_samples = _tlaps_resource_int(
+        summary.get("sample_count"),
+        "TLAPS resource summary.sample_count",
+        minimum=1,
+    )
+    summary_supervisor = _tlaps_resource_int(
+        summary.get("supervisor_pid"),
+        "TLAPS resource summary.supervisor_pid",
+        minimum=2,
+    )
+    peak_memory = _tlaps_resource_int(
+        summary.get("peak_memory_bytes"),
+        "TLAPS resource summary.peak_memory_bytes",
+    )
+    peak_rss = _tlaps_resource_int(
+        summary.get("peak_rss_bytes"), "TLAPS resource summary.peak_rss_bytes"
+    )
+    peak_footprint = _tlaps_resource_int(
+        summary.get("peak_physical_footprint_bytes"),
+        "TLAPS resource summary.peak_physical_footprint_bytes",
+    )
+    kernel_peak_rss = _tlaps_resource_int(
+        summary.get("kernel_peak_rss_bytes"),
+        "TLAPS resource summary.kernel_peak_rss_bytes",
+    )
+    evidence_peak_rss = _tlaps_resource_int(
+        summary.get("evidence_peak_rss_bytes"),
+        "TLAPS resource summary.evidence_peak_rss_bytes",
+    )
+    summary_sample_interval = _tlaps_resource_float(
+        summary.get("sample_interval_seconds"),
+        "TLAPS resource summary.sample_interval_seconds",
+    )
+    summary_footprint_interval = _tlaps_resource_float(
+        summary.get("physical_footprint_interval_seconds"),
+        "TLAPS resource summary.physical_footprint_interval_seconds",
+    )
+    started = _tlaps_resource_timestamp(
+        summary.get("started_utc"), "TLAPS resource summary.started_utc"
+    )
+    ended = _tlaps_resource_timestamp(
+        summary.get("ended_utc"), "TLAPS resource summary.ended_utc"
+    )
+    expected_kernel_method = (
+        "wait4_ru_maxrss" if kernel_peak_rss > 0 else "unavailable"
     )
     if (
-        toolchain["schema_version"] != "1"
-        or toolchain["tlc_profile"] != "ci"
-        or toolchain["tlaps_threads"] != "1"
+        summary_schema != 1
+        or summary.get("event") != "summary"
+        or summary.get("exit_reason") != "completed"
+        or summary_child_status != 0
+        or summary_exit_status != 0
+        or summary_limit != _TLAPS_RESOURCE_MEMORY_LIMIT_BYTES
+        or summary.get("memory_enforcement_mode")
+        != _TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE
+        or summary_sample_interval
+        != _TLAPS_RESOURCE_SAMPLE_INTERVAL_SECONDS
+        or summary_footprint_interval
+        != _TLAPS_RESOURCE_PHYSICAL_FOOTPRINT_INTERVAL_SECONDS
+        or summary.get("report_context") is not None
+        or summary.get("kernel_peak_rss_method") != expected_kernel_method
+        or summary.get("kernel_peak_rss_scope") != "direct_guarded_body"
+        or summary_samples != len(sample_records)
+        or ended < started
+        or peak_memory > summary_limit
+        or kernel_peak_rss > summary_limit
+        or evidence_peak_rss > summary_limit
+        or evidence_peak_rss != max(peak_rss, kernel_peak_rss)
     ):
-        raise ReceiptError("formal toolchain does not describe the pinned release profile")
-    for tool in ("java", "tlapm", "tla2tools", "verus", "cargo_verus"):
-        raw_path = Path(toolchain[f"{tool}_path"])
-        if not raw_path.is_absolute():
-            raise ReceiptError(f"formal {tool} path is not absolute")
-        tool_snapshot = _bounded_evidence_snapshot(
-            raw_path,
-            f"formal {tool} tool",
-            maximum_bytes=_MAX_TOOL_BYTES,
-            require_single_link=False,
+        raise ReceiptError(
+            "TLAPS resource summary is not a successful bounded release run"
         )
-        digest = toolchain[f"{tool}_sha256"]
-        if not _DIGEST_RE.fullmatch(digest) or tool_snapshot.sha256 != digest:
-            raise ReceiptError(f"formal {tool} tool digest mismatch")
-    log_lines = _decode_lf_text(gate_log, "formal gate log").splitlines()
+
+    start_schema = _tlaps_resource_int(
+        start.get("schema_version"), "TLAPS resource start.schema_version"
+    )
+    start_limit = _tlaps_resource_int(
+        start.get("memory_limit_bytes"),
+        "TLAPS resource start.memory_limit_bytes",
+        minimum=1,
+    )
+    start_supervisor = _tlaps_resource_int(
+        start.get("supervisor_pid"),
+        "TLAPS resource start.supervisor_pid",
+        minimum=2,
+    )
+    start_sample_interval = _tlaps_resource_float(
+        start.get("sample_interval_seconds"),
+        "TLAPS resource start.sample_interval_seconds",
+    )
+    start_footprint_interval = _tlaps_resource_float(
+        start.get("physical_footprint_interval_seconds"),
+        "TLAPS resource start.physical_footprint_interval_seconds",
+    )
+    start_time = _tlaps_resource_timestamp(
+        start.get("started_utc"), "TLAPS resource start.started_utc"
+    )
     if (
-        not log_lines
-        or log_lines[-1] != _FORMAL_FINAL_MARKER
-        or log_lines.count(_FORMAL_FINAL_MARKER) != 1
+        start_schema != 1
+        or start.get("event") != "start"
+        or start_limit != summary_limit
+        or start.get("memory_enforcement_mode")
+        != _TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE
+        or start_sample_interval != summary_sample_interval
+        or start_footprint_interval != summary_footprint_interval
+        or start.get("report_context") is not None
+        or start_supervisor != summary_supervisor
+        or start.get("started_utc") != summary.get("started_utc")
+        or start_time != started
     ):
-        raise ReceiptError("formal gate log lacks its one exact final success marker")
-    _validate_formal_snapshot_replays(
-        snapshots=snapshots,
-        checker=checker,
-        checker_environment=checker_environment,
-        repo_root=repo_root,
-    )
-    return (
-        _snapshot_contract(gate_log),
-        _snapshot_contract(ledger),
-        _snapshot_contract(evidence),
-        _snapshot_contract(verus_evidence),
-        _snapshot_contract(verus_log),
-        _snapshot_contract(multilane_apalache_evidence),
-        _snapshot_contract(cross_tool_evidence),
-        _snapshot_contract(harness_lock),
-        _snapshot_contract(toolchain_snapshot),
-        _snapshot_contract(tlaps_resource_jsonl),
-        _snapshot_contract(tlaps_resource_summary),
-    )
+        raise ReceiptError("TLAPS resource start record is not bound to its summary")
 
+    spawn_schema = _tlaps_resource_int(
+        spawn.get("schema_version"), "TLAPS resource spawn.schema_version"
+    )
+    process_group_id = _tlaps_resource_int(
+        spawn.get("process_group_id"),
+        "TLAPS resource spawn.process_group_id",
+        minimum=2,
+    )
+    wrapper_pid = _tlaps_resource_int(
+        spawn.get("wrapper_pid"), "TLAPS resource spawn.wrapper_pid", minimum=2
+    )
+    spawn_time = _tlaps_resource_timestamp(
+        spawn.get("timestamp_utc"), "TLAPS resource spawn.timestamp_utc"
+    )
+    if (
+        spawn_schema != 1
+        or spawn.get("event") != "spawn"
+        or process_group_id == wrapper_pid
+        or process_group_id == summary_supervisor
+        or wrapper_pid == summary_supervisor
+        or spawn_time < started
+        or spawn_time > ended
+    ):
+        raise ReceiptError("TLAPS resource spawn record is not one guarded body")
 
-def _test_count_from_log(lines: list[str], kind: str, name: str) -> int:
-    if kind == "cargo-focus":
-        running = [line for line in lines if line == "running 1 test"]
-        results = [
-            line
-            for line in lines
-            if re.fullmatch(
-                r"test result: ok\. 1 passed; 0 failed; 0 ignored; "
-                r"0 measured; [0-9]+ filtered out; finished in .+",
-                line,
-            )
-            is not None
-        ]
-        if not running or len(running) != len(results):
-            raise ReceiptError(
-                f"{name} has an ambiguous Cargo transcript for focused tests"
-            )
-        return len(results)
-    if kind.startswith("cargo-"):
-        running = [
-            match
-            for line in lines
-            if (match := re.fullmatch(r"running ([0-9]+) tests?", line))
-        ]
-        results = [
-            match
-            for line in lines
-            if (
-                match := re.fullmatch(
-                    r"test result: ok\. ([0-9]+) passed; 0 failed; 0 ignored; "
-                    r"0 measured; [0-9]+ filtered out; finished in .+",
-                    line,
-                )
-            )
-        ]
+    observed_memory: list[int] = []
+    observed_rss: list[int] = []
+    observed_footprint: list[int] = []
+    previous_elapsed = -1.0
+    previous_timestamp = spawn_time
+    for index, raw_sample in enumerate(sample_records):
+        sample = _require_exact_json_fields(
+            raw_sample, sample_fields, f"TLAPS resource sample record {index}"
+        )
+        sample_schema = _tlaps_resource_int(
+            sample.get("schema_version"),
+            f"TLAPS resource sample {index}.schema_version",
+        )
+        sample_limit = _tlaps_resource_int(
+            sample.get("memory_limit_bytes"),
+            f"TLAPS resource sample {index}.memory_limit_bytes",
+            minimum=1,
+        )
+        sample_group = _tlaps_resource_int(
+            sample.get("process_group_id"),
+            f"TLAPS resource sample {index}.process_group_id",
+            minimum=2,
+        )
+        _tlaps_resource_int(
+            sample.get("process_count"),
+            f"TLAPS resource sample {index}.process_count",
+            minimum=1,
+        )
+        memory = _tlaps_resource_int(
+            sample.get("memory_bytes"),
+            f"TLAPS resource sample {index}.memory_bytes",
+        )
+        rss = _tlaps_resource_int(
+            sample.get("rss_bytes"), f"TLAPS resource sample {index}.rss_bytes"
+        )
+        footprint = _tlaps_resource_int(
+            sample.get("physical_footprint_bytes"),
+            f"TLAPS resource sample {index}.physical_footprint_bytes",
+        )
+        elapsed = _tlaps_resource_float(
+            sample.get("elapsed_seconds"),
+            f"TLAPS resource sample {index}.elapsed_seconds",
+        )
+        timestamp = _tlaps_resource_timestamp(
+            sample.get("timestamp_utc"),
+            f"TLAPS resource sample {index}.timestamp_utc",
+        )
+        accounting_method = sample.get("accounting_method")
+        if accounting_method == "rss":
+            accounting_is_exact = footprint == 0 and memory == rss
+        elif accounting_method == _TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE:
+            accounting_is_exact = footprint > 0 and memory == max(rss, footprint)
+        else:
+            accounting_is_exact = False
         if (
-            len(running) != 1
-            or len(results) != 1
-            or running[0].group(1) != results[0].group(1)
+            sample_schema != 1
+            or sample.get("event") != "sample"
+            or sample_limit != summary_limit
+            or sample_group != process_group_id
+            or memory > sample_limit
+            or not accounting_is_exact
+            or elapsed < previous_elapsed
+            or timestamp < previous_timestamp
+            or timestamp > ended
         ):
-            raise ReceiptError(f"{name} has an ambiguous Cargo transcript")
-        return int(results[0].group(1))
-    if kind == "pytest":
-        matches = [
-            match
-            for line in lines
-            if (
-                match := re.fullmatch(
-                    r"([0-9]+) passed in [0-9]+(?:\.[0-9]+)?s", line
-                )
-            )
-        ]
-        if len(matches) != 1:
-            raise ReceiptError(f"{name} has an ambiguous pytest transcript")
-        return int(matches[0].group(1))
-    if kind == "node":
-        matches = [
-            match
-            for line in lines
-            if (match := re.fullmatch(r"# pass ([0-9]+)", line))
-        ]
-        if len(matches) != 1 or lines.count("# fail 0") != 1:
-            raise ReceiptError(f"{name} has an ambiguous Node transcript")
-        return int(matches[0].group(1))
-    if kind == "native-amx-sdk":
-        matches = [
-            match
-            for line in lines
-            if (
-                match := re.fullmatch(
-                    r"native-amx-v2-grouped-parity surface=[a-z]+ "
-                    r"tests=([0-9]+) fixture_sha256=[0-9a-f]{64} "
-                    r"suite_source_manifest_sha256=[0-9a-f]{64}",
-                    line,
-                )
-            )
-        ]
-        if len(matches) != 1:
             raise ReceiptError(
-                f"{name} has an ambiguous grouped Native AMX V2 SDK transcript"
+                f"TLAPS resource sample {index} is not exact bounded guard evidence"
             )
-        return int(matches[0].group(1))
-    if kind == "command":
-        return 0
-    raise ReceiptError(f"{name} has unknown leg kind {kind}")
+        previous_elapsed = elapsed
+        previous_timestamp = timestamp
+        observed_memory.append(memory)
+        observed_rss.append(rss)
+        observed_footprint.append(footprint)
 
-
-def _prebuilt_directory(path: Path, name: str) -> Path:
-    if not path.is_absolute() or Path(os.path.abspath(path)) != path:
-        raise ReceiptError(f"{name} path must be absolute and normalized")
-    try:
-        resolved = path.resolve(strict=True)
-        metadata = path.lstat()
-    except OSError as error:
-        raise ReceiptError(f"{name} is unavailable") from error
     if (
-        resolved != path
-        or stat.S_ISLNK(metadata.st_mode)
-        or not stat.S_ISDIR(metadata.st_mode)
-        or stat.S_IMODE(metadata.st_mode) != 0o500
-        or metadata.st_uid != os.geteuid()
+        peak_memory != max(observed_memory)
+        or peak_rss != max(observed_rss)
+        or peak_footprint != max(observed_footprint)
     ):
         raise ReceiptError(
-            f"{name} must be an owner-owned resolved non-symlink directory "
-            "with exact mode 0500"
+            "TLAPS resource summary peaks do not match the authenticated sample stream"
         )
-    return path
-
-
-def _prebuilt_workspace_target(repo_root: Path) -> Path:
-    alias = repo_root / "target"
-    try:
-        alias_metadata = alias.lstat()
-        resolved = alias.resolve(strict=True)
-        resolved_metadata = resolved.lstat()
-    except (OSError, RuntimeError) as error:
-        raise ReceiptError("release workspace target authority is unavailable") from error
-    if (
-        not (stat.S_ISDIR(alias_metadata.st_mode) or stat.S_ISLNK(alias_metadata.st_mode))
-        or Path(os.path.abspath(resolved)) != resolved
-        or resolved.resolve(strict=True) != resolved
-        or stat.S_ISLNK(resolved_metadata.st_mode)
-        or not stat.S_ISDIR(resolved_metadata.st_mode)
-        or resolved_metadata.st_uid != os.geteuid()
-        or (not stat.S_ISLNK(alias_metadata.st_mode) and resolved != alias)
-    ):
-        raise ReceiptError(
-            "release workspace target authority must resolve to one owner-owned real directory"
-        )
-    return resolved
-
 
 def _prebuilt_directory_inventory(
     path: Path, expected_names: set[str], name: str
@@ -4628,18 +4590,8 @@ def _prebuilt_version_transcripts(
     corridor_fields: dict[str, str],
 ) -> dict[str, dict[str, Any]]:
     tool_specs = (
-        (
-            "cargo",
-            Path(corridor_fields["cargo_path"]),
-            ["--version"],
-            fields["cargo_version_sha256"],
-        ),
-        (
-            "rustc",
-            Path(corridor_fields["rustc_path"]),
-            ["-vV"],
-            fields["rustc_version_sha256"],
-        ),
+        ("cargo", Path(corridor_fields["cargo_path"]), (), fields["cargo_version_sha256"]),
+        ("rustc", Path(corridor_fields["rustc_path"]), ("-vV",), fields["rustc_version_sha256"]),
     )
     results: dict[str, dict[str, Any]] = {}
     environment = _closed_replay_environment(bundle_dir)
@@ -4654,15 +4606,19 @@ def _prebuilt_version_transcripts(
         )
         if contract.mode & 0o111 == 0:
             raise ReceiptError(f"authenticated corridor {tool} tool is not executable")
-        status, stdout, stderr = _run_bounded_replay(
-            executable,
-            arguments,
-            cwd=bundle_dir,
-            environment=environment,
-            name=f"authenticated {tool} version probe",
-            maximum_output_bytes=_MAX_PREBUILT_VERSION_TRANSCRIPT_BYTES,
-            executable_contract=contract,
-        )
+        if tool == "cargo":
+            # This transcript was captured earlier through run_cargo --version.
+            status, stdout, stderr = 0, (corridor_fields["cargo_version"] + "\n").encode(), b""
+        else:
+            status, stdout, stderr = _run_bounded_replay(
+                executable,
+                arguments,
+                cwd=bundle_dir,
+                environment=environment,
+                name=f"authenticated {tool} version probe",
+                maximum_output_bytes=_MAX_PREBUILT_VERSION_TRANSCRIPT_BYTES,
+                executable_contract=contract,
+            )
         if status != 0 or stderr or not stdout.endswith(b"\n"):
             raise ReceiptError(
                 f"authenticated {tool} version probe did not produce exact stdout"
@@ -4673,9 +4629,9 @@ def _prebuilt_version_transcripts(
             )
         observed_digest = hashlib.sha256(stdout).hexdigest()
         if observed_digest != expected_digest:
+            source = "policy-captured corridor transcript" if tool == "cargo" else "authenticated tool"
             raise ReceiptError(
-                f"prebuilt manifest {tool_label} version digest does not match "
-                "the authenticated tool"
+                f"prebuilt manifest {tool_label} version digest does not match the {source}"
             )
         try:
             lines = stdout.decode("utf-8").splitlines()
@@ -4685,9 +4641,7 @@ def _prebuilt_version_transcripts(
             ) from error
         if tool == "cargo":
             if lines != [corridor_fields["cargo_version"]]:
-                raise ReceiptError(
-                    "authenticated Cargo version probe disagrees with corridor"
-                )
+                raise ReceiptError("policy-captured Cargo version transcript is not exact")
         else:
             version = re.fullmatch(
                 r"rustc ([0-9]+\.[0-9]+\.[0-9]+) "
@@ -4695,28 +4649,15 @@ def _prebuilt_version_transcripts(
                 corridor_fields["rustc_version"],
             )
             expected_keys = (
-                "binary",
-                "commit-hash",
-                "commit-date",
-                "host",
-                "release",
-                "LLVM version",
+                "binary", "commit-hash", "commit-date", "host", "release", "LLVM version"
             )
             parsed: dict[str, str] = {}
-            if (
-                version is None
-                or not lines
-                or lines[0] != corridor_fields["rustc_version"]
-            ):
-                raise ReceiptError(
-                    "authenticated rustc version probe has the wrong version line"
-                )
+            if version is None or not lines or lines[0] != corridor_fields["rustc_version"]:
+                raise ReceiptError("authenticated rustc version probe has the wrong version line")
             for line in lines[1:]:
                 key, separator, value = line.partition(": ")
                 if not separator or key in parsed or not value:
-                    raise ReceiptError(
-                        "authenticated rustc version probe is not exact rustc -vV output"
-                    )
+                    raise ReceiptError("authenticated rustc version probe is not exact rustc -vV output")
                 parsed[key] = value
             if (
                 tuple(parsed) != expected_keys
@@ -4726,15 +4667,10 @@ def _prebuilt_version_transcripts(
                 or parsed["commit-date"] != version.group(3)
                 or parsed["host"] != fields["host_triple"]
                 or parsed["release"] != version.group(1)
-                or re.fullmatch(
-                    r"[0-9]+\.[0-9]+(?:\.[0-9]+)?",
-                    parsed["LLVM version"],
-                )
+                or re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", parsed["LLVM version"])
                 is None
             ):
-                raise ReceiptError(
-                    "authenticated rustc version probe is not exact rustc -vV output"
-                )
+                raise ReceiptError("authenticated rustc version probe is not exact rustc -vV output")
         after = _capture_path_contract(
             executable,
             f"authenticated corridor {tool} tool after version probe",
@@ -4745,11 +4681,10 @@ def _prebuilt_version_transcripts(
             expected_size=contract.size,
         )
         if after != contract:
-            raise ReceiptError(
-                f"authenticated corridor {tool} tool changed during version probe"
-            )
+            raise ReceiptError(f"authenticated corridor {tool} tool changed during version probe")
+        display_arguments = ("--version",) if tool == "cargo" else arguments
         results[tool] = {
-            "argv": [str(executable), *arguments],
+            "argv": [str(executable), *display_arguments],
             "sha256": observed_digest,
             "size_bytes": len(stdout),
         }
@@ -4763,15 +4698,16 @@ def _prebuilt_binary_bundle(
     fields: dict[str, str],
     sealed: dict[str, Any],
     repo_root: Path,
+    artifact_root: Path,
+    cargo_target_root: Path,
 ) -> dict[str, Any]:
     expected_manifest_sha256 = _require_digest(
         expected_manifest_sha256, "prebuilt binary manifest digest"
     )
     if manifest_path.name != _PREBUILT_MANIFEST_NAME:
         raise ReceiptError("prebuilt binary manifest has the wrong filename")
-    workspace_target = _prebuilt_workspace_target(repo_root)
     expected_programs = (
-        workspace_target
+        artifact_root
         / "sumeragi-v2-release"
         / sealed["workspace_source_manifest_sha256"]
         / "programs"
@@ -4918,6 +4854,8 @@ def _prebuilt_binary_bundle(
         "target_triple": manifest_fields["target_triple"],
         "profile": manifest_fields["profile"],
         "bundle_dir": str(bundle_dir),
+        "artifact_root": str(artifact_root),
+        "cargo_target_root": str(cargo_target_root),
         "version_transcripts": _prebuilt_version_transcripts(
             bundle_dir=bundle_dir,
             fields=manifest_fields,
@@ -4933,6 +4871,9 @@ def _corridor_artifacts(
     sealed: dict[str, Any],
     repo_root: Path,
     bootstrap_runner_tools: dict[str, Any],
+    *,
+    expected_artifact_root: Path,
+    expected_cargo_target_root: Path,
 ) -> tuple[
     PathContract,
     PathContract,
@@ -4949,6 +4890,8 @@ def _corridor_artifacts(
             "head_tree",
             "source_manifest_sha256",
             "cargo_lock_sha256",
+            "artifact_root_path",
+            "cargo_target_root_path",
             "leg_count",
             "production_required_test_count",
             "g_unit_expected_test_count",
@@ -4986,6 +4929,12 @@ def _corridor_artifacts(
             "prebuilt_manifest_sha256",
         },
         "corridor completion",
+    )
+    artifact_root, cargo_target_root = _prebuilt_release_roots(
+        repo_root=repo_root,
+        fields=fields,
+        expected_artifact_root=expected_artifact_root,
+        expected_cargo_target_root=expected_cargo_target_root,
     )
     expected_identity = {
         "schema_version": "1",
@@ -5077,7 +5026,9 @@ def _corridor_artifacts(
         != fields["native_amx_grouped_fixture_sha256"]
     ):
         raise ReceiptError("grouped Native AMX V2 fixture digest mismatch")
-    expected_suite_manifest = _native_amx_grouped_suite_source_manifest(repo_root)
+    expected_suite_manifest = _sdk_suite_source_manifest(
+        repo_root, _NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE
+    )
     if (
         not _DIGEST_RE.fullmatch(
             fields["native_amx_grouped_suite_source_manifest_sha256"]
@@ -5088,6 +5039,9 @@ def _corridor_artifacts(
         raise ReceiptError(
             "grouped Native AMX V2 suite-source manifest digest mismatch"
         )
+    expected_diagnostics_suite_manifest = _sdk_suite_source_manifest(
+        repo_root, _SUMERAGI_SDK_DIAGNOSTICS_SOURCE_CLOSURE_SUITE
+    )
 
     release_runner = _bounded_evidence_snapshot(
         repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh",
@@ -5224,6 +5178,7 @@ def _corridor_artifacts(
         "status-rust": (_DATA_STATUS_TEST,),
         "lane-certificate-rust": (_DATA_LANE_CERTIFICATE_TEST,),
         "cross-sdk-rust": _CROSS_SDK_TESTS,
+        "sumeragi-diagnostics-rust": _RUST_SDK_DIAGNOSTICS_TESTS,
     }
     exact_cargo_tests.update(
         {
@@ -5303,15 +5258,6 @@ def _corridor_artifacts(
                     raise ReceiptError(
                         f"corridor exact Cargo leg {leg_id} lacks its named test"
                     )
-        if kind == "node":
-            for test_index, test in enumerate(_JS_STATUS_TESTS, 1):
-                if (
-                    lines.count(f"# Subtest: {test}") != 1
-                    or lines.count(f"ok {test_index} - {test}") != 1
-                ):
-                    raise ReceiptError(
-                        "corridor Node leg lacks its exact TAP subtest result"
-                    )
         if kind == "native-amx-sdk":
             surface = leg_id.removeprefix("native-amx-grouped-")
             expected_marker = (
@@ -5327,6 +5273,18 @@ def _corridor_artifacts(
                     f"corridor grouped Native AMX V2 {surface} leg is not "
                     "bound to the exact fixture and suite sources"
                 )
+        if kind == "sdk-diagnostics":
+            surface = leg_id.removeprefix("sumeragi-diagnostics-")
+            expected_marker = (
+                f"sumeragi-v2-sdk-diagnostics surface={surface} "
+                f"tests={observed} suite_source_manifest_sha256="
+                f"{expected_diagnostics_suite_manifest}"
+            )
+            if lines.count(expected_marker) != 1:
+                raise ReceiptError(
+                    f"corridor Sumeragi v2 SDK diagnostics {surface} leg is "
+                    "not bound to the exact suite sources"
+                )
         logs.append(_snapshot_contract(log))
     manifest_path = Path(fields["prebuilt_manifest_path"])
     prebuilt_bundle = _prebuilt_binary_bundle(
@@ -5335,6 +5293,8 @@ def _corridor_artifacts(
         fields=fields,
         sealed=sealed,
         repo_root=repo_root,
+        artifact_root=artifact_root,
+        cargo_target_root=cargo_target_root,
     )
     return (
         _snapshot_contract(summary),
@@ -5349,7 +5309,7 @@ def _seed_run_logs(
     seed_completion: EvidenceSnapshot,
     summary: EvidenceSnapshot,
     manifest: str,
-    repo_root: Path,
+    cargo_target_root: Path,
     prebuilt_bundle_dir: Path,
     prebuilt_manifest_sha256: str,
 ) -> list[PathContract]:
@@ -5373,8 +5333,7 @@ def _seed_run_logs(
         )
 
     run_logs = []
-    source_bound_root = repo_root / "target" / "sumeragi-v2-release" / manifest
-    cargo_target_dir = source_bound_root / "test-suite"
+    cargo_target_dir = cargo_target_root
     program_target_dir = prebuilt_bundle_dir
     irohad = program_target_dir / "release" / "irohad"
     message_control_irohad = (
@@ -6756,6 +6715,12 @@ def build_receipt(
         sealed,
         repo_root,
         bootstrap_authentication["runner"]["tools"],
+        expected_artifact_root=(
+            bootstrap_evidence_dir_path / "release-runner" / "output"
+        ),
+        expected_cargo_target_root=(
+            bootstrap_evidence_dir_path / "release-runner" / "target"
+        ),
     )
     prebuilt_manifest_sha256 = prebuilt_binary_bundle["manifest"]["sha256"]
     g4p_evidence = _validate_g4p_evidence(
@@ -6781,6 +6746,7 @@ def build_receipt(
         formal_verus_log,
         formal_multilane_apalache_evidence,
         formal_cross_tool_evidence,
+        formal_production_trace_extraction_evidence,
         formal_harness_lock,
         formal_toolchain,
         formal_tlaps_resource_jsonl,
@@ -6837,7 +6803,7 @@ def build_receipt(
         seed_path,
         seed_summary,
         manifest,
-        repo_root,
+        Path(prebuilt_binary_bundle["cargo_target_root"]),
         Path(prebuilt_binary_bundle["bundle_dir"]),
         prebuilt_manifest_sha256,
     )
@@ -6979,7 +6945,11 @@ def build_receipt(
                 "--source-manifest",
                 manifest,
                 "--build-root",
-                str(repo_root / "target" / "sumeragi-v2-release" / manifest),
+                str(
+                    Path(prebuilt_binary_bundle["artifact_root"])
+                    / "sumeragi-v2-release"
+                    / manifest
+                ),
                 "--repo-root",
                 str(repo_root),
             ],
@@ -7044,6 +7014,9 @@ def build_receipt(
                 formal_multilane_apalache_evidence
             ),
             "formal_cross_tool_evidence": _artifact(formal_cross_tool_evidence),
+            "formal_production_trace_extraction_evidence": _artifact(
+                formal_production_trace_extraction_evidence
+            ),
             "formal_harness_lock": _artifact(formal_harness_lock),
             "formal_toolchain": _artifact(formal_toolchain),
             "formal_tlaps_resource_jsonl": _artifact(formal_tlaps_resource_jsonl),
@@ -7395,6 +7368,7 @@ def _snapshot_receipt_inputs(
                 "formal_verus_log",
                 "formal_multilane_apalache_evidence",
                 "formal_cross_tool_evidence",
+                "formal_production_trace_extraction_evidence",
                 "formal_harness_lock",
                 "formal_toolchain",
                 "formal_tlaps_resource_jsonl",

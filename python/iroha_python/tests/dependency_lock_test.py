@@ -138,6 +138,22 @@ def test_numeric_workflow_enforces_the_ci_lock() -> None:
     assert "PYTHONPATH: src:../norito_py/src:.." in workflow
 
 
+def test_native_amx_installed_package_path_is_dependency_only() -> None:
+    harness = (
+        REPO_ROOT / "ci/run_native_amx_v2_grouped_sdk_parity.sh"
+    ).read_text(encoding="utf-8")
+    installed_paths = re.findall(
+        r'if \[\[ "\$\{IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-\}" == "1" \]\]; then\n'
+        r'\s+readonly python_parity_path="([^"]*)"\n'
+        r"\s+else",
+        harness,
+    )
+
+    assert installed_paths == [
+        "${repo_root}/python/norito_py/src:${repo_root}/python"
+    ]
+
+
 def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
     workflow = (REPO_ROOT / ".github/workflows/pr_privacy_sdk_guard.yml").read_text(
         encoding="utf-8"
@@ -161,7 +177,7 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
     cargo_jobs = {
         "privacy_native_bridge_tests": {
             "consumer": (
-                "run: cargo test -p connect_norito_bridge privacy_ --lib "
+                "cargo test -p connect_norito_bridge privacy_ --lib "
                 "-- --test-threads=1"
             ),
             "fetch_name": "Prime privacy native Cargo dependencies",
@@ -189,12 +205,12 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
     assert workflow.count("ci/privacy_sdk_cargo_lockfile.sh verify-ci") == 6
     assert workflow.count("run: cargo fetch --locked") == 3
     assert "Swatinem/rust-cache@" not in workflow
-    assert workflow.count("id: privacy-python") == 2
-    assert workflow.count('python-version: "3.12"') == 2
-    assert workflow.count("update-environment: false") == 2
+    assert workflow.count("id: privacy-python") == 3
+    assert workflow.count('python-version: "3.12"') == 3
+    assert workflow.count("update-environment: false") == 3
     assert "cache: pip" not in workflow
     assert "cache-dependency-path: python/iroha_python/requirements-ci.lock" not in workflow
-    assert workflow.count(setup_python_path) == 8
+    assert workflow.count(setup_python_path) == 9
     for job, policy in cargo_jobs.items():
         match = re.search(
             rf"(?ms)^  {re.escape(job)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",

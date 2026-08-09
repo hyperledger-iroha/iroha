@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from pathlib import Path
 import sys
@@ -55,13 +56,71 @@ def test_checked_in_shards_are_bounded_ordered_and_uniquely_resolved() -> None:
     )
 
 
+def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
+    sources = _sources()
+    recovery = "SumeragiV2AsyncRecoveryVoteEpochProofs"
+    continuation = "SumeragiV2AsyncRecoveryVoteEpochContinuationProofs"
+    fair_service = "SumeragiV2AsyncFairServiceProofs"
+    footer = "=============================================================================\n"
+
+    assert checker.ASYNC_LIVENESS_SHARD_MAX_THEOREMS == 150
+    assert recovery not in checker.ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS
+    assert continuation not in checker.ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS
+    assert sum(
+        kind == "theorem"
+        for _, kind, _, _ in checker._top_level_declarations(sources[recovery])
+    ) == 150
+    assert sum(
+        kind == "theorem"
+        for _, kind, _, _ in checker._top_level_declarations(sources[continuation])
+    ) == 24
+    continuation_theorems = [
+        name
+        for name, kind, _, _ in checker._top_level_declarations(
+            sources[continuation]
+        )
+        if kind == "theorem"
+    ]
+    assert len(continuation_theorems) == len(set(continuation_theorems))
+
+    recovery_header = f"---- MODULE {recovery} ----\nEXTENDS SumeragiV2AsyncTimeoutKernelProofs\n\n"
+    continuation_header = (
+        f"---- MODULE {continuation} ----\nEXTENDS {recovery}\n\n"
+    )
+    assert sources[recovery].startswith(recovery_header)
+    assert sources[continuation].startswith(continuation_header)
+    assert sources[recovery].endswith(footer)
+    assert sources[continuation].endswith(footer)
+    combined_body = (
+        sources[recovery][len(recovery_header) : -len(footer)]
+        + sources[continuation][len(continuation_header) : -len(footer)]
+    )
+    assert hashlib.sha256(combined_body.encode("utf-8")).hexdigest() == (
+        "47b2d3c026f34d25c09134f4afc7c1f06e2fe0f240cbfc86f10d6ee6b1ffb431"
+    )
+
+    errors, providers = checker._async_liveness_shard_contract(sources)
+    assert errors == []
+    for theorem in (
+        "HistoricalVoteAdmissionIsExactLockedCommit",
+        "HistoricalCommitFormationIsExactLockedRound",
+        "HistoricalLockedCommitUsesProgressReserve",
+        "HistoricalBeginLockExecutionCreatesSameRefPending",
+    ):
+        assert providers[theorem] == continuation
+    assert checker._module_extends(sources[continuation]) == (recovery,)
+    assert checker._module_extends(sources[fair_service]) == (continuation,)
+
+
 def test_deadlock_shard_exact_finite_runner_dependency_is_acyclic() -> None:
     deadlock = "SumeragiV2AsyncDeadlockProofs"
     finite_runner = "SumeragiV2AsyncFiniteRunnerEpisodeProofs"
+    candidate_continuation = "SumeragiV2AsyncCandidateProducerContinuationProofs"
+    expected_dependencies = (finite_runner, candidate_continuation)
     sources = _sources()
 
-    assert checker._module_extends(sources[deadlock]) == (finite_runner,)
-    assert checker.ASYNC_LIVENESS_EXTENDS_OVERRIDES[deadlock] == (finite_runner,)
+    assert checker._module_extends(sources[deadlock]) == expected_dependencies
+    assert checker.ASYNC_LIVENESS_EXTENDS_OVERRIDES[deadlock] == expected_dependencies
 
     def reaches(module: str, target: str, seen: set[str]) -> bool:
         if module == target:
@@ -75,7 +134,80 @@ def test_deadlock_shard_exact_finite_runner_dependency_is_acyclic() -> None:
         source = path.read_text(encoding="utf-8")
         return any(reaches(dependency, target, seen) for dependency in checker._module_extends(source))
 
-    assert not reaches(finite_runner, deadlock, set())
+    for dependency in expected_dependencies:
+        assert not reaches(dependency, deadlock, set())
+
+
+def test_global_mechanical_body_reconstruction_is_exact() -> None:
+    sources = _sources()
+    footer = "=============================================================================\n"
+    deadlock = "SumeragiV2AsyncDeadlockProofs"
+    deadlock_index = next(
+        index
+        for index, (module, _) in enumerate(checker.ASYNC_LIVENESS_SHARDS)
+        if module == deadlock
+    )
+    expected_deadlock_prefix = (
+        "---- MODULE SumeragiV2AsyncDeadlockProofs ----\n"
+        "EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs, "
+        "SumeragiV2AsyncCandidateProducerContinuationProofs\n\n"
+    )
+    assert checker._async_liveness_shard_source_prefix(
+        deadlock, deadlock_index
+    ) == expected_deadlock_prefix
+    assert sources[deadlock].startswith(expected_deadlock_prefix)
+
+    reconstructed_parts = []
+    for index, (module, _) in enumerate(checker.ASYNC_LIVENESS_SHARDS):
+        prefix = checker._async_liveness_shard_source_prefix(module, index)
+        source = sources[module]
+        assert source.startswith(prefix)
+        assert source.endswith(footer)
+        reconstructed_parts.append(source[len(prefix) : -len(footer)])
+    reconstructed = "".join(reconstructed_parts)
+    corrected_quantifier = (
+        "  \\A source \\in AsyncCurrentResponsiveVoters,\n"
+        "     recipient \\in CurrentVoters:\n"
+        "    \\A minimumView:\n"
+        "      ResponsiveViewCertificateAuthority(source, minimumView)\n"
+        "        => TcFrontier(recipient, minimumView)"
+    )
+    original_quantifier = (
+        "  \\A source \\in AsyncCurrentResponsiveVoters,\n"
+        "     recipient \\in CurrentVoters, minimumView:\n"
+        "    ResponsiveViewCertificateAuthority(source, minimumView)\n"
+        "      => TcFrontier(recipient, minimumView)"
+    )
+    assert reconstructed.count(corrected_quantifier) == 1
+    sealed_reconstruction = reconstructed.replace(
+        corrected_quantifier, original_quantifier
+    )
+    assert hashlib.sha256(sealed_reconstruction.encode("utf-8")).hexdigest() == (
+        checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256
+    )
+    assert checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 == (
+        "946223a56f68896ae0484ec2d46acc7d3337e17beeb1409f3167d39ab294a52a"
+    )
+
+
+def test_shard_contract_rejects_prefix_and_footer_drift() -> None:
+    prefix_drift = _sources()
+    deadlock = "SumeragiV2AsyncDeadlockProofs"
+    prefix_drift[deadlock] = prefix_drift[deadlock].replace(
+        "SumeragiV2AsyncFiniteRunnerEpisodeProofs, "
+        "SumeragiV2AsyncCandidateProducerContinuationProofs\n\n",
+        "SumeragiV2AsyncFiniteRunnerEpisodeProofs,  "
+        "SumeragiV2AsyncCandidateProducerContinuationProofs\n\n",
+        1,
+    )
+    errors, _ = checker._async_liveness_shard_contract(prefix_drift)
+    assert any("exact reviewed async liveness shard prefix" in error for error in errors)
+
+    footer_drift = _sources()
+    decision = "SumeragiV2AsyncDecisionApplicationProofs"
+    footer_drift[decision] = footer_drift[decision].removesuffix("\n")
+    errors, _ = checker._async_liveness_shard_contract(footer_drift)
+    assert any("exact reviewed async liveness shard footer" in error for error in errors)
 
 
 def test_shard_contract_rejects_missing_reordered_and_duplicate_sources() -> None:
@@ -224,6 +356,26 @@ def test_shard_contract_rejects_reconstruction_drift() -> None:
     assert any("not a mechanical partition" in error for error in errors)
 
 
+def test_shard_contract_rejects_reconstruction_header_bypass() -> None:
+    sources = _sources()
+    deadlock = "SumeragiV2AsyncDeadlockProofs"
+    sources[deadlock] = sources[deadlock].replace(
+        "EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs, "
+        "SumeragiV2AsyncCandidateProducerContinuationProofs\n",
+        "EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs,\n"
+        "        SumeragiV2AsyncCandidateProducerContinuationProofs\n",
+        1,
+    )
+
+    errors, _ = checker._async_liveness_shard_contract(sources)
+
+    assert any(
+        f"{deadlock}.tla must start with its exact reviewed async liveness "
+        "shard prefix" in error
+        for error in errors
+    )
+
+
 def test_facade_evidence_maps_symbols_to_provider_logs() -> None:
     entries = checker._facade_provider_entries(checker.FORMAL_DIR, checker.ROOT_DIR)
     by_symbol = {entry["symbol"]: entry for entry in entries}
@@ -232,7 +384,7 @@ def test_facade_evidence_maps_symbols_to_provider_logs() -> None:
         "symbol": "AsyncTypeInvariantObligation",
         "module": "SumeragiV2AsyncProtectedSlotProofs",
         "log": (
-            "target/formal/sumeragi_v2/tlaps/"
+            "formal/sumeragi_v2/tlaps/"
             "SumeragiV2AsyncProtectedSlotProofs.log"
         ),
     }

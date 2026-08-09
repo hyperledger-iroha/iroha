@@ -135,7 +135,7 @@ fn zk_ace_policy_record_is_canonical_self_digested_and_roundtrips() {
     tampered.authorization_epoch = 2;
     tamperings.push(tampered);
     let mut tampered = record.clone();
-    tampered.asset_definition_id = AssetDefinitionId::new(
+    tampered.asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal").expect("domain"),
         Name::from_str("other_asset").expect("asset name"),
     );
@@ -409,7 +409,7 @@ fn zk_ace_revocation_is_one_step_terminal_and_content_preserving() {
     redigest_zk_ace_policy(&mut changed_policy_digest);
     mutations.push(changed_policy_digest);
     let mut changed_asset = successor.clone();
-    changed_asset.asset_definition_id = AssetDefinitionId::new(
+    changed_asset.asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal").expect("domain"),
         Name::from_str("other_asset").expect("asset name"),
     );
@@ -553,7 +553,7 @@ fn assert_bootle_lantern_matrix_boundaries(record: &BootleLanternIssuerPolicyV1)
     monomial_first_column[0].coefficients[0] = 1;
     invalid = record.clone();
     invalid.issuer_public_matrix =
-        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(monomial_first_column)
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&monomial_first_column)
             .expect("canonical monomial multiplication matrix shape");
     redigest_bootle_lantern_policy(&mut invalid);
     assert_eq!(
@@ -580,7 +580,7 @@ fn assert_bootle_lantern_matrix_boundaries(record: &BootleLanternIssuerPolicyV1)
     }
     invalid = record.clone();
     invalid.issuer_public_matrix =
-        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(sparse_first_column)
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&sparse_first_column)
             .expect("canonical sparse multiplication matrix shape");
     redigest_bootle_lantern_policy(&mut invalid);
     assert_eq!(
@@ -635,7 +635,7 @@ fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
     let mut short_first_column = first_column.clone();
     short_first_column[7].coefficients.pop();
     assert!(matches!(
-        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(short_first_column),
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&short_first_column),
         Err(
             BootleLanternIssuerPolicyValidationErrorV1::InvalidPolynomialCoefficientCount {
                 polynomial: 56,
@@ -648,7 +648,7 @@ fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
     noncanonical_first_column[7].coefficients[63] = BOOTLE_LANTERN_APPLICATION_MODULUS_V1;
     assert!(matches!(
         BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(
-            noncanonical_first_column
+            &noncanonical_first_column
         ),
         Err(
             BootleLanternIssuerPolicyValidationErrorV1::NonCanonicalMatrixCoefficient {
@@ -659,9 +659,8 @@ fn bootle_lantern_r512_matrix_constructor_is_exact_and_mutation_closed() {
             }
         )
     ));
-    let matrix =
-        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column.clone())
-            .expect("canonical dense degree-512 public-key matrix");
+    let matrix = BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
+        .expect("canonical dense degree-512 public-key matrix");
     matrix
         .validate_r512_multiplication_structure_v1()
         .expect("constructed matrix passes its structural validator");

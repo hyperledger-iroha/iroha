@@ -13,7 +13,7 @@ during perf/profiling runs.
 
 Options:
   --mode <MODE>              permissioned, npos, or both (default: both)
-  --peers <N>                number of peers (default: 7)
+  --peers <N>                exact revision-4 committee: 4, 7, ..., 31 (default: 7)
   --tps <N>                  target TPS across the whole network (default: 100)
   --duration <SEC>           load duration seconds (default: 120)
   --parallel <N>             total ping parallelism across peers (default: 140)

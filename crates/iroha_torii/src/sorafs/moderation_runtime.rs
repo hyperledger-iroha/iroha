@@ -44,16 +44,16 @@ use sorafs_node::moderation_orchestrator::{
     MODERATION_TRANSACTION_TTL_MS_V1, ModerationFinalizedCursorV1,
     ModerationFinalizedSnapshotReaderV1, ModerationHandoffFailureV1,
     ModerationOrchestratorDurableHealthV1, ModerationOrchestratorV1,
-    ModerationPanelNotificationClaimV1, ModerationPanelNotificationDeliveryReceiptV1,
-    ModerationPanelNotificationFailureV1, ModerationPanelNotificationKindV1,
-    ModerationPanelNotificationSinkV1, ModerationPanelNotificationV1,
-    ModerationRuntimeProviderQualificationErrorV1, ModerationRuntimeProviderQualificationV1,
-    ModerationRuntimeProviderReadinessErrorV1, ModerationRuntimeProviderV1,
-    ModerationSignedTransactionV1, ModerationSnapshotReadErrorV1, ModerationSubmissionFailureV1,
-    ModerationSubmissionLookupV1, ModerationTerminalHandoffKindV1, ModerationTerminalHandoffSinkV1,
-    ModerationTerminalHandoffV1, ModerationTransactionReceiptV1, ModerationTransactionRequestV1,
-    ModerationTransactionSubmitterV1, qualify_moderation_runtime_provider_v1,
-    revalidate_moderation_runtime_provider_v1,
+    ModerationPanelNotificationArchiveHeadV1, ModerationPanelNotificationClaimV1,
+    ModerationPanelNotificationDeliveryReceiptV1, ModerationPanelNotificationFailureV1,
+    ModerationPanelNotificationKindV1, ModerationPanelNotificationSinkV1,
+    ModerationPanelNotificationV1, ModerationRuntimeProviderQualificationErrorV1,
+    ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1,
+    ModerationRuntimeProviderV1, ModerationSignedTransactionV1, ModerationSnapshotReadErrorV1,
+    ModerationSubmissionFailureV1, ModerationSubmissionLookupV1, ModerationTerminalHandoffKindV1,
+    ModerationTerminalHandoffSinkV1, ModerationTerminalHandoffV1, ModerationTransactionReceiptV1,
+    ModerationTransactionRequestV1, ModerationTransactionSubmitterV1,
+    qualify_moderation_runtime_provider_v1, revalidate_moderation_runtime_provider_v1,
 };
 
 const MODERATION_HANDOFF_MAX_BYTES_V1: usize = 64 * 1024;
@@ -63,20 +63,59 @@ const MODERATION_TRANSACTION_TTL_V1: Duration =
     Duration::from_millis(MODERATION_TRANSACTION_TTL_MS_V1);
 const MODERATION_TRANSACTION_PAYLOAD_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
 /// Fixed identity of the in-process V1 Torii strict-durable ingress.
-pub(crate) const TORII_MODERATION_STRICT_INGRESS_HANDLE_V1: &str =
+pub const TORII_MODERATION_STRICT_INGRESS_HANDLE_V1: &str =
     "torii.sorafs.moderation-strict-ingress.v1";
 /// Revision of the in-process V1 Torii strict-durable ingress policy.
-pub(crate) const TORII_MODERATION_STRICT_INGRESS_REVISION_V1: u64 = 1;
+pub const TORII_MODERATION_STRICT_INGRESS_REVISION_V1: u64 = 1;
 /// BLAKE3 digest of `sorafs.moderation.strict-ingress.torii.v1\0`.
-pub(crate) const TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1: [u8; 32] = [
+pub const TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1: [u8; 32] = [
     0xcc, 0x0c, 0xea, 0xc1, 0x8b, 0x93, 0xfa, 0x97, 0x05, 0xc0, 0xef, 0x86, 0xf6, 0x57, 0xa9, 0xed,
     0x94, 0xc5, 0xdd, 0x65, 0x31, 0x57, 0x84, 0x96, 0xa2, 0xd6, 0x4e, 0x8e, 0xc5, 0x21, 0x6d, 0x2e,
 ];
 
-fn torii_moderation_strict_ingress_qualification_v1() -> ModerationRuntimeProviderQualificationV1 {
+/// Return the exact public qualification of Torii's built-in V1 moderation ingress.
+#[must_use]
+pub const fn torii_moderation_strict_ingress_qualification_v1()
+-> ModerationRuntimeProviderQualificationV1 {
     ModerationRuntimeProviderQualificationV1::new(
         TORII_MODERATION_STRICT_INGRESS_REVISION_V1,
         TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1,
+    )
+}
+
+#[derive(Debug)]
+struct ToriiModerationStrictIngressBindingV1;
+
+impl ModerationRuntimeProviderV1 for ToriiModerationStrictIngressBindingV1 {
+    fn handle(&self) -> &str {
+        TORII_MODERATION_STRICT_INGRESS_HANDLE_V1
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>
+    {
+        Ok(torii_moderation_strict_ingress_qualification_v1())
+    }
+}
+
+/// Qualify configured public metadata against Torii's built-in V1 moderation ingress.
+///
+/// This preflight needs no queue, ledger state, credentials, or private key and
+/// can therefore run before Tokio and node-owned durable state are opened.
+///
+/// # Errors
+///
+/// Returns a payload-free qualification error when the configured handle is
+/// missing, substituted, test-marked, or its revision/policy digest is stale.
+pub fn qualify_torii_moderation_strict_ingress_binding_v1(
+    configured_handle: &str,
+    configured_qualification: ModerationRuntimeProviderQualificationV1,
+) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
+    qualify_moderation_runtime_provider_v1(
+        configured_handle,
+        configured_qualification,
+        &ToriiModerationStrictIngressBindingV1,
     )
 }
 
@@ -170,6 +209,7 @@ impl ModerationFinalizedProjectionCacheV1 {
             ModerationProjectionReadErrorV1::Poisoned
         })?;
         let invalid_cursor = durable_health.finalized_cursor != Some(cursor)
+            || !durable_health.archive_is_fresh()
             || health.last_cursor.is_some_and(|previous| {
                 cursor.height < previous.height
                     || (cursor.height == previous.height
@@ -1337,6 +1377,16 @@ pub struct ModerationDurableHandoffRequestV1 {
     pub canonical_handoff: Vec<u8>,
 }
 
+/// Canonical signed archive-head request supplied to the slot-20
+/// `ModerationPublicationHandoff` boundary.
+#[derive(Debug, Clone)]
+pub struct ModerationDurableArchiveHeadPublicationRequestV1 {
+    /// Exact authenticated monotonic archive head.
+    pub head: ModerationPanelNotificationArchiveHeadV1,
+    /// Canonical Norito encoding of `head`.
+    pub canonical_head: Vec<u8>,
+}
+
 /// Successful result from a durable handoff boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationDurableHandoffOutcomeV1 {
@@ -1374,6 +1424,20 @@ pub trait ModerationDurableHandoffBoundaryV1: ModerationRuntimeProviderV1 {
         &self,
         request: &ModerationDurableHandoffRequestV1,
     ) -> Result<ModerationDurableHandoffOutcomeV1, ModerationDurableHandoffFailureV1>;
+
+    /// Publish or replay one exact signed archive head under its operation identity.
+    ///
+    /// Implementations must atomically enforce generation/predecessor continuity,
+    /// reject forks and gaps, and make the accepted monotonic head publicly readable.
+    fn publish_archive_head_once(
+        &self,
+        request: &ModerationDurableArchiveHeadPublicationRequestV1,
+    ) -> Result<ModerationDurableHandoffOutcomeV1, ModerationDurableHandoffFailureV1>;
+
+    /// Read the monotonic public archive head from the publication store.
+    fn read_published_archive_head(
+        &self,
+    ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationDurableHandoffFailureV1>;
 }
 
 /// Destination-bound terminal handoff adapter.
@@ -1457,7 +1521,7 @@ impl ModerationTerminalHandoffSinkV1 for ModerationTerminalHandoffSinkAdapterV1 
         if handoff.kind != self.kind
             || handoff.handoff_id == [0; 32]
             || handoff.outcome_digest == [0; 32]
-            || handoff.finalized_cursor.height == 0
+            || handoff.finalized_cursor.block_height == 0
             || handoff.finalized_cursor.block_hash == [0; 32]
             || !is_canonical_moderation_identifier_v1(&handoff.case_id)
             || !is_canonical_moderation_identifier_v1(&handoff.round_id)
@@ -1488,6 +1552,90 @@ impl ModerationTerminalHandoffSinkV1 for ModerationTerminalHandoffSinkAdapterV1 
             ModerationDurableHandoffFailureV1::Ambiguous => ModerationHandoffFailureV1::Ambiguous,
             ModerationDurableHandoffFailureV1::Permanent => ModerationHandoffFailureV1::Permanent,
         })
+    }
+
+    fn publish_panel_notification_archive_head(
+        &self,
+        head: &ModerationPanelNotificationArchiveHeadV1,
+    ) -> Result<(), ModerationHandoffFailureV1> {
+        if self.kind != ModerationTerminalHandoffKindV1::Publication
+            || head
+                .verify(
+                    &head.archive_handle,
+                    ModerationRuntimeProviderQualificationV1::new(
+                        head.archive_revision,
+                        head.archive_policy_digest,
+                    ),
+                    head.archive_id,
+                    head.archive_public_key,
+                )
+                .is_err()
+        {
+            return Err(ModerationHandoffFailureV1::Permanent);
+        }
+        let canonical_head =
+            norito::to_bytes(head).map_err(|_| ModerationHandoffFailureV1::Permanent)?;
+        if canonical_head.is_empty() || canonical_head.len() > MODERATION_HANDOFF_MAX_BYTES_V1 {
+            return Err(ModerationHandoffFailureV1::Permanent);
+        }
+        let request = ModerationDurableArchiveHeadPublicationRequestV1 {
+            head: head.clone(),
+            canonical_head,
+        };
+        self.boundary
+            .revalidate()
+            .map_err(|_| ModerationHandoffFailureV1::NotDelivered)?;
+        let result = self.boundary.provider.publish_archive_head_once(&request);
+        self.boundary
+            .revalidate()
+            .map_err(|_| ModerationHandoffFailureV1::Ambiguous)?;
+        result.map(|_| ()).map_err(|error| match error {
+            ModerationDurableHandoffFailureV1::NotDelivered => {
+                ModerationHandoffFailureV1::NotDelivered
+            }
+            ModerationDurableHandoffFailureV1::Ambiguous => ModerationHandoffFailureV1::Ambiguous,
+            ModerationDurableHandoffFailureV1::Permanent => ModerationHandoffFailureV1::Permanent,
+        })
+    }
+
+    fn read_panel_notification_archive_head(
+        &self,
+    ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationHandoffFailureV1> {
+        if self.kind != ModerationTerminalHandoffKindV1::Publication {
+            return Err(ModerationHandoffFailureV1::Permanent);
+        }
+        self.boundary
+            .revalidate()
+            .map_err(|_| ModerationHandoffFailureV1::NotDelivered)?;
+        let result = self.boundary.provider.read_published_archive_head();
+        self.boundary
+            .revalidate()
+            .map_err(|_| ModerationHandoffFailureV1::Ambiguous)?;
+        let head = result.map_err(|error| match error {
+            ModerationDurableHandoffFailureV1::NotDelivered => {
+                ModerationHandoffFailureV1::NotDelivered
+            }
+            ModerationDurableHandoffFailureV1::Ambiguous => ModerationHandoffFailureV1::Ambiguous,
+            ModerationDurableHandoffFailureV1::Permanent => ModerationHandoffFailureV1::Permanent,
+        })?;
+        if head.as_ref().is_some_and(|head| {
+            norito::to_bytes(head).ok().is_none_or(|bytes| {
+                bytes.is_empty() || bytes.len() > MODERATION_HANDOFF_MAX_BYTES_V1
+            }) || head
+                .verify(
+                    &head.archive_handle,
+                    ModerationRuntimeProviderQualificationV1::new(
+                        head.archive_revision,
+                        head.archive_policy_digest,
+                    ),
+                    head.archive_id,
+                    head.archive_public_key,
+                )
+                .is_err()
+        }) {
+            return Err(ModerationHandoffFailureV1::Permanent);
+        }
+        Ok(head)
     }
 }
 
@@ -1666,6 +1814,54 @@ mod tests {
         ModerationRuntimeProviderQualificationV1::new(1, [0xA4; 32]);
 
     #[test]
+    fn torii_strict_ingress_public_binding_preflight_is_exact() {
+        let exact = torii_moderation_strict_ingress_qualification_v1();
+        assert_eq!(
+            qualify_torii_moderation_strict_ingress_binding_v1(
+                TORII_MODERATION_STRICT_INGRESS_HANDLE_V1,
+                exact,
+            ),
+            Ok(())
+        );
+
+        for (handle, qualification, expected) in [
+            (
+                "",
+                exact,
+                ModerationRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle,
+            ),
+            (
+                "torii.sorafs.moderation-test-ingress.v1",
+                exact,
+                ModerationRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle,
+            ),
+            (
+                "torii.sorafs.moderation-strict-ingress.primary",
+                exact,
+                ModerationRuntimeProviderQualificationErrorV1::SubstitutedProvider,
+            ),
+            (
+                TORII_MODERATION_STRICT_INGRESS_HANDLE_V1,
+                ModerationRuntimeProviderQualificationV1::new(0, exact.policy_digest()),
+                ModerationRuntimeProviderQualificationErrorV1::InvalidConfiguredQualification,
+            ),
+            (
+                TORII_MODERATION_STRICT_INGRESS_HANDLE_V1,
+                ModerationRuntimeProviderQualificationV1::new(
+                    exact.revision() + 1,
+                    exact.policy_digest(),
+                ),
+                ModerationRuntimeProviderQualificationErrorV1::QualificationMismatch,
+            ),
+        ] {
+            assert_eq!(
+                qualify_torii_moderation_strict_ingress_binding_v1(handle, qualification),
+                Err(expected)
+            );
+        }
+    }
+
+    #[test]
     fn local_strict_ingress_identity_is_implementation_derived() {
         assert_eq!(
             TORII_MODERATION_STRICT_INGRESS_POLICY_DIGEST_V1,
@@ -1724,6 +1920,9 @@ mod tests {
             pending_panel_notifications: 0,
             durable_dead_letters: 0,
             panel_notification_dead_letters: 0,
+            panel_notification_archive_generation: 0,
+            panel_notification_archive_published_generation: 0,
+            panel_notification_archive_audited_generation: 0,
         }
     }
 
@@ -2623,6 +2822,8 @@ mod tests {
         calls: usize,
         fail_next: Option<ModerationDurableHandoffFailureV1>,
         delivered: BTreeMap<[u8; 32], Vec<u8>>,
+        published_archive_heads:
+            BTreeMap<[u8; 32], (Vec<u8>, ModerationPanelNotificationArchiveHeadV1)>,
     }
 
     #[derive(Debug)]
@@ -2725,6 +2926,72 @@ mod tests {
             }
             outcome
         }
+
+        fn publish_archive_head_once(
+            &self,
+            request: &ModerationDurableArchiveHeadPublicationRequestV1,
+        ) -> Result<ModerationDurableHandoffOutcomeV1, ModerationDurableHandoffFailureV1> {
+            let mut state = self.state.lock().expect("handoff lock");
+            state.calls = state.calls.saturating_add(1);
+            if let Some(error) = state.fail_next.take() {
+                return Err(error);
+            }
+            if let Some((canonical, head)) = state
+                .published_archive_heads
+                .get(&request.head.operation_id)
+            {
+                return if canonical == &request.canonical_head && head == &request.head {
+                    Ok(ModerationDurableHandoffOutcomeV1::AlreadyDelivered)
+                } else {
+                    Err(ModerationDurableHandoffFailureV1::Permanent)
+                };
+            }
+            let latest = state
+                .published_archive_heads
+                .values()
+                .map(|(_, head)| head)
+                .max_by_key(|head| head.generation);
+            let lineage_is_valid = match latest {
+                None => {
+                    request.head.generation == 1
+                        && request.head.predecessor_operation_id.is_none()
+                        && request.head.predecessor_head_digest.is_none()
+                        && request.head.predecessor_chain_commitment.is_none()
+                }
+                Some(predecessor) => {
+                    predecessor.generation.checked_add(1) == Some(request.head.generation)
+                        && request.head.predecessor_operation_id == Some(predecessor.operation_id)
+                        && request.head.predecessor_head_digest == Some(predecessor.head_digest)
+                        && request.head.predecessor_chain_commitment
+                            == Some(predecessor.chain_commitment)
+                }
+            };
+            if !lineage_is_valid {
+                return Err(ModerationDurableHandoffFailureV1::Permanent);
+            }
+            state.published_archive_heads.insert(
+                request.head.operation_id,
+                (request.canonical_head.clone(), request.head.clone()),
+            );
+            Ok(ModerationDurableHandoffOutcomeV1::Delivered)
+        }
+
+        fn read_published_archive_head(
+            &self,
+        ) -> Result<
+            Option<ModerationPanelNotificationArchiveHeadV1>,
+            ModerationDurableHandoffFailureV1,
+        > {
+            Ok(self
+                .state
+                .lock()
+                .expect("handoff lock")
+                .published_archive_heads
+                .values()
+                .map(|(_, head)| head)
+                .max_by_key(|head| head.generation)
+                .cloned())
+        }
     }
 
     fn terminal_handoff(kind: ModerationTerminalHandoffKindV1) -> ModerationTerminalHandoffV1 {
@@ -2734,9 +3001,25 @@ mod tests {
             case_id: "case-1".to_owned(),
             round_id: "round-1".to_owned(),
             outcome_digest: [0x62; 32],
-            finalized_cursor: ModerationFinalizedCursorV1 {
-                height: 11,
+            outcome_finalized_at_unix_ms: 11,
+            finalized_cursor: ModerationFinalizedEventCursorV1 {
+                sequence: 1,
+                block_height: 11,
                 block_hash: [0x63; 32],
+                event_index: 0,
+            },
+            source_event_witness: ModerationFinalizedEventV1 {
+                sequence: 1,
+                block_height: 11,
+                block_hash: [0x63; 32],
+                event_index: 0,
+                event: SorafsModerationLedgerEvent::new(
+                    SorafsModerationLedgerEventKind::CaseFinalized,
+                    Some("case-1".to_owned()),
+                    Some("round-1".to_owned()),
+                    account(&key(61)),
+                    11,
+                ),
             },
         }
     }

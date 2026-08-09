@@ -917,7 +917,7 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
                 let child_depth = depth
                     .checked_add(1)
                     .ok_or_else(|| embedded_state_type_depth_error("decoding"))?;
-                let (tag, tag_used) = <u8 as DecodeFromSlice>::decode_from_slice(&encoded)?;
+                let (tag, tag_used) = <u8 as DecodeFromSlice>::decode_from_slice(encoded)?;
                 let payload = &encoded[tag_used..];
                 let (constructor, children, consumed) = match tag {
                     EMBEDDED_STATE_TYPE_TAG_INT
@@ -981,7 +981,7 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
                         let mut children = try_embedded_decode_vec(encoded_fields.len())?;
                         for encoded_field in encoded_fields {
                             let (field_name, field_name_used) =
-                                <String as DecodeFromSlice>::decode_from_slice(&encoded_field)?;
+                                <String as DecodeFromSlice>::decode_from_slice(encoded_field)?;
                             let (field_type, field_type_used) =
                                 decode_embedded_state_byte_vec(&encoded_field[field_name_used..])?;
                             expect_payload_consumed(

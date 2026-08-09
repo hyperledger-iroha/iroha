@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.hyperledger.iroha.android.util.HashLiteral;
 
@@ -299,10 +300,12 @@ public final class SumeragiDiagnosticsModels {
             applicationBlockHeight.signum() > 0, "application block height must be positive");
       }
       require(state != null, "state must not be null");
+      final boolean requiresApplicationBlock =
+          state == NativeAmxParticipantApplicationState.COMMITTED_EVIDENCE_PENDING
+              || state == NativeAmxParticipantApplicationState.DURABLY_APPLIED;
       require(
-          state != NativeAmxParticipantApplicationState.DURABLY_APPLIED
-              || applicationBlockHeight != null,
-          "durably applied Native AMX evidence requires an application block");
+          (applicationBlockHeight != null) == requiresApplicationBlock,
+          "Native AMX participant state and application block identity disagree");
 
       requireCanonicalNonzeroHash(laneIncarnation, "laneIncarnation");
       if (predecessorDescriptorHash != null) {
@@ -393,6 +396,7 @@ public final class SumeragiDiagnosticsModels {
   }
 
   public enum AutonomousLaneExecutionStuckReason {
+    AWAITING_EXECUTABLE_PAYLOAD("awaiting_executable_payload"),
     AWAITING_PAYLOAD_AVAILABILITY("awaiting_payload_availability"),
     AWAITING_LANE_CERTIFICATION("awaiting_lane_certification"),
     CERTIFIED_BUNDLE_UNAVAILABLE("certified_bundle_unavailable"),
@@ -420,6 +424,9 @@ public final class SumeragiDiagnosticsModels {
     public final BigInteger laneBlockView;
     public final BigInteger proposalHeight;
     public final BigInteger proposalView;
+    public final String reservationOwnerHash;
+    public final String proposalIdentityHash;
+    public final String reservationGroupHash;
     public final String proposalHash;
     public final String descriptorHash;
     public final String executablePayloadHash;
@@ -436,6 +443,8 @@ public final class SumeragiDiagnosticsModels {
         final long laneId, final BigInteger dataspaceId, final String laneIncarnation,
         final BigInteger laneBlockHeight, final BigInteger laneBlockView,
         final BigInteger proposalHeight, final BigInteger proposalView,
+        final String reservationOwnerHash, final String proposalIdentityHash,
+        final String reservationGroupHash,
         final String proposalHash, final String descriptorHash,
         final String executablePayloadHash, final String sourceBundleHash,
         final String mergeEntryHash, final BigInteger applicationBlockHeight,
@@ -444,8 +453,11 @@ public final class SumeragiDiagnosticsModels {
         final AutonomousLaneExecutionStuckReason stuckReason) {
       require(laneId >= 0 && laneId <= 0xffff_ffffL, "laneId out of range");
       for (final BigInteger coordinate :
-          new BigInteger[] {dataspaceId, laneBlockHeight, laneBlockView, proposalHeight, proposalView}) {
+          new BigInteger[] {dataspaceId, laneBlockHeight, laneBlockView, proposalHeight}) {
         requireUnsigned64(coordinate, "autonomous execution coordinate");
+      }
+      if (proposalView != null) {
+        requireUnsigned64(proposalView, "autonomous proposal view");
       }
       require(laneBlockHeight.signum() > 0 && proposalHeight.signum() > 0, "height must be positive");
       require(transactionCount >= 1 && transactionCount <= 4096
@@ -456,19 +468,35 @@ public final class SumeragiDiagnosticsModels {
         requireUnsigned64(applicationBlockHeight, "applicationBlockHeight");
         require(applicationBlockHeight.signum() > 0, "carrier height must be positive");
       }
-      for (final String hash : new String[] {laneIncarnation, proposalHash, descriptorHash}) {
+      for (final String hash :
+          new String[] {
+            laneIncarnation, reservationOwnerHash, proposalIdentityHash, reservationGroupHash
+          }) {
         requireCanonicalNonzeroHash(hash, "autonomous execution hash");
       }
       for (final String hash :
-          new String[] {executablePayloadHash, sourceBundleHash, mergeEntryHash, applicationBlockHash}) {
+          new String[] {
+            proposalHash, descriptorHash, executablePayloadHash, sourceBundleHash,
+            mergeEntryHash, applicationBlockHash
+          }) {
         if (hash != null) requireCanonicalNonzeroHash(hash, "autonomous optional hash");
       }
+      require((proposalHash == null) == (descriptorHash == null),
+          "proposal and descriptor hashes must appear together");
       require(highestDurableStage != null, "stage must not be null");
       require(stuckReason == expectedStuckReason(highestDurableStage),
           "stage and stuck reason disagree");
       if (highestDurableStage != AutonomousLaneExecutionStage.CONFLICT) {
         require(reservationCount == transactionCount,
             "reservation and transaction counts disagree");
+        require(
+            (highestDurableStage == AutonomousLaneExecutionStage.RESERVATIONS_DURABLE)
+                == (proposalHash == null),
+            "finalized identity disagrees with durable stage");
+        require(
+            highestDurableStage != AutonomousLaneExecutionStage.RESERVATIONS_DURABLE
+                || proposalView == null,
+            "proposal view disagrees with durable stage");
         final boolean hasPayload = executablePayloadHash != null;
         final boolean hasBundle = sourceBundleHash != null;
         final boolean hasMerge = mergeEntryHash != null;
@@ -504,7 +532,9 @@ public final class SumeragiDiagnosticsModels {
       this.laneId = laneId; this.dataspaceId = dataspaceId;
       this.laneIncarnation = laneIncarnation; this.laneBlockHeight = laneBlockHeight;
       this.laneBlockView = laneBlockView; this.proposalHeight = proposalHeight;
-      this.proposalView = proposalView; this.proposalHash = proposalHash;
+      this.proposalView = proposalView; this.reservationOwnerHash = reservationOwnerHash;
+      this.proposalIdentityHash = proposalIdentityHash;
+      this.reservationGroupHash = reservationGroupHash; this.proposalHash = proposalHash;
       this.descriptorHash = descriptorHash; this.executablePayloadHash = executablePayloadHash;
       this.sourceBundleHash = sourceBundleHash; this.mergeEntryHash = mergeEntryHash;
       this.applicationBlockHeight = applicationBlockHeight;
@@ -519,6 +549,9 @@ public final class SumeragiDiagnosticsModels {
     public BigInteger laneBlockView() { return laneBlockView; }
     public BigInteger proposalHeight() { return proposalHeight; }
     public BigInteger proposalView() { return proposalView; }
+    public String reservationOwnerHash() { return reservationOwnerHash; }
+    public String proposalIdentityHash() { return proposalIdentityHash; }
+    public String reservationGroupHash() { return reservationGroupHash; }
     public String proposalHash() { return proposalHash; }
     public String descriptorHash() { return descriptorHash; }
     public String executablePayloadHash() { return executablePayloadHash; }
@@ -536,6 +569,7 @@ public final class SumeragiDiagnosticsModels {
       final AutonomousLaneExecutionStage stage) {
     switch (stage) {
       case RESERVATIONS_DURABLE:
+        return AutonomousLaneExecutionStuckReason.AWAITING_EXECUTABLE_PAYLOAD;
       case EXECUTABLE_PAYLOAD_DURABLE:
         return AutonomousLaneExecutionStuckReason.AWAITING_PAYLOAD_AVAILABILITY;
       case PAYLOAD_AVAILABILITY_CERTIFIED:
@@ -650,30 +684,31 @@ public final class SumeragiDiagnosticsModels {
           "laneGovernanceSealedTotal must be an unsigned 32-bit value");
 
       final List<?> copiedLaneCommitments =
-          boundedCopy(laneCommitments, "laneCommitments", DIAGNOSTIC_LANES_MAX);
+          boundedOpaqueCopy(laneCommitments, "laneCommitments", DIAGNOSTIC_LANES_MAX);
       final List<?> copiedDataspaceCommitments =
-          boundedCopy(dataspaceCommitments, "dataspaceCommitments", DIAGNOSTIC_LANES_MAX);
+          boundedOpaqueCopy(dataspaceCommitments, "dataspaceCommitments", DIAGNOSTIC_LANES_MAX);
       final List<?> copiedLaneSettlementCommitments =
-          boundedCopy(
+          boundedOpaqueCopy(
               laneSettlementCommitments,
               "laneSettlementCommitments",
               DIAGNOSTIC_LANES_MAX);
       final List<?> copiedLaneRelayEnvelopes =
-          boundedCopy(laneRelayEnvelopes, "laneRelayEnvelopes", DIAGNOSTIC_LANES_MAX);
+          boundedOpaqueCopy(
+              laneRelayEnvelopes, "laneRelayEnvelopes", DIAGNOSTIC_LANES_MAX);
       final List<?> copiedLanePayloadOwnerships =
-          boundedCopy(
+          boundedOpaqueCopy(
               lanePayloadOwnerships,
               "lanePayloadOwnerships",
               DIAGNOSTIC_LANES_MAX);
       final List<?> copiedCommittedLaneBlocks =
-          boundedCopy(
+          boundedOpaqueCopy(
               committedLaneBlocks,
               "committedLaneBlocks",
               DIAGNOSTIC_LANES_MAX);
       final List<?> copiedLaneBlockSessions =
-          boundedCopy(laneBlockSessions, "laneBlockSessions", DIAGNOSTIC_LANES_MAX);
+          boundedOpaqueCopy(laneBlockSessions, "laneBlockSessions", DIAGNOSTIC_LANES_MAX);
       final List<?> copiedLaneGovernance =
-          boundedCopy(laneGovernance, "laneGovernance", DIAGNOSTIC_LANES_MAX);
+          boundedOpaqueCopy(laneGovernance, "laneGovernance", DIAGNOSTIC_LANES_MAX);
       validateNativeAmxDiagnosticsEvidence(
           copiedLaneSettlementCommitments, copiedLaneRelayEnvelopes);
       final List<String> copiedAliases =
@@ -750,6 +785,387 @@ public final class SumeragiDiagnosticsModels {
     public List<AutonomousLaneExecution> autonomousLaneExecutions() {
       return autonomousLaneExecutions;
     }
+
+    /** Parse one fatal-UTF-8, duplicate-key rejecting diagnostics response. */
+    public static SumeragiDiagnosticsStatus parseJson(final byte[] payload) {
+      return SumeragiDiagnosticsModels.parseDiagnostics(payload);
+    }
+
+    /** Parse one duplicate-key rejecting diagnostics response. */
+    public static SumeragiDiagnosticsStatus parseJson(final String payload) {
+      return SumeragiDiagnosticsModels.parseDiagnostics(payload);
+    }
+  }
+
+  /** Parse one fatal-UTF-8, duplicate-key rejecting diagnostics response. */
+  public static SumeragiDiagnosticsStatus parseDiagnostics(final byte[] payload) {
+    require(
+        payload != null && payload.length > 0,
+        "Sumeragi diagnostics response must not be empty");
+    require(
+        (long) payload.length <= SumeragiStatusModels.DIAGNOSTICS_JSON_MAX_BYTES,
+        "Sumeragi diagnostics response exceeds "
+            + SumeragiStatusModels.DIAGNOSTICS_JSON_MAX_BYTES
+            + " bytes");
+    return parseDiagnostics(
+        SumeragiJsonSupport.decodeUtf8(payload, "Sumeragi diagnostics"));
+  }
+
+  /** Parse one duplicate-key rejecting diagnostics response. */
+  public static SumeragiDiagnosticsStatus parseDiagnostics(final String payload) {
+    final String context = "Sumeragi diagnostics";
+    final Map<String, Object> root = SumeragiJsonSupport.parseObject(payload, context);
+    SumeragiJsonSupport.requireFields(
+        root,
+        Set.of(
+            "pipeline_execution",
+            "tx_queue_depth",
+            "tx_queue_capacity",
+            "tx_queue_retained_bytes",
+            "tx_queue_max_retained_bytes",
+            "tx_queue_saturated",
+            "tx_queue_saturated_by_count",
+            "tx_queue_saturated_by_bytes",
+            "tx_queue_saturated_by_age",
+            "tx_queue_oldest_queued_age_ms",
+            "lane_commitments",
+            "dataspace_commitments",
+            "lane_settlement_commitments",
+            "lane_relay_envelopes",
+            "lane_payload_ownerships",
+            "committed_lane_blocks",
+            "lane_block_sessions",
+            "lane_governance_sealed_total",
+            "lane_governance_sealed_aliases",
+            "lane_governance",
+            "native_amx_participant_applications",
+            "autonomous_lane_executions"),
+        Set.of("npos"),
+        context);
+    return new SumeragiDiagnosticsStatus(
+        parsePipelineExecution(root.get("pipeline_execution"), context + ".pipeline_execution"),
+        SumeragiJsonSupport.u64(root.get("tx_queue_depth"), context + ".tx_queue_depth"),
+        SumeragiJsonSupport.u64(
+            root.get("tx_queue_capacity"), context + ".tx_queue_capacity"),
+        SumeragiJsonSupport.u64(
+            root.get("tx_queue_retained_bytes"), context + ".tx_queue_retained_bytes"),
+        SumeragiJsonSupport.u64(
+            root.get("tx_queue_max_retained_bytes"),
+            context + ".tx_queue_max_retained_bytes"),
+        SumeragiJsonSupport.bool(
+            root.get("tx_queue_saturated"), context + ".tx_queue_saturated"),
+        SumeragiJsonSupport.bool(
+            root.get("tx_queue_saturated_by_count"),
+            context + ".tx_queue_saturated_by_count"),
+        SumeragiJsonSupport.bool(
+            root.get("tx_queue_saturated_by_bytes"),
+            context + ".tx_queue_saturated_by_bytes"),
+        SumeragiJsonSupport.bool(
+            root.get("tx_queue_saturated_by_age"),
+            context + ".tx_queue_saturated_by_age"),
+        SumeragiJsonSupport.u64(
+            root.get("tx_queue_oldest_queued_age_ms"),
+            context + ".tx_queue_oldest_queued_age_ms"),
+        root.get("npos") == null ? null : parseNpos(root.get("npos"), context + ".npos"),
+        opaqueRows(root.get("lane_commitments"), context + ".lane_commitments"),
+        opaqueRows(root.get("dataspace_commitments"), context + ".dataspace_commitments"),
+        opaqueRows(
+            root.get("lane_settlement_commitments"),
+            context + ".lane_settlement_commitments"),
+        opaqueRows(root.get("lane_relay_envelopes"), context + ".lane_relay_envelopes"),
+        opaqueRows(
+            root.get("lane_payload_ownerships"), context + ".lane_payload_ownerships"),
+        opaqueRows(root.get("committed_lane_blocks"), context + ".committed_lane_blocks"),
+        opaqueRows(root.get("lane_block_sessions"), context + ".lane_block_sessions"),
+        SumeragiJsonSupport.u32(
+                root.get("lane_governance_sealed_total"),
+                context + ".lane_governance_sealed_total")
+            .longValueExact(),
+        parseAliases(
+            root.get("lane_governance_sealed_aliases"),
+            context + ".lane_governance_sealed_aliases"),
+        opaqueRows(root.get("lane_governance"), context + ".lane_governance"),
+        parseNativeApplications(
+            root.get("native_amx_participant_applications"),
+            context + ".native_amx_participant_applications"),
+        parseAutonomousExecutions(
+            root.get("autonomous_lane_executions"),
+            context + ".autonomous_lane_executions"));
+  }
+
+  private static PipelineExecutionStatus parsePipelineExecution(
+      final Object value, final String context) {
+    final Set<String> fields =
+        Set.of(
+            "tx_vertices_total",
+            "tx_edges_total",
+            "overlay_count_total",
+            "overlay_instr_total",
+            "overlay_bytes_total",
+            "rbc_chunks_total",
+            "rbc_bytes_total",
+            "detached_prepared_total",
+            "detached_merged_total",
+            "detached_fallback_total",
+            "detached_fallback_fee_postprocessing_total",
+            "detached_fallback_user_executor_total",
+            "detached_fallback_durable_state_total",
+            "detached_fallback_unsupported_instruction_total",
+            "detached_fallback_rejected_eval_total",
+            "detached_fallback_overlay_error_total",
+            "quarantine_executed_total");
+    final Map<String, Object> record =
+        SumeragiJsonSupport.exactObject(value, fields, context);
+    return new PipelineExecutionStatus(
+        diagnosticU64(record, "tx_vertices_total", context),
+        diagnosticU64(record, "tx_edges_total", context),
+        diagnosticU64(record, "overlay_count_total", context),
+        diagnosticU64(record, "overlay_instr_total", context),
+        diagnosticU64(record, "overlay_bytes_total", context),
+        diagnosticU64(record, "rbc_chunks_total", context),
+        diagnosticU64(record, "rbc_bytes_total", context),
+        diagnosticU64(record, "detached_prepared_total", context),
+        diagnosticU64(record, "detached_merged_total", context),
+        diagnosticU64(record, "detached_fallback_total", context),
+        diagnosticU64(record, "detached_fallback_fee_postprocessing_total", context),
+        diagnosticU64(record, "detached_fallback_user_executor_total", context),
+        diagnosticU64(record, "detached_fallback_durable_state_total", context),
+        diagnosticU64(record, "detached_fallback_unsupported_instruction_total", context),
+        diagnosticU64(record, "detached_fallback_rejected_eval_total", context),
+        diagnosticU64(record, "detached_fallback_overlay_error_total", context),
+        diagnosticU64(record, "quarantine_executed_total", context));
+  }
+
+  private static BigInteger diagnosticU64(
+      final Map<String, Object> record, final String field, final String context) {
+    return SumeragiJsonSupport.u64(record.get(field), context + "." + field);
+  }
+
+  private static NposDiagnostics parseNpos(final Object value, final String context) {
+    final Map<String, Object> record =
+        SumeragiJsonSupport.exactObject(
+            value,
+            Set.of(
+                "epoch_length_blocks",
+                "vrf_commit_deadline_offset",
+                "vrf_reveal_deadline_offset",
+                "epoch_seed",
+                "prf_height",
+                "prf_view",
+                "vrf_penalty_epoch",
+                "vrf_committed_no_reveal_total",
+                "vrf_no_participation_total",
+                "vrf_late_reveals_total"),
+            context);
+    final List<?> rawSeed = SumeragiJsonSupport.array(record.get("epoch_seed"), context + ".epoch_seed", 32);
+    require(rawSeed.size() == 32, context + ".epoch_seed must contain exactly 32 bytes");
+    final ArrayList<Integer> seed = new ArrayList<>();
+    for (int index = 0; index < rawSeed.size(); index++) {
+      seed.add(
+          SumeragiJsonSupport.unsigned(
+                  rawSeed.get(index), BigInteger.valueOf(255L),
+                  context + ".epoch_seed[" + index + "]")
+              .intValueExact());
+    }
+    return new NposDiagnostics(
+        diagnosticU64(record, "epoch_length_blocks", context),
+        diagnosticU64(record, "vrf_commit_deadline_offset", context),
+        diagnosticU64(record, "vrf_reveal_deadline_offset", context),
+        seed,
+        diagnosticU64(record, "prf_height", context),
+        diagnosticU64(record, "prf_view", context),
+        diagnosticU64(record, "vrf_penalty_epoch", context),
+        diagnosticU64(record, "vrf_committed_no_reveal_total", context),
+        diagnosticU64(record, "vrf_no_participation_total", context),
+        diagnosticU64(record, "vrf_late_reveals_total", context));
+  }
+
+  private static List<?> opaqueRows(final Object value, final String context) {
+    final List<?> raw = SumeragiJsonSupport.array(value, context, DIAGNOSTIC_LANES_MAX);
+    final ArrayList<Object> rows = new ArrayList<>();
+    for (int index = 0; index < raw.size(); index++) {
+      final String rowContext = context + "[" + index + "]";
+      final Map<String, Object> row = SumeragiJsonSupport.object(raw.get(index), rowContext);
+      rows.add(SumeragiJsonSupport.deepFreeze(row, rowContext));
+    }
+    return Collections.unmodifiableList(rows);
+  }
+
+  private static List<String> parseAliases(final Object value, final String context) {
+    final List<?> raw = SumeragiJsonSupport.array(value, context, DIAGNOSTIC_LANES_MAX);
+    final ArrayList<String> aliases = new ArrayList<>();
+    for (int index = 0; index < raw.size(); index++) {
+      aliases.add(
+          SumeragiJsonSupport.exactNonemptyString(
+              raw.get(index), context + "[" + index + "]"));
+    }
+    return Collections.unmodifiableList(aliases);
+  }
+
+  private static List<NativeAmxParticipantApplication> parseNativeApplications(
+      final Object value, final String context) {
+    final List<?> raw =
+        SumeragiJsonSupport.array(value, context, NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX);
+    final ArrayList<NativeAmxParticipantApplication> rows = new ArrayList<>();
+    for (int index = 0; index < raw.size(); index++) {
+      final String rowContext = context + "[" + index + "]";
+      final Map<String, Object> row = SumeragiJsonSupport.object(raw.get(index), rowContext);
+      SumeragiJsonSupport.requireFields(
+          row,
+          Set.of(
+              "lane_id",
+              "dataspace_id",
+              "lane_incarnation",
+              "participant_height",
+              "participant_view",
+              "predecessor_height",
+              "descriptor_hash",
+              "proposal_hash",
+              "settlement_hash",
+              "source_count",
+              "state"),
+          Set.of(
+              "predecessor_descriptor_hash",
+              "application_block_height",
+              "application_block_hash"),
+          rowContext);
+      rows.add(
+          new NativeAmxParticipantApplication(
+              SumeragiJsonSupport.u32(row.get("lane_id"), rowContext + ".lane_id")
+                  .longValueExact(),
+              SumeragiJsonSupport.u64(row.get("dataspace_id"), rowContext + ".dataspace_id"),
+              SumeragiJsonSupport.nonzeroHash(
+                  row.get("lane_incarnation"), rowContext + ".lane_incarnation"),
+              SumeragiJsonSupport.positiveU64(
+                  row.get("participant_height"), rowContext + ".participant_height"),
+              SumeragiJsonSupport.u64(
+                  row.get("participant_view"), rowContext + ".participant_view"),
+              SumeragiJsonSupport.u64(
+                  row.get("predecessor_height"), rowContext + ".predecessor_height"),
+              optionalNonzeroHash(
+                  row.get("predecessor_descriptor_hash"),
+                  rowContext + ".predecessor_descriptor_hash"),
+              SumeragiJsonSupport.nonzeroHash(
+                  row.get("descriptor_hash"), rowContext + ".descriptor_hash"),
+              SumeragiJsonSupport.nonzeroHash(
+                  row.get("proposal_hash"), rowContext + ".proposal_hash"),
+              SumeragiJsonSupport.nonzeroHash(
+                  row.get("settlement_hash"), rowContext + ".settlement_hash"),
+              SumeragiJsonSupport.unsigned(
+                      row.get("source_count"),
+                      BigInteger.valueOf(NATIVE_AMX_PARTICIPANT_APPLICATION_SOURCES_MAX),
+                      rowContext + ".source_count",
+                      true)
+                  .longValueExact(),
+              optionalPositiveU64(
+                  row.get("application_block_height"),
+                  rowContext + ".application_block_height"),
+              optionalNonzeroHash(
+                  row.get("application_block_hash"), rowContext + ".application_block_hash"),
+              NativeAmxParticipantApplicationState.fromWireName(
+                  SumeragiJsonSupport.string(row.get("state"), rowContext + ".state"))));
+    }
+    return Collections.unmodifiableList(rows);
+  }
+
+  private static List<AutonomousLaneExecution> parseAutonomousExecutions(
+      final Object value, final String context) {
+    final List<?> raw =
+        SumeragiJsonSupport.array(value, context, AUTONOMOUS_LANE_EXECUTIONS_MAX);
+    final ArrayList<AutonomousLaneExecution> rows = new ArrayList<>();
+    for (int index = 0; index < raw.size(); index++) {
+      final String rowContext = context + "[" + index + "]";
+      final Map<String, Object> row = SumeragiJsonSupport.object(raw.get(index), rowContext);
+      SumeragiJsonSupport.requireFields(
+          row,
+          Set.of(
+              "lane_id",
+              "dataspace_id",
+              "lane_incarnation",
+              "lane_block_height",
+              "lane_block_view",
+              "proposal_height",
+              "reservation_owner_hash",
+              "proposal_identity_hash",
+              "reservation_group_hash",
+              "reservation_count",
+              "transaction_count",
+              "highest_durable_stage"),
+          Set.of(
+              "proposal_view",
+              "proposal_hash",
+              "descriptor_hash",
+              "executable_payload_hash",
+              "source_bundle_hash",
+              "merge_entry_hash",
+              "application_block_height",
+              "application_block_hash",
+              "stuck_reason"),
+          rowContext);
+      rows.add(
+          new AutonomousLaneExecution(
+              SumeragiJsonSupport.u32(row.get("lane_id"), rowContext + ".lane_id")
+                  .longValueExact(),
+              SumeragiJsonSupport.u64(row.get("dataspace_id"), rowContext + ".dataspace_id"),
+              SumeragiJsonSupport.nonzeroHash(
+                  row.get("lane_incarnation"), rowContext + ".lane_incarnation"),
+              SumeragiJsonSupport.positiveU64(
+                  row.get("lane_block_height"), rowContext + ".lane_block_height"),
+              SumeragiJsonSupport.u64(
+                  row.get("lane_block_view"), rowContext + ".lane_block_view"),
+              SumeragiJsonSupport.positiveU64(
+                  row.get("proposal_height"), rowContext + ".proposal_height"),
+              optionalU64(row.get("proposal_view"), rowContext + ".proposal_view"),
+              SumeragiJsonSupport.nonzeroHash(
+                  row.get("reservation_owner_hash"), rowContext + ".reservation_owner_hash"),
+              SumeragiJsonSupport.nonzeroHash(
+                  row.get("proposal_identity_hash"), rowContext + ".proposal_identity_hash"),
+              SumeragiJsonSupport.nonzeroHash(
+                  row.get("reservation_group_hash"), rowContext + ".reservation_group_hash"),
+              optionalNonzeroHash(row.get("proposal_hash"), rowContext + ".proposal_hash"),
+              optionalNonzeroHash(row.get("descriptor_hash"), rowContext + ".descriptor_hash"),
+              optionalNonzeroHash(
+                  row.get("executable_payload_hash"), rowContext + ".executable_payload_hash"),
+              optionalNonzeroHash(
+                  row.get("source_bundle_hash"), rowContext + ".source_bundle_hash"),
+              optionalNonzeroHash(
+                  row.get("merge_entry_hash"), rowContext + ".merge_entry_hash"),
+              optionalPositiveU64(
+                  row.get("application_block_height"),
+                  rowContext + ".application_block_height"),
+              optionalNonzeroHash(
+                  row.get("application_block_hash"), rowContext + ".application_block_hash"),
+              SumeragiJsonSupport.unsigned(
+                      row.get("reservation_count"), BigInteger.valueOf(4_096L),
+                      rowContext + ".reservation_count")
+                  .longValueExact(),
+              SumeragiJsonSupport.unsigned(
+                      row.get("transaction_count"), BigInteger.valueOf(4_096L),
+                      rowContext + ".transaction_count", true)
+                  .longValueExact(),
+              AutonomousLaneExecutionStage.fromWireName(
+                  SumeragiJsonSupport.string(
+                      row.get("highest_durable_stage"),
+                      rowContext + ".highest_durable_stage")),
+              row.get("stuck_reason") == null
+                  ? null
+                  : AutonomousLaneExecutionStuckReason.fromWireName(
+                      SumeragiJsonSupport.string(
+                          row.get("stuck_reason"), rowContext + ".stuck_reason"))));
+    }
+    return Collections.unmodifiableList(rows);
+  }
+
+  private static BigInteger optionalU64(final Object value, final String context) {
+    return value == null ? null : SumeragiJsonSupport.u64(value, context);
+  }
+
+  private static BigInteger optionalPositiveU64(final Object value, final String context) {
+    return value == null ? null : SumeragiJsonSupport.positiveU64(value, context);
+  }
+
+  private static String optionalNonzeroHash(final Object value, final String context) {
+    return value == null ? null : SumeragiJsonSupport.nonzeroHash(value, context);
   }
 
   private static void validateNativeAmxDiagnosticsEvidence(
@@ -801,6 +1217,19 @@ public final class SumeragiDiagnosticsModels {
     return Collections.unmodifiableList(copy);
   }
 
+  private static List<?> boundedOpaqueCopy(
+      final List<?> values, final String field, final int maximum) {
+    require(values != null, field + " must not be null");
+    require(values.size() <= maximum, field + " exceeds its bounded row limit");
+    final ArrayList<Object> copy = new ArrayList<>();
+    for (int index = 0; index < values.size(); index++) {
+      final Object value = values.get(index);
+      require(value instanceof Map<?, ?>, field + " must contain only JSON objects");
+      copy.add(SumeragiJsonSupport.deepFreeze(value, field + "[" + index + "]"));
+    }
+    return Collections.unmodifiableList(copy);
+  }
+
   private static int compareAutonomous(
       final AutonomousLaneExecution left, final AutonomousLaneExecution right) {
     int result = Long.compare(left.laneId, right.laneId);
@@ -809,8 +1238,7 @@ public final class SumeragiDiagnosticsModels {
     if (result == 0) result = left.laneBlockHeight.compareTo(right.laneBlockHeight);
     if (result == 0) result = left.laneBlockView.compareTo(right.laneBlockView);
     if (result == 0) result = left.proposalHeight.compareTo(right.proposalHeight);
-    if (result == 0) result = left.proposalView.compareTo(right.proposalView);
-    if (result == 0) result = left.proposalHash.compareTo(right.proposalHash);
+    if (result == 0) result = left.proposalIdentityHash.compareTo(right.proposalIdentityHash);
     return result;
   }
 

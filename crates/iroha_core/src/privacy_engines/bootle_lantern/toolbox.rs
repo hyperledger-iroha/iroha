@@ -1227,7 +1227,7 @@ mod tests {
         MatrixSeedV1, PresentationChallengeBindingV1, PresentationTranscriptV1,
     };
 
-    fn projection_test_transcript() -> PresentationTranscriptV1 {
+    fn projection_test_transcript() -> ProofTranscriptCoreV1 {
         let parameter_digest = [0x11; 32];
         PresentationTranscriptV1::new(
             PresentationChallengeBindingV1 {
@@ -1241,6 +1241,7 @@ mod tests {
             [0x77; 32],
         )
         .expect("fully bound projection transcript")
+        .proof_core()
     }
 
     #[test]
@@ -1259,7 +1260,6 @@ mod tests {
     #[test]
     fn oversized_projection_is_rejected_before_arithmetic_allocation_or_transcript_work() {
         let transcript = projection_test_transcript();
-        let core = transcript.proof_core();
         let expected =
             ToolboxErrorV1::Transcript(TranscriptErrorV1::FixedProfileCapacityExceeded {
                 field: "ternary_columns",
@@ -1274,13 +1274,13 @@ mod tests {
             usize::MAX,
         ] {
             assert_eq!(
-                expand_projection_matrix_v1(&core, b"", &[], columns)
+                expand_projection_matrix_v1(&transcript, b"", &[], columns)
                     .expect_err("oversized projection must fail before expansion"),
                 expected
             );
         }
         assert_eq!(
-            expand_projection_matrix_v1(&core, b"projection", &[], 0),
+            expand_projection_matrix_v1(&transcript, b"projection", &[], 0),
             Err(ToolboxErrorV1::Transcript(
                 TranscriptErrorV1::EmptyProjectionRow
             ))

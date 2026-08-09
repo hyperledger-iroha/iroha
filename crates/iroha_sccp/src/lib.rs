@@ -63,7 +63,7 @@ use iroha_data_model::{
     account::{AccountController, AccountId},
     block::BlockHeader,
     bridge::{
-        BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeSccpDestinationProofBackendV1,
+        BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeSccpDestinationProofBackendV1,
         BridgeSccpDestinationProofV1, SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER, SccpBn254G1PointV1,
         SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpGovernedRouteV1,
         SccpGroth16Bn254VerifyingKeyV1, SccpOutboundProofPolicyV1, SccpSemanticProofProfileV1,
@@ -186,8 +186,7 @@ pub const SCCP_DOMAIN_TRON: u32 = 5;
 /// Public TAIRA chain id bound into TAIRA-origin SCCP finality proofs.
 pub const SCCP_TAIRA_FINALITY_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 /// Canonical I105 chain discriminant required for every SCCP Taira account literal.
-pub const SCCP_TAIRA_I105_DISCRIMINANT_V1: u16 =
-    iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_TAIRA;
+pub const SCCP_TAIRA_I105_DISCRIMINANT_V1: u16 = 369;
 /// TAIRA SCCP route id used for the initial XOR bridge to TRON Nile.
 pub const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: &str = "taira_tron_xor";
 /// TAIRA SCCP route id used for the exact XOR bridge to Ethereum.
@@ -1467,7 +1466,7 @@ pub fn sccp_solana_destination_proof_account_is_well_formed_v1(
             account.runtime_accounts,
             &account.deployment,
         )
-        || sccp_groth16_bn254_verifying_key_hash_v1(account.deployment.verifying_key)
+        || sccp_groth16_bn254_verifying_key_hash_v1(&account.deployment.verifying_key)
             != Some(account.deployment.verifier_key_hash)
         || account
             .deployment
@@ -2832,9 +2831,9 @@ pub fn sccp_groth16_bn254_verifying_key_is_well_formed_v1(
 /// The result is the concatenation of 38 ABI words: alpha G1, beta/gamma/delta
 /// G2 in contract limb order, then the twelve IC G1 points.
 pub fn canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
-    verifying_key: SccpGroth16Bn254VerifyingKeyV1,
+    verifying_key: &SccpGroth16Bn254VerifyingKeyV1,
 ) -> Option<Vec<u8>> {
-    if !sccp_groth16_bn254_verifying_key_is_well_formed_v1(&verifying_key) {
+    if !sccp_groth16_bn254_verifying_key_is_well_formed_v1(verifying_key) {
         return None;
     }
     let mut out = Vec::with_capacity(38 * 32);
@@ -2859,7 +2858,7 @@ pub fn canonical_sccp_groth16_bn254_verifying_key_bytes_v1(
 
 /// Hash a valid SCCP Groth16 key byte-identically to Solidity `verifyingKeyHash()`.
 pub fn sccp_groth16_bn254_verifying_key_hash_v1(
-    verifying_key: SccpGroth16Bn254VerifyingKeyV1,
+    verifying_key: &SccpGroth16Bn254VerifyingKeyV1,
 ) -> Option<H256> {
     Some(keccak256_bytes(
         &canonical_sccp_groth16_bn254_verifying_key_bytes_v1(verifying_key)?,
@@ -3300,7 +3299,7 @@ fn sccp_groth16_bn254_proof_request_hash(
     let sora_finality_anchor_bytes =
         canonical_sccp_sora_finality_anchor_bytes_v1(request.sora_finality_anchor).ok()?;
     let verifying_key_bytes =
-        canonical_sccp_groth16_bn254_verifying_key_bytes_v1(request.verifying_key)?;
+        canonical_sccp_groth16_bn254_verifying_key_bytes_v1(&request.verifying_key)?;
     let mut preimage = Vec::with_capacity(
         public_inputs_bytes.len()
             + canonical_payload_bytes.len()
@@ -3387,7 +3386,7 @@ fn sccp_groth16_bn254_build_context_is_valid_v1(
         )
         && payload_hash(context.canonical_payload_bytes) == context.public_inputs.payload_hash
         && h256_is_nonzero(&context.expected_verifier_key_hash)
-        && sccp_groth16_bn254_verifying_key_hash_v1(*context.verifying_key)
+        && sccp_groth16_bn254_verifying_key_hash_v1(context.verifying_key)
             == Some(context.expected_verifier_key_hash)
         && !hash_roles_alias(&[
             context.destination_binding_hash,
@@ -3485,7 +3484,7 @@ fn sccp_governed_route_groth16_material_v1(
             deployment.outbound_proof_policy,
         ),
     };
-    (sccp_groth16_bn254_verifying_key_hash_v1(verifying_key) == Some(verifier_key_hash)
+    (sccp_groth16_bn254_verifying_key_hash_v1(&verifying_key) == Some(verifier_key_hash)
         && policy.validate().is_ok())
     .then_some((verifying_key, verifier_key_hash, policy))
 }
@@ -3658,7 +3657,7 @@ fn sccp_groth16_bn254_proof_request_header_is_canonical_v1(
             request.semantic_proof_profile_hash,
             request.sora_finality_anchor_hash,
         )
-        && sccp_groth16_bn254_verifying_key_hash_v1(request.verifying_key)
+        && sccp_groth16_bn254_verifying_key_hash_v1(&request.verifying_key)
             == Some(request.verifier_key_hash)
 }
 
@@ -5384,7 +5383,7 @@ pub fn verify_taira_bridge_finality_proof_structure(proof: &TairaBridgeFinalityP
     let Ok(block_header_bytes) = to_bytes(&proof.block_header) else {
         return false;
     };
-    if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V1
+    if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V2
         || artifact.height_context.chain_id.as_str() != SCCP_TAIRA_FINALITY_CHAIN_ID_V1
         || block_header_bytes.len() > SCCP_TAIRA_MAX_BLOCK_HEADER_BYTES_V1
         || !preflight_uncompressed_norito_frame(
@@ -5444,7 +5443,7 @@ pub fn verified_sccp_message_taira_finality_proof(
 /// Decode and cryptographically verify a proof-controlled Taira v2 artifact.
 ///
 /// This establishes internal cryptographic consistency for the complete frozen
-/// v2 context, dual count-and-power quorum, `PoPs`, and exact commit-vote
+/// v2 context, exact equal-vote quorum, `PoPs`, and exact commit-vote
 /// transcript. The context and roster are still carried by the proof, so
 /// callers MUST NOT treat this function as a trust anchor. Production
 /// destination proofs additionally bind an audited semantic circuit to a
@@ -5907,7 +5906,7 @@ mod tests {
             verifier_address: [0x31; 20],
             verifier_code_hash: [0x41; 32],
             verifying_key: key,
-            verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(key)
+            verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(&key)
                 .expect("valid repeated-generator key"),
             outbound_proof_policy: outbound_proof_policy(),
             route_address: [0x51; 20],
@@ -5932,7 +5931,7 @@ mod tests {
             native_verifier_program_code_hash: [0x1b; 32],
             native_verifier_config_hash: [0x1c; 32],
             verifying_key: key,
-            verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(key)
+            verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(&key)
                 .expect("valid repeated-generator key"),
             outbound_proof_policy: outbound_proof_policy(),
             taira_to_token_multiplier: SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER,
@@ -7071,7 +7070,7 @@ mod tests {
             norito::decode_from_bytes::<SccpGroth16Bn254VerifyingKeyV1>(&old_key_bytes).is_err()
         );
         assert_eq!(
-            canonical_sccp_groth16_bn254_verifying_key_bytes_v1(key)
+            canonical_sccp_groth16_bn254_verifying_key_bytes_v1(&key)
                 .expect("canonical eleven-signal key")
                 .len(),
             38 * 32
@@ -7084,13 +7083,13 @@ mod tests {
         assert!(sccp_groth16_bn254_verifying_key_is_well_formed_v1(&key));
         assert_eq!(key.ic.points().len(), 12);
         assert_eq!(
-            canonical_sccp_groth16_bn254_verifying_key_bytes_v1(key)
+            canonical_sccp_groth16_bn254_verifying_key_bytes_v1(&key)
                 .expect("canonical key")
                 .len(),
             38 * 32
         );
         assert_eq!(
-            sccp_groth16_bn254_verifying_key_hash_v1(key),
+            sccp_groth16_bn254_verifying_key_hash_v1(&key),
             Some(hex32(
                 "6923e63427820ab42cc16c3c2bc0eb4097577919bb3911ea50cbb4f20cebfddb"
             ))
@@ -7102,7 +7101,7 @@ mod tests {
             verifier_address: [0x31; 20],
             verifier_code_hash: [0x41; 32],
             verifying_key: key,
-            verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(key).unwrap(),
+            verifier_key_hash: sccp_groth16_bn254_verifying_key_hash_v1(&key).unwrap(),
             outbound_proof_policy: outbound_proof_policy(),
             route_address: [0x51; 20],
             route_code_hash: [0x61; 32],
@@ -7604,7 +7603,7 @@ mod tests {
         assert!(verify_taira_bridge_finality_proof_cryptographic(&proof));
 
         assert_finality_structure_rejected(&proof, |attack| {
-            attack.version = BRIDGE_FINALITY_PROOF_VERSION_V1.saturating_add(1);
+            attack.version = BRIDGE_FINALITY_PROOF_VERSION_V2.saturating_add(1);
         });
         assert_finality_structure_rejected(&proof, |attack| {
             attack.finality_artifact.protocol_version = PROTOCOL_VERSION.saturating_add(1);

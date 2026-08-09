@@ -16,7 +16,7 @@ import org.junit.Test;
 public final class ExecutableTests {
 
   private static final String CONTRACT_ADDRESS =
-      "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8";
+      "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
 
   @Test
   public void contractInvocationDefensivelyCopiesHashAndArguments() {
@@ -67,6 +67,14 @@ public final class ExecutableTests {
             new ContractInvocation(
                 " " + CONTRACT_ADDRESS, repeatedByte(0x01, 32), "run", null),
         "contractAddress must not contain surrounding whitespace");
+    assertIllegalArgument(
+        () ->
+            new ContractInvocation(
+                "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+                repeatedByte(0x01, 32),
+                "run",
+                null),
+        "contractAddress must use the canonical irohac prefix");
     assertIllegalArgument(
         () ->
             new ContractInvocation(CONTRACT_ADDRESS, repeatedByte(0x01, 32), " ", null),
@@ -127,10 +135,10 @@ public final class ExecutableTests {
       " " + CONTRACT_ADDRESS,
       CONTRACT_ADDRESS.toUpperCase(java.util.Locale.ROOT),
       CONTRACT_ADDRESS.substring(0, CONTRACT_ADDRESS.length() - 1) + "q",
-      "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqc3gg99",
-      "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjpsmv3a4",
-      "tairac1qyqqqqqqqqqqqqpu6elzr2",
-      "tairac1qgqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqdjp7qw"
+      "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqc3gg99",
+      "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjpvkdn59",
+      "irohac1qyqqqqqqqqqqqqpupm8207",
+      "irohac1qgqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3lquf7"
     };
     for (final String invalidAddress : invalidAddresses) {
       assertIllegalArgument(

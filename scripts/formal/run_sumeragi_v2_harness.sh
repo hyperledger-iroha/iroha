@@ -5,7 +5,7 @@ set -euo pipefail
 # creating a lockfile in the production workspace. The copied authoritative
 # reducer keeps the verification package's source-link relationship intact.
 if (($# == 0)); then
-  echo "usage: $0 [--fetch|--unit|--fast-network|--model-replay|--chaos-100k|--verus|--clippy]" >&2
+  echo "usage: $0 [--unit|--fast-network|--model-replay|--chaos-100k|--verus|--clippy]" >&2
   exit 2
 fi
 
@@ -13,6 +13,17 @@ readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly PRODUCTION_CORE_DIR="${REPO_ROOT}/crates/iroha_core/src/sumeragi/v2_core"
 readonly HARNESS_LOCK="${REPO_ROOT}/scripts/formal/sumeragi_v2_harness.lock"
 readonly HARNESS_LOCK_SHA256="9c49a60551d9f66c8786f2497cb107fb3214fb3420c4f5c23ba3d24814b3f97e"
+case "$1" in
+  --unit|--fast-network|--model-replay|--chaos-100k|--verus|--clippy) ;;
+  --*)
+    echo "unknown harness mode: $1" >&2
+    exit 2
+    ;;
+  *)
+    echo "positional harness commands are unsupported; select one fixed mode" >&2
+    exit 2
+    ;;
+esac
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -22,53 +33,36 @@ hash_file() {
   fi
 }
 
-wait_for_external_cargo() {
-  local active_compilers
-  while true; do
-    ps -axo pid,etime,command
-    active_compilers="$(
-      ps -axo pid=,command= | awk '
-        {
-          executable = $2
-          sub(/^.*\//, "", executable)
-          if (executable == "cargo" || executable == "rustc") {
-            print
-          }
-        }
-      '
-    )"
-    if [[ -z "$active_compilers" ]]; then
-      return
-    fi
-    printf '%s\n' \
-      "waiting for active Cargo/rustc processes before formal-harness command:" \
-      "$active_compilers" >&2
-    sleep 10
-  done
-}
-
-run_cargo() {
-  wait_for_external_cargo
-  command cargo "$@"
-}
+source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
 
 if [[ ! -f "$HARNESS_LOCK" || -L "$HARNESS_LOCK" \
   || "$(hash_file "$HARNESS_LOCK")" != "$HARNESS_LOCK_SHA256" ]]; then
   echo "pinned Sumeragi v2 harness lock is missing or has the wrong digest" >&2
   exit 1
 fi
-if [[ "$1" == "--fetch" ]]; then
-  export CARGO_NET_OFFLINE=false
-else
-  export CARGO_NET_OFFLINE=true
+export CARGO_NET_OFFLINE=true
+cleanup_paths=()
+if [[ -z "${CARGO_TARGET_DIR:-}" \
+  && -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  && -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  formal_harness_root="$(mktemp -d "/private/tmp/sumeragi-v2-harness.XXXXXX")"
+  mkdir -m 0700 -- "$formal_harness_root/target" "$formal_harness_root/artifacts"
+  export CARGO_TARGET_DIR="$formal_harness_root/target"
+  export IROHA_RELEASE_ARTIFACT_ROOT="$formal_harness_root/artifacts"
+  export IROHA_RELEASE_CANCEL_REQUEST_PATH="$formal_harness_root/cancel-request.json"
+  cleanup_paths+=("$CARGO_TARGET_DIR" "$IROHA_RELEASE_ARTIFACT_ROOT")
+elif [[ -z "${CARGO_TARGET_DIR:-}" \
+  || -z "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+  || -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" ]]; then
+  echo "formal harness requires CARGO_TARGET_DIR, IROHA_RELEASE_ARTIFACT_ROOT, and IROHA_RELEASE_CANCEL_REQUEST_PATH together" >&2
+  exit 2
 fi
-verify_workspace="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-harness.XXXXXX")"
-cleanup_paths=("$verify_workspace")
-if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
-  CARGO_TARGET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-harness-target.XXXXXX")"
-  cleanup_paths+=("$CARGO_TARGET_DIR")
-  export CARGO_TARGET_DIR
-fi
+require_external_cargo_target_dir "$REPO_ROOT"
+require_external_release_artifact_root "$REPO_ROOT"
+require_disjoint_release_roots "$REPO_ROOT"
+release_gate_boundary "formal-harness:entry" || exit $?
+verify_workspace="$(mktemp -d "/private/tmp/sumeragi-v2-harness-workspace.XXXXXX")"
+cleanup_paths+=("$verify_workspace")
 cleanup() {
   rm -rf -- "${cleanup_paths[@]}"
 }
@@ -109,15 +103,6 @@ EOF
 cd "$verify_workspace"
 cp -- "$HARNESS_LOCK" Cargo.lock
 case "$1" in
-  --fetch)
-    if (($# != 1)); then
-      echo "--fetch accepts no additional arguments" >&2
-      exit 2
-    fi
-    # Populate a cold Cargo home from the checksum-pinned standalone lock.
-    # All verification/test modes remain offline and consume this exact graph.
-    run_cargo fetch --locked
-    ;;
   --unit)
     if (($# != 1)); then
       echo "--unit accepts no additional arguments" >&2
@@ -311,13 +296,5 @@ case "$1" in
       exit 2
     fi
     run_cargo clippy --locked --offline -p iroha_sumeragi_core --lib -- -D warnings
-    ;;
-  --*)
-    echo "unknown harness mode: $1" >&2
-    exit 2
-    ;;
-  *)
-    echo "positional harness commands are unsupported; select one fixed mode" >&2
-    exit 2
     ;;
 esac

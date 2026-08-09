@@ -1992,12 +1992,12 @@ mod tests {
             execution_policy_hash: committed_execution_policy_hash(&policy_state)
                 .expect("derive fixture execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x31; 32],
         };
@@ -2189,10 +2189,11 @@ mod tests {
     }
 
     fn execution_commitment(seed: u8) -> wire::ExecutionCommitment {
-        wire::ExecutionCommitment::without_topups(
+        wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([seed, 1]),
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),
+            1,
             Hash::new([seed, 4]),
         )
     }
@@ -2215,6 +2216,13 @@ mod tests {
             view: 0,
         };
         let mut exact_execution_commitment = execution_commitment(0xB6);
+        exact_execution_commitment.executed_block_wire_len = u64::try_from(
+            block
+                .encode_wire()
+                .expect("canonical executed block wire")
+                .len(),
+        )
+        .expect("canonical executed block wire length fits u64");
         exact_execution_commitment.executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("canonical executed block wire");

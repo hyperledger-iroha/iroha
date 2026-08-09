@@ -20,6 +20,8 @@ use toml::{Value as TomlValue, value::Table as TomlTable};
 
 use crate::{Outcome, RunArgs, tui};
 
+const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
+
 /// Supported network profiles for the wizard.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum Profile {
@@ -171,12 +173,24 @@ impl<T: Write> RunArgs<T> for Args {
         let answers = gather_answers(&self)?;
         let keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .wrap_err("failed to generate wizard BLS key pair")?;
+        let soranet_transport_keypair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .wrap_err("failed to generate wizard SoraNet transport key pair")?;
         let trusted_pops = resolve_trusted_peers_pop(&self, &answers, &keypair)?;
 
         tui::status("Generating config and genesis files");
-        let (mut config, genesis_template_path) =
-            load_config_template(&answers, &keypair, &trusted_pops)?;
-        apply_overrides(&mut config, &answers, &keypair, &trusted_pops)?;
+        let (mut config, genesis_template_path) = load_config_template(
+            &answers,
+            &keypair,
+            &soranet_transport_keypair,
+            &trusted_pops,
+        )?;
+        apply_overrides(
+            &mut config,
+            &answers,
+            &keypair,
+            &soranet_transport_keypair,
+            &trusted_pops,
+        )?;
         let genesis = load_and_patch_genesis(&genesis_template_path, &answers.chain)?;
 
         fs::create_dir_all(&answers.output_dir)
@@ -623,6 +637,7 @@ fn write_wizard_readme(
 fn load_config_template(
     answers: &Answers,
     keypair: &KeyPair,
+    soranet_transport_keypair: &KeyPair,
     trusted_pops: &BTreeMap<PublicKey, Vec<u8>>,
 ) -> Result<(TomlValue, String)> {
     let defaults = ProfileDefaults::for_profile(answers.profile);
@@ -645,6 +660,7 @@ fn load_config_template(
     let config = build_vanilla_config(
         &answers.chain,
         keypair,
+        soranet_transport_keypair,
         &answers.p2p_host,
         answers.p2p_port,
         &answers.torii_host,
@@ -660,6 +676,7 @@ fn apply_overrides(
     config: &mut TomlValue,
     answers: &Answers,
     keypair: &KeyPair,
+    soranet_transport_keypair: &KeyPair,
     trusted_pops: &BTreeMap<PublicKey, Vec<u8>>,
 ) -> Result<()> {
     set_string(config, "chain", &answers.chain);
@@ -668,6 +685,16 @@ fn apply_overrides(
         config,
         "private_key",
         &ExposedPrivateKey(keypair.private_key().clone()).to_string(),
+    );
+    set_string(
+        config,
+        "soranet_transport_public_key",
+        &soranet_transport_keypair.public_key().to_string(),
+    );
+    set_string(
+        config,
+        "soranet_transport_private_key",
+        &ExposedPrivateKey(soranet_transport_keypair.private_key().clone()).to_string(),
     );
 
     // trusted peers + ensure self is present
@@ -782,6 +809,10 @@ fn apply_overrides(
         TomlValue::String(keypair.public_key().to_string()),
     );
     genesis.insert("file".into(), TomlValue::String("genesis.json".to_owned()));
+    genesis.insert(
+        "expected_hash".into(),
+        TomlValue::String(GENESIS_EXPECTED_HASH_PLACEHOLDER.to_owned()),
+    );
     set_table(config, "genesis", genesis);
 
     Ok(())
@@ -892,6 +923,7 @@ fn ensure_trusted_peer_list(
 fn build_vanilla_config(
     chain: &str,
     keypair: &KeyPair,
+    soranet_transport_keypair: &KeyPair,
     p2p_host: &str,
     p2p_port: u16,
     torii_host: &str,
@@ -908,6 +940,16 @@ fn build_vanilla_config(
     root.insert(
         "private_key".into(),
         TomlValue::String(ExposedPrivateKey(keypair.private_key().clone()).to_string()),
+    );
+    root.insert(
+        "soranet_transport_public_key".into(),
+        TomlValue::String(soranet_transport_keypair.public_key().to_string()),
+    );
+    root.insert(
+        "soranet_transport_private_key".into(),
+        TomlValue::String(
+            ExposedPrivateKey(soranet_transport_keypair.private_key().clone()).to_string(),
+        ),
     );
     root.insert(
         "trusted_peers".into(),
@@ -942,6 +984,10 @@ fn build_vanilla_config(
         TomlValue::String(keypair.public_key().to_string()),
     );
     genesis.insert("file".into(), TomlValue::String("genesis.json".to_owned()));
+    genesis.insert(
+        "expected_hash".into(),
+        TomlValue::String(GENESIS_EXPECTED_HASH_PLACEHOLDER.to_owned()),
+    );
     root.insert("genesis".into(), TomlValue::Table(genesis));
 
     let mut nexus = TomlTable::new();
@@ -1019,11 +1065,23 @@ mod tests {
             .expect("wizard BLS fixture key generation should succeed")
     }
 
+    fn checked_wizard_transport_keypair() -> KeyPair {
+        KeyPair::try_from_seed(
+            b"iroha:kagami:wizard:test:soranet-transport:v1".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("wizard SoraNet transport fixture key generation should succeed")
+    }
+
     #[test]
     fn wizard_fixture_key_generation_preserves_bls_algorithm() {
         assert_eq!(
             checked_wizard_bls_keypair().public_key().algorithm(),
             Algorithm::BlsNormal
+        );
+        assert_eq!(
+            checked_wizard_transport_keypair().algorithm(),
+            Algorithm::Ed25519
         );
     }
 
@@ -1046,6 +1104,7 @@ mod tests {
     #[test]
     fn vanilla_config_has_minimal_sections() {
         let kp = checked_wizard_bls_keypair();
+        let transport_kp = checked_wizard_transport_keypair();
         let pop = bls_normal_pop_prove(kp.private_key()).expect("pop");
         let mut pops = BTreeMap::new();
         pops.insert(kp.public_key().clone(), pop);
@@ -1053,6 +1112,7 @@ mod tests {
         let config = build_vanilla_config(
             "chain-x",
             &kp,
+            &transport_kp,
             "localhost",
             1337,
             "localhost",
@@ -1068,8 +1128,34 @@ mod tests {
         assert!(table.get("network").is_some());
         assert!(table.get("torii").is_some());
         assert!(table.get("genesis").is_some());
+        assert_eq!(
+            table
+                .get("genesis")
+                .and_then(TomlValue::as_table)
+                .and_then(|genesis| genesis.get("expected_hash"))
+                .and_then(TomlValue::as_str),
+            Some(GENESIS_EXPECTED_HASH_PLACEHOLDER),
+            "wizard output must remain fail-closed until signing binds the exact block hash"
+        );
         assert!(table.get("trusted_peers").is_some());
         assert!(table.get("trusted_peers_pop").is_some());
+        assert_eq!(
+            table
+                .get("soranet_transport_public_key")
+                .and_then(TomlValue::as_str),
+            Some(transport_kp.public_key().to_string().as_str())
+        );
+        assert_eq!(
+            table
+                .get("soranet_transport_private_key")
+                .and_then(TomlValue::as_str),
+            Some(
+                ExposedPrivateKey(transport_kp.private_key().clone())
+                    .to_string()
+                    .as_str()
+            )
+        );
+        assert_ne!(transport_kp.public_key(), kp.public_key());
     }
 
     #[test]

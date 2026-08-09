@@ -194,14 +194,64 @@ pub(super) struct MaskedRelaxedProofWireV1 {
     pub(super) error_opening_blinding: VegaScalarWireV1,
 }
 
+/// Producer-side masked Nova history before the terminal Spartan proof.
+///
+/// The final folded witness remains inside a zeroizing wrapper. Public
+/// consumers may use the instances/folds to build an audit transcript, but
+/// settlement must derive the terminal instance again with
+/// [`verify_and_replay_masked_relaxed_v1`].
+pub(super) struct MaskedRelaxedPrecomputationV1 {
+    pub(super) shape: Shape,
+    pub(super) mask_instance: RelaxedInstance,
+    pub(super) strict_instances: Vec<Instance>,
+    pub(super) folds: Vec<NovaNifs>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) folded_instance: RelaxedInstance,
+    folded_witness: SecretRelaxedWitness,
+}
+
+impl MaskedRelaxedPrecomputationV1 {
+    pub(super) fn folded_witness(&self) -> &RelaxedWitness {
+        &self.folded_witness
+    }
+}
+
 pub(super) fn prove_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
+    domain: &'static [u8],
+    context_frame: &[u8],
+    commitment_key_label: &[u8],
+    assignments: Vec<CircuitAssignment>,
+    worker_count: usize,
+    random: &mut R,
+) -> Result<MaskedRelaxedProofWireV1, MaskedRelaxedErrorV1> {
+    let precomputation = precompute_masked_relaxed_v1(
+        domain,
+        context_frame,
+        commitment_key_label,
+        assignments,
+        worker_count,
+        random,
+    )?;
+    prove_masked_relaxed_precomputation_v1(
+        domain,
+        context_frame,
+        commitment_key_label,
+        &precomputation,
+        worker_count,
+    )
+}
+
+/// Build the complete producer-side masked Nova history from strict circuit
+/// assignments. This is the canonical source of the transcript schedule used
+/// by plaintext KATs and by the encrypted Phase-II/III conformance oracle.
+pub(super) fn precompute_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
     domain: &'static [u8],
     context_frame: &[u8],
     commitment_key_label: &[u8],
     mut assignments: Vec<CircuitAssignment>,
     worker_count: usize,
     random: &mut R,
-) -> Result<MaskedRelaxedProofWireV1, MaskedRelaxedErrorV1> {
+) -> Result<MaskedRelaxedPrecomputationV1, MaskedRelaxedErrorV1> {
     validate_count(assignments.len())?;
     validate_worker_count(worker_count)?;
     if domain.is_empty() || context_frame.is_empty() || commitment_key_label.is_empty() {
@@ -283,15 +333,171 @@ pub(super) fn prove_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
         strict_instances.push(regular_instance);
         folds.push(fold);
     }
+    Ok(MaskedRelaxedPrecomputationV1 {
+        shape,
+        mask_instance,
+        strict_instances,
+        folds,
+        folded_instance,
+        folded_witness,
+    })
+}
+
+/// Finish one producer-side precomputation without exposing or copying its
+/// zeroized final folded witness.
+pub(super) fn prove_masked_relaxed_precomputation_v1(
+    domain: &'static [u8],
+    context_frame: &[u8],
+    commitment_key_label: &[u8],
+    precomputation: &MaskedRelaxedPrecomputationV1,
+    worker_count: usize,
+) -> Result<MaskedRelaxedProofWireV1, MaskedRelaxedErrorV1> {
+    prove_precomputed_masked_relaxed_inner_v1(
+        domain,
+        context_frame,
+        commitment_key_label,
+        &precomputation.shape,
+        &precomputation.mask_instance,
+        &precomputation.strict_instances,
+        &precomputation.folds,
+        precomputation.folded_witness(),
+        worker_count,
+    )
+}
+
+/// Finish a masked relaxed-R1CS proof from a publicly replayable fold history
+/// and the one final folded witness reconstructed by the PBS.
+///
+/// The caller cannot nominate the terminal relaxed instance. This function
+/// replays every Nova challenge from the mask, the ordered strict public
+/// inputs and witness commitments, and the ordered cross-term commitments.
+/// Only the resulting instance is accepted by the terminal Spartan prover.
+/// That hard boundary prevents a malicious PBS from replacing the encrypted
+/// fold history with an independently satisfiable relaxed assignment.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prove_precomputed_masked_relaxed_v1(
+    domain: &'static [u8],
+    context_frame: &[u8],
+    commitment_key_label: &[u8],
+    shape: &Shape,
+    mask_instance: &RelaxedInstance,
+    strict_instances: &[Instance],
+    folds: &[NovaNifs],
+    folded_witness: RelaxedWitness,
+    worker_count: usize,
+) -> Result<MaskedRelaxedProofWireV1, MaskedRelaxedErrorV1> {
+    // Take ownership immediately so every success and error path scrubs the
+    // materialized folded witness on return.
+    let folded_witness = SecretRelaxedWitness::new(folded_witness);
+    prove_precomputed_masked_relaxed_inner_v1(
+        domain,
+        context_frame,
+        commitment_key_label,
+        shape,
+        mask_instance,
+        strict_instances,
+        folds,
+        &folded_witness,
+        worker_count,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prove_precomputed_masked_relaxed_inner_v1(
+    domain: &'static [u8],
+    context_frame: &[u8],
+    commitment_key_label: &[u8],
+    shape: &Shape,
+    mask_instance: &RelaxedInstance,
+    strict_instances: &[Instance],
+    folds: &[NovaNifs],
+    folded_witness: &RelaxedWitness,
+    worker_count: usize,
+) -> Result<MaskedRelaxedProofWireV1, MaskedRelaxedErrorV1> {
+    validate_count(strict_instances.len())?;
+    validate_worker_count(worker_count)?;
+    if domain.is_empty()
+        || context_frame.is_empty()
+        || commitment_key_label.is_empty()
+        || folds.len() != strict_instances.len()
+    {
+        return Err(MaskedRelaxedErrorV1::InvalidProfile);
+    }
+    let dimensions = MaskedRelaxedDimensionsV1::from_shape(shape)?;
+    if strict_instances
+        .iter()
+        .any(|instance| instance.public_inputs.len() != dimensions.public_input_count)
+    {
+        return Err(MaskedRelaxedErrorV1::InvalidProfile);
+    }
+    let strict_public_inputs = strict_instances
+        .iter()
+        .map(|instance| instance.public_inputs.clone())
+        .collect::<Vec<_>>();
+    let key = CommitmentKey::derive(commitment_key_label, MASKED_RELAXED_COMMITMENT_COLUMNS_V1)
+        .and_then(|key| key.with_worker_count(worker_count))
+        .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?;
+    let mut transcript = composition_transcript(
+        domain,
+        context_frame,
+        shape,
+        &strict_public_inputs,
+        dimensions,
+    )?;
+    let mut folded_instance = mask_instance.clone();
+    for (strict_instance, fold) in strict_instances.iter().zip(folds) {
+        folded_instance = fold
+            .verify(
+                &key,
+                shape,
+                &mut transcript,
+                &folded_instance,
+                strict_instance,
+            )
+            .map_err(|_| MaskedRelaxedErrorV1::VerificationFailed)?;
+    }
+
+    shape
+        .validate_relaxed_assignment(
+            &folded_witness.values,
+            folded_instance.relaxation,
+            &folded_instance.public_inputs,
+            &folded_witness.error,
+        )
+        .map_err(|_| MaskedRelaxedErrorV1::UnsatisfiedWitness)?;
+    if key
+        .commit(&folded_witness.values, &folded_witness.witness_blindings)
+        .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?
+        != folded_instance.witness_commitment
+        || key
+            .commit(&folded_witness.error, &folded_witness.error_blindings)
+            .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?
+            != folded_instance.error_commitment
+    {
+        return Err(MaskedRelaxedErrorV1::VerificationFailed);
+    }
+
     let spartan = RelaxedSpartanProof::prove(
-        &shape,
+        shape,
         &key,
         &folded_instance,
-        &folded_witness,
+        folded_witness,
         &mut transcript,
     )
     .map_err(|_| MaskedRelaxedErrorV1::InvalidProfile)?;
-    MaskedRelaxedProofWireV1::from_protocol(&mask_instance, &strict_instances, &folds, &spartan)
+    let proof =
+        MaskedRelaxedProofWireV1::from_protocol(mask_instance, strict_instances, folds, &spartan)?;
+
+    // A native prover bug must never escape as a settlement-acceptable wire.
+    verify_masked_relaxed_v1(
+        domain,
+        context_frame,
+        commitment_key_label,
+        shape,
+        &strict_public_inputs,
+        &proof,
+    )?;
+    Ok(proof)
 }
 
 pub(super) fn verify_masked_relaxed_v1(
@@ -302,6 +508,31 @@ pub(super) fn verify_masked_relaxed_v1(
     strict_public_inputs: &[Vec<Scalar>],
     proof: &MaskedRelaxedProofWireV1,
 ) -> Result<(), MaskedRelaxedErrorV1> {
+    verify_and_replay_masked_relaxed_v1(
+        domain,
+        context_frame,
+        commitment_key_label,
+        shape,
+        strict_public_inputs,
+        proof,
+    )
+    .map(|_| ())
+}
+
+/// Verify the complete masked fold proof and return the terminal relaxed
+/// instance derived by public replay.
+///
+/// Consumers with a separately transported terminal anchor must compare it
+/// exactly to this value. Returning the replay result avoids circularly
+/// binding that anchor into the Fiat--Shamir context that produced it.
+pub(super) fn verify_and_replay_masked_relaxed_v1(
+    domain: &'static [u8],
+    context_frame: &[u8],
+    commitment_key_label: &[u8],
+    shape: &Shape,
+    strict_public_inputs: &[Vec<Scalar>],
+    proof: &MaskedRelaxedProofWireV1,
+) -> Result<RelaxedInstance, MaskedRelaxedErrorV1> {
     validate_count(strict_public_inputs.len())?;
     if domain.is_empty() || context_frame.is_empty() || commitment_key_label.is_empty() {
         return Err(MaskedRelaxedErrorV1::InvalidProfile);
@@ -332,7 +563,8 @@ pub(super) fn verify_masked_relaxed_v1(
     }
     spartan
         .verify(shape, &key, &folded, &mut transcript)
-        .map_err(|_| MaskedRelaxedErrorV1::VerificationFailed)
+        .map_err(|_| MaskedRelaxedErrorV1::VerificationFailed)?;
+    Ok(folded)
 }
 
 impl MaskedRelaxedProofWireV1 {
@@ -588,6 +820,34 @@ fn sample_relaxed_mask<R: MaskedRelaxedRandomSourceV1>(
             error_blindings: error_blindings.to_vec(),
         },
     ))
+}
+
+/// Construct the sole masked-Nova composition transcript used by plaintext,
+/// encrypted, prover, and verifier paths.
+pub(super) fn masked_relaxed_composition_transcript_v1(
+    domain: &'static [u8],
+    context_frame: &[u8],
+    shape: &Shape,
+    strict_public_inputs: &[Vec<Scalar>],
+) -> Result<VegaTranscriptV1, MaskedRelaxedErrorV1> {
+    validate_count(strict_public_inputs.len())?;
+    if domain.is_empty() || context_frame.is_empty() {
+        return Err(MaskedRelaxedErrorV1::InvalidProfile);
+    }
+    let dimensions = MaskedRelaxedDimensionsV1::from_shape(shape)?;
+    if strict_public_inputs
+        .iter()
+        .any(|inputs| inputs.len() != dimensions.public_input_count)
+    {
+        return Err(MaskedRelaxedErrorV1::InvalidProfile);
+    }
+    composition_transcript(
+        domain,
+        context_frame,
+        shape,
+        strict_public_inputs,
+        dimensions,
+    )
 }
 
 fn composition_transcript(
@@ -872,6 +1132,11 @@ impl Drop for SecretRelaxedWitness {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vega::r1cs::SparseMatrix;
+
+    const TEST_DOMAIN: &[u8] = b"iroha.test.masked-relaxed.precomputed";
+    const TEST_CONTEXT: &[u8] = b"ordered-batch-context-v1";
+    const TEST_KEY_LABEL: &[u8] = b"iroha.test.masked-relaxed.precomputed.key";
 
     struct ConstantRandom(u8);
 
@@ -893,6 +1158,120 @@ mod tests {
         }
     }
 
+    struct CounterRandom(u64);
+
+    impl MaskedRelaxedRandomSourceV1 for CounterRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            for chunk in destination.chunks_mut(8) {
+                self.0 = self
+                    .0
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                chunk.copy_from_slice(&self.0.to_le_bytes()[..chunk.len()]);
+            }
+            Ok(())
+        }
+    }
+
+    struct PrecomputedFixture {
+        shape: Shape,
+        mask: RelaxedInstance,
+        strict: Vec<Instance>,
+        folds: Vec<NovaNifs>,
+        folded_instance: RelaxedInstance,
+        folded_witness: RelaxedWitness,
+    }
+
+    fn s(value: u64) -> Scalar {
+        Scalar::from_u64(value)
+    }
+
+    fn precomputed_test_shape() -> Shape {
+        let variables = MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
+        let constraints = MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
+        let columns = variables + 2;
+        // The only non-empty row enforces W[0] * u = x[0]. Empty rows
+        // canonicalize to 0 * 0 = 0, preserving the released power-of-two
+        // commitment geometry without adding irrelevant test constraints.
+        let a = SparseMatrix::new(constraints, columns, &[(0, 0, s(1))]).expect("canonical A");
+        let b =
+            SparseMatrix::new(constraints, columns, &[(0, variables, s(1))]).expect("canonical B");
+        let c = SparseMatrix::new(constraints, columns, &[(0, variables + 1, s(1))])
+            .expect("canonical C");
+        Shape::new(constraints, variables, 1, a, b, c).expect("valid test shape")
+    }
+
+    fn precomputed_fixture(values: &[u64]) -> PrecomputedFixture {
+        let shape = precomputed_test_shape();
+        let dimensions = MaskedRelaxedDimensionsV1::from_shape(&shape).expect("dimensions");
+        let key = CommitmentKey::derive(TEST_KEY_LABEL, MASKED_RELAXED_COMMITMENT_COLUMNS_V1)
+            .expect("commitment key");
+        let mut random = CounterRandom(0x6a09_e667_f3bc_c909);
+        let (mask, mut folded_witness) =
+            sample_relaxed_mask(&mut random, &shape, &key, dimensions).expect("fresh mask");
+        let public_inputs = values
+            .iter()
+            .map(|value| vec![s(*value)])
+            .collect::<Vec<_>>();
+        let mut transcript = composition_transcript(
+            TEST_DOMAIN,
+            TEST_CONTEXT,
+            &shape,
+            &public_inputs,
+            dimensions,
+        )
+        .expect("composition transcript");
+        let mut folded_instance = mask.clone();
+        let mut strict = Vec::with_capacity(values.len());
+        let mut folds = Vec::with_capacity(values.len());
+        for value in values {
+            let mut witness_values = vec![Scalar::zero(); shape.variable_count()];
+            witness_values[0] = s(*value);
+            let witness = Witness {
+                values: witness_values,
+                blindings: sample_nonzero_scalars(
+                    &mut random,
+                    dimensions.witness_commitment_points,
+                )
+                .expect("strict blindings"),
+            };
+            let instance = Instance {
+                witness_commitment: key
+                    .commit(&witness.values, &witness.blindings)
+                    .expect("strict commitment"),
+                public_inputs: vec![s(*value)],
+            };
+            let cross_term_blindings =
+                sample_nonzero_scalars(&mut random, dimensions.error_commitment_points)
+                    .expect("cross-term blindings");
+            let (fold, next_instance, next_witness) = NovaNifs::prove(
+                NovaNifsProverInput {
+                    key: &key,
+                    shape: &shape,
+                    relaxed_instance: &folded_instance,
+                    relaxed_witness: &folded_witness,
+                    regular_instance: &instance,
+                    regular_witness: &witness,
+                    cross_term_blindings: &cross_term_blindings,
+                },
+                &mut transcript,
+            )
+            .expect("valid precomputed fold");
+            folded_instance = next_instance;
+            folded_witness = next_witness;
+            strict.push(instance);
+            folds.push(fold);
+        }
+        PrecomputedFixture {
+            shape,
+            mask,
+            strict,
+            folds,
+            folded_instance,
+            folded_witness,
+        }
+    }
+
     #[test]
     fn random_health_rejects_unavailable_zero_and_constant_sources() {
         assert_eq!(
@@ -908,6 +1287,164 @@ mod tests {
         assert_eq!(
             validate_random_health(&mut ConstantRandom(1)),
             Err(MaskedRelaxedErrorV1::DegenerateRandomness)
+        );
+    }
+
+    #[test]
+    fn precomputed_history_round_trips_and_binds_ordered_public_inputs() {
+        let fixture = precomputed_fixture(&[3, 5]);
+        let proof = prove_precomputed_masked_relaxed_v1(
+            TEST_DOMAIN,
+            TEST_CONTEXT,
+            TEST_KEY_LABEL,
+            &fixture.shape,
+            &fixture.mask,
+            &fixture.strict,
+            &fixture.folds,
+            fixture.folded_witness.clone(),
+            1,
+        )
+        .expect("full history produces terminal proof");
+        let public_inputs = fixture
+            .strict
+            .iter()
+            .map(|instance| instance.public_inputs.clone())
+            .collect::<Vec<_>>();
+        verify_masked_relaxed_v1(
+            TEST_DOMAIN,
+            TEST_CONTEXT,
+            TEST_KEY_LABEL,
+            &fixture.shape,
+            &public_inputs,
+            &proof,
+        )
+        .expect("canonical history verifies");
+        assert_eq!(
+            verify_and_replay_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                &fixture.shape,
+                &public_inputs,
+                &proof,
+            )
+            .expect("canonical history replays"),
+            fixture.folded_instance
+        );
+
+        let mut reordered = public_inputs.clone();
+        reordered.swap(0, 1);
+        assert_eq!(
+            verify_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                &fixture.shape,
+                &reordered,
+                &proof,
+            ),
+            Err(MaskedRelaxedErrorV1::VerificationFailed)
+        );
+        let mut changed_context = TEST_CONTEXT.to_vec();
+        changed_context.push(0);
+        assert_eq!(
+            verify_masked_relaxed_v1(
+                TEST_DOMAIN,
+                &changed_context,
+                TEST_KEY_LABEL,
+                &fixture.shape,
+                &public_inputs,
+                &proof,
+            ),
+            Err(MaskedRelaxedErrorV1::VerificationFailed)
+        );
+    }
+
+    #[test]
+    fn precomputed_history_rejects_splicing_and_final_witness_forgery() {
+        let fixture = precomputed_fixture(&[7, 11]);
+
+        let mut reordered_strict = fixture.strict.clone();
+        reordered_strict.swap(0, 1);
+        assert!(
+            prove_precomputed_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                &fixture.shape,
+                &fixture.mask,
+                &reordered_strict,
+                &fixture.folds,
+                fixture.folded_witness.clone(),
+                1,
+            )
+            .is_err()
+        );
+
+        let mut spliced_folds = fixture.folds.clone();
+        spliced_folds.swap(0, 1);
+        assert!(
+            prove_precomputed_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                &fixture.shape,
+                &fixture.mask,
+                &fixture.strict,
+                &spliced_folds,
+                fixture.folded_witness.clone(),
+                1,
+            )
+            .is_err()
+        );
+
+        assert_eq!(
+            prove_precomputed_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                &fixture.shape,
+                &fixture.mask,
+                &fixture.strict,
+                &fixture.folds[..1],
+                fixture.folded_witness.clone(),
+                1,
+            ),
+            Err(MaskedRelaxedErrorV1::InvalidProfile)
+        );
+
+        let mut forged_relation = fixture.folded_witness.clone();
+        forged_relation.error[0] += Scalar::one();
+        assert_eq!(
+            prove_precomputed_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                &fixture.shape,
+                &fixture.mask,
+                &fixture.strict,
+                &fixture.folds,
+                forged_relation,
+                1,
+            ),
+            Err(MaskedRelaxedErrorV1::UnsatisfiedWitness)
+        );
+
+        let mut forged_blinding = fixture.folded_witness.clone();
+        forged_blinding.witness_blindings[0] += Scalar::one();
+        assert_eq!(
+            prove_precomputed_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                &fixture.shape,
+                &fixture.mask,
+                &fixture.strict,
+                &fixture.folds,
+                forged_blinding,
+                1,
+            ),
+            Err(MaskedRelaxedErrorV1::VerificationFailed)
         );
     }
 }

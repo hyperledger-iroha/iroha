@@ -101,12 +101,19 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
     let mut parent: Option<V2FinalityArtifact> = None;
     for block in blocks {
         let height = block.header().height().get();
-        let execution_commitment = ExecutionCommitment::new(
+        let execution_commitment = ExecutionCommitment::new_without_merge_carrier(
             Hash::new(b"eviction bench parent state"),
             Hash::new(b"eviction bench post state"),
             Hash::new(b"eviction bench ordinary writes"),
             None,
             0,
+            u64::try_from(
+                block
+                    .encode_wire()
+                    .expect("eviction bench block wire")
+                    .len(),
+            )
+            .expect("eviction bench block wire length fits u64"),
             block
                 .executed_block_wire_hash()
                 .expect("hash eviction-benchmark executed block wire"),
@@ -129,12 +136,12 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
             nexus_amx_context_hash: Hash::new(b"eviction bench nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::Plain,
+                encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x42; 32],
         };
@@ -218,8 +225,7 @@ fn kura_bench_config(dir: &tempfile::TempDir, blocks_in_memory: NonZeroUsize) ->
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-        eviction_required_replicas:
-            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
 
@@ -276,8 +282,7 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
             iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention:
             iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-        eviction_required_replicas:
-            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let (kura, _) = iroha_core::kura::Kura::new(&cfg, &LaneConfig::default()).unwrap();
@@ -300,7 +305,7 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
 
     let (alice_id, alice_keypair) = gen_account_in("test");
     let (bob_id, _bob_keypair) = gen_account_in("test");
-    let xor_id = iroha_data_model::asset::AssetDefinitionId::new(
+    let xor_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new("test", "universal").unwrap(),
         "xor".parse().unwrap(),
     );

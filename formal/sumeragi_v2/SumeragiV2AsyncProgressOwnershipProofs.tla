@@ -4977,8 +4977,8 @@ PROOF
         BY <2>3 DEF InstallGenerationExhausted
       <3>2. /\ TcHighRank(request.tc) \in Ranks
              /\ TcHighRank(request.tc) <= request.tc.view
-        BY <2>1, <3>1,
-           ValidInstallSelectedRankDoesNotExceedTcView
+        BY <2>1, <3>1, ValidTimeoutCertificateSelectsMember, Isa
+           DEF StrongInductiveInvariant, Safety, TypeInvariant, ReducerProvenanceInvariant, PendingCertificateWritesAuthorized, TCValid, TimeoutVoteRecordSet, TcHighRank
       <3>3. FALSE
         BY <2>1, <2>2, <3>1, <3>2, SMT
            DEF StrongInductiveInvariant, Safety,

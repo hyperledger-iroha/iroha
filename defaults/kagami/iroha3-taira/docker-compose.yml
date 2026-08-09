@@ -1,12 +1,106 @@
 version: "3.9"
 services:
-  iroha-iroha3-taira:
+  iroha-iroha3-taira-0:
     image: hyperledger/iroha:latest
-    command: ["irohad", "--sora", "--config", "/config/config.toml", "--genesis", "/config/genesis.json"]
+    command: ["irohad", "--sora", "--config", "/config/config.toml"]
     volumes:
       - ./config.toml:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
       - ./sorafs_sites.json:/config/sorafs_sites.json:ro
     ports:
       - "8080:8080"
       - "1337:1337"
+    networks:
+      profile:
+        ipv4_address: 172.28.0.10
+  iroha-iroha3-taira-1:
+    image: hyperledger/iroha:latest
+    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    volumes:
+      - ./config-peer-1.toml:/config/config.toml:ro
+      - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+      - ./sorafs_sites.json:/config/sorafs_sites.json:ro
+    ports:
+      - "8081:8081"
+      - "1338:1338"
+    networks:
+      profile:
+        ipv4_address: 172.28.0.11
+  iroha-iroha3-taira-2:
+    image: hyperledger/iroha:latest
+    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    volumes:
+      - ./config-peer-2.toml:/config/config.toml:ro
+      - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+      - ./sorafs_sites.json:/config/sorafs_sites.json:ro
+    ports:
+      - "8082:8082"
+      - "1339:1339"
+    networks:
+      profile:
+        ipv4_address: 172.28.0.12
+  iroha-iroha3-taira-3:
+    image: hyperledger/iroha:latest
+    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    volumes:
+      - ./config-peer-3.toml:/config/config.toml:ro
+      - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+      - ./sorafs_sites.json:/config/sorafs_sites.json:ro
+    ports:
+      - "8083:8083"
+      - "1340:1340"
+    networks:
+      profile:
+        ipv4_address: 172.28.0.13
+  iroha-iroha3-taira-4:
+    image: hyperledger/iroha:latest
+    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    volumes:
+      - ./config-peer-4.toml:/config/config.toml:ro
+      - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+      - ./sorafs_sites.json:/config/sorafs_sites.json:ro
+    ports:
+      - "8084:8084"
+      - "1341:1341"
+    networks:
+      profile:
+        ipv4_address: 172.28.0.14
+  iroha-iroha3-taira-5:
+    image: hyperledger/iroha:latest
+    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    volumes:
+      - ./config-peer-5.toml:/config/config.toml:ro
+      - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+      - ./sorafs_sites.json:/config/sorafs_sites.json:ro
+    ports:
+      - "8085:8085"
+      - "1342:1342"
+    networks:
+      profile:
+        ipv4_address: 172.28.0.15
+  iroha-iroha3-taira-6:
+    image: hyperledger/iroha:latest
+    command: ["irohad", "--sora", "--config", "/config/config.toml"]
+    volumes:
+      - ./config-peer-6.toml:/config/config.toml:ro
+      - ./genesis.json:/config/genesis.json:ro
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro
+      - ./sorafs_sites.json:/config/sorafs_sites.json:ro
+    ports:
+      - "8086:8086"
+      - "1343:1343"
+    networks:
+      profile:
+        ipv4_address: 172.28.0.16
+
+networks:
+  profile:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

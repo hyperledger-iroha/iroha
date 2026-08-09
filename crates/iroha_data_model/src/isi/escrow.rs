@@ -466,289 +466,6 @@ impl ExpireAssetLock {
     }
 }
 
-isi! {
-    /// Open a ledger-managed anonymous asset escrow using shielded inputs.
-    pub struct OpenAnonymousAssetEscrow {
-        /// Caller-selected escrow identifier.
-        pub escrow_id: crate::escrow::EscrowId,
-        /// Shielded asset definition to lock.
-        pub asset_definition: crate::asset::AssetDefinitionId,
-        /// Nullifiers consumed by the funding proof.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub funding_nullifiers: Vec<[u8; 32]>,
-        /// Escrow note commitment created by the funding proof.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub escrow_commitment: [u8; 32],
-        /// Proof attachment for the shielded funding transfer.
-        pub proof: crate::proof::ProofAttachment,
-        /// Optional recent shielded Merkle root used during proof construction.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::option"))]
-        pub root_hint: Option<[u8; 32]>,
-        /// Evidence hashes attached when opening the escrow.
-        #[cfg_attr(feature = "json", norito(default))]
-        pub evidence_hashes: Vec<iroha_crypto::Hash>,
-    }
-}
-
-impl OpenAnonymousAssetEscrow {
-    /// Construct an anonymous escrow-opening instruction without initial evidence.
-    #[must_use]
-    pub fn new(
-        escrow_id: crate::escrow::EscrowId,
-        asset_definition: crate::asset::AssetDefinitionId,
-        funding_nullifiers: Vec<[u8; 32]>,
-        escrow_commitment: [u8; 32],
-        proof: crate::proof::ProofAttachment,
-        root_hint: Option<[u8; 32]>,
-    ) -> Self {
-        Self {
-            escrow_id,
-            asset_definition,
-            funding_nullifiers,
-            escrow_commitment,
-            proof,
-            root_hint,
-            evidence_hashes: Vec::new(),
-        }
-    }
-
-    /// Construct an anonymous escrow-opening instruction with evidence hashes attached.
-    #[must_use]
-    pub fn with_evidence_hashes(
-        escrow_id: crate::escrow::EscrowId,
-        asset_definition: crate::asset::AssetDefinitionId,
-        funding_nullifiers: Vec<[u8; 32]>,
-        escrow_commitment: [u8; 32],
-        proof: crate::proof::ProofAttachment,
-        root_hint: Option<[u8; 32]>,
-        evidence_hashes: Vec<iroha_crypto::Hash>,
-    ) -> Self {
-        Self {
-            escrow_id,
-            asset_definition,
-            funding_nullifiers,
-            escrow_commitment,
-            proof,
-            root_hint,
-            evidence_hashes,
-        }
-    }
-}
-
-isi! {
-    /// Accept an open anonymous asset escrow as its buyer.
-    pub struct AcceptAnonymousAssetEscrow {
-        /// Escrow to accept.
-        pub escrow_id: crate::escrow::EscrowId,
-    }
-}
-
-impl AcceptAnonymousAssetEscrow {
-    /// Construct an anonymous escrow-acceptance instruction.
-    #[must_use]
-    pub const fn new(escrow_id: crate::escrow::EscrowId) -> Self {
-        Self { escrow_id }
-    }
-}
-
-isi! {
-    /// Mark an accepted anonymous asset escrow as paid off-chain.
-    pub struct MarkAnonymousEscrowPaymentSent {
-        /// Escrow whose payment has been sent.
-        pub escrow_id: crate::escrow::EscrowId,
-    }
-}
-
-impl MarkAnonymousEscrowPaymentSent {
-    /// Construct an instruction that marks anonymous escrow payment as sent.
-    #[must_use]
-    pub const fn new(escrow_id: crate::escrow::EscrowId) -> Self {
-        Self { escrow_id }
-    }
-}
-
-isi! {
-    /// Release a paid anonymous escrow to its accepted buyer using shielded outputs.
-    pub struct ReleaseAnonymousAssetEscrow {
-        /// Escrow to release.
-        pub escrow_id: crate::escrow::EscrowId,
-        /// Nullifiers spending the escrow note.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub escrow_nullifiers: Vec<[u8; 32]>,
-        /// Output commitments labelled for the accepted buyer.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub buyer_output_commitments: Vec<[u8; 32]>,
-        /// Proof attachment for the shielded release transfer.
-        pub proof: crate::proof::ProofAttachment,
-        /// Optional recent shielded Merkle root used during proof construction.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::option"))]
-        pub root_hint: Option<[u8; 32]>,
-    }
-}
-
-impl ReleaseAnonymousAssetEscrow {
-    /// Construct an instruction that releases an anonymous escrow.
-    #[must_use]
-    pub fn new(
-        escrow_id: crate::escrow::EscrowId,
-        escrow_nullifiers: Vec<[u8; 32]>,
-        buyer_output_commitments: Vec<[u8; 32]>,
-        proof: crate::proof::ProofAttachment,
-        root_hint: Option<[u8; 32]>,
-    ) -> Self {
-        Self {
-            escrow_id,
-            escrow_nullifiers,
-            buyer_output_commitments,
-            proof,
-            root_hint,
-        }
-    }
-}
-
-isi! {
-    /// Cancel an open or accepted anonymous escrow before payment is marked.
-    pub struct CancelAnonymousAssetEscrow {
-        /// Escrow to cancel.
-        pub escrow_id: crate::escrow::EscrowId,
-        /// Nullifiers spending the escrow note.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub escrow_nullifiers: Vec<[u8; 32]>,
-        /// Output commitments labelled for the seller.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub seller_output_commitments: Vec<[u8; 32]>,
-        /// Proof attachment for the shielded cancellation transfer.
-        pub proof: crate::proof::ProofAttachment,
-        /// Optional recent shielded Merkle root used during proof construction.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::option"))]
-        pub root_hint: Option<[u8; 32]>,
-    }
-}
-
-impl CancelAnonymousAssetEscrow {
-    /// Construct an instruction that cancels an anonymous escrow.
-    #[must_use]
-    pub fn new(
-        escrow_id: crate::escrow::EscrowId,
-        escrow_nullifiers: Vec<[u8; 32]>,
-        seller_output_commitments: Vec<[u8; 32]>,
-        proof: crate::proof::ProofAttachment,
-        root_hint: Option<[u8; 32]>,
-    ) -> Self {
-        Self {
-            escrow_id,
-            escrow_nullifiers,
-            seller_output_commitments,
-            proof,
-            root_hint,
-        }
-    }
-}
-
-isi! {
-    /// Open an anonymous escrow dispute for court moderation.
-    pub struct OpenAnonymousEscrowDispute {
-        /// Escrow to dispute.
-        pub escrow_id: crate::escrow::EscrowId,
-        /// Evidence hashes attached by the disputing party.
-        #[cfg_attr(feature = "json", norito(default))]
-        pub evidence_hashes: Vec<iroha_crypto::Hash>,
-    }
-}
-
-impl OpenAnonymousEscrowDispute {
-    /// Construct an instruction that opens an anonymous escrow dispute without new evidence.
-    #[must_use]
-    pub fn new(escrow_id: crate::escrow::EscrowId) -> Self {
-        Self {
-            escrow_id,
-            evidence_hashes: Vec::new(),
-        }
-    }
-
-    /// Construct an instruction that opens an anonymous escrow dispute with evidence hashes.
-    #[must_use]
-    pub fn with_evidence_hashes(
-        escrow_id: crate::escrow::EscrowId,
-        evidence_hashes: Vec<iroha_crypto::Hash>,
-    ) -> Self {
-        Self {
-            escrow_id,
-            evidence_hashes,
-        }
-    }
-}
-
-isi! {
-    /// Resolve a disputed anonymous escrow by spending the escrow note to labelled outputs.
-    pub struct ResolveAnonymousEscrowDispute {
-        /// Escrow to resolve.
-        pub escrow_id: crate::escrow::EscrowId,
-        /// Nullifiers spending the escrow note.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub escrow_nullifiers: Vec<[u8; 32]>,
-        /// Output commitments labelled for the accepted buyer.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub buyer_output_commitments: Vec<[u8; 32]>,
-        /// Output commitments labelled for the seller.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
-        pub seller_output_commitments: Vec<[u8; 32]>,
-        /// Proof attachment for the shielded dispute-resolution transfer.
-        pub proof: crate::proof::ProofAttachment,
-        /// Optional recent shielded Merkle root used during proof construction.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::option"))]
-        pub root_hint: Option<[u8; 32]>,
-        /// Evidence or judgement hashes attached by the resolver.
-        #[cfg_attr(feature = "json", norito(default))]
-        pub evidence_hashes: Vec<iroha_crypto::Hash>,
-    }
-}
-
-impl ResolveAnonymousEscrowDispute {
-    /// Construct an anonymous dispute-resolution instruction without additional evidence.
-    #[must_use]
-    pub fn new(
-        escrow_id: crate::escrow::EscrowId,
-        escrow_nullifiers: Vec<[u8; 32]>,
-        buyer_output_commitments: Vec<[u8; 32]>,
-        seller_output_commitments: Vec<[u8; 32]>,
-        proof: crate::proof::ProofAttachment,
-        root_hint: Option<[u8; 32]>,
-    ) -> Self {
-        Self {
-            escrow_id,
-            escrow_nullifiers,
-            buyer_output_commitments,
-            seller_output_commitments,
-            proof,
-            root_hint,
-            evidence_hashes: Vec::new(),
-        }
-    }
-
-    /// Construct an anonymous dispute-resolution instruction with evidence or judgement hashes.
-    #[must_use]
-    pub fn with_evidence_hashes(
-        escrow_id: crate::escrow::EscrowId,
-        escrow_nullifiers: Vec<[u8; 32]>,
-        buyer_output_commitments: Vec<[u8; 32]>,
-        seller_output_commitments: Vec<[u8; 32]>,
-        proof: crate::proof::ProofAttachment,
-        root_hint: Option<[u8; 32]>,
-        evidence_hashes: Vec<iroha_crypto::Hash>,
-    ) -> Self {
-        Self {
-            escrow_id,
-            escrow_nullifiers,
-            buyer_output_commitments,
-            seller_output_commitments,
-            proof,
-            root_hint,
-            evidence_hashes,
-        }
-    }
-}
-
 impl crate::seal::Instruction for OpenAssetEscrow {}
 impl crate::seal::Instruction for AcceptAssetEscrow {}
 impl crate::seal::Instruction for MarkEscrowPaymentSent {}
@@ -763,13 +480,6 @@ impl crate::seal::Instruction for ExpireConditionalEscrow {}
 impl crate::seal::Instruction for DrawdownAssetLock {}
 impl crate::seal::Instruction for CancelAssetLock {}
 impl crate::seal::Instruction for ExpireAssetLock {}
-impl crate::seal::Instruction for OpenAnonymousAssetEscrow {}
-impl crate::seal::Instruction for AcceptAnonymousAssetEscrow {}
-impl crate::seal::Instruction for MarkAnonymousEscrowPaymentSent {}
-impl crate::seal::Instruction for ReleaseAnonymousAssetEscrow {}
-impl crate::seal::Instruction for CancelAnonymousAssetEscrow {}
-impl crate::seal::Instruction for OpenAnonymousEscrowDispute {}
-impl crate::seal::Instruction for ResolveAnonymousEscrowDispute {}
 
 fn escrow_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
@@ -882,55 +592,6 @@ impl_escrow_decode_from_slice!(ExpireAssetLock {
     escrow_id: crate::escrow::EscrowId,
 });
 
-impl_escrow_decode_from_slice!(OpenAnonymousAssetEscrow {
-    escrow_id: crate::escrow::EscrowId,
-    asset_definition: crate::asset::AssetDefinitionId,
-    funding_nullifiers: Vec<[u8; 32]>,
-    escrow_commitment: [u8; 32],
-    proof: crate::proof::ProofAttachment,
-    root_hint: Option<[u8; 32]>,
-    evidence_hashes: Vec<iroha_crypto::Hash>,
-});
-
-impl_escrow_decode_from_slice!(AcceptAnonymousAssetEscrow {
-    escrow_id: crate::escrow::EscrowId,
-});
-
-impl_escrow_decode_from_slice!(MarkAnonymousEscrowPaymentSent {
-    escrow_id: crate::escrow::EscrowId,
-});
-
-impl_escrow_decode_from_slice!(ReleaseAnonymousAssetEscrow {
-    escrow_id: crate::escrow::EscrowId,
-    escrow_nullifiers: Vec<[u8; 32]>,
-    buyer_output_commitments: Vec<[u8; 32]>,
-    proof: crate::proof::ProofAttachment,
-    root_hint: Option<[u8; 32]>,
-});
-
-impl_escrow_decode_from_slice!(CancelAnonymousAssetEscrow {
-    escrow_id: crate::escrow::EscrowId,
-    escrow_nullifiers: Vec<[u8; 32]>,
-    seller_output_commitments: Vec<[u8; 32]>,
-    proof: crate::proof::ProofAttachment,
-    root_hint: Option<[u8; 32]>,
-});
-
-impl_escrow_decode_from_slice!(OpenAnonymousEscrowDispute {
-    escrow_id: crate::escrow::EscrowId,
-    evidence_hashes: Vec<iroha_crypto::Hash>,
-});
-
-impl_escrow_decode_from_slice!(ResolveAnonymousEscrowDispute {
-    escrow_id: crate::escrow::EscrowId,
-    escrow_nullifiers: Vec<[u8; 32]>,
-    buyer_output_commitments: Vec<[u8; 32]>,
-    seller_output_commitments: Vec<[u8; 32]>,
-    proof: crate::proof::ProofAttachment,
-    root_hint: Option<[u8; 32]>,
-    evidence_hashes: Vec<iroha_crypto::Hash>,
-});
-
 #[cfg(test)]
 mod tests {
     use core::num::{NonZeroU32, NonZeroU64};
@@ -941,11 +602,7 @@ mod tests {
     use norito::core::DecodeFromSlice;
 
     use super::*;
-    use crate::{
-        domain::DomainId,
-        name::Name,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-    };
+    use crate::{domain::DomainId, name::Name};
 
     #[derive(Encode)]
     struct ForgedOpenAssetEscrow {
@@ -955,21 +612,12 @@ mod tests {
         evidence_hashes: Vec<iroha_crypto::Hash>,
     }
 
-    fn proof_attachment() -> ProofAttachment {
-        let backend: iroha_schema::Ident = "halo2/ipa/poly-open".into();
-        ProofAttachment::new_ref(
-            backend.clone(),
-            ProofBox::new(backend.clone(), vec![1, 2, 3]),
-            VerifyingKeyId::new(backend, "escrow_vk"),
-        )
-    }
-
     fn escrow_id() -> crate::escrow::EscrowId {
         crate::escrow::EscrowId::new(Hash::new("escrow-slice"))
     }
 
     fn asset_definition_id() -> crate::asset::AssetDefinitionId {
-        crate::asset::AssetDefinitionId::new(
+        crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse::<Name>().unwrap(),
         )
@@ -1041,7 +689,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn escrow_instruction_constructors_fill_expected_fields() {
         let escrow_id = crate::escrow::EscrowId::new(Hash::new("escrow-ctor"));
-        let asset_definition = crate::asset::AssetDefinitionId::new(
+        let asset_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse::<Name>().unwrap(),
         );
@@ -1133,79 +781,6 @@ mod tests {
         assert_eq!(cancel.escrow_id, escrow_id);
         assert_eq!(cancel.expected_remaining_amount, Quantity::from(20_u64));
         assert_eq!(ExpireAssetLock::new(escrow_id).escrow_id, escrow_id);
-
-        let proof = proof_attachment();
-        assert_eq!(
-            OpenAnonymousAssetEscrow::new(
-                escrow_id,
-                asset_definition.clone(),
-                vec![[0x11; 32]],
-                [0x22; 32],
-                proof.clone(),
-                Some([0x33; 32]),
-            )
-            .evidence_hashes,
-            Vec::new()
-        );
-        assert_eq!(
-            OpenAnonymousAssetEscrow::with_evidence_hashes(
-                escrow_id,
-                asset_definition,
-                vec![[0x11; 32]],
-                [0x22; 32],
-                proof.clone(),
-                Some([0x33; 32]),
-                evidence.clone(),
-            )
-            .evidence_hashes,
-            evidence
-        );
-        assert_eq!(
-            AcceptAnonymousAssetEscrow::new(escrow_id).escrow_id,
-            escrow_id
-        );
-        assert_eq!(
-            MarkAnonymousEscrowPaymentSent::new(escrow_id).escrow_id,
-            escrow_id
-        );
-        assert_eq!(
-            ReleaseAnonymousAssetEscrow::new(
-                escrow_id,
-                vec![[0x44; 32]],
-                vec![[0x55; 32]],
-                proof.clone(),
-                None,
-            )
-            .buyer_output_commitments,
-            vec![[0x55; 32]]
-        );
-        assert_eq!(
-            CancelAnonymousAssetEscrow::new(
-                escrow_id,
-                vec![[0x44; 32]],
-                vec![[0x66; 32]],
-                proof.clone(),
-                None,
-            )
-            .seller_output_commitments,
-            vec![[0x66; 32]]
-        );
-        assert_eq!(
-            OpenAnonymousEscrowDispute::new(escrow_id).evidence_hashes,
-            Vec::new()
-        );
-        assert_eq!(
-            ResolveAnonymousEscrowDispute::new(
-                escrow_id,
-                vec![[0x44; 32]],
-                vec![[0x55; 32]],
-                vec![[0x66; 32]],
-                proof,
-                None,
-            )
-            .seller_output_commitments,
-            vec![[0x66; 32]]
-        );
     }
 
     #[test]
@@ -1213,7 +788,6 @@ mod tests {
     fn escrow_decode_from_slice_roundtrips() {
         let escrow_id = escrow_id();
         let asset_definition = asset_definition_id();
-        let proof = proof_attachment();
         let evidence = evidence_hashes();
         let destination = account(0xB1);
         let release_authority = account(0xB2);
@@ -1254,44 +828,6 @@ mod tests {
         ));
         assert_slice_roundtrip(CancelAssetLock::new(escrow_id, Quantity::from(20_u64)));
         assert_slice_roundtrip(ExpireAssetLock::new(escrow_id));
-        assert_slice_roundtrip(OpenAnonymousAssetEscrow::with_evidence_hashes(
-            escrow_id,
-            asset_definition,
-            vec![[0x11; 32]],
-            [0x22; 32],
-            proof.clone(),
-            Some([0x33; 32]),
-            evidence.clone(),
-        ));
-        assert_slice_roundtrip(AcceptAnonymousAssetEscrow::new(escrow_id));
-        assert_slice_roundtrip(MarkAnonymousEscrowPaymentSent::new(escrow_id));
-        assert_slice_roundtrip(ReleaseAnonymousAssetEscrow::new(
-            escrow_id,
-            vec![[0x44; 32]],
-            vec![[0x55; 32]],
-            proof.clone(),
-            None,
-        ));
-        assert_slice_roundtrip(CancelAnonymousAssetEscrow::new(
-            escrow_id,
-            vec![[0x44; 32]],
-            vec![[0x66; 32]],
-            proof.clone(),
-            None,
-        ));
-        assert_slice_roundtrip(OpenAnonymousEscrowDispute::with_evidence_hashes(
-            escrow_id,
-            evidence.clone(),
-        ));
-        assert_slice_roundtrip(ResolveAnonymousEscrowDispute::with_evidence_hashes(
-            escrow_id,
-            vec![[0x44; 32]],
-            vec![[0x55; 32]],
-            vec![[0x66; 32]],
-            proof,
-            Some([0x77; 32]),
-            evidence,
-        ));
     }
 
     #[cfg(feature = "json")]
@@ -1441,7 +977,6 @@ mod tests {
         let registry = crate::isi::registry::default();
         let escrow_id = escrow_id();
         let asset_definition = asset_definition_id();
-        let proof = proof_attachment();
         let evidence = evidence_hashes();
         let destination = account(0xC1);
         let release_authority = account(0xC2);
@@ -1493,55 +1028,5 @@ mod tests {
             CancelAssetLock::new(escrow_id, Quantity::from(20_u64)),
         );
         assert_registry_decodes(&registry, ExpireAssetLock::new(escrow_id));
-        assert_registry_decodes(
-            &registry,
-            OpenAnonymousAssetEscrow::with_evidence_hashes(
-                escrow_id,
-                asset_definition,
-                vec![[0x11; 32]],
-                [0x22; 32],
-                proof.clone(),
-                Some([0x33; 32]),
-                evidence.clone(),
-            ),
-        );
-        assert_registry_decodes(&registry, AcceptAnonymousAssetEscrow::new(escrow_id));
-        assert_registry_decodes(&registry, MarkAnonymousEscrowPaymentSent::new(escrow_id));
-        assert_registry_decodes(
-            &registry,
-            ReleaseAnonymousAssetEscrow::new(
-                escrow_id,
-                vec![[0x44; 32]],
-                vec![[0x55; 32]],
-                proof.clone(),
-                None,
-            ),
-        );
-        assert_registry_decodes(
-            &registry,
-            CancelAnonymousAssetEscrow::new(
-                escrow_id,
-                vec![[0x44; 32]],
-                vec![[0x66; 32]],
-                proof.clone(),
-                None,
-            ),
-        );
-        assert_registry_decodes(
-            &registry,
-            OpenAnonymousEscrowDispute::with_evidence_hashes(escrow_id, evidence.clone()),
-        );
-        assert_registry_decodes(
-            &registry,
-            ResolveAnonymousEscrowDispute::with_evidence_hashes(
-                escrow_id,
-                vec![[0x44; 32]],
-                vec![[0x55; 32]],
-                vec![[0x66; 32]],
-                proof,
-                Some([0x77; 32]),
-                evidence,
-            ),
-        );
     }
 }

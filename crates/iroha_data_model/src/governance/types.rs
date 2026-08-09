@@ -23,6 +23,7 @@ use crate::{
         bridge::SccpRouteGovernanceActionV1,
         governance::{CouncilDerivationKind, VotingMode},
     },
+    musubi::MusubiParliamentActionV1,
     runtime::RuntimeUpgradeManifest,
     smart_contract::{ContractAddress, manifest::ManifestProvenance},
     validation_fee::{
@@ -402,7 +403,7 @@ impl JsonDeserialize for AbiVersion {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
-    norito(tag = "kind", content = "payload"),
+    norito(tag = "kind", content = "payload", deny_unknown_fields),
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub enum ProposalKind {
@@ -421,6 +422,9 @@ pub enum ProposalKind {
     /// Authorize one exact validation-fee treasury payout lifecycle.
     #[codec(index = 4)]
     ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal),
+    /// Enact one exact Musubi recovery, alias-retarget, takedown, or policy action.
+    #[codec(index = 5)]
+    MusubiRegistryGovernance(MusubiParliamentActionV1),
 }
 
 /// Proposal payload for deploying an IVM contract via governance.
@@ -1000,6 +1004,9 @@ impl ProposalKind {
             Self::ValidationFeePayoutLifecycle(_) => {
                 crate::governance_fingerprint::VALIDATION_FEE_PAYOUT_LIFECYCLE_V1
             }
+            Self::MusubiRegistryGovernance(_) => {
+                crate::governance_fingerprint::MUSUBI_REGISTRY_GOVERNANCE_V1
+            }
         };
         crate::governance_fingerprint::fingerprint(domain, self)
     }
@@ -1097,7 +1104,7 @@ mod tests {
         let code_hash = ContractCodeHash::from_hex_str(&"aa".repeat(32)).expect("code hash");
         let abi_hash = ContractAbiHash::from_hex_str(&"bb".repeat(32)).expect("abi hash");
         let proposal = DeployContractProposal {
-            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
             code_hash_hex: code_hash,
@@ -1128,6 +1135,45 @@ mod tests {
             ProposalKind::ValidationFeePayoutLifecycle(_) => {
                 panic!("unexpected validation-fee payout lifecycle proposal")
             }
+            ProposalKind::MusubiRegistryGovernance(_) => {
+                panic!("unexpected Musubi registry proposal")
+            }
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn proposal_kind_json_rejects_unknown_fields_through_musubi_action() {
+        let proposal =
+            ProposalKind::MusubiRegistryGovernance(MusubiParliamentActionV1::SetRegistryPolicy(
+                crate::musubi::MusubiSetRegistryPolicyActionV1 {
+                    policy: crate::musubi::MusubiRegistryPolicyV1::default(),
+                    expected_revision: 1,
+                },
+            ));
+        let canonical =
+            norito::json::to_json(&proposal).expect("canonical governance proposal JSON encodes");
+        assert_eq!(
+            norito::json::from_json::<ProposalKind>(&canonical)
+                .expect("canonical governance proposal JSON decodes"),
+            proposal
+        );
+
+        for (prefix, depth) in [
+            ("{", "the proposal envelope"),
+            ("\"payload\":{", "the Musubi action envelope"),
+            ("\"value\":{", "the Musubi action payload"),
+        ] {
+            let replacement = format!("{prefix}\"legacy\":true,");
+            let hostile = canonical.replacen(prefix, &replacement, 1);
+            assert_ne!(
+                hostile, canonical,
+                "canonical governance proposal JSON must contain {depth}"
+            );
+            assert!(
+                norito::json::from_json::<ProposalKind>(&hostile).is_err(),
+                "governance proposal JSON must reject an unknown field at {depth}"
+            );
         }
     }
 
@@ -1165,6 +1211,9 @@ mod tests {
             ProposalKind::ValidationFeePayoutLifecycle(_) => {
                 panic!("unexpected validation-fee payout lifecycle proposal")
             }
+            ProposalKind::MusubiRegistryGovernance(_) => {
+                panic!("unexpected Musubi registry proposal")
+            }
         }
     }
 
@@ -1184,7 +1233,7 @@ mod tests {
     #[test]
     fn proposal_fingerprint_matches_manual_derivation() {
         let proposal = DeployContractProposal {
-            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
             code_hash_hex: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),

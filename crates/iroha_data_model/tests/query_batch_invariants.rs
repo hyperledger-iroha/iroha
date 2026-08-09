@@ -71,7 +71,6 @@ fn every_empty_batch_variant() -> Vec<QueryOutputBatchBox> {
         QueryOutputBatchBox::TwitterBindingRecord(Vec::new()),
         QueryOutputBatchBox::DefiOracleAttestation(Vec::new()),
         QueryOutputBatchBox::AssetEscrowRecord(Vec::new()),
-        QueryOutputBatchBox::AnonymousAssetEscrowRecord(Vec::new()),
         QueryOutputBatchBox::FeeSponsorProgram(Vec::new()),
         QueryOutputBatchBox::FeeSponsorProgramId(Vec::new()),
     ]

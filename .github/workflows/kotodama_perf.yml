@@ -22,6 +22,7 @@ on:
       - "crates/iroha_torii/src/**"
       - "crates/iroha_cli/src/**"
       - "crates/iroha_js_host/src/**"
+      - "javascript/iroha_js/**"
       - "crates/irohad/src/soracloud_runtime.rs"
       - "scripts/check_kotodama_perf.py"
       - "scripts/check_kotodama_docs.py"
@@ -67,8 +68,28 @@ jobs:
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - name: Install JavaScript SDK dependencies
         run: npm ci --ignore-scripts --prefix javascript/iroha_js
-      - name: Build the Rust native binding and run the complete JavaScript suite
+      - name: Build the Rust native binding and run the zero-skip hermetic JavaScript suite
         run: npm test --prefix javascript/iroha_js
+
+  javascript-provenance-platforms:
+    name: JavaScript native provenance (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - name: Install JavaScript SDK dependencies
+        run: npm ci --ignore-scripts --prefix javascript/iroha_js
+      - name: Enforce platform-selected provenance tests with zero skips
+        run: npm run test:native-provenance --prefix javascript/iroha_js
 
   representative-regression:
     # Benchmark the base and candidate on the same controlled Iroha runner.
@@ -77,6 +98,7 @@ jobs:
     runs-on: [self-hosted, Linux, iroha2]
     timeout-minutes: 90
     env:
+      CARGO_BUILD_JOBS: "1"
       CARGO_INCREMENTAL: "0"
       CARGO_TARGET_DIR: ${{ github.workspace }}/target-kotodama-perf
       RUSTUP_TOOLCHAIN: "1.93.1"
@@ -165,9 +187,9 @@ jobs:
       - name: Measure base revision
         working-directory: baseline
         run: |
-          cargo bench --locked -p ivm --bench bench_kotodama -- --save-baseline base
-          cargo bench --locked -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
-          cargo bench --locked -p iroha_core --bench queries -- typed_core_query_ --save-baseline base
+          cargo bench --locked --jobs 1 -p ivm --bench bench_kotodama -- --save-baseline base
+          cargo bench --locked --jobs 1 -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
+          cargo bench --locked --jobs 1 -p iroha_core --bench queries -- typed_core_query_ --save-baseline base
 
       # Criterion writes a `new` sample even while saving the named `base`.
       # Delete those current slots so a benchmark omitted by the candidate
@@ -188,9 +210,9 @@ jobs:
       - name: Measure candidate revision
         working-directory: candidate
         run: |
-          cargo bench --locked -p ivm --bench bench_kotodama -- --save-baseline candidate
-          cargo bench --locked -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
-          cargo bench --locked -p iroha_core --bench queries -- typed_core_query_ --save-baseline candidate
+          cargo bench --locked --jobs 1 -p ivm --bench bench_kotodama -- --save-baseline candidate
+          cargo bench --locked --jobs 1 -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
+          cargo bench --locked --jobs 1 -p iroha_core --bench queries -- typed_core_query_ --save-baseline candidate
 
       - name: Enforce five-percent ceiling
         working-directory: candidate

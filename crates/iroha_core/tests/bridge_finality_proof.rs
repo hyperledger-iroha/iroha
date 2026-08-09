@@ -51,7 +51,7 @@ fn fixture() -> Fixture {
     keys.sort_by(|left, right| {
         PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
     });
-    let powers = [40, 30, 20, 10];
+    let powers = [1, 1, 1, 1];
     let roster = keys
         .iter()
         .zip(powers)
@@ -95,12 +95,12 @@ fn fixture() -> Fixture {
         nexus_amx_context_hash: Hash::new(b"bridge core v2 context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::Plain,
+            encoding: PayloadEncoding::ReedSolomon16,
             chunk_size_bytes: 1024,
-            data_shards: 0,
-            parity_shards: 0,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: 4096,
-            max_chunk_count: 4,
+            max_chunk_count: 8,
         },
         leader_seed: [0x42; 32],
     };
@@ -112,10 +112,12 @@ fn fixture() -> Fixture {
             .expect("canonical bridge proposal block wire"),
     };
     let signers = vec![0, 1, 2];
-    let execution_commitment = ExecutionCommitment::without_topups(
+    let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new(b"bridge core v2 parent state"),
         Hash::new(b"bridge core v2 post state"),
         Hash::new(b"bridge core v2 ordinary writes"),
+        u64::try_from(block.encode_wire().expect("bridge block wire").len())
+            .expect("bridge block wire length fits u64"),
         block
             .executed_block_wire_hash()
             .expect("canonical bridge executed block wire"),

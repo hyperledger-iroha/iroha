@@ -1,25 +1,6 @@
 {
   "chain": "00000000-0000-0000-0000-000000000000",
   "chain_discriminant": 753,
-  "consensus_fingerprint": "0xad9f5aa6923efb6cde4ba10f802ad23985033a2f221cb8cb0d5bfd2115862dd7",
-  "consensus_mode": "Npos",
-  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16","details":null},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"6611CDC66348BEBFBD583F888864A747DCC828C5FE84F58DFB0346CCA27ABAF3","execution_policy_hash":"2BD12E3442D63942FDBCA380667D00ADB633605D89BB08B81CBB8F5FB3C28B41"},
-  "crypto": {
-    "allowed_curve_ids": [
-      1,
-      3,
-      4
-    ],
-    "allowed_signing": [
-      "ed25519",
-      "secp256k1",
-      "bls_normal"
-    ],
-    "default_hash": "blake2b-256",
-    "sm2_distid_default": "1234567812345678",
-    "sm_intrinsics": "auto",
-    "sm_openssl_preview": false
-  },
   "executor": null,
   "ivm_dir": ".",
   "transactions": [
@@ -30,9 +11,7 @@
             "Domain": {
               "id": "wonderland.universal",
               "logo": null,
-              "metadata": {
-                "key": "value"
-              }
+              "metadata": {}
             }
           }
         },
@@ -41,21 +20,8 @@
             "Account": {
               "id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "label": null,
-              "metadata": {
-                "key": "value"
-              },
-              "uaid": null
-            }
-          }
-        },
-        {
-          "Register": {
-            "Account": {
-              "id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
-              "label": null,
-              "metadata": {
-                "purpose": "fee_sponsor_vault_custody"
-              },
+              "metadata": {},
+              "opaque_ids": [],
               "uaid": null
             }
           }
@@ -63,6 +29,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "balance_scope_policy": "Global",
               "confidential_policy": {
                 "mode": "TransparentOnly",
                 "pedersen_params_id": null,
@@ -70,14 +38,16 @@
                 "poseidon_params_id": null,
                 "vk_set_hash": null
               },
-              "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+              "description": null,
+              "id": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi",
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
+              "name": "rose",
+              "owning_domain": null,
               "spec": {
                 "scale": null
-              },
-              "name": "rose"
+              }
             }
           }
         },
@@ -93,9 +63,10 @@
         {
           "Register": {
             "Account": {
-              "id": "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
+              "id": "sorauﾛ1PｽNgｿﾘ9ﾏﾕ2ﾕ9ﾄZﾀﾃﾌWwNｸｾヰﾄﾂT3WｺTxｶｵﾎKﾓﾛmｷ4Y6PLN",
               "label": null,
               "metadata": {},
+              "opaque_ids": [],
               "uaid": null
             }
           }
@@ -103,6 +74,8 @@
         {
           "Register": {
             "AssetDefinition": {
+              "alias": null,
+              "balance_scope_policy": "Global",
               "confidential_policy": {
                 "mode": "TransparentOnly",
                 "pedersen_params_id": null,
@@ -110,22 +83,65 @@
                 "poseidon_params_id": null,
                 "vk_set_hash": null
               },
-              "id": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
+              "description": null,
+              "id": "7juDbiprDn46sQ8YRdmM4VbUMYot",
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
+              "name": "cabbage",
+              "owning_domain": null,
               "spec": {
                 "scale": null
-              },
-              "name": "cabbage"
+              }
             }
           }
         }
       ],
       "ivm_triggers": [],
       "parameters": {
+        "sumeragi": {
+          "block_cadence_ms": 100,
+          "max_clock_drift_ms": 1000,
+          "key_activation_lead_blocks": 1,
+          "key_overlap_grace_blocks": 8,
+          "key_expiry_grace_blocks": 0,
+          "key_require_hsm": false,
+          "key_allowed_algorithms": [
+            "bls_normal"
+          ],
+          "key_allowed_hsm_providers": [
+            "pkcs11",
+            "softkey",
+            "yubihsm"
+          ]
+        },
         "block": {
           "max_transactions": 512
+        },
+        "transaction": {
+          "max_signatures": 16,
+          "max_instructions": 100000,
+          "ivm_bytecode_size": 4194304,
+          "max_tx_bytes": 10485760,
+          "max_decompressed_bytes": 10485760,
+          "max_metadata_depth": 8,
+          "max_time_to_live_ms": 86400000,
+          "require_height_ttl": false,
+          "require_sequence": false
+        },
+        "executor": {
+          "fuel": 55000000,
+          "memory": 1048576,
+          "execution_depth": 3,
+          "max_output_items": 4096,
+          "max_output_bytes": 8388608
+        },
+        "smart_contract": {
+          "fuel": 55000000,
+          "memory": 1048576,
+          "execution_depth": 3,
+          "max_output_items": 4096,
+          "max_output_bytes": 8388608
         },
         "custom": {
           "ivm_gas_limit_per_block": {
@@ -135,62 +151,22 @@
           "sumeragi_npos_parameters": {
             "id": "sumeragi_npos_parameters",
             "payload": {
-              "activation_lag_blocks": 1,
-              "epoch_length_blocks": 3600,
               "epoch_seed": "A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5",
-              "evidence_horizon_blocks": 7200,
-              "finality_margin_blocks": 8,
-              "max_entity_correlation_pct": 25,
-              "max_nominator_concentration_pct": 25,
-              "max_validators": 128,
-              "min_nomination_bond": "1",
-              "min_self_bond": "1000",
-              "seat_band_pct": 5,
-              "slashing_delay_blocks": 259200,
               "vrf_commit_window_blocks": 100,
-              "vrf_reveal_window_blocks": 40
+              "vrf_reveal_window_blocks": 40,
+              "max_validators": 31,
+              "min_self_bond": "1000",
+              "min_nomination_bond": "1",
+              "max_nominator_concentration_pct": 25,
+              "seat_band_pct": 5,
+              "max_entity_correlation_pct": 25,
+              "finality_margin_blocks": 8,
+              "evidence_horizon_blocks": 7200,
+              "activation_lag_blocks": 1,
+              "slashing_delay_blocks": 259200,
+              "epoch_length_blocks": 3600
             }
           }
-        },
-        "executor": {
-          "execution_depth": 3,
-          "fuel": 55000000,
-          "memory": 1048576,
-          "max_output_items": 4096,
-          "max_output_bytes": 8388608
-        },
-        "smart_contract": {
-          "execution_depth": 3,
-          "fuel": 55000000,
-          "memory": 1048576,
-          "max_output_items": 4096,
-          "max_output_bytes": 8388608
-        },
-        "sumeragi": {
-          "block_cadence_ms": 100,
-          "key_activation_lead_blocks": 1,
-          "key_allowed_algorithms": [
-            "bls_normal"
-          ],
-          "key_allowed_hsm_providers": [
-            "pkcs11",
-            "yubihsm",
-            "softkey"
-          ],
-          "key_expiry_grace_blocks": 0,
-          "key_overlap_grace_blocks": 8,
-          "key_require_hsm": false,
-          "max_clock_drift_ms": 1000},
-        "transaction": {
-          "ivm_bytecode_size": 4194304,
-          "max_decompressed_bytes": 10485760,
-          "max_instructions": 20000,
-          "max_metadata_depth": 8,
-          "max_signatures": 16,
-          "max_time_to_live_ms": 86400000,
-          "max_tx_bytes": 10485760,
-          "require_height_ttl": false,
-          "require_sequence": false
         }
       },
       "topology": []
@@ -198,9 +174,26 @@
     {
       "instructions": [
         {
+          "Grant": {
+            "Permission": {
+              "destination": "sorauﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7",
+              "object": {
+                "name": "CanManageVerifyingKeys",
+                "payload": null
+              }
+            }
+          }
+        }
+      ],
+      "ivm_triggers": [],
+      "topology": []
+    },
+    {
+      "instructions": [
+        {
           "Mint": {
             "Asset": {
-              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "destination": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": "13"
             }
           }
@@ -208,7 +201,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "destination": "7juDbiprDn46sQ8YRdmM4VbUMYot#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": "44"
             }
           }
@@ -217,7 +210,7 @@
           "Transfer": {
             "AssetDefinition": {
               "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+              "object": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi",
               "source": "sorauﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7"
             }
           }
@@ -227,7 +220,8 @@
             "Permission": {
               "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
-                "name": "CanSetParameters"
+                "name": "CanSetParameters",
+                "payload": null
               }
             }
           }
@@ -237,7 +231,32 @@
             "Permission": {
               "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
-                "name": "CanRegisterAccount"
+                "name": "CanReadAllLedgerData",
+                "payload": null
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
+                "name": "CanManageSoracloud",
+                "payload": null
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
+                "name": "CanRegisterAccount",
+                "payload": {
+                  "domain": "wonderland.universal"
+                }
               }
             }
           }
@@ -247,5 +266,38 @@
       "topology": []
     }
   ],
-  "wire_protocol_version": 3
+  "consensus_mode": "Npos",
+  "wire_protocol_version": 4,
+  "consensus_fingerprint": "0x36681577feb49e7506b5f9bfbb32cde2dd5f2a1553e32290c4fa86ef0a8ab618",
+  "sumeragi_v2": {
+    "da_layout": {
+      "encoding": {
+        "encoding": "reed_solomon16",
+        "details": null
+      },
+      "chunk_size_bytes": 262144,
+      "data_shards": 4,
+      "parity_shards": 2,
+      "max_payload_size_bytes": 16777216,
+      "max_chunk_count": 1024
+    },
+    "nexus_amx_context_hash": "EA6A4CF07D275F1EFD034FC82449967713410C6C13DFF7CD1BABB51F38C8705B",
+    "execution_policy_hash": "3F947453758F8EE90B2C66437A128FC22D93C4D2E0CA60C261D828B7E0B897C3"
+  },
+  "crypto": {
+    "sm_openssl_preview": false,
+    "sm_intrinsics": "auto",
+    "default_hash": "blake2b-256",
+    "allowed_signing": [
+      "ed25519",
+      "secp256k1",
+      "bls_normal"
+    ],
+    "sm2_distid_default": "1234567812345678",
+    "allowed_curve_ids": [
+      1,
+      3,
+      4
+    ]
+  }
 }

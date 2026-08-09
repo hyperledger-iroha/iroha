@@ -18,7 +18,7 @@ fn build_env_bytes(k: u32) -> Vec<u8> {
     // Build a small polynomial opening
     let coeffs: Vec<h2::PrimeField64> = vec![0u64.into(); params.n()];
     let poly = h2::Polynomial::from_coeffs(coeffs);
-    let mut tr = h2::Transcript::new(ivm::host::LABEL_TRANSFER);
+    let mut tr = h2::Transcript::new(ivm::host::LABEL_VOTE_BALLOT);
     let p_g = poly.commit(&params).unwrap();
     let z = h2::PrimeField64::from(1u64);
     let (proof, t) = poly.open(&params, &mut tr, z, p_g).unwrap();
@@ -28,7 +28,7 @@ fn build_env_bytes(k: u32) -> Vec<u8> {
         params: params_wire,
         public: nh::poly_open_public::<PallasBackend>(params.n(), z, t, p_g),
         proof: nh::proof_to_wire(&proof),
-        transcript_label: ivm::host::LABEL_TRANSFER.to_string(),
+        transcript_label: ivm::host::LABEL_VOTE_BALLOT.to_string(),
         vk_commitment: None,
         public_inputs_schema_hash: None,
         domain_tag: None,
@@ -43,7 +43,7 @@ fn decode_statuses(vm: &IVM, ptr: u64) -> Vec<u8> {
 }
 
 #[test]
-fn zk_verify_transfer_wrapper_positive() {
+fn zk_verify_ballot_wrapper_positive() {
     if !should_run_wrappers() {
         eprintln!("Skipping: set IROHA_RUN_ZK_WRAPPERS=1 to run kotodama wrapper tests.");
         return;
@@ -61,7 +61,12 @@ fn zk_verify_transfer_wrapper_positive() {
         ..ZkHalo2Config::default()
     };
     let mut host = DefaultHost::new().with_zk_halo2_config(cfg);
-    let r = kstd::zk_verify_transfer(&mut host, &mut vm, &env_bytes);
+    let r = kstd::zk_verify_with_env(
+        &mut host,
+        &mut vm,
+        &env_bytes,
+        ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
+    );
     assert_eq!(r, 1);
 }
 

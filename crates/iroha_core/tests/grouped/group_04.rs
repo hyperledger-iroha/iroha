@@ -48,8 +48,6 @@ mod validation_fee_admission;
 mod validation_fee_plain_ballot_gates;
 #[path = "../zk_backend_tags.rs"]
 mod zk_backend_tags;
-#[path = "../zk_confidential_events.rs"]
-mod zk_confidential_events;
 #[path = "../zk_dedup.rs"]
 mod zk_dedup;
 #[path = "../zk_ipa_native.rs"]
@@ -64,5 +62,3 @@ mod zk_preverify_budget;
 mod zk_proof_event_callhash;
 #[path = "../zk_proof_retention.rs"]
 mod zk_proof_retention;
-#[path = "../zk_root_hint_enforced.rs"]
-mod zk_root_hint_enforced;

@@ -1,6 +1,8 @@
 //! Definition of Iroha default permission tokens.
 //!
-//! An exact token is a delegable capability unless its type is a genesis-only bootstrap root.
+//! Exact tokens are normally delegable capabilities unless their type is a genesis-only bootstrap
+//! root. Exact asset-definition-alias tokens are deliberately different: their grant lifecycle is
+//! rooted in the active asset owner and alias namespace, not possession of the leaf token.
 //! Resource-scoped tokens may also define a native use-time ownership root or an explicit wider
 //! parent token; ownership of an adjacent component of the scope is never sufficient.
 #![allow(clippy::missing_errors_doc)]
@@ -84,6 +86,84 @@ pub mod domain {
 pub mod asset_definition {
     use super::*;
 
+    /// Scope carried by asset-definition-alias management permissions.
+    #[derive(Debug, Clone, PartialEq, Eq, iroha_schema::IntoSchema)]
+    #[allow(variant_size_differences)]
+    #[norito(tag = "scope", content = "value", rename_all = "snake_case")]
+    pub enum AssetDefinitionAliasPermissionScope {
+        /// Permission scoped to a specific dataspace-qualified domain.
+        Domain(DomainId),
+        /// Permission scoped to a dataspace-root alias namespace.
+        Dataspace(DataSpaceId),
+        /// Permission scoped to one catalog-pinned alias and exact asset definition.
+        Alias(ResolvedAssetDefinitionAliasV1),
+    }
+
+    impl norito::json::JsonSerialize for AssetDefinitionAliasPermissionScope {
+        fn json_serialize(&self, out: &mut String) {
+            out.push_str("{\"scope\":\"");
+            match self {
+                Self::Domain(value) => {
+                    out.push_str("domain\",\"value\":");
+                    norito::json::JsonSerialize::json_serialize(value, out);
+                }
+                Self::Dataspace(value) => {
+                    out.push_str("dataspace\",\"value\":");
+                    norito::json::JsonSerialize::json_serialize(value, out);
+                }
+                Self::Alias(value) => {
+                    out.push_str("alias\",\"value\":");
+                    norito::json::JsonSerialize::json_serialize(value, out);
+                }
+            }
+            out.push('}');
+        }
+    }
+
+    impl norito::json::JsonDeserialize for AssetDefinitionAliasPermissionScope {
+        fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
+            let value =
+                <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(p)?;
+            Self::json_from_value(&value)
+        }
+
+        fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+            let object = value.as_object().ok_or_else(|| {
+                norito::json::Error::Message(
+                    "expected asset-definition alias permission scope object".into(),
+                )
+            })?;
+            let scope = object
+                .get("scope")
+                .and_then(norito::json::Value::as_str)
+                .ok_or_else(|| {
+                    norito::json::Error::Message(
+                        "missing asset-definition alias permission scope discriminator".into(),
+                    )
+                })?;
+            let value = object.get("value").ok_or_else(|| {
+                norito::json::Error::Message(
+                    "missing asset-definition alias permission scope value".into(),
+                )
+            })?;
+
+            match scope {
+                "domain" => Ok(Self::Domain(
+                    <DomainId as norito::json::JsonDeserialize>::json_from_value(value)?,
+                )),
+                "dataspace" => Ok(Self::Dataspace(
+                    <DataSpaceId as norito::json::JsonDeserialize>::json_from_value(value)?,
+                )),
+                "alias" => Ok(Self::Alias(
+                    <ResolvedAssetDefinitionAliasV1 as norito::json::JsonDeserialize>::json_from_value(value)?,
+                )),
+                other => Err(norito::json::Error::Message(format!(
+                    "unknown asset-definition alias permission scope `{other}`"
+                ))),
+            }
+        }
+    }
+
     permission! {
         /// Permission to unregister the specified asset definition.
         pub struct CanUnregisterAssetDefinition {
@@ -97,6 +177,71 @@ pub mod asset_definition {
         pub struct CanModifyAssetDefinitionMetadata {
             /// Identifier of the asset definition whose metadata may be changed.
             pub asset_definition: AssetDefinitionId,
+        }
+    }
+
+    permission! {
+        /// Permission to register, bind, clear, or replace asset-definition aliases in one scope.
+        ///
+        /// This capability is intentionally independent from account-alias management.
+        pub struct CanManageAssetDefinitionAlias {
+            /// Asset-definition alias namespace governed by this permission.
+            pub scope: AssetDefinitionAliasPermissionScope,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use iroha_schema::{IntoSchema, Metadata};
+
+        #[test]
+        fn asset_alias_scope_serializes_as_snake_case() {
+            let json = norito::json::to_json(&AssetDefinitionAliasPermissionScope::Dataspace(
+                DataSpaceId::UNIVERSAL,
+            ))
+            .expect("serialize asset alias scope");
+
+            assert_eq!(json, "{\"scope\":\"dataspace\",\"value\":0}");
+        }
+
+        #[test]
+        fn asset_alias_scope_schema_uses_independent_tags() {
+            let schema = AssetDefinitionAliasPermissionScope::schema();
+            let Some(Metadata::Enum(meta)) = schema.get::<AssetDefinitionAliasPermissionScope>()
+            else {
+                panic!("asset alias scope schema must be an enum");
+            };
+
+            let tags = meta
+                .variants
+                .iter()
+                .map(|variant| variant.tag.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(tags, vec!["domain", "dataspace", "alias"]);
+        }
+
+        #[test]
+        fn exact_asset_alias_scope_roundtrips() {
+            let scope =
+                AssetDefinitionAliasPermissionScope::Alias(ResolvedAssetDefinitionAliasV1::new(
+                    "usd#banka.paynet"
+                        .parse()
+                        .expect("canonical asset-definition alias"),
+                    DataSpaceId::new(7),
+                    AssetDefinitionId::derive_from_components(
+                        DomainId::try_new("banka", "paynet").expect("domain"),
+                        "usd".parse().expect("asset name"),
+                    ),
+                ));
+            let json = norito::json::to_json(&scope).expect("serialize exact asset alias scope");
+            let decoded: AssetDefinitionAliasPermissionScope =
+                norito::json::from_str(&json).expect("deserialize exact asset alias scope");
+
+            assert_eq!(decoded, scope);
+            assert!(json.contains("usd#banka.paynet"));
+            assert!(json.contains("\"dataspace_id\":7"));
+            assert!(json.contains("\"asset_definition_id\""));
         }
     }
 }
@@ -415,10 +560,16 @@ pub mod asset {
     }
 
     permission! {
-        /// Permission to mint the specified asset instance.
-        pub struct CanMintAsset {
-            /// Identifier of the asset instance that may be minted.
-            pub asset: AssetId,
+        /// Permission to mint one asset definition into one exact account.
+        ///
+        /// Mint authority belongs to the asset-definition owner. Keeping the
+        /// destination account separate from the definition makes both the
+        /// authority root and the least-privilege scope explicit.
+        pub struct CanMintAssetToAccount {
+            /// Definition whose supply may be minted.
+            pub asset_definition: AssetDefinitionId,
+            /// Exact account that may receive the minted supply.
+            pub account: AccountId,
         }
     }
 
@@ -683,8 +834,8 @@ pub mod settlement {
         /// Exact consent from a debited counterparty for one bilateral settlement intent.
         ///
         /// Only the account named by `debited_asset` may delegate or revoke this
-        /// token. The intent hash commits to the complete domain-separated DvP,
-        /// PvP, or repo phase, so changing any economic term or the settlement
+        /// token. The intent hash commits to the complete domain-separated `DvP`,
+        /// `PvP`, or repo phase, so changing any economic term or the settlement
         /// identifier requires fresh consent. Repo initiation requires distinct
         /// cash-debit and maturity-collateral consents before any asset moves.
         pub struct CanExecuteSettlement {
@@ -792,9 +943,20 @@ pub mod governance {
     }
 
     permission! {
+        /// Allow proposing a runtime upgrade for one exact ABI target.
+        #[derive(Copy)]
+        pub struct CanProposeRuntimeUpgrade {
+            /// Exact ABI version targeted by the proposed runtime upgrade.
+            pub abi_version: u16,
+            /// Exact canonical ABI hash targeted by the proposed runtime upgrade.
+            pub abi_hash: [u8; 32],
+        }
+    }
+
+    permission! {
         /// Allow submitting a governance ballot to a referendum/election
         pub struct CanSubmitGovernanceBallot {
-            /// Referendum or election identifier (opaque string)
+            /// Canonical governance selector V1 identifying the referendum or election.
             pub referendum_id: String,
         }
     }
@@ -828,7 +990,7 @@ pub mod governance {
     permission! {
         /// Allow slashing governance bond locks for a referendum.
         pub struct CanSlashGovernanceLock {
-            /// Referendum identifier (opaque string)
+            /// Canonical governance selector V1 identifying the referendum.
             pub referendum_id: String,
         }
     }
@@ -836,7 +998,7 @@ pub mod governance {
     permission! {
         /// Allow restituting governance bond locks after appeal.
         pub struct CanRestituteGovernanceLock {
-            /// Referendum identifier (opaque string)
+            /// Canonical governance selector V1 identifying the referendum.
             pub referendum_id: String,
         }
     }
@@ -992,20 +1154,21 @@ pub mod sorafs {
     }
 }
 
-/// Permission tokens governing `Musubi` package-registry operations.
-pub mod musubi {
+/// Permission tokens governing `SoraNet` services.
+pub mod soranet {
     use super::*;
 
     permission! {
-        /// Permission to bind or update a curated global `Musubi` short alias.
+        /// Permission to authorize accounts and roles that may issue `SoraNet` VPN quotes.
         #[derive(Copy)]
-        pub struct CanSetMusubiShortAlias;
+        pub struct CanManageSoranetVpnQuoteIssuers;
     }
-}
 
-/// Permission tokens governing `SoraNet` privacy ingestion.
-pub mod soranet {
-    use super::*;
+    permission! {
+        /// Permission to issue operator-signed `SoraNet` VPN lease quotes.
+        #[derive(Copy)]
+        pub struct CanIssueSoranetVpnQuote;
+    }
 
     permission! {
         /// Permission to ingest `SoraNet` privacy events or shares.
@@ -1066,7 +1229,7 @@ mod tests {
         CanSetAssetHoldingLimit, CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit,
     };
     use super::escrow::CanResolveEscrowDispute;
-    use super::governance::CanManageVerifyingKeys;
+    use super::governance::{CanManageVerifyingKeys, CanProposeRuntimeUpgrade};
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
@@ -1099,7 +1262,7 @@ mod tests {
 
     #[test]
     fn transfer_control_permissions_use_exact_availability_target_and_scoped_daily_limit() {
-        let asset_definition = AssetDefinitionId::new(
+        let asset_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("currency", "sbp").expect("asset domain"),
             "pkr".parse().expect("asset name"),
         );
@@ -1209,6 +1372,42 @@ mod tests {
     }
 
     #[test]
+    fn runtime_upgrade_proposal_permission_binds_the_exact_abi_target() {
+        let expected = CanProposeRuntimeUpgrade {
+            abi_version: 1,
+            abi_hash: [0xA5; 32],
+        };
+        let canonical: iroha_data_model::permission::Permission = expected.into();
+        assert_eq!(canonical.name(), "CanProposeRuntimeUpgrade");
+        assert_eq!(
+            CanProposeRuntimeUpgrade::try_from(&canonical)
+                .expect("decode exact runtime-upgrade proposal scope"),
+            expected
+        );
+
+        let other_target: iroha_data_model::permission::Permission = CanProposeRuntimeUpgrade {
+            abi_version: 1,
+            abi_hash: [0x5A; 32],
+        }
+        .into();
+        assert_ne!(canonical, other_target);
+        let other_version: iroha_data_model::permission::Permission = CanProposeRuntimeUpgrade {
+            abi_version: 2,
+            abi_hash: [0xA5; 32],
+        }
+        .into();
+        assert_ne!(canonical, other_version);
+        let malformed = iroha_data_model::permission::Permission::new(
+            "CanProposeRuntimeUpgrade".into(),
+            norito::json!({"abi_version": 1}),
+        );
+        assert!(
+            CanProposeRuntimeUpgrade::try_from(&malformed).is_err(),
+            "runtime-upgrade permission must require the exact ABI hash"
+        );
+    }
+
+    #[test]
     fn restricted_dataspace_read_permission_is_exact_and_typed() {
         let permission = CanReadRestrictedDataspace {
             dataspace: DataSpaceId::new(10),
@@ -1251,7 +1450,7 @@ mod tests {
         );
         let malformed_global = iroha_data_model::permission::Permission::new(
             "CanReadAllLedgerData".into(),
-            norito::json!({"account": account.to_string()}),
+            norito::json!({"account": (account.to_string())}),
         );
         assert!(
             CanReadAllLedgerData::try_from(&malformed_global).is_err(),

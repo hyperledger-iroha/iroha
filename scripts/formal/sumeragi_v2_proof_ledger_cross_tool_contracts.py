@@ -25,7 +25,7 @@ _DURABLE_INTENT_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_for_pending", "8b26caff839a21e4350fcfc48d65ad15485ef4740673caee4323c3111a3358ce", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_claim", "2be2c4e14a098fd2334fdbe96fa4b8044461d8d94b7f2a6a3f820274fc5d293e", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "boundary_grant", "1e263db662a7b2e1f7bbdead0f4bb3026e6fbd5174cde1c11ba254036a3dc7ff", brace_context=(("impl", "Reducer"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "transition_projection", "5e81099efa0c3d9e40ba2a6c8041a1a1024e721a27be3b8babcf028c26b9a7fc", brace_context=(("impl", "Reducer"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "transition_projection", "49d3a03ed60e2baa9aeb2796d0959c1e1754f77c335920f88eee1694f2768f02", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "event_kind", "dda92f84e6994e7ae557198f8346fbe75ce0c3e424442bd760789465e525d282", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "progress_witness_violation", "8c15eb7f0f261819eb387288d1cce374be7d6b61d3489167cd0a53accfe06d69", brace_context=(("impl", "Reducer"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/reducer.rs", "locked_commit_progress_witness_projection", "c19038941ba1aecc7614e2769c7662f8ba3c82074b9166273414be51e2392455", brace_context=(("impl", "Reducer"),)),
@@ -245,15 +245,15 @@ _TWO_STAGE_RELAY_RETRY_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_two_stage_relay_retry_trace_body", "fda81d366704ada4700101cb7ee870acfec2fabe141133ece61c5d9eb1d84ea9", "macro"),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionTwoStageRelayRetryTraceProjection", "d57f9345ce3300bdbf9676f2d2672c5119d4e75c5eb44b8724d3ae500d1c1ebe", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "inbound_source_credit_capacity", "f842d672d209cbcaefccb037b5699832b4775813eb02af0d8fa3c427ace221eb"),
-    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "reply_route_source_capacity", "118a3c85c1e4faa0dac128e48981d346085cfb0b90110c0123414f8e8bb0a770", brace_context=(("impl", "<", "T", ":", "Pload", "+", "message", "::", "ClassifyTopic", ",", "K", ":", "Kex", "+", "Sync", ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<", "T", ",", "K", ",", "E", ">"),)),
-    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "authenticated_source_credit_capacity", "2c9a309017b0f51e9e3e9a6e3604ce9819c9eb4fed1fb9f004eb653b7354dbaa", brace_context=(("impl", "<", "T", ":", "Pload", "+", "message", "::", "ClassifyTopic", ",", "K", ":", "Kex", "+", "Sync", ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<", "T", ",", "K", ",", "E", ">"),)),
+    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "reply_route_source_capacity", "118a3c85c1e4faa0dac128e48981d346085cfb0b90110c0123414f8e8bb0a770", brace_context=(("impl", "<", "T", ":", "Pload", "+", "message", "::", "ClassifyTopic", ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<", "T", ",", "E", ">"),)),
+    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "authenticated_source_credit_capacity", "2c9a309017b0f51e9e3e9a6e3604ce9819c9eb4fed1fb9f004eb653b7354dbaa", brace_context=(("impl", "<", "T", ":", "Pload", "+", "message", "::", "ClassifyTopic", ",", "E", ":", "Enc", "+", "Sync", ">", "NetworkBaseHandle", "<", "T", ",", "E", ">"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "SumeragiRelayCapacityGeometry", "fd24144fb9fd13a9964e0e74742da6afd2a2537c9447b5dcd756e8f0646288dd", "struct"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "checked", "437cc7139737ea555afc202dcd74399007ec6be43117bbce7dec68a6cc51f4bd", brace_context=(("impl", "SumeragiRelayCapacityGeometry"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "daemon_source_capacity_matches_two_upstream_lanes", "e076da72adb47662a2908743a343731b0668f8061eb4645365ab1cb40e9d0d9b", brace_context=(("impl", "SumeragiRelayCapacityGeometry"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "class_corridor_covers_authenticated_sources", "02d410bef16235ed815cbe067cc5a2f36cb0063d3fa4f03490c6533d168270b5", brace_context=(("impl", "SumeragiRelayCapacityGeometry"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "SumeragiRelaySourceCredits", "9b0dde87c00cf8e524577325581281be0a24b796b32b243abec53980e0cd6c7d", "struct"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "geometry", "b4c2ec9807ac341e0cec136a0febc5ee5f1014d7704bae2753dc2966f773e09a", brace_context=(("impl", "SumeragiRelaySourceCredits"),)),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "semaphore", "548c7a2189bfc9e9b43274a7dc9dd2890a4687a4598a133195fe9cbcea5af435", brace_context=(("impl", "SumeragiRelaySourceCredits"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "semaphore", "95028ea0d5e2780689acb0d23c363b2eeff0b5b0f24143b89d726eb1f2788a02", brace_context=(("impl", "SumeragiRelaySourceCredits"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "HeldSumeragiRelayOwnership", "ca1bf309503b4384b12bca302e2fa926a6f6cba52cfef23282e46286243bce5f", "struct"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "CreditedSumeragiRelayWorkItem", "76c7a64c3f811475a019115ad10930a045550a2c3188806cc6a52ef79ef856ed", "struct"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "SumeragiRelayIngress", "faab37bed32a2d7e27306de0b5ed8cc60114532555153ea4584cdda93b83593e", "struct"),
@@ -264,22 +264,22 @@ _TWO_STAGE_RELAY_RETRY_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "send_rehydrated", "d10242d792a48f0778102fd02d6eb3b1843dfb2c099101cddc181b817eadf668", brace_context=(("impl", "SumeragiRelayIngress"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_rehydrated_ownership_matches", "e256e3116ecb06539aa891d0057e502b9b6bdf46150211a9891168eeb38a256e"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "rehydrate_held_sumeragi_relay_work", "c70d1d27ef4f639937fdbb8e4c5deb035142532b31c7bcfdb539ab752e36bb16"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "prepare_sumeragi_relay_work", "25149b267f36f5a990d340fbc9331768bc5062a5c414e3de46720407862a874c", brace_context=(("impl", "NetworkRelayShared"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "prepare_sumeragi_relay_work", "6fbdddbe5b1a6cddad8e75a566f897a44e0d7cc74be88dc037d9aa7339a3791f", brace_context=(("impl", "NetworkRelayShared"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "push", "d30cc609e125945f143c35d42f513479d7255ed739859859a6a2149aa74abf82", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "pop_if_with_trace", "4041485881b4ba7d2898082b21a228ff77652d520a91bb20cb9475ece8a48b41", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "finish_sumeragi_block_ingress_attempt", "acfcb75628dc5cc0a843059252287d0caaddae96a7575435ced11cd3b84a86fb"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "attempt_sumeragi_relay_work", "c21b27dedd5e620b494684aff5a2845c35c01aba006421c359403d726d089f97"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "pop_if_with_trace", "a370e5f5cee51cc1029e98aa16701951ea9c307d3b01f291fcf29c9a7c67f83c", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "finish_sumeragi_block_ingress_attempt", "b3022c31815414001838c0db14d09029fbb063a37384696ddd24e1a58388cb27"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "attempt_sumeragi_relay_work", "48785399f28a8eedac4f2e71ef4429c2c7e1ea892511b14ed608360127fafecf"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_source_capacity", "d0bb1db54ebde2668f6f6c52b6dae565c696950422448fbdb994ae9ceb9641ec"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "new_sumeragi_relay_retained_queue", "ed48c8fb78adf6d9cc4750004bf768828d4dca2676d0d58ef76ed272a4e43314"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_source_credits", "142b0e99fd19e9b6ef02821ac06acd5589b1c4644414d99460affcb8ab8cdd59"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_dispatcher_capacity", "5d5c9a68cde0a263c47641d250717da5f186f7b1c3c9437a7d57d05fc0bb581c"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_class_capacity", "6a0f470f2cc7ba50e6893bb586cbd18e99a6ceffa29029279decaf1e692f7d49"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_retain_retry", "4eaa732c6b69e6c455ac7bef64be8b0c76425c70bb5ce5138fb1fa4f063395c1"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "spawn_sumeragi_relay_dispatcher", "028ea5ef68d3851d4ba87f4571693bc4d7607fbcd971b038528bb1aae75cf72c"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "spawn_network_relay_worker", "b60f7100692c80656a06f76ff03ac021f37b563555b997b2ed1e3ebd2593d9f7"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_relay_retain_retry", "f668e5ce645905c1e717c47f35512de6102d0d64f71da6b8508ce454209015f6"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "spawn_sumeragi_relay_dispatcher", "8ec9a952ab902393a16405c7454b18025ac711460e2158745bbb1af40c4efece"),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "spawn_network_relay_worker", "78bcf5e86d56182049fcdb979b37ba564aa3724f78be8dd4547216aad26afe44"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "forward_relay_lane", "8aca2344fdba8a6e935e2d852ed79b0c3f4d904560b3a6a52d0428c7990ddceb"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "drive_network_relay_ingress_inner", "fbe68c06eba092f488d4f4f92191b2014fa6923de62d111ffc12319a7cd67bb8"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "run", "d73c6ed0483744469a4c526ed0dd7fd707fe7fd7c66b5d1d3955eb91d36f203b", brace_context=(("impl", "NetworkRelay"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "run", "33c13b597c3c9ea26897299ca82499093898f6deb5f0f8319b2bdc39e917195a", brace_context=(("impl", "NetworkRelay"),)),
 )
 
 
@@ -387,7 +387,7 @@ _HISTORICAL_BODY_SOURCE_ITEM_SEALS = _SUCCESSOR_IDENTITY_CONSTANT_SOURCE_ITEM_SE
 )
 
 _SUCCESSOR_APPLIED_SHARED_MACROS = (
-    ("refinement_tag_value", "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e"),
+    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("durable_predecessor_is_canonical_body", "2a069095fb4ff28848a8a44a60ec3e61cfc4cb6dd142962349a9facbe426a601"),
@@ -398,7 +398,7 @@ _SUCCESSOR_APPLIED_SHARED_MACROS = (
 )
 
 _SUCCESSOR_TERMINAL_APPLICATION_SHARED_MACROS = (
-    ("refinement_tag_value", "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e"),
+    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("durable_predecessor_is_canonical_body", "2a069095fb4ff28848a8a44a60ec3e61cfc4cb6dd142962349a9facbe426a601"),
@@ -406,7 +406,7 @@ _SUCCESSOR_TERMINAL_APPLICATION_SHARED_MACROS = (
 )
 
 _SUCCESSOR_RECOVERED_SHARED_MACROS = (
-    ("refinement_tag_value", "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e"),
+    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("canonical_identity_is_zero_body", "659e4ab0b79335d08311a07134239aa7338818f507fb721b71c336fc65a52f6d"),
@@ -417,19 +417,19 @@ _SUCCESSOR_RECOVERED_SHARED_MACROS = (
 )
 
 _SUCCESSOR_LIFECYCLE_SHARED_MACROS = (
-    ("refinement_tag_value", "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e"),
+    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
     ("production_startup_failure_and_restart_trace_body", "5aa2d29e594aef4f585c74cf2c6875f5d7f98f8b04a6fb597657bc62a8d42eb7"),
 )
 
 _HISTORICAL_CERTIFICATE_SHARED_MACROS = (
-    ("refinement_tag_value", "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e"),
+    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("production_historical_certificate_trace_body", "1b004a044c33700c93a06a9684a21559c64c25e5eae42b337866ed0f5cd26b4e"),
 )
 
 _HISTORICAL_BODY_SHARED_MACROS = (
-    ("refinement_tag_value", "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e"),
+    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
     ("canonical_identity_equal_body", "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3"),
     ("canonical_identity_is_typed_body", "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76"),
     ("production_historical_body_pipeline_trace_body", "c999442642f008ace2e73caf53cd2f18af1732dd06638b8d86ae3e17ba7a3ead"),
@@ -610,7 +610,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         ),
                         item="check",
                         item_token_sha256=(
-                            "208714b6905a5f92c18f43115d46889b10ea422cd5581dfb0f1923b8d2485bdb"
+                            "1db08f6f4afa93500566e9b27cac9c0fe2dd1c234af375482b61a9dbdf67590f"
                         ),
                         projection="trace, enter_view",
                         required_expression="""
@@ -783,7 +783,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="plan_body_pipeline_owner_hash",
                         item_token_sha256=(
-                            "afc4c4fa90ce5d4c30b3d72525a8a909bca734b268ccd166094e9c168ca45fc3"
+                            "752ff235ca71762b585e46f93d91afb04bbd6fb8ae10454665c083329c2f8d80"
                         ),
                         brace_context=((
                             "impl", "<", "R", ":", "EffectRuntime", ">",
@@ -976,7 +976,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="reconcile_protected_lock",
                         item_token_sha256=(
-                            "a97368bb3587961e9c93f294ef8089a53cebe8e8ebbf7c54782e567820f6cf19"
+                            "da83291d975ff1f309746a87c94f2371ecae41df7733677b568f32a7008f89c2"
                         ),
                         brace_context=((
                             "impl", "<", "R", ":", "EffectRuntime", ">",
@@ -1053,7 +1053,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="plan_certified_view_body_cleanup",
                         item_token_sha256=(
-                            "ef98ad6c9b7bc9b0ec4f04bfa86479cdc1d10f0bfb29802afd5b2878d5ef5374"
+                            "a5fe08d7c00b3873335df4fb485fea37e9791f64112767f56977e1c8b83a53f4"
                         ),
                         brace_context=((
                             "impl", "<", "R", ":", "EffectRuntime", ">",
@@ -1237,7 +1237,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="step",
                         item_token_sha256=(
-                            "5851f7e8fa8223c1de6ca54101426bca28c00c4e1d32c78762bd84c3b6e1767c"
+                            "5054f687f343932ca8be815fc7690d0a0bb2e6490af8ad97ec5f7dacb0c36ac1"
                         ),
                         brace_context=((
                             "impl", "<", "D", ":", "RuntimeDriver", ">",
@@ -1248,7 +1248,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="step_recovery",
                         item_token_sha256=(
-                            "f3a91673b74b2b256c52ba84d82881bb2404b2726966b91049c11bc450965c5d"
+                            "6237cbe71023254491c5cfa8024f57bb71183da8dc8ed557a9b06776de33ceed"
                         ),
                         brace_context=((
                             "impl", "<", "D", ":", "RuntimeDriver", ">",
@@ -1261,7 +1261,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="pop_next_with_ownership",
                         item_token_sha256=(
-                            "3487fa62cd12853581116460243e2914096a23abb31efd308b366c69ff673efd"
+                            "5b737b0c5c3629305efae9d1cf6024bcb6f5bec5eb381483f346692fe0380dd6"
                         ),
                         brace_context=((
                             "impl", "<", "C", ":", "ExactRuntimeCommandIdentity",
@@ -1269,17 +1269,13 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         ),),
                         projection="service_trace",
                         required_expression="""
-                            let queue_before = self.ownership_projection();
+                            let queue_before = self.ownership_snapshot();
                             let cursor_before = self.next_class.service_code();
-                            let Some(oldest_lifecycle_ordinal) =
-                                self.oldest_lifecycle_ordinal()?
-                            else {
+                            if self.oldest_lifecycle_ordinal()?.is_none() {
                                 return Ok(None);
-                            };
+                            }
                             let (completion_ready, progress_ready, normal_ready) =
-                                self.class_readiness_at_lifecycle(
-                                    oldest_lifecycle_ordinal
-                                );
+                                self.class_readiness();
                             let selection = select_bounded_service_class(
                                 cursor_before,
                                 completion_ready,
@@ -1449,7 +1445,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_const=False,
                 verified_kernel_shared_macro_sha256=(
-                    ("refinement_tag_value", "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e"),
+                    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
                     ("production_durable_intent_trace_body", "8bc5f5f07d5d188dc48e6cbc02f0c43d67af2591a8cf5f379e11b39fd0013e4c"),
                     ("pending_projection_is_absent_body", "1ee3ae9d3fa183f21f330af54f681f77c7c54300b6c436f34ff47fca238871ac"),
                     ("pending_projection_equal_body", "76c11e957c8c596fed3caa5b3685c25b1fdd3511b82ebdbb9b12c10cd30577f8"),
@@ -1586,7 +1582,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "production_decision_recovery_trace_body!(projection)"
                 ),
                 verified_kernel_shared_macro_sha256=(
-    ("refinement_tag_value", "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e"),
+    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
                     ("production_decision_recovery_trace_body", "8c0db740cb3c62621e42f7ed6fa3db06c2926f11e530d7549b07efda2b5bf64d"),
                 ),
                 theorem_kernel_projection=(
@@ -2297,7 +2293,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     "production_reliable_flush_trace_body!(projection)"
                 ),
                 verified_kernel_shared_macro_sha256=(
-    ("refinement_tag_value", "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e"),
+    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
                     ("production_reliable_flush_trace_body", "7b830dafccef15b33a2966e57e2fccd18c6f6ce3e454831cb7378d12ae2db1d5"),
                 ),
                 theorem_kernel_projection=(
@@ -2376,7 +2372,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             "production_reliable_flush_application_body!(projection)"
                         ),
                         verified_kernel_shared_macro_sha256=(
-    ("refinement_tag_value", "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e"),
+    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
                             ("production_reliable_flush_application_body", "49559bef138c5b61161d45ca264e50a35e4c6f48d76d517b289b4f5e6fa64b80"),
                         ),
                         theorem_kernel_projection=(
@@ -2543,7 +2539,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_body="production_application_trace_body!(projection)",
                 verified_kernel_shared_macro_sha256=(
-    ("refinement_tag_value", "d76a2d87c5afac70c71613f7f3f8cd665d9262a0e90a67523569f6257906223e"),
+    ("refinement_tag_value", "41847d48e31632cbb78b0599ccb2bc99bbded64999dd869a12083275f1798ed8"),
                     ("production_application_trace_body", "c2a02aabdd24ec9d7a2f23d57cf0cf59514e1c6928105dd5d3617d47a55dc719"),
                 ),
                 theorem_kernel_projection=(
@@ -3148,7 +3144,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runner.rs",
                         item="run_inner",
                         item_token_sha256=(
-                            "665cb4f59dc4037e17216d4f250cb08ec33f8dacd3c34405c544bd1582c8ebab"
+                            "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544"
                         ),
                         projection="terminal_application,",
                         required_expression="""
@@ -3252,6 +3248,30 @@ _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_VERUS_GATE_SHA256 = (
 )
 _CHECKED_PRODUCTION_INGRESS_MATERIALIZATION_AUXILIARY_THEOREM_SHA256 = (
     "67ebe84f470c8d16cc5207f20a574d778d542e52d970a6c5c57cf29ea60e7d47"
+)
+_CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_PROJECTION_SHA256 = (
+    "5fa36e7fa40e8d96deb04371a539f8ffa58dbaaf8bdd36ecc2dbd67249531eb1"
+)
+_CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_VERUS_PROJECTION_SHA256 = (
+    "490481c013f0e98760035000231290a993a72876b3b3d7e566bde7003e1d341f"
+)
+_CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_MACRO_SHA256 = (
+    "e3fc5ceca76f5a878abf66de4607ff4f4b393aff18b5f53870a451674acfb8ab"
+)
+_CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_GATE_SHA256 = (
+    "900c145d1a16a580d36462d30335d118dde6ec5de661f575876bc3fef7a0d270"
+)
+_CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_VERUS_GATE_SHA256 = (
+    "07e41c8605ff29ceb732e64ff1238ba8e22722b09d7be416f425e18b956f0fa0"
+)
+_CHECKED_PRODUCTION_EFFECT_TO_CANDIDATE_AUXILIARY_THEOREM_SHA256 = (
+    "464d4610fd3499807750f084905df57cc80d185046b6a7e8e8d71e5e89c7b35b"
+)
+_CHECKED_PRODUCTION_COMPLETION_PRODUCT_RANK_SHA256 = (
+    "5cec83a64f58fe1751a5f60a7b3a0ad5d80512adb16a00132fd8242457f77d8f"
+)
+_CHECKED_PRODUCTION_COMPLETION_PRODUCT_RANK_DESCENT_SHA256 = (
+    "c99a968bf360ff9d32fd9813addefeb8e10562acd341d24d7b9479ba057589f9"
 )
 _TOTAL_GATE_THEOREM_ITEM_SHA256 = {
     "ProductionDurableIntentTraceRefinesProgressWitness": "129a6981dfcf42f154616ba6569eea2b671902267b2dfbddf4ede6add37560d0",
@@ -3369,3 +3389,274 @@ _EFFECTIVE_LOCK_PLAN_CARRIERS = {
         ),
     ),
 }
+
+
+@lru_cache(maxsize=1)
+def _verus_evidence_contract_module() -> Any:
+    """Load the independently pinned Verus evidence validator."""
+
+    path = ROOT_DIR / "scripts" / "formal" / "sumeragi_v2_verus_evidence.py"
+    spec = importlib.util.spec_from_file_location(
+        "_sumeragi_v2_verus_evidence_contract", path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load Verus evidence contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _cross_tool_contract_errors() -> list[str]:
+    """Check the immutable 4 + 7 + 6 refinement mapping itself."""
+
+    errors: list[str] = []
+    try:
+        verus_evidence_sources = frozenset(
+            _verus_evidence_contract_module().REQUIRED_SOURCE_PATHS
+        )
+    except (AttributeError, OSError, RuntimeError, ValueError) as error:
+        errors.append(
+            "cross-tool contract cannot load the Verus source inventory: "
+            f"{error}"
+        )
+        verus_evidence_sources = frozenset()
+    expected_ids = (
+        "effective-lock-body-acquisition-production-refinement",
+        "progress-witness-production-refinement",
+        "successor-activation-exact-recovery-production-refinement",
+    )
+    observed_ids = tuple(
+        contract.obligation_id for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+    )
+    if observed_ids != expected_ids:
+        errors.append(
+            "cross-tool obligation inventory must equal the canonical three "
+            f"production seams {expected_ids!r}; found {observed_ids!r}"
+        )
+    observed_counts = tuple(
+        len(contract.claims) for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+    )
+    if observed_counts != (4, 7, 6):
+        errors.append(
+            "cross-tool production claim cardinalities must equal (4, 7, 6); "
+            f"found {observed_counts!r}"
+        )
+
+    expected_premises = {
+        "effective-lock-body-acquisition-production-refinement": (
+            "ProductionEffectiveLockBodyAcquisitionRefinement"
+        ),
+        "progress-witness-production-refinement": (
+            "ProductionProgressWitnessTraceRefinement"
+        ),
+        "successor-activation-exact-recovery-production-refinement": (
+            "ProductionSuccessorAndExactRecoveryTraceRefinement"
+        ),
+    }
+    expected_ledger_bindings = {
+        "effective-lock-body-acquisition-production-refinement": (
+            "operator",
+            "/\\ ProductionEffectiveLockBodyAcquisitionRefinement "
+            "/\\ EffectiveLockAcquisitionModelObligation",
+            "BY EffectiveLockAcquisitionModelObligation "
+            "DEF EffectiveLockBodyAcquisitionProductionRefinementObligation",
+        ),
+        "progress-witness-production-refinement": (
+            "operator",
+            "/\\ ProductionProgressWitnessTraceRefinement "
+            "/\\ ProgressWitnessObligation",
+            "BY ProgressWitnessObligation "
+            "DEF ProgressWitnessProductionRefinementObligation",
+        ),
+        "successor-activation-exact-recovery-production-refinement": (
+            "operator",
+            "/\\ ProductionSuccessorAndExactRecoveryTraceRefinement "
+            "/\\ (IndexedChainSpec => []"
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant)",
+            "BY IndexedChainSpecEstablishesSuccessorActivationAndExactHistoricalRecoveryInvariant "
+            "DEF SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
+        ),
+    }
+
+    constants: list[str] = []
+    verus_theorems: list[str] = []
+    auxiliary_verus_theorems: list[str] = []
+    tla_theorems: list[str] = []
+    proof_modes: list[str] = []
+    total_gate_names: list[str] = []
+    for contract in CROSS_TOOL_REFINEMENT_CONTRACTS:
+        reviewed_target = REQUIRED_PROOF_OBLIGATION_INVENTORY.get(
+            contract.obligation_id
+        )
+        if reviewed_target != (contract.module, contract.ledger_symbol):
+            errors.append(
+                f"cross-tool contract {contract.obligation_id} targets "
+                f"{(contract.module, contract.ledger_symbol)!r}, not reviewed "
+                f"ledger target {reviewed_target!r}"
+            )
+        expected_premise = expected_premises.get(contract.obligation_id)
+        expected_statement = (
+            None
+            if expected_premise is None
+            else f"{expected_premise} => {contract.ledger_symbol}"
+        )
+        if contract.tla_statement != expected_statement:
+            errors.append(
+                f"cross-tool contract {contract.obligation_id} must imply its "
+                f"exact ledger theorem symbol using {expected_statement!r}; "
+                f"found {contract.tla_statement!r}"
+            )
+        expected_ledger_binding = expected_ledger_bindings.get(
+            contract.obligation_id, (None, None, None)
+        )
+        observed_ledger_binding = (
+            contract.ledger_declaration_kind,
+            contract.ledger_statement,
+            contract.tla_proof,
+        )
+        if observed_ledger_binding != expected_ledger_binding:
+            errors.append(
+                f"cross-tool contract {contract.obligation_id} must bind the exact "
+                "reviewed ledger declaration kind, normalized definition, and bridge "
+                f"proof {expected_ledger_binding!r}; found {observed_ledger_binding!r}"
+            )
+        tla_theorems.append(contract.tla_theorem)
+        for claim in contract.claims:
+            constants.append(claim.constant)
+            verus_theorems.append(claim.verus_theorem)
+            proof_modes.append(claim.proof_mode)
+            if claim.total_gate is not None:
+                total_gate_names.append(claim.total_gate.name)
+            total_gate_names.extend(
+                kernel.total_gate.name
+                for kernel in claim.supplemental_kernels
+                if kernel.total_gate is not None
+            )
+            auxiliary_verus_theorems.extend(
+                kernel.auxiliary_verus_theorem
+                for kernel in claim.supplemental_kernels
+                if kernel.auxiliary_verus_theorem is not None
+            )
+            if not claim.production_sources:
+                errors.append(
+                    f"cross-tool claim {claim.constant} has no production sources"
+                )
+            for relative in (
+                claim.verus_source,
+                *claim.production_sources,
+                *(consumer.source for consumer in claim.linked_consumers),
+            ):
+                path = Path(relative)
+                if path.is_absolute() or ".." in path.parts:
+                    errors.append(
+                        f"cross-tool claim {claim.constant} has unsafe source path "
+                        f"{relative!r}"
+                    )
+            required_evidence_sources = (
+                claim.verus_source,
+                claim.verified_kernel_source,
+                *(call_site.source for call_site in claim.production_call_sites),
+                *(
+                    kernel.verified_kernel_source
+                    for kernel in claim.supplemental_kernels
+                ),
+                *(
+                    call_site.source
+                    for kernel in claim.supplemental_kernels
+                    for call_site in kernel.production_call_sites
+                ),
+                *(consumer.source for consumer in claim.linked_consumers),
+            )
+            missing_evidence_sources = tuple(
+                relative
+                for relative in required_evidence_sources
+                if _nonempty_string(relative)
+                and relative not in verus_evidence_sources
+            )
+            if missing_evidence_sources:
+                errors.append(
+                    f"cross-tool claim {claim.constant} has proof, kernel, or "
+                    "authoritative production call sources outside the Verus "
+                    f"evidence inventory: {missing_evidence_sources!r}"
+                )
+    for label, values, expected_count in (
+        ("TLA constants", constants, 17),
+        ("Verus theorem names", verus_theorems, 17),
+        ("TLA theorem names", tla_theorems, 3),
+    ):
+        if len(values) != expected_count or len(set(values)) != expected_count:
+            errors.append(
+                f"cross-tool {label} must contain {expected_count} unique names"
+            )
+    if tuple(proof_modes).count("legacy_requires_builder") != 4:
+        errors.append(
+            "cross-tool proof modes must retain exactly four legacy "
+            "effective-lock claims"
+        )
+    if tuple(proof_modes).count("total_checked_gate") != 13:
+        errors.append(
+            "cross-tool proof modes must contain exactly thirteen total "
+            "checked-gate claims"
+        )
+    observed_legacy_constants = tuple(
+        claim.constant
+        for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        if claim.proof_mode == "legacy_requires_builder"
+    )
+    if observed_legacy_constants != _LEGACY_EFFECTIVE_LOCK_CLAIM_CONSTANTS:
+        errors.append(
+            "cross-tool legacy mode must contain exactly the four canonical "
+            "effective-lock claims"
+        )
+    observed_total_constants = tuple(
+        claim.constant
+        for contract in CROSS_TOOL_REFINEMENT_CONTRACTS
+        for claim in contract.claims
+        if claim.proof_mode == "total_checked_gate"
+    )
+    if observed_total_constants != tuple(_TOTAL_GATE_BY_CLAIM):
+        errors.append(
+            "cross-tool total checked-gate mode must contain exactly the "
+            "canonical thirteen progress/successor claims"
+        )
+    unknown_modes = tuple(
+        mode
+        for mode in proof_modes
+        if mode not in {"legacy_requires_builder", "total_checked_gate"}
+    )
+    if unknown_modes:
+        errors.append(f"cross-tool claims have unknown proof modes {unknown_modes!r}")
+    if auxiliary_verus_theorems != [
+        "production_ingress_reservation_materialization_refines_protected_ownership",
+        "production_leader_wire_admission_trace_refines_lifecycle_ownership",
+    ]:
+        errors.append(
+            "cross-tool auxiliary Verus theorem inventory must contain exactly "
+            "the reservation-materialization and durable leader-wire proofs"
+        )
+    if len(total_gate_names) != 17 or len(set(total_gate_names)) != 17:
+        errors.append(
+            "cross-tool total checked-gate inventory must contain exactly "
+            "seventeen unique gates"
+        )
+    return errors
+
+
+def _rust_parameter_names(parameters: str) -> tuple[str, ...]:
+    """Return simple named Rust parameters from one reviewed signature fragment."""
+
+    # Cross-tool kernels deliberately use a flat, named projection signature.
+    # Rejecting patterns/destructuring here keeps the source-fidelity check
+    # unambiguous and prevents a changed projection from hiding in syntax the
+    # checker does not normalize.
+    names = re.findall(
+        r"(?:^|,)\s*(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:", parameters
+    )
+    return tuple(names)
+
+
+def _normalized_rust_contract(source: str) -> str:
+    """Normalize one code-owned Rust/Verus contract to its token stream."""
+
+    return " ".join(rust_code_tokens(source))

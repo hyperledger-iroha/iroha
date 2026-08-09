@@ -161,11 +161,6 @@
         }
     }
 
-    fn bfv_full_bootstrap_stark_test_prover_input_material()
-    -> iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1 {
-        bfv_full_bootstrap_stark_test_prover_input_material_for_slot(0)
-    }
-
     fn bfv_full_bootstrap_stark_test_release_audit_package_and_digest(
         params: &iroha_crypto::BfvParameters,
         material: &iroha_crypto::BfvFullBootstrapCircuitMaterialV1,
@@ -224,9 +219,8 @@
         .expect("sample external-review full-bootstrap release audit package and digest")
     }
 
-    fn bfv_full_bootstrap_stark_test_prover_input_material_for_slot(
-        slot_index: u32,
-    ) -> iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1 {
+    fn build_bfv_full_bootstrap_stark_test_prover_input_materials()
+    -> [iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1; 2] {
         let params = iroha_crypto::ram_lfe_bfv_parameters_v1();
         let (secret_key, public_key, _relinearization_key) =
             iroha_crypto::keygen_from_seed(&params, b"zk-stark-bfv-full-bootstrap-keygen")
@@ -314,33 +308,6 @@
                 reviewer_key_pair.public_key(),
             )
             .expect("release-audited artifact-aware full-bootstrap output bound");
-        let claim = iroha_crypto::bfv_full_bootstrap_execution_proof_claim_with_witness_digest_v1(
-            &params,
-            &bootstrap_key,
-            &artifacts,
-            &galois_keys,
-            slot_index,
-            input,
-            output,
-            iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
-            input_bound,
-            output_bound,
-        )
-        .expect("derive execution proof claim");
-        let witness_material =
-            iroha_crypto::bfv_full_bootstrap_execution_witness_digest_material_v1(
-                &params,
-                &bootstrap_key,
-                &artifacts,
-                &galois_keys,
-                &claim,
-            )
-            .expect("derive execution witness material");
-        let proof_input = iroha_crypto::bfv_full_bootstrap_execution_proof_input_material_v1(
-            &public_key,
-            &witness_material,
-        )
-        .expect("build execution proof input material");
         let prover_key = iroha_crypto::decode_bfv_full_bootstrap_proof_key_artifact_v1(
             &params,
             &material,
@@ -355,12 +322,105 @@
             &artifacts.verifier_key,
         )
         .expect("decode verifier key artifact");
-        iroha_crypto::bfv_full_bootstrap_execution_prover_input_material_v1(
-            &proof_input,
-            &prover_key,
-            &verifier_key,
-        )
-        .expect("build BFV execution prover input material")
+        [0_u32, 1_u32].map(|slot_index| {
+            let claim =
+                iroha_crypto::bfv_full_bootstrap_execution_proof_claim_with_witness_digest_v1(
+                    &params,
+                    &bootstrap_key,
+                    &artifacts,
+                    &galois_keys,
+                    slot_index,
+                    input.clone(),
+                    output.clone(),
+                    iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+                    input_bound,
+                    output_bound,
+                )
+                .expect("derive execution proof claim");
+            let witness_material =
+                iroha_crypto::bfv_full_bootstrap_execution_witness_digest_material_v1(
+                    &params,
+                    &bootstrap_key,
+                    &artifacts,
+                    &galois_keys,
+                    &claim,
+                )
+                .expect("derive execution witness material");
+            let proof_input =
+                iroha_crypto::bfv_full_bootstrap_execution_proof_input_material_v1(
+                    &public_key,
+                    &witness_material,
+                )
+                .expect("build execution proof input material");
+            iroha_crypto::bfv_full_bootstrap_execution_prover_input_material_v1(
+                &proof_input,
+                &prover_key,
+                &verifier_key,
+            )
+            .expect("build BFV execution prover input material")
+        })
+    }
+
+    // The deterministic BFV setup and canonical proof are expensive in debug builds. Sharing
+    // them prevents libtest's parallel workers from rebuilding identical cryptographic material.
+    struct BfvFullBootstrapStarkTestFixture {
+        material: iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1,
+        envelope_bytes: std::sync::OnceLock<Vec<u8>>,
+    }
+
+    fn build_bfv_full_bootstrap_stark_test_fixtures()
+    -> [BfvFullBootstrapStarkTestFixture; 2] {
+        build_bfv_full_bootstrap_stark_test_prover_input_materials().map(|material| {
+            BfvFullBootstrapStarkTestFixture {
+                material,
+                envelope_bytes: std::sync::OnceLock::new(),
+            }
+        })
+    }
+
+    fn bfv_full_bootstrap_stark_test_fixture_for_slot(
+        slot_index: u32,
+    ) -> &'static BfvFullBootstrapStarkTestFixture {
+        static FIXTURES: std::sync::OnceLock<[BfvFullBootstrapStarkTestFixture; 2]> =
+            std::sync::OnceLock::new();
+
+        let slot_index = match slot_index {
+            0 => 0,
+            1 => 1,
+            _ => panic!("BFV full-bootstrap STARK test fixture only supports slots 0 and 1"),
+        };
+        &FIXTURES.get_or_init(build_bfv_full_bootstrap_stark_test_fixtures)[slot_index]
+    }
+
+    fn bfv_full_bootstrap_stark_test_fixture()
+    -> &'static BfvFullBootstrapStarkTestFixture {
+        bfv_full_bootstrap_stark_test_fixture_for_slot(0)
+    }
+
+    fn bfv_full_bootstrap_stark_test_prover_input_material()
+    -> &'static iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1 {
+        &bfv_full_bootstrap_stark_test_fixture().material
+    }
+
+    fn bfv_full_bootstrap_stark_test_prover_input_material_for_slot(
+        slot_index: u32,
+    ) -> &'static iroha_crypto::BfvFullBootstrapExecutionProverInputMaterialV1 {
+        &bfv_full_bootstrap_stark_test_fixture_for_slot(slot_index).material
+    }
+
+    fn bfv_full_bootstrap_stark_test_envelope_bytes() -> &'static [u8] {
+        bfv_full_bootstrap_stark_test_envelope_bytes_for_slot(0)
+    }
+
+    fn bfv_full_bootstrap_stark_test_envelope_bytes_for_slot(slot_index: u32) -> &'static [u8] {
+        let fixture = bfv_full_bootstrap_stark_test_fixture_for_slot(slot_index);
+        fixture
+            .envelope_bytes
+            .get_or_init(|| {
+                prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&fixture.material)
+                    .expect("BFV full-bootstrap STARK AIR envelope")
+            })
+            .as_slice()
     }
 
     #[test]
@@ -400,13 +460,12 @@
     #[test]
     fn bfv_full_bootstrap_air_prover_binds_statement_and_public_openings() {
         let material = bfv_full_bootstrap_stark_test_prover_input_material();
-        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
-            .expect("BFV full-bootstrap STARK AIR envelope");
+        let bytes = bfv_full_bootstrap_stark_test_envelope_bytes();
         assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
-            &bytes, &material
+            bytes, material
         ));
         let env: StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
+            norito::decode_from_bytes(bytes).expect("decode BFV STARK envelope");
         assert!(bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(
             &env.transcript_label
         ));
@@ -417,15 +476,20 @@
             compressed_bytes, bytes,
             "compressed BFV STARK envelope bytes must differ from canonical v1 bytes"
         );
-        let compressed_env: StarkVerifyEnvelopeV1 = norito::decode_from_bytes(&compressed_bytes)
-            .expect("compressed BFV STARK envelope must remain structurally decodable");
+        // `bytes` is the trusted generated uncompressed frame. Default decode limits are derived
+        // from the compressed frame size and intentionally reject this high-ratio expansion.
+        let compressed_env: StarkVerifyEnvelopeV1 = norito::decode_from_bytes_with_limits(
+            &compressed_bytes,
+            norito::canonical_decode_limits(bytes.len()),
+        )
+        .expect("compressed BFV STARK envelope must remain structurally decodable");
         assert_eq!(
             norito::to_bytes(&compressed_env).expect("re-encode compressed BFV STARK envelope"),
             bytes,
             "compressed BFV STARK envelope must decode to the same typed proof as canonical bytes"
         );
         assert!(
-            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&compressed_bytes, &material),
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&compressed_bytes, material),
             "artifact-bound BFV verifier must reject noncanonical compressed proof framing"
         );
         let expected_params =
@@ -438,7 +502,7 @@
         let witness = &material.proof_input_material.witness_material;
         assert!(
             verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                &bytes,
+                bytes,
                 material.proof_input_material.statement_hash,
                 material.arithmetic_trace_material_digest,
                 witness.slot_index,
@@ -505,12 +569,12 @@
             "public-padding BFV verifier must reject suffixed-label alternate proof encodings"
         );
         assert!(
-            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&suffixed_label_bytes, &material),
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&suffixed_label_bytes, material),
             "artifact-bound BFV verifier must reject suffixed-label alternate proof encodings"
         );
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                &bytes,
+                bytes,
                 iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]),
                 material.arithmetic_trace_material_digest,
                 witness.slot_index,
@@ -520,7 +584,7 @@
         );
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                &bytes,
+                bytes,
                 material.proof_input_material.statement_hash,
                 iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]),
                 witness.slot_index,
@@ -532,7 +596,7 @@
             iroha_crypto::Hash::new(b"pending BFV full-bootstrap execution witness digest");
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                &bytes,
+                bytes,
                 placeholder_statement_hash,
                 material.arithmetic_trace_material_digest,
                 witness.slot_index,
@@ -544,7 +608,7 @@
             iroha_crypto::Hash::new(b"pending BFV full-bootstrap execution witness digest");
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                &bytes,
+                bytes,
                 material.proof_input_material.statement_hash,
                 placeholder_trace_material_digest,
                 witness.slot_index,
@@ -562,7 +626,7 @@
             iroha_crypto::Hash::new(&delayed_placeholder_statement_preimage);
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                &bytes,
+                bytes,
                 delayed_placeholder_statement_hash,
                 material.arithmetic_trace_material_digest,
                 witness.slot_index,
@@ -580,7 +644,7 @@
         for separator_spelled_statement_hash in separator_spelled_statement_hashes.iter().copied() {
             assert!(
                 !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                    &bytes,
+                    bytes,
                     separator_spelled_statement_hash,
                     material.arithmetic_trace_material_digest,
                     witness.slot_index,
@@ -604,7 +668,7 @@
         {
             assert!(
                 !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                    &bytes,
+                    bytes,
                     delayed_separator_spelled_statement_hash,
                     material.arithmetic_trace_material_digest,
                     witness.slot_index,
@@ -617,7 +681,7 @@
             iroha_crypto::Hash::new(&delayed_placeholder_statement_preimage);
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                &bytes,
+                bytes,
                 material.proof_input_material.statement_hash,
                 delayed_placeholder_trace_material_digest,
                 witness.slot_index,
@@ -633,7 +697,7 @@
         {
             assert!(
                 !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                    &bytes,
+                    bytes,
                     material.proof_input_material.statement_hash,
                     separator_spelled_trace_material_digest,
                     witness.slot_index,
@@ -659,7 +723,7 @@
         {
             assert!(
                 !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                    &bytes,
+                    bytes,
                     material.proof_input_material.statement_hash,
                     delayed_separator_spelled_trace_material_digest,
                     witness.slot_index,
@@ -670,7 +734,7 @@
         }
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                &bytes,
+                bytes,
                 material.proof_input_material.statement_hash,
                 material.arithmetic_trace_material_digest,
                 u32::from(iroha_crypto::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PRIVATE_ROW_COUNT_V1),
@@ -680,7 +744,7 @@
         );
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                &bytes,
+                bytes,
                 iroha_crypto::Hash::new(b"stale BFV full-bootstrap public statement hash"),
                 material.arithmetic_trace_material_digest,
                 witness.slot_index,
@@ -690,7 +754,7 @@
         );
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                &bytes,
+                bytes,
                 material.proof_input_material.statement_hash,
                 material.arithmetic_trace_material_digest,
                 witness.slot_index.saturating_add(1),
@@ -708,7 +772,7 @@
         };
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
-                &bytes,
+                bytes,
                 material.proof_input_material.statement_hash,
                 material.arithmetic_trace_material_digest,
                 witness.slot_index,
@@ -1117,7 +1181,7 @@
             "public-padding BFV verifier must reject duplicated sampled public openings"
         );
         assert!(
-            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&duplicate_opening_bytes, &material),
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&duplicate_opening_bytes, material),
             "artifact-bound BFV verifier must reject duplicated sampled public openings"
         );
 
@@ -1142,7 +1206,7 @@
             "public-padding BFV verifier must reject reordered public openings"
         );
         assert!(
-            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&reordered_opening_bytes, &material),
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&reordered_opening_bytes, material),
             "artifact-bound BFV verifier must reject reordered public openings"
         );
 
@@ -1167,7 +1231,7 @@
             "public-padding BFV verifier must reject truncated sampled public openings"
         );
         assert!(
-            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&truncated_opening_bytes, &material),
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&truncated_opening_bytes, material),
             "artifact-bound BFV verifier must reject truncated sampled public openings"
         );
 
@@ -1196,14 +1260,14 @@
         let stale_domain_bytes = norito::to_bytes(&stale_domain).expect("encode stale domain");
         assert!(!verify_stark_fri_bfv_full_bootstrap_air_envelope(
             &stale_domain_bytes,
-            &material
+            material
         ));
 
-        let mut stale_material = material.clone();
+        let mut stale_material = (*material).clone();
         stale_material.proof_input_material.statement_hash =
             iroha_crypto::Hash::new(b"stale BFV full-bootstrap statement hash");
         assert!(!verify_stark_fri_bfv_full_bootstrap_air_envelope(
-            &bytes,
+            bytes,
             &stale_material
         ));
 
@@ -1219,7 +1283,7 @@
             norito::to_bytes(&tampered_opening).expect("encode tampered opening");
         assert!(!verify_stark_fri_bfv_full_bootstrap_air_envelope(
             &tampered_opening_bytes,
-            &material
+            material
         ));
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
@@ -1236,14 +1300,13 @@
     #[test]
     fn bfv_full_bootstrap_air_rejects_auxiliary_generic_composition_sidecars() {
         let material = bfv_full_bootstrap_stark_test_prover_input_material();
-        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
-            .expect("BFV full-bootstrap STARK AIR envelope");
+        let bytes = bfv_full_bootstrap_stark_test_envelope_bytes();
         assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
-            &bytes, &material
+            bytes, material
         ));
 
         let mut sidecar_envelope: StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
+            norito::decode_from_bytes(bytes).expect("decode BFV STARK envelope");
         assert!(sidecar_envelope.proof.commits.comp_root.is_none());
         assert!(sidecar_envelope.proof.comp_values.is_none());
         attach_valid_auxiliary_composition_values(&mut sidecar_envelope);
@@ -1288,7 +1351,7 @@
                 "caller-owned BFV explicit AIR must reject {case}"
             );
             assert!(
-                !verify_stark_fri_bfv_full_bootstrap_air_envelope(&auxiliary_bytes, &material),
+                !verify_stark_fri_bfv_full_bootstrap_air_envelope(&auxiliary_bytes, material),
                 "BFV native AIR verifier must reject {case}"
             );
             assert!(
@@ -1307,13 +1370,12 @@
     #[test]
     fn bfv_full_bootstrap_air_rejects_malformed_proof_and_air_bindings() {
         let material = bfv_full_bootstrap_stark_test_prover_input_material();
-        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
-            .expect("BFV full-bootstrap STARK AIR envelope");
+        let bytes = bfv_full_bootstrap_stark_test_envelope_bytes();
         assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
-            &bytes, &material
+            bytes, material
         ));
         let envelope: StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
+            norito::decode_from_bytes(bytes).expect("decode BFV STARK envelope");
         let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
         let witness = &material.proof_input_material.witness_material;
 
@@ -1333,7 +1395,7 @@
                 "caller-owned BFV explicit AIR must reject {case}"
             );
             assert!(
-                !verify_stark_fri_bfv_full_bootstrap_air_envelope(&malformed_bytes, &material),
+                !verify_stark_fri_bfv_full_bootstrap_air_envelope(&malformed_bytes, material),
                 "BFV native AIR verifier must reject {case}"
             );
             assert!(
@@ -1417,13 +1479,12 @@
     #[test]
     fn bfv_full_bootstrap_air_rejects_opening_path_and_sample_drift() {
         let material = bfv_full_bootstrap_stark_test_prover_input_material();
-        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
-            .expect("BFV full-bootstrap STARK AIR envelope");
+        let bytes = bfv_full_bootstrap_stark_test_envelope_bytes();
         assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
-            &bytes, &material
+            bytes, material
         ));
         let envelope: StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
+            norito::decode_from_bytes(bytes).expect("decode BFV STARK envelope");
         let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
         let witness = &material.proof_input_material.witness_material;
 
@@ -1443,7 +1504,7 @@
                 "caller-owned BFV explicit AIR must reject {case}"
             );
             assert!(
-                !verify_stark_fri_bfv_full_bootstrap_air_envelope(&malformed_bytes, &material),
+                !verify_stark_fri_bfv_full_bootstrap_air_envelope(&malformed_bytes, material),
                 "BFV native AIR verifier must reject {case}"
             );
             assert!(
@@ -1554,21 +1615,20 @@
     #[test]
     fn bfv_full_bootstrap_air_verifier_limits_are_enforced() {
         let material = bfv_full_bootstrap_stark_test_prover_input_material();
-        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
-            .expect("BFV full-bootstrap STARK AIR envelope");
+        let bytes = bfv_full_bootstrap_stark_test_envelope_bytes();
         assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
-            &bytes, &material
+            bytes, material
         ));
         assert!(
             verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
-                &bytes,
+                bytes,
                 &StarkVerifierLimits::default(),
-                &material,
+                material,
             )
         );
 
         let envelope: StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
+            norito::decode_from_bytes(bytes).expect("decode BFV STARK envelope");
         let air = envelope.proof.air.as_ref().expect("BFV AIR section");
         let witness = &material.proof_input_material.witness_material;
 
@@ -1576,15 +1636,15 @@
         tight_envelope_bytes.max_envelope_bytes = bytes.len().saturating_sub(1);
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
-                &bytes,
+                bytes,
                 &tight_envelope_bytes,
-                &material,
+                material,
             ),
             "BFV native AIR verifier must honor envelope byte limits"
         );
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
-                &bytes,
+                bytes,
                 &tight_envelope_bytes,
                 material.proof_input_material.statement_hash,
                 material.arithmetic_trace_material_digest,
@@ -1599,15 +1659,15 @@
             envelope.transcript_label.len().saturating_sub(1);
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
-                &bytes,
+                bytes,
                 &tight_transcript_label,
-                &material,
+                material,
             ),
             "BFV native AIR verifier must honor transcript-label limits"
         );
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
-                &bytes,
+                bytes,
                 &tight_transcript_label,
                 material.proof_input_material.statement_hash,
                 material.arithmetic_trace_material_digest,
@@ -1621,15 +1681,15 @@
         tight_queries.max_queries = envelope.proof.queries.len().saturating_sub(1);
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
-                &bytes,
+                bytes,
                 &tight_queries,
-                &material,
+                material,
             ),
             "BFV native AIR verifier must honor query-count limits"
         );
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
-                &bytes,
+                bytes,
                 &tight_queries,
                 material.proof_input_material.statement_hash,
                 material.arithmetic_trace_material_digest,
@@ -1643,15 +1703,15 @@
         tight_air_width.max_air_width = usize::from(air.trace_width).saturating_sub(1);
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
-                &bytes,
+                bytes,
                 &tight_air_width,
-                &material,
+                material,
             ),
             "BFV native AIR verifier must honor AIR width limits"
         );
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
-                &bytes,
+                bytes,
                 &tight_air_width,
                 material.proof_input_material.statement_hash,
                 material.arithmetic_trace_material_digest,
@@ -1665,15 +1725,15 @@
         tight_merkle_depth.max_merkle_depth = usize::from(envelope.params.n_log2).saturating_sub(1);
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
-                &bytes,
+                bytes,
                 &tight_merkle_depth,
-                &material,
+                material,
             ),
             "BFV native AIR verifier must honor Merkle-depth limits"
         );
         assert!(
             !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
-                &bytes,
+                bytes,
                 &tight_merkle_depth,
                 material.proof_input_material.statement_hash,
                 material.arithmetic_trace_material_digest,
@@ -1687,13 +1747,12 @@
     #[test]
     fn bfv_full_bootstrap_air_rejects_parameter_profile_drift() {
         let material = bfv_full_bootstrap_stark_test_prover_input_material();
-        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
-            .expect("BFV full-bootstrap STARK AIR envelope");
+        let bytes = bfv_full_bootstrap_stark_test_envelope_bytes();
         assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
-            &bytes, &material
+            bytes, material
         ));
         let envelope: StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&bytes).expect("decode BFV STARK envelope");
+            norito::decode_from_bytes(bytes).expect("decode BFV STARK envelope");
         let public_digest: [u8; 32] = material.proof_input_material.statement_hash.into();
         let witness = &material.proof_input_material.witness_material;
 
@@ -1713,7 +1772,7 @@
                 "caller-owned BFV explicit AIR must reject {case}"
             );
             assert!(
-                !verify_stark_fri_bfv_full_bootstrap_air_envelope(&malformed_bytes, &material),
+                !verify_stark_fri_bfv_full_bootstrap_air_envelope(&malformed_bytes, material),
                 "BFV native AIR verifier must reject {case}"
             );
             assert!(
@@ -1767,10 +1826,9 @@
     #[test]
     fn bfv_full_bootstrap_air_rejects_stale_prover_input_material() {
         let material = bfv_full_bootstrap_stark_test_prover_input_material();
-        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
-            .expect("BFV full-bootstrap STARK AIR envelope");
+        let bytes = bfv_full_bootstrap_stark_test_envelope_bytes();
         assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
-            &bytes, &material
+            bytes, material
         ));
 
         let assert_rejected_material =
@@ -1783,7 +1841,7 @@
                     "mutated BFV prover input material must fail validation: {case}"
                 );
                 assert!(
-                    !verify_stark_fri_bfv_full_bootstrap_air_envelope(&bytes, &material),
+                    !verify_stark_fri_bfv_full_bootstrap_air_envelope(bytes, &material),
                     "BFV native AIR verifier must reject {case}"
                 );
                 assert!(
@@ -1792,15 +1850,15 @@
                 );
             };
 
-        let mut stale_version = material.clone();
+        let mut stale_version = (*material).clone();
         stale_version.version = stale_version.version.saturating_add(1);
         assert_rejected_material("stale prover input material version", stale_version);
 
-        let mut stale_field_count = material.clone();
+        let mut stale_field_count = (*material).clone();
         stale_field_count.field_count = stale_field_count.field_count.saturating_add(1);
         assert_rejected_material("stale prover input material field count", stale_field_count);
 
-        let mut stale_proof_input_version = material.clone();
+        let mut stale_proof_input_version = (*material).clone();
         stale_proof_input_version.proof_input_material.version = stale_proof_input_version
             .proof_input_material
             .version
@@ -1810,12 +1868,12 @@
             stale_proof_input_version,
         );
 
-        let mut stale_trace_digest = material.clone();
+        let mut stale_trace_digest = (*material).clone();
         stale_trace_digest.arithmetic_trace_material_digest =
             iroha_crypto::Hash::new(b"stale BFV arithmetic trace material digest");
         assert_rejected_material("stale arithmetic trace material digest", stale_trace_digest);
 
-        let mut stale_air_evaluation_digest = material.clone();
+        let mut stale_air_evaluation_digest = (*material).clone();
         stale_air_evaluation_digest.arithmetic_air_evaluation_material_digest =
             iroha_crypto::Hash::new(b"stale BFV arithmetic AIR evaluation material digest");
         assert_rejected_material(
@@ -1823,11 +1881,11 @@
             stale_air_evaluation_digest,
         );
 
-        let mut drifted_trace_rows = material.clone();
+        let mut drifted_trace_rows = (*material).clone();
         drifted_trace_rows.arithmetic_trace_material.rows[0][0] ^= 0x01;
         assert_rejected_material("drifted arithmetic trace rows", drifted_trace_rows);
 
-        let mut drifted_composition_values = material.clone();
+        let mut drifted_composition_values = (*material).clone();
         drifted_composition_values
             .arithmetic_air_evaluation_material
             .composition_values[0] ^= 0x01;
@@ -1836,7 +1894,7 @@
             drifted_composition_values,
         );
 
-        let mut stale_public_opening_digest = material.clone();
+        let mut stale_public_opening_digest = (*material).clone();
         stale_public_opening_digest.public_opening_material_digest =
             iroha_crypto::Hash::new(b"stale BFV public opening material digest");
         assert_rejected_material(
@@ -1845,7 +1903,7 @@
         );
 
         let alternate_material = bfv_full_bootstrap_stark_test_prover_input_material_for_slot(1);
-        let mut retargeted_public_opening_material = material.clone();
+        let mut retargeted_public_opening_material = (*material).clone();
         retargeted_public_opening_material.public_opening_material =
             alternate_material.public_opening_material.clone();
         retargeted_public_opening_material.public_opening_material_digest =
@@ -1855,7 +1913,7 @@
             retargeted_public_opening_material,
         );
 
-        let mut swapped_proof_keys = material;
+        let mut swapped_proof_keys = (*material).clone();
         core::mem::swap(
             &mut swapped_proof_keys.prover_key,
             &mut swapped_proof_keys.verifier_key,
@@ -1868,7 +1926,7 @@
         let material = bfv_full_bootstrap_stark_test_prover_input_material_for_slot(0);
         let alternate_material = bfv_full_bootstrap_stark_test_prover_input_material_for_slot(1);
         iroha_crypto::validate_bfv_full_bootstrap_execution_prover_input_material_v1(
-            &alternate_material,
+            alternate_material,
         )
         .expect("alternate BFV prover material is internally valid");
         assert_ne!(
@@ -1887,28 +1945,25 @@
             "alternate slot must bind distinct AIR evaluation material"
         );
 
-        let bytes = prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&material)
-            .expect("BFV full-bootstrap STARK AIR envelope");
+        let bytes = bfv_full_bootstrap_stark_test_envelope_bytes_for_slot(0);
         assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
-            &bytes, &material
+            bytes, material
         ));
-        let alternate_bytes =
-            prove_stark_fri_bfv_full_bootstrap_air_envelope_bytes(&alternate_material)
-                .expect("alternate BFV full-bootstrap STARK AIR envelope");
+        let alternate_bytes = bfv_full_bootstrap_stark_test_envelope_bytes_for_slot(1);
         assert!(verify_stark_fri_bfv_full_bootstrap_air_envelope(
-            &alternate_bytes,
-            &alternate_material,
+            alternate_bytes,
+            alternate_material,
         ));
         assert_ne!(
             bytes, alternate_bytes,
             "statement-specific BFV native AIR envelopes must differ"
         );
         assert!(
-            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&bytes, &alternate_material),
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(bytes, alternate_material),
             "valid BFV native AIR envelope must not replay against another valid statement package"
         );
         assert!(
-            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&alternate_bytes, &material),
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(alternate_bytes, material),
             "alternate BFV native AIR envelope must not replay against the original statement package"
         );
     }

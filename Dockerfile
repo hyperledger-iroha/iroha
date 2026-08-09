@@ -23,7 +23,7 @@ ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
-ARG BINARIES="irohad iroha kagami attachment_sanitizer"
+ARG BINARIES="irohad sorafs_governance_dag iroha kagami attachment_sanitizer"
 ARG USE_PREBUILT="0"
 ARG IROHA_GIT_COMMIT_HASH=""
 ARG VALIDATOR_LOCK_SHA256=""
@@ -85,6 +85,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/cargo-target \
     set -e; \
     export CARGO_TARGET_DIR=/cargo-target; \
+    selected_binaries="${BINARIES}"; \
+    if [ "${CONFIG_PROFILE}" = "taira" ]; then \
+        case " ${selected_binaries} " in \
+            *" taira_bootle_lantern_broker "*) : ;; \
+            *) selected_binaries="${selected_binaries} taira_bootle_lantern_broker" ;; \
+        esac; \
+    fi; \
     mkdir -p /outbin /outprovenance; \
     locked_arg=""; \
     workspace_source_manifest_before=""; \
@@ -109,14 +116,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
         locked_arg="--locked"; \
     fi; \
     if [ "${USE_PREBUILT}" = "1" ]; then \
-        for bin in ${BINARIES}; do \
+        for bin in ${selected_binaries}; do \
             cp "/app/dist/docker-bin/${bin}" "/outbin/${bin}"; \
             chmod 755 "/outbin/${bin}"; \
         done; \
     else \
         regular_bins=""; \
         build_kagami=0; \
-        for bin in ${BINARIES}; do \
+        for bin in ${selected_binaries}; do \
             if [ "${bin}" = "kagami" ]; then \
                 build_kagami=1; \
             else \

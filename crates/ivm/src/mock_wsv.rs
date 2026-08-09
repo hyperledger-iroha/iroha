@@ -287,10 +287,6 @@ pub enum PermissionToken {
     SetAccountQuorum(AccountId),
     /// Permission to set account detail for the given account
     SetAccountDetail(AccountId),
-    /// Permission to shield public funds for an asset
-    Shield(AssetDefinitionId),
-    /// Permission to unshield private funds for an asset
-    Unshield(AssetDefinitionId),
     /// Permission to read balances of the given account
     ReadAccountAssets(AccountId),
     /// Permission to create, delete, grant, and revoke roles.
@@ -402,11 +398,8 @@ pub struct MockWorldStateView {
 
 pub struct ZkPolicyConfig {
     pub mode: ZkAssetMode,
-    pub allow_shield: bool,
     pub allow_unshield: bool,
-    pub vk_transfer: Option<VerifyingKeyId>,
     pub vk_unshield: Option<VerifyingKeyId>,
-    pub vk_shield: Option<VerifyingKeyId>,
 }
 
 impl MockWorldStateView {
@@ -635,192 +628,19 @@ impl MockWorldStateView {
         if !self.asset_definitions.contains_key(&asset) {
             return false;
         }
-        let vk_transfer_binding = policy
-            .vk_transfer
-            .as_ref()
-            .map(|id| self.binding_from_registry(id));
         let vk_unshield_binding = policy
             .vk_unshield
             .as_ref()
             .map(|id| self.binding_from_registry(id));
-        let vk_shield_binding = policy
-            .vk_shield
-            .as_ref()
-            .map(|id| self.binding_from_registry(id));
         let st = self.zk_assets.entry(asset.clone()).or_default();
         st.mode = policy.mode;
-        st.allow_shield = policy.allow_shield;
         st.allow_unshield = policy.allow_unshield;
-        st.vk_transfer = vk_transfer_binding;
         st.vk_unshield = vk_unshield_binding;
-        st.vk_shield = vk_shield_binding;
         // Emit a policy-updated event
         self.zk_events.push(ZkEvent::ZkPolicyUpdated {
             asset: asset.clone(),
             mode: policy.mode,
-            allow_shield: policy.allow_shield,
             allow_unshield: policy.allow_unshield,
-        });
-        true
-    }
-
-    /// Shield `amount` from `from` by appending a note commitment for `asset`.
-    /// Permissions, proof validation, and Merkle verification are intentionally omitted in this mock.
-    pub fn shield(
-        &mut self,
-        from: &AccountId,
-        asset: &AssetDefinitionId,
-        amount: Quantity,
-        note_commitment: [u8; 32],
-    ) -> bool {
-        if !self.asset_definitions.contains_key(asset) {
-            return false;
-        }
-        if !self.account_is_linked(from) {
-            return false;
-        }
-        if !Self::is_scale0(&amount) {
-            return false;
-        }
-        let from_subject = Self::account_subject(from);
-        let st = self.zk_assets.entry(asset.clone()).or_default();
-        match st.mode {
-            ZkAssetMode::Hybrid => {
-                if !st.allow_shield {
-                    return false;
-                }
-                // Debit public balance
-                let key = (from_subject, asset.clone());
-                let current = self
-                    .balances
-                    .get(&key)
-                    .cloned()
-                    .unwrap_or_else(Quantity::zero);
-                let remaining = match current.checked_sub(&amount) {
-                    Ok(value) => value,
-                    Err(_) => return false,
-                };
-                if remaining.is_zero() {
-                    self.balances.remove(&key);
-                } else {
-                    self.balances.insert(key, remaining);
-                }
-                let root = st.push_commitment(note_commitment);
-                self.zk_events.push(ZkEvent::CommitmentAdded {
-                    asset: asset.clone(),
-                    commitment: note_commitment,
-                    new_root: *root.as_ref(),
-                });
-                true
-            }
-            ZkAssetMode::ZkNative => {
-                // No public balance to debit in native mode
-                let root = st.push_commitment(note_commitment);
-                self.zk_events.push(ZkEvent::CommitmentAdded {
-                    asset: asset.clone(),
-                    commitment: note_commitment,
-                    new_root: *root.as_ref(),
-                });
-                true
-            }
-        }
-    }
-
-    /// Private transfer within shielded ledger: consume nullifiers and append output commitments.
-    /// Proof verification and Merkle root binding are not modelled in this mock implementation.
-    pub fn zk_transfer(
-        &mut self,
-        asset: &AssetDefinitionId,
-        inputs: &[[u8; 32]],
-        outputs: &[[u8; 32]],
-        proof: &ProofAttachment,
-    ) -> bool {
-        let st = self.zk_assets.entry(asset.clone()).or_default();
-        if let Some(binding) = st.vk_transfer.as_ref()
-            && !binding.matches(proof)
-        {
-            return false;
-        }
-        // Consume nullifiers (fail if any already used)
-        for n in inputs {
-            if !st.nullifiers.insert(*n) {
-                return false;
-            }
-        }
-        for c in outputs {
-            let root = st.push_commitment(*c);
-            self.zk_events.push(ZkEvent::CommitmentAdded {
-                asset: asset.clone(),
-                commitment: *c,
-                new_root: *root.as_ref(),
-            });
-        }
-        true
-    }
-
-    /// Unshield: consume nullifiers, append private change commitments, and credit public balance.
-    /// Merkle root binding and full proof public-input semantics are not modelled in this mock.
-    pub fn unshield(
-        &mut self,
-        to: &AccountId,
-        asset: &AssetDefinitionId,
-        public_amount: Quantity,
-        inputs: &[[u8; 32]],
-        outputs: &[[u8; 32]],
-        proof: &ProofAttachment,
-    ) -> bool {
-        if !self.account_is_linked(to) {
-            return false;
-        }
-        if !Self::is_scale0(&public_amount) {
-            return false;
-        }
-        let to_subject = Self::account_subject(to);
-        let key = (to_subject.clone(), asset.clone());
-        let current = self
-            .balances
-            .get(&key)
-            .cloned()
-            .unwrap_or_else(Quantity::zero);
-        let next = match current.checked_add(&public_amount) {
-            Ok(value) => value,
-            Err(_) => return false,
-        };
-        let Some(st) = self.zk_assets.get_mut(asset) else {
-            return false;
-        };
-        if st.mode != ZkAssetMode::Hybrid || !st.allow_unshield {
-            return false;
-        }
-        if let Some(binding) = st.vk_unshield.as_ref()
-            && !binding.matches(proof)
-        {
-            return false;
-        }
-        let mut new_nullifiers = HashSet::with_capacity(inputs.len());
-        for n in inputs {
-            if st.nullifiers.contains(n) || !new_nullifiers.insert(*n) {
-                return false;
-            }
-        }
-        st.nullifiers.extend(new_nullifiers);
-        let mut output_events = Vec::with_capacity(outputs.len());
-        for c in outputs {
-            let root = st.push_commitment(*c);
-            output_events.push(ZkEvent::CommitmentAdded {
-                asset: asset.clone(),
-                commitment: *c,
-                new_root: *root.as_ref(),
-            });
-        }
-        // Credit public balance
-        self.balances.insert(key, next);
-        self.zk_events.extend(output_events);
-        // Emit an unshield event (no new root)
-        self.zk_events.push(ZkEvent::Unshielded {
-            asset: asset.clone(),
-            to: to_subject,
-            public_amount,
         });
         true
     }
@@ -832,20 +652,21 @@ impl MockWorldStateView {
         max: usize,
     ) -> ([u8; 32], Vec<[u8; 32]>, u32) {
         if let Some(st) = self.zk_assets.get(asset) {
-            let latest = st
-                .root_history
-                .last()
-                .map(|h| *h.as_ref())
-                .unwrap_or([0u8; 32]);
-            let list: Vec<[u8; 32]> = if max == 0 || st.root_history.len() <= max {
-                st.root_history.iter().map(|h| *h.as_ref()).collect()
+            let all_roots = if st.root_history.is_empty() {
+                vec![iroha_data_model::zk::CONFIDENTIAL_TREE_POSEIDON_PASTA_V1_EMPTY_ROOT]
             } else {
-                st.root_history[st.root_history.len() - max..]
-                    .iter()
-                    .map(|h| *h.as_ref())
-                    .collect()
+                st.root_history.iter().map(|h| *h.as_ref()).collect()
             };
-            (latest, list, st.root_history.len() as u32)
+            let latest = *all_roots
+                .last()
+                .expect("registered ZK assets always expose at least the profile empty root");
+            let list = if max == 0 || all_roots.len() <= max {
+                all_roots
+            } else {
+                all_roots[all_roots.len() - max..].to_vec()
+            };
+            let height = u32::try_from(st.commitments.len()).unwrap_or(u32::MAX);
+            (latest, list, height)
         } else {
             ([0u8; 32], Vec::new(), 0)
         }
@@ -1256,7 +1077,6 @@ impl MockWorldStateView {
                 "mock WSV balances must have scale=0"
             );
             let subject = Self::account_subject(account);
-            wsv.domains.entry(asset.domain().clone()).or_default();
             wsv.accounts.entry(subject.clone()).or_default();
             wsv.asset_definitions
                 .entry(asset.clone())
@@ -1335,17 +1155,14 @@ impl MockWorldStateView {
 
     /// Unregister a domain if it exists and has no accounts, assets, or NFTs.
     pub fn unregister_domain(&mut self, id: &DomainId) -> bool {
-        // deny removal if any account or asset belongs to the domain
+        // Asset-definition identifiers are opaque and do not imply domain
+        // ownership. Only explicit domain-owned records may pin this row.
         let has_accounts = self
             .domain_accounts
             .get(id)
             .is_some_and(|subjects| !subjects.is_empty());
-        let has_assets = self
-            .asset_definitions
-            .keys()
-            .any(|ad| ad.try_domain() == Some(id));
         let has_nfts = self.nfts.keys().any(|nft_id| nft_id.domain() == id);
-        if has_accounts || has_assets || has_nfts {
+        if has_accounts || has_nfts {
             return false;
         }
         self.domain_accounts.remove(id);
@@ -1404,8 +1221,7 @@ impl MockWorldStateView {
     /// Register a new asset definition with given mintability.
     ///
     /// The mock matches the core host and accepts canonical opaque asset
-    /// definition identifiers without requiring a first-class domain row for
-    /// `id.domain()`.
+    /// definition identifiers without projecting domain ownership from the ID.
     ///
     /// Returns `true` if the definition was added.
     pub fn register_asset_definition(
@@ -1797,9 +1613,7 @@ use iroha_data_model::isi::{InstructionBox as DMInstructionBox, zk as DMZk};
 /// Shielded asset mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ZkAssetMode {
-    /// Only shielded ledger (no public account balances).
-    ZkNative,
-    /// Hybrid: public balances plus shielded ledger; allows shield/unshield when policy permits.
+    /// Public balances plus the proof-bound confidential ledger.
     #[default]
     Hybrid,
 }
@@ -1813,60 +1627,15 @@ pub struct ZkAssetVerifierBinding {
     pub commitment: Option<[u8; 32]>,
 }
 
-impl ZkAssetVerifierBinding {
-    fn matches(&self, proof: &ProofAttachment) -> bool {
-        if proof.backend.as_str() != self.id.backend {
-            return false;
-        }
-        if proof.vk_ref != self.id {
-            return false;
-        }
-        if let Some(commitment) = proof.vk_commitment
-            && let Some(expected) = self.commitment
-            && commitment != expected
-        {
-            return false;
-        }
-        true
-    }
-}
-
 /// Policy and state for a shielded asset.
 #[derive(Clone, Debug, Default)]
 pub struct ZkAssetState {
     pub mode: ZkAssetMode,
-    pub allow_shield: bool,
     pub allow_unshield: bool,
     pub commitments: Vec<[u8; 32]>,
     pub root_history: Vec<HashOf<iroha_crypto::MerkleTree<[u8; 32]>>>,
     pub nullifiers: HashSet<[u8; 32]>,
-    pub vk_transfer: Option<ZkAssetVerifierBinding>,
     pub vk_unshield: Option<ZkAssetVerifierBinding>,
-    pub vk_shield: Option<ZkAssetVerifierBinding>,
-    /// Canonical Merkle tree over 32-byte commitments (SHA-256 inner nodes, prehashed leaves)
-    tree: iroha_crypto::MerkleTree<[u8; 32]>,
-}
-
-/// Maximum number of shielded Merkle roots retained in tests.
-const ROOT_HISTORY_MAX: usize = 1024;
-
-impl ZkAssetState {
-    fn push_commitment(&mut self, c: [u8; 32]) -> HashOf<iroha_crypto::MerkleTree<[u8; 32]>> {
-        self.commitments.push(c);
-        // Domain‑tagged leaf and update root
-        let leaf = iroha_crypto::MerkleTree::<[u8; 32]>::shielded_leaf_from_commitment(c);
-        self.tree.add(leaf);
-        let root = self
-            .tree
-            .root()
-            .unwrap_or_else(|| HashOf::from_untyped_unchecked(CryptoHash::prehashed([0u8; 32])));
-        self.root_history.push(root);
-        if self.root_history.len() > ROOT_HISTORY_MAX {
-            let overflow = self.root_history.len() - ROOT_HISTORY_MAX;
-            self.root_history.drain(0..overflow);
-        }
-        root
-    }
 }
 
 /// Election state for anonymous voting.
@@ -1880,23 +1649,6 @@ pub struct ElectionState {
     pub tally: Vec<u64>,
     pub ballot_nullifiers: HashSet<[u8; 32]>,
     pub ciphertexts: Vec<Vec<u8>>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn zk_root_history_is_bounded() {
-        let mut state = ZkAssetState::default();
-        for i in 0..(ROOT_HISTORY_MAX + 32) {
-            let mut commitment = [0u8; 32];
-            commitment[..8].copy_from_slice(&(i as u64).to_le_bytes());
-            state.push_commitment(commitment);
-        }
-        assert_eq!(state.root_history.len(), ROOT_HISTORY_MAX);
-        assert_eq!(state.commitments.len(), ROOT_HISTORY_MAX + 32);
-    }
 }
 
 #[cfg(test)]
@@ -1916,7 +1668,6 @@ pub enum ZkEvent {
     ZkPolicyUpdated {
         asset: AssetDefinitionId,
         mode: ZkAssetMode,
-        allow_shield: bool,
         allow_unshield: bool,
     },
     /// New commitment was appended and root updated.
@@ -1924,12 +1675,6 @@ pub enum ZkEvent {
         asset: AssetDefinitionId,
         commitment: [u8; 32],
         new_root: [u8; 32],
-    },
-    /// Unshield operation credited public balance.
-    Unshielded {
-        asset: AssetDefinitionId,
-        to: AccountId,
-        public_amount: Quantity,
     },
 }
 
@@ -1951,8 +1696,6 @@ pub struct WsvHost {
     account_aliases: BTreeMap<String, MockAccountAliasBinding>,
     public_inputs: BTreeMap<Name, Vec<u8>>,
     // ZK verify gating and configuration
-    zk_verified_transfer: bool,
-    zk_verified_unshield: bool,
     zk_verified_ballot: VecDeque<[u8; 32]>,
     zk_verified_tally: Option<[u8; 32]>,
     zk_cfg: crate::host::ZkHalo2Config,
@@ -1980,8 +1723,6 @@ struct WsvHostSnapshot {
     asset_map: HashMap<u64, AssetDefinitionId>,
     account_aliases: BTreeMap<String, MockAccountAliasBinding>,
     public_inputs: BTreeMap<Name, Vec<u8>>,
-    zk_verified_transfer: bool,
-    zk_verified_unshield: bool,
     zk_verified_ballot: VecDeque<[u8; 32]>,
     zk_verified_tally: Option<[u8; 32]>,
     zk_cfg: crate::host::ZkHalo2Config,
@@ -2018,11 +1759,8 @@ impl WsvHost {
                 reserve_available_syscall_gas_at_least(vm, PUBLIC_INPUT_GAS_BASE)?
             }
             crate::syscalls::SYSCALL_SCHEMA_ENCODE
-            | crate::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT
             | crate::syscalls::SYSCALL_SCHEMA_DECODE
-            | crate::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT
-            | crate::syscalls::SYSCALL_SCHEMA_INFO
-            | crate::syscalls::SYSCALL_SCHEMA_INFO_DIRECT => {
+            | crate::syscalls::SYSCALL_SCHEMA_INFO => {
                 let schema = crate::core_host::CoreHost::quote_codec_tlv_payload_len(
                     vm,
                     10,
@@ -2030,8 +1768,7 @@ impl WsvHost {
                     false,
                 )?;
                 let value = match number {
-                    crate::syscalls::SYSCALL_SCHEMA_ENCODE
-                    | crate::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT => {
+                    crate::syscalls::SYSCALL_SCHEMA_ENCODE => {
                         crate::core_host::CoreHost::quote_codec_tlv_payload_len(
                             vm,
                             11,
@@ -2039,8 +1776,7 @@ impl WsvHost {
                             false,
                         )?
                     }
-                    crate::syscalls::SYSCALL_SCHEMA_DECODE
-                    | crate::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT => {
+                    crate::syscalls::SYSCALL_SCHEMA_DECODE => {
                         crate::core_host::CoreHost::quote_codec_tlv_payload_len(
                             vm,
                             11,
@@ -2114,8 +1850,6 @@ impl WsvHost {
             asset_map,
             account_aliases: BTreeMap::new(),
             public_inputs: BTreeMap::new(),
-            zk_verified_transfer: false,
-            zk_verified_unshield: false,
             zk_verified_ballot: VecDeque::new(),
             zk_verified_tally: None,
             zk_cfg: crate::host::ZkHalo2Config::default(),
@@ -2216,8 +1950,6 @@ impl WsvHost {
             asset_map: self.asset_map.clone(),
             account_aliases: self.account_aliases.clone(),
             public_inputs: self.public_inputs.clone(),
-            zk_verified_transfer: self.zk_verified_transfer,
-            zk_verified_unshield: self.zk_verified_unshield,
             zk_verified_ballot: self.zk_verified_ballot.clone(),
             zk_verified_tally: self.zk_verified_tally,
             zk_cfg: self.zk_cfg,
@@ -2246,8 +1978,6 @@ impl WsvHost {
         self.asset_map = snapshot.asset_map.clone();
         self.account_aliases = snapshot.account_aliases.clone();
         self.public_inputs = snapshot.public_inputs.clone();
-        self.zk_verified_transfer = snapshot.zk_verified_transfer;
-        self.zk_verified_unshield = snapshot.zk_verified_unshield;
         self.zk_verified_ballot = snapshot.zk_verified_ballot.clone();
         self.zk_verified_tally = snapshot.zk_verified_tally;
         self.zk_cfg = snapshot.zk_cfg;
@@ -3377,16 +3107,6 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
             AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::RegisterZkAsset(id));
     }
-    if let Some(rest) = s.strip_prefix("shield:") {
-        let id =
-            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
-        return Ok(PermissionToken::Shield(id));
-    }
-    if let Some(rest) = s.strip_prefix("unshield:") {
-        let id =
-            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
-        return Ok(PermissionToken::Unshield(id));
-    }
     if let Some(rest) = s.strip_prefix("mint_asset:") {
         let id =
             AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
@@ -3513,7 +3233,6 @@ impl IVMHost for WsvHost {
         if matches!(
             number,
             crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
-                | crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
                 | crate::syscalls::SYSCALL_STATE_MAP_KEY_AT
                 | crate::syscalls::SYSCALL_STATE_VALUE_ENCODE
                 | crate::syscalls::SYSCALL_STATE_VALUE_DECODE
@@ -3587,8 +3306,7 @@ impl IVMHost for WsvHost {
         if crate::syscalls::is_numeric_v1_syscall(number) {
             return crate::numeric_v1::execute(number, vm);
         }
-        let canonical = crate::syscalls::canonical_helper_syscall(number);
-        if crate::syscalls::is_json_getter_syscall(canonical) {
+        if crate::syscalls::is_json_getter_syscall(number) {
             let cost = crate::json::typed_getter(
                 vm,
                 number,
@@ -3918,11 +3636,13 @@ impl IVMHost for WsvHost {
                 Ok(Self::json_gas(0, body.len()))
             }
             crate::syscalls::SYSCALL_JSON_SET_I64
-            | crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
-            | crate::syscalls::SYSCALL_JSON_SET_I64_DIRECT
-            | crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT => {
-                let json_tlv = vm.validate_tlv(vm.register(10))?;
-                let key_tlv = vm.validate_tlv(vm.register(11))?;
+            | crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID => {
+                let json_addr =
+                    crate::core_host::CoreHost::resolve_code_tlv_addr(vm, vm.register(10));
+                let key_addr =
+                    crate::core_host::CoreHost::resolve_code_tlv_addr(vm, vm.register(11));
+                let json_tlv = vm.validate_tlv(json_addr)?;
+                let key_tlv = vm.validate_tlv(key_addr)?;
                 if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -3953,13 +3673,15 @@ impl IVMHost for WsvHost {
                 let key_name: Name =
                     decode_canonical_norito(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
 
-                let field = match crate::syscalls::canonical_helper_syscall(number) {
+                let field = match number {
                     crate::syscalls::SYSCALL_JSON_SET_I64 => {
                         input_len = input_len.saturating_add(core::mem::size_of::<i64>());
                         njson::Value::from(vm.register(12) as i64)
                     }
                     crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID => {
-                        let value_tlv = vm.validate_tlv(vm.register(12))?;
+                        let value_addr =
+                            crate::core_host::CoreHost::resolve_code_tlv_addr(vm, vm.register(12));
+                        let value_tlv = vm.validate_tlv(value_addr)?;
                         if value_tlv.type_id != PointerType::AccountId {
                             return Err(VMError::NoritoInvalid);
                         }
@@ -4144,16 +3866,12 @@ impl IVMHost for WsvHost {
                 Ok(Self::tlv_eq_gas(left_len, right_len))
             }
             crate::syscalls::SYSCALL_SCHEMA_ENCODE
-            | crate::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT
             | crate::syscalls::SYSCALL_SCHEMA_DECODE
-            | crate::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT
-            | crate::syscalls::SYSCALL_SCHEMA_INFO
-            | crate::syscalls::SYSCALL_SCHEMA_INFO_DIRECT => {
+            | crate::syscalls::SYSCALL_SCHEMA_INFO => {
                 crate::core_host::CoreHost::new_with_registry(Box::new(Arc::clone(&self.schema)))
                     .syscall(number, vm)
             }
             crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
-            | crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
             | crate::syscalls::SYSCALL_STATE_MAP_KEY_AT
             | crate::syscalls::SYSCALL_STATE_VALUE_ENCODE
             | crate::syscalls::SYSCALL_STATE_VALUE_DECODE
@@ -4224,10 +3942,7 @@ impl IVMHost for WsvHost {
                 Err(VMError::NotImplemented { syscall: number })
             }
             // Link ZK_VERIFY syscalls: decode Norito envelope and set per-op verified flags.
-            syscalls::SYSCALL_ZK_VERIFY_TRANSFER
-            | syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
-            | syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
-            | syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
+            syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT | syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
                 // Expect NoritoBytes TLV in r10 for a `iroha_data_model::zk::OpenVerifyEnvelope`.
                 //
                 // Note: `WsvHost` is a development/mock host. It does not perform full
@@ -4279,8 +3994,6 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, 1);
                 vm.set_register(11, 0);
                 match number {
-                    syscalls::SYSCALL_ZK_VERIFY_TRANSFER => self.zk_verified_transfer = true,
-                    syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => self.zk_verified_unshield = true,
                     syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => {
                         self.zk_verified_ballot.push_back(env_hash);
                     }
@@ -4310,32 +4023,6 @@ impl IVMHost for WsvHost {
                         self.handle_submit_ballot(instr)?;
                         Ok(instruction_gas)
                     }
-                    syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD => {
-                        let Some(instr) = any_ref.downcast_ref::<DMZk::Unshield>() else {
-                            return Err(VMError::PermissionDenied);
-                        };
-                        let amount = instr.public_amount().clone();
-                        let tok = PermissionToken::Unshield(instr.asset().clone());
-                        if !self.wsv.has_permission(&self.caller, &tok)
-                            || !self.zk_verified_unshield
-                        {
-                            return Err(VMError::PermissionDenied);
-                        }
-                        self.zk_verified_unshield = false;
-                        let to = Self::materialize_subject_account(&mut self.wsv, instr.to());
-                        if self.wsv.unshield(
-                            &to,
-                            instr.asset(),
-                            amount,
-                            instr.inputs().as_slice(),
-                            instr.outputs().as_slice(),
-                            instr.proof(),
-                        ) {
-                            Ok(instruction_gas)
-                        } else {
-                            Err(VMError::PermissionDenied)
-                        }
-                    }
                     syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE => {
                         if any_ref
                             .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
@@ -4359,26 +4046,7 @@ impl IVMHost for WsvHost {
                 let req: crate::zk_verify::RootsGetRequest = decode_canonical_norito(tlv.payload)?;
                 let asset: AssetDefinitionId =
                     req.asset_id.parse().map_err(|_| VMError::NoritoInvalid)?;
-                let (latest, roots, height) = if let Some(state) = self.wsv.zk_assets.get(&asset) {
-                    let latest = state
-                        .root_history
-                        .last()
-                        .map(|root| *root.as_ref())
-                        .unwrap_or([0u8; 32]);
-                    let max = req.max as usize;
-                    let sl = &state.root_history;
-                    let list: Vec<[u8; 32]> = if max == 0 || sl.len() <= max {
-                        sl.iter().map(|root| *root.as_ref()).collect()
-                    } else {
-                        sl[sl.len() - max..]
-                            .iter()
-                            .map(|root| *root.as_ref())
-                            .collect()
-                    };
-                    (latest, list, sl.len() as u32)
-                } else {
-                    ([0u8; 32], Vec::new(), 0)
-                };
+                let (latest, roots, height) = self.wsv.get_roots(&asset, req.max as usize);
                 let resp = crate::zk_verify::RootsGetResponse {
                     latest,
                     roots,
@@ -4407,6 +4075,9 @@ impl IVMHost for WsvHost {
                 let input_len = tlv.payload.len();
                 let req: crate::zk_verify::VoteGetTallyRequest =
                     decode_canonical_norito(tlv.payload)?;
+                if !req.is_valid_v1() {
+                    return Err(VMError::NoritoInvalid);
+                }
                 let (finalized, tally) = if let Some(e) = self.wsv.elections.get(&req.election_id) {
                     DMZk::validate_election_tally_v1(e.options, e.tally.len())
                         .map_err(|_| VMError::NoritoInvalid)?;
@@ -6121,149 +5792,16 @@ mod tests_zk_asset_bindings {
     use super::*;
 
     #[test]
-    fn register_without_vk_allows_shield() {
-        let caller: AccountId = test_account_id(
-            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
-            "domain",
-        );
-        let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
-        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("domain", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
-        let mut wsv = MockWorldStateView::new();
-        wsv.add_account_unchecked(caller.clone());
-        wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
-        assert!(wsv.register_domain(&caller, domain.clone()));
-        wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-        assert!(wsv.register_asset_definition(&caller, asset.clone(), Mintable::Infinitely));
-        wsv.grant_permission(&caller, PermissionToken::RegisterZkAsset(asset.clone()));
-        wsv.grant_permission(&caller, PermissionToken::Shield(asset.clone()));
-        wsv.grant_permission(&caller, PermissionToken::MintAsset(asset.clone()));
-        assert!(wsv.register_zk_asset(
-            asset.clone(),
-            ZkPolicyConfig {
-                mode: ZkAssetMode::Hybrid,
-                allow_shield: true,
-                allow_unshield: true,
-                vk_transfer: None,
-                vk_unshield: None,
-                vk_shield: None,
-            },
-        ));
-        wsv.mint(
-            &caller,
-            caller.clone(),
-            asset.clone(),
-            Quantity::from(10_u64),
-        );
-        assert!(wsv.shield(&caller, &asset, Quantity::from(3_u64), [7u8; 32]));
-    }
-
-    #[test]
-    fn unshield_appends_private_change_outputs_and_rejects_duplicate_inputs_without_mutation() {
-        let caller: AccountId = test_account_id(
-            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
-            "domain",
-        );
-        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("domain", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
-        let mut wsv = MockWorldStateView::with_balances(&[(
-            (caller.clone(), asset.clone()),
-            Quantity::from(10_u64),
-        )]);
-        assert!(wsv.register_zk_asset(
-            asset.clone(),
-            ZkPolicyConfig {
-                mode: ZkAssetMode::Hybrid,
-                allow_shield: true,
-                allow_unshield: true,
-                vk_transfer: None,
-                vk_unshield: None,
-                vk_shield: None,
-            },
-        ));
-        wsv.drain_zk_events();
-
-        let proof = iroha_data_model::proof::ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xA5]),
-            iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
-        );
-        let inputs = [[1u8; 32], [2u8; 32]];
-        let outputs = [[9u8; 32], [10u8; 32]];
-        assert!(wsv.unshield(
-            &caller,
-            &asset,
-            Quantity::from(4_u64),
-            &inputs,
-            &outputs,
-            &proof,
-        ));
-        assert_eq!(
-            wsv.balance(caller.clone(), asset.clone()),
-            Quantity::from(14_u64)
-        );
-        let (latest_root, roots, depth) = wsv.get_roots(&asset, 8);
-        assert_eq!(depth, 2);
-        assert_eq!(roots.len(), 2);
-        assert_eq!(latest_root, roots[1]);
-
-        let events = wsv.drain_zk_events();
-        assert_eq!(
-            events,
-            vec![
-                ZkEvent::CommitmentAdded {
-                    asset: asset.clone(),
-                    commitment: outputs[0],
-                    new_root: roots[0],
-                },
-                ZkEvent::CommitmentAdded {
-                    asset: asset.clone(),
-                    commitment: outputs[1],
-                    new_root: roots[1],
-                },
-                ZkEvent::Unshielded {
-                    asset: asset.clone(),
-                    to: caller.clone(),
-                    public_amount: Quantity::from(4_u64),
-                },
-            ]
-        );
-
-        let duplicate_inputs = [[3u8; 32], [3u8; 32]];
-        assert!(!wsv.unshield(
-            &caller,
-            &asset,
-            Quantity::from(1_u64),
-            &duplicate_inputs,
-            &[[11u8; 32]],
-            &proof,
-        ));
-        assert_eq!(
-            wsv.balance(caller.clone(), asset.clone()),
-            Quantity::from(14_u64)
-        );
-        let (latest_after_failure, roots_after_failure, depth_after_failure) =
-            wsv.get_roots(&asset, 8);
-        assert_eq!(depth_after_failure, 2);
-        assert_eq!(roots_after_failure, roots);
-        assert_eq!(latest_after_failure, latest_root);
-        assert!(wsv.drain_zk_events().is_empty());
-    }
-
-    #[test]
     fn register_asset_definition_does_not_require_domain_row_for_opaque_id() {
         let caller: AccountId = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonder", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset: AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonder", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
         let opaque = norito::decode_from_bytes::<AssetDefinitionId>(
             &norito::to_bytes(&asset).expect("encode asset definition"),
         )
@@ -6290,7 +5828,7 @@ mod tests_zk_asset_bindings {
             "domain",
         );
         let domain: DomainId = DomainId::try_new("wonder", "universal").unwrap();
-        let projected = iroha_data_model::asset::AssetDefinitionId::new(
+        let projected = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             domain.clone(),
             "rose".parse().unwrap(),
         );
@@ -6584,7 +6122,7 @@ mod tests_null_decode {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         );
@@ -6640,7 +6178,7 @@ mod tests_null_decode {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         );
@@ -6698,7 +6236,8 @@ mod tests_null_decode {
             .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &malformed))
             .expect("alloc malformed envelope");
         vm.set_register(10, ptr);
-        let gas = call_syscall(&mut vm, syscalls::SYSCALL_ZK_VERIFY_TRANSFER).expect("zk verify");
+        let gas =
+            call_syscall(&mut vm, syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT).expect("zk verify");
 
         assert_eq!(gas, WsvHost::verify_gas(malformed.len()));
         assert_eq!(vm.register(10), 0);
@@ -6716,7 +6255,7 @@ mod tests_null_decode {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
-        let asset_id = AssetDefinitionId::new(
+        let asset_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         );
@@ -6834,6 +6373,35 @@ mod tests_null_decode {
         assert!(response.finalized);
         assert_eq!(response.tally, expected);
         assert_eq!(response.tally.len(), DMZk::MAX_ELECTION_OPTIONS_V1 as usize);
+    }
+
+    #[test]
+    fn vote_tally_query_rejects_noncanonical_selector_without_response() {
+        let caller: AccountId = test_account_id(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "wonderland",
+        );
+        let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+        let request = crate::zk_verify::VoteGetTallyRequest {
+            election_id: "election/alias".to_owned(),
+        };
+        let payload = encode_canonical_norito(&request).expect("encode tally request");
+        let request_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &payload))
+            .expect("allocate tally request");
+        vm.set_register(10, request_ptr);
+
+        assert_eq!(
+            call_syscall(&mut vm, syscalls::SYSCALL_ZK_VOTE_GET_TALLY),
+            Err(VMError::NoritoInvalid)
+        );
+        assert_eq!(
+            vm.register(10),
+            request_ptr,
+            "failed tally queries must not publish a response pointer"
+        );
     }
 
     #[test]
@@ -7222,7 +6790,6 @@ mod tests_null_decode {
         for tag in [
             0,
             99,
-            syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD,
             syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
         ] {
             vm.set_register(11, tag);
@@ -7321,7 +6888,7 @@ mod tests_null_decode {
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
             "wonderland",
         );
-        let asset = AssetDefinitionId::new(
+        let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         );
@@ -7415,7 +6982,7 @@ mod tests_null_decode {
                 "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
                 "app",
             );
-            let asset = AssetDefinitionId::new(
+            let asset = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("currency", "sbp").expect("asset domain"),
                 "pkr".parse().expect("asset name"),
             );

@@ -29,7 +29,13 @@ fn build_world(def_id: &AssetDefinitionId) -> World {
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice_account = iroha_data_model::account::Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let escrow_account = iroha_data_model::account::Account::new(BOB_ID.clone()).build(&BOB_ID);
-    let asset_def = AssetDefinition::numeric(def_id.clone()).build(&ALICE_ID);
+    let asset_def = AssetDefinition::numeric(
+        def_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&ALICE_ID);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),
         Quantity::from(1_000_u64),
@@ -50,10 +56,11 @@ fn build_world(def_id: &AssetDefinitionId) -> World {
 
 #[test]
 fn register_and_revoke_citizenship_moves_bond() {
-    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
+    let def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
     let world = build_world(&def_id);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -113,10 +120,11 @@ fn register_and_revoke_citizenship_moves_bond() {
 
 #[test]
 fn citizenship_gate_blocks_and_allows_governance() {
-    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
+    let def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
     let world = build_world(&def_id);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -219,10 +227,11 @@ fn citizenship_gate_blocks_and_allows_governance() {
 
 #[test]
 fn citizenship_records_persist_across_transactions() {
-    let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-        "xor".parse().unwrap(),
-    );
+    let def_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
     let world = build_world(&def_id);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -274,7 +283,7 @@ fn citizenship_records_persist_across_transactions() {
 
 #[test]
 fn citizenship_top_up_preserves_the_original_bond_interval_and_service_state() {
-    let def_id = AssetDefinitionId::new(
+    let def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain"),
         "xor".parse().expect("asset name"),
     );

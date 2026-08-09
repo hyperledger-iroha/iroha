@@ -27,6 +27,10 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
+        with:
+          distribution: "temurin"
+          java-version: "21"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"
@@ -69,6 +73,20 @@ jobs:
           cargo test -p norito crc64 --features cuda-crc64 -- --nocapture
           cargo test -p norito stage1_helper --features cuda-stage1,stage1-validate -- --nocapture
           cargo test -p norito cuda_stage1_backend_matches_scalar_when_required_or_available --features cuda-stage1,stage1-validate -- --nocapture
+      - name: Java Android CUDA JNI smoke test
+        run: |
+          cargo build --locked -p connect_norito_bridge --features cuda
+          java_out="$(mktemp -d "${RUNNER_TEMP}/iroha-java-cuda-smoke.XXXXXX")"
+          trap 'rm -rf "$java_out"' EXIT INT TERM
+          javac --release 8 -Xlint:all,-options -Werror -d "$java_out" \
+            java/iroha_android/src/main/java/org/hyperledger/iroha/android/gpu/CudaAccelerators.java \
+            java/iroha_android/src/test/java/org/hyperledger/iroha/android/gpu/CudaAcceleratorsNativeSmokeTests.java
+          java \
+            -ea \
+            -Diroha.cuda.enableNative=true \
+            -Djava.library.path="$GITHUB_WORKSPACE/$CARGO_TARGET_DIR/debug" \
+            -cp "$java_out" \
+            org.hyperledger.iroha.android.gpu.CudaAcceleratorsNativeSmokeTests
       - name: Upload CUDA inventory
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

@@ -290,6 +290,7 @@ impl<'a> norito::json::FastFromJson<'a> for EntrypointValueTypeV1 {
         walker: &mut norito::json::TapeWalker<'a>,
         _arena: &mut norito::json::Arena,
     ) -> Result<Self, norito::Error> {
+        walker.ensure_document_depth()?;
         let input = walker.input();
         let mut parser = norito::json::Parser::new_at(input, walker.raw_pos());
         let value = <Self as norito::json::JsonDeserialize>::json_deserialize(&mut parser)
@@ -1724,6 +1725,29 @@ mod tests {
             .expect("convert recovery schema to JSON value");
         norito::json::from_value::<EntrypointValueTypeV1>(leaf_value)
             .expect("failed from_value validation must not poison later decodes");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn manual_fast_json_schema_decode_enforces_complete_document_depth() {
+        let wrappers = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 1;
+        let nested = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
+        let input = format!(r#"{{"nodes":[],"unknown":{nested}}}"#);
+        let mut walker = norito::json::TapeWalker::new(&input);
+        let mut arena = norito::json::Arena::new();
+        assert!(matches!(
+            <EntrypointValueTypeV1 as norito::json::FastFromJson>::parse(
+                &mut walker,
+                &mut arena
+            ),
+            Err(norito::Error::Json(
+                norito::json::Error::NestingDepthExceeded {
+                    depth,
+                    limit: norito::json::MAX_JSON_VALUE_NESTING_DEPTH,
+                    context: "JSON value",
+                }
+            )) if depth == norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1
+        ));
     }
 
     #[test]

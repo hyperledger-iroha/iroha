@@ -77,8 +77,7 @@ traces/*
 npm-iroha-js.log
 javascript/npm-iroha-js.log
 javascript/iroha_js/**/*.log
-javascript/iroha_js/native/*.node
-javascript/iroha_js/native/iroha_js_host.checksums.json
+javascript/iroha_js/native/
 javascript/iroha_js/scripts/release_matrix.targets.json
 build/*
 dist/*
@@ -161,6 +160,10 @@ javascript/iroha_js/node_modules/
 javascript/iroha_js/dist/
 javascript/iroha_js/target-cargo/
 
+# Developer portal build artifacts
+docs/portal/.docusaurus/
+docs/portal/node_modules/
+
 # Python build artifacts
 *.pyc
 python/norito_py/build/
@@ -200,9 +203,16 @@ fixtures/sccp/release_evidence_v1/artifacts/phases/*
 .clean_copy/*
 clean_copy/*
 test_*
+!vendor/vega-prover/src/bellpepper/test_r1cs.rs
+!vendor/vega-prover/src/bellpepper/test_shape_cs.rs
+!crates/musubi/src/test_runner.rs
+!crates/iroha_core/src/kura/test_fault_injection_state.rs
+!crates/iroha_core/src/kura/test_fault_injection_controls.rs
+!crates/iroha_core/src/sumeragi/status/test_guards.rs
 !crates/iroha_core/src/privacy_engines/fcmp_plus_plus/test_vectors/
 !crates/iroha_core/src/privacy_engines/fcmp_plus_plus/test_vectors/**
 !python/iroha_torii_client/tests/test_client.py
+!python/iroha_torii_client/tests/test_strict_wire_profiles.py
 !python/iroha_python/tests/test_address_format.py
 !python/iroha_python/tests/test_governance_zk_ballot.py
 !python/iroha_python/tests/test_nexus_app.py

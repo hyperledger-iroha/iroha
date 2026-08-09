@@ -6,7 +6,6 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_config_base::WithOrigin;
-use iroha_crypto::KeyPair;
 use iroha_data_model::{ChainId, prelude::Peer};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{NetworkHandle, network, network::message::*};
@@ -96,10 +95,10 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr, cap_high: usize, cap_low: usize
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn drops_increment_for_high_post_queue() {
     let chain = ChainId::from("test_chain");
-    let kp = KeyPair::random();
+    let kp = super::random_node_key_pair();
     let addr = super::next_addr();
     let (net, _child) = match NetworkHandle::<Msg>::start(
-        kp.clone(),
+        super::p2p_identity_keys(kp.clone()),
         cfg(addr.clone(), 1, 128),
         chain.clone(),
         None,
@@ -136,10 +135,10 @@ async fn drops_increment_for_high_post_queue() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn drops_increment_for_low_broadcast_queue() {
     let chain = ChainId::from("test_chain");
-    let kp = KeyPair::random();
+    let kp = super::random_node_key_pair();
     let addr = super::next_addr();
     let (net, _child) = match NetworkHandle::<Msg>::start(
-        kp.clone(),
+        super::p2p_identity_keys(kp.clone()),
         cfg(addr.clone(), 128, 1),
         chain.clone(),
         None,
@@ -173,8 +172,8 @@ async fn per_peer_post_channel_overflow_disconnects() {
     // With a tiny cap and a burst of posts, the sender's try_send will fail and the
     // network actor will drop the peer according to current policy.
     let chain = ChainId::from("test_chain");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let a1 = super::next_addr();
     let a2 = super::next_addr();
 
@@ -182,7 +181,7 @@ async fn per_peer_post_channel_overflow_disconnects() {
     c1.p2p_post_queue_cap = core::num::NonZeroUsize::new(1).unwrap();
     c1.disconnect_on_post_overflow = true;
     let (net1, _ch1) = match NetworkHandle::<Msg>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         c1,
         chain.clone(),
         None,
@@ -195,7 +194,7 @@ async fn per_peer_post_channel_overflow_disconnects() {
         Err(_e) => return,
     };
     let (net2, _ch2) = match NetworkHandle::<Msg>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(a2.clone(), 128, 128),
         chain.clone(),
         None,
@@ -262,8 +261,8 @@ impl iroha_p2p::network::message::ClassifyTopic for HiMsg {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn per_peer_overflow_drop_policy_keeps_connection() {
     let chain = ChainId::from("test_chain");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let a1 = super::next_addr();
     let a2 = super::next_addr();
 
@@ -271,7 +270,7 @@ async fn per_peer_overflow_drop_policy_keeps_connection() {
     c1.p2p_post_queue_cap = core::num::NonZeroUsize::new(1).unwrap();
     c1.disconnect_on_post_overflow = false;
     let (net1, _ch1) = match NetworkHandle::<HiMsg>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         c1,
         chain.clone(),
         None,
@@ -284,7 +283,7 @@ async fn per_peer_overflow_drop_policy_keeps_connection() {
         Err(_e) => return,
     };
     let (net2, _ch2) = match NetworkHandle::<HiMsg>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(a2.clone(), 128, 128),
         chain.clone(),
         None,
@@ -343,8 +342,8 @@ async fn per_peer_overflow_drop_policy_keeps_connection() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn overflow_metrics_increment_for_consensus_and_other() {
     let chain = ChainId::from("test_chain");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let a1 = super::next_addr();
     let a2 = super::next_addr();
 
@@ -352,7 +351,7 @@ async fn overflow_metrics_increment_for_consensus_and_other() {
     c1.p2p_post_queue_cap = core::num::NonZeroUsize::new(1).unwrap();
     c1.disconnect_on_post_overflow = false;
     let (net1, _ch1) = match NetworkHandle::<Msg>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         c1,
         chain.clone(),
         None,
@@ -365,7 +364,7 @@ async fn overflow_metrics_increment_for_consensus_and_other() {
         Err(_e) => return,
     };
     let (net2, _ch2) = match NetworkHandle::<Msg>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(a2.clone(), 128, 128),
         chain.clone(),
         None,

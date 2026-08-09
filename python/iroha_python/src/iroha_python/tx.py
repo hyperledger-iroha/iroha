@@ -542,18 +542,18 @@ class TransactionDraft:
     def register_asset_definition(
         self,
         definition_id: str,
-        owner: str,
         *,
-        name: Optional[str] = None,
+        owning_domain: Optional[str],
+        balance_scope_policy: str,
+        name: str,
         description: Optional[str] = None,
         alias: Optional[str] = None,
         scale: Optional[Union[int, str]] = None,
         mintable: Optional[str] = None,
-        balance_scope_policy: Optional[str] = None,
         confidential_policy: Optional[str] = None,
         metadata: MetadataLike = None,
     ) -> TransactionDraft:
-        """Append a `RegisterAssetDefinition` instruction for quantity assets."""
+        """Append an asset definition owned by this transaction's authority."""
 
         normalized_scale: Optional[int]
         if scale is None:
@@ -568,13 +568,31 @@ class TransactionDraft:
         else:
             raise TypeError("scale must be an integer or string when provided")
 
+        normalized_owning_domain = (
+            None
+            if owning_domain is None
+            else _require_exact_non_empty_string(owning_domain, "owning_domain")
+        )
+        if balance_scope_policy not in {"Global", "DataspaceRestricted"}:
+            raise ValueError(
+                "balance_scope_policy must be Global or DataspaceRestricted"
+            )
+        if (
+            balance_scope_policy == "DataspaceRestricted"
+            and normalized_owning_domain is None
+        ):
+            raise ValueError(
+                "owning_domain is required for DataspaceRestricted balances"
+            )
+        normalized_name = _require_exact_non_empty_string(name, "name")
+
         metadata_payload = _normalize_metadata(metadata)
 
         self.add_instruction(
             Instruction.register_asset_definition(
                 definition_id,
-                owner,
-                name=name,
+                owning_domain=normalized_owning_domain,
+                name=normalized_name,
                 description=description,
                 alias=alias,
                 scale=normalized_scale,
@@ -593,7 +611,6 @@ class TransactionDraft:
         mode: str = "Hybrid",
         allow_shield: bool = True,
         allow_unshield: bool = True,
-        vk_transfer: Optional[VerifyingKeyLike] = None,
         vk_unshield: Optional[VerifyingKeyLike] = None,
         vk_shield: Optional[VerifyingKeyLike] = None,
     ) -> TransactionDraft:
@@ -609,7 +626,6 @@ class TransactionDraft:
                 mode=mode,
                 allow_shield=bool(allow_shield),
                 allow_unshield=bool(allow_unshield),
-                vk_transfer=vk_transfer,
                 vk_unshield=vk_unshield,
                 vk_shield=vk_shield,
             )
@@ -622,105 +638,6 @@ class TransactionDraft:
         if not isinstance(proof, Mapping):
             raise TypeError("proof must be a mapping")
         self.add_instruction(Instruction.verify_proof(dict(proof)))
-        return self
-
-    def shield_asset(
-        self,
-        asset_definition_id: str,
-        from_account_id: str,
-        amount: QuantityLike,
-        *,
-        note_commitment: FixedBytesLike,
-        ephemeral_public_key: FixedBytesLike,
-        nonce: FixedBytesLike,
-        ciphertext: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        ciphertext_b64: Optional[str] = None,
-    ) -> TransactionDraft:
-        """Append a `Shield` instruction for public-to-shielded movement."""
-
-        if ciphertext is None and ciphertext_b64 is None:
-            raise ValueError("provide either ciphertext or ciphertext_b64")
-        if ciphertext is not None and ciphertext_b64 is not None:
-            raise ValueError("provide only one of ciphertext or ciphertext_b64")
-        normalized_ciphertext: Union[bytes, bytearray, memoryview, str]
-        if ciphertext_b64 is not None:
-            normalized_ciphertext = ciphertext_b64
-        elif isinstance(ciphertext, str):
-            normalized_ciphertext = ciphertext.encode("utf-8")
-        else:
-            assert ciphertext is not None
-            normalized_ciphertext = ciphertext
-        self.add_instruction(
-            Instruction.shield_asset(
-                _require_non_empty_string(asset_definition_id, "asset_definition_id"),
-                _require_non_empty_string(from_account_id, "from_account_id"),
-                _normalize_quantity(amount),
-                note_commitment,
-                ephemeral_public_key,
-                nonce,
-                normalized_ciphertext,
-            )
-        )
-        return self
-
-    def zk_transfer_prepared(
-        self,
-        asset_definition_id: str,
-        *,
-        inputs: Iterable[FixedBytesLike],
-        outputs: Iterable[FixedBytesLike],
-        proof: Mapping[str, Any],
-        root_hint: Optional[FixedBytesLike] = None,
-    ) -> TransactionDraft:
-        """Append a prepared `ZkTransfer` instruction."""
-
-        if not isinstance(proof, Mapping):
-            raise TypeError("proof must be a mapping")
-        input_list = list(inputs)
-        output_list = list(outputs)
-        self.add_instruction(
-            Instruction.zk_transfer_prepared(
-                _require_non_empty_string(asset_definition_id, "asset_definition_id"),
-                input_list,
-                output_list,
-                dict(proof),
-                root_hint=root_hint,
-            )
-        )
-        return self
-
-    def unshield_prepared(
-        self,
-        asset_definition_id: str,
-        to_account_id: str,
-        public_amount: QuantityLike,
-        *,
-        inputs: Iterable[FixedBytesLike],
-        proof: Mapping[str, Any],
-        outputs: Optional[Iterable[FixedBytesLike]] = None,
-        root_hint: Optional[FixedBytesLike] = None,
-    ) -> TransactionDraft:
-        """Append a prepared `Unshield` instruction."""
-
-        if not isinstance(proof, Mapping):
-            raise TypeError("proof must be a mapping")
-        try:
-            normalized_public_amount = _normalize_quantity(public_amount)
-        except TypeError as exc:
-            raise TypeError(f"public_amount: {exc}") from exc
-        except ValueError as exc:
-            raise ValueError(f"public_amount: {exc}") from exc
-        self.add_instruction(
-            Instruction.unshield_prepared(
-                _require_non_empty_string(asset_definition_id, "asset_definition_id"),
-                _require_non_empty_string(to_account_id, "to_account_id"),
-                normalized_public_amount,
-                list(inputs),
-                dict(proof),
-                outputs=list(outputs or []),
-                root_hint=root_hint,
-            )
-        )
         return self
 
     def mint_asset_quantity(self, asset_id: str, quantity: QuantityLike) -> TransactionDraft:

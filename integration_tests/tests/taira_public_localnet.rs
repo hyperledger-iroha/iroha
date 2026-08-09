@@ -364,6 +364,7 @@ fn blocker_label(blocker: SumeragiV2LivenessBlocker) -> &'static str {
         SumeragiV2LivenessBlocker::TimeoutCertificateMissing => "timeout_certificate_missing",
         SumeragiV2LivenessBlocker::SchedulerStarvation => "scheduler_starvation",
         SumeragiV2LivenessBlocker::ApplicationPending => "application_pending",
+        SumeragiV2LivenessBlocker::SuccessorActivationPending => "successor_activation_pending",
         SumeragiV2LivenessBlocker::LocalControlPending => "local_control_pending",
     }
 }
@@ -1828,6 +1829,7 @@ fn build_joiner_peer(
         .ok_or_else(|| eyre!("template config root must be a TOML table"))?;
 
     let peer_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let soranet_transport_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let peer_id = PeerId::new(peer_key.public_key().clone());
     let pop = bls_normal_pop_prove(peer_key.private_key()).wrap_err("generate BLS PoP")?;
     root.insert(
@@ -1837,6 +1839,16 @@ fn build_joiner_peer(
     root.insert(
         "private_key".into(),
         TomlValue::String(ExposedPrivateKey(peer_key.private_key().clone()).to_string()),
+    );
+    root.insert(
+        "soranet_transport_public_key".into(),
+        TomlValue::String(soranet_transport_key.public_key().to_string()),
+    );
+    root.insert(
+        "soranet_transport_private_key".into(),
+        TomlValue::String(
+            ExposedPrivateKey(soranet_transport_key.private_key().clone()).to_string(),
+        ),
     );
     if let Some(trusted_peers_pop) = root
         .get_mut("trusted_peers_pop")
@@ -1852,6 +1864,11 @@ fn build_joiner_peer(
     }
 
     let stream_key = KeyPair::random();
+    assert_ne!(
+        soranet_transport_key.public_key(),
+        stream_key.public_key(),
+        "joiner SoraNet transport and streaming identities must be independent"
+    );
     let streaming = get_subtable_mut(root, "streaming")?;
     streaming.insert(
         "identity_public_key".into(),
@@ -3895,6 +3912,10 @@ fn simulation_summary_json_records_release_profile_and_status_evidence() {
         "application_pending"
     );
     assert_eq!(
+        blocker_label(SumeragiV2LivenessBlocker::SuccessorActivationPending),
+        "successor_activation_pending"
+    );
+    assert_eq!(
         blocker_label(SumeragiV2LivenessBlocker::LocalControlPending),
         "local_control_pending"
     );
@@ -3919,49 +3940,4 @@ fn write_summary_persists_local_and_durable_evidence() {
     );
 }
 
-#[test]
-fn status_snapshot_preserves_the_source_validator_index() {
-    let snapshot = status_snapshot_value(3, norito::json!({"height": 9_u64}));
-    let object = snapshot.as_object().expect("snapshot object");
-    assert_eq!(
-        object
-            .get("validator_index")
-            .and_then(norito::json::Value::as_u64),
-        Some(3)
-    );
-    assert_eq!(
-        object
-            .get("status")
-            .and_then(norito::json::Value::as_object)
-            .and_then(|status| status.get("height"))
-            .and_then(norito::json::Value::as_u64),
-        Some(9)
-    );
-}
-
-#[test]
-fn generated_config_digest_tracks_config_but_not_runtime_logs() {
-    let temp = tempfile::tempdir().expect("temporary config directory");
-    fs::write(temp.path().join("peer0.toml"), "chain = 'a'\n").expect("write config");
-    fs::write(temp.path().join("peer0.log"), "startup\n").expect("write log");
-    fs::create_dir_all(temp.path().join("storage")).expect("create storage");
-    fs::write(temp.path().join("storage/block.json"), "dynamic\n").expect("write storage");
-
-    let first = generated_config_blake2b_256(temp.path()).expect("digest generated config");
-    fs::write(temp.path().join("peer0.log"), "different log\n").expect("update log");
-    fs::write(
-        temp.path().join("storage/block.json"),
-        "different storage\n",
-    )
-    .expect("update storage");
-    assert_eq!(
-        first,
-        generated_config_blake2b_256(temp.path()).expect("digest without runtime artifacts")
-    );
-
-    fs::write(temp.path().join("peer0.toml"), "chain = 'b'\n").expect("update config");
-    assert_ne!(
-        first,
-        generated_config_blake2b_256(temp.path()).expect("digest changed config")
-    );
-}
+include!("taira_public_localnet_config_digest_test.rs");

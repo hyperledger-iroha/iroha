@@ -12,5 +12,6 @@ pub mod handshake;
 pub mod pow;
 pub mod puzzle;
 pub mod record;
+pub mod replay;
 mod replay_lock;
 pub mod token;

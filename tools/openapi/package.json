@@ -3,11 +3,12 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "sync-openapi": "node scripts/sync-openapi.mjs --version=current --latest",
+    "sync-openapi": "node scripts/sync-openapi.mjs --version=current --latest --output-dir=../../artifacts/openapi",
     "check:openapi-signatures": "node scripts/check-openapi-signatures.mjs",
     "check:openapi-release-inputs": "node scripts/verify-openapi-release-inputs.mjs",
+    "check:musubi-v1": "node scripts/verify-musubi-v1-contract.mjs",
     "check:openapi-versions": "node scripts/verify-openapi-versions.mjs",
-    "test": "node --test scripts/__tests__/sync-openapi.test.mjs scripts/__tests__/verify-openapi-versions.test.mjs scripts/__tests__/check-openapi-signatures.test.mjs scripts/__tests__/openapi-manifest-v2.test.mjs scripts/__tests__/openapi-release-inputs.test.mjs scripts/__tests__/openapi-release-contract.test.mjs scripts/__tests__/openapi-safe-file.test.mjs scripts/__tests__/provision-openapi-cargo-lock.test.mjs scripts/__tests__/openapi-signature.test.mjs"
+    "test": "node --test scripts/__tests__/sync-openapi.test.mjs scripts/__tests__/verify-openapi-versions.test.mjs scripts/__tests__/verify-musubi-v1-contract.test.mjs scripts/__tests__/check-openapi-signatures.test.mjs scripts/__tests__/openapi-manifest-v2.test.mjs scripts/__tests__/openapi-release-inputs.test.mjs scripts/__tests__/openapi-release-contract.test.mjs scripts/__tests__/openapi-safe-file.test.mjs scripts/__tests__/provision-openapi-cargo-lock.test.mjs scripts/__tests__/openapi-signature.test.mjs"
   },
   "dependencies": {
     "@noble/hashes": "1.4.0"

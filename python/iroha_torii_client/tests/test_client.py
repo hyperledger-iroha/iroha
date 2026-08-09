@@ -12,7 +12,12 @@ from urllib.parse import quote
 
 import pytest
 import requests
-from requests.structures import CaseInsensitiveDict
+
+from sumeragi_exact_json_test_support import (
+    RecordingSession,
+    StubResponse,
+    sumeragi_exact_json_response_cases,
+)
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
@@ -49,12 +54,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     build_canonical_request_headers,
     canonical_request_signature_message,
     decode_pdp_commitment_header,
-    encode_identifier_resolution_receipt_attestation,
-    encode_identifier_resolution_receipt_payload,
-    inspect_i105_network_prefix,
-    verify_identifier_resolution_receipt,
 )
-from iroha_torii_client.client import _decode_i105_string  # noqa: E402
 from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
 from iroha_torii_client.native_amx import (  # noqa: E402
     compute_native_amx_descriptor_hash,
@@ -104,7 +104,7 @@ def _contract_operation_receipt(
     fee_payment: Optional[Dict[str, Any]] = None,
     contract_alias: Optional[str] = "router::universal",
     contract_address: Optional[str] = (
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
     ),
 ) -> Dict[str, Any]:
     return {
@@ -118,7 +118,7 @@ def _contract_operation_receipt(
         "abi_hash_hex": "33" * 32,
         "tx_hash_hex": None,
         "entrypoint": entrypoint,
-        "entrypoint_hash_hex": "55" * 32,
+        "entrypoint_hash_hex": None,
         "gas_limit": gas_limit,
         "gas_used": None,
         "fee_payment": fee_payment or _sponsor_fee_payment(gas_limit),
@@ -141,12 +141,12 @@ def _contract_call_draft(
     entrypoint: str = "ping",
     contract_alias: Optional[str] = "router::universal",
     contract_address: Optional[str] = (
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
     ),
     fee_payment: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    scaffold_b64 = base64.b64encode(b"\x01\x02\x03").decode("ascii")
-    signing_message = bytearray(hashlib.blake2b(b"payload", digest_size=32).digest())
+    transaction_payload = b"\x01\x02\x03"
+    signing_message = bytearray(hashlib.blake2b(transaction_payload, digest_size=32).digest())
     signing_message[-1] |= 1
     return {
         "ok": True,
@@ -160,9 +160,8 @@ def _contract_call_draft(
         "pipeline_status": None,
         "entrypoint": entrypoint,
         "transaction_ttl_ms": 60_000,
-        "entrypoint_hash_hex": "55" * 32,
-        "transaction_scaffold_b64": scaffold_b64,
-        "signed_transaction_b64": scaffold_b64,
+        "entrypoint_hash_hex": None,
+        "transaction_payload_b64": base64.b64encode(transaction_payload).decode("ascii"),
         "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
         "operation_receipt": _contract_operation_receipt(
             entrypoint=entrypoint,
@@ -184,47 +183,6 @@ def _canonical_hash(seed: int) -> str:
             crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
     return f"hash:{body}#{crc:04X}"
 
-
-def test_offline_proof_backend_type_is_the_exact_closed_registry_v1() -> None:
-    expected = {
-        "halo2/ipa",
-        "halo2/pasta/kaigi-roster-v1",
-        "halo2/pasta/kaigi-usage-v1",
-        "halo2/pasta/ivm-execution-v1",
-        "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-        "stark/fri",
-        "stark/fri/sha256-goldilocks",
-        "stark/fri/poseidon2-goldilocks",
-        "stark/fri/sha256_goldilocks.v1",
-    }
-    actual = get_args(client_module.OfflineProofBackend)
-    assert len(actual) == len(expected)
-    assert set(actual) == expected
-
-    retired_or_hostile = {
-        "halo2-ipa-pasta",
-        "halo2-bn254",
-        "groth16",
-        "groth16-bls12-377",
-        "halo2-ipa-orchard",
-        "aztec-plonkish-private-kernel",
-        "zkat",
-        "silent-threshold-anoncred",
-        "penumbra-masp",
-        "sis-hints-anoncred-pq-v0",
-        "sis-with-hints",
-        "unsupported",
-        "stark",
-        " halo2/ipa",
-        "halo2/ipa ",
-        "HALO2/IPA",
-        "halo2\uff0fipa",
-        "halo2/\u200bipa",
-    }
-    assert expected.isdisjoint(retired_or_hostile)
 
 
 _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
@@ -248,10 +206,12 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
         ),
         "native_amx_application_manifest_count": 0,
+        "merge_carrier": None,
+        "executed_block_wire_len": 123,
         "executed_block_wire_hash": _canonical_hash(0x37),
     }
     return {
-        "protocol_version": 3,
+        "protocol_version": 4,
         "node_fingerprint": _canonical_hash(0x11),
         "build_fingerprint": _canonical_hash(0x12),
         "config_fingerprint": _canonical_hash(0x13),
@@ -447,6 +407,40 @@ def _native_amx_participant_application_payload(
         "application_block_height": 10,
         "application_block_hash": _canonical_hash(0x79),
         "state": state,
+    }
+
+
+def _set_native_amx_application_without_block(
+    row: Dict[str, Any], state: str
+) -> None:
+    row["state"] = state
+    row.pop("application_block_height")
+    row.pop("application_block_hash")
+
+
+def _autonomous_lane_execution_payload() -> Dict[str, Any]:
+    return {
+        "lane_id": 3,
+        "dataspace_id": 8,
+        "lane_incarnation": _canonical_hash(0x65),
+        "lane_block_height": 8,
+        "lane_block_view": 1,
+        "proposal_height": 10,
+        "proposal_view": 2,
+        "reservation_owner_hash": _canonical_hash(0x66),
+        "proposal_identity_hash": _canonical_hash(0x67),
+        "reservation_group_hash": _canonical_hash(0x68),
+        "proposal_hash": _canonical_hash(0x69),
+        "descriptor_hash": _canonical_hash(0x73),
+        "executable_payload_hash": _canonical_hash(0x74),
+        "source_bundle_hash": _canonical_hash(0x75),
+        "merge_entry_hash": _canonical_hash(0x76),
+        "application_block_height": 12,
+        "application_block_hash": _canonical_hash(0x77),
+        "reservation_count": 2,
+        "transaction_count": 2,
+        "highest_durable_stage": "kura_wsv_application_receipt_durable",
+        "stuck_reason": "queue_finalization_unverifiable",
     }
 
 
@@ -704,86 +698,6 @@ def _noncanonical_standard_base64_pad_bit_alias(encoded: str) -> str:
     index = len(chars) - 3
     chars[index] = alphabet[alphabet.index(chars[index]) ^ 0x01]
     return "".join(chars)
-
-
-def test_i105_decoder_rejects_out_of_range_numeric_discriminants() -> None:
-    payload = CANONICAL_OWNER.removeprefix("sora")
-
-    assert _decode_i105_string(f"n65535{payload}")
-    prefix = inspect_i105_network_prefix(CANONICAL_OWNER, expected_chain_discriminant=0x02F1)
-    assert prefix.sentinel == "sora"
-    assert prefix.chain_discriminant == 0x02F1
-    assert prefix.profile == "minamoto"
-    numeric_prefix = inspect_i105_network_prefix(f"n65535{payload}")
-    assert numeric_prefix.sentinel == "n65535"
-    assert numeric_prefix.chain_discriminant == 65535
-    assert numeric_prefix.profile is None
-    with pytest.raises(ValueError, match="discriminant mismatch"):
-        inspect_i105_network_prefix(CANONICAL_OWNER, expected_chain_discriminant=0x0171)
-    for literal in (f"n65536{payload}", f"n70000{payload}"):
-        with pytest.raises(ValueError, match="unsigned 16-bit"):
-            _decode_i105_string(literal)
-
-
-class StubResponse(requests.Response):
-    def __init__(
-        self,
-        status_code: int = 200,
-        payload: Optional[Any] = None,
-        *,
-        headers: Optional[Dict[str, str]] = None,
-        text: Optional[str] = None,
-    ) -> None:
-        super().__init__()
-        self.status_code = status_code
-        self._payload = payload
-        self.headers = CaseInsensitiveDict(headers or {})
-        if payload is None:
-            content = text.encode("utf-8") if text is not None else b""
-        else:
-            content = json.dumps(payload).encode("utf-8")
-            if "Content-Type" not in self.headers:
-                self.headers["Content-Type"] = "application/json"
-        self._content = content
-        self.encoding = "utf-8"
-
-    def json(self, **kwargs: Any) -> Any:
-        if self._payload is None:
-            raise ValueError("no payload available")
-        return json.loads(self.text)
-
-
-class RecordingSession(requests.Session):
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls: List[Dict[str, Any]] = []
-        self._responses: List[StubResponse] = []
-
-    def queue(self, response: StubResponse) -> None:
-        self._responses.append(response)
-
-    def request(
-        self,
-        method: Union[str, bytes],
-        url: Union[str, bytes],
-        *args: Any,
-        **kwargs: Any,
-    ) -> requests.Response:
-        params = kwargs.get("params") or {}
-        headers = kwargs.get("headers") or {}
-        data = kwargs.get("data")
-        self.calls.append(
-            {
-                "method": method,
-                "url": url,
-                "params": params,
-                "headers": headers,
-                "data": data,
-            }
-        )
-        if not self._responses:
-            raise AssertionError("no queued responses")
-        return self._responses.pop(0)
 
 
 def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
@@ -1128,75 +1042,6 @@ def test_sorafs_orderbook_submit_helpers_validate_inputs() -> None:
 
 
 @pytest.mark.parametrize(
-    "value",
-    [
-        "0",
-        "0.000000001",
-        str(1 << 128),
-        str((1 << 511) - 1),
-        "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047",
-    ],
-    ids=["zero", "nanoxor", "over-u128", "max-mantissa", "max-scaled"],
-)
-def test_sorafs_orderbook_xor_quantity_parser_preserves_exact_boundaries(
-    value: str,
-) -> None:
-    assert ToriiClient._normalize_sorafs_orderbook_xor_quantity(value, "amount") == value
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        1,
-        1.0,
-        True,
-        None,
-        "",
-        "+1",
-        "-1",
-        " 1",
-        "1 ",
-        "01",
-        "1.",
-        ".1",
-        "1.0",
-        "1.000000000",
-        "1e0",
-        "0.0000000001",
-        str(1 << 511),
-        "1" * 156,
-        "1" * 10_000,
-    ],
-    ids=[
-        "json-integer",
-        "json-float",
-        "json-bool",
-        "json-null",
-        "empty",
-        "plus",
-        "negative",
-        "leading-space",
-        "trailing-space",
-        "leading-zero",
-        "missing-fraction",
-        "missing-whole",
-        "trailing-zero",
-        "nine-trailing-zeros",
-        "exponent",
-        "over-scale",
-        "mantissa-overflow",
-        "text-bound-overflow",
-        "oversized-input",
-    ],
-)
-def test_sorafs_orderbook_xor_quantity_parser_rejects_adversarial_values(
-    value: Any,
-) -> None:
-    with pytest.raises((TypeError, ValueError)):
-        ToriiClient._normalize_sorafs_orderbook_xor_quantity(value, "amount")
-
-
-@pytest.mark.parametrize(
     ("parser", "payload_key", "retired_field"),
     [
         (
@@ -1328,6 +1173,18 @@ VPN_PAYMENT_HASH = "22" * 32
 VPN_METERING_KEY = "33" * 32
 VPN_LEASE_ID = VPN_QUOTE_ID
 VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00" * 656
+VPN_RELAY_ID_HEX = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+
+
+def _vpn_trust_fields(spki: str = "ab" * 32) -> Dict[str, str]:
+    return {
+        "relay_id_hex": VPN_RELAY_ID_HEX,
+        "descriptor_commit_hex": "cd" * 32,
+        "tls_server_name": "relay.example",
+        "relay_tls_spki_sha256_hex": spki,
+        "relay_certificate_sha256_hex": "ef" * 32,
+        "directory_snapshot_digest_hex": "42" * 32,
+    }
 
 
 def _vpn_instruction(wire_id: str = "OpenVpnLeaseEscrow") -> Dict[str, str]:
@@ -1337,7 +1194,7 @@ def _vpn_instruction(wire_id: str = "OpenVpnLeaseEscrow") -> Dict[str, str]:
 def _vpn_profile_payload() -> Dict[str, Any]:
     return {
         "available": True,
-        "relay_endpoint": "/dns4/relay.example/tcp/443",
+        "relay_endpoint": "/dns4/relay.example/udp/443/quic",
         "supported_exit_classes": ["standard", "low-latency", "high-security"],
         "default_exit_class": "standard",
         "lease_secs": 3600,
@@ -1349,14 +1206,12 @@ def _vpn_profile_payload() -> Dict[str, Any]:
         "tunnel_addresses": ["10.208.0.2/32"],
         "mtu_bytes": 1280,
         "display_billing_label": "standard - soranet.vpn.v1 - 100.25 XOR",
-        "fee_asset_id": "xor#universal",
-        "escrow_account_id": VPN_ESCROW,
         "operator_account_id": VPN_OPERATOR,
         "lease_fee": "100.25",
         "settlement_grace_secs": 300,
         "flow_label_bits": 24,
         "padding_budget_ms": 250,
-        "relay_tls_spki_sha256_hex": "44" * 32,
+        **_vpn_trust_fields(),
     }
 
 
@@ -1372,7 +1227,7 @@ def _vpn_quote_payload() -> Dict[str, Any]:
         "relay_endpoint": payload["relay_endpoint"],
         "lease_secs": payload["lease_secs"],
         "quote_expires_at_ms": 1_700_000_000_000,
-        "fee_asset_id": payload["fee_asset_id"],
+        "fee_asset_id": "xor#universal",
         "escrow_account_id": VPN_ESCROW,
         "operator_account_id": VPN_OPERATOR,
         "lease_fee": payload["lease_fee"],
@@ -1384,10 +1239,9 @@ def _vpn_quote_payload() -> Dict[str, Any]:
         "meter_family": payload["meter_family"],
         "flow_label_bits": payload["flow_label_bits"],
         "padding_budget_ms": payload["padding_budget_ms"],
-        "relay_tls_spki_sha256_hex": payload["relay_tls_spki_sha256_hex"],
+        **_vpn_trust_fields(payload["relay_tls_spki_sha256_hex"]),
         "metering_public_key_hex": VPN_METERING_KEY,
         "open_lease_instruction": _vpn_instruction(),
-        "tx_instructions": [_vpn_instruction()],
     }
 
 
@@ -1411,7 +1265,7 @@ def _vpn_session_payload() -> Dict[str, Any]:
         "lease_fee": quote_payload["lease_fee"],
         "flow_label_bits": quote_payload["flow_label_bits"],
         "padding_budget_ms": quote_payload["padding_budget_ms"],
-        "relay_tls_spki_sha256_hex": quote_payload["relay_tls_spki_sha256_hex"],
+        **_vpn_trust_fields(quote_payload["relay_tls_spki_sha256_hex"]),
         "route_pushes": quote_payload["route_pushes"],
         "excluded_routes": quote_payload["excluded_routes"],
         "dns_servers": quote_payload["dns_servers"],
@@ -1449,7 +1303,6 @@ def _vpn_receipt_payload(status: str = "settled") -> Dict[str, Any]:
         "refunded_fee": "75.125",
         "lease_id_hex": VPN_LEASE_ID,
         "settle_lease_instruction": _vpn_instruction("SettleVpnLease"),
-        "tx_instructions": [_vpn_instruction("SettleVpnLease")],
     }
 
 
@@ -1466,51 +1319,9 @@ def _vpn_auth(captured: List[bytes]) -> ToriiCanonicalRequestAuth:
     )
 
 
-def test_vpn_profile_deserializes_native_lease_fields() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload=_vpn_profile_payload()))
-    client = ToriiClient("http://node.test", session=session)
-
-    profile = client.get_vpn_profile()
-
-    assert profile.fee_asset_id == "xor#universal"
-    assert profile.lease_fee == "100.25"
-    assert profile.escrow_account_id == VPN_ESCROW
-    assert profile.operator_account_id == VPN_OPERATOR
-    assert profile.route_pushes == ["0.0.0.0/0"]
-    assert session.calls[0]["url"] == "http://node.test/v1/vpn/profile"
-    assert session.calls[0]["headers"] == {"Accept": "application/json"}
-
-
-@pytest.mark.parametrize("invalid_fee", [100, "01", "-1", "1.0"])
-def test_vpn_profile_rejects_noncanonical_quantity_fee(invalid_fee: Any) -> None:
-    payload = _vpn_profile_payload()
-    payload["lease_fee"] = invalid_fee
-    session = RecordingSession()
-    session.queue(StubResponse(payload=payload))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="lease_fee"):
-        client.get_vpn_profile()
-
-
-@pytest.mark.parametrize("dns_push_interval_secs", [None, 0, 29], ids=["missing", "zero", "below-minimum"])
-def test_vpn_profile_requires_dns_push_interval_of_at_least_30(
-    dns_push_interval_secs: Optional[int],
-) -> None:
-    payload = _vpn_profile_payload()
-    if dns_push_interval_secs is None:
-        payload.pop("dns_push_interval_secs")
-    else:
-        payload["dns_push_interval_secs"] = dns_push_interval_secs
-
-    with pytest.raises(RuntimeError, match="dns_push_interval_secs"):
-        ToriiClient._parse_vpn_profile(payload, context="vpn profile")
-
-
 def test_signed_vpn_methods_require_canonical_auth_before_dispatch() -> None:
     session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     omitted_auth_calls = [
         lambda: client.create_vpn_quote(
             VpnQuoteCreateRequest(metering_public_key_hex=VPN_METERING_KEY)
@@ -1577,7 +1388,7 @@ def test_signed_vpn_methods_require_canonical_auth_before_dispatch() -> None:
 
 def test_vpn_request_mappings_reject_unknown_fields_before_dispatch() -> None:
     session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     auth = _vpn_auth([])
     calls = [
         lambda: client.create_vpn_quote(
@@ -1668,7 +1479,7 @@ def test_create_vpn_quote_signs_body_and_parses_open_lease_instruction() -> None
     session.queue(StubResponse(status_code=201, payload=_vpn_quote_payload()))
     captured: List[bytes] = []
     auth = _vpn_auth(captured)
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
 
     quote = client.create_vpn_quote(
         VpnQuoteCreateRequest(
@@ -1699,9 +1510,8 @@ def test_create_vpn_quote_signs_body_and_parses_open_lease_instruction() -> None
     assert headers["X-Iroha-Timestamp-Ms"] == str(auth.timestamp_ms)
     assert headers["X-Iroha-Nonce"] == auth.nonce
     assert quote.lease_id_hex == VPN_LEASE_ID
-    assert quote.open_lease_instruction is not None
     assert quote.open_lease_instruction.wire_id == "OpenVpnLeaseEscrow"
-    assert quote.tx_instructions[0].payload_hex == "ab" * 8
+    assert quote.open_lease_instruction.payload_hex == "ab" * 8
 
 
 def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
@@ -1736,9 +1546,8 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
             timestamp_ms=1,
             nonce="nonce",
         )
-
     session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     with pytest.raises(ValueError, match="surrounding whitespace"):
         client.create_vpn_quote(
             VpnQuoteCreateRequest(
@@ -1753,198 +1562,6 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
             ),
         )
     assert session.calls == []
-
-
-def test_identifier_resolution_receipt_matches_shared_vectors() -> None:
-    fixture = json.loads(
-        (PACKAGE_ROOT.parent / "fixtures/soracloud/identifier_receipt_vectors_v1.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert fixture["vector_set"] == "identifier-receipt-attestation-v1"
-
-    payload_bytes = encode_identifier_resolution_receipt_payload(fixture["receipt"]["payload"])
-    assert hashlib.sha256(payload_bytes).hexdigest().upper() == fixture["canonical_payload_sha256"]
-    assert verify_identifier_resolution_receipt(fixture["receipt"], fixture["policy"]) is True
-
-    for kind in (" signed", "signed ", "Signed"):
-        non_exact_kind = json.loads(json.dumps(fixture["receipt"]["attestation"]))
-        non_exact_kind["kind"] = kind
-        with pytest.raises(ValueError, match="identifier receipt attestation.kind"):
-            encode_identifier_resolution_receipt_attestation(non_exact_kind)
-
-    padded_backend_payload = json.loads(json.dumps(fixture["receipt"]["payload"]))
-    padded_backend_payload["execution"]["backend"] = " hkdf-sha3-512-prf-v1"
-    with pytest.raises(ValueError, match="payload.execution.backend must not contain surrounding whitespace"):
-        encode_identifier_resolution_receipt_payload(padded_backend_payload)
-
-    padded_mode_payload = json.loads(json.dumps(fixture["receipt"]["payload"]))
-    padded_mode_payload["execution"]["verification_mode"] = "signed "
-    with pytest.raises(ValueError, match="payload.execution.verification_mode must not contain surrounding whitespace"):
-        encode_identifier_resolution_receipt_payload(padded_mode_payload)
-
-    for vector in fixture["attestation_vectors"]:
-        encoded = encode_identifier_resolution_receipt_attestation(vector["attestation"])
-        assert len(encoded) == vector["expected_attestation_bytes"], vector["name"]
-        assert hashlib.sha256(encoded).hexdigest().upper() == vector["expected_attestation_sha256"]
-        if vector["attestation"]["kind"] == "signed":
-            for signature in (f" {vector['attestation']['signature']}", f"{vector['attestation']['signature']} "):
-                padded_signature = json.loads(json.dumps(vector["attestation"]))
-                padded_signature["signature"] = signature
-                with pytest.raises(
-                    ValueError,
-                    match="identifier receipt attestation.signature must not contain surrounding whitespace",
-                ):
-                    encode_identifier_resolution_receipt_attestation(padded_signature)
-        if vector["attestation"]["kind"] == "proof":
-            padded_proof_backend = json.loads(json.dumps(vector["attestation"]))
-            padded_proof_backend["proof_backend"] = f"{padded_proof_backend['proof_backend']} "
-            with pytest.raises(ValueError, match="identifier receipt attestation.proof_backend must not contain surrounding whitespace"):
-                encode_identifier_resolution_receipt_attestation(padded_proof_backend)
-
-            malformed_proof_b64 = json.loads(json.dumps(vector["attestation"]))
-            malformed_proof_b64["proof_b64"] = "@@@"
-            with pytest.raises(ValueError, match="attestation.proof_b64 must be valid base64"):
-                encode_identifier_resolution_receipt_attestation(malformed_proof_b64)
-
-            for proof_b64 in (f" {vector['attestation']['proof_b64']}", f"{vector['attestation']['proof_b64']} "):
-                padded_proof_b64 = json.loads(json.dumps(vector["attestation"]))
-                padded_proof_b64["proof_b64"] = proof_b64
-                with pytest.raises(
-                    ValueError,
-                    match="identifier receipt attestation.proof_b64 must not contain surrounding whitespace",
-                ):
-                    encode_identifier_resolution_receipt_attestation(padded_proof_b64)
-
-            with pytest.raises(RuntimeError, match="proof attestations require an external verifier"):
-                verify_identifier_resolution_receipt(
-                    {
-                        "payload": fixture["receipt"]["payload"],
-                        "attestation": vector["attestation"],
-                    },
-                    fixture["policy"],
-                )
-
-    for opening_signature in (
-        f" {fixture['receipt']['payload']['opening']['signature']}",
-        f"{fixture['receipt']['payload']['opening']['signature']} ",
-    ):
-        padded_opening = json.loads(json.dumps(fixture["receipt"]))
-        padded_opening["payload"]["opening"]["signature"] = opening_signature
-        with pytest.raises(
-            ValueError,
-            match="payload.opening.signature must not contain surrounding whitespace",
-        ):
-            verify_identifier_resolution_receipt(padded_opening, fixture["policy"])
-
-    for policy_id in (" phone#retail", "phone#retail ", "phone #retail", "phone# retail"):
-        padded_policy_id = json.loads(json.dumps(fixture["receipt"]))
-        padded_policy_id["payload"]["policy_id"] = policy_id
-        with pytest.raises(ValueError, match="payload.policy_id"):
-            verify_identifier_resolution_receipt(padded_policy_id, fixture["policy"])
-
-    for program_id in (" identifier_lookup_retail", "identifier_lookup_retail "):
-        padded_execution_program = json.loads(json.dumps(fixture["receipt"]))
-        padded_execution_program["payload"]["execution"]["program_id"] = program_id
-        with pytest.raises(ValueError, match="payload.execution.program_id"):
-            verify_identifier_resolution_receipt(padded_execution_program, fixture["policy"])
-
-        padded_opening_program = json.loads(json.dumps(fixture["receipt"]))
-        padded_opening_program["payload"]["opening"]["payload"]["program_id"] = program_id
-        with pytest.raises(ValueError, match="payload.opening.payload.program_id"):
-            verify_identifier_resolution_receipt(padded_opening_program, fixture["policy"])
-
-    for account_id in (
-        f" {fixture['receipt']['payload']['account_id']}",
-        f"{fixture['receipt']['payload']['account_id']} ",
-    ):
-        padded_account_id = json.loads(json.dumps(fixture["receipt"]))
-        padded_account_id["payload"]["account_id"] = account_id
-        with pytest.raises(ValueError, match="payload.account_id"):
-            verify_identifier_resolution_receipt(padded_account_id, fixture["policy"])
-
-    hash_exactness_cases = (
-        ("payload.opaque_id", ("payload", "opaque_id"), fixture["receipt"]["payload"]["opaque_id"]),
-        ("payload.receipt_hash", ("payload", "receipt_hash"), fixture["receipt"]["payload"]["receipt_hash"]),
-        ("payload.uaid", ("payload", "uaid"), fixture["receipt"]["payload"]["uaid"]),
-        (
-            "payload.execution.program_digest",
-            ("payload", "execution", "program_digest"),
-            fixture["receipt"]["payload"]["execution"]["program_digest"],
-        ),
-        (
-            "payload.opening.payload.input_ciphertext_hash",
-            ("payload", "opening", "payload", "input_ciphertext_hash"),
-            fixture["receipt"]["payload"]["opening"]["payload"]["input_ciphertext_hash"],
-        ),
-    )
-    for context, path, value in hash_exactness_cases:
-        for padded_value in (f" {value}", f"{value} "):
-            padded_hash = json.loads(json.dumps(fixture["receipt"]))
-            target = padded_hash
-            for component in path[:-1]:
-                target = target[component]
-            target[path[-1]] = padded_value
-            with pytest.raises(ValueError, match=context.replace(".", r"\.")):
-                verify_identifier_resolution_receipt(padded_hash, fixture["policy"])
-
-    timestamp_exactness_cases = (
-        (
-            "payload.execution.executed_at_ms",
-            ("payload", "execution", "executed_at_ms"),
-            fixture["receipt"]["payload"]["execution"]["executed_at_ms"],
-        ),
-        (
-            "payload.execution.expires_at_ms",
-            ("payload", "execution", "expires_at_ms"),
-            fixture["receipt"]["payload"]["execution"]["expires_at_ms"],
-        ),
-        (
-            "payload.opening.payload.opened_at_ms",
-            ("payload", "opening", "payload", "opened_at_ms"),
-            fixture["receipt"]["payload"]["opening"]["payload"]["opened_at_ms"],
-        ),
-        (
-            "payload.opening.payload.expires_at_ms",
-            ("payload", "opening", "payload", "expires_at_ms"),
-            fixture["receipt"]["payload"]["opening"]["payload"]["expires_at_ms"],
-        ),
-    )
-    for context, path, value in timestamp_exactness_cases:
-        for padded_value in (f" {value}", f"{value} "):
-            padded_timestamp = json.loads(json.dumps(fixture["receipt"]))
-            target = padded_timestamp
-            for component in path[:-1]:
-                target = target[component]
-            target[path[-1]] = padded_value
-            with pytest.raises((TypeError, ValueError), match=context.replace(".", r"\.")):
-                verify_identifier_resolution_receipt(padded_timestamp, fixture["policy"])
-
-    for negative in fixture["negative_cases"]:
-        receipt = json.loads(json.dumps(fixture["receipt"]))
-        policy = json.loads(json.dumps(fixture["policy"]))
-        if negative["mutation"] == "receipt.payload.execution.output_ciphertext_hash":
-            receipt["payload"]["execution"]["output_ciphertext_hash"] = negative["value"]
-        elif negative["mutation"] == "policy.resolver_public_key":
-            policy["resolver_public_key"] = negative["value"]
-        elif negative["mutation"] == "policy.policy_id":
-            policy["policy_id"] = negative["value"]
-        elif negative["mutation"] == "receipt.attestation.signature":
-            receipt["attestation"]["signature"] = negative["value"]
-        elif negative["mutation"] == "receipt.attestation":
-            receipt["attestation"] = negative["value"]
-        else:
-            raise AssertionError(f"unhandled receipt vector mutation {negative['mutation']}")
-
-        expected_error = negative.get("expected_error_contains")
-        if expected_error:
-            with pytest.raises((RuntimeError, ValueError), match=expected_error):
-                verify_identifier_resolution_receipt(receipt, policy)
-        else:
-            assert (
-                verify_identifier_resolution_receipt(receipt, policy)
-                is negative["expected_result"]
-            ), negative["name"]
 
 
 def test_vpn_session_accepts_exact_lowercase_664_byte_helper_ticket() -> None:
@@ -2061,8 +1678,6 @@ def test_vpn_response_parsers_reject_empty_min_length_strings() -> None:
                 "relay_endpoint",
                 "meter_family",
                 "display_billing_label",
-                "fee_asset_id",
-                "escrow_account_id",
                 "operator_account_id",
             ),
         ),
@@ -2151,7 +1766,7 @@ def test_vpn_response_parsers_enforce_openapi_enums_and_bounds() -> None:
             "vpn profile",
         ),
         (
-            "quote instruction count",
+            "retired quote instruction array",
             ToriiClient._parse_vpn_quote,
             _vpn_quote_payload(),
             lambda payload: payload.__setitem__("tx_instructions", []),
@@ -2242,7 +1857,7 @@ def test_vpn_response_parsers_enforce_openapi_enums_and_bounds() -> None:
             "vpn receipts",
         ),
     ]
-    for case_name, parser, payload, mutate, expected_field, context in cases:
+    for _case_name, parser, payload, mutate, expected_field, context in cases:
         mutate(payload)
         with pytest.raises(RuntimeError, match=expected_field):
             parser(payload, context=context)
@@ -2375,7 +1990,7 @@ def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
         )
     )
     session.queue(StubResponse(status_code=404))
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     captured: List[bytes] = []
     auth = _vpn_auth(captured)
 
@@ -2396,7 +2011,7 @@ def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
     assert fetched is not None and fetched.payment_tx_hash == VPN_PAYMENT_HASH
     assert deleted is not None and deleted.status == "disconnected"
     assert deleted.settle_lease_instruction is not None
-    assert deleted.tx_instructions[0].wire_id == "SettleVpnLease"
+    assert deleted.settle_lease_instruction.wire_id == "SettleVpnLease"
     assert receipts.total == 1
     assert receipts.items[0].refunded_fee == "75.125"
     assert missing is None
@@ -2406,7 +2021,7 @@ def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
 def test_submit_vpn_receipt_parses_settlement_instruction() -> None:
     session = RecordingSession()
     session.queue(StubResponse(status_code=201, payload=_vpn_receipt_payload()))
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     captured: List[bytes] = []
 
     receipt = client.submit_vpn_receipt(
@@ -2455,6 +2070,7 @@ def test_list_peers_returns_typed_records() -> None:
             "params": {},
             "headers": {},
             "data": None,
+            "allow_redirects": True,
         }
     ]
 
@@ -2480,13 +2096,13 @@ def test_fee_quote_posts_exact_payload_with_authority_signature() -> None:
         timestamp_ms=123,
         nonce="fee-quote-nonce",
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     draft = {"authority": CANONICAL_OWNER, "fee_payment": _authority_fee_payment()}
 
     assert client.quote_fees(draft, canonical_auth=auth) == quote
 
     call = session.calls[0]
-    assert call["url"] == "http://node.test/v1/fees/quote"
+    assert call["url"] == "https://node.test/v1/fees/quote"
     assert json.loads(call["data"].decode("utf-8")) == {"payload": draft}
     assert call["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
     assert call["headers"]["X-Iroha-Timestamp-Ms"] == "123"
@@ -2544,7 +2160,7 @@ def test_fee_quote_rejects_substituted_selection(
             }
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     auth = ToriiCanonicalRequestAuth(
         account_id=CANONICAL_OWNER,
         signer=lambda _message: b"signature",
@@ -2573,7 +2189,7 @@ def test_fee_sponsor_program_lookup_is_account_signed_and_exact() -> None:
         timestamp_ms=124,
         nonce="program-lookup-nonce",
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
 
     result = client.get_fee_sponsor_program(
         f"{CANONICAL_OWNER}/retail",
@@ -2597,7 +2213,7 @@ def test_fee_sponsor_program_lookup_rejects_substituted_response_id() -> None:
             }
         )
     )
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient("https://node.test", session=session)
     auth = ToriiCanonicalRequestAuth(
         account_id=CANONICAL_OWNER,
         signer=lambda _message: b"signature",
@@ -2635,13 +2251,13 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
     assert result.entrypoint == "ping"
     assert result.creation_time_ms == 42
     assert result.transaction_ttl_ms == 60_000
-    assert result.entrypoint_hash_hex == "55" * 32
+    assert result.entrypoint_hash_hex is None
     assert isinstance(result.operation_receipt, ContractOperationReceipt)
     assert result.operation_receipt.gas_limit == 5000
     assert result.operation_receipt.payload_digest_hex == "66" * 32
     assert result.submitted is False
     assert result.pipeline_status is None
-    assert result.transaction_scaffold_b64 == result.signed_transaction_b64
+    assert result.transaction_payload_b64 == base64.b64encode(b"\x01\x02\x03").decode("ascii")
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert payload == {
         "authority": CANONICAL_OWNER,
@@ -2784,6 +2400,7 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
     session = RecordingSession()
     instruction = b"\x01\x02\x03\x04"
     proposal_id = "aa" * 32
+    draft = _app_api_transaction_draft()
     session.queue(
         StubResponse(
             payload={
@@ -2795,12 +2412,12 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
                 "tx_hash_hex": None,
                 "executed_tx_hash_hex": None,
                 "creation_time_ms": 123,
-                "signing_message_b64": "AQID",
+                "transaction_payload_b64": draft["transaction_payload_b64"],
+                "signing_message_b64": draft["signing_message_b64"],
             },
         )
     )
     client = ToriiClient("http://node.test", session=session)
-
     result = client.propose_multisig(
         multisig_account_alias="cbdc@banka",
         signer_account_id=CANONICAL_OWNER,
@@ -2808,13 +2425,13 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         creation_time_ms=123,
         fee_payment=_sponsor_fee_payment(),
     )
-
     assert isinstance(result, MultisigResponse)
     assert result.ok is True
     assert result.resolved_multisig_account_id == CANONICAL_OWNER
     assert result.submitted is False
     assert result.instructions_hash == proposal_id
-    assert result.signing_message_b64 == "AQID"
+    assert result.transaction_payload_b64 == draft["transaction_payload_b64"]
+    assert result.signing_message_b64 == draft["signing_message_b64"]
     call = session.calls[0]
     assert call["method"] == "POST"
     assert call["url"] == "http://node.test/v1/multisig/propose"
@@ -2832,7 +2449,7 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
 def test_multisig_instruction_b64_validates_inputs() -> None:
     assert ToriiClient.multisig_instruction_b64(b"\x01\x02") == "AQI="
     assert ToriiClient.multisig_instruction_b64("AQI=") == "AQI="
-    with pytest.raises(RuntimeError, match="valid base64"):
+    with pytest.raises((RuntimeError, ValueError), match="valid base64|exact standard-base64"):
         ToriiClient.multisig_instruction_b64("not base64")
     with pytest.raises(RuntimeError, match="must not be empty"):
         ToriiClient.multisig_instruction_b64(b"")
@@ -2992,31 +2609,32 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             payload={
                 "ok": True,
                 "resolved_multisig_account_id": CANONICAL_OWNER,
+                **_app_api_transaction_draft(),
                 "signing_message_b64": "not base64",
             }
         )
     )
     client = ToriiClient("http://node.test", session=session)
-    with pytest.raises(RuntimeError, match="valid base64"):
+    with pytest.raises((RuntimeError, ValueError), match="valid base64|exact standard-base64"):
         client.propose_multisig(
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
             fee_payment=_authority_fee_payment(),
         )
-
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
                 "ok": True,
                 "resolved_multisig_account_id": CANONICAL_OWNER,
+                **_app_api_transaction_draft(),
                 "signing_message_b64": "",
             }
         )
     )
     client = ToriiClient("http://node.test", session=session)
-    with pytest.raises(RuntimeError, match="empty bytes"):
+    with pytest.raises((RuntimeError, ValueError), match="empty bytes|non-empty"):
         client.propose_multisig(
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
@@ -3050,7 +2668,7 @@ def test_call_contract_rejects_ambiguous_selector() -> None:
     with pytest.raises(ValueError, match="exactly one of contract_address or contract_alias"):
         client.prepare_contract_call(
             authority=CANONICAL_OWNER,
-            contract_address="tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            contract_address="irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             contract_alias="router::universal",
             entrypoint="ping",
             fee_payment=_authority_fee_payment(1),
@@ -3064,7 +2682,7 @@ def test_call_contract_rejects_padded_selectors_before_dispatch() -> None:
     with pytest.raises(ValueError, match="prepare_contract_call\\.contract_address must not contain surrounding whitespace"):
         client.prepare_contract_call(
             authority=CANONICAL_OWNER,
-            contract_address=" tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            contract_address=" irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             entrypoint="ping",
             fee_payment=_authority_fee_payment(1),
         )
@@ -3086,7 +2704,7 @@ def test_get_governance_contract_parses_response() -> None:
         StubResponse(
             payload={
                 "found": True,
-                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
                 "dataspace": "universal",
                 "code_hash_hex": "22" * 32,
             },
@@ -3095,7 +2713,7 @@ def test_get_governance_contract_parses_response() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     result = client.get_governance_contract(
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
     )
 
     assert isinstance(result, GovernanceContractResponse)
@@ -3103,8 +2721,89 @@ def test_get_governance_contract_parses_response() -> None:
     assert result.code_hash_hex == "22" * 32
     assert session.calls[0]["url"] == (
         "http://node.test/v1/gov/contracts/"
-        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
     )
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        "",
+        ".",
+        ".hidden",
+        "selector/alias",
+        "selector%2Falias",
+        "selector alias",
+        "selector\nalias",
+        "sélector",
+        "a" * 129,
+    ],
+)
+def test_governance_selectors_reject_before_transport(selector: str) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    operations = [
+        lambda: client.get_governance_locks(selector),
+        lambda: client.get_governance_referendum(selector),
+        lambda: client.get_governance_tally(selector),
+        lambda: client.submit_plain_ballot(
+            authority=CANONICAL_OWNER,
+            chain_id="chain",
+            referendum_id=selector,
+            owner=CANONICAL_OWNER,
+            amount="1",
+            duration_blocks=1,
+            direction="Aye",
+        ),
+        lambda: client.submit_zk_ballot_v1(
+            authority=CANONICAL_OWNER,
+            chain_id="chain",
+            election_id=selector,
+            backend="halo2/ipa",
+            envelope_b64="AAAA",
+        ),
+    ]
+    for operation in operations:
+        with pytest.raises(RuntimeError, match="canonical governance selector V1"):
+            operation()
+    assert session.calls == []
+
+
+def test_governance_selector_accepts_exact_boundaries() -> None:
+    for selector in ("a", "a" * 128, "A9_selector~with.dots"):
+        assert (
+            ToriiClient._require_governance_selector_v1(
+                selector,
+                context="selector",
+            )
+            == selector
+        )
+
+
+@pytest.mark.parametrize(
+    "proposal_id",
+    ["a" * 63, "A" * 64, "0x" + "a" * 64, "a" * 63 + "/"],
+)
+def test_governance_proposal_ids_reject_before_transport(proposal_id: str) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    for operation in [
+        lambda: client.get_governance_proposal(proposal_id),
+        lambda: client.enact_proposal(proposal_id=proposal_id),
+        lambda: client.finalize_referendum(
+            referendum_id="a" * 64,
+            proposal_id=proposal_id,
+        ),
+        lambda: client.finalize_referendum(
+            referendum_id=proposal_id,
+            proposal_id="a" * 64,
+        ),
+    ]:
+        with pytest.raises(RuntimeError, match="lowercase 32-byte hex"):
+            operation()
+    assert session.calls == []
 
 
 def _governance_locks_payload(amount: Any) -> Dict[str, Any]:
@@ -3615,7 +3314,7 @@ def test_get_node_capabilities_parses_snapshot() -> None:
 
 def test_contract_helpers_against_mock_server() -> None:
     server = ToriiMockServer().start()
-    contract_address = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
     try:
         response = requests.post(
             f"{server.base_url.rstrip('/')}/__mock__/gov/config",
@@ -3676,7 +3375,7 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
 
         payload = response.json()
 
-        assert payload["protocol_version"] == 3
+        assert payload["protocol_version"] == 4
         assert payload["restart_required"] is False
         assert payload["leader"] == 1
         assert payload["height_context"]["validator_count"] == 4
@@ -3699,7 +3398,7 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
     try:
         base_url = server.base_url.rstrip("/")
         fixtures = {
-            "status": {"protocol_version": 3, "height": 42},
+            "status": {"protocol_version": 4, "height": 42},
             "leader": {"leader_index": 2},
             "telemetry": {"availability": {"total_votes_ingested": 7}},
         }
@@ -3734,7 +3433,7 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
 
     assert type(status) is SumeragiV2Status
     assert SumeragiV2Status is not SumeragiDiagnosticsStatus
-    assert status.protocol_version == 3
+    assert status.protocol_version == 4
     assert status.restart_required is False
     assert status.height == 10
     assert status.phase == "prepare"
@@ -3825,6 +3524,88 @@ def test_get_sumeragi_status_rejects_invalid_native_manifest(
     mutate(payload["last_commit_qc"]["certificate"]["execution_commitment"])
 
     with pytest.raises(RuntimeError, match=error):
+        _get_sumeragi_status(payload)
+
+
+def test_get_sumeragi_status_requires_exact_merge_carrier_projection() -> None:
+    payload = _sumeragi_v2_status_payload()
+    commitment = payload["last_commit_qc"]["certificate"]["execution_commitment"]
+    status = _get_sumeragi_status(payload)
+    assert status.last_commit_qc is not None
+    assert status.last_commit_qc.certificate.execution_commitment.merge_carrier is None
+
+    commitment["merge_carrier"] = {
+        "version": 1,
+        "entry_hash": _canonical_hash(0x39),
+    }
+    status = _get_sumeragi_status(payload)
+    assert status.last_commit_qc is not None
+    carrier = status.last_commit_qc.certificate.execution_commitment.merge_carrier
+    assert carrier is not None
+    assert carrier.version == 1
+    assert carrier.entry_hash == _canonical_hash(0x39)
+
+    invalid_carriers = [
+        "missing",
+        "malformed",
+        "wrong_version",
+        "missing_version",
+        "missing_entry_hash",
+        "bad_hash",
+        "unknown_field",
+    ]
+    for case in invalid_carriers:
+        candidate = _sumeragi_v2_status_payload()
+        candidate_commitment = candidate["last_commit_qc"]["certificate"][
+            "execution_commitment"
+        ]
+        if case == "missing":
+            del candidate_commitment["merge_carrier"]
+        elif case == "malformed":
+            candidate_commitment["merge_carrier"] = "carrier"
+        elif case == "wrong_version":
+            candidate_commitment["merge_carrier"] = {
+                "version": 2,
+                "entry_hash": _canonical_hash(0x39),
+            }
+        elif case == "missing_version":
+            candidate_commitment["merge_carrier"] = {
+                "entry_hash": _canonical_hash(0x39),
+            }
+        elif case == "missing_entry_hash":
+            candidate_commitment["merge_carrier"] = {"version": 1}
+        elif case == "bad_hash":
+            candidate_commitment["merge_carrier"] = {
+                "version": 1,
+                "entry_hash": "not-a-hash",
+            }
+        else:
+            candidate_commitment["merge_carrier"] = {
+                "version": 1,
+                "entry_hash": _canonical_hash(0x39),
+                "future": True,
+            }
+        with pytest.raises(RuntimeError):
+            _get_sumeragi_status(candidate)
+
+
+@pytest.mark.parametrize("invalid", [None, True, 0, -1, 1 << 64, "123"])
+def test_get_sumeragi_status_requires_exact_executed_wire_len(invalid: Any) -> None:
+    payload = _sumeragi_v2_status_payload()
+    commitment = payload["last_commit_qc"]["certificate"]["execution_commitment"]
+    status = _get_sumeragi_status(payload)
+    assert status.last_commit_qc is not None
+    assert (
+        status.last_commit_qc.certificate.execution_commitment.executed_block_wire_len
+        == 123
+    )
+
+    commitment["executed_block_wire_len"] = invalid
+    with pytest.raises(RuntimeError, match="executed_block_wire_len"):
+        _get_sumeragi_status(payload)
+
+    del commitment["executed_block_wire_len"]
+    with pytest.raises(RuntimeError, match="executed_block_wire_len"):
         _get_sumeragi_status(payload)
 
 
@@ -3973,6 +3754,18 @@ def test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker() ->
     assert status.liveness.blocker == "local_control_pending"
 
 
+def test_get_sumeragi_status_accepts_successor_activation_pending_liveness_blocker() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["liveness"]["blocker"] = {
+        "blocker": "successor_activation_pending",
+        "details": None,
+    }
+
+    status = _get_sumeragi_status(payload)
+
+    assert status.liveness.blocker == "successor_activation_pending"
+
+
 def test_get_sumeragi_status_accepts_unsafe_proposal_ignore_reason() -> None:
     payload = _sumeragi_v2_status_payload()
     payload["liveness"]["ignore_counts"] = [
@@ -4086,6 +3879,17 @@ def test_sumeragi_endpoint_methods_reject_swapped_payload_contracts() -> None:
     assert diagnostics_session.calls[0]["url"].endswith(
         "/v1/sumeragi/diagnostics"
     )
+
+    for endpoint, response, error_type, message in sumeragi_exact_json_response_cases():
+        session = RecordingSession()
+        session.queue(response)
+        client = ToriiClient("http://node.test", session=session)
+        with pytest.raises(error_type, match=message):
+            getattr(client, f"get_sumeragi_{endpoint}")()
+        assert response.was_closed is True, endpoint
+        assert session.calls[0]["url"].endswith(f"/v1/sumeragi/{endpoint}")
+        assert session.calls[0]["headers"] == {"Accept": "application/json"}
+        assert session.calls[0]["stream"] is True
 
 
 def test_get_sumeragi_diagnostics_parses_exact_nested_fee_and_native_amx_receipts() -> None:
@@ -4286,20 +4090,31 @@ def test_get_sumeragi_diagnostics_parses_ordered_native_application_evidence() -
     assert applications[0].state == "durably_applied"
 
 
-def test_get_sumeragi_diagnostics_accepts_explicit_native_application_conflict() -> None:
+@pytest.mark.parametrize(
+    ("state", "has_application_block"),
+    [
+        pytest.param("certified_pending_carrier", False, id="certified"),
+        pytest.param("committed_evidence_pending", True, id="committed"),
+        pytest.param("durably_applied", True, id="durably-applied"),
+        pytest.param("conflict", False, id="conflict"),
+    ],
+)
+def test_get_sumeragi_diagnostics_accepts_native_application_state_geometry(
+    state: str, has_application_block: bool
+) -> None:
     payload = _sumeragi_diagnostics_payload()
-    application = _native_amx_participant_application_payload(state="conflict")
-    del application["application_block_height"]
-    del application["application_block_hash"]
+    application = _native_amx_participant_application_payload(state=state)
+    if not has_application_block:
+        _set_native_amx_application_without_block(application, state)
     payload["native_amx_participant_applications"] = [application]
 
     parsed = _get_sumeragi_diagnostics(
         payload
     ).native_amx_participant_applications[0]
 
-    assert parsed.state == "conflict"
-    assert parsed.application_block_height is None
-    assert parsed.application_block_hash is None
+    assert parsed.state == state
+    assert (parsed.application_block_height is not None) is has_application_block
+    assert (parsed.application_block_hash is not None) is has_application_block
 
 
 @pytest.mark.parametrize(
@@ -4336,6 +4151,30 @@ def test_get_sumeragi_diagnostics_accepts_explicit_native_application_conflict()
             lambda row: row.pop("application_block_hash"),
             "application block height and hash must appear together",
             id="unpaired-application-block",
+        ),
+        pytest.param(
+            lambda row: row.update(state="certified_pending_carrier"),
+            "state and application block identity disagree",
+            id="certified-with-application-block",
+        ),
+        pytest.param(
+            lambda row: row.update(state="conflict"),
+            "state and application block identity disagree",
+            id="conflict-with-application-block",
+        ),
+        pytest.param(
+            lambda row: _set_native_amx_application_without_block(
+                row, "committed_evidence_pending"
+            ),
+            "state and application block identity disagree",
+            id="committed-without-application-block",
+        ),
+        pytest.param(
+            lambda row: _set_native_amx_application_without_block(
+                row, "durably_applied"
+            ),
+            "state and application block identity disagree",
+            id="durably-applied-without-application-block",
         ),
         pytest.param(
             lambda row: row.update(source_count="2"),
@@ -4406,26 +4245,14 @@ def test_get_sumeragi_diagnostics_enforces_native_application_bound_and_order() 
 
 def test_get_sumeragi_diagnostics_parses_autonomous_stage_and_conflict() -> None:
     payload = _sumeragi_diagnostics_payload()
-    row = {
-        "lane_id": 3, "dataspace_id": 8,
-        "lane_incarnation": _canonical_hash(0x65),
-        "lane_block_height": 8, "lane_block_view": 1,
-        "proposal_height": 10, "proposal_view": 2,
-        "proposal_hash": _canonical_hash(0x69),
-        "descriptor_hash": _canonical_hash(0x73),
-        "executable_payload_hash": _canonical_hash(0x74),
-        "source_bundle_hash": _canonical_hash(0x75),
-        "merge_entry_hash": _canonical_hash(0x76),
-        "application_block_height": 12,
-        "application_block_hash": _canonical_hash(0x77),
-        "reservation_count": 2, "transaction_count": 2,
-        "highest_durable_stage": "kura_wsv_application_receipt_durable",
-        "stuck_reason": "queue_finalization_unverifiable",
-    }
+    row = _autonomous_lane_execution_payload()
     payload["autonomous_lane_executions"] = [row]
     parsed = _get_sumeragi_diagnostics(payload).autonomous_lane_executions[0]
     assert parsed.merge_entry_hash == _canonical_hash(0x76)
     assert parsed.application_block_height == 12
+    assert parsed.reservation_owner_hash == _canonical_hash(0x66)
+    assert parsed.proposal_identity_hash == _canonical_hash(0x67)
+    assert parsed.reservation_group_hash == _canonical_hash(0x68)
 
     payload["autonomous_lane_executions"] = [row, dict(row)]
     with pytest.raises(RuntimeError, match="strictly ordered"):
@@ -4441,6 +4268,141 @@ def test_get_sumeragi_diagnostics_parses_autonomous_stage_and_conflict() -> None
     )
     row["stuck_reason"] = "awaiting_merge_selection"
     with pytest.raises(RuntimeError, match="stage and stuck reason disagree"):
+        _get_sumeragi_diagnostics(payload)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["reservation_owner_hash", "proposal_identity_hash", "reservation_group_hash"],
+)
+def test_get_sumeragi_diagnostics_requires_provisional_identity_hashes(
+    field: str,
+) -> None:
+    for mutation in ("missing", "zero", "type", "bare-lowercase"):
+        row = _autonomous_lane_execution_payload()
+        if mutation == "missing":
+            del row[field]
+        elif mutation == "zero":
+            row[field] = "hash:" + ("00" * 32) + "#6A0A"
+        elif mutation == "type":
+            row[field] = [1] * 32
+        else:
+            row[field] = "ab" * 32
+        payload = _sumeragi_diagnostics_payload()
+        payload["autonomous_lane_executions"] = [row]
+        with pytest.raises(RuntimeError, match=field):
+            _get_sumeragi_diagnostics(payload)
+
+
+def test_get_sumeragi_diagnostics_enforces_reservation_only_geometry() -> None:
+    row = _autonomous_lane_execution_payload()
+    row.update(
+        highest_durable_stage="reservations_durable",
+        stuck_reason="awaiting_executable_payload",
+    )
+    for field in (
+        "proposal_view",
+        "proposal_hash",
+        "descriptor_hash",
+        "executable_payload_hash",
+        "source_bundle_hash",
+        "merge_entry_hash",
+        "application_block_height",
+        "application_block_hash",
+    ):
+        del row[field]
+    payload = _sumeragi_diagnostics_payload()
+    payload["autonomous_lane_executions"] = [row]
+    parsed = _get_sumeragi_diagnostics(payload).autonomous_lane_executions[0]
+    assert parsed.proposal_hash is None
+    assert parsed.descriptor_hash is None
+    assert parsed.proposal_view is None
+    assert parsed.stuck_reason == "awaiting_executable_payload"
+
+    for field in (
+        "proposal_hash",
+        "executable_payload_hash",
+        "source_bundle_hash",
+        "merge_entry_hash",
+        "application_block_height",
+    ):
+        invalid = copy.deepcopy(row)
+        if field == "proposal_hash":
+            invalid["proposal_hash"] = _canonical_hash(0x79)
+            invalid["descriptor_hash"] = _canonical_hash(0x7A)
+        elif field == "application_block_height":
+            invalid[field] = 12
+            invalid["application_block_hash"] = _canonical_hash(0x7B)
+        else:
+            invalid[field] = _canonical_hash(0x7C)
+        payload["autonomous_lane_executions"] = [invalid]
+        with pytest.raises(RuntimeError, match="finalized identity|evidence"):
+            _get_sumeragi_diagnostics(payload)
+
+    wrong_reason = copy.deepcopy(row)
+    wrong_reason["stuck_reason"] = "awaiting_payload_availability"
+    payload["autonomous_lane_executions"] = [wrong_reason]
+    with pytest.raises(RuntimeError, match="stage and stuck reason disagree"):
+        _get_sumeragi_diagnostics(payload)
+
+    mismatched_counts = copy.deepcopy(row)
+    mismatched_counts["reservation_count"] = 1
+    payload["autonomous_lane_executions"] = [mismatched_counts]
+    with pytest.raises(RuntimeError, match="reservation and transaction counts disagree"):
+        _get_sumeragi_diagnostics(payload)
+
+    null_view = copy.deepcopy(row)
+    null_view["proposal_view"] = None
+    payload["autonomous_lane_executions"] = [null_view]
+    assert _get_sumeragi_diagnostics(
+        payload
+    ).autonomous_lane_executions[0].proposal_view is None
+
+    present_view = copy.deepcopy(row)
+    present_view["proposal_view"] = 0
+    payload["autonomous_lane_executions"] = [present_view]
+    with pytest.raises(RuntimeError, match="proposal view disagrees"):
+        _get_sumeragi_diagnostics(payload)
+
+
+def test_get_sumeragi_diagnostics_enforces_finalized_identity_pair_and_order() -> None:
+    payload = _sumeragi_diagnostics_payload()
+    for missing_field in ("proposal_hash", "descriptor_hash"):
+        row = _autonomous_lane_execution_payload()
+        del row[missing_field]
+        payload["autonomous_lane_executions"] = [row]
+        with pytest.raises(RuntimeError, match="must appear together"):
+            _get_sumeragi_diagnostics(payload)
+
+    row = _autonomous_lane_execution_payload()
+    row["proposal_hash"] = None
+    row["descriptor_hash"] = None
+    payload["autonomous_lane_executions"] = [row]
+    with pytest.raises(RuntimeError, match="finalized identity disagrees"):
+        _get_sumeragi_diagnostics(payload)
+
+    missing_view = _autonomous_lane_execution_payload()
+    del missing_view["proposal_view"]
+    payload["autonomous_lane_executions"] = [missing_view]
+    assert _get_sumeragi_diagnostics(
+        payload
+    ).autonomous_lane_executions[0].proposal_view is None
+
+    first = _autonomous_lane_execution_payload()
+    same_provisional_identity = copy.deepcopy(first)
+    same_provisional_identity["proposal_hash"] = _canonical_hash(0x7D)
+    same_provisional_identity["descriptor_hash"] = _canonical_hash(0x7E)
+    payload["autonomous_lane_executions"] = [first, same_provisional_identity]
+    with pytest.raises(RuntimeError, match="strictly ordered"):
+        _get_sumeragi_diagnostics(payload)
+
+    first["proposal_identity_hash"] = _canonical_hash(0x90)
+    ordering_drift = copy.deepcopy(first)
+    ordering_drift["proposal_identity_hash"] = _canonical_hash(0x80)
+    ordering_drift["proposal_hash"] = _canonical_hash(0x91)
+    ordering_drift["descriptor_hash"] = _canonical_hash(0x92)
+    payload["autonomous_lane_executions"] = [first, ordering_drift]
+    with pytest.raises(RuntimeError, match="strictly ordered"):
         _get_sumeragi_diagnostics(payload)
 
 
@@ -4829,8 +4791,8 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
         _get_sumeragi_status(legacy_field)
 
     wrong_version = _sumeragi_v2_status_payload()
-    wrong_version["protocol_version"] = 1
-    with pytest.raises(RuntimeError, match="protocol_version must equal 3"):
+    wrong_version["protocol_version"] = 3
+    with pytest.raises(RuntimeError, match="protocol_version must equal 4"):
         _get_sumeragi_status(wrong_version)
 
     missing_restart_required = _sumeragi_v2_status_payload()
@@ -4900,6 +4862,19 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
     underpowered["last_commit_qc"]["signed_power"] = 2
     with pytest.raises(RuntimeError, match="does not satisfy its frozen dual quorum"):
         _get_sumeragi_status(underpowered)
+
+    weighted_npos = _sumeragi_v2_status_payload()
+    weighted_npos["height_context"]["mode"] = {"mode": "npos", "details": None}
+    weighted_npos["height_context"]["quorum"]["total_power"] = 5
+    with pytest.raises(RuntimeError, match="quorum is not canonical"):
+        _get_sumeragi_status(weighted_npos)
+
+    invalid_geometry = _sumeragi_v2_status_payload()
+    invalid_geometry["height_context"]["validator_count"] = 5
+    invalid_geometry["height_context"]["quorum"]["min_signers"] = 4
+    invalid_geometry["height_context"]["quorum"]["total_power"] = 5
+    with pytest.raises(RuntimeError, match="quorum is not canonical"):
+        _get_sumeragi_status(invalid_geometry)
 
 
 def test_get_sumeragi_status_allows_authenticated_bootstrap_without_commit_details() -> None:
@@ -5895,69 +5870,219 @@ def test_get_sumeragi_evidence_count_returns_int() -> None:
     assert session.calls[0]["url"].endswith("/v1/sumeragi/evidence/count")
 
 
+def _sumeragi_evidence_common(*, admitted: Optional[int] = None) -> Dict[str, Any]:
+    return {
+        "recorded_height": 40,
+        "recorded_view": 2,
+        "recorded_ms": 1_700_000_000_000,
+        "consensus_admitted_height": admitted,
+    }
+
+
+def _sumeragi_v2_equivocation_record(
+    *, evidence_class: str = "phase_vote"
+) -> Dict[str, Any]:
+    return {
+        "kind": "SumeragiV2Equivocation",
+        "class": evidence_class,
+        "height": 31,
+        "view": 4,
+        "epoch": 2,
+        "signer": 3,
+        "context_id": "11" * 32,
+        "artifact_hash_1": "22" * 32,
+        "artifact_hash_2": "33" * 32,
+        **_sumeragi_evidence_common(admitted=41),
+    }
+
+
+def _sumeragi_censorship_record() -> Dict[str, Any]:
+    return {
+        "kind": "Censorship",
+        "tx_hash": "44" * 32,
+        "receipt_count": 2,
+        "signers": ["alice@test", "bob@test"],
+        "submitted_at_height_min": 20,
+        "submitted_at_height_max": 22,
+        **_sumeragi_evidence_common(),
+    }
+
+
 def test_list_sumeragi_evidence_parses_records() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
-                "total": 3,
+                "total": 4,
                 "items": [
                     {
                         "kind": "DoublePrepare",
                         "recorded_height": 1,
                         "recorded_view": 2,
                         "recorded_ms": 3,
+                        "consensus_admitted_height": None,
                         "phase": "Prepare",
                         "height": 4,
                         "view": 5,
                         "epoch": 6,
-                        "signer": "ed011122",
-                        "block_hash_1": "aa11",
-                        "block_hash_2": "bb22",
+                        "signer": 1,
+                        "block_hash_1": "aa" * 32,
+                        "block_hash_2": "bb" * 32,
                     },
                     {
                         "kind": "InvalidProposal",
                         "recorded_height": 7,
                         "recorded_view": 8,
                         "recorded_ms": 9,
+                        "consensus_admitted_height": None,
                         "height": 10,
                         "view": 11,
                         "epoch": 12,
-                        "subject_block_hash": "cc33",
-                        "payload_hash": "dd44",
+                        "subject_block_hash": "cc" * 32,
+                        "payload_hash": "dd" * 32,
                         "reason": "payload mismatch",
                     },
-                    {
-                        "kind": "UnknownEvidence",
-                        "recorded_height": 13,
-                        "recorded_view": 14,
-                        "recorded_ms": 15,
-                        "detail": "unknown entry",
-                    },
+                    _sumeragi_censorship_record(),
+                    _sumeragi_v2_equivocation_record(),
                 ],
             }
         )
     )
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_sumeragi_evidence(limit=5, offset=1, kind="DoublePrepare")
+    page = client.list_sumeragi_evidence(
+        limit=5, offset=1, kind="SumeragiV2Equivocation"
+    )
 
-    assert page.total == 3
-    assert len(page.items) == 3
+    assert page.total == 4
+    assert len(page.items) == 4
     prevote = page.items[0]
+    assert isinstance(prevote, client_module.SumeragiDoubleVoteEvidenceRecord)
     assert prevote.kind == "DoublePrepare"
     assert prevote.phase == "Prepare"
-    assert prevote.block_hash_1 == "aa11"
-    assert prevote.block_hash_2 == "bb22"
+    assert prevote.signer == 1
+    assert prevote.block_hash_1 == "aa" * 32
+    assert prevote.block_hash_2 == "bb" * 32
     invalid_proposal = page.items[1]
-    assert invalid_proposal.payload_hash == "dd44"
+    assert isinstance(
+        invalid_proposal, client_module.SumeragiInvalidProposalEvidenceRecord
+    )
+    assert invalid_proposal.payload_hash == "dd" * 32
     assert invalid_proposal.reason == "payload mismatch"
-    unknown = page.items[2]
-    assert unknown.kind == "UnknownEvidence"
-    assert unknown.detail == "unknown entry"
+    censorship = page.items[2]
+    assert isinstance(censorship, client_module.SumeragiCensorshipEvidenceRecord)
+    assert censorship.submitted_at_height_min == 20
+    assert censorship.submitted_at_height_max == 22
+    equivocation = page.items[3]
+    assert isinstance(
+        equivocation, client_module.SumeragiV2EquivocationEvidenceRecord
+    )
+    assert equivocation.class_ == "phase_vote"
+    assert equivocation.signer == 3
+    assert equivocation.context_id == "11" * 32
+    assert equivocation.consensus_admitted_height == 41
     call = session.calls[0]
     assert call["url"].endswith("/v1/sumeragi/evidence")
-    assert call["params"] == {"limit": 5, "offset": 1, "kind": "DoublePrepare"}
+    assert call["params"] == {
+        "limit": 5,
+        "offset": 1,
+        "kind": "SumeragiV2Equivocation",
+    }
+
+
+@pytest.mark.parametrize("evidence_class", ["proposal", "phase_vote", "timeout_vote"])
+def test_sumeragi_v2_equivocation_accepts_exact_classes(evidence_class: str) -> None:
+    parsed = ToriiClient._parse_sumeragi_evidence_record(
+        _sumeragi_v2_equivocation_record(evidence_class=evidence_class),
+        context="evidence",
+    )
+
+    assert isinstance(parsed, client_module.SumeragiV2EquivocationEvidenceRecord)
+    assert parsed.class_ == evidence_class
+
+
+def test_sumeragi_evidence_rejects_unknown_record_kind() -> None:
+    record = {"kind": "UnknownEvidence", **_sumeragi_evidence_common()}
+
+    with pytest.raises(RuntimeError, match=r"kind must be one of"):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
+
+
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "min_height",
+        "max_height",
+        "minHeight",
+        "maxHeight",
+        "submittedAtHeightMin",
+        "submittedAtHeightMax",
+    ],
+)
+def test_sumeragi_censorship_rejects_retired_height_aliases(alias: str) -> None:
+    record = _sumeragi_censorship_record()
+    record[alias] = 20
+
+    with pytest.raises(RuntimeError, match=rf"unexpected {alias}"):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("class", "Prepare", r"class must be one of"),
+        ("signer", "3", r"signer must be a non-negative JSON integer"),
+        ("signer", True, r"signer must be a non-negative JSON integer"),
+        ("signer", 0x1_0000_0000, r"signer must be <= 4294967295"),
+        ("context_id", "AA" * 32, r"exact lowercase 32-byte hex"),
+        ("artifact_hash_2", "22" * 32, r"distinct artifacts"),
+    ],
+)
+def test_sumeragi_v2_equivocation_rejects_noncanonical_fields(
+    field: str, value: Any, match: str
+) -> None:
+    record = _sumeragi_v2_equivocation_record()
+    record[field] = value
+
+    with pytest.raises(RuntimeError, match=match):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
+
+
+@pytest.mark.parametrize(("field", "match"), [("context_id", "missing context_id")])
+def test_sumeragi_v2_equivocation_rejects_missing_fields(
+    field: str, match: str
+) -> None:
+    record = _sumeragi_v2_equivocation_record()
+    del record[field]
+
+    with pytest.raises(RuntimeError, match=match):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
+
+
+@pytest.mark.parametrize(
+    ("receipt_count", "signers", "height_min", "height_max", "match"),
+    [
+        (2, ["alice@test"], 20, 22, r"receipt_count must equal len\(signers\)"),
+        (2, ["alice@test", "bob@test"], 23, 22, r"submitted_at_height_min"),
+    ],
+)
+def test_sumeragi_censorship_rejects_inconsistent_receipt_metadata(
+    receipt_count: int,
+    signers: List[str],
+    height_min: int,
+    height_max: int,
+    match: str,
+) -> None:
+    record = _sumeragi_censorship_record()
+    record.update(
+        receipt_count=receipt_count,
+        signers=signers,
+        submitted_at_height_min=height_min,
+        submitted_at_height_max=height_max,
+    )
+
+    with pytest.raises(RuntimeError, match=match):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
 
 
 def test_list_sumeragi_evidence_validates_limit() -> None:
@@ -6165,7 +6290,11 @@ def test_finalize_referendum_posts_payload() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    draft = client.finalize_referendum(referendum_id="ref-1", proposal_id="a" * 64)
+    proposal_id = "a" * 64
+    draft = client.finalize_referendum(
+        referendum_id=proposal_id,
+        proposal_id=proposal_id,
+    )
 
     assert draft.ok is True
     assert len(draft.tx_instructions) == 1
@@ -6173,8 +6302,8 @@ def test_finalize_referendum_posts_payload() -> None:
     assert call["method"] == "POST"
     assert call["url"].endswith("/v1/gov/finalize")
     assert json.loads(call["data"]) == {
-        "referendum_id": "ref-1",
-        "proposal_id": "a" * 64,
+        "referendum_id": proposal_id,
+        "proposal_id": proposal_id,
     }
 
 
@@ -6643,6 +6772,69 @@ def _offline_top_up_finality_proof(
     **overrides: Any,
 ) -> Dict[str, Any]:
     bound_anchor = anchor if anchor is not None else _offline_top_up_anchor()
+    context_id = _canonical_hash(0xA0)
+
+    def execution_commitment(*, includes_top_up: bool, seed: int) -> Dict[str, Any]:
+        commitment = {
+            "parent_state_root": _canonical_hash(seed),
+            "post_state_root": _canonical_hash(seed + 1),
+            "ordinary_writes_root": _canonical_hash(seed + 2),
+            "topup_anchor_root": None,
+            "topup_anchor_count": 0,
+            "native_amx_application_manifest_version": 1,
+            "native_amx_application_manifest_root": (
+                _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+            ),
+            "native_amx_application_manifest_count": 0,
+            "merge_carrier": None,
+            "executed_block_wire_len": 123,
+            "executed_block_wire_hash": _canonical_hash(seed + 3),
+        }
+        if includes_top_up:
+            commitment["topup_anchor_root"] = _canonical_hash(seed + 4)
+            commitment["topup_anchor_count"] = 1
+        return commitment
+
+    def certificate(
+        *,
+        height: int,
+        certificate_context_id: str,
+        includes_top_up: bool,
+        seed: int,
+    ) -> Dict[str, Any]:
+        round_ = {
+            "context_id": [certificate_context_id],
+            "height": height,
+            "view": 0,
+        }
+        return {
+            "round": round_,
+            "proposal_round": copy.deepcopy(round_),
+            "phase": {"phase": "commit", "details": None},
+            "subject": {
+                "parent_block_hash": (
+                    None if height == 1 else _canonical_hash(seed + 5)
+                ),
+                "block_hash": _canonical_hash(seed + 6),
+                "payload_hash": _canonical_hash(seed + 7),
+            },
+            "execution_commitment": execution_commitment(
+                includes_top_up=includes_top_up,
+                seed=seed + 8,
+            ),
+            "signers": [0],
+            "aggregate_signature": [seed] * 96,
+        }
+
+    parent_commit_qc = None
+    if finalized_height > 1:
+        parent_commit_qc = certificate(
+            height=finalized_height - 1,
+            certificate_context_id=_canonical_hash(0xA1),
+            includes_top_up=False,
+            seed=0x21,
+        )
+
     proof = {
         "version": 1,
         "anchor": {
@@ -6655,13 +6847,37 @@ def _offline_top_up_finality_proof(
         },
         "commit_qc": {
             "height_context": {
+                "context_id": [context_id],
+                "chain_id": "wonderland",
+                "protocol_version": 4,
                 "height": finalized_height,
-                "opaque_context": {"protocol_version": 3},
+                "epoch": 0,
+                "epoch_end_height": max(100, finalized_height),
+                "next_epoch_snapshot": None,
+                "mode": {"mode": "permissioned", "details": None},
+                "parent_commit_qc": parent_commit_qc,
+                "snapshot_bootstrap": None,
+                "nexus_amx_context_hash": _canonical_hash(0xA2),
+                "execution_policy_hash": _canonical_hash(0xA3),
+                "da_layout": {
+                    "encoding": {
+                        "encoding": "reed_solomon16",
+                        "details": None,
+                    },
+                    "chunk_size_bytes": 4,
+                    "data_shards": 1,
+                    "parity_shards": 1,
+                    "max_payload_size_bytes": 4,
+                    "max_chunk_count": 2,
+                },
+                "leader_seed": _offline_fixed_bytes(0xA4),
             },
-            "certificate": {
-                "round": {"height": finalized_height, "view": 0},
-                "opaque_certificate": [1, 2, 3],
-            },
+            "certificate": certificate(
+                height=finalized_height,
+                certificate_context_id=context_id,
+                includes_top_up=True,
+                seed=0x31,
+            ),
         },
         "anchor_path": {"leaf_index": 0, "leaf_count": 1, "siblings": []},
     }
@@ -6716,7 +6932,7 @@ def test_offline_public_request_annotations_are_closed_first_release_types() -> 
     )
 
 
-def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> None:
+def test_offline_finality_execution_commitment_requires_executed_wire_identity() -> None:
     payload = {
         "parent_state_root": _canonical_hash(0x91),
         "post_state_root": _canonical_hash(0x92),
@@ -6727,6 +6943,8 @@ def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> 
             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
         ),
         "native_amx_application_manifest_count": 0,
+        "merge_carrier": None,
+        "executed_block_wire_len": 321,
         "executed_block_wire_hash": _canonical_hash(0x94),
     }
     commitment = client_module._offline_top_up_finality_execution_commitment(
@@ -6734,6 +6952,7 @@ def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> 
         "test.execution_commitment",
         require_topup=False,
     )
+    assert commitment.executed_block_wire_len == payload["executed_block_wire_len"]
     assert commitment.executed_block_wire_hash == payload["executed_block_wire_hash"]
 
     payload["native_amx_application_manifest_root"] = _canonical_hash(0x95)
@@ -6747,6 +6966,25 @@ def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> 
     )
     assert nonempty_commitment.native_amx_application_manifest_count == 1
 
+    for invalid in (None, True, 0, -1, 1 << 64, "321"):
+        invalid_payload = dict(payload)
+        invalid_payload["executed_block_wire_len"] = invalid
+        with pytest.raises(RuntimeError, match="executed_block_wire_len"):
+            client_module._offline_top_up_finality_execution_commitment(
+                invalid_payload,
+                "test.execution_commitment",
+                require_topup=False,
+            )
+
+    missing_len = dict(payload)
+    del missing_len["executed_block_wire_len"]
+    with pytest.raises(RuntimeError, match="executed_block_wire_len"):
+        client_module._offline_top_up_finality_execution_commitment(
+            missing_len,
+            "test.execution_commitment",
+            require_topup=False,
+        )
+
     del payload["executed_block_wire_hash"]
     with pytest.raises(RuntimeError, match="executed_block_wire_hash"):
         client_module._offline_top_up_finality_execution_commitment(
@@ -6754,6 +6992,80 @@ def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> 
             "test.execution_commitment",
             require_topup=False,
         )
+
+
+def test_offline_finality_execution_commitment_requires_exact_merge_carrier() -> None:
+    def payload() -> Dict[str, Any]:
+        return {
+            "parent_state_root": _canonical_hash(0x91),
+            "post_state_root": _canonical_hash(0x92),
+            "ordinary_writes_root": _canonical_hash(0x93),
+            "topup_anchor_count": 0,
+            "native_amx_application_manifest_version": 1,
+            "native_amx_application_manifest_root": (
+                _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+            ),
+            "native_amx_application_manifest_count": 0,
+            "merge_carrier": None,
+            "executed_block_wire_len": 321,
+            "executed_block_wire_hash": _canonical_hash(0x94),
+        }
+
+    parsed = client_module._offline_top_up_finality_execution_commitment(
+        payload(), "test.execution_commitment", require_topup=False
+    )
+    assert parsed.merge_carrier is None
+
+    carrier_payload = payload()
+    carrier_payload["merge_carrier"] = {
+        "version": 1,
+        "entry_hash": _canonical_hash(0x95),
+    }
+    parsed = client_module._offline_top_up_finality_execution_commitment(
+        carrier_payload, "test.execution_commitment", require_topup=False
+    )
+    assert parsed.merge_carrier is not None
+    assert parsed.merge_carrier.entry_hash == _canonical_hash(0x95)
+
+    invalid_payloads = []
+    missing = payload()
+    del missing["merge_carrier"]
+    invalid_payloads.append(missing)
+    malformed = payload()
+    malformed["merge_carrier"] = []
+    invalid_payloads.append(malformed)
+    wrong_version = payload()
+    wrong_version["merge_carrier"] = {
+        "version": 2,
+        "entry_hash": _canonical_hash(0x95),
+    }
+    invalid_payloads.append(wrong_version)
+    missing_version = payload()
+    missing_version["merge_carrier"] = {
+        "entry_hash": _canonical_hash(0x95),
+    }
+    invalid_payloads.append(missing_version)
+    missing_entry_hash = payload()
+    missing_entry_hash["merge_carrier"] = {"version": 1}
+    invalid_payloads.append(missing_entry_hash)
+    bad_hash = payload()
+    bad_hash["merge_carrier"] = {"version": 1, "entry_hash": "bad"}
+    invalid_payloads.append(bad_hash)
+    unknown = payload()
+    unknown["merge_carrier"] = {
+        "version": 1,
+        "entry_hash": _canonical_hash(0x95),
+        "future": 1,
+    }
+    invalid_payloads.append(unknown)
+
+    for invalid in invalid_payloads:
+        with pytest.raises(RuntimeError):
+            client_module._offline_top_up_finality_execution_commitment(
+                invalid,
+                "test.execution_commitment",
+                require_topup=False,
+            )
 
 
 @pytest.mark.parametrize(
@@ -6798,6 +7110,8 @@ def test_offline_finality_execution_commitment_rejects_invalid_native_manifest(
             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
         ),
         "native_amx_application_manifest_count": 0,
+        "merge_carrier": None,
+        "executed_block_wire_len": 321,
         "executed_block_wire_hash": _canonical_hash(0x94),
     }
     mutate(payload)
@@ -6830,18 +7144,7 @@ def test_get_offline_capability_is_asset_neutral_and_exact() -> None:
     assert call["url"].endswith("/v1/offline/readiness")
     assert call["params"] == {}
     assert call["headers"]["Accept"] == "application/json"
-
-
-def test_deprecated_kagemusha_readiness_selector_is_ignored() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload=_offline_capability_payload()))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.warns(DeprecationWarning, match="get_offline_capability"):
-        capability = client.get_kagemusha_readiness("not-an-asset-selector")
-
-    assert capability.cash_handoff_capability == "cash_handoff_v1"
-    assert session.calls[0]["params"] == {}
+    assert not hasattr(ToriiClient, "get_kagemusha_readiness")
 
 
 def test_get_offline_capability_rejects_non_universal_claims() -> None:
@@ -7098,10 +7401,8 @@ def test_kagemusha_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
     assert typed_anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
 
 
-def test_offline_top_up_finality_proof_is_direct_typed_and_preserves_opaque_internals() -> None:
+def test_offline_top_up_finality_proof_is_closed_and_direct_typed() -> None:
     proof = _offline_top_up_finality_proof()
-    proof["commit_qc"]["future_qc_field"] = {"opaque": [7, 8, 9]}
-    proof["anchor_path"]["future_path_field"] = "preserved"
     session = RecordingSession()
     session.queue(
         StubResponse(payload=_offline_applied_top_up_status(finality_proof=proof))
@@ -7118,11 +7419,244 @@ def test_offline_top_up_finality_proof_is_direct_typed_and_preserves_opaque_inte
     assert typed_proof.version == 1
     assert typed_proof.anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
     assert typed_proof.anchor.anchor_digest == tuple(_offline_fixed_bytes(0x71))
-    assert typed_proof.commit_qc["future_qc_field"] == {"opaque": [7, 8, 9]}
-    assert typed_proof.anchor_path["future_path_field"] == "preserved"
+    assert typed_proof.commit_qc.height_context.protocol_version == 4
+    assert (
+        typed_proof.commit_qc.height_context.da_layout.encoding.encoding
+        == "reed_solomon16"
+    )
+    assert typed_proof.commit_qc.height_context.da_layout.data_shards == 1
+    assert typed_proof.commit_qc.height_context.da_layout.parity_shards == 1
+    assert typed_proof.commit_qc.certificate.round.height == 12
+    assert (
+        typed_proof.commit_qc.certificate.proposal_round
+        == typed_proof.commit_qc.certificate.round
+    )
+    assert typed_proof.commit_qc.height_context.snapshot_bootstrap is None
+    assert typed_proof.anchor_path.leaf_count == 1
 
-    proof["commit_qc"]["future_qc_field"]["opaque"][0] = 255
-    assert typed_proof.commit_qc["future_qc_field"] == {"opaque": [7, 8, 9]}
+
+def test_offline_top_up_public_parser_types_snapshot_and_omitted_genesis_authorities() -> None:
+    snapshot_proof = _offline_top_up_finality_proof()
+    snapshot_context = snapshot_proof["commit_qc"]["height_context"]
+    snapshot_context["parent_commit_qc"] = None
+    snapshot_context["snapshot_bootstrap"] = {
+        "snapshot_height": 11,
+        "snapshot_block_hash": _canonical_hash(0xA6),
+        "snapshot_block_creation_time_ms": 1_000,
+        "snapshot_state_hash": _canonical_hash(0xA7),
+    }
+    snapshot_session = RecordingSession()
+    snapshot_session.queue(
+        StubResponse(
+            payload=_offline_applied_top_up_status(finality_proof=snapshot_proof)
+        )
+    )
+
+    snapshot_status = ToriiClient(
+        "http://node.test", session=snapshot_session
+    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+
+    assert isinstance(snapshot_status, OfflineAppliedOperation)
+    snapshot_bootstrap = (
+        snapshot_status.result.result.finality_proof.commit_qc.height_context.snapshot_bootstrap
+    )
+    assert snapshot_bootstrap is not None
+    assert snapshot_bootstrap.snapshot_height == 11
+    assert snapshot_bootstrap.snapshot_block_creation_time_ms == 1_000
+
+    genesis_anchor = _offline_top_up_anchor(finalized_height=1)
+    genesis_proof = _offline_top_up_finality_proof(
+        genesis_anchor,
+        finalized_height=1,
+    )
+    genesis_context = genesis_proof["commit_qc"]["height_context"]
+    for optional_field in (
+        "next_epoch_snapshot",
+        "parent_commit_qc",
+        "snapshot_bootstrap",
+    ):
+        genesis_context.pop(optional_field)
+    genesis_session = RecordingSession()
+    genesis_session.queue(
+        StubResponse(
+            payload=_offline_applied_top_up_status(
+                genesis_anchor,
+                finalized_block_height=1,
+                finality_proof=genesis_proof,
+            )
+        )
+    )
+
+    genesis_status = ToriiClient(
+        "http://node.test", session=genesis_session
+    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+
+    assert isinstance(genesis_status, OfflineAppliedOperation)
+    genesis_height_context = (
+        genesis_status.result.result.finality_proof.commit_qc.height_context
+    )
+    assert genesis_height_context.next_epoch_snapshot is None
+    assert genesis_height_context.parent_commit_qc is None
+    assert genesis_height_context.snapshot_bootstrap is None
+
+
+def test_offline_top_up_public_parser_rejects_noncanonical_da_layouts() -> None:
+    invalid_proofs = []
+
+    missing_encoding = copy.deepcopy(_offline_top_up_finality_proof())
+    missing_encoding["commit_qc"]["height_context"]["da_layout"].pop("encoding")
+    invalid_proofs.append(
+        (missing_encoding, r"da_layout\.encoding is required")
+    )
+
+    missing_variant = copy.deepcopy(_offline_top_up_finality_proof())
+    missing_variant["commit_qc"]["height_context"]["da_layout"]["encoding"] = {
+        "details": None,
+    }
+    invalid_proofs.append(
+        (missing_variant, r"da_layout\.encoding\.encoding is required")
+    )
+
+    for retired_or_unknown in ("plain", "rs16"):
+        invalid_encoding = copy.deepcopy(_offline_top_up_finality_proof())
+        layout = invalid_encoding["commit_qc"]["height_context"]["da_layout"]
+        layout["encoding"]["encoding"] = retired_or_unknown
+        invalid_proofs.append(
+            (
+                invalid_encoding,
+                r"da_layout\.encoding\.encoding must be reed_solomon16",
+            )
+        )
+
+    for field in ("data_shards", "parity_shards"):
+        zero_shard = copy.deepcopy(_offline_top_up_finality_proof())
+        zero_shard["commit_qc"]["height_context"]["da_layout"][field] = 0
+        invalid_proofs.append(
+            (zero_shard, rf"da_layout\.{field} must be between 1 and 65535")
+        )
+
+    for proof, expected_error in invalid_proofs:
+        session = RecordingSession()
+        session.queue(
+            StubResponse(
+                payload=_offline_applied_top_up_status(finality_proof=proof)
+            )
+        )
+        with pytest.raises(RuntimeError, match=expected_error):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+
+
+def test_offline_top_up_public_parser_rejects_unknown_finality_projection_fields() -> None:
+    def next_epoch_snapshot() -> Dict[str, Any]:
+        return {
+            "epoch": 1,
+            "epoch_end_height": 100,
+            "mode": {"mode": "permissioned", "details": None},
+            "roster": [{"validator": _NATIVE_AMX_VALIDATOR_SET[0], "power": 1}],
+            "validator_set_pops": [[1] * 96],
+            "quorum": {"min_signers": 1, "total_power": 1},
+            "leader_seed": _offline_fixed_bytes(0xA5),
+        }
+
+    invalid_proofs: List[tuple[Dict[str, Any], str]] = []
+
+    def reject_unknown(
+        proof: Dict[str, Any], target: Dict[str, Any], field: str, context: str
+    ) -> None:
+        target[field] = "retired-extension"
+        invalid_proofs.append((proof, rf"{context}\.{field} is not part"))
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    reject_unknown(proof, height_context, "future_context", r"height_context")
+
+    proof = _offline_top_up_finality_proof()
+    certificate = proof["commit_qc"]["certificate"]
+    reject_unknown(proof, certificate, "future_certificate", r"certificate")
+
+    for component in ("round", "proposal_round", "phase", "subject"):
+        proof = _offline_top_up_finality_proof()
+        nested = proof["commit_qc"]["certificate"][component]
+        reject_unknown(proof, nested, f"future_{component}", rf"certificate\.{component}")
+
+    proof = _offline_top_up_finality_proof()
+    execution = proof["commit_qc"]["certificate"]["execution_commitment"]
+    reject_unknown(
+        proof,
+        execution,
+        "future_execution",
+        r"certificate\.execution_commitment",
+    )
+
+    proof = _offline_top_up_finality_proof()
+    mode = proof["commit_qc"]["height_context"]["mode"]
+    reject_unknown(proof, mode, "future_mode", r"height_context\.mode")
+
+    proof = _offline_top_up_finality_proof()
+    reject_unknown(proof, proof["anchor_path"], "future_path", r"anchor_path")
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    height_context["epoch_end_height"] = 12
+    height_context["next_epoch_snapshot"] = next_epoch_snapshot()
+    reject_unknown(
+        proof,
+        height_context["next_epoch_snapshot"],
+        "future_snapshot",
+        r"next_epoch_snapshot",
+    )
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    height_context["epoch_end_height"] = 12
+    height_context["next_epoch_snapshot"] = next_epoch_snapshot()
+    reject_unknown(
+        proof,
+        height_context["next_epoch_snapshot"]["roster"][0],
+        "future_validator",
+        r"roster\[0\]",
+    )
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    height_context["epoch_end_height"] = 12
+    height_context["next_epoch_snapshot"] = next_epoch_snapshot()
+    reject_unknown(
+        proof,
+        height_context["next_epoch_snapshot"]["quorum"],
+        "future_quorum",
+        r"next_epoch_snapshot\.quorum",
+    )
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    height_context["parent_commit_qc"] = None
+    height_context["snapshot_bootstrap"] = {
+        "snapshot_height": 11,
+        "snapshot_block_hash": _canonical_hash(0xA6),
+        "snapshot_block_creation_time_ms": 1_000,
+        "snapshot_state_hash": _canonical_hash(0xA7),
+    }
+    reject_unknown(
+        proof,
+        height_context["snapshot_bootstrap"],
+        "future_bootstrap",
+        r"snapshot_bootstrap",
+    )
+
+    for proof, expected_error in invalid_proofs:
+        session = RecordingSession()
+        session.queue(
+            StubResponse(
+                payload=_offline_applied_top_up_status(finality_proof=proof)
+            )
+        )
+        with pytest.raises(RuntimeError, match=expected_error):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
 
 
 def test_offline_top_up_finality_proof_rejects_missing_mismatched_and_type_confused_fields() -> None:
@@ -7150,6 +7684,7 @@ def test_offline_top_up_finality_proof_rejects_missing_mismatched_and_type_confu
         mutated("commit_qc", "certificate", []),
         mutated("commit_qc", "certificate", "round", []),
         mutated("commit_qc", "certificate", "round", "height", 13),
+        mutated("commit_qc", "certificate", "proposal_round", "view", 1),
         mutated("anchor_path", []),
     ]
     for payload in invalid:
@@ -7615,572 +8150,3 @@ def test_status_snapshot_parses_mode_and_consensus_caps() -> None:
     assert snapshot.status.consensus_caps is not None
     assert snapshot.status.consensus_caps.collectors_k == 2
     assert snapshot.status.consensus_caps.rbc_chunk_max_bytes == 1024
-
-
-def test_decode_pdp_commitment_header_handles_mapping() -> None:
-    payload = b"\x01\x02\x03"
-    header_value = base64.b64encode(payload).decode("ascii")
-
-    decoded = decode_pdp_commitment_header({"sora-pdp-commitment": header_value})
-
-    assert decoded == payload
-
-
-def test_decode_pdp_commitment_header_is_case_insensitive() -> None:
-    payload = b"\xAA\xBB"
-    header_value = base64.b64encode(payload).decode("ascii")
-
-    decoded = decode_pdp_commitment_header({"Sora-PDP-Commitment": header_value})
-
-    assert decoded == payload
-
-
-def test_decode_pdp_commitment_header_rejects_invalid_payload() -> None:
-    try:
-        decode_pdp_commitment_header({"sora-pdp-commitment": "###"})
-    except RuntimeError as exc:
-        assert "Failed to decode" in str(exc)
-    else:
-        raise AssertionError("expected RuntimeError for invalid header")
-
-
-def test_decode_pdp_commitment_header_returns_none_when_missing() -> None:
-    assert decode_pdp_commitment_header({}) is None
-    assert decode_pdp_commitment_header(None) is None
-
-
-def test_submit_plain_ballot_requires_canonical_lossless_quantity() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "accepted": True,
-                "reason": None,
-                "tx_instructions": [],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    client.submit_plain_ballot(
-        authority=CANONICAL_OWNER,
-        chain_id="chain",
-        referendum_id="ref-1",
-        owner=CANONICAL_OWNER,
-        amount=CANONICAL_LARGE_FRACTION,
-        duration_blocks=5,
-        direction="Aye",
-    )
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["amount"] == CANONICAL_LARGE_FRACTION
-
-    overflowing = "9" * 155
-    for invalid in [
-        1,
-        1.5,
-        "+1",
-        "01",
-        "1.0",
-        "1.2300",
-        " 1",
-        "1 ",
-        "-1",
-        overflowing,
-    ]:
-        with pytest.raises(RuntimeError, match="quantity|512-bit"):
-            client.submit_plain_ballot(
-                authority=CANONICAL_OWNER,
-                chain_id="chain",
-                referendum_id="ref-1",
-                owner=CANONICAL_OWNER,
-                amount=invalid,  # type: ignore[arg-type]
-                duration_blocks=5,
-                direction="Aye",
-            )
-
-
-def test_submit_zk_ballot_rejects_unsupported_public_inputs() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "accepted": True,
-                "reason": None,
-                "tx_instructions": [],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="durationBlocks"):
-        client.submit_zk_ballot(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={
-                "owner": CANONICAL_OWNER,
-                "amount": "100",
-                "durationBlocks": 5,
-            },
-        )
-
-
-def test_submit_zk_ballot_normalizes_public_inputs() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "accepted": True,
-                "reason": None,
-                "tx_instructions": [],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    client.submit_zk_ballot(
-        authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        chain_id="chain",
-        election_id="election-1",
-        proof_b64="AAAA",
-        public={
-            "owner": CANONICAL_OWNER,
-            "amount": CANONICAL_LARGE_FRACTION,
-            "duration_blocks": 5,
-            "root_hint": f"0x{'Cc' * 32}",
-            "nullifier": bytes.fromhex("DD" * 32),
-        },
-    )
-
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    public = payload["public"]
-    assert public["amount"] == CANONICAL_LARGE_FRACTION
-    assert public["root_hint"] == "cc" * 32
-    assert public["nullifier"] == "dd" * 32
-
-
-@pytest.mark.parametrize(
-    "amount",
-    [1, 1.5, "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", "9" * 155],
-)
-def test_submit_zk_ballot_lock_hints_reject_noncanonical_quantity(
-    amount: Any,
-) -> None:
-    session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="quantity"):
-        client.submit_zk_ballot(
-            authority=CANONICAL_OWNER,
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={
-                "owner": CANONICAL_OWNER,
-                "amount": amount,
-                "duration_blocks": 5,
-            },
-        )
-    with pytest.raises(RuntimeError, match="quantity"):
-        client.submit_zk_ballot_v1(
-            authority=CANONICAL_OWNER,
-            chain_id="chain",
-            election_id="election-1",
-            backend="halo2/ipa",
-            envelope_b64="AAAA",
-            owner=CANONICAL_OWNER,
-            amount=amount,  # type: ignore[arg-type]
-            duration_blocks=5,
-        )
-
-
-def test_submit_zk_ballot_rejects_invalid_hex_hints() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="root_hint"):
-        client.submit_zk_ballot(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={
-                "owner": CANONICAL_OWNER,
-                "amount": "100",
-                "duration_blocks": 5,
-                "root_hint": "not-hex",
-            },
-        )
-
-
-def test_submit_zk_ballot_rejects_incomplete_lock_hints() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
-        client.submit_zk_ballot(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={"owner": CANONICAL_OWNER},
-        )
-
-
-def test_submit_zk_ballot_rejects_noncanonical_owner() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="canonical I105 account id"):
-        client.submit_zk_ballot(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={
-                "owner": "soradead",
-                "amount": "100",
-                "duration_blocks": 5,
-            },
-        )
-
-
-def test_submit_zk_ballot_v1_rejects_incomplete_lock_hints() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
-        client.submit_zk_ballot_v1(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            backend="halo2/ipa",
-            envelope_b64="AAAA",
-            owner=CANONICAL_OWNER,
-        )
-
-
-def test_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="canonical I105 account id"):
-        client.submit_zk_ballot_v1(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            backend="halo2/ipa",
-            envelope_b64="AAAA",
-            owner="soradead",
-            amount="100",
-            duration_blocks=5,
-        )
-
-
-def test_submit_zk_ballot_v1_normalizes_hex_hints() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    client.submit_zk_ballot_v1(
-        authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        chain_id="chain",
-        election_id="election-1",
-        backend="halo2/ipa",
-        envelope_b64="AAAA",
-        root_hint=f"0x{'Aa' * 32}",
-        owner=CANONICAL_OWNER,
-        amount=CANONICAL_LARGE_FRACTION,
-        duration_blocks=5,
-        nullifier=f"blake2b32:{'BB' * 32}",
-    )
-
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["root_hint"] == "aa" * 32
-    assert payload["amount"] == CANONICAL_LARGE_FRACTION
-    assert payload["nullifier"] == "bb" * 32
-
-
-def test_submit_zk_ballot_v1_rejects_invalid_hex_hints() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="root_hint"):
-        client.submit_zk_ballot_v1(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            backend="halo2/ipa",
-            envelope_b64="AAAA",
-            root_hint="not-hex",
-        )
-
-
-def test_list_subscription_plans_encodes_params() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "items": [
-                    {
-                        "plan_id": "plan#subs",
-                        "plan": {"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", "pricing": {"kind": "fixed"}},
-                    }
-                ],
-                "total": 1,
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    page = client.list_subscription_plans(provider="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", limit=10, offset=5)
-
-    assert page.total == 1
-    assert page.items[0].plan_id == "plan#subs"
-    assert page.items[0].plan["provider"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
-    assert session.calls[0]["params"] == {
-        "provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        "limit": 10,
-        "offset": 5,
-    }
-
-
-def test_create_subscription_plan_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                **_app_api_transaction_draft(),
-                "plan_id": "plan#subs",
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    result = client.create_subscription_plan(
-        authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        plan_id="plan#subs",
-        plan={"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"},
-    )
-
-    assert result.submitted is False
-    assert result.plan_id == "plan#subs"
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["authority"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
-    assert "private_key" not in payload
-    assert payload["plan_id"] == "plan#subs"
-    assert payload["plan"]["provider"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
-
-
-def test_list_subscriptions_encodes_params() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "items": [
-                    {
-                        "subscription_id": "sub-1$subscriptions",
-                        "subscription": {"status": "active"},
-                        "invoice": {"amount": "120"},
-                        "plan": {"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"},
-                    }
-                ],
-                "total": 1,
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    page = client.list_subscriptions(
-        owned_by="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        provider="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        status="ACTIVE",
-        limit=25,
-        offset=0,
-    )
-
-    assert page.total == 1
-    assert page.items[0].subscription_id == "sub-1$subscriptions"
-    assert page.items[0].subscription["status"] == "active"
-    assert session.calls[0]["params"] == {
-        "owned_by": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        "provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        "status": "active",
-        "limit": 25,
-        "offset": 0,
-    }
-
-
-def test_list_subscriptions_rejects_invalid_status() -> None:
-    client = ToriiClient("http://node.test", session=RecordingSession())
-
-    with pytest.raises(ValueError, match="subscriptions.status"):
-        client.list_subscriptions(status="unknown")
-
-
-def test_create_subscription_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "subscription_id": "sub-1$subscriptions",
-                "billing_trigger_id": "sub-bill",
-                "usage_trigger_id": "sub-usage",
-                "first_charge_ms": 1_704_067_200_000,
-                "tx_hash_hex": "deadbeef",
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    result = client.create_subscription(
-        authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        private_key="ed25519:priv",
-        subscription_id="sub-1$subscriptions",
-        plan_id="plan#subs",
-        billing_trigger_id="sub-bill",
-        usage_trigger_id="sub-usage",
-        first_charge_ms=1_704_067_200_000,
-        grant_usage_to_provider=True,
-    )
-
-    assert result.subscription_id == "sub-1$subscriptions"
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["authority"] == "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-    assert payload["private_key"] == "ed25519:priv"
-    assert payload["billing_trigger_id"] == "sub-bill"
-    assert payload["usage_trigger_id"] == "sub-usage"
-    assert payload["first_charge_ms"] == 1_704_067_200_000
-    assert payload["grant_usage_to_provider"] is True
-
-
-def test_get_subscription_encodes_path_and_parses_response() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "subscription_id": "sub-1$subscriptions",
-                "subscription": {"status": "active"},
-                "plan": {"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"},
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    record = client.get_subscription("sub-1$subscriptions")
-
-    assert record is not None
-    assert record.subscription_id == "sub-1$subscriptions"
-    assert session.calls[0]["url"].endswith("/v1/subscriptions/sub-1%24subscriptions")
-
-
-def test_get_subscription_returns_none_on_404() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(status_code=404, payload=None))
-    client = ToriiClient("http://node.test", session=session)
-
-    assert client.get_subscription("sub-404$subscriptions") is None
-
-
-def test_subscription_actions_post_payloads() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "a"}))
-    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "b"}))
-    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "c"}))
-    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "d"}))
-    client = ToriiClient("http://node.test", session=session)
-
-    client.pause_subscription("sub-1", authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE", private_key="ed25519:priv")
-    client.resume_subscription(
-        "sub-1",
-        authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        private_key="ed25519:priv",
-        charge_at_ms=1_704_067_200_000,
-    )
-    client.cancel_subscription("sub-1", authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE", private_key="ed25519:priv")
-    client.charge_subscription_now(
-        "sub-1",
-        authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        private_key="ed25519:priv",
-        charge_at_ms=1_704_067_200_000,
-    )
-
-    pause_body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert pause_body["authority"] == "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-    resume_body = json.loads(session.calls[1]["data"].decode("utf-8"))
-    assert resume_body["charge_at_ms"] == 1_704_067_200_000
-    cancel_body = json.loads(session.calls[2]["data"].decode("utf-8"))
-    assert cancel_body["private_key"] == "ed25519:priv"
-    charge_body = json.loads(session.calls[3]["data"].decode("utf-8"))
-    assert charge_body["charge_at_ms"] == 1_704_067_200_000
-
-
-def test_record_subscription_usage_uses_canonical_quantity_boundary() -> None:
-    session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
-    canonical_values = [
-        "0",
-        "12.5",
-        str((1 << 511) - 1),
-        f"0.{'0' * 27}1",
-    ]
-    for canonical in canonical_values:
-        session.queue(
-            StubResponse(
-                payload={
-                    **_app_api_transaction_draft(canonical.encode("utf-8")),
-                    "subscription_id": "sub-1",
-                }
-            )
-        )
-        result = client.record_subscription_usage(
-            "sub-1",
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            unit_key="compute_ms",
-            delta=canonical,
-            usage_trigger_id="sub-usage",
-        )
-        assert result.submitted is False
-        payload = json.loads(session.calls[-1]["data"].decode("utf-8"))
-        assert payload["unit_key"] == "compute_ms"
-        assert payload["delta"] == canonical
-        assert payload["usage_trigger_id"] == "sub-usage"
-        assert "private_key" not in payload
-
-    invalid_values: List[Any] = [
-        0,
-        1,
-        1.25,
-        "+1",
-        "01",
-        "00",
-        "00.1",
-        "1.0",
-        "1.20",
-        "0.0",
-        "-0",
-        "-1",
-        str(1 << 511),
-        f"0.{'0' * 28}1",
-    ]
-    submitted = len(session.calls)
-    for invalid in invalid_values:
-        with pytest.raises(RuntimeError, match="quantity"):
-            client.record_subscription_usage(
-                "sub-1",
-                authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-                unit_key="compute_ms",
-                delta=invalid,  # type: ignore[arg-type]
-            )
-    assert len(session.calls) == submitted

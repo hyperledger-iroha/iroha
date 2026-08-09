@@ -6,7 +6,6 @@
 //! canonical encoding and governance constraints before they are persisted.
 
 use blake3::Hasher;
-use iroha_crypto::{Algorithm, PublicKey};
 use norito::{
     Error as NoritoError,
     derive::{NoritoDeserialize, NoritoSerialize},
@@ -15,6 +14,10 @@ use thiserror::Error;
 
 use crate::{
     BLAKE3_256_MULTIHASH_CODE, CouncilSignature, chunker_registry,
+    provider_admission::{
+        ProviderAdmissionCouncilPolicy, ProviderAdmissionSignatureError,
+        verify_council_signatures_over_digest, verify_council_signatures_without_trust,
+    },
     validation::{ManifestValidationError, validate_manifest_root_cid},
 };
 
@@ -249,27 +252,8 @@ pub enum AliasProofVerificationError {
     },
     #[error("alias proof is missing council signatures")]
     MissingCouncilSignatures,
-    #[error("alias proof signature at index {index} must contain 64 bytes (found {length})")]
-    InvalidSignatureLength {
-        /// Signature position inside the bundle.
-        index: usize,
-        /// Actual signature length encountered.
-        length: usize,
-    },
-    #[error("alias proof signer at index {index} invalid ({reason})")]
-    InvalidSignerPublicKey {
-        /// Signature position inside the bundle.
-        index: usize,
-        /// Failure reason (includes signer identifier).
-        reason: String,
-    },
-    #[error("alias proof signature verification failed at index {index}: {reason}")]
-    SignatureVerificationFailed {
-        /// Signature position inside the bundle.
-        index: usize,
-        /// Verification failure reason (includes signer identifier).
-        reason: String,
-    },
+    #[error("alias proof council authorization failed: {0}")]
+    CouncilAuthorization(#[source] ProviderAdmissionSignatureError),
 }
 
 fn alias_binding_leaf_hash(binding: &AliasBindingV1) -> Result<[u8; 32], NoritoError> {
@@ -334,22 +318,57 @@ pub fn alias_merkle_root(
     recompute_merkle_root(binding, path).map_err(AliasProofVerificationError::EncodeAliasBinding)
 }
 
-/// Compute the digest that council members sign for an alias proof bundle.
+/// Compute the digest that council members sign for an alias-registry root.
+///
+/// Council signatures deliberately authorize the root and its lifetime rather
+/// than each leaf independently. [`verify_alias_proof_bundle`] authenticates a
+/// particular binding by recomputing its leaf-to-root Merkle path before it
+/// verifies the trusted council quorum over this digest.
 #[must_use]
 pub fn alias_proof_signature_digest(bundle: &AliasProofBundleV1) -> [u8; 32] {
     alias_signature_message(bundle)
 }
 
-/// Perform cryptographic verification of an alias proof bundle.
+/// Verify an alias proof bundle against an operator-controlled council policy.
 ///
 /// # Errors
 ///
 /// Returns [`AliasProofVerificationError`] when the bundle fails structural
-/// validation, the Merkle root does not match, or council signatures fail to
-/// verify.
+/// validation, its binding is not a member of the signed registry root, or the
+/// configured trusted council quorum did not authorize that root.
 pub fn verify_alias_proof_bundle(
     bundle: &AliasProofBundleV1,
+    policy: &ProviderAdmissionCouncilPolicy,
 ) -> Result<(), AliasProofVerificationError> {
+    verify_alias_proof_bundle_inner(bundle, |signatures, digest| {
+        verify_council_signatures_over_digest(signatures, digest, policy)
+    })
+}
+
+/// Verify alias-proof integrity without establishing signer trust.
+///
+/// This helper is reserved for fixture generation, language-neutral reference
+/// validation, and cache-freshness tooling. A node or gateway making an
+/// admission decision must use [`verify_alias_proof_bundle`] with an
+/// operator-controlled [`ProviderAdmissionCouncilPolicy`].
+///
+/// # Errors
+///
+/// Returns [`AliasProofVerificationError`] when the bundle fails structural,
+/// Merkle-membership, or embedded-signature validation.
+pub fn verify_alias_proof_bundle_untrusted_signers(
+    bundle: &AliasProofBundleV1,
+) -> Result<(), AliasProofVerificationError> {
+    verify_alias_proof_bundle_inner(bundle, verify_council_signatures_without_trust)
+}
+
+fn verify_alias_proof_bundle_inner<F>(
+    bundle: &AliasProofBundleV1,
+    verify_signatures: F,
+) -> Result<(), AliasProofVerificationError>
+where
+    F: FnOnce(&[CouncilSignature], &[u8; 32]) -> Result<(), ProviderAdmissionSignatureError>,
+{
     bundle.validate()?;
 
     let computed_root = alias_merkle_root(&bundle.binding, &bundle.merkle_path)?;
@@ -359,61 +378,13 @@ pub fn verify_alias_proof_bundle(
             computed_hex: hex::encode(computed_root),
         });
     }
-
     if bundle.council_signatures.is_empty() {
         return Err(AliasProofVerificationError::MissingCouncilSignatures);
     }
 
     let message = alias_signature_message(bundle);
-    for (index, signature) in bundle.council_signatures.iter().enumerate() {
-        if signature.signature.len() != 64 {
-            return Err(AliasProofVerificationError::InvalidSignatureLength {
-                index,
-                length: signature.signature.len(),
-            });
-        }
-        let signer_hex = hex::encode(signature.signer);
-        crate::checked_ed25519_verifying_key_from_bytes(&signature.signer).map_err(|reason| {
-            AliasProofVerificationError::InvalidSignerPublicKey {
-                index,
-                reason: format!("signer {signer_hex}: {reason}"),
-            }
-        })?;
-        let signature_bytes: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
-            signature.signature.as_slice().try_into().map_err(|err| {
-                AliasProofVerificationError::SignatureVerificationFailed {
-                    index,
-                    reason: format!("signer {signer_hex}: invalid signature material: {err}"),
-                }
-            })?;
-        crate::checked_ed25519_signature_from_bytes(&signature_bytes).map_err(|reason| {
-            AliasProofVerificationError::SignatureVerificationFailed {
-                index,
-                reason: format!("signer {signer_hex}: {reason}"),
-            }
-        })?;
-        let public_key =
-            PublicKey::from_bytes(Algorithm::Ed25519, &signature.signer).map_err(|err| {
-                AliasProofVerificationError::InvalidSignerPublicKey {
-                    index,
-                    reason: format!("signer {signer_hex}: {err}"),
-                }
-            })?;
-        let sig = iroha_crypto::ed25519_parse_signature(&signature.signature).map_err(|err| {
-            AliasProofVerificationError::SignatureVerificationFailed {
-                index,
-                reason: format!("signer {signer_hex}: invalid signature material: {err}"),
-            }
-        })?;
-        sig.verify(&public_key, message.as_ref()).map_err(|err| {
-            AliasProofVerificationError::SignatureVerificationFailed {
-                index,
-                reason: format!("signer {signer_hex}: {err}"),
-            }
-        })?;
-    }
-
-    Ok(())
+    verify_signatures(&bundle.council_signatures, &message)
+        .map_err(AliasProofVerificationError::CouncilAuthorization)
 }
 
 /// Provider acknowledgement for a replication order.
@@ -677,6 +648,17 @@ mod tests {
         (bundle, keypair)
     }
 
+    fn council_policy_for(keypair: &KeyPair) -> ProviderAdmissionCouncilPolicy {
+        let signer: [u8; 32] = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid")
+            .1
+            .try_into()
+            .expect("ed25519 public key must be 32 bytes");
+        ProviderAdmissionCouncilPolicy::new([signer], 1).expect("valid fixture council policy")
+    }
+
     #[test]
     fn alias_proof_bundle_validate() {
         let bundle = sample_alias_proof_bundle();
@@ -775,8 +757,30 @@ mod tests {
 
     #[test]
     fn alias_proof_bundle_verification_succeeds() {
+        let (bundle, keypair) = signed_alias_proof_bundle();
+        let policy = council_policy_for(&keypair);
+        verify_alias_proof_bundle(&bundle, &policy).expect("bundle must verify");
+        verify_alias_proof_bundle_untrusted_signers(&bundle)
+            .expect("untrusted fixture verification must preserve integrity checks");
+    }
+
+    #[test]
+    fn alias_proof_bundle_rejects_self_asserted_council() {
         let (bundle, _) = signed_alias_proof_bundle();
-        verify_alias_proof_bundle(&bundle).expect("bundle must verify");
+        let trusted_private = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x22; 32])
+            .expect("parse trusted fixture private key");
+        let trusted =
+            KeyPair::from_private_key(trusted_private).expect("derive trusted fixture keypair");
+        let policy = council_policy_for(&trusted);
+
+        let err = verify_alias_proof_bundle(&bundle, &policy)
+            .expect_err("a self-signed bundle outside the trust set must fail");
+        assert!(matches!(
+            err,
+            AliasProofVerificationError::CouncilAuthorization(
+                ProviderAdmissionSignatureError::UntrustedSigner { .. }
+            )
+        ));
     }
 
     #[test]
@@ -794,9 +798,10 @@ mod tests {
 
     #[test]
     fn alias_proof_bundle_verification_rejects_root_mismatch() {
-        let (mut bundle, _) = signed_alias_proof_bundle();
+        let (mut bundle, keypair) = signed_alias_proof_bundle();
+        let policy = council_policy_for(&keypair);
         bundle.registry_root[0] ^= 0xFF;
-        let err = verify_alias_proof_bundle(&bundle).expect_err("verification must fail");
+        let err = verify_alias_proof_bundle(&bundle, &policy).expect_err("verification must fail");
         assert!(matches!(
             err,
             AliasProofVerificationError::MerkleRootMismatch { .. }
@@ -805,20 +810,24 @@ mod tests {
 
     #[test]
     fn alias_proof_bundle_verification_rejects_bad_signature() {
-        let (mut bundle, _) = signed_alias_proof_bundle();
+        let (mut bundle, keypair) = signed_alias_proof_bundle();
+        let policy = council_policy_for(&keypair);
         bundle.council_signatures[0].signature[0] ^= 0xFF;
-        let err = verify_alias_proof_bundle(&bundle).expect_err("verification must fail");
+        let err = verify_alias_proof_bundle(&bundle, &policy).expect_err("verification must fail");
         assert!(matches!(
             err,
-            AliasProofVerificationError::SignatureVerificationFailed { .. }
+            AliasProofVerificationError::CouncilAuthorization(
+                ProviderAdmissionSignatureError::Verification { .. }
+            )
         ));
     }
 
     #[test]
     fn alias_proof_bundle_verification_rejects_all_zero_signature_material() {
-        let (mut bundle, _) = signed_alias_proof_bundle();
+        let (mut bundle, keypair) = signed_alias_proof_bundle();
+        let policy = council_policy_for(&keypair);
         bundle.council_signatures[0].signature.fill(0);
-        let err = verify_alias_proof_bundle(&bundle).expect_err("verification must fail");
+        let err = verify_alias_proof_bundle(&bundle, &policy).expect_err("verification must fail");
         assert!(matches!(
             err,
             AliasProofVerificationError::Validation(
@@ -833,15 +842,18 @@ mod tests {
             ("small-order", SMALL_ORDER_R, "small-order"),
             ("noncanonical", NONCANONICAL_R, "not a canonical"),
         ] {
-            let (mut bundle, _) = signed_alias_proof_bundle();
+            let (mut bundle, keypair) = signed_alias_proof_bundle();
+            let policy = council_policy_for(&keypair);
             bundle.council_signatures[0].signature[..32].copy_from_slice(&replacement_r);
 
-            let err = verify_alias_proof_bundle(&bundle).expect_err("verification must fail");
+            let err =
+                verify_alias_proof_bundle(&bundle, &policy).expect_err("verification must fail");
             assert!(
                 matches!(
                     &err,
-                    AliasProofVerificationError::SignatureVerificationFailed { reason, .. }
-                        if reason.contains(expected_reason)
+                    AliasProofVerificationError::CouncilAuthorization(
+                        ProviderAdmissionSignatureError::Verification { reason, .. }
+                    ) if reason.contains(expected_reason)
                 ),
                 "{label} signature R produced unexpected error: {err}"
             );

@@ -435,6 +435,10 @@ def run_java_parity_checks() -> None:
     """Execute Norito Java binding parity checks."""
 
     if os.environ.get("NORITO_JAVA_SKIP_TESTS") == "1":
+        if java_checks_are_strict():
+            raise CheckError(
+                "NORITO_JAVA_SKIP_TESTS=1 is forbidden in strict Java parity mode"
+            )
         print(
             "[norito-java] Skipping JVM parity tests (NORITO_JAVA_SKIP_TESTS=1).",
             file=sys.stderr,
@@ -507,6 +511,10 @@ def run_kotlin_parity_checks() -> None:
     """Execute Norito Kotlin binding parity checks."""
 
     if os.environ.get("NORITO_KOTLIN_SKIP_TESTS") == "1":
+        if kotlin_checks_are_strict():
+            raise CheckError(
+                "NORITO_KOTLIN_SKIP_TESTS=1 is forbidden in strict Kotlin parity mode"
+            )
         print(
             "[norito-kotlin] Skipping Kotlin parity tests (NORITO_KOTLIN_SKIP_TESTS=1).",
             file=sys.stderr,
@@ -577,6 +585,13 @@ def kotlin_checks_are_strict() -> bool:
     return ci_value in {"1", "true", "yes", "on"}
 
 
+def all_checks_are_required() -> bool:
+    """Return whether every SDK parity lane must run regardless of changed paths."""
+
+    value = os.environ.get("NORITO_BINDINGS_CHECK_ALL", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 def main() -> int:
     os.chdir(REPO_ROOT)
 
@@ -608,11 +623,12 @@ def main() -> int:
         return 1
 
     try:
-        if flags.python_updated or flags.needs_reference_update:
+        run_all = all_checks_are_required()
+        if run_all or flags.python_updated or flags.needs_reference_update:
             run_python_parity_checks()
-        if flags.java_updated or flags.needs_reference_update:
+        if run_all or flags.java_updated or flags.needs_reference_update:
             run_java_parity_checks()
-        if flags.kotlin_updated or flags.needs_reference_update:
+        if run_all or flags.kotlin_updated or flags.needs_reference_update:
             run_kotlin_parity_checks()
     except CheckError as error:
         print(error, file=sys.stderr)

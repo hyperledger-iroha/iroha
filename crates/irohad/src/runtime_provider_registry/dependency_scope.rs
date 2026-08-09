@@ -15,6 +15,9 @@ pub(super) fn dependency_is_present(
 
     let deps = dependencies;
     match slot {
+        Slot::BootleLanternIssuanceProviderRegistry => {
+            deps.bootle_lantern_issuance_provider_registry.is_some()
+        }
         Slot::ModerationQuarantineKeyWrapper => deps.moderation_quarantine_key_wrapper.is_some(),
         Slot::PrivacyCyclePrfProvider => deps.privacy_cycle_prf_provider.is_some(),
         Slot::PrivacyReleaseAnchor => deps.privacy_release_anchor.is_some(),
@@ -30,6 +33,7 @@ pub(super) fn dependency_is_present(
         }
         Slot::GovernanceDagCheckpointStore => deps.sorafs_governance_dag_checkpoint_store.is_some(),
         Slot::StreamTokenSigner => deps.sorafs_stream_token_signer.is_some(),
+        Slot::StreamTokenGatewayAdmission => deps.sorafs_stream_token_gateway_admission.is_some(),
         Slot::AppealFinanceTransactionSigner => {
             deps.sorafs_appeal_finance_runtime_signers.is_some()
         }
@@ -42,6 +46,9 @@ pub(super) fn dependency_is_present(
         Slot::ModerationSettlementHandoff => deps.sorafs_moderation_settlement_handoff.is_some(),
         Slot::ModerationPublicationHandoff => deps.sorafs_moderation_publication_handoff.is_some(),
         Slot::ModerationPanelNotification => deps.sorafs_moderation_panel_notification.is_some(),
+        Slot::ModerationPanelNotificationArchive => {
+            deps.sorafs_moderation_panel_notification_archive.is_some()
+        }
         Slot::ModerationCheckpointStore => deps.sorafs_moderation_checkpoint_store.is_some(),
         Slot::EvidenceViewerWebAuthn => deps.sorafs_evidence_viewer_webauthn.is_some(),
         Slot::EvidenceViewerGrantAuthority => deps.sorafs_evidence_viewer_grants.is_some(),
@@ -110,7 +117,13 @@ pub(super) fn has_unrequested_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
 ) -> bool {
-    has_unrequested_storage_security_dependency(bindings, dependencies)
+    dependency_is_unrequested(
+        bindings,
+        IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry,
+        dependencies
+            .bootle_lantern_issuance_provider_registry
+            .is_some(),
+    ) || has_unrequested_storage_security_dependency(bindings, dependencies)
         || has_unrequested_finance_native_dependency(bindings, dependencies)
         || has_unrequested_moderation_viewer_dependency(bindings, dependencies)
         || has_unrequested_pop_potr_gateway_dependency(bindings, dependencies)
@@ -210,6 +223,10 @@ fn has_unrequested_storage_security_dependency(
         dependencies.sorafs_stream_token_signer.is_some(),
     ) || dependency_is_unrequested(
         bindings,
+        Slot::StreamTokenGatewayAdmission,
+        dependencies.sorafs_stream_token_gateway_admission.is_some(),
+    ) || dependency_is_unrequested(
+        bindings,
         Slot::PorFinalizedReplayArchive,
         dependencies.sorafs_por_finalized_replay_archive.is_some(),
     )
@@ -272,6 +289,12 @@ fn has_unrequested_moderation_viewer_dependency(
         bindings,
         Slot::ModerationPanelNotification,
         dependencies.sorafs_moderation_panel_notification.is_some(),
+    ) || dependency_is_unrequested(
+        bindings,
+        Slot::ModerationPanelNotificationArchive,
+        dependencies
+            .sorafs_moderation_panel_notification_archive
+            .is_some(),
     ) || dependency_is_unrequested(
         bindings,
         Slot::ModerationCheckpointStore,

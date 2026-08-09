@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -8,6 +9,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 
 /** Minimal JSON parser for Torii contract deploy/call responses. */
 public final class ContractJsonParser {
@@ -22,7 +25,8 @@ public final class ContractJsonParser {
   public static ContractCallResponse parseCallResponse(final byte[] payload) {
     final Map<String, Object> root =
         expectObject(parse(payload, "contract call response"), "contract call response");
-    return new ContractCallResponse(
+    rejectRetiredDraftFields(root, "contract call response");
+    final ContractCallResponse response = new ContractCallResponse(
         requiredBoolean(root.get("ok"), "contract call response.ok"),
         requiredBoolean(root.get("submitted"), "contract call response.submitted"),
         requiredString(root.get("dataspace"), "contract call response.dataspace"),
@@ -45,12 +49,25 @@ public final class ContractJsonParser {
         asOptionalNonNegativeLong(
             root.get("transaction_ttl_ms"), "contract call response.transaction_ttl_ms"),
         optionalHash(root.get("entrypoint_hash_hex"), "contract call response.entrypoint_hash_hex"),
-        optionalBase64(root.get("transaction_scaffold_b64"), "contract call response.transaction_scaffold_b64"),
-        optionalBase64(root.get("signed_transaction_b64"), "contract call response.signed_transaction_b64"),
+        optionalBase64(root.get("transaction_payload_b64"), "contract call response.transaction_payload_b64"),
         optionalBase64(root.get("signing_message_b64"), "contract call response.signing_message_b64"),
         parseOperationReceipt(
             expectObject(root.get("operation_receipt"), "contract call response.operation_receipt"),
             "contract call response.operation_receipt"));
+    validateUnsignedTransactionState(
+        response.submitted(),
+        response.txHashHex(),
+        response.transactionPayloadB64(),
+        response.signingMessageB64(),
+        "contract call response");
+    if (!response.submitted()
+        && (response.entrypointHashHex() != null
+            || response.operationReceipt().txHashHex() != null
+            || response.operationReceipt().entrypointHashHex() != null)) {
+      throw new IllegalStateException(
+          "contract call response unsigned draft must not contain transaction hashes");
+    }
+    return response;
   }
 
   private static ContractOperationReceipt parseOperationReceipt(
@@ -86,10 +103,11 @@ public final class ContractJsonParser {
     if (!Boolean.TRUE.equals(root.get("ok"))) {
       throw new IllegalStateException("multisig response.ok must be true");
     }
-    return new MultisigResponse(
+    rejectRetiredDraftFields(root, "multisig response");
+    final MultisigResponse response = new MultisigResponse(
         true,
         requiredExactAccountId(root.get("resolved_multisig_account_id"), "multisig response.resolved_multisig_account_id"),
-        optionalBoolean(root.get("submitted"), "multisig response.submitted"),
+        requiredBoolean(root.get("submitted"), "multisig response.submitted"),
         optionalString(root.get("proposal_id"), "multisig response.proposal_id"),
         root.containsKey("instructions_hash") && root.get("instructions_hash") != null
             ? HttpClientTransport.normalizeHex32(
@@ -107,7 +125,15 @@ public final class ContractJsonParser {
                 "executedTxHashHex")
             : null,
         asOptionalNonNegativeLong(root.get("creation_time_ms"), "multisig response.creation_time_ms"),
+        optionalBase64(root.get("transaction_payload_b64"), "multisig response.transaction_payload_b64"),
         optionalBase64(root.get("signing_message_b64"), "multisig response.signing_message_b64"));
+    validateUnsignedTransactionState(
+        response.submitted(),
+        response.txHashHex(),
+        response.transactionPayloadB64(),
+        response.signingMessageB64(),
+        "multisig response");
+    return response;
   }
 
   public static GovernanceContractResponse parseGovernanceContractResponse(final byte[] payload) {
@@ -200,16 +226,6 @@ public final class ContractJsonParser {
     return Collections.unmodifiableMap(new LinkedHashMap<>(expectObject(value, path)));
   }
 
-  private static Boolean optionalBoolean(final Object value, final String path) {
-    if (value == null) {
-      return null;
-    }
-    if (!(value instanceof Boolean)) {
-      throw new IllegalStateException(path + " must be a boolean");
-    }
-    return (Boolean) value;
-  }
-
   private static boolean requiredBoolean(final Object value, final String path) {
     if (!(value instanceof Boolean bool)) {
       throw new IllegalStateException(path + " must be a boolean");
@@ -283,4 +299,53 @@ public final class ContractJsonParser {
     }
     return literal;
   }
+
+  private static void rejectRetiredDraftFields(
+      final Map<String, Object> value, final String context) {
+    for (final String field : RETIRED_DRAFT_FIELDS) {
+      if (value.containsKey(field)) {
+        throw new IllegalStateException(context + " contains retired field `" + field + "`");
+      }
+    }
+  }
+
+  private static void validateUnsignedTransactionState(
+      final boolean submitted,
+      final String txHashHex,
+      final String transactionPayloadB64,
+      final String signingMessageB64,
+      final String context) {
+    if (submitted) {
+      if (txHashHex == null || transactionPayloadB64 != null || signingMessageB64 != null) {
+        throw new IllegalStateException(
+            context + " submitted response must contain only the final transaction hash");
+      }
+      return;
+    }
+    if (txHashHex != null || transactionPayloadB64 == null || signingMessageB64 == null) {
+      throw new IllegalStateException(
+          context + " unsigned response must contain exactly one payload and signing-message pair");
+    }
+    final byte[] transactionPayload = Base64.getDecoder().decode(transactionPayloadB64);
+    final byte[] signingMessage = Base64.getDecoder().decode(signingMessageB64);
+    try {
+      NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(transactionPayload);
+    } catch (final Exception ex) {
+      throw new IllegalStateException(
+          context + ".transaction_payload_b64 must contain one canonical TransactionPayload", ex);
+    }
+    if (signingMessage.length != 32
+        || !Arrays.equals(signingMessage, IrohaHash.prehash(transactionPayload))) {
+      throw new IllegalStateException(
+          context + ".signing_message_b64 must be the exact TransactionPayload hash");
+    }
+  }
+
+  private static final List<String> RETIRED_DRAFT_FIELDS =
+      List.of(
+          "transaction_scaffold_b64",
+          "transaction_scaffold_base64",
+          "signed_transaction_b64",
+          "placeholder_transaction_hash_hex",
+          "placeholder_entrypoint_hash_hex");
 }

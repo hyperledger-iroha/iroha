@@ -521,7 +521,7 @@ fn kaigi_privacy_join_updates_record_and_private_leave_is_rejected() {
         proof: Some(roster.leave_proof.clone()),
     }
     .execute(&participant, &mut tx2)
-    .expect_err("private Kaigi leave is intentionally off-chain only");
+    .expect_err("privacy-mode Kaigi leave is intentionally off-chain only");
 
     let view_after_rejected_leave = state.view();
     let domain = view_after_rejected_leave

@@ -26,7 +26,7 @@ pub const G_FASTPQ_BATCH: u64 = 16;
 pub const G_CONTRACT_ADMIN: u64 = 16;
 /// Fixed parent overhead for `CALL_CONTRACT`, before request/return byte charges.
 pub const G_CALL_CONTRACT: u64 = 16;
-/// Fixed gas for native and anonymous escrow bridge syscalls.
+/// Fixed gas for native asset escrow bridge syscalls.
 pub const G_ESCROW: u64 = 16;
 /// Fixed gas for Soracloud runtime syscalls, before request/response byte charges.
 pub const G_SORACLOUD: u64 = 16;

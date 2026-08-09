@@ -13,6 +13,11 @@ import {
 import { browserSignedTransactionHashHex } from "../src/transactionCodec.js";
 import * as browserSdk from "../src/browser.js";
 import * as browserDistSdk from "../dist/browser.js";
+import {
+  browserSumeragiDiagnosticsFixture,
+  browserSumeragiStatusFixture,
+  hashLiteral,
+} from "./sumeragiBrowserFixtures.js";
 
 const BASE_URL = "https://localhost:8080/v1/explorer";
 const FIXTURE_ALICE_ID = AccountAddress.fromAccount({
@@ -46,21 +51,6 @@ function jsonResponse(payload, init = {}) {
     status: init.status ?? 200,
     headers: { "content-type": "application/json", ...(init.headers ?? {}) },
   });
-}
-
-function hashLiteral(hex) {
-  const body = hex.toUpperCase();
-  let crc = 0xffff;
-  for (const byte of Buffer.from(`hash:${body}`, "utf8")) {
-    crc ^= (byte & 0xff) << 8;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc =
-        (crc & 0x8000) !== 0
-          ? ((crc << 1) ^ 0x1021) & 0xffff
-          : (crc << 1) & 0xffff;
-    }
-  }
-  return `hash:${body}#${crc.toString(16).toUpperCase().padStart(4, "0")}`;
 }
 
 function compactHashSignedTransactionFixture() {
@@ -104,12 +94,47 @@ function blockProofResponseFixture() {
   };
   const field = (payload) => Buffer.concat([compact(payload.length), payload]);
   const struct = (...fields) => Buffer.concat(fields.map(field));
-  const leaf = Buffer.alloc(32, 0x20);
-  leaf[31] |= 1;
+  const entryHash = Buffer.alloc(32, 0x20);
+  entryHash[31] |= 1;
+  const resultHash = Buffer.alloc(32, 0x50);
+  resultHash[31] |= 1;
+  const blockHash = Buffer.alloc(32, 0x30);
+  blockHash[31] |= 1;
+  const executedBlockWireHash = Buffer.alloc(32, 0x40);
+  executedBlockWireHash[31] |= 1;
+  const entryRoot = Buffer.from(
+    blake2b256(
+      Buffer.concat([
+        Buffer.from("iroha:merkle:leaf:v1\0", "utf8"),
+        entryHash,
+      ]),
+    ),
+  );
+  entryRoot[31] |= 1;
+  const resultRoot = Buffer.from(
+    blake2b256(
+      Buffer.concat([
+        Buffer.from("iroha:merkle:leaf:v1\0", "utf8"),
+        resultHash,
+      ]),
+    ),
+  );
+  resultRoot[31] |= 1;
   const leafIndex = Buffer.alloc(4);
-  const receipt = struct(leaf, struct(leafIndex, u64(0)));
+  const entryCommitment = struct(entryRoot, u64(1));
+  const receipt = struct(entryHash, struct(leafIndex, u64(0)));
+  const resultCommitment = struct(resultRoot, u64(1));
+  const resultReceipt = struct(resultHash, struct(leafIndex, u64(0)));
   const payload = struct(
-    u64(7), leaf, leaf, receipt, Buffer.of(0), Buffer.of(0), u64(0),
+    u64(7),
+    blockHash,
+    executedBlockWireHash,
+    entryHash,
+    entryCommitment,
+    receipt,
+    resultCommitment,
+    resultReceipt,
+    u64(0),
   );
   const schemaHash = Buffer.from(
     sha256(Buffer.from(
@@ -139,6 +164,36 @@ function blockProofResponseFixture() {
   ]);
 }
 
+function authenticatedBlockProofAnchorFixture() {
+  const entryHash = Buffer.alloc(32, 0x20);
+  entryHash[31] |= 1;
+  const resultHash = Buffer.alloc(32, 0x50);
+  resultHash[31] |= 1;
+  const blockHash = Buffer.alloc(32, 0x30);
+  blockHash[31] |= 1;
+  const executedBlockWireHash = Buffer.alloc(32, 0x40);
+  executedBlockWireHash[31] |= 1;
+  const merkleLeafDomain = Buffer.from("iroha:merkle:leaf:v1\0", "utf8");
+  const entryRoot = Buffer.from(
+    blake2b256(Buffer.concat([merkleLeafDomain, entryHash])),
+  );
+  entryRoot[31] |= 1;
+  const resultRoot = Buffer.from(
+    blake2b256(Buffer.concat([merkleLeafDomain, resultHash])),
+  );
+  resultRoot[31] |= 1;
+  return {
+    block_height: "7",
+    block_hash: blockHash.toString("hex"),
+    executed_block_wire_hash: executedBlockWireHash.toString("hex"),
+    entry_hash: entryHash.toString("hex"),
+    entry_index: 0,
+    entry_commitment: { root: entryRoot.toString("hex"), leaf_count: "1" },
+    result_commitment: { root: resultRoot.toString("hex"), leaf_count: "1" },
+    fastpq_transcripts: {},
+  };
+}
+
 function sseResponse(chunks, { close = true, onCancel } = {}) {
   const encoder = new TextEncoder();
   return new Response(
@@ -155,7 +210,7 @@ function sseResponse(chunks, { close = true, onCancel } = {}) {
   );
 }
 
- test("ToriiBrowserClient strips API suffixes and calls current explorer block routes", async () => {
+test("ToriiBrowserClient strips API suffixes and calls current explorer block routes", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(String(url), "https://localhost:8080/v1/explorer/blocks?page=2&per_page=5");
     assert.equal(init.method, "GET");
@@ -171,6 +226,154 @@ function sseResponse(chunks, { close = true, onCancel } = {}) {
   });
   const payload = await client.listExplorerBlocks({ page: 2, perPage: 5 });
   assert.equal(payload.pagination.page, 2);
+});
+
+test("ToriiBrowserClient uses opaque cursors for world Explorer lists", async () => {
+  const cursor = "ZXhwbG9yZXItY3Vyc29y";
+  const nextCursor = "bmV4dA";
+  const expectedPaths = [
+    ["/v1/explorer/accounts", (client) => client.listExplorerAccounts({ cursor, limit: 10 })],
+    ["/v1/explorer/domains", (client) => client.listExplorerDomains({ cursor, limit: 10 })],
+    [
+      "/v1/explorer/asset-definitions",
+      (client) => client.listExplorerAssetDefinitions({ cursor, limit: 10 }),
+    ],
+    ["/v1/explorer/assets", (client) => client.listExplorerAssets({ cursor, limit: 10 })],
+    ["/v1/explorer/nfts", (client) => client.listExplorerNfts({ cursor, limit: 10 })],
+    ["/v1/explorer/rwas", (client) => client.listExplorerRwas({ cursor, limit: 10 })],
+  ];
+  const seen = [];
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      seen.push(parsed.pathname);
+      assert.equal(parsed.searchParams.get("cursor"), cursor);
+      assert.equal(parsed.searchParams.get("limit"), "10");
+      assert.equal(parsed.searchParams.get("page"), null);
+      assert.equal(parsed.searchParams.get("per_page"), null);
+      return jsonResponse({
+        pagination: { limit: 10, next_cursor: nextCursor, has_more: true },
+        items: [],
+      });
+    },
+  });
+
+  for (const [path, invoke] of expectedPaths) {
+    const page = await invoke(client);
+    assert.equal(seen.at(-1), path);
+    assert.deepEqual(page.pagination, {
+      limit: 10,
+      next_cursor: nextCursor,
+      has_more: true,
+    });
+  }
+});
+
+test("ToriiBrowserClient uses explicit asset-definition ownership fields", async () => {
+  const item = {
+    id: "11111111-1111-4111-8111-111111111111",
+    owning_domain: null,
+    mintable: "Infinitely",
+    logo: null,
+    metadata: {},
+    owned_by: FIXTURE_ALICE_ID,
+    assets: 0,
+    total_quantity: "0",
+    locked_quantity: null,
+    circulating_quantity: null,
+  };
+  const client = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      assert.equal(parsed.searchParams.get("owning_domain"), "treasury.universal");
+      assert.equal(parsed.searchParams.get("domain"), null);
+      return jsonResponse({
+        pagination: { limit: 10, next_cursor: null, has_more: false },
+        items: [item],
+      });
+    },
+  });
+
+  const page = await client.listExplorerAssetDefinitions({
+    limit: 10,
+    owningDomain: "treasury.universal",
+  });
+  assert.equal(page.items[0].owning_domain, null);
+
+  const missingOwnership = { ...item };
+  delete missingOwnership.owning_domain;
+  const invalidClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () =>
+      jsonResponse({
+        pagination: { limit: 10, next_cursor: null, has_more: false },
+        items: [missingOwnership],
+      }),
+  });
+  await assert.rejects(
+    invalidClient.listExplorerAssetDefinitions({ limit: 10 }),
+    /missing or unsupported fields/u,
+  );
+});
+
+test("ToriiBrowserClient rejects invalid world Explorer cursor contracts", async () => {
+  let fetchCalls = 0;
+  const localClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  assert.throws(
+    () => localClient.listExplorerAccounts({ page: 2 }),
+    /page is not supported; use cursor and limit/u,
+  );
+  assert.throws(
+    () => localClient.listExplorerNfts({ cursor: "padded==" }),
+    /canonical base64url without padding/u,
+  );
+  assert.throws(
+    () => localClient.listExplorerAccounts({ cursor: "AB" }),
+    /canonical base64url without padding/u,
+  );
+  assert.throws(
+    () => localClient.listExplorerRwas({ limit: 101 }),
+    /limit must be between 1 and 100/u,
+  );
+  assert.equal(fetchCalls, 0);
+
+  const malformedClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => jsonResponse({
+      pagination: { limit: 25, next_cursor: null, has_more: true },
+      items: [],
+    }),
+  });
+  await assert.rejects(
+    () => malformedClient.listExplorerDomains(),
+    /has_more must match next_cursor availability/u,
+  );
+
+  const unknownFieldClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => jsonResponse({
+      pagination: { limit: 25, next_cursor: null, has_more: false },
+      items: [],
+      total_items: 0,
+    }),
+  });
+  await assert.rejects(
+    () => unknownFieldClient.listExplorerAccounts(),
+    /contains unknown field total_items/u,
+  );
+
+  const oversizedPageClient = new ToriiBrowserClient("https://localhost:8080", {
+    fetchImpl: async () => jsonResponse({
+      pagination: { limit: 1, next_cursor: null, has_more: false },
+      items: [{}, {}],
+    }),
+  });
+  await assert.rejects(
+    () => oversizedPageClient.listExplorerAssets(),
+    /items must not exceed pagination\.limit/u,
+  );
 });
 
 test("ToriiBrowserClient exposes exact JSON ledger windows, roots, and state proofs", async () => {
@@ -219,8 +422,69 @@ test("ToriiBrowserClient fetches ledger BlockProofs only as canonical Norito", a
   );
   assert.equal(captured.init.headers.Accept, "application/x-norito");
   assert.equal(captured.init.headers["x-test-client"], "ledger");
+  assert.deepEqual(Object.keys(proof), [
+    "block_height",
+    "block_hash",
+    "executed_block_wire_hash",
+    "entry_hash",
+    "entry_commitment",
+    "entry_proof",
+    "result_commitment",
+    "result_proof",
+    "fastpq_transcripts",
+  ]);
   assert.equal(proof.block_height, "7");
-  assert.equal(proof.entry_hash, proof.entry_root);
+  assert.match(proof.block_hash, /^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u);
+  assert.match(
+    proof.executed_block_wire_hash,
+    /^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u,
+  );
+  assert.equal(proof.entry_proof.leaf, proof.entry_hash);
+  assert.deepEqual(proof.entry_proof.proof, { leaf_index: 0, audit_path: [] });
+  assert.equal(proof.entry_commitment.leaf_count, "1");
+  assert.notEqual(proof.entry_commitment.root, proof.entry_hash);
+  assert.equal(proof.result_commitment.leaf_count, "1");
+  assert.equal(proof.result_proof.proof.leaf_index, 0);
+  assert.notEqual(proof.result_commitment.root, proof.result_proof.leaf);
+  assert.deepEqual(proof.fastpq_transcripts, {});
+
+  assert.equal(
+    browserSdk.verifyBlockProofs(
+      proof,
+      authenticatedBlockProofAnchorFixture(),
+    ).valid,
+    true,
+  );
+  assert.equal(browserSdk.verifyBlockProofs(proof).valid, false);
+});
+
+test("ToriiBrowserClient fetches the bounded exact executed block wire", async () => {
+  const expectedWire = Buffer.from([1, 0x4e, 0x52, 0x54, 0x30, 0xaa]);
+  let captured;
+  const client = new ToriiBrowserClient(BASE_URL, {
+    defaultHeaders: { Accept: "application/json", "x-test-client": "ledger" },
+    fetchImpl: async (url, init) => {
+      captured = { url: String(url), init };
+      return new Response(expectedWire, {
+        headers: { "content-type": "application/x-norito" },
+      });
+    },
+  });
+
+  const actualWire = await client.getLedgerExecutedBlockWire(7);
+  assert.equal(captured.url, "https://localhost:8080/v1/ledger/block/7");
+  assert.equal(captured.init.headers.Accept, "application/x-norito");
+  assert.equal(captured.init.headers["x-test-client"], "ledger");
+  assert.deepEqual(actualWire, expectedWire);
+
+  const maximumHeightWire = await client.getLedgerExecutedBlockWire(
+    "18446744073709551615",
+  );
+  assert.equal(
+    captured.url,
+    "https://localhost:8080/v1/ledger/block/18446744073709551615",
+  );
+  assert.deepEqual(maximumHeightWire, expectedWire);
 });
 
 test("ToriiBrowserClient rejects malformed ledger selectors and representations locally", async () => {
@@ -232,9 +496,21 @@ test("ToriiBrowserClient rejects malformed ledger selectors and representations 
     },
   });
 
-  assert.throws(() => client.listLedgerHeaders({ from: 0 }), /positive safe integer/u);
+  assert.throws(() => client.listLedgerHeaders({ from: 0 }), /positive decimal integer/u);
   assert.throws(() => client.listLedgerHeaders({ offset: 1 }), /unsupported option offset/u);
-  assert.throws(() => client.getLedgerStateRoot(0), /positive safe integer/u);
+  assert.throws(() => client.getLedgerStateRoot(0), /positive decimal integer/u);
+  await assert.rejects(
+    client.getLedgerExecutedBlockWire(0),
+    /positive decimal integer/u,
+  );
+  await assert.rejects(
+    client.getLedgerExecutedBlockWire(1n << 64n),
+    /must not exceed 18446744073709551615/u,
+  );
+  await assert.rejects(
+    client.getLedgerExecutedBlockWire(1, { offset: 1 }),
+    /unsupported option offset/u,
+  );
   await assert.rejects(
     client.getLedgerBlockProof(1, "abc"),
     /exactly 32 bytes of hexadecimal/u,
@@ -247,6 +523,65 @@ test("ToriiBrowserClient rejects malformed ledger selectors and representations 
   await assert.rejects(
     wrongContentTypeClient.getLedgerBlockProof(1, "ab".repeat(32)),
     /must return application\/x-norito/u,
+  );
+  await assert.rejects(
+    wrongContentTypeClient.getLedgerExecutedBlockWire(1),
+    /must return application\/x-norito/u,
+  );
+
+  const emptyClient = new ToriiBrowserClient(BASE_URL, {
+    fetchImpl: async () => new Response(new Uint8Array(), {
+      headers: { "content-type": "application/x-norito" },
+    }),
+  });
+  await assert.rejects(
+    emptyClient.getLedgerExecutedBlockWire(1),
+    /must not be empty/u,
+  );
+
+  const oversizedClient = new ToriiBrowserClient(BASE_URL, {
+    fetchImpl: async () => new Response(Uint8Array.of(1), {
+      headers: {
+        "content-type": "application/x-norito",
+        "content-length": String(
+          browserSdk.AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 + 1,
+        ),
+      },
+    }),
+  });
+  await assert.rejects(
+    oversizedClient.getLedgerExecutedBlockWire(1),
+    /33554432-byte response limit/u,
+  );
+
+  const lengthMismatchClient = new ToriiBrowserClient(BASE_URL, {
+    fetchImpl: async () => new Response(Uint8Array.of(1), {
+      headers: {
+        "content-type": "application/x-norito",
+        "content-length": "2",
+      },
+    }),
+  });
+  await assert.rejects(
+    lengthMismatchClient.getLedgerExecutedBlockWire(1),
+    /Content-Length does not match/u,
+  );
+
+  const fragmentedClient = new ToriiBrowserClient(BASE_URL, {
+    fetchImpl: async () => new Response(new ReadableStream({
+      start(controller) {
+        for (let index = 0; index <= 16_384; index += 1) {
+          controller.enqueue(Uint8Array.of(index & 0xff));
+        }
+        controller.close();
+      },
+    }), {
+      headers: { "content-type": "application/x-norito" },
+    }),
+  });
+  await assert.rejects(
+    fragmentedClient.getLedgerExecutedBlockWire(1),
+    /too many fragmented response chunks/u,
   );
 });
 
@@ -666,12 +1001,15 @@ test("ToriiBrowserClient rejects noncanonical asset and RWA quantity readbacks",
       invoke: (client) => client.listAssetHolders("asset-definition"),
     },
     {
-      payload: { pagination: {}, items: [{ id: "asset", quantity: "01" }] },
+      payload: {
+        pagination: { limit: 25, next_cursor: null, has_more: false },
+        items: [{ id: "asset", value: "01" }],
+      },
       invoke: (client) => client.listExplorerAssets(),
     },
     {
       payload: {
-        pagination: {},
+        pagination: { limit: 25, next_cursor: null, has_more: false },
         items: [{ id: "rwa", quantity: "1", held_quantity: "0.0" }],
       },
       invoke: (client) => client.listExplorerRwas(),
@@ -688,12 +1026,17 @@ test("ToriiBrowserClient rejects noncanonical asset and RWA quantity readbacks",
   }
 });
 
-test("ToriiBrowserClient does not statically import Node-only Norito code", () => {
+test("ToriiBrowserClient statically imports only named browser-safe Norito APIs", () => {
   const source = readFileSync(
     new URL("../src/toriiBrowserClient.js", import.meta.url),
     "utf8",
   );
-  assert.doesNotMatch(source, /from\s+["']\.\/norito\.js["']/);
+  assert.match(
+    source,
+    /import\s*\{[^}]*noritoDecodeBlockProofs[^}]*noritoEncodeMultisigProposeRequest[^}]*\}\s*from\s*["']\.\/norito\.js["']/su,
+  );
+  assert.doesNotMatch(source, /import\s*\(\s*["']\.\/norito\.js["']\s*\)/u);
+  assert.doesNotMatch(source, /import\s+\*\s+as\s+\w+\s+from\s+["']\.\/norito\.js["']/u);
 });
 
 test("ToriiBrowserClient source and dist use only first-release multisig proposal routes", () => {
@@ -855,7 +1198,7 @@ test("ToriiBrowserClient submits multisig Norito payloads to registered routes",
   await client.submitMultisigContractCallPropose({
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
-    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     entrypoint: "execute",
     feePayment: AUTHORITY_FEE_PAYMENT,
   });
@@ -1080,4 +1423,149 @@ test("ToriiBrowserClient keeps diagnostic scopes separate from global-only waits
     );
   }
   assert.equal(submissions, 0);
+});
+
+const typedSumeragiBrowserClients = Object.freeze([
+  ["source", ToriiBrowserClient],
+  ["dist", browserDistSdk.ToriiBrowserClient],
+]);
+
+test("ToriiBrowserClient typed Sumeragi methods use fixed JSON routes and preserve u64 tokens", async (t) => {
+  for (const [label, Client] of typedSumeragiBrowserClients) {
+    await t.test(label, async () => {
+      const diagnosticsText = JSON.stringify(
+        browserSumeragiDiagnosticsFixture(),
+      )
+        .replace(
+          '"tx_queue_retained_bytes":4096',
+          '"tx_queue_retained_bytes":9007199254740993',
+        )
+        .replace(
+          '"tx_queue_max_retained_bytes":65536',
+          '"tx_queue_max_retained_bytes":9007199254740994',
+        );
+      const requests = [];
+      const client = new Client("https://torii.example", {
+        fetchImpl: async (url, init) => {
+          requests.push([String(url), init]);
+          if (String(url).endsWith("/v1/sumeragi/status")) {
+            return new Response(JSON.stringify(browserSumeragiStatusFixture()), {
+              headers: { "content-type": "application/json; charset=utf-8" },
+            });
+          }
+          return new Response(diagnosticsText, {
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
+
+      const status = await client.getSumeragiStatusTyped();
+      const diagnostics = await client.getSumeragiDiagnosticsTyped();
+      assert.equal(status.protocol_version, 4);
+      assert.equal(status.height, 10);
+      assert.equal(diagnostics.tx_queue_retained_bytes, 9007199254740993n);
+      assert.equal(
+        diagnostics.tx_queue_max_retained_bytes,
+        9007199254740994n,
+      );
+      assert.deepEqual(
+        requests.map(([url, init]) => [url, init.method, init.headers.Accept]),
+        [
+          [
+            "https://torii.example/v1/sumeragi/status",
+            "GET",
+            "application/json",
+          ],
+          [
+            "https://torii.example/v1/sumeragi/diagnostics",
+            "GET",
+            "application/json",
+          ],
+        ],
+      );
+    });
+  }
+});
+
+test("ToriiBrowserClient typed Sumeragi methods reject ambiguous JSON and non-JSON media", async (t) => {
+  for (const [label, Client] of typedSumeragiBrowserClients) {
+    await t.test(label, async () => {
+      const validStatus = JSON.stringify(browserSumeragiStatusFixture());
+      const responses = [
+        new Response(`{"protocol_version":4,${validStatus.slice(1)}`, {
+          headers: { "content-type": "application/json" },
+        }),
+        new Response(`${validStatus} trailing`, {
+          headers: { "content-type": "application/json" },
+        }),
+        new Response("", {
+          headers: { "content-type": "application/json" },
+        }),
+        new Response(validStatus, {
+          headers: { "content-type": "text/plain" },
+        }),
+      ];
+      const client = new Client("https://torii.example", {
+        fetchImpl: async () => responses.shift(),
+      });
+
+      await assert.rejects(
+        client.getSumeragiStatusTyped(),
+        /duplicate object key/u,
+      );
+      await assert.rejects(
+        client.getSumeragiStatusTyped(),
+        /trailing input/u,
+      );
+      await assert.rejects(
+        client.getSumeragiStatusTyped(),
+        /unexpected end of input/u,
+      );
+      await assert.rejects(
+        client.getSumeragiStatusTyped(),
+        /application\/json media type/u,
+      );
+      assert.throws(
+        () => client.getSumeragiStatusTyped({ headers: {} }),
+        /unsupported option headers/u,
+      );
+    });
+  }
+});
+
+test("ToriiBrowserClient typed Sumeragi methods enforce endpoint-specific byte bounds", async (t) => {
+  for (const [label, Client] of typedSumeragiBrowserClients) {
+    await t.test(label, async () => {
+      const declaredLengths = [1024 * 1024 + 1, 16 * 1024 * 1024 + 1];
+      const client = new Client("https://torii.example", {
+        fetchImpl: async () => new Response("{}", {
+          headers: {
+            "content-length": String(declaredLengths.shift()),
+            "content-type": "application/json",
+          },
+        }),
+      });
+
+      await assert.rejects(
+        client.getSumeragiStatusTyped(),
+        /1048576-byte response limit/u,
+      );
+      await assert.rejects(
+        client.getSumeragiDiagnosticsTyped(),
+        /16777216-byte response limit/u,
+      );
+    });
+  }
+});
+
+test("ToriiBrowserClient keeps raw and typed Sumeragi methods distinct", async () => {
+  const payload = { operational_note: "raw payload" };
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => jsonResponse(payload),
+  });
+
+  assert.deepEqual(await client.getSumeragiStatus(), payload);
+  assert.deepEqual(await client.getSumeragiDiagnostics(), payload);
+  await assert.rejects(client.getSumeragiStatusTyped(), /unknown field/u);
+  await assert.rejects(client.getSumeragiDiagnosticsTyped(), /unknown field/u);
 });

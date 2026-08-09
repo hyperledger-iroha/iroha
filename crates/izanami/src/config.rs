@@ -16,8 +16,12 @@ use iroha_config::{
         Nexus as ActualNexus, Sumeragi as ActualSumeragi,
     },
 };
+use iroha_crypto::Hash;
 use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId},
+    block::consensus_v2::{
+        MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
+    },
     nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId},
 };
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
@@ -36,10 +40,10 @@ pub struct IzanamiArgs {
     /// Allow Izanami to orchestrate networked peers (required outside tests).
     #[arg(long, default_value_t = false)]
     pub allow_net: bool,
-    /// Total number of peers to start in the chaos network.
+    /// Exact bounded `3f + 1` validator committee to start in the chaos network.
     #[arg(long, default_value_t = 4)]
     pub peers: usize,
-    /// Number of peers that should behave in a faulty (Byzantine) manner.
+    /// Number of Byzantine peers, bounded by the committee's fault tolerance `f`.
     #[arg(long, default_value_t = 1)]
     pub faulty: usize,
     /// Wall-clock duration for which the scenario should run.
@@ -439,13 +443,20 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
                 "network orchestration disabled: pass --allow-net or set allow_net=true to run Izanami"
             ));
         }
-        if args.peers == 0 {
-            return Err(eyre!("peer count must be greater than zero"));
-        }
-        if args.faulty > args.peers {
+        if !is_valid_committee_size(args.peers) {
             return Err(eyre!(
-                "faulty peer count ({}) cannot exceed total peer count ({})",
+                "peer count ({}) must be an exact revision-4 3f + 1 committee in {}..={}",
+                args.peers,
+                MIN_VALIDATORS_PER_HEIGHT,
+                MAX_VALIDATORS_PER_HEIGHT
+            ));
+        }
+        let max_faulty_peers = (args.peers - 1) / 3;
+        if args.faulty > max_faulty_peers {
+            return Err(eyre!(
+                "faulty peer count ({}) exceeds revision-4 fault tolerance f={} for {} peers",
                 args.faulty,
+                max_faulty_peers,
                 args.peers
             ));
         }
@@ -784,6 +795,21 @@ impl NexusProfile {
             );
             raw_table.insert("torii".to_string(), Value::Table(torii));
         }
+        let expected_hash = raw_table
+            .get_mut("genesis")
+            .and_then(Value::as_table_mut)
+            .and_then(|genesis| genesis.get_mut("expected_hash"))
+            .ok_or_else(|| eyre!("embedded Nexus signing profile lacks genesis.expected_hash"))?;
+        if expected_hash.as_str() != Some("REPLACE_WITH_GENESIS_EXPECTED_HASH") {
+            return Err(eyre!(
+                "embedded Nexus signing profile must retain its explicit genesis hash placeholder"
+            ));
+        }
+        // Izanami parses the complete profile only to project Nexus and Sumeragi fields below;
+        // genesis is never copied into `config_layer`. Keep the checked-in profile unrunnable and
+        // use a deterministic in-memory value solely to satisfy complete-config normalization.
+        *expected_hash =
+            Value::String(Hash::new(b"Izanami Nexus-profile policy projection only").to_string());
         let reader = ConfigReader::new().with_toml_source(TomlSource::inline(raw_table.clone()));
         let actual = iroha_config::parameters::user::Root::read_and_complete(reader)
             .map_err(|err| eyre!("failed to load embedded nexus config: {err:?}"))?
@@ -1204,7 +1230,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
-            peers: 2,
+            peers: 7,
             faulty: 3,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -1243,7 +1269,43 @@ mod tests {
             nexus: false,
             diagnostic_dir: None,
         };
-        assert!(ChaosConfig::try_from(args).is_err());
+        let err = ChaosConfig::try_from(args).expect_err("faulty peers above f must fail");
+        assert!(
+            err.to_string().contains("fault tolerance f=2"),
+            "error should report the revision-4 fault bound: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_accepts_every_revision4_committee_size() {
+        for peers in (MIN_VALIDATORS_PER_HEIGHT..=MAX_VALIDATORS_PER_HEIGHT).step_by(3) {
+            let mut args = IzanamiArgs::defaults();
+            args.allow_net = true;
+            args.peers = peers;
+            args.faulty = (peers - 1) / 3;
+
+            let config = ChaosConfig::try_from(args)
+                .unwrap_or_else(|error| panic!("valid {peers}-peer committee failed: {error}"));
+            assert_eq!(config.peer_count, peers);
+            assert_eq!(config.faulty_peers, (peers - 1) / 3);
+        }
+    }
+
+    #[test]
+    fn chaos_config_rejects_non_revision4_committee_sizes() {
+        for peers in [0, 1, 2, 3, 5, 6, 8, 30, 32, 34] {
+            let mut args = IzanamiArgs::defaults();
+            args.allow_net = true;
+            args.peers = peers;
+            args.faulty = 0;
+
+            let error = ChaosConfig::try_from(args)
+                .expect_err("non-revision-4 committee geometry must fail");
+            assert!(
+                error.to_string().contains("exact revision-4 3f + 1"),
+                "error should report invalid committee geometry for {peers} peers: {error}"
+            );
+        }
     }
 
     #[test]
@@ -1251,7 +1313,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
-            peers: 1,
+            peers: 4,
             faulty: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -1290,7 +1352,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: false,
-            peers: 1,
+            peers: 4,
             faulty: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -1334,7 +1396,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
-            peers: 1,
+            peers: 4,
             faulty: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -1372,7 +1434,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
-            peers: 1,
+            peers: 4,
             faulty: 0,
             duration: Duration::from_secs(1),
             pipeline_time: Some(
@@ -1509,7 +1571,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
-            peers: 1,
+            peers: 4,
             faulty: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -1553,7 +1615,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
-            peers: 1,
+            peers: 4,
             faulty: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -1597,7 +1659,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
-            peers: 1,
+            peers: 4,
             faulty: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -1641,7 +1703,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
-            peers: 1,
+            peers: 4,
             faulty: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -1685,7 +1747,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
-            peers: 1,
+            peers: 4,
             faulty: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -1728,7 +1790,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
-            peers: 1,
+            peers: 4,
             faulty: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -1830,7 +1892,7 @@ mod tests {
         let args = IzanamiArgs {
             tui: false,
             allow_net: true,
-            peers: 1,
+            peers: 4,
             faulty: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,

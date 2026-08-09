@@ -34,10 +34,20 @@ def _fixture(tmp_path: Path) -> dict[str, object]:
     repo = tmp_path.resolve() / "repo"
     repo.mkdir()
     (repo / "Cargo.lock").write_bytes(b"fixture-lock-v1\n")
-    source_root = repo / "target" / "sumeragi-v2-release" / SOURCE_MANIFEST
+    cargo_target = tmp_path.resolve() / "cargo-target"
+    artifact_root = tmp_path.resolve() / "artifacts"
+    cargo_target.mkdir(mode=0o700)
+    artifact_root.mkdir(mode=0o700)
+    source_root = cargo_target / "sumeragi-v2-release" / SOURCE_MANIFEST
     default_cache = source_root / "program-build-cache" / "default"
     message_cache = source_root / "program-build-cache" / "message-control"
-    prepare_cache(repo, SOURCE_MANIFEST, default_cache, message_cache)
+    prepare_cache(
+        repo,
+        SOURCE_MANIFEST,
+        cargo_target,
+        default_cache,
+        message_cache,
+    )
     for label, relative, cache_name in RELATIVE_BINARIES:
         cache = default_cache if cache_name == "default" else message_cache
         source_relative = (
@@ -63,10 +73,12 @@ def _fixture(tmp_path: Path) -> dict[str, object]:
         b"release: 1.99.0\n"
         b"LLVM version: 99.0.0\n"
     )
-    programs = source_root / "programs"
+    programs = artifact_root / "sumeragi-v2-release" / SOURCE_MANIFEST / "programs"
     bundle, manifest_sha256 = create_bundle(
         repo,
         SOURCE_MANIFEST,
+        cargo_target,
+        artifact_root,
         default_cache,
         message_cache,
         programs,
@@ -75,6 +87,8 @@ def _fixture(tmp_path: Path) -> dict[str, object]:
     )
     return {
         "repo": repo,
+        "cargo_target": cargo_target,
+        "artifact_root": artifact_root,
         "default_cache": default_cache,
         "message_cache": message_cache,
         "programs": programs,
@@ -163,7 +177,14 @@ def test_create_publishes_exact_v2_manifest_and_read_only_single_link_bundle(
             current /= component
             assert stat.S_IMODE(current.stat().st_mode) == 0o500
 
-    validate_bundle(repo, SOURCE_MANIFEST, bundle, manifest_sha256)
+    validate_bundle(
+        repo,
+        SOURCE_MANIFEST,
+        Path(fixture["cargo_target"]),
+        Path(fixture["artifact_root"]),
+        bundle,
+        manifest_sha256,
+    )
 
 
 def test_create_always_allocates_a_fresh_invocation_bundle(tmp_path: Path) -> None:
@@ -171,6 +192,8 @@ def test_create_always_allocates_a_fresh_invocation_bundle(tmp_path: Path) -> No
     second, second_digest = create_bundle(
         Path(fixture["repo"]),
         SOURCE_MANIFEST,
+        Path(fixture["cargo_target"]),
+        Path(fixture["artifact_root"]),
         Path(fixture["default_cache"]),
         Path(fixture["message_cache"]),
         Path(fixture["programs"]),
@@ -193,6 +216,8 @@ def test_validate_rejects_forged_external_manifest_anchor(tmp_path: Path) -> Non
         validate_bundle(
             Path(fixture["repo"]),
             SOURCE_MANIFEST,
+            Path(fixture["cargo_target"]),
+            Path(fixture["artifact_root"]),
             Path(fixture["bundle"]),
             "0" * 64,
         )
@@ -209,6 +234,8 @@ def test_validate_rejects_mutated_or_non_private_artifacts(
     manifest_sha256 = str(fixture["manifest_sha256"])
     binary = bundle / "release" / "irohad"
     release_dir = binary.parent
+    original_binary = binary.read_bytes()
+    original_binary_mode = stat.S_IMODE(binary.stat().st_mode)
     bundle.chmod(0o700)
     release_dir.chmod(0o700)
     if mutation == "binary":
@@ -232,8 +259,26 @@ def test_validate_rejects_mutated_or_non_private_artifacts(
     release_dir.chmod(0o500)
     bundle.chmod(0o500)
 
-    with pytest.raises(PrebuiltBundleError):
-        validate_bundle(repo, SOURCE_MANIFEST, bundle, manifest_sha256)
+    try:
+        with pytest.raises(PrebuiltBundleError):
+            validate_bundle(
+                repo,
+                SOURCE_MANIFEST,
+                Path(fixture["cargo_target"]),
+                Path(fixture["artifact_root"]),
+                bundle,
+                manifest_sha256,
+            )
+    finally:
+        if mutation == "symlink":
+            bundle.chmod(0o700)
+            release_dir.chmod(0o700)
+            if binary.is_symlink() or binary.exists():
+                binary.unlink()
+            binary.write_bytes(original_binary)
+            binary.chmod(original_binary_mode)
+            release_dir.chmod(0o500)
+            bundle.chmod(0o500)
 
 
 @pytest.mark.parametrize("kind", ("file", "directory"))
@@ -255,6 +300,8 @@ def test_validate_rejects_every_unexpected_bundle_entry(
         validate_bundle(
             Path(fixture["repo"]),
             SOURCE_MANIFEST,
+            Path(fixture["cargo_target"]),
+            Path(fixture["artifact_root"]),
             bundle,
             str(fixture["manifest_sha256"]),
         )
@@ -282,6 +329,8 @@ def test_validate_rejects_wrong_published_modes(
         validate_bundle(
             Path(fixture["repo"]),
             SOURCE_MANIFEST,
+            Path(fixture["cargo_target"]),
+            Path(fixture["artifact_root"]),
             bundle,
             str(fixture["manifest_sha256"]),
         )
@@ -292,22 +341,38 @@ def test_validate_rejects_symlinked_expected_directory(tmp_path: Path) -> None:
     bundle = Path(fixture["bundle"])
     message_control = bundle / "message-control"
     release = message_control / "release"
+    binary = release / "irohad"
+    original_binary = binary.read_bytes()
+    original_binary_mode = stat.S_IMODE(binary.stat().st_mode)
     bundle.chmod(0o700)
     message_control.chmod(0o700)
     release.chmod(0o700)
-    (release / "irohad").unlink()
+    binary.unlink()
     release.rmdir()
     release.symlink_to(bundle / "release", target_is_directory=True)
     message_control.chmod(0o500)
     bundle.chmod(0o500)
 
-    with pytest.raises(PrebuiltBundleError, match="directory is not real"):
-        validate_bundle(
-            Path(fixture["repo"]),
-            SOURCE_MANIFEST,
-            bundle,
-            str(fixture["manifest_sha256"]),
-        )
+    try:
+        with pytest.raises(PrebuiltBundleError, match="directory is not real"):
+            validate_bundle(
+                Path(fixture["repo"]),
+                SOURCE_MANIFEST,
+                Path(fixture["cargo_target"]),
+                Path(fixture["artifact_root"]),
+                bundle,
+                str(fixture["manifest_sha256"]),
+            )
+    finally:
+        bundle.chmod(0o700)
+        message_control.chmod(0o700)
+        release.unlink()
+        release.mkdir()
+        binary.write_bytes(original_binary)
+        binary.chmod(original_binary_mode)
+        release.chmod(0o500)
+        message_control.chmod(0o500)
+        bundle.chmod(0o500)
 
 
 @pytest.mark.parametrize(
@@ -382,7 +447,14 @@ def test_validate_rejects_noncanonical_or_forged_manifest_fields(
     manifest_sha256 = _replace_manifest(bundle, data)
 
     with pytest.raises(PrebuiltBundleError):
-        validate_bundle(repo, SOURCE_MANIFEST, bundle, manifest_sha256)
+        validate_bundle(
+            repo,
+            SOURCE_MANIFEST,
+            Path(fixture["cargo_target"]),
+            Path(fixture["artifact_root"]),
+            bundle,
+            manifest_sha256,
+        )
 
 
 def test_validate_rejects_source_or_lock_drift(tmp_path: Path) -> None:
@@ -392,11 +464,25 @@ def test_validate_rejects_source_or_lock_drift(tmp_path: Path) -> None:
     manifest_sha256 = str(fixture["manifest_sha256"])
 
     with pytest.raises(PrebuiltBundleError):
-        validate_bundle(repo, "b" * 64, bundle, manifest_sha256)
+        validate_bundle(
+            repo,
+            "b" * 64,
+            Path(fixture["cargo_target"]),
+            Path(fixture["artifact_root"]),
+            bundle,
+            manifest_sha256,
+        )
 
     (repo / "Cargo.lock").write_bytes(b"fixture-lock-v2\n")
     with pytest.raises(PrebuiltBundleError, match="Cargo.lock digest mismatch"):
-        validate_bundle(repo, SOURCE_MANIFEST, bundle, manifest_sha256)
+        validate_bundle(
+            repo,
+            SOURCE_MANIFEST,
+            Path(fixture["cargo_target"]),
+            Path(fixture["artifact_root"]),
+            bundle,
+            manifest_sha256,
+        )
 
 
 def test_validate_rejects_cross_bundle_manifest_replay(tmp_path: Path) -> None:
@@ -406,6 +492,8 @@ def test_validate_rejects_cross_bundle_manifest_replay(tmp_path: Path) -> None:
     second, _second_digest = create_bundle(
         repo,
         SOURCE_MANIFEST,
+        Path(fixture["cargo_target"]),
+        Path(fixture["artifact_root"]),
         Path(fixture["default_cache"]),
         Path(fixture["message_cache"]),
         Path(fixture["programs"]),
@@ -416,7 +504,14 @@ def test_validate_rejects_cross_bundle_manifest_replay(tmp_path: Path) -> None:
     replayed_digest = _replace_manifest(second, first_manifest.read_bytes())
 
     with pytest.raises(PrebuiltBundleError, match="base identity mismatch"):
-        validate_bundle(repo, SOURCE_MANIFEST, second, replayed_digest)
+        validate_bundle(
+            repo,
+            SOURCE_MANIFEST,
+            Path(fixture["cargo_target"]),
+            Path(fixture["artifact_root"]),
+            second,
+            replayed_digest,
+        )
 
 
 def test_validate_rejects_relative_bundle_path(tmp_path: Path) -> None:
@@ -427,6 +522,8 @@ def test_validate_rejects_relative_bundle_path(tmp_path: Path) -> None:
         validate_bundle(
             Path(fixture["repo"]),
             SOURCE_MANIFEST,
+            Path(fixture["cargo_target"]),
+            Path(fixture["artifact_root"]),
             relative,
             str(fixture["manifest_sha256"]),
         )
@@ -442,6 +539,8 @@ def test_create_rejects_malformed_or_non_private_tool_stdout(
 ) -> None:
     fixture = _fixture(tmp_path)
     cargo_version = Path(fixture["cargo_version"])
+    original_cargo_version = cargo_version.read_bytes()
+    original_cargo_version_mode = stat.S_IMODE(cargo_version.stat().st_mode)
     if mutation == "empty":
         cargo_version.write_bytes(b"")
     elif mutation == "no_newline":
@@ -459,31 +558,48 @@ def test_create_rejects_malformed_or_non_private_tool_stdout(
         alias = cargo_version.with_suffix(".alias")
         os.link(cargo_version, alias)
 
-    with pytest.raises(PrebuiltBundleError):
-        create_bundle(
-            Path(fixture["repo"]),
-            SOURCE_MANIFEST,
-            Path(fixture["default_cache"]),
-            Path(fixture["message_cache"]),
-            Path(fixture["programs"]),
-            cargo_version,
-            Path(fixture["rustc_version"]),
-        )
+    try:
+        with pytest.raises(PrebuiltBundleError):
+            create_bundle(
+                Path(fixture["repo"]),
+                SOURCE_MANIFEST,
+                Path(fixture["cargo_target"]),
+                Path(fixture["artifact_root"]),
+                Path(fixture["default_cache"]),
+                Path(fixture["message_cache"]),
+                Path(fixture["programs"]),
+                cargo_version,
+                Path(fixture["rustc_version"]),
+            )
+    finally:
+        if mutation == "symlink":
+            cargo_version.unlink()
+            cargo_version.write_bytes(original_cargo_version)
+            cargo_version.chmod(original_cargo_version_mode)
 
 
 def test_create_rejects_symlinked_build_output(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     output = Path(fixture["default_cache"]) / "release" / "irohad"
+    original_output = output.read_bytes()
+    original_output_mode = stat.S_IMODE(output.stat().st_mode)
     output.unlink()
     output.symlink_to(Path(fixture["repo"]) / "Cargo.lock")
 
-    with pytest.raises(PrebuiltBundleError, match="non-symlink"):
-        create_bundle(
-            Path(fixture["repo"]),
-            SOURCE_MANIFEST,
-            Path(fixture["default_cache"]),
-            Path(fixture["message_cache"]),
-            Path(fixture["programs"]),
-            Path(fixture["cargo_version"]),
-            Path(fixture["rustc_version"]),
-        )
+    try:
+        with pytest.raises(PrebuiltBundleError, match="non-symlink"):
+            create_bundle(
+                Path(fixture["repo"]),
+                SOURCE_MANIFEST,
+                Path(fixture["cargo_target"]),
+                Path(fixture["artifact_root"]),
+                Path(fixture["default_cache"]),
+                Path(fixture["message_cache"]),
+                Path(fixture["programs"]),
+                Path(fixture["cargo_version"]),
+                Path(fixture["rustc_version"]),
+            )
+    finally:
+        output.unlink()
+        output.write_bytes(original_output)
+        output.chmod(original_output_mode)

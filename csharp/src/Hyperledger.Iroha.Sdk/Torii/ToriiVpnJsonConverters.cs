@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.Sockets;
+using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Hyperledger.Iroha.Address;
@@ -6,6 +9,22 @@ namespace Hyperledger.Iroha.Torii;
 
 internal static class ToriiVpnJson
 {
+    private static readonly BigInteger Ed25519FieldModulus = (BigInteger.One << 255) - 19;
+    private static readonly BigInteger Ed25519SubgroupOrder =
+        (BigInteger.One << 252) + BigInteger.Parse("27742317777372353535851937790883648493");
+    private static readonly BigInteger Ed25519D = ModEd25519(
+        -121665 * BigInteger.ModPow(121666, Ed25519FieldModulus - 2, Ed25519FieldModulus));
+    private static readonly BigInteger Ed25519SqrtMinusOne = BigInteger.ModPow(
+        2,
+        (Ed25519FieldModulus - 1) / 4,
+        Ed25519FieldModulus);
+
+    private readonly record struct Ed25519ExtendedPoint(
+        BigInteger X,
+        BigInteger Y,
+        BigInteger Z,
+        BigInteger T);
+
     internal static void ValidateVpnTxInstruction(ToriiVpnTxInstruction instruction, string context)
     {
         ArgumentNullException.ThrowIfNull(instruction);
@@ -18,7 +37,10 @@ internal static class ToriiVpnJson
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        ToriiSseEventJson.RequireExactTokenText(response.RelayEndpoint, $"{context}.relay_endpoint");
+        RequireVpnRelayEndpoint(
+            response.RelayEndpoint,
+            $"{context}.relay_endpoint",
+            allowEmpty: !response.Available);
         ValidateVpnExitClassList(response.SupportedExitClasses, $"{context}.supported_exit_classes");
         RequireVpnExitClass(response.DefaultExitClass, $"{context}.default_exit_class");
         RequireUInt64Range(response.LeaseSeconds, 1, uint.MaxValue, $"{context}.lease_secs");
@@ -30,14 +52,20 @@ internal static class ToriiVpnJson
         ValidateStringList(response.TunnelAddresses, $"{context}.tunnel_addresses", token: true);
         RequireExactUInt64(response.MtuBytes, 1280, $"{context}.mtu_bytes");
         RequireExactNonEmptyText(response.DisplayBillingLabel, $"{context}.display_billing_label");
-        ToriiSseEventJson.RequireExactTokenText(response.FeeAssetId, $"{context}.fee_asset_id");
-        RequireCanonicalAccountId(response.EscrowAccountId, $"{context}.escrow_account_id");
         RequireCanonicalAccountId(response.OperatorAccountId, $"{context}.operator_account_id");
         _ = ToriiQuantityJson.RequireCanonicalQuantity(response.LeaseFee, $"{context}.lease_fee");
         RequirePositiveUInt64(response.SettlementGraceSeconds, $"{context}.settlement_grace_secs");
         RequireExactUInt64(response.FlowLabelBits, 24, $"{context}.flow_label_bits");
         RequireUInt64Range(response.PaddingBudgetMilliseconds, 1, ushort.MaxValue, $"{context}.padding_budget_ms");
-        ToriiSseEventJson.RequireOptionalExactSizedHex(response.RelayTlsSpkiSha256Hex, $"{context}.relay_tls_spki_sha256_hex", 32);
+        ValidateVpnTrust(
+            response.RelayIdHex,
+            response.DescriptorCommitHex,
+            response.TlsServerName,
+            response.RelayTlsSpkiSha256Hex,
+            response.RelayCertificateSha256Hex,
+            response.DirectorySnapshotDigestHex,
+            context,
+            allowEmpty: !response.Available);
     }
 
     internal static void ValidateVpnQuote(ToriiVpnQuote response, string context)
@@ -50,7 +78,7 @@ internal static class ToriiVpnJson
         ToriiSseEventJson.RequireExactTokenText(response.PaymentReference, $"{context}.payment_reference");
         RequireCanonicalAccountId(response.AccountId, $"{context}.account_id");
         RequireVpnExitClass(response.ExitClass, $"{context}.exit_class");
-        ToriiSseEventJson.RequireExactTokenText(response.RelayEndpoint, $"{context}.relay_endpoint");
+        RequireVpnRelayEndpoint(response.RelayEndpoint, $"{context}.relay_endpoint");
         RequireUInt64Range(response.LeaseSeconds, 1, uint.MaxValue, $"{context}.lease_secs");
         ToriiSseEventJson.RequireExactTokenText(response.FeeAssetId, $"{context}.fee_asset_id");
         RequireCanonicalAccountId(response.EscrowAccountId, $"{context}.escrow_account_id");
@@ -64,10 +92,16 @@ internal static class ToriiVpnJson
         ToriiSseEventJson.RequireExactTokenText(response.MeterFamily, $"{context}.meter_family");
         RequireExactUInt64(response.FlowLabelBits, 24, $"{context}.flow_label_bits");
         RequireUInt64Range(response.PaddingBudgetMilliseconds, 1, ushort.MaxValue, $"{context}.padding_budget_ms");
-        ToriiSseEventJson.RequireOptionalExactSizedHex(response.RelayTlsSpkiSha256Hex, $"{context}.relay_tls_spki_sha256_hex", 32);
+        ValidateVpnTrust(
+            response.RelayIdHex,
+            response.DescriptorCommitHex,
+            response.TlsServerName,
+            response.RelayTlsSpkiSha256Hex,
+            response.RelayCertificateSha256Hex,
+            response.DirectorySnapshotDigestHex,
+            context);
         ToriiSseEventJson.RequireExactSizedHex(response.MeteringPublicKeyHex, $"{context}.metering_public_key_hex", 32);
-        ValidateOptionalVpnTxInstruction(response.OpenLeaseInstruction, $"{context}.open_lease_instruction");
-        ValidateVpnTxInstructions(response.TxInstructions, $"{context}.tx_instructions", minimumCount: 1, maximumCount: 1);
+        ValidateVpnTxInstruction(response.OpenLeaseInstruction, $"{context}.open_lease_instruction");
     }
 
     internal static void ValidateVpnSession(ToriiVpnSession response, string context)
@@ -77,7 +111,7 @@ internal static class ToriiVpnJson
         ToriiSseEventJson.RequireExactSizedHex(response.SessionId, $"{context}.session_id", 32);
         RequireCanonicalAccountId(response.AccountId, $"{context}.account_id");
         RequireVpnExitClass(response.ExitClass, $"{context}.exit_class");
-        ToriiSseEventJson.RequireExactTokenText(response.RelayEndpoint, $"{context}.relay_endpoint");
+        RequireVpnRelayEndpoint(response.RelayEndpoint, $"{context}.relay_endpoint");
         RequireUInt64Range(response.LeaseSeconds, 1, uint.MaxValue, $"{context}.lease_secs");
         if (response.ExpiresAtMilliseconds <= response.ConnectedAtMilliseconds)
         {
@@ -94,7 +128,14 @@ internal static class ToriiVpnJson
         _ = ToriiQuantityJson.RequireCanonicalQuantity(response.LeaseFee, $"{context}.lease_fee");
         RequireExactUInt64(response.FlowLabelBits, 24, $"{context}.flow_label_bits");
         RequireUInt64Range(response.PaddingBudgetMilliseconds, 1, ushort.MaxValue, $"{context}.padding_budget_ms");
-        ToriiSseEventJson.RequireOptionalExactSizedHex(response.RelayTlsSpkiSha256Hex, $"{context}.relay_tls_spki_sha256_hex", 32);
+        ValidateVpnTrust(
+            response.RelayIdHex,
+            response.DescriptorCommitHex,
+            response.TlsServerName,
+            response.RelayTlsSpkiSha256Hex,
+            response.RelayCertificateSha256Hex,
+            response.DirectorySnapshotDigestHex,
+            context);
         ValidateStringList(response.RoutePushes, $"{context}.route_pushes", token: true);
         ValidateStringList(response.ExcludedRoutes, $"{context}.excluded_routes", token: true);
         ValidateStringList(response.DnsServers, $"{context}.dns_servers", token: true);
@@ -134,7 +175,6 @@ internal static class ToriiVpnJson
         ToriiSseEventJson.RequireExactSizedHex(response.LeaseIdHex, $"{context}.lease_id_hex", 32);
 
         ValidateOptionalVpnTxInstruction(response.SettleLeaseInstruction, $"{context}.settle_lease_instruction");
-        ValidateVpnTxInstructions(response.TxInstructions, $"{context}.tx_instructions", minimumCount: 0, maximumCount: 1);
     }
 
     internal static void ValidateVpnReceiptListResponse(ToriiVpnReceiptListResponse response, string context)
@@ -228,34 +268,6 @@ internal static class ToriiVpnJson
     internal static ToriiVpnTxInstruction? ReadOptionalVpnTxInstruction(ref Utf8JsonReader reader, string context)
     {
         return reader.TokenType == JsonTokenType.Null ? null : ReadVpnTxInstruction(ref reader, context);
-    }
-
-    internal static IReadOnlyList<ToriiVpnTxInstruction>? ReadVpnTxInstructionList(ref Utf8JsonReader reader, string context)
-    {
-        if (reader.TokenType == JsonTokenType.Null)
-        {
-            return null;
-        }
-
-        if (reader.TokenType != JsonTokenType.StartArray)
-        {
-            throw new JsonException($"{context} must be an array.");
-        }
-
-        var items = new List<ToriiVpnTxInstruction>();
-        var index = 0;
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndArray)
-            {
-                return items;
-            }
-
-            items.Add(ReadVpnTxInstruction(ref reader, $"{context}[{index}]"));
-            index++;
-        }
-
-        throw new JsonException($"{context} JSON array is incomplete.");
     }
 
     internal static IReadOnlyList<string>? ReadStringList(ref Utf8JsonReader reader, string context)
@@ -412,31 +424,6 @@ internal static class ToriiVpnJson
         }
     }
 
-    private static void ValidateVpnTxInstructions(
-        IReadOnlyList<ToriiVpnTxInstruction>? instructions,
-        string context,
-        int minimumCount,
-        int maximumCount)
-    {
-        if (instructions is null)
-        {
-            throw new JsonException($"{context} is required.");
-        }
-
-        if (instructions.Count < minimumCount || instructions.Count > maximumCount)
-        {
-            var requirement = minimumCount == maximumCount
-                ? $"exactly {minimumCount}"
-                : $"between {minimumCount} and {maximumCount}";
-            throw new JsonException($"{context} must contain {requirement} items.");
-        }
-
-        for (var index = 0; index < instructions.Count; index++)
-        {
-            ValidateVpnTxInstruction(instructions[index], $"{context}[{index}]");
-        }
-    }
-
     private static void ValidateOptionalVpnTxInstruction(ToriiVpnTxInstruction? instruction, string context)
     {
         if (instruction is not null)
@@ -475,6 +462,259 @@ internal static class ToriiVpnJson
         {
             throw new JsonException($"{field} must equal {expected}.");
         }
+    }
+
+    private static void ValidateVpnTrust(
+        string relayIdHex,
+        string descriptorCommitHex,
+        string tlsServerName,
+        string relayTlsSpkiSha256Hex,
+        string relayCertificateSha256Hex,
+        string directorySnapshotDigestHex,
+        string context,
+        bool allowEmpty = false)
+    {
+        RequireVpnRelayId(relayIdHex, $"{context}.relay_id_hex", allowEmpty);
+        RequireVpnTrustDigest(
+            descriptorCommitHex,
+            $"{context}.descriptor_commit_hex",
+            allowEmpty);
+        RequireVpnTlsServerName(tlsServerName, $"{context}.tls_server_name", allowEmpty);
+        RequireVpnTrustDigest(
+            relayTlsSpkiSha256Hex,
+            $"{context}.relay_tls_spki_sha256_hex",
+            allowEmpty);
+        RequireVpnTrustDigest(
+            relayCertificateSha256Hex,
+            $"{context}.relay_certificate_sha256_hex",
+            allowEmpty);
+        RequireVpnTrustDigest(
+            directorySnapshotDigestHex,
+            $"{context}.directory_snapshot_digest_hex",
+            allowEmpty);
+    }
+
+    private static void RequireVpnRelayId(string value, string field, bool allowEmpty)
+    {
+        if (allowEmpty && value.Length == 0)
+        {
+            return;
+        }
+
+        ToriiSseEventJson.RequireExactSizedHex(value, field, 32);
+        if (!IsCanonicalPrimeOrderEd25519PublicKey(Convert.FromHexString(value)))
+        {
+            throw new JsonException(
+                $"{field} must encode a canonical prime-order Ed25519 public key.");
+        }
+    }
+
+    private static void RequireVpnTrustDigest(string value, string field, bool allowEmpty)
+    {
+        if (allowEmpty && value.Length == 0)
+        {
+            return;
+        }
+
+        ToriiSseEventJson.RequireExactSizedHex(value, field, 32);
+        if (value.AsSpan().IndexOfAnyExcept('0') < 0)
+        {
+            throw new JsonException($"{field} must not be the all-zero digest.");
+        }
+    }
+
+    private static void RequireVpnTlsServerName(
+        string value,
+        string field,
+        bool allowEmpty = false)
+    {
+        if (allowEmpty && value.Length == 0)
+        {
+            return;
+        }
+
+        if (value.Length is 0 or > 253
+            || !string.Equals(value, value.ToLowerInvariant(), StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must be a canonical lowercase DNS name.");
+        }
+
+        foreach (var label in value.Split('.', StringSplitOptions.None))
+        {
+            if (label.Length is 0 or > 63
+                || !IsDnsAlphaNumeric(label[0])
+                || !IsDnsAlphaNumeric(label[^1])
+                || label.Any(static character => !IsDnsAlphaNumeric(character) && character != '-'))
+            {
+                throw new JsonException($"{field} must be a canonical lowercase DNS name.");
+            }
+        }
+    }
+
+    private static bool IsDnsAlphaNumeric(char character)
+    {
+        return character is (>= 'a' and <= 'z') or (>= '0' and <= '9');
+    }
+
+    private static void RequireVpnRelayEndpoint(
+        string value,
+        string field,
+        bool allowEmpty = false)
+    {
+        if (allowEmpty && value.Length == 0)
+        {
+            return;
+        }
+
+        var parts = value.Split('/', StringSplitOptions.None);
+        if (parts.Length != 6
+            || parts[0].Length != 0
+            || parts[1] is not ("ip4" or "ip6" or "dns" or "dns4" or "dns6")
+            || !string.Equals(parts[3], "udp", StringComparison.Ordinal)
+            || !string.Equals(parts[5], "quic", StringComparison.Ordinal))
+        {
+            throw new JsonException(
+                $"{field} must use /{{ip4|ip6|dns|dns4|dns6}}/host/udp/port/quic.");
+        }
+
+        var protocol = parts[1];
+        var host = parts[2];
+        if (protocol == "ip4")
+        {
+            if (!IPAddress.TryParse(host, out var address)
+                || address.AddressFamily != AddressFamily.InterNetwork
+                || !string.Equals(address.ToString(), host, StringComparison.Ordinal))
+            {
+                throw new JsonException($"{field} must contain a canonical IPv4 address.");
+            }
+        }
+        else if (protocol == "ip6")
+        {
+            if (!IPAddress.TryParse(host, out var address)
+                || address.AddressFamily != AddressFamily.InterNetworkV6
+                || !string.Equals(address.ToString(), host, StringComparison.Ordinal))
+            {
+                throw new JsonException(
+                    $"{field} must contain a canonical lowercase IPv6 address.");
+            }
+        }
+        else
+        {
+            RequireVpnTlsServerName(host, $"{field} host");
+        }
+
+        if (!ushort.TryParse(parts[4], out var port)
+            || port == 0
+            || !string.Equals(port.ToString(), parts[4], StringComparison.Ordinal))
+        {
+            throw new JsonException($"{field} must contain a canonical non-zero UDP port.");
+        }
+    }
+
+    private static bool IsCanonicalPrimeOrderEd25519PublicKey(ReadOnlySpan<byte> encoded)
+    {
+        if (encoded.Length != 32)
+        {
+            return false;
+        }
+
+        Span<byte> yBytes = stackalloc byte[32];
+        encoded.CopyTo(yBytes);
+        var sign = yBytes[31] >> 7;
+        yBytes[31] &= 0x7f;
+        var y = new BigInteger(yBytes, isUnsigned: true, isBigEndian: false);
+        if (y >= Ed25519FieldModulus)
+        {
+            return false;
+        }
+
+        var ySquared = ModEd25519(y * y);
+        var denominator = ModEd25519((Ed25519D * ySquared) + 1);
+        if (denominator.IsZero)
+        {
+            return false;
+        }
+
+        var xSquared = ModEd25519(
+            (ySquared - 1)
+            * BigInteger.ModPow(denominator, Ed25519FieldModulus - 2, Ed25519FieldModulus));
+        var x = BigInteger.ModPow(
+            xSquared,
+            (Ed25519FieldModulus + 3) / 8,
+            Ed25519FieldModulus);
+        if (ModEd25519(x * x) != xSquared)
+        {
+            x = ModEd25519(x * Ed25519SqrtMinusOne);
+        }
+
+        if (ModEd25519(x * x) != xSquared || (x.IsZero && sign == 1))
+        {
+            return false;
+        }
+
+        if ((x.IsEven ? 0 : 1) != sign)
+        {
+            x = Ed25519FieldModulus - x;
+        }
+
+        if (x.IsZero && y.IsOne)
+        {
+            return false;
+        }
+
+        var subgroup = MultiplyEd25519(
+            new Ed25519ExtendedPoint(x, y, BigInteger.One, ModEd25519(x * y)),
+            Ed25519SubgroupOrder);
+        return subgroup.X.IsZero && subgroup.Y == subgroup.Z;
+    }
+
+    private static Ed25519ExtendedPoint MultiplyEd25519(
+        Ed25519ExtendedPoint point,
+        BigInteger scalar)
+    {
+        var result = new Ed25519ExtendedPoint(
+            BigInteger.Zero,
+            BigInteger.One,
+            BigInteger.One,
+            BigInteger.Zero);
+        var addend = point;
+        while (scalar > 0)
+        {
+            if (!scalar.IsEven)
+            {
+                result = AddEd25519(result, addend);
+            }
+
+            addend = AddEd25519(addend, addend);
+            scalar >>= 1;
+        }
+
+        return result;
+    }
+
+    private static Ed25519ExtendedPoint AddEd25519(
+        Ed25519ExtendedPoint left,
+        Ed25519ExtendedPoint right)
+    {
+        var a = ModEd25519((left.Y - left.X) * (right.Y - right.X));
+        var b = ModEd25519((left.Y + left.X) * (right.Y + right.X));
+        var c = ModEd25519(2 * Ed25519D * left.T * right.T);
+        var d = ModEd25519(2 * left.Z * right.Z);
+        var e = ModEd25519(b - a);
+        var f = ModEd25519(d - c);
+        var g = ModEd25519(d + c);
+        var h = ModEd25519(b + a);
+        return new Ed25519ExtendedPoint(
+            ModEd25519(e * f),
+            ModEd25519(g * h),
+            ModEd25519(f * g),
+            ModEd25519(e * h));
+    }
+
+    private static BigInteger ModEd25519(BigInteger value)
+    {
+        var reduced = value % Ed25519FieldModulus;
+        return reduced.Sign < 0 ? reduced + Ed25519FieldModulus : reduced;
     }
 
     private static void RequireVpnExitClass(string value, string field)
@@ -580,33 +820,6 @@ internal static class ToriiVpnJson
         WriteVpnTxInstruction(writer, instruction, context);
     }
 
-    internal static void WriteVpnTxInstructionList(
-        Utf8JsonWriter writer,
-        string propertyName,
-        IReadOnlyList<ToriiVpnTxInstruction>? instructions,
-        string context)
-    {
-        if (instructions is null)
-        {
-            writer.WriteNull(propertyName);
-            return;
-        }
-
-        writer.WriteStartArray(propertyName);
-        for (var index = 0; index < instructions.Count; index++)
-        {
-            var instruction = instructions[index];
-            if (instruction is null)
-            {
-                throw new JsonException($"{context}[{index}] must be an object.");
-            }
-
-            WriteVpnTxInstruction(writer, instruction, $"{context}[{index}]");
-        }
-
-        writer.WriteEndArray();
-    }
-
     internal static void WriteVpnTxInstruction(Utf8JsonWriter writer, ToriiVpnTxInstruction instruction, string context)
     {
         ValidateVpnTxInstruction(instruction, context);
@@ -643,7 +856,6 @@ internal static class ToriiVpnJson
             _ when TryMapCollectionField(paramName, nameof(ToriiVpnProfile.ExcludedRoutes), "excluded_routes", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiVpnProfile.DnsServers), "dns_servers", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiVpnProfile.TunnelAddresses), "tunnel_addresses", out var mapped) => mapped,
-            _ when TryMapCollectionField(paramName, nameof(ToriiVpnQuote.TxInstructions), "tx_instructions", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiVpnReceiptListResponse.Items), "items", out var mapped) => mapped,
             _ when TryMapNestedField(paramName, nameof(ToriiVpnQuote.OpenLeaseInstruction), "open_lease_instruction", out var mapped) => mapped,
             _ when TryMapNestedField(paramName, nameof(ToriiVpnReceipt.SettleLeaseInstruction), "settle_lease_instruction", out var mapped) => mapped,
@@ -654,10 +866,13 @@ internal static class ToriiVpnJson
             nameof(ToriiVpnProfile.MeterFamily) => "meter_family",
             nameof(ToriiVpnProfile.MtuBytes) => "mtu_bytes",
             nameof(ToriiVpnProfile.DisplayBillingLabel) => "display_billing_label",
-            nameof(ToriiVpnProfile.FeeAssetId) => "fee_asset_id",
-            nameof(ToriiVpnProfile.EscrowAccountId) => "escrow_account_id",
             nameof(ToriiVpnProfile.OperatorAccountId) => "operator_account_id",
+            nameof(ToriiVpnProfile.RelayIdHex) => "relay_id_hex",
+            nameof(ToriiVpnProfile.DescriptorCommitHex) => "descriptor_commit_hex",
+            nameof(ToriiVpnProfile.TlsServerName) => "tls_server_name",
             nameof(ToriiVpnProfile.RelayTlsSpkiSha256Hex) => "relay_tls_spki_sha256_hex",
+            nameof(ToriiVpnProfile.RelayCertificateSha256Hex) => "relay_certificate_sha256_hex",
+            nameof(ToriiVpnProfile.DirectorySnapshotDigestHex) => "directory_snapshot_digest_hex",
             nameof(ToriiVpnTxInstruction.WireId) => "wire_id",
             nameof(ToriiVpnTxInstruction.PayloadHex) => "payload_hex",
             nameof(ToriiVpnQuote.QuoteId) => "quote_id",
@@ -666,6 +881,9 @@ internal static class ToriiVpnJson
             nameof(ToriiVpnQuote.PaymentReference) => "payment_reference",
             nameof(ToriiVpnQuote.AccountId) => "account_id",
             nameof(ToriiVpnQuote.ExitClass) => "exit_class",
+            nameof(ToriiVpnQuote.FeeAssetId) => "fee_asset_id",
+            nameof(ToriiVpnQuote.EscrowAccountId) => "escrow_account_id",
+            nameof(ToriiVpnQuote.LeaseFee) => "lease_fee",
             nameof(ToriiVpnQuote.QuoteExpiresAtMilliseconds) => "quote_expires_at_ms",
             nameof(ToriiVpnQuote.MeteringPublicKeyHex) => "metering_public_key_hex",
             nameof(ToriiVpnSession.SessionId) => "session_id",
@@ -856,14 +1074,17 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
         "tunnel_addresses",
         "mtu_bytes",
         "display_billing_label",
-        "fee_asset_id",
-        "escrow_account_id",
         "operator_account_id",
         "lease_fee",
         "settlement_grace_secs",
         "flow_label_bits",
         "padding_budget_ms",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
         "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
     ];
 
     public override bool HandleNull => true;
@@ -898,14 +1119,17 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
         IReadOnlyList<string>? tunnelAddresses = null;
         ulong? mtuBytes = null;
         string? displayBillingLabel = null;
-        string? feeAssetId = null;
-        string? escrowAccountId = null;
         string? operatorAccountId = null;
         string? leaseFee = null;
         ulong? settlementGraceSeconds = null;
         byte? flowLabelBits = null;
         ushort? paddingBudgetMilliseconds = null;
+        string? relayIdHex = null;
+        string? descriptorCommitHex = null;
+        string? tlsServerName = null;
         string? relayTlsSpkiSha256Hex = null;
+        string? relayCertificateSha256Hex = null;
+        string? directorySnapshotDigestHex = null;
 
         while (reader.Read())
         {
@@ -929,8 +1153,6 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
                     TunnelAddresses = tunnelAddresses!,
                     MtuBytes = ToriiVpnReceiptListResponseJsonConverter.RequireUInt64(mtuBytes, context, "mtu_bytes"),
                     DisplayBillingLabel = ToriiVpnJson.RequireString(displayBillingLabel, $"{context}.display_billing_label"),
-                    FeeAssetId = ToriiVpnJson.RequireString(feeAssetId, $"{context}.fee_asset_id"),
-                    EscrowAccountId = ToriiVpnJson.RequireString(escrowAccountId, $"{context}.escrow_account_id"),
                     OperatorAccountId = ToriiVpnJson.RequireString(operatorAccountId, $"{context}.operator_account_id"),
                     LeaseFee = ToriiQuantityJson.RequireCanonicalQuantity(
                         ToriiVpnJson.RequireString(leaseFee, $"{context}.lease_fee"),
@@ -944,7 +1166,20 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
                         paddingBudgetMilliseconds,
                         context,
                         "padding_budget_ms"),
-                    RelayTlsSpkiSha256Hex = relayTlsSpkiSha256Hex,
+                    RelayIdHex = ToriiVpnJson.RequireString(relayIdHex, $"{context}.relay_id_hex"),
+                    DescriptorCommitHex = ToriiVpnJson.RequireString(
+                        descriptorCommitHex,
+                        $"{context}.descriptor_commit_hex"),
+                    TlsServerName = ToriiVpnJson.RequireString(tlsServerName, $"{context}.tls_server_name"),
+                    RelayTlsSpkiSha256Hex = ToriiVpnJson.RequireString(
+                        relayTlsSpkiSha256Hex,
+                        $"{context}.relay_tls_spki_sha256_hex"),
+                    RelayCertificateSha256Hex = ToriiVpnJson.RequireString(
+                        relayCertificateSha256Hex,
+                        $"{context}.relay_certificate_sha256_hex"),
+                    DirectorySnapshotDigestHex = ToriiVpnJson.RequireString(
+                        directorySnapshotDigestHex,
+                        $"{context}.directory_snapshot_digest_hex"),
                 }, context);
                 ToriiVpnJson.ValidateVpnProfile(profile, context);
                 ToriiVpnJson.RequireRequiredProperties(seen, context, RequiredPropertyNames);
@@ -1004,12 +1239,6 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
                 case "display_billing_label":
                     displayBillingLabel = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.display_billing_label");
                     break;
-                case "fee_asset_id":
-                    feeAssetId = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.fee_asset_id");
-                    break;
-                case "escrow_account_id":
-                    escrowAccountId = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.escrow_account_id");
-                    break;
                 case "operator_account_id":
                     operatorAccountId = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.operator_account_id");
                     break;
@@ -1025,8 +1254,23 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
                 case "padding_budget_ms":
                     paddingBudgetMilliseconds = ToriiVpnJson.ReadUInt16(ref reader, $"{context}.padding_budget_ms");
                     break;
+                case "relay_id_hex":
+                    relayIdHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.relay_id_hex");
+                    break;
+                case "descriptor_commit_hex":
+                    descriptorCommitHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.descriptor_commit_hex");
+                    break;
+                case "tls_server_name":
+                    tlsServerName = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.tls_server_name");
+                    break;
                 case "relay_tls_spki_sha256_hex":
                     relayTlsSpkiSha256Hex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.relay_tls_spki_sha256_hex");
+                    break;
+                case "relay_certificate_sha256_hex":
+                    relayCertificateSha256Hex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.relay_certificate_sha256_hex");
+                    break;
+                case "directory_snapshot_digest_hex":
+                    directorySnapshotDigestHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.directory_snapshot_digest_hex");
                     break;
                 default:
                     throw new JsonException($"{context}.{propertyName} is not allowed.");
@@ -1057,14 +1301,17 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
         ToriiVpnJson.WriteStringList(writer, "tunnel_addresses", value.TunnelAddresses);
         writer.WriteNumber("mtu_bytes", value.MtuBytes);
         writer.WriteString("display_billing_label", value.DisplayBillingLabel);
-        writer.WriteString("fee_asset_id", value.FeeAssetId);
-        writer.WriteString("escrow_account_id", value.EscrowAccountId);
         writer.WriteString("operator_account_id", value.OperatorAccountId);
         writer.WriteString("lease_fee", value.LeaseFee);
         writer.WriteNumber("settlement_grace_secs", value.SettlementGraceSeconds);
         writer.WriteNumber("flow_label_bits", value.FlowLabelBits);
         writer.WriteNumber("padding_budget_ms", value.PaddingBudgetMilliseconds);
-        ToriiVpnJson.WriteNullableString(writer, "relay_tls_spki_sha256_hex", value.RelayTlsSpkiSha256Hex);
+        writer.WriteString("relay_id_hex", value.RelayIdHex);
+        writer.WriteString("descriptor_commit_hex", value.DescriptorCommitHex);
+        writer.WriteString("tls_server_name", value.TlsServerName);
+        writer.WriteString("relay_tls_spki_sha256_hex", value.RelayTlsSpkiSha256Hex);
+        writer.WriteString("relay_certificate_sha256_hex", value.RelayCertificateSha256Hex);
+        writer.WriteString("directory_snapshot_digest_hex", value.DirectorySnapshotDigestHex);
         writer.WriteEndObject();
     }
 }
@@ -1094,10 +1341,14 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
         "meter_family",
         "flow_label_bits",
         "padding_budget_ms",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
         "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
         "metering_public_key_hex",
         "open_lease_instruction",
-        "tx_instructions",
     ];
 
     public override bool HandleNull => true;
@@ -1140,10 +1391,14 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
         string? meterFamily = null;
         byte? flowLabelBits = null;
         ushort? paddingBudgetMilliseconds = null;
+        string? relayIdHex = null;
+        string? descriptorCommitHex = null;
+        string? tlsServerName = null;
         string? relayTlsSpkiSha256Hex = null;
+        string? relayCertificateSha256Hex = null;
+        string? directorySnapshotDigestHex = null;
         string? meteringPublicKeyHex = null;
         ToriiVpnTxInstruction? openLeaseInstruction = null;
-        IReadOnlyList<ToriiVpnTxInstruction>? txInstructions = null;
 
         while (reader.Read())
         {
@@ -1180,12 +1435,25 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
                         paddingBudgetMilliseconds,
                         context,
                         "padding_budget_ms"),
-                    RelayTlsSpkiSha256Hex = relayTlsSpkiSha256Hex,
+                    RelayIdHex = ToriiVpnJson.RequireString(relayIdHex, $"{context}.relay_id_hex"),
+                    DescriptorCommitHex = ToriiVpnJson.RequireString(
+                        descriptorCommitHex,
+                        $"{context}.descriptor_commit_hex"),
+                    TlsServerName = ToriiVpnJson.RequireString(tlsServerName, $"{context}.tls_server_name"),
+                    RelayTlsSpkiSha256Hex = ToriiVpnJson.RequireString(
+                        relayTlsSpkiSha256Hex,
+                        $"{context}.relay_tls_spki_sha256_hex"),
+                    RelayCertificateSha256Hex = ToriiVpnJson.RequireString(
+                        relayCertificateSha256Hex,
+                        $"{context}.relay_certificate_sha256_hex"),
+                    DirectorySnapshotDigestHex = ToriiVpnJson.RequireString(
+                        directorySnapshotDigestHex,
+                        $"{context}.directory_snapshot_digest_hex"),
                     MeteringPublicKeyHex = ToriiVpnJson.RequireString(
                         meteringPublicKeyHex,
                         $"{context}.metering_public_key_hex"),
-                    OpenLeaseInstruction = openLeaseInstruction,
-                    TxInstructions = ToriiVpnJson.RequireList(txInstructions, context, "tx_instructions"),
+                    OpenLeaseInstruction = openLeaseInstruction
+                        ?? throw new JsonException($"{context}.open_lease_instruction must not be null."),
                 }, context);
                 ToriiVpnJson.ValidateVpnQuote(quote, context);
                 ToriiVpnJson.RequireRequiredProperties(seen, context, RequiredPropertyNames);
@@ -1269,17 +1537,31 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
                 case "padding_budget_ms":
                     paddingBudgetMilliseconds = ToriiVpnJson.ReadUInt16(ref reader, $"{context}.padding_budget_ms");
                     break;
+                case "relay_id_hex":
+                    relayIdHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.relay_id_hex");
+                    break;
+                case "descriptor_commit_hex":
+                    descriptorCommitHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.descriptor_commit_hex");
+                    break;
+                case "tls_server_name":
+                    tlsServerName = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.tls_server_name");
+                    break;
                 case "relay_tls_spki_sha256_hex":
                     relayTlsSpkiSha256Hex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.relay_tls_spki_sha256_hex");
+                    break;
+                case "relay_certificate_sha256_hex":
+                    relayCertificateSha256Hex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.relay_certificate_sha256_hex");
+                    break;
+                case "directory_snapshot_digest_hex":
+                    directorySnapshotDigestHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.directory_snapshot_digest_hex");
                     break;
                 case "metering_public_key_hex":
                     meteringPublicKeyHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.metering_public_key_hex");
                     break;
                 case "open_lease_instruction":
-                    openLeaseInstruction = ToriiVpnJson.ReadOptionalVpnTxInstruction(ref reader, $"{context}.open_lease_instruction");
-                    break;
-                case "tx_instructions":
-                    txInstructions = ToriiVpnJson.ReadVpnTxInstructionList(ref reader, $"{context}.tx_instructions");
+                    openLeaseInstruction = ToriiVpnJson.ReadVpnTxInstruction(
+                        ref reader,
+                        $"{context}.open_lease_instruction");
                     break;
                 default:
                     throw new JsonException($"{context}.{propertyName} is not allowed.");
@@ -1319,18 +1601,18 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
         writer.WriteString("meter_family", value.MeterFamily);
         writer.WriteNumber("flow_label_bits", value.FlowLabelBits);
         writer.WriteNumber("padding_budget_ms", value.PaddingBudgetMilliseconds);
-        ToriiVpnJson.WriteNullableString(writer, "relay_tls_spki_sha256_hex", value.RelayTlsSpkiSha256Hex);
+        writer.WriteString("relay_id_hex", value.RelayIdHex);
+        writer.WriteString("descriptor_commit_hex", value.DescriptorCommitHex);
+        writer.WriteString("tls_server_name", value.TlsServerName);
+        writer.WriteString("relay_tls_spki_sha256_hex", value.RelayTlsSpkiSha256Hex);
+        writer.WriteString("relay_certificate_sha256_hex", value.RelayCertificateSha256Hex);
+        writer.WriteString("directory_snapshot_digest_hex", value.DirectorySnapshotDigestHex);
         writer.WriteString("metering_public_key_hex", value.MeteringPublicKeyHex);
-        ToriiVpnJson.WriteOptionalVpnTxInstruction(
+        writer.WritePropertyName("open_lease_instruction");
+        ToriiVpnJson.WriteVpnTxInstruction(
             writer,
-            "open_lease_instruction",
             value.OpenLeaseInstruction,
             "vpn quote.open_lease_instruction");
-        ToriiVpnJson.WriteVpnTxInstructionList(
-            writer,
-            "tx_instructions",
-            value.TxInstructions,
-            "vpn quote.tx_instructions");
         writer.WriteEndObject();
     }
 }
@@ -1356,7 +1638,12 @@ internal sealed class ToriiVpnSessionJsonConverter : JsonConverter<ToriiVpnSessi
         "lease_fee",
         "flow_label_bits",
         "padding_budget_ms",
+        "relay_id_hex",
+        "descriptor_commit_hex",
+        "tls_server_name",
         "relay_tls_spki_sha256_hex",
+        "relay_certificate_sha256_hex",
+        "directory_snapshot_digest_hex",
         "route_pushes",
         "excluded_routes",
         "dns_servers",
@@ -1404,7 +1691,12 @@ internal sealed class ToriiVpnSessionJsonConverter : JsonConverter<ToriiVpnSessi
         string? leaseFee = null;
         byte? flowLabelBits = null;
         ushort? paddingBudgetMilliseconds = null;
+        string? relayIdHex = null;
+        string? descriptorCommitHex = null;
+        string? tlsServerName = null;
         string? relayTlsSpkiSha256Hex = null;
+        string? relayCertificateSha256Hex = null;
+        string? directorySnapshotDigestHex = null;
         IReadOnlyList<string>? routePushes = null;
         IReadOnlyList<string>? excludedRoutes = null;
         IReadOnlyList<string>? dnsServers = null;
@@ -1451,7 +1743,20 @@ internal sealed class ToriiVpnSessionJsonConverter : JsonConverter<ToriiVpnSessi
                         paddingBudgetMilliseconds,
                         context,
                         "padding_budget_ms"),
-                    RelayTlsSpkiSha256Hex = relayTlsSpkiSha256Hex,
+                    RelayIdHex = ToriiVpnJson.RequireString(relayIdHex, $"{context}.relay_id_hex"),
+                    DescriptorCommitHex = ToriiVpnJson.RequireString(
+                        descriptorCommitHex,
+                        $"{context}.descriptor_commit_hex"),
+                    TlsServerName = ToriiVpnJson.RequireString(tlsServerName, $"{context}.tls_server_name"),
+                    RelayTlsSpkiSha256Hex = ToriiVpnJson.RequireString(
+                        relayTlsSpkiSha256Hex,
+                        $"{context}.relay_tls_spki_sha256_hex"),
+                    RelayCertificateSha256Hex = ToriiVpnJson.RequireString(
+                        relayCertificateSha256Hex,
+                        $"{context}.relay_certificate_sha256_hex"),
+                    DirectorySnapshotDigestHex = ToriiVpnJson.RequireString(
+                        directorySnapshotDigestHex,
+                        $"{context}.directory_snapshot_digest_hex"),
                     RoutePushes = routePushes!,
                     ExcludedRoutes = excludedRoutes!,
                     DnsServers = dnsServers!,
@@ -1532,8 +1837,23 @@ internal sealed class ToriiVpnSessionJsonConverter : JsonConverter<ToriiVpnSessi
                 case "padding_budget_ms":
                     paddingBudgetMilliseconds = ToriiVpnJson.ReadUInt16(ref reader, $"{context}.padding_budget_ms");
                     break;
+                case "relay_id_hex":
+                    relayIdHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.relay_id_hex");
+                    break;
+                case "descriptor_commit_hex":
+                    descriptorCommitHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.descriptor_commit_hex");
+                    break;
+                case "tls_server_name":
+                    tlsServerName = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.tls_server_name");
+                    break;
                 case "relay_tls_spki_sha256_hex":
                     relayTlsSpkiSha256Hex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.relay_tls_spki_sha256_hex");
+                    break;
+                case "relay_certificate_sha256_hex":
+                    relayCertificateSha256Hex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.relay_certificate_sha256_hex");
+                    break;
+                case "directory_snapshot_digest_hex":
+                    directorySnapshotDigestHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.directory_snapshot_digest_hex");
                     break;
                 case "route_pushes":
                     routePushes = ToriiVpnJson.ReadStringList(ref reader, $"{context}.route_pushes");
@@ -1595,7 +1915,12 @@ internal sealed class ToriiVpnSessionJsonConverter : JsonConverter<ToriiVpnSessi
         writer.WriteString("lease_fee", value.LeaseFee);
         writer.WriteNumber("flow_label_bits", value.FlowLabelBits);
         writer.WriteNumber("padding_budget_ms", value.PaddingBudgetMilliseconds);
-        ToriiVpnJson.WriteNullableString(writer, "relay_tls_spki_sha256_hex", value.RelayTlsSpkiSha256Hex);
+        writer.WriteString("relay_id_hex", value.RelayIdHex);
+        writer.WriteString("descriptor_commit_hex", value.DescriptorCommitHex);
+        writer.WriteString("tls_server_name", value.TlsServerName);
+        writer.WriteString("relay_tls_spki_sha256_hex", value.RelayTlsSpkiSha256Hex);
+        writer.WriteString("relay_certificate_sha256_hex", value.RelayCertificateSha256Hex);
+        writer.WriteString("directory_snapshot_digest_hex", value.DirectorySnapshotDigestHex);
         ToriiVpnJson.WriteStringList(writer, "route_pushes", value.RoutePushes);
         ToriiVpnJson.WriteStringList(writer, "excluded_routes", value.ExcludedRoutes);
         ToriiVpnJson.WriteStringList(writer, "dns_servers", value.DnsServers);
@@ -1635,7 +1960,6 @@ internal sealed class ToriiVpnReceiptJsonConverter : JsonConverter<ToriiVpnRecei
         "refunded_fee",
         "lease_id_hex",
         "settle_lease_instruction",
-        "tx_instructions",
     ];
 
     public override bool HandleNull => true;
@@ -1683,7 +2007,6 @@ internal sealed class ToriiVpnReceiptJsonConverter : JsonConverter<ToriiVpnRecei
         string? refundedFee = null;
         string? leaseIdHex = null;
         ToriiVpnTxInstruction? settleLeaseInstruction = null;
-        IReadOnlyList<ToriiVpnTxInstruction>? txInstructions = null;
 
         while (reader.Read())
         {
@@ -1730,7 +2053,6 @@ internal sealed class ToriiVpnReceiptJsonConverter : JsonConverter<ToriiVpnRecei
                         $"{context}.refunded_fee"),
                     LeaseIdHex = ToriiVpnJson.RequireString(leaseIdHex, $"{context}.lease_id_hex"),
                     SettleLeaseInstruction = settleLeaseInstruction,
-                    TxInstructions = ToriiVpnJson.RequireList(txInstructions, context, "tx_instructions"),
                 }, context);
                 ToriiVpnJson.ValidateVpnReceipt(receipt, context);
                 ToriiVpnJson.RequireRequiredProperties(seen, context, RequiredPropertyNames);
@@ -1817,9 +2139,6 @@ internal sealed class ToriiVpnReceiptJsonConverter : JsonConverter<ToriiVpnRecei
                 case "settle_lease_instruction":
                     settleLeaseInstruction = ToriiVpnJson.ReadOptionalVpnTxInstruction(ref reader, $"{context}.settle_lease_instruction");
                     break;
-                case "tx_instructions":
-                    txInstructions = ToriiVpnJson.ReadVpnTxInstructionList(ref reader, $"{context}.tx_instructions");
-                    break;
                 default:
                     throw new JsonException($"{context}.{propertyName} is not allowed.");
             }
@@ -1868,11 +2187,6 @@ internal sealed class ToriiVpnReceiptJsonConverter : JsonConverter<ToriiVpnRecei
             "settle_lease_instruction",
             value.SettleLeaseInstruction,
             $"{context}.settle_lease_instruction");
-        ToriiVpnJson.WriteVpnTxInstructionList(
-            writer,
-            "tx_instructions",
-            value.TxInstructions,
-            $"{context}.tx_instructions");
         writer.WriteEndObject();
     }
 }

@@ -383,6 +383,47 @@ final class SccpV1Tests: XCTestCase {
         )
     }
 
+    func testSubmitRequiresExactDefaultTransactionTimeToLive() throws {
+        let authority = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x56, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+
+        let defaultTimeToLive = try canonicalSccpTransactionPayload(
+            authority: authority,
+            creationTimeMs: 7
+        )
+        XCTAssertNoThrow(try SccpSubmitValidation.canonicalTransactionPayload(
+            defaultTimeToLive,
+            creationTimeMs: 7,
+            expectedAuthority: authority,
+            expectedFeePayment: nil
+        ))
+
+        let missingTimeToLive = try canonicalSccpTransactionPayload(
+            authority: authority,
+            creationTimeMs: 7,
+            timeToLiveMs: nil
+        )
+        XCTAssertThrowsError(try SccpSubmitValidation.canonicalTransactionPayload(
+            missingTimeToLive,
+            creationTimeMs: 7,
+            expectedAuthority: authority,
+            expectedFeePayment: nil
+        ))
+
+        let nonDefaultTimeToLive = try canonicalSccpTransactionPayload(
+            authority: authority,
+            creationTimeMs: 7,
+            timeToLiveMs: 99_999
+        )
+        XCTAssertThrowsError(try SccpSubmitValidation.canonicalTransactionPayload(
+            nonDefaultTimeToLive,
+            creationTimeMs: 7,
+            expectedAuthority: authority,
+            expectedFeePayment: nil
+        ))
+    }
+
     func testSubmitRejectsNonNfcSponsorProgramNameInRawCompactTransaction() throws {
         let authority = try AccountAddress
             .fromAccount(publicKey: Data(repeating: 0x55, count: 32))
@@ -698,16 +739,35 @@ final class SccpV1Tests: XCTestCase {
             publicSignalSchemaHash()
         )
         let finalityAnchor = outboundProofPolicy.soraFinalityAnchor
-        XCTAssertEqual(finalityAnchor.protocolVersion, 3)
+        XCTAssertEqual(finalityAnchor.protocolVersion, 4)
         XCTAssertEqual(finalityAnchor.checkpointContextId, Data(repeating: 0xa2, count: 32))
         XCTAssertEqual(finalityAnchor.checkpointFinalityArtifactHash, Data(repeating: 0xa3, count: 32))
         XCTAssertEqual(
             finalityAnchor.anchorHash,
+            Data(hexString: "4410EE4CCFD06F2D0E3A658615D516AC8CF65255D8A8716CE511EA95E135C8C3")
+        )
+        let currentRequest = try SccpGroth16ProofRequestV1.parse(
+            try proofRequestJSON(protocolVersion: 4)
+        )
+        XCTAssertEqual(currentRequest.soraFinalityAnchor.protocolVersion, 4)
+        XCTAssertEqual(currentRequest.soraFinalityAnchor.anchorHash, finalityAnchor.anchorHash)
+        let historicalRequest = try SccpGroth16ProofRequestV1.parse(
+            try proofRequestJSON(protocolVersion: 3)
+        )
+        XCTAssertEqual(historicalRequest.soraFinalityAnchor.protocolVersion, 3)
+        XCTAssertEqual(
+            historicalRequest.soraFinalityAnchor.anchorHash,
             Data(hexString: "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA")
+        )
+        XCTAssertNotEqual(
+            historicalRequest.soraFinalityAnchor.anchorHash,
+            currentRequest.soraFinalityAnchor.anchorHash
         )
 
         let invalidFinalityAnchors: [(inout [String: Any]) -> Void] = [
             { $0["protocol_version"] = 1 },
+            { $0["protocol_version"] = "4" },
+            { $0["protocol_version"] = 5 },
             { $0["protocol_version"] = "3" },
             { $0["protocol_version"] = true },
             { $0["validator_set_epoch"] = 2 },
@@ -726,8 +786,8 @@ final class SccpV1Tests: XCTestCase {
         let canonicalJSON = String(data: valid, encoding: .utf8)!
         XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
             canonicalJSON.replacingOccurrences(
-                of: "\"protocol_version\":3",
-                with: "\"protocol_version\":3.0"
+                of: "\"protocol_version\":4",
+                with: "\"protocol_version\":4.0"
             ).utf8
         )))
         XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
@@ -1520,10 +1580,10 @@ final class SccpV1Tests: XCTestCase {
         ])
     }
 
-    private func proofRequestJSON() throws -> Data {
+    private func proofRequestJSON(protocolVersion: Int = 4) throws -> Data {
         let key = verifyingKey()
         let hashes = policyHashes()
-        let anchor = finalityAnchor()
+        let anchor = finalityAnchor(protocolVersion: protocolVersion)
         return jsonData([
             "version": 1,
             "backend": ["backend": "evm_groth16_bn254_v1", "family": NSNull()],
@@ -1700,14 +1760,14 @@ final class SccpV1Tests: XCTestCase {
         return (semantic, finalityAnchor().hash)
     }
 
-    private func finalityAnchor() -> (object: [String: Any], hash: Data) {
+    private func finalityAnchor(protocolVersion: Int = 4) -> (object: [String: Any], hash: Data) {
         let chainId = Data(hexString: "fc56984b2be7431d840e21514d1883f0")!
         let chainHash = irohaKeccak256(chainId)
         let checkpoint = Data(repeating: 0xa1, count: 32)
         let contextId = Data(repeating: 0xa2, count: 32)
         let artifactHash = Data(repeating: 0xa3, count: 32)
         var canonical = Data([1, SccpNetworkV1.soraTaira.tag])
-        appendUInt16LE(3, to: &canonical)
+        appendUInt16LE(UInt16(protocolVersion), to: &canonical)
         canonical.append(chainHash)
         appendUInt64LE(7, to: &canonical)
         canonical.append(checkpoint)
@@ -1718,7 +1778,7 @@ final class SccpV1Tests: XCTestCase {
         return ([
             "version": 1,
             "source_network": network("sora-taira"),
-            "protocol_version": 3,
+            "protocol_version": protocolVersion,
             "chain_id_hash": chainHash.hexEncodedString().uppercased(),
             "checkpoint_height": 7,
             "checkpoint_block_hash": checkpoint.hexEncodedString().uppercased(),
@@ -1919,19 +1979,22 @@ final class SccpV1Tests: XCTestCase {
     private func canonicalSccpTransactionPayload(
         authority: String,
         creationTimeMs: UInt64,
-        feePayment: FeePaymentIntent = .authority(chargeLimits: [], gasLimit: nil)
+        feePayment: FeePaymentIntent = .authority(chargeLimits: [], gasLimit: nil),
+        timeToLiveMs: UInt64? = 100_000
     ) throws -> Data {
         try canonicalSccpTransactionPayload(
             authority: authority,
             creationTimeMs: creationTimeMs,
-            rawFeePayment: feePayment.compactNorito()
+            rawFeePayment: feePayment.compactNorito(),
+            timeToLiveMs: timeToLiveMs
         )
     }
 
     private func canonicalSccpTransactionPayload(
         authority: String,
         creationTimeMs: UInt64,
-        rawFeePayment: Data
+        rawFeePayment: Data,
+        timeToLiveMs: UInt64? = 100_000
     ) throws -> Data {
         var chain = CompactNoritoWriter()
         chain.writeField(CompactNorito.encodeString("sccp-test"))
@@ -1942,17 +2005,21 @@ final class SccpV1Tests: XCTestCase {
         var creation = CompactNoritoWriter()
         creation.writeUInt64LE(creationTimeMs)
         var emptyMetadata = CompactNoritoWriter()
-        emptyMetadata.writeLength(0)
+        emptyMetadata.writeUInt64LE(0)
 
         var payload = CompactNoritoWriter()
         payload.writeField(chain.data)
         payload.writeField(try address.compactNoritoAccountControllerPayload())
         payload.writeField(creation.data)
         payload.writeField(Data([1]))
-        payload.writeField(Data([0]))
+        payload.writeField(try CompactNorito.encodeOption(
+            timeToLiveMs,
+            encode: CompactNorito.encodeUInt64
+        ))
         payload.writeField(Data([0]))
         payload.writeField(rawFeePayment)
         payload.writeField(emptyMetadata.data)
+        payload.writeField(Data([0]))
         return payload.data
     }
 }

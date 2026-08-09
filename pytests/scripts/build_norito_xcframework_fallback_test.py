@@ -1,41 +1,32 @@
-"""Regression tests for the NoritoBridge XCFramework build fallback."""
+"""Regression tests for the fail-closed NoritoBridge XCFramework builder."""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-import plistlib
-import shutil
-import signal
-import stat
-import subprocess
-import time
 from pathlib import Path
+import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "build_norito_xcframework.sh"
-STATIC_LIB_NAME = "libconnect_norito_bridge.a"
-PUBLIC_STATIC_LIB_NAME = "libNoritoBridge.a"
-SLICE_IDS = (
-    "ios-arm64",
-    "ios-arm64_x86_64-simulator",
-    "macos-arm64",
-)
-BUILD_LOCK_NAME = ".NoritoBridge.build-publish.lockfile"
 
 
-def test_cargo_slice_builds_are_locked_offline_and_single_job() -> None:
-    lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+def _source() -> str:
+    return SCRIPT.read_text(encoding="utf-8")
+
+
+def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
+    source = _source()
+    lines = source.splitlines()
     call_starts = [
         index
         for index, line in enumerate(lines)
-        if line == "  run_hermetic_apple_cargo \\"
+        if line == "run_hermetic_apple_cargo \\"
     ]
-    assert len(call_starts) == 4
+    assert len(call_starts) == 5
 
-    calls = []
+    calls: list[list[str]] = []
     for start in call_starts:
         end = start
         while lines[end].endswith("\\"):
@@ -43,34 +34,22 @@ def test_cargo_slice_builds_are_locked_offline_and_single_job() -> None:
         calls.append(lines[start : end + 1])
 
     expected_slices = (
-        (
-            "apple-ios-device",
-            "$CARGO_BUILD_DIR_DEVICE",
-            "$IPHONEOS_SDKROOT",
-            "$DEVICE_TRIPLE",
-        ),
+        ("apple-ios-device", "$IPHONEOS_SDKROOT", "$DEVICE_TRIPLE"),
         (
             "apple-ios-simulator",
-            "$CARGO_BUILD_DIR_SIM_ARM",
             "$IPHONESIMULATOR_SDKROOT",
             "$SIM_ARM_TRIPLE",
         ),
         (
             "apple-ios-simulator",
-            "$CARGO_BUILD_DIR_SIM_X64",
             "$IPHONESIMULATOR_SDKROOT",
             "$SIM_X64_TRIPLE",
         ),
-        (
-            "apple-macos",
-            "$CARGO_BUILD_DIR_MACOS",
-            "$MACOSX_SDKROOT",
-            "$MACOS_TRIPLE",
-        ),
+        ("apple-macos", "$MACOSX_SDKROOT", "$MACOS_TRIPLE"),
     )
-    for call, (profile, target_dir, sdkroot, triple) in zip(calls, expected_slices):
+    for call, (profile, sdkroot, triple) in zip(calls, expected_slices, strict=True):
         assert len(call) == 5
-        assert call[1].strip() == f'{profile} "{target_dir}" "{sdkroot}" \\'
+        assert call[1].strip() == f'{profile} "{sdkroot}" \\'
         assert (
             call[2].strip()
             == 'build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \\'
@@ -78,371 +57,84 @@ def test_cargo_slice_builds_are_locked_offline_and_single_job() -> None:
         assert call[3].strip() == f'--target "{triple}" \\'
         assert call[4].strip().startswith('"${CARGO_FEATURE_ARGS[@]+')
 
-
-def _write_executable(path: Path, contents: str) -> None:
-    path.write_text(contents, encoding="utf-8")
-    path.chmod(path.stat().st_mode | stat.S_IXUSR)
-
-
-def _write_static_library(build_dir: Path, triple: str, contents: str) -> None:
-    library = (
-        build_dir
-        / "cargo-ios15_0-sim15_0-privacy-production-disabled"
-        / triple
-        / triple
-        / "release"
-        / STATIC_LIB_NAME
-    )
-    library.parent.mkdir(parents=True, exist_ok=True)
-    library.write_text(contents, encoding="utf-8")
-
-
-def _write_live_artifact(out_dir: Path) -> tuple[Path, bytes]:
-    framework = out_dir / "NoritoBridge.xcframework"
-    framework.mkdir(parents=True)
-    (framework / "live-sentinel").write_text(
-        "complete-old-artifact\n",
-        encoding="utf-8",
-    )
-    hashes = {}
-    for identifier in SLICE_IDS:
-        binary = framework / identifier / PUBLIC_STATIC_LIB_NAME
-        binary.parent.mkdir(parents=True)
-        contents = f"old-{identifier}\n".encode()
-        binary.write_bytes(contents)
-        hashes[identifier] = hashlib.sha256(contents).hexdigest()
-    manifest_bytes = (
-        json.dumps(
-            {
-                "native_bridge_abi_version": 19,
-                "hashes": hashes,
-            },
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode()
-    (out_dir / "NoritoBridge.artifacts.json").write_bytes(manifest_bytes)
-    return framework, manifest_bytes
-
-
-def _write_fake_tools(tools_dir: Path) -> None:
-    _write_executable(
-        tools_dir / "lipo",
-        """#!/usr/bin/env bash
-set -euo pipefail
-output=""
-inputs=()
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -create)
-      ;;
-    -output)
-      shift
-      output="$1"
-      ;;
-    *)
-      inputs+=("$1")
-      ;;
-  esac
-  shift
-done
-mkdir -p "$(dirname "$output")"
-: >"$output"
-for input in "${inputs[@]}"; do
-  cat "$input" >>"$output"
-done
-""",
-    )
-    _write_executable(
-        tools_dir / "xcodebuild",
-        """#!/usr/bin/env bash
-set -euo pipefail
-candidate=""
-while [[ $# -gt 0 ]]; do
-  if [[ "$1" == "-output" ]]; then
-    shift
-    candidate="$1"
-  fi
-  shift
-done
-test -n "$candidate"
-test -f "${NORITO_BRIDGE_OUT_DIR:?}/NoritoBridge.xcframework/live-sentinel"
-if [[ -n "${NORITO_BRIDGE_XCODE_WAIT_MARKER:-}" ]]; then
-  : > "$NORITO_BRIDGE_XCODE_WAIT_MARKER"
-  while true; do
-    sleep 1
-  done
-fi
-mkdir -p "$candidate/unexpected-partial"
-printf 'must-not-publish\\n' > "$candidate/unexpected-partial/junk"
-exit 65
-""",
-    )
-    _write_executable(
-        tools_dir / "python3",
-        """#!/usr/bin/env bash
-set -euo pipefail
-if [[ "${1:-}" == "-" ]]; then
-  exec "${REAL_PYTHON3:?}" "$@"
-fi
-if [[ "${1:-}" == */exec_with_file_lock.py ]]; then
-  exec "${REAL_PYTHON3:?}" "$@"
-fi
-case "${2:-}" in
-  fingerprint)
-    printf 'fallback-test-source-fingerprint\\n'
-    ;;
-  status)
-    printf 'fallback-test-dirty-source\\n'
-    ;;
-  *)
-    exit 97
-    ;;
-esac
-""",
-    )
-    _write_executable(
-        tools_dir / "bash",
-        """#!/bin/bash
-set -euo pipefail
-if [[ "${1:-}" == */check_mobile_sdk_artifacts.sh ]]; then
-  candidate="${MOBILE_SDK_APPLE_ARTIFACT_DIR:?}"
-  test "$candidate" != "${NORITO_BRIDGE_OUT_DIR:?}"
-  test -d "$candidate/NoritoBridge.xcframework"
-  test -L "$candidate/NoritoBridge.artifacts.json"
-  test "$(readlink "$candidate/NoritoBridge.artifacts.json")" = \
-    "NoritoBridge.xcframework/NoritoBridge.artifacts.json"
-  test -f "$candidate/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
-  printf '%s\\n' "$candidate" > "${NORITO_BRIDGE_CHECKER_MARKER:?}"
-  exit "${NORITO_BRIDGE_CHECKER_EXIT:-0}"
-fi
-exec "${REAL_BASH:?}" "$@"
-""",
-    )
-
-
-def _build_environment(
-    tmp_path: Path,
-    *,
-    checker_exit: int = 0,
-) -> tuple[Path, Path, dict[str, str], Path]:
-    build_dir = tmp_path / "build"
-    out_dir = tmp_path / "dist"
-    tools_dir = tmp_path / "tools"
-    checker_marker = tmp_path / "checker-candidate"
-    tools_dir.mkdir()
-    _write_live_artifact(out_dir)
-
-    _write_static_library(build_dir, "aarch64-apple-ios", "device")
-    _write_static_library(build_dir, "aarch64-apple-ios-sim", "sim-arm")
-    _write_static_library(build_dir, "x86_64-apple-ios", "sim-x64")
-    _write_static_library(build_dir, "aarch64-apple-darwin", "macos")
-    _write_fake_tools(tools_dir)
-
-    env = os.environ.copy()
-    real_bash = shutil.which("bash", path=env.get("PATH"))
-    assert real_bash is not None
-    real_python3 = shutil.which("python3", path=env.get("PATH"))
-    assert real_python3 is not None
-    env.update(
-        {
-            "NORITO_BRIDGE_BUILD_DIR": str(build_dir),
-            "NORITO_BRIDGE_OUT_DIR": str(out_dir),
-            "NORITO_BRIDGE_SKIP_CARGO_BUILDS": "1",
-            "NORITO_BRIDGE_CHECKER_EXIT": str(checker_exit),
-            "NORITO_BRIDGE_CHECKER_MARKER": str(checker_marker),
-            "PATH": f"{tools_dir}{os.pathsep}{env['PATH']}",
-            "REAL_BASH": real_bash,
-            "REAL_PYTHON3": real_python3,
-        }
-    )
-    return build_dir, out_dir, env, checker_marker
-
-
-def _run_builder(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            "bash",
-            str(SCRIPT),
-            "--bridge-version",
-            "1.0.0",
-            "--allow-dirty-source",
-        ],
-        cwd=ROOT,
-        env=env,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-
-def test_manual_xcframework_fallback_writes_required_info_plist(
-    tmp_path: Path,
-) -> None:
-    build_dir, out_dir, env, checker_marker = _build_environment(tmp_path)
-    result = _run_builder(env)
-
-    assert result.returncode == 0, result.stderr
-
-    xcframework = out_dir / "NoritoBridge.xcframework"
-    assert not (xcframework / "live-sentinel").exists()
-    assert not (xcframework / "unexpected-partial").exists()
-    info = plistlib.loads((xcframework / "Info.plist").read_bytes())
-    assert info["XCFrameworkFormatVersion"] == "1.0"
-    assert info["CFBundlePackageType"] == "XFWK"
-
-    libraries = {
-        entry["LibraryIdentifier"]: entry for entry in info["AvailableLibraries"]
-    }
-    assert set(libraries) == {
-        "ios-arm64",
-        "ios-arm64_x86_64-simulator",
-        "macos-arm64",
-    }
-
-    for identifier, library in libraries.items():
-        assert library["LibraryPath"] == "libNoritoBridge.a"
-        assert library["HeadersPath"] == "Headers"
-        assert (xcframework / identifier / "libNoritoBridge.a").is_file()
-        assert (xcframework / identifier / "Headers" / "NoritoBridge.h").is_file()
-        assert (
-            xcframework / identifier / "Headers" / "connect_norito_bridge.h"
-        ).is_file()
-
-    assert libraries["ios-arm64"]["SupportedPlatform"] == "ios"
-    assert libraries["ios-arm64"]["SupportedArchitectures"] == ["arm64"]
-    assert libraries["ios-arm64_x86_64-simulator"]["SupportedPlatform"] == "ios"
-    assert libraries["ios-arm64_x86_64-simulator"][
-        "SupportedPlatformVariant"
-    ] == "simulator"
-    assert libraries["ios-arm64_x86_64-simulator"]["SupportedArchitectures"] == [
-        "arm64",
-        "x86_64",
-    ]
-    assert libraries["macos-arm64"]["SupportedPlatform"] == "macos"
-    assert libraries["macos-arm64"]["SupportedArchitectures"] == ["arm64"]
-
-    public_manifest = out_dir / "NoritoBridge.artifacts.json"
-    embedded_manifest = xcframework / "NoritoBridge.artifacts.json"
-    assert public_manifest.is_symlink()
+    assert "CARGO_BUILD_DIR_" not in source
+    assert "local cargo_target_dir" not in source
+    assert source.count('--set "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"') == 1
     assert (
-        os.readlink(public_manifest)
-        == "NoritoBridge.xcframework/NoritoBridge.artifacts.json"
-    )
-    assert public_manifest.resolve() == embedded_manifest.resolve()
-    manifest = json.loads(public_manifest.read_text(encoding="utf-8"))
-    assert manifest["native_bridge_abi_version"] == 21
-    assert set(manifest["hashes"]) == set(SLICE_IDS)
-    for identifier in SLICE_IDS:
-        binary = xcframework / identifier / PUBLIC_STATIC_LIB_NAME
-        assert manifest["hashes"][identifier] == hashlib.sha256(
-            binary.read_bytes()
-        ).hexdigest()
-
-    checked_candidate = Path(checker_marker.read_text(encoding="utf-8").strip())
-    assert checked_candidate.parent == out_dir
-    assert checked_candidate.name.startswith(".NoritoBridge.publish.")
-    assert not checked_candidate.exists()
-    assert not list(out_dir.glob(".NoritoBridge.publish.*"))
-    assert (build_dir / BUILD_LOCK_NAME).is_file()
-
-
-def test_prepublication_checker_failure_preserves_live_pair(
-    tmp_path: Path,
-) -> None:
-    build_dir, out_dir, env, checker_marker = _build_environment(
-        tmp_path,
-        checker_exit=73,
-    )
-    live_framework = out_dir / "NoritoBridge.xcframework"
-    live_manifest = out_dir / "NoritoBridge.artifacts.json"
-    original_manifest = live_manifest.read_bytes()
-    original_hashes = {
-        identifier: hashlib.sha256(
-            (live_framework / identifier / PUBLIC_STATIC_LIB_NAME).read_bytes()
-        ).hexdigest()
-        for identifier in SLICE_IDS
-    }
-
-    result = _run_builder(env)
-
-    assert result.returncode == 73, result.stderr
-    assert (live_framework / "live-sentinel").is_file()
-    assert live_manifest.is_file()
-    assert not live_manifest.is_symlink()
-    assert live_manifest.read_bytes() == original_manifest
-    assert not (live_framework / "NoritoBridge.artifacts.json").exists()
-    for identifier, expected_hash in original_hashes.items():
-        binary = live_framework / identifier / PUBLIC_STATIC_LIB_NAME
-        assert hashlib.sha256(binary.read_bytes()).hexdigest() == expected_hash
-
-    checked_candidate = Path(checker_marker.read_text(encoding="utf-8").strip())
-    assert checked_candidate.parent == out_dir
-    assert not checked_candidate.exists()
-    assert not list(out_dir.glob(".NoritoBridge.publish.*"))
-    assert (build_dir / BUILD_LOCK_NAME).is_file()
-
-
-def test_termination_cleans_lock_and_candidate_without_touching_live_pair(
-    tmp_path: Path,
-) -> None:
-    build_dir, out_dir, env, _ = _build_environment(tmp_path)
-    wait_marker = tmp_path / "xcodebuild-waiting"
-    env["NORITO_BRIDGE_XCODE_WAIT_MARKER"] = str(wait_marker)
-    live_framework = out_dir / "NoritoBridge.xcframework"
-    live_manifest = out_dir / "NoritoBridge.artifacts.json"
-    original_manifest = live_manifest.read_bytes()
-
-    process = subprocess.Popen(
-        [
-            "bash",
-            str(SCRIPT),
-            "--bridge-version",
-            "1.0.0",
-            "--allow-dirty-source",
-        ],
-        cwd=ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
-    deadline = time.monotonic() + 10
-    while not wait_marker.exists() and process.poll() is None:
-        if time.monotonic() >= deadline:
-            process.kill()
-            raise AssertionError("builder did not reach the xcodebuild wait point")
-        time.sleep(0.05)
-    if not wait_marker.exists():
-        _, stderr = process.communicate(timeout=5)
-        raise AssertionError(f"builder exited before the wait point: {stderr}")
-
-    os.killpg(process.pid, signal.SIGTERM)
-    _, stderr = process.communicate(timeout=10)
-
-    assert process.returncode == 143, stderr
-    assert (live_framework / "live-sentinel").is_file()
-    assert live_manifest.is_file()
-    assert not live_manifest.is_symlink()
-    assert live_manifest.read_bytes() == original_manifest
-    assert not list(out_dir.glob(".NoritoBridge.publish.*"))
-    assert (build_dir / BUILD_LOCK_NAME).is_file()
-
-
-def test_builder_does_not_require_process_table_access(tmp_path: Path) -> None:
-    build_dir, out_dir, env, _ = _build_environment(tmp_path)
-    tools_dir = Path(env["PATH"].split(os.pathsep, 1)[0])
-    _write_executable(
-        tools_dir / "ps",
-        """#!/usr/bin/env bash
-echo "process table access denied" >&2
-exit 99
-""",
+        'source_library="$CARGO_TARGET_DIR/$target_triple/release/'
+        'lib${LIB_CRATE_NAME}.a"'
+    ) in source
+    assert not any(
+        "rm -rf" in line and "CARGO_TARGET_DIR" in line
+        for line in lines
     )
 
-    result = _run_builder(env)
-    assert result.returncode == 0, result.stderr
-    assert (out_dir / "NoritoBridge.artifacts.json").is_symlink()
-    assert (build_dir / BUILD_LOCK_NAME).is_file()
+
+def test_retired_build_modes_are_rejected_before_cargo(tmp_path: Path) -> None:
+    assert sys.version_info[:2] == (3, 12)
+    python = Path(sys.executable).resolve(strict=True)
+    assert not python.is_symlink()
+    for retired in (
+        "NORITO_BRIDGE_SKIP_CARGO_BUILDS",
+        "NORITO_BRIDGE_PRESERVE_CARGO_TARGETS",
+    ):
+        environment = os.environ.copy()
+        environment["MOBILE_SDK_PYTHON_BINARY"] = str(python)
+        environment["NORITO_BRIDGE_BUILD_DIR"] = str(tmp_path / f"{retired}-build")
+        environment["NORITO_BRIDGE_OUT_DIR"] = str(tmp_path / f"{retired}-out")
+        environment[retired] = ""
+        completed = subprocess.run(
+            ["bash", str(SCRIPT)],
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert completed.returncode == 1
+        assert (
+            f"{retired} is not part of the first-release build contract"
+            in completed.stderr
+        )
+        assert "Building Rust static libraries" not in completed.stderr
+
+
+def test_xcodebuild_failure_has_no_manual_packaging_fallback() -> None:
+    source = _source()
+    packaging_start = source.index('echo "[+] Creating XCFramework"')
+    packaging_end = source.index(
+        'assert_bridge_source_seal "XCFramework packaging"', packaging_start
+    )
+    packaging = source[packaging_start:packaging_end]
+
+    assert "write_static_xcframework_info_plist" not in source
+    assert "copy_static_xcframework_slice" not in source
+    assert "rebuilding the fallback" not in source
+    assert "after xcodebuild failure" not in source
+    assert "xcodebuild_status=$?" in packaging
+    assert 'exit "$xcodebuild_status"' in packaging
+    assert 'rm -rf -- "$PUBLISH_XCFRAMEWORK"' not in packaging
+    assert "$FINAL_XCFRAMEWORK" not in packaging
+    assert "$FINAL_MANIFEST" not in packaging
+
+    cleanup = source.index("cleanup_build_state()")
+    candidate = source.index(
+        'PUBLISH_ROOT="$(mktemp -d "$OUT_DIR/.NoritoBridge.publish.XXXXXX")"'
+    )
+    publication = source.index(
+        'assert_bridge_source_seal "pre-publication artifact verification"'
+    )
+    assert cleanup < candidate < packaging_start < publication
+
+
+def test_build_and_output_roots_are_canonical_disjoint_directories() -> None:
+    source = _source()
+    assert "canonical_writable_directory()" in source
+    assert 'OUT_DIR="$(canonical_writable_directory' in source
+    assert 'BUILD_DIR="$(canonical_writable_directory' in source
+    assert (
+        "Cargo target, build, and output directories must be pairwise disjoint"
+        in source
+    )
+    assert " ps " not in source

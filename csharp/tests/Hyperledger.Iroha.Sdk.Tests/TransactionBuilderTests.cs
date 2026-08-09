@@ -63,7 +63,7 @@ public sealed class TransactionBuilderTests
             FixtureAccountId);
         var hash = Enumerable.Repeat((byte)0xA5, 32).ToArray();
         var invocation = new TransactionContractInvocation(
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             hash,
             "run",
             [1, 2, 3]);
@@ -92,7 +92,7 @@ public sealed class TransactionBuilderTests
         Assert.Equal(0xA5, invocation.ExpectedCodeHash[0]);
 
         var emptyArguments = new TransactionContractInvocation(
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             Enumerable.Repeat((byte)0xA5, 32).ToArray(),
             "run",
             Array.Empty<byte>());
@@ -104,7 +104,7 @@ public sealed class TransactionBuilderTests
     public void ExecutableBatchBuilderRequiresGasAndEmitsCanonicalJsonShape()
     {
         var invocation = new TransactionContractInvocation(
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             Enumerable.Repeat((byte)0x11, 32).ToArray(),
             "run");
         var missingGas = new TransactionBuilder(
@@ -149,8 +149,8 @@ public sealed class TransactionBuilderTests
         var hash = Enumerable.Repeat((byte)0x11, 32).ToArray();
         var validAddresses = new[]
         {
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
-            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtydf6x",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
+            "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qhfvtnk",
         };
         foreach (var address in validAddresses)
         {
@@ -160,13 +160,14 @@ public sealed class TransactionBuilderTests
         var invalidAddresses = new[]
         {
             "abc",
-            " tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            " irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
             "TAIRAC1QYQQQQQQQQQQQQPUTUV64ZHF0A0A4HHLQDJ2LHNWUZQ4XJQDDCYQ8",
-            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyqp",
-            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
-            "tairac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtm5n60",
-            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpkqaty5s",
-            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8pkjeu85",
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyqp",
+            "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
+            "irohac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qhk43nl",
+            "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpkk75nd5",
+            "irohac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8p2lc7wy",
         };
         foreach (var address in invalidAddresses)
         {
@@ -177,9 +178,9 @@ public sealed class TransactionBuilderTests
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
     [Theory]
-    [InlineData("swift_transfer_asset_basic", 805, 1423, "aaf57e9f247a5d92ba3c4c7d5076bd4aacf9b24b7de3b11e511b026784dec38b")]
-    [InlineData("swift_mint_asset_basic", 695, 1313, "e38b26f35c901bf2099facd691511ea1ad1d1ebc7c43d98a9f473731fdeecd09")]
-    [InlineData("swift_burn_asset_basic", 695, 1313, "8e2d28a9da78b1db4800d1e2e86be623a7d566235616c08daf813d9dcdd9a907")]
+    [InlineData("swift_transfer_asset_basic", 814, 1423, "db2a35382e8bd77c90f227c6e79c2781ab6b811d38aecbcae6338b937db51d49")]
+    [InlineData("swift_mint_asset_basic", 704, 1313, "a0968b1d31d415c8a0e76e8ce6827d4511b60473ba48e8fa01f23aa9e0c1c261")]
+    [InlineData("swift_burn_asset_basic", 704, 1313, "5f8f7fc2db4693e0f914b725ea20febc8ce9ab8ecacdb7a3c0e39ff1e7125b29")]
     public void BuildSignedProducesDeterministicGoldenOutputs(
         string fixtureName,
         int expectedPayloadLength,

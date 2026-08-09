@@ -2,7 +2,7 @@
 
 use std::{format, string::String, vec, vec::Vec};
 
-pub use events::{DataEvent, confidential};
+pub use events::DataEvent;
 pub use filters::{DataEventFilter, EscrowEventFilter};
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
@@ -18,6 +18,7 @@ mod events;
 mod filters;
 #[cfg(feature = "governance")]
 pub mod governance;
+pub mod musubi;
 pub mod oracle;
 pub mod proof;
 pub mod runtime_upgrade;
@@ -31,10 +32,10 @@ pub mod verifying_keys;
 /// Exports common structs and enums from this module.
 pub mod prelude {
     pub use super::{
-        confidential::prelude::*,
         escrow::prelude::*,
         events::prelude::*,
         filters::prelude::*,
+        musubi::prelude::*,
         oracle::prelude::*,
         social::prelude::*,
         soradns::{SoradnsDirectoryEvent, SoradnsDirectoryEventSet},

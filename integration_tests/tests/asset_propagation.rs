@@ -22,12 +22,18 @@ fn client_mint_asset_should_increase_amount_on_another_peer() -> Result<()> {
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let (account_id, _account_keypair) = gen_account_in("domain");
     let create_account = Register::account(Account::new(account_id.clone()));
-    let asset_definition_id =
-        AssetDefinitionId::new(DomainId::try_new("domain", "universal")?, "xor".parse()?);
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("domain", "universal")?,
+        "xor".parse()?,
+    );
     let create_asset = Register::asset_definition({
         let __asset_definition_id = asset_definition_id.clone();
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
+        AssetDefinition::numeric(
+            __asset_definition_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     });
 
     let quantity = Quantity::from(200_u32);

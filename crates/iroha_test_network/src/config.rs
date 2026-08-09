@@ -582,12 +582,20 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .parse()
         .expect("garden_of_live_flowers domain");
     let cabbage_name: Name = "cabbage".parse().expect("cabbage asset name");
+    let test_domain_name: Name = "domain".parse().expect("test domain");
+    let and_domain_name: Name = "and".parse().expect("and domain");
+    let xor_name: Name = "xor".parse().expect("xor asset name");
+    let may_name: Name = "MAY".parse().expect("MAY asset name");
     let alice_metadata = Metadata::default();
     let universal_dataspace: Name = "universal".parse().expect("universal dataspace");
     let wonderland_domain =
         DomainId::try_new(&wonderland_name, &universal_dataspace).expect("wonderland domain id");
     let garden_domain =
         DomainId::try_new(&garden_name, &universal_dataspace).expect("garden domain id");
+    let test_domain_id =
+        DomainId::try_new(&test_domain_name, &universal_dataspace).expect("test domain id");
+    let and_domain_id =
+        DomainId::try_new(&and_domain_name, &universal_dataspace).expect("and domain id");
 
     builder = builder
         .domain(wonderland_domain.clone())
@@ -599,22 +607,32 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .domain(garden_domain.clone())
         .account(CARPENTER_KEYPAIR.public_key().clone())
         .asset(cabbage_name, NumericSpec::default())
+        .finish_domain()
+        .domain(test_domain_id.clone())
+        .asset(xor_name, NumericSpec::default())
+        .finish_domain()
+        .domain(and_domain_id.clone())
+        .asset(may_name, NumericSpec::default())
         .finish_domain();
 
     let wonderland_domain =
         DomainId::parse_fully_qualified("wonderland.universal").expect("wonderland domain id");
     let garden_domain = DomainId::parse_fully_qualified("garden_of_live_flowers.universal")
         .expect("garden_of_live_flowers domain id");
-    let rose_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        wonderland_domain.clone(),
-        "rose".parse().unwrap(),
+    let rose_definition_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            wonderland_domain.clone(),
+            "rose".parse().unwrap(),
+        );
+    let camomile_definition_id: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            wonderland_domain.clone(),
+            "camomile".parse().unwrap(),
+        );
+    let cabbage_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+        garden_domain.clone(),
+        "cabbage".parse().unwrap(),
     );
-    let camomile_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        wonderland_domain.clone(),
-        "camomile".parse().unwrap(),
-    );
-    let cabbage_definition_id: AssetDefinitionId =
-        AssetDefinitionId::new(garden_domain.clone(), "cabbage".parse().unwrap());
     let rose_asset_id = AssetId::new(rose_definition_id.clone(), alice_id.clone());
     let cabbage_asset_id = AssetId::new(cabbage_definition_id.clone(), alice_id.clone());
 
@@ -628,16 +646,16 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
 
     builder = builder.next_transaction();
 
-    let test_domain_id = DomainId::parse_fully_qualified("domain.universal").expect("domain id");
-    let and_domain_id = DomainId::parse_fully_qualified("and.universal").expect("and domain id");
-    let xor_asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        test_domain_id.clone(),
-        "xor".parse().unwrap(),
-    );
-    let may_and_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        and_domain_id.clone(),
-        "MAY".parse().unwrap(),
-    );
+    let xor_asset_def: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            test_domain_id.clone(),
+            "xor".parse().unwrap(),
+        );
+    let may_and_def: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            and_domain_id.clone(),
+            "MAY".parse().unwrap(),
+        );
 
     let grant_instructions = [
         InstructionBox::from(Grant::account_permission(
@@ -752,14 +770,18 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         BTreeSet::from([alice_id.clone(), bob_id.clone(), carpenter_id.clone()]);
 
     builder = builder.next_transaction();
-    builder = builder.append_instruction(Register::asset_definition(
-        AssetDefinition::numeric(agent_wallet_asset_definition.clone())
-            .with_name("soracloud_agent_wallet".to_owned()),
-    ));
-    builder = builder.append_instruction(Register::asset_definition(
-        AssetDefinition::numeric(hf_shared_lease_asset_definition.clone())
-            .with_name("soracloud_hf_lease".to_owned()),
-    ));
+    builder = builder.append_instruction(Register::asset_definition(AssetDefinition::numeric(
+        agent_wallet_asset_definition.clone(),
+        "soracloud_agent_wallet".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )));
+    builder = builder.append_instruction(Register::asset_definition(AssetDefinition::numeric(
+        hf_shared_lease_asset_definition.clone(),
+        "soracloud_hf_lease".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )));
     for account_id in soracloud_bootstrap_accounts {
         builder = builder.append_instruction(Mint::asset_quantity(
             500_000_u32,
@@ -1442,12 +1464,17 @@ mod tests {
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
 
-        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "genesis_extra".parse().unwrap(),
         );
         let instructions = vec![InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id).with_name("Genesis Extra".to_owned()),
+            AssetDefinition::numeric(
+                asset_definition_id,
+                "Genesis Extra".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ),
         ))];
 
         let block = genesis(vec![instructions], topology, vec![entry]);
@@ -1788,7 +1815,7 @@ mod tests {
         let validator_key = KeyPair::random();
         let validator_id = AccountId::new(validator_key.public_key().clone());
         let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
-        let stake_asset_id = AssetDefinitionId::new(
+        let stake_asset_id = AssetDefinitionId::derive_from_components(
             nexus_domain.clone(),
             "multilane_stake".parse().expect("stake asset name"),
         );
@@ -1833,8 +1860,12 @@ mod tests {
             Register::account(Account::new(validator_id.clone())).into(),
             Register::asset_definition({
                 let __asset_definition_id = stake_asset_id.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "multilane_stake".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             })
             .into(),
             Mint::asset_quantity(
@@ -2006,7 +2037,7 @@ mod tests {
         let nexus = super::resolve_preexec_nexus_config(None, Some(&bundle))
             .expect("preexec should resolve proof policy overrides");
         let state = State::new_with_pre_genesis_nexus_for_testing(world, nexus, query_handle);
-        super::install_preexec_lane_manifests(&state)
+        super::install_preexec_lane_manifests(&state, None)
             .expect("preexec should install proof-policy-derived lane manifests");
 
         let view = state.view();

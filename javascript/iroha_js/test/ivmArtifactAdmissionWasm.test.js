@@ -13,22 +13,24 @@ import {
   createStaticArtifactAdmissionVerifier,
   staticArtifactAdmissionWasm,
 } from "./helpers/artifactAdmissionWasm.js";
+import { parseStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
 
-const CURRENT_ARTIFACT_FIXTURE = JSON.parse(
+const CURRENT_ARTIFACT_FIXTURE = parseStrictLosslessIntegerJson(
   readFileSync(
     new URL("./fixtures/current_rust_contract_artifact.json", import.meta.url),
     "utf8",
   ),
+  "current Rust contract artifact fixture",
 );
 
 function successfulOutput() {
   return {
     ok: true,
-    code_hash_hex: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_hash_hex,
-    abi_hash_hex: CURRENT_ARTIFACT_FIXTURE.rust_verifier.abi_hash_hex,
-    header_len: CURRENT_ARTIFACT_FIXTURE.rust_verifier.header_len,
-    code_offset: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_offset,
-    entrypoint_count: CURRENT_ARTIFACT_FIXTURE.rust_verifier.entrypoint_count,
+    code_hash_hex: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_hash_hex,
+    abi_hash_hex: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.abi_hash_hex,
+    header_len: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.header_len,
+    code_offset: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
+    entrypoint_count: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.entrypoint_count,
     manifest: CURRENT_ARTIFACT_FIXTURE.manifest,
   };
 }
@@ -55,11 +57,11 @@ test("raw artifact-admission WASM is digest anchored and returns bounded typed o
   const result = verifyIvmContractArtifactAdmission(verifier, artifact);
   assert.deepEqual(result, {
     ok: true,
-    codeHashHex: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_hash_hex,
-    abiHashHex: CURRENT_ARTIFACT_FIXTURE.rust_verifier.abi_hash_hex,
-    headerLength: CURRENT_ARTIFACT_FIXTURE.rust_verifier.header_len,
-    codeOffset: CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_offset,
-    entrypointCount: CURRENT_ARTIFACT_FIXTURE.rust_verifier.entrypoint_count,
+    codeHashHex: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_hash_hex,
+    abiHashHex: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.abi_hash_hex,
+    headerLength: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.header_len,
+    codeOffset: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
+    entrypointCount: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.entrypoint_count,
     manifest: CURRENT_ARTIFACT_FIXTURE.manifest,
   });
   assert.equal(Object.isFrozen(result), true);
@@ -159,11 +161,11 @@ test(
     assert.equal(accepted.ok, true);
     assert.equal(
       accepted.codeHashHex,
-      CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_hash_hex,
+      CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_hash_hex,
     );
 
     const forbidden = Buffer.from(artifact);
-    const codeOffset = CURRENT_ARTIFACT_FIXTURE.rust_verifier.code_offset;
+    const codeOffset = CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset;
     forbidden.set([0x00, 0x00, 0xfe, 0x62], codeOffset);
     const rejected = verifier.verify(forbidden);
     assert.equal(rejected.ok, false);

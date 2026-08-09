@@ -52,9 +52,10 @@ QUANTITATIVE_FIXED_CORRIDOR_OPERATOR_BODIES = {
         "SumeragiV2AsyncCausalWorkBudgetProofs",
         "AsyncCausalEpisodeExactCandidateOccurrenceTokens",
     ): (
-        "{<<candidate, token>>: candidate \\in "
-        "AsyncCausalEpisodeCandidates(node, cutoffOrdinal), token \\in "
-        "1..AsyncCausalExactRemainingOccurrenceBudget(candidate.kind)}"
+        "UNION { {<<candidate, token>>: token \\in "
+        "1..AsyncCausalExactRemainingOccurrenceBudget(candidate.kind)}: "
+        "candidate \\in "
+        "AsyncCausalEpisodeCandidates(node, cutoffOrdinal)}"
     ),
     (
         "SumeragiV2AsyncCausalWorkBudgetProofs",
@@ -332,9 +333,10 @@ QUANTITATIVE_FIXED_CORRIDOR_OPERATOR_BODIES = {
         "SumeragiV2AdequateLeaderFixedCorridorClockProofs",
         "AdequateLeaderFixedCutCumulativeActionTokens",
     ): (
-        "{<<candidate, token>>: candidate \\in "
-        "AsyncCausalEpisodeCandidates(node, cutoffOrdinal), token \\in "
-        "1..AdequateLeaderFixedCandidateRemainingActionCredit(candidate)}"
+        "UNION {{<<candidate, token>>: token \\in "
+        "1..AdequateLeaderFixedCandidateRemainingActionCredit(candidate)}: "
+        "candidate \\in "
+        "AsyncCausalEpisodeCandidates(node, cutoffOrdinal)}"
     ),
     (
         "SumeragiV2AdequateLeaderFixedCorridorClockProofs",
@@ -495,7 +497,8 @@ QUANTITATIVE_FIXED_CORRIDOR_THEOREM_STATEMENTS = {
         "SumeragiV2AsyncCausalWorkBudgetProofs",
         "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
     ): (
-        "\\A node \\in ValidatorIds, origin, cutoffOrdinal \\in Nat \\ {0}: "
+        "\\A origin: \\A node \\in ValidatorIds, "
+        "cutoffOrdinal \\in Nat \\ {0}: "
         "/\\ AsyncStrongTypeInvariant "
         "/\\ AsyncProgressOwnershipInvariant "
         "/\\ AsyncCausalEpisodeLifecycleCutOwned( "
@@ -512,7 +515,8 @@ QUANTITATIVE_FIXED_CORRIDOR_THEOREM_STATEMENTS = {
         "SumeragiV2AsyncCausalWorkBudgetProofs",
         "AsyncCausalEpisodeOwnedLifecycleServeCutCannotReplenish",
     ): (
-        "\\A node \\in ValidatorIds, origin, cutoffOrdinal \\in Nat \\ {0}: "
+        "\\A origin: \\A node \\in ValidatorIds, "
+        "cutoffOrdinal \\in Nat \\ {0}: "
         "/\\ AsyncStrongTypeInvariant "
         "/\\ AsyncProgressOwnershipInvariant "
         "/\\ AsyncCausalEpisodeLifecycleCutOwned( "
@@ -529,7 +533,7 @@ QUANTITATIVE_FIXED_CORRIDOR_THEOREM_STATEMENTS = {
         "SumeragiV2AsyncCausalWorkBudgetProofs",
         "AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget",
     ): (
-        "\\A node \\in ValidatorIds, origin, "
+        "\\A origin: \\A node \\in ValidatorIds, "
         "cutoffOrdinal \\in Nat \\ {0}, "
         "serviced \\in AsyncCandidateSet: "
         "/\\ gst "
@@ -926,11 +930,16 @@ QUANTITATIVE_FIXED_CORRIDOR_PROOF_DEPENDENCIES = {
         "SumeragiV2AsyncCausalWorkBudgetProofs",
         "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
     ): (
+        # The physical-cut refinement supersedes the narrower GST departure
+        # lemma: strong-type preservation plus both monotone high-watermarks
+        # prevent any pre-cut origin from being re-admitted.
         "AsyncNextNeverSchedulesAnUnownedCandidateLifecycle",
-        "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
+        "AsyncBracketNextPreservesStrongTypeInvariant",
         "AsyncSharedSchedulerHighWatermarkIsMonotone",
+        "AsyncIngressPhysicalHighWatermarkIsMonotone",
         "AsyncCausalEpisodeLifecycleCutOwned",
         "AsyncCausalEpisodeFrozenPredecessorOrigins",
+        "AsyncCausalEpisodeTargetPhysicalCut",
         "AsyncAllVars",
     ),
     (
@@ -949,9 +958,11 @@ QUANTITATIVE_FIXED_CORRIDOR_PROOF_DEPENDENCIES = {
         "SumeragiV2AsyncCausalWorkBudgetProofs",
         "AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget",
     ): (
+        # This is a one-step exact-successor multiset argument.  Candidate
+        # resurrection is excluded by the GST/lifecycle temporal layer, not by
+        # importing its stronger theorem into this assumption-light leaf.
         "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
         "AsyncCommandExactSuccessorBatchStrictlyConsumesOccurrenceBudget",
-        "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
         "AsyncNextNeverSchedulesAnUnownedCandidateLifecycle",
         "AsyncCausalEpisodeLifecycleCutOwned",
         "AsyncCausalEpisodeExactCandidateOccurrenceBudget",
@@ -1440,7 +1451,7 @@ HISTORICAL_LOCAL_AUTHORITY_EXACT_OPERATOR_BODIES = {
         "/\\ [][IndexedAdequateLeaderWitness(initialContext)!AsyncNext]_( "
         "IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars) "
         "/\\ WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)( "
-        "IndexedAdequateLeaderWitness(initialContext)!gst "
+        "IndexedCore(initialContext, 7) "
         "/\\ IndexedAdequateLeaderWitness(initialContext)!AsyncTick) "
         "/\\ \\A node \\in IndexedAdequateLeaderWitness(initialContext)! "
         "AsyncVotersAt(initialContext): "

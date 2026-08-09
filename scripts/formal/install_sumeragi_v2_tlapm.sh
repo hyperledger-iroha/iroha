@@ -39,9 +39,13 @@ esac
 
 readonly ARCHIVE="tlapm-${TLAPM_VERSION}-${PLATFORM}.tar.gz"
 readonly URL="${RELEASE_ASSET_API_BASE}/${RELEASE_ASSET_ID}"
-readonly INSTALL_ROOT="${TLAPM_INSTALL_ROOT:-${REPO_ROOT}/target/tlapm/toolchains}"
+readonly INSTALL_ROOT="${TLAPM_INSTALL_ROOT:?TLAPM_INSTALL_ROOT must be an explicitly authorized external directory}"
 readonly INSTALL_DIR="${INSTALL_ROOT}/${TLAPM_COMMIT}/${PLATFORM}"
 readonly TLAPM_BIN="${INSTALL_DIR}/tlapm/bin/tlapm"
+
+source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"
+require_external_private_directory \
+  "$REPO_ROOT" "$INSTALL_ROOT" "TLAPM install" || exit $?
 
 verify_install() {
   [[ -x "$TLAPM_BIN" ]] || return 1

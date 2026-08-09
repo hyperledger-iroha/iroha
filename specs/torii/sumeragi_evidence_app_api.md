@@ -1,23 +1,24 @@
-# Torii Sumeragi Evidence & Proof Streaming (TORII-APP-3)
+# Torii Sumeragi Evidence Monitoring & Proof Streaming (TORII-APP-3)
 
 Status: Completed 2026-03-21  
 Owners: Torii Platform, Integration Tests WG  
 Roadmap reference: TORII-APP-3 — Evidence endpoints & SSE parity
 
-This note documents the `/v1/sumeragi/evidence/*` HTTP surfaces and the proof
-signals emitted over `/v1/events/sse`. The handlers already ship in Torii, but
-the contract was tracked in the roadmap until we captured the DTO shapes,
-filters, and sample payloads for SDK parity.
+This note documents the read-only `/v1/sumeragi/evidence` and
+`/v1/sumeragi/evidence/count` HTTP surfaces and the proof signals emitted over
+`/v1/events/sse`. The contract was tracked in the roadmap until we captured the
+DTO shapes, filters, and sample payloads for SDK parity.
 
 ## Evidence Endpoints
 
-The handlers live in `crates/iroha_torii/src/routing.rs:2863-3099` and are wired
-under `Torii::add_sumeragi_routes` when the `app_api` feature is enabled.【crates/iroha_torii/src/routing.rs:2863】【crates/iroha_torii/src/lib.rs:6295】
-Requests accept Norito (`application/x-norito`) or JSON payloads via the shared
-`NoritoJson` extractor, and responses can be negotiated with the `Accept` header
+The handlers live in `crates/iroha_torii/src/routing.rs` and are wired through
+`Torii::add_sumeragi_routes`; their route descriptors live in
+`crates/iroha_torii_shared/src/route_catalog.rs`.
+Responses can be negotiated with the `Accept` header
 (`application/x-norito` or `application/json`). Query parameters use standard
-URL encoding and are decoded through the Norito JSON codec, so booleans,
-integers, and strings are parsed without additional quoting.
+URL encoding and a strict string extractor: unknown keys, duplicate keys,
+whitespace, signs, leading zeroes, non-decimal integers, and non-canonical kind
+spellings are rejected.
 
 ### `GET /v1/sumeragi/evidence/count`
 
@@ -41,8 +42,8 @@ parameters (`EvidenceListQuery`):
 
 | Parameter | Type | Default | Notes |
 |-----------|------|---------|-------|
-| `limit`   | `usize` | 50 | Clamped to `1..=1000`. |
-| `offset`  | `usize` | `0` | Offset into the ordered snapshot. |
+| `limit`   | `usize` | 50 | Must be a canonical unsigned decimal integer in `1..=1000`. |
+| `offset`  | `usize` | `0` | Canonical unsigned decimal offset into the ordered snapshot. |
 | `kind`    | `string` | _none_ | One of `DoublePrepare`, `DoubleCommit`, `InvalidQc`, `InvalidProposal`, `Censorship`, `SumeragiV2Equivocation`. |
 
 Response JSON is a Norito JSON object:
@@ -53,7 +54,7 @@ Response JSON is a Norito JSON object:
   "items": [
     {
       "kind": "DoublePrepare",
-      "phase": "Prevote",
+      "phase": "Prepare",
       "height": 1024,
       "view": 8,
       "epoch": 0,
@@ -96,31 +97,13 @@ key order; every follower anchors the embedded context to immutable committed
 v2 context history, revalidates the self-contained proof, and only permits
 penalties to consume an admission from a prior committed block.
 
-### `POST /v1/sumeragi/evidence`
-
-Submits slashing evidence to the running Sumeragi instance.
-
-- Request body:
-
-```json
-{
-  "evidence_hex": "0x010000000200…" // hex of Norito-framed `ConsensusEvidence` bytes
-}
-```
-
-- The handler validates the hex payload, decodes it as `ConsensusEvidence`, and
-  forwards it to Sumeragi. Bad hex or invalid payloads result in
-  `400 Bad Request` with a Norito `ValidationFail` error.
-- Successful submissions return `202 Accepted` with:
-
-```json
-{
-  "status": "accepted",
-  "kind": "DoublePrepare"
-}
-```
-
-Norito bodies are also accepted (`Content-Type: application/x-norito`).【crates/iroha_torii/src/routing.rs:3078】【crates/iroha_torii/src/routing.rs:3085】
+Evidence mutation is deliberately absent from Torii. Evidence is admitted only
+through the authenticated consensus peer path and signed-block proof batches;
+HTTP, CLI, MCP, and SDK surfaces are read-only.
+`POST /v1/sumeragi/evidence` therefore returns `405 Method Not Allowed`.
+`/v1/sumeragi/vrf/commit` and `/v1/sumeragi/vrf/reveal` are not HTTP routes and
+return `404 Not Found`; the active `VrfCommit` and `VrfReveal` messages remain
+part of the authenticated consensus peer protocol.
 
 ## Proof & Pipeline SSE (`GET /v1/events/sse`)
 
@@ -195,7 +178,7 @@ comments until they catch up.
   - `crates/iroha_torii/tests/sse_proof_verified_fields.rs`
   - `crates/iroha_torii/tests/sse_proof_rejected_fields.rs`
   - `integration_tests/tests/events/sse_smoke.rs`
-- CLI helpers mirror the API (`iroha ops sumeragi evidence list|count|submit`), and
+- CLI helpers mirror the API (`iroha ops sumeragi evidence list|count`), and
   SDKs consume the same DTOs (`javascript/iroha_js`, `IrohaSwift`, Python).
 
 With the schema captured here the roadmap item moves to `status.md`, and SDK

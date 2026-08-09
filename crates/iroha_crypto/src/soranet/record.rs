@@ -1,7 +1,7 @@
-//! Post-handshake authenticated records for SoraNet application streams.
+//! Post-handshake authenticated records for `SoraNet` application streams.
 //!
 //! QUIC protects the transport with TLS, while this layer extends the hybrid
-//! SoraNet handshake's confidentiality and integrity guarantees to application
+//! `SoraNet` handshake's confidentiality and integrity guarantees to application
 //! data.  Every QUIC stream and wire direction receives an independent key.
 
 use std::fmt;
@@ -15,10 +15,10 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::SessionKey;
 
-#[cfg(feature = "soranet-record-io")]
 mod io;
-#[cfg(feature = "soranet-record-io")]
-pub use io::{RecordReader, RecordWriter};
+
+#[doc(hidden)]
+pub use zeroize::Zeroize as __RecordZeroize;
 
 /// Magic and protocol version carried by every protected record.
 pub const RECORD_MAGIC: [u8; 4] = *b"SNR1";
@@ -38,9 +38,9 @@ const KDF_INFO: &[u8] = b"iroha.soranet.record.chacha20poly1305.key.v1";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RecordEndpoint {
-    /// The endpoint that initiated the SoraNet connection.
+    /// The endpoint that initiated the `SoraNet` connection.
     Client = 0,
-    /// The relay accepting the SoraNet connection.
+    /// The relay accepting the `SoraNet` connection.
     Relay = 1,
 }
 
@@ -82,7 +82,7 @@ impl RecordStreamContext {
     }
 }
 
-/// Failures produced by the SoraNet record protocol.
+/// Failures produced by the `SoraNet` record protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum RecordError {
     /// Session key has {actual} bytes; exactly 32 are required
@@ -163,7 +163,7 @@ impl fmt::Debug for RecordLayer {
 }
 
 impl RecordLayer {
-    /// Bind a record layer to a negotiated SoraNet session key and local role.
+    /// Bind a record layer to a negotiated `SoraNet` session key and local role.
     ///
     /// # Errors
     ///
@@ -194,9 +194,11 @@ impl RecordLayer {
             RecordEndpoint::Client => (WireDirection::ClientToRelay, WireDirection::RelayToClient),
             RecordEndpoint::Relay => (WireDirection::RelayToClient, WireDirection::ClientToRelay),
         };
+        let send_key = self.derive_key(context, send_direction)?;
+        let receive_key = self.derive_key(context, receive_direction)?;
         Ok(DuplexRecordLayer {
-            sealer: RecordSealer::new(self.derive_key(context, send_direction)?),
-            opener: RecordOpener::new(self.derive_key(context, receive_direction)?),
+            sealer: RecordSealer::new(&send_key),
+            opener: RecordOpener::new(&receive_key),
         })
     }
 
@@ -242,7 +244,7 @@ impl fmt::Debug for RecordSealer {
 }
 
 impl RecordSealer {
-    fn new(key: Zeroizing<[u8; SESSION_KEY_LEN]>) -> Self {
+    fn new(key: &Zeroizing<[u8; SESSION_KEY_LEN]>) -> Self {
         let cipher = ChaCha20Poly1305::new_from_slice(key.as_ref())
             .expect("record key has the algorithm's fixed key length");
         Self {
@@ -319,7 +321,7 @@ impl fmt::Debug for RecordOpener {
 }
 
 impl RecordOpener {
-    fn new(key: Zeroizing<[u8; SESSION_KEY_LEN]>) -> Self {
+    fn new(key: &Zeroizing<[u8; SESSION_KEY_LEN]>) -> Self {
         let cipher = ChaCha20Poly1305::new_from_slice(key.as_ref())
             .expect("record key has the algorithm's fixed key length");
         Self {

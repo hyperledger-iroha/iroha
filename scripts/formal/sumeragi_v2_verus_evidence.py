@@ -34,7 +34,7 @@ EXPECTED_DEPENDENCY_VERIFIED = 1690
 # The local proof expansion adds 31 roots to the historical 126-root source;
 # the proposal-origin closure adds one independent root.
 EXPECTED_ROOT_VERIFIED = 172
-EXPECTED_LOG_PATH = "target/formal/sumeragi_v2/verus.log"
+EXPECTED_LOG_PATH = "formal/sumeragi_v2/verus.log"
 EXPECTED_INVOCATION = (
     "bash",
     "scripts/formal/run_sumeragi_v2_harness.sh",
@@ -81,6 +81,7 @@ REQUIRED_SOURCE_PATHS = (
     "crates/iroha_core/src/sumeragi/v2_effects.rs",
     "crates/iroha_core/src/sumeragi/mod.rs",
     "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+    "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
     "crates/iroha_core/src/sumeragi/v2_recovery.rs",
     "crates/iroha_core/src/sumeragi/v2_runner.rs",
     "crates/iroha_core/src/sumeragi/v2_runtime.rs",
@@ -252,7 +253,16 @@ def _verify_invocation_contract(root: Path) -> None:
     harness_source = harness.read_text(encoding="utf-8")
     if harness_source.count(EXPECTED_HARNESS_VERUS_BRANCH) != 1:
         raise ValueError("Sumeragi v2 Verus harness command has drifted")
-    if '"${@:2}"' in harness_source or harness_source.count('"$@"') != 1:
+    expected_policy_source = (
+        'source "${REPO_ROOT}/scripts/sumeragi_v2_release_process_policy.sh"'
+    )
+    if harness_source.count(expected_policy_source) != 1:
+        raise ValueError("Sumeragi v2 formal harness bypasses the process policy")
+    if (
+        '"${@:2}"' in harness_source
+        or "command cargo" in harness_source
+        or re.search(r"(?m)^\s*cargo(?:\s|$)", harness_source) is not None
+    ):
         raise ValueError("Sumeragi v2 formal harness permits arbitrary command dispatch")
 
 
@@ -324,7 +334,12 @@ def build_evidence(
     if not cargo_verus.is_file() or cargo_verus.is_symlink():
         raise ValueError("cargo-verus must be a regular executable")
     log_path = log_path.resolve(strict=True)
-    expected_log = (root / EXPECTED_LOG_PATH).resolve(strict=True)
+    evidence_root = os.environ.get("SUMERAGI_V2_FORMAL_EVIDENCE_DIR")
+    expected_log = (
+        Path(evidence_root) / "verus.log"
+        if evidence_root is not None
+        else root / EXPECTED_LOG_PATH
+    ).resolve(strict=True)
     if log_path != expected_log:
         raise ValueError(f"Verus log must be {EXPECTED_LOG_PATH}")
     source_manifest_sha256 = workspace_source_manifest(root)
@@ -460,7 +475,13 @@ def validate_evidence(
     nonce = evidence.get("nonce")
     if not isinstance(nonce, str) or NONCE_RE.fullmatch(nonce) is None:
         errors.append("Verus evidence nonce must be 64 lowercase hexadecimal digits")
-    log_path = root / EXPECTED_LOG_PATH if log_path is None else log_path
+    if log_path is None:
+        evidence_root = os.environ.get("SUMERAGI_V2_FORMAL_EVIDENCE_DIR")
+        log_path = (
+            Path(evidence_root) / "verus.log"
+            if evidence_root is not None
+            else root / EXPECTED_LOG_PATH
+        )
     if not log_path.is_file() or log_path.is_symlink():
         errors.append(f"Verus evidence log is not a regular file: {log_path}")
     else:

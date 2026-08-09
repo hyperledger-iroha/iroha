@@ -1372,7 +1372,7 @@ fn verify_v2_aggregate_signature(
     for signer in signers {
         let index = usize::try_from(*signer)
             .ok()
-            .filter(|index| *index < context.roster.len())
+            .filter(|index| *index < context.roster.len() && *index < proofs_of_possession.len())
             .ok_or(EvidenceValidationError::V2SignerMismatch)?;
         public_keys.push(context.roster[index].validator.public_key());
         proofs.push(proofs_of_possession[index].as_slice());
@@ -1582,21 +1582,11 @@ mod tests {
 
     fn test_state_for_v2_fixture_with_world(fixture: &V2EvidenceFixture, world: World) -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
-        let verified = super::super::v2::VerifiedHeightContext::genesis(
-            fixture.context.clone(),
-            fixture.proofs.clone(),
-        )
-        .expect("verified fixture height context");
-        let store =
-            super::super::v2_context_store::V2ContextStore::open(kura.sumeragi_v2_storage_root())
-                .expect("open fixture context store");
-        store
-            .persist(
-                &super::super::v2_context_store::PersistedHeightContext::from_verified(&verified),
-            )
-            .expect("persist fixture height context");
         let query = crate::query::store::LiveQueryStore::start_test();
-        State::new_with_chain_for_testing(world, kura, query, fixture.context.chain_id.clone())
+        let state =
+            State::new_with_chain_for_testing(world, kura, query, fixture.context.chain_id.clone());
+        install_v2_finality_for_fixture(&state, fixture);
+        state
     }
 
     struct V2EvidenceFixture {
@@ -1631,17 +1621,17 @@ mod tests {
                 snapshot_bootstrap: None,
                 mode: wire_v2::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
-                quorum: wire_v2::DualQuorum::from_roster(&roster).expect("dual quorum"),
+                quorum: wire_v2::DualQuorum::from_roster(&roster).expect("equal-vote quorum"),
                 roster,
                 nexus_amx_context_hash: Hash::new(b"v2-evidence-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire_v2::DataAvailabilityLayout {
-                    encoding: wire_v2::PayloadEncoding::Plain,
+                    encoding: wire_v2::PayloadEncoding::ReedSolomon16,
                     chunk_size_bytes: 32,
-                    data_shards: 0,
-                    parity_shards: 0,
+                    data_shards: 1,
+                    parity_shards: 1,
                     max_payload_size_bytes: 1024,
-                    max_chunk_count: 32,
+                    max_chunk_count: 64,
                 },
                 leader_seed: [0x51; 32],
             };
@@ -1686,10 +1676,11 @@ mod tests {
         }
 
         fn execution_commitment(&self) -> wire_v2::ExecutionCommitment {
-            wire_v2::ExecutionCommitment::without_topups(
+            wire_v2::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"v2 evidence parent state"),
                 Hash::new(b"v2 evidence post state"),
                 Hash::new(b"v2 evidence ordinary writes"),
+                1,
                 Hash::new(b"v2 evidence executed block wire"),
             )
         }
@@ -1744,12 +1735,17 @@ mod tests {
         fn proposal(&self, subject: wire_v2::BlockSubject) -> wire_v2::Proposal {
             let round = self.round(0);
             let proposer = self.context.leader(0);
+            let body = [subject.payload_hash.as_ref()[0]];
+            let chunks = wire_v2::encode_payload_chunks(self.context.da_layout, &body)
+                .expect("encode complete v2 evidence fixture chunks");
+            // Evidence cases supply the exact subject under test, so derive
+            // against that subject after constructing canonical RS16 chunks.
             let manifest = wire_v2::PayloadManifest::derive(
                 &self.context,
                 round,
                 subject,
-                1,
-                &[vec![subject.payload_hash.as_ref()[0]]],
+                u64::try_from(body.len()).expect("small evidence fixture body length fits u64"),
+                &chunks,
             )
             .expect("v2 evidence manifest");
             let mut proposal = wire_v2::Proposal {
@@ -1818,10 +1814,12 @@ mod tests {
                 .canonical_proposal_wire_hash()
                 .expect("canonical proposal wire"),
         };
-        let execution_commitment = wire_v2::ExecutionCommitment::without_topups(
+        let execution_commitment = wire_v2::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"v2 evidence finality parent state"),
             Hash::new(b"v2 evidence finality post state"),
             Hash::new(b"v2 evidence finality ordinary writes"),
+            u64::try_from(block.encode_wire().expect("v2 evidence block wire").len())
+                .expect("v2 evidence block wire length fits u64"),
             block
                 .executed_block_wire_hash()
                 .expect("canonical executed block wire"),
@@ -1929,7 +1927,6 @@ mod tests {
             view,
         );
         let mut state_block = state.block(header);
-        let nexus = state.nexus_snapshot();
         let effects = iroha_data_model::consensus::NposConsensusEffects {
             vrf_epoch_seals: Vec::new(),
             v2_evidence_admissions: admissions,
@@ -1939,14 +1936,10 @@ mod tests {
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
-            &nexus.dataspace_catalog,
-            &nexus.staking,
             height,
             view,
             now_ms,
             #[cfg(feature = "telemetry")]
-            None,
-            #[cfg(not(feature = "telemetry"))]
             None,
         )
         .expect("valid exact v2 admission applies");
@@ -2180,6 +2173,8 @@ mod tests {
         );
     }
 
+    include!("evidence/missing_signer_pop_test.rs");
+
     #[test]
     fn sumeragi_v2_equivocation_persistence_deduplicates_swaps_and_restart_replay() {
         let fixture = V2EvidenceFixture::new();
@@ -2229,6 +2224,45 @@ mod tests {
             .expect("self-contained exact proof must validate on an unaware follower");
         assert_eq!(keys, vec![v2_evidence_admission_key(&evidence)]);
         assert_eq!(follower.world.consensus_evidence.view().iter().count(), 0);
+    }
+
+    #[test]
+    fn v2_admission_rejects_context_store_only_recovery_record() {
+        let fixture = V2EvidenceFixture::new();
+        let evidence = canonical_v2_phase_vote_evidence(&fixture, 0x91, 0x92);
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let verified = super::super::v2::VerifiedHeightContext::genesis(
+            fixture.context.clone(),
+            fixture.proofs.clone(),
+        )
+        .expect("verified fixture height context");
+        let store =
+            super::super::v2_context_store::V2ContextStore::open(kura.sumeragi_v2_storage_root())
+                .expect("open fixture context store");
+        store
+            .persist(
+                &super::super::v2_context_store::PersistedHeightContext::from_verified(&verified),
+            )
+            .expect("persist fixture height context");
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain_for_testing(
+            World::default(),
+            kura,
+            query,
+            fixture.context.chain_id.clone(),
+        );
+
+        assert_eq!(
+            state
+                .sumeragi_v2_height_context(fixture.context.height)
+                .expect("inspect finality-only historical context"),
+            None,
+            "a checksummed recovery context is not committed authorization"
+        );
+        assert_eq!(
+            validate_v2_evidence_admissions(&state, 2, &[evidence]),
+            Err(EvidenceValidationError::V2AdmissionContextUnavailable)
+        );
     }
 
     #[test]
@@ -2344,8 +2378,6 @@ mod tests {
         let fixture = V2EvidenceFixture::new();
         let proposer = test_state_for_v2_fixture_with_slashing_delay(&fixture, 1);
         let follower = test_state_for_v2_fixture_with_slashing_delay(&fixture, 1);
-        install_v2_finality_for_fixture(&proposer, &fixture);
-        install_v2_finality_for_fixture(&follower, &fixture);
         let offender = fixture.context.roster[1].validator.clone();
         add_v2_penalty_validator(&proposer, &offender);
         add_v2_penalty_validator(&follower, &offender);
@@ -5042,20 +5074,7 @@ mod tests {
         assert_eq!(view.iter().count(), 0);
     }
 
-    #[test]
-    fn persist_record_rejects_missing_signature_mutation() {
-        let ctx = test_context();
-        let context = ctx.validation_context();
-        let evidence = double_vote_with_unchecked(&ctx, |v1, v2| {
-            v1.bls_sig.clear();
-            v2.bls_sig.clear();
-        });
-        assert_invalid_evidence_rejected(
-            &context,
-            &evidence,
-            EvidenceValidationError::SignatureMissing,
-        );
-    }
+    include!("evidence/signature_missing_test.rs");
 
     #[test]
     fn persist_record_rejects_truncated_signature_mutation() {
@@ -6050,45 +6069,5 @@ mod tests {
         assert_eq!(view.iter().count(), 0);
     }
 
-    #[test]
-    fn roadmap_invalid_evidence_roundtrip_cases() {
-        let ctx = test_context();
-        let context = ctx.validation_context();
-        let cases: &[EvidenceRoundtripCase] = &[
-            (
-                "duplicate signer",
-                EvidenceValidationError::SignerMismatch,
-                roundtrip_case_duplicate_signer,
-            ),
-            (
-                "conflicting height",
-                EvidenceValidationError::HeightMismatch,
-                roundtrip_case_conflicting_height,
-            ),
-            (
-                "conflicting view",
-                EvidenceValidationError::ViewMismatch,
-                roundtrip_case_conflicting_view,
-            ),
-            (
-                "forged signature length",
-                EvidenceValidationError::SignatureTruncated,
-                roundtrip_case_signature_truncated,
-            ),
-            (
-                "mixed manifest payload",
-                EvidenceValidationError::KindPayloadMismatch,
-                roundtrip_case_mixed_manifest_payload,
-            ),
-        ];
-
-        for (label, expected, build) in cases {
-            let evidence = build(&ctx);
-            assert_invalid_evidence_rejected(&context, &evidence, *expected);
-            assert!(
-                validate_evidence(&evidence, &context).is_err(),
-                "{label}: expected structural validation to fail"
-            );
-        }
-    }
+    include!("evidence/roundtrip_matrix_test.rs");
 }

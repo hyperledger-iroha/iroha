@@ -6,9 +6,8 @@
 //! IFC1 framing are all produced here; callers cannot inject opaque
 //! precomputed circuit witnesses.
 
-use std::collections::BTreeSet;
-
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, edwards::EdwardsPoint, scalar::Scalar};
+use p256::elliptic_curve::subtle::{Choice, ConstantTimeEq as _};
 use rand_core_06::{CryptoRng, RngCore};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -34,8 +33,8 @@ use super::{
         native_parameters, selene_curve,
     },
     proof_math::{
-        HeliosSuite, ProofPoint, ProofScalar, ProofSuite, ProverTranscript, SeleneSuite,
-        helios_bp_generators, selene_bp_generators,
+        FcmpProofRandomSource, HeliosSuite, ProofPoint, ProofScalar, ProofSuite, ProverTranscript,
+        SeleneSuite, helios_bp_generators, random_scalar_from_fcmp_rng, selene_bp_generators,
     },
     range::prove_fcmp_range_with_checked_rng_v1,
     sal::{generator_t, generator_u, generator_v, prove_fcmp_sal_with_checked_rng_v1},
@@ -45,7 +44,129 @@ use super::{
 const MAX_PROVER_SCALAR_ATTEMPTS_V1: usize = 128;
 const MAX_MEMBERSHIP_PROVER_RESTARTS_V1: usize = 128;
 
-#[derive(Clone)]
+fn zeroizing_digest_buffer(
+    exact_capacity: usize,
+) -> Result<Zeroizing<Vec<[u8; 32]>>, FcmpNativeErrorV1> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(exact_capacity)
+        .map_err(|_| FcmpNativeErrorV1::ArithmeticInvariant)?;
+    if values.capacity() < exact_capacity {
+        return Err(FcmpNativeErrorV1::ArithmeticInvariant);
+    }
+    Ok(Zeroizing::new(values))
+}
+
+fn ct_slice_contains_by<T, U>(
+    values: &[T],
+    target: &U,
+    mut equal: impl FnMut(&T, &U) -> Choice,
+) -> Choice {
+    let mut found = Choice::from(0);
+    for value in values {
+        found |= equal(value, target);
+    }
+    found
+}
+
+fn ct_has_duplicate_by<T>(values: &[T], mut equal: impl FnMut(&T, &T) -> Choice) -> Choice {
+    let mut duplicate = Choice::from(0);
+    for (index, left) in values.iter().enumerate() {
+        for right in &values[index + 1..] {
+            duplicate |= equal(left, right);
+        }
+    }
+    duplicate
+}
+
+/// Compare every element when the public slice lengths agree.
+fn ct_equal_slices_by<T>(
+    left: &[T],
+    right: &[T],
+    mut equal: impl FnMut(&T, &T) -> Choice,
+) -> Choice {
+    if left.len() != right.len() {
+        return Choice::from(0);
+    }
+    let mut all_equal = Choice::from(1);
+    for (left, right) in left.iter().zip(right) {
+        all_equal &= equal(left, right);
+    }
+    all_equal
+}
+
+fn ct_all_match_by<T, U>(
+    values: &[T],
+    expected: &U,
+    mut matches: impl FnMut(&T, &U) -> Choice,
+) -> Choice {
+    let mut all_match = Choice::from(1);
+    for value in values {
+        all_match &= matches(value, expected);
+    }
+    all_match
+}
+
+/// Require an already allocated slot before a private value is constructed.
+///
+/// Calling this immediately before sampling/preparing and pushing a secret
+/// prevents `Vec::push` from copying previously inserted secrets during a
+/// growth operation. The caller's count is public, so capacity exhaustion is
+/// an arithmetic invariant rather than a secret-dependent branch.
+fn require_preallocated_push(
+    current_len: usize,
+    allocation_capacity: usize,
+) -> Result<(), FcmpNativeErrorV1> {
+    if current_len >= allocation_capacity {
+        return Err(FcmpNativeErrorV1::ArithmeticInvariant);
+    }
+    Ok(())
+}
+
+/// Compare every fixed-size digest pair without early exit.
+///
+/// The slice length is public transaction shape. Digest contents can identify
+/// hidden spent leaves before proof publication, so neither equality nor the
+/// duplicate position may influence the prover's control flow.
+fn ct_has_duplicate_digests(values: &[[u8; 32]]) -> bool {
+    bool::from(ct_has_duplicate_by(values, |left, right| {
+        left.as_slice().ct_eq(right.as_slice())
+    }))
+}
+
+fn ct_digest_slice_contains(values: &[[u8; 32]], target: &[u8; 32]) -> bool {
+    bool::from(ct_slice_contains_by(values, target, |value, target| {
+        value.as_slice().ct_eq(target.as_slice())
+    }))
+}
+
+// `hash_{selene,helios}` and `decode(..., false)` both guarantee nonidentity,
+// so the identity arm inside point encoding has a fixed outcome here. The
+// encoded-byte comparison itself examines all 32 bytes.
+fn ct_selene_point_eq(left: &SelenePoint, right: &SelenePoint) -> bool {
+    let left = Zeroizing::new(left.encode());
+    let right = Zeroizing::new(right.encode());
+    bool::from(left.as_slice().ct_eq(right.as_slice()))
+}
+
+fn ct_helios_point_eq(left: &HeliosPoint, right: &HeliosPoint) -> bool {
+    let left = Zeroizing::new(left.encode());
+    let right = Zeroizing::new(right.encode());
+    bool::from(left.as_slice().ct_eq(right.as_slice()))
+}
+
+fn ct_field25519_slice_contains(values: &[Field25519], target: Field25519) -> bool {
+    bool::from(ct_slice_contains_by(values, &target, |value, target| {
+        (*value - *target).ct_is_zero()
+    }))
+}
+
+fn ct_helioselene_slice_contains(values: &[HelioseleneField], target: HelioseleneField) -> bool {
+    bool::from(ct_slice_contains_by(values, &target, |value, target| {
+        (*value - *target).ct_is_zero()
+    }))
+}
+
 enum AdditionalBranch {
     /// A branch of Selene x-coordinates which hashes to Helios.
     ToHelios(Vec<HelioseleneField>),
@@ -68,13 +189,51 @@ impl Drop for AdditionalBranch {
     }
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn duplicate_zeroizing_slice<T>(values: &[T]) -> Zeroizing<Vec<T>>
+where
+    T: Copy + Zeroize,
+{
+    let mut duplicate = Zeroizing::new(Vec::with_capacity(values.len()));
+    duplicate.extend_from_slice(values);
+    duplicate
+}
+
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+fn duplicate_zeroizing_nested_slices<T>(values: &[Vec<T>]) -> Zeroizing<Vec<Vec<T>>>
+where
+    T: Copy + Zeroize,
+{
+    let mut duplicate = Zeroizing::new(Vec::with_capacity(values.len()));
+    for values in values {
+        let mut inner = duplicate_zeroizing_slice(values);
+        duplicate.push(core::mem::take(&mut *inner));
+    }
+    duplicate
+}
+
+#[cfg(test)]
+impl AdditionalBranch {
+    fn duplicate_for_test(&self) -> Self {
+        match self {
+            Self::ToHelios(values) => {
+                let mut duplicate = duplicate_zeroizing_slice(values);
+                Self::ToHelios(core::mem::take(&mut *duplicate))
+            }
+            Self::ToSelene(values) => {
+                let mut duplicate = duplicate_zeroizing_slice(values);
+                Self::ToSelene(core::mem::take(&mut *duplicate))
+            }
+        }
+    }
+}
+
 /// Caller-selected rerandomization witness for one authoritative FCMP++
 /// public input.
 ///
 /// These values must be chosen with a cryptographically secure RNG before the
 /// typed statement is hashed. Keeping them explicit makes O~/I~/R/C~/L
 /// derivable in one pass and avoids any dependence on replaying an RNG stream.
-#[derive(Clone)]
 pub struct FcmpInputRerandomizationV1 {
     output: Scalar,
     linking: Scalar,
@@ -106,6 +265,20 @@ impl FcmpInputRerandomizationV1 {
             rerandomization_blind: decode(&rerandomization_blind)?,
             commitment: decode(&commitment)?,
         })
+    }
+
+    #[cfg(test)]
+    fn duplicate_for_test(&self) -> Self {
+        let output = Zeroizing::new(self.output);
+        let linking = Zeroizing::new(self.linking);
+        let rerandomization_blind = Zeroizing::new(self.rerandomization_blind);
+        let commitment = Zeroizing::new(self.commitment);
+        Self {
+            output: *output,
+            linking: *linking,
+            rerandomization_blind: *rerandomization_blind,
+            commitment: *commitment,
+        }
     }
 }
 
@@ -139,7 +312,6 @@ impl core::fmt::Debug for FcmpInputRerandomizationV1 {
 /// branch (up to 38 Field25519 elements), and the curves continue
 /// alternating. The last branch is the shared root branch. Missing capacity
 /// is canonically padded with zero by the prover.
-#[derive(Clone)]
 pub struct FcmpProverInputV1 {
     output: FcmpOutputTupleV1,
     spend_x: Scalar,
@@ -205,16 +377,24 @@ impl FcmpProverInputV1 {
             Option::<Scalar>::from(Scalar::from_canonical_bytes(*output_y_bytes))
                 .ok_or(FcmpNativeErrorV1::ScalarEncoding)?,
         );
-        if *spend_x == Scalar::ZERO
-            || leaves.is_empty()
+        if leaves.is_empty()
             || leaves.len() > FCMP_LAYER_ONE_LEN_V1
-            || !leaves.contains(&output)
             || additional_branches.len() + 1 > usize::from(FCMP_MAX_TREE_LAYERS_V1)
         {
             return Err(FcmpNativeErrorV1::ArithmeticInvariant);
         }
-        let mut leaf_ids = BTreeSet::new();
-        if leaves.iter().any(|leaf| !leaf_ids.insert(leaf.output_id())) {
+        let mut leaf_ids = zeroizing_digest_buffer(leaves.len())?;
+        for leaf in leaves.iter() {
+            leaf_ids.push(leaf.output_id());
+        }
+        let output_id = Zeroizing::new(output.output_id());
+        let output_present = ct_digest_slice_contains(&leaf_ids, &output_id);
+        let duplicate_leaf = ct_has_duplicate_digests(&leaf_ids);
+        let zero_spend = bool::from(spend_x.ct_eq(&Scalar::ZERO));
+        if zero_spend || !output_present {
+            return Err(FcmpNativeErrorV1::ArithmeticInvariant);
+        }
+        if duplicate_leaf {
             return Err(FcmpNativeErrorV1::DuplicateOutput);
         }
         let mut decoded = Vec::with_capacity(additional_branches.len());
@@ -253,6 +433,28 @@ impl FcmpProverInputV1 {
             leaves: core::mem::take(&mut *leaves),
             additional_branches: decoded,
         })
+    }
+
+    #[cfg(test)]
+    fn duplicate_for_test(&self) -> Self {
+        let output = Zeroizing::new(self.output);
+        let spend_x = Zeroizing::new(self.spend_x);
+        let output_y = Zeroizing::new(self.output_y);
+        let rerandomization = self.rerandomization.duplicate_for_test();
+        let mut leaves = duplicate_zeroizing_slice(&self.leaves);
+        let mut additional_branches =
+            Zeroizing::new(Vec::with_capacity(self.additional_branches.len()));
+        for branch in &self.additional_branches {
+            additional_branches.push(branch.duplicate_for_test());
+        }
+        Self {
+            output: *output,
+            spend_x: *spend_x,
+            output_y: *output_y,
+            rerandomization,
+            leaves: core::mem::take(&mut *leaves),
+            additional_branches: core::mem::take(&mut *additional_branches),
+        }
     }
 
     /// Number of layers represented by this path.
@@ -450,10 +652,10 @@ pub(crate) fn fcmp_release_fixture_v1(
         fcmp_fixture_spendable_output_v1(401, 409, 431, INPUT_AMOUNT, 149)?;
     let (output_2, spend_x_2, output_y_2) =
         fcmp_fixture_spendable_output_v1(419, 421, 433, INPUT_AMOUNT, 157)?;
-    let leaves = vec![output_1, output_2];
+    let mut leaves = Zeroizing::new(vec![output_1, output_2]);
 
     let mut leaf_coordinates = Vec::with_capacity(6 * leaves.len());
-    for leaf in &leaves {
+    for leaf in leaves.iter() {
         let (output_key, linking_tag_generator, amount_commitment) = leaf.components();
         for point in [output_key, linking_tag_generator, amount_commitment] {
             let (x, y) = edwards_to_wei25519(point)?;
@@ -462,7 +664,9 @@ pub(crate) fn fcmp_release_fixture_v1(
     }
     let mut current_selene = hash_selene(&leaf_coordinates)?;
     let mut current_helios = None;
-    let mut branches = Vec::with_capacity(usize::from(FCMP_MAX_TREE_LAYERS_V1.saturating_sub(1)));
+    let mut branches = Zeroizing::new(Vec::with_capacity(usize::from(
+        FCMP_MAX_TREE_LAYERS_V1.saturating_sub(1),
+    )));
     for branch_index in 0..usize::from(FCMP_MAX_TREE_LAYERS_V1 - 1) {
         if branch_index % 2 == 0 {
             let child = current_selene
@@ -486,24 +690,25 @@ pub(crate) fn fcmp_release_fixture_v1(
             .encode(),
     )?;
 
-    let inputs = vec![
-        FcmpProverInputV1::new(
-            output_1,
-            spend_x_1,
-            output_y_1,
-            fcmp_fixture_rerandomization_v1(439, 443, 449, 163)?,
-            leaves.clone(),
-            branches.clone(),
-        )?,
-        FcmpProverInputV1::new(
-            output_2,
-            spend_x_2,
-            output_y_2,
-            fcmp_fixture_rerandomization_v1(457, 461, 463, 167)?,
-            leaves,
-            branches,
-        )?,
-    ];
+    let mut first_leaves = duplicate_zeroizing_slice(&leaves);
+    let mut first_branches = duplicate_zeroizing_nested_slices(&branches);
+    let first_input = FcmpProverInputV1::new(
+        output_1,
+        spend_x_1,
+        output_y_1,
+        fcmp_fixture_rerandomization_v1(439, 443, 449, 163)?,
+        core::mem::take(&mut *first_leaves),
+        core::mem::take(&mut *first_branches),
+    )?;
+    let second_input = FcmpProverInputV1::new(
+        output_2,
+        spend_x_2,
+        output_y_2,
+        fcmp_fixture_rerandomization_v1(457, 461, 463, 167)?,
+        core::mem::take(&mut *leaves),
+        core::mem::take(&mut *branches),
+    )?;
+    let inputs = vec![first_input, second_input];
 
     // Input masks plus their pseudo-out rerandomizations total 636. These
     // four masks preserve the aggregate while positive amounts total 10.
@@ -563,10 +768,29 @@ pub(crate) fn fcmp_release_invalid_path_fixture_v1() -> Result<
     Ok((inputs, outputs, root))
 }
 
-#[derive(Clone, PartialEq, Eq)]
 enum RootValues {
     C1(Vec<Field25519>),
     C2(Vec<HelioseleneField>),
+}
+
+fn root_values_ct_eq(left: &RootValues, right: &RootValues) -> Choice {
+    // Variant and length are fixed by the public layer count. Only coordinate
+    // contents are private, and equal-shape roots always scan every one.
+    match (left, right) {
+        (RootValues::C1(left), RootValues::C1(right)) => {
+            ct_equal_slices_by(left, right, |left, right| (*left - *right).ct_is_zero())
+        }
+        (RootValues::C2(left), RootValues::C2(right)) => {
+            ct_equal_slices_by(left, right, |left, right| (*left - *right).ct_is_zero())
+        }
+        _ => Choice::from(0),
+    }
+}
+
+fn all_paths_share_root(paths: &[PathValues], shared_root: &RootValues) -> bool {
+    bool::from(ct_all_match_by(paths, shared_root, |path, shared_root| {
+        root_values_ct_eq(&path.root, shared_root)
+    }))
 }
 
 impl Zeroize for RootValues {
@@ -584,7 +808,6 @@ impl Drop for RootValues {
     }
 }
 
-#[derive(Clone)]
 struct PathValues {
     c1_non_root: Vec<Vec<Field25519>>,
     c2_non_root: Vec<Vec<HelioseleneField>>,
@@ -623,12 +846,15 @@ fn parse_path(
     leaves.resize(6 * FCMP_LAYER_ONE_LEN_V1, Field25519::ZERO);
     let mut current_c1 = Zeroizing::new(Some(hash_selene(&leaves)?));
     let mut current_c2 = Zeroizing::new(None);
-    let mut c1_non_root = Zeroizing::new(Vec::new());
-    let mut c2_non_root = Zeroizing::new(Vec::new());
+    let private_branch_capacity = input.additional_branches.len().saturating_add(1);
+    let mut c1_non_root = Zeroizing::new(Vec::with_capacity(private_branch_capacity));
+    let mut c2_non_root = Zeroizing::new(Vec::with_capacity(private_branch_capacity));
 
     if input.additional_branches.is_empty() {
         let expected = SelenePoint::decode(root.point(), false)?;
-        if root.curve() != FcmpTreeCurveV1::Selene || *current_c1 != Some(expected) {
+        let matches_expected = Option::as_ref(&current_c1)
+            .map_or(false, |actual| ct_selene_point_eq(actual, &expected));
+        if root.curve() != FcmpTreeCurveV1::Selene || !matches_expected {
             return Err(FcmpNativeErrorV1::RootMismatch);
         }
         return Ok(PathValues {
@@ -648,16 +874,20 @@ fn parse_path(
                     .take()
                     .and_then(SelenePoint::x)
                     .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
-                let mut branch = Zeroizing::new(branch.clone());
-                branch.resize(FCMP_LAYER_TWO_LEN_V1, HelioseleneField::ZERO);
-                if !branch.contains(&prior_x) {
+                let mut padded = Zeroizing::new(Vec::with_capacity(FCMP_LAYER_TWO_LEN_V1));
+                let allocation_capacity = padded.capacity();
+                padded.extend_from_slice(branch);
+                padded.resize(FCMP_LAYER_TWO_LEN_V1, HelioseleneField::ZERO);
+                debug_assert!(allocation_capacity >= FCMP_LAYER_TWO_LEN_V1);
+                debug_assert_eq!(padded.capacity(), allocation_capacity);
+                if !ct_helioselene_slice_contains(&padded, prior_x) {
                     return Err(FcmpNativeErrorV1::ArithmeticInvariant);
                 }
-                *current_c2 = Some(hash_helios(&branch)?);
+                *current_c2 = Some(hash_helios(&padded)?);
                 if index == last {
-                    root_values = Some(RootValues::C2(core::mem::take(&mut *branch)));
+                    root_values = Some(RootValues::C2(core::mem::take(&mut *padded)));
                 } else {
-                    c2_non_root.push(core::mem::take(&mut *branch));
+                    c2_non_root.push(core::mem::take(&mut *padded));
                 }
             }
             AdditionalBranch::ToSelene(branch) => {
@@ -665,24 +895,36 @@ fn parse_path(
                     .take()
                     .and_then(HeliosPoint::x)
                     .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?;
-                let mut branch = Zeroizing::new(branch.clone());
-                branch.resize(FCMP_LAYER_ONE_LEN_V1, Field25519::ZERO);
-                if !branch.contains(&prior_x) {
+                let mut padded = Zeroizing::new(Vec::with_capacity(FCMP_LAYER_ONE_LEN_V1));
+                let allocation_capacity = padded.capacity();
+                padded.extend_from_slice(branch);
+                padded.resize(FCMP_LAYER_ONE_LEN_V1, Field25519::ZERO);
+                debug_assert!(allocation_capacity >= FCMP_LAYER_ONE_LEN_V1);
+                debug_assert_eq!(padded.capacity(), allocation_capacity);
+                if !ct_field25519_slice_contains(&padded, prior_x) {
                     return Err(FcmpNativeErrorV1::ArithmeticInvariant);
                 }
-                *current_c1 = Some(hash_selene(&branch)?);
+                *current_c1 = Some(hash_selene(&padded)?);
                 if index == last {
-                    root_values = Some(RootValues::C1(core::mem::take(&mut *branch)));
+                    root_values = Some(RootValues::C1(core::mem::take(&mut *padded)));
                 } else {
-                    c1_non_root.push(core::mem::take(&mut *branch));
+                    c1_non_root.push(core::mem::take(&mut *padded));
                 }
             }
         }
     }
 
     let matches_root = match root.curve() {
-        FcmpTreeCurveV1::Selene => *current_c1 == Some(SelenePoint::decode(root.point(), false)?),
-        FcmpTreeCurveV1::Helios => *current_c2 == Some(HeliosPoint::decode(root.point(), false)?),
+        FcmpTreeCurveV1::Selene => {
+            let expected = SelenePoint::decode(root.point(), false)?;
+            Option::as_ref(&current_c1)
+                .map_or(false, |actual| ct_selene_point_eq(actual, &expected))
+        }
+        FcmpTreeCurveV1::Helios => {
+            let expected = HeliosPoint::decode(root.point(), false)?;
+            Option::as_ref(&current_c2)
+                .map_or(false, |actual| ct_helios_point_eq(actual, &expected))
+        }
     };
     if !matches_root {
         return Err(FcmpNativeErrorV1::RootMismatch);
@@ -698,7 +940,7 @@ fn random_proof_scalar<F: ProofScalar>(
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<F, FcmpNativeErrorV1> {
     for _ in 0..MAX_PROVER_SCALAR_ATTEMPTS_V1 {
-        if let Some(scalar) = F::random(rng)?
+        if let Some(scalar) = random_scalar_from_fcmp_rng::<F, _>(rng)?
             && !scalar.is_zero()
         {
             return Ok(scalar);
@@ -823,17 +1065,19 @@ fn prove_fcmp_plus_plus_once_v1(
             max: super::FCMP_MAX_INPUTS_NATIVE_V1,
         });
     }
-    let mut spent_outputs = BTreeSet::new();
-    let mut derived_key_images = BTreeSet::new();
+    let mut spent_outputs = zeroizing_digest_buffer(inputs.len())?;
+    let mut derived_key_images = zeroizing_digest_buffer(inputs.len())?;
     for input in inputs {
-        if !spent_outputs.insert(input.output.output_id()) {
-            return Err(FcmpNativeErrorV1::DuplicateOutput);
-        }
+        spent_outputs.push(input.output.output_id());
         let linking = decode_edwards_point(input.output.components().1, false)?;
         let key_image = (linking * input.spend_x).compress().to_bytes();
-        if !derived_key_images.insert(key_image) {
-            return Err(FcmpNativeErrorV1::DuplicateKeyImage);
-        }
+        derived_key_images.push(key_image);
+    }
+    if ct_has_duplicate_digests(&spent_outputs) {
+        return Err(FcmpNativeErrorV1::DuplicateOutput);
+    }
+    if ct_has_duplicate_digests(&derived_key_images) {
+        return Err(FcmpNativeErrorV1::DuplicateKeyImage);
     }
     if new_output_openings.is_empty()
         || new_output_openings.len() > super::FCMP_MAX_OUTPUTS_NATIVE_V1
@@ -847,24 +1091,23 @@ fn prove_fcmp_plus_plus_once_v1(
         .iter()
         .map(FcmpOutputCommitmentOpeningV1::output)
         .collect::<Vec<_>>();
-    let mut new_output_ids = BTreeSet::new();
-    if new_outputs
-        .iter()
-        .any(|output| !new_output_ids.insert(output.output_id()))
-    {
+    let mut new_output_ids = zeroizing_digest_buffer(new_outputs.len())?;
+    for output in &new_outputs {
+        new_output_ids.push(output.output_id());
+    }
+    if ct_has_duplicate_digests(&new_output_ids) {
         return Err(FcmpNativeErrorV1::DuplicateOutput);
     }
     let layers = usize::from(root.layers());
-    let paths = inputs
-        .iter()
-        .map(|input| parse_path(input, root))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut shared_root = paths
+    let mut paths = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        paths.push(parse_path(input, root)?);
+    }
+    let shared_root = &paths
         .first()
         .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?
-        .root
-        .clone();
-    if paths.iter().any(|path| path.root != shared_root) {
+        .root;
+    if !all_paths_share_root(&paths, shared_root) {
         return Err(FcmpNativeErrorV1::RootMismatch);
     }
 
@@ -873,23 +1116,40 @@ fn prove_fcmp_plus_plus_once_v1(
     let c2_generators = <HeliosSuite as ProofSuite>::generators().reduce(c2_rows)?;
     let mut c1_tape = ProverVectorCommitmentTape::new(c1_rows)?;
     let mut c2_tape = ProverVectorCommitmentTape::new(c2_rows)?;
+    let c1_non_root_count = paths.iter().try_fold(0_usize, |count, path| {
+        count
+            .checked_add(path.c1_non_root.len())
+            .ok_or(FcmpNativeErrorV1::TreeFull)
+    })?;
+    let c2_non_root_count = paths.iter().try_fold(0_usize, |count, path| {
+        count
+            .checked_add(path.c2_non_root.len())
+            .ok_or(FcmpNativeErrorV1::TreeFull)
+    })?;
     let mut transcripted_paths = Vec::with_capacity(paths.len());
-    let mut c1_branch_masks = Zeroizing::new(Vec::new());
-    let mut c2_branch_masks = Zeroizing::new(Vec::new());
-    let mut selene_blinds = Vec::new();
-    let mut helios_blinds = Vec::new();
+    // The row counts are public upper bounds for every subsequently appended
+    // vector commitment. Allocate them before accepting any branch mask so no
+    // private scalar can be copied by a Vec growth operation.
+    let mut c1_branch_masks = Zeroizing::new(Vec::with_capacity(c1_rows));
+    let mut c2_branch_masks = Zeroizing::new(Vec::with_capacity(c2_rows));
+    let mut selene_blinds = Vec::with_capacity(c1_non_root_count);
+    let mut helios_blinds = Vec::with_capacity(c2_non_root_count);
 
     for path in &paths {
         let mut c1_non_root = Vec::with_capacity(path.c1_non_root.len());
         for branch in &path.c1_non_root {
-            c1_non_root.push(c1_tape.append_branch(branch.clone())?);
+            c1_non_root.push(c1_tape.append_branch(branch)?);
+            require_preallocated_push(c1_branch_masks.len(), c1_branch_masks.capacity())?;
+            require_preallocated_push(selene_blinds.len(), selene_blinds.capacity())?;
             let blind = prepare_selene_blind(random_proof_scalar(rng)?)?;
             c1_branch_masks.push(-blind.scalar);
             selene_blinds.push(blind);
         }
         let mut c2_non_root = Vec::with_capacity(path.c2_non_root.len());
         for branch in &path.c2_non_root {
-            c2_non_root.push(c2_tape.append_branch(branch.clone())?);
+            c2_non_root.push(c2_tape.append_branch(branch)?);
+            require_preallocated_push(c2_branch_masks.len(), c2_branch_masks.capacity())?;
+            require_preallocated_push(helios_blinds.len(), helios_blinds.capacity())?;
             let blind = prepare_helios_blind(random_proof_scalar(rng)?)?;
             c2_branch_masks.push(-blind.scalar);
             helios_blinds.push(blind);
@@ -899,14 +1159,16 @@ fn prove_fcmp_plus_plus_once_v1(
             c2_non_root,
         });
     }
-    let root_variables = match &mut shared_root {
+    let root_variables = match shared_root {
         RootValues::C1(values) => {
-            let variables = c1_tape.append_branch(core::mem::take(values))?;
+            let variables = c1_tape.append_branch(values)?;
+            require_preallocated_push(c1_branch_masks.len(), c1_branch_masks.capacity())?;
             c1_branch_masks.push(random_proof_scalar(rng)?);
             variables
         }
         RootValues::C2(values) => {
-            let variables = c2_tape.append_branch(core::mem::take(values))?;
+            let variables = c2_tape.append_branch(values)?;
+            require_preallocated_push(c2_branch_masks.len(), c2_branch_masks.capacity())?;
             c2_branch_masks.push(random_proof_scalar(rng)?);
             variables
         }
@@ -918,13 +1180,11 @@ fn prove_fcmp_plus_plus_once_v1(
     )?;
 
     let mut prepared_inputs = Vec::with_capacity(inputs.len());
-    let mut generated_pseudo_outs = BTreeSet::new();
+    let mut generated_pseudo_outs = zeroizing_digest_buffer(inputs.len())?;
     for input in inputs {
         let (output_bytes, linking_bytes, commitment_bytes) = input.output.components();
         let public = input.public_input()?;
-        if !generated_pseudo_outs.insert(public.pseudo_out) {
-            return Err(FcmpNativeErrorV1::DuplicatePseudoOut);
-        }
+        generated_pseudo_outs.push(public.pseudo_out);
         let r_o = input.rerandomization.output;
         let r_i = input.rerandomization.linking;
         let r_r_i = input.rerandomization.rerandomization_blind;
@@ -935,42 +1195,48 @@ fn prove_fcmp_plus_plus_once_v1(
         let input_blind_v = prepare_ed_blind(generator_v(), -r_i)?;
         let input_blind_blind = prepare_ed_blind(generator_t(), r_r_i)?;
         let commitment_blind = prepare_ed_blind(ED25519_BASEPOINT_POINT, -r_c)?;
-        let output_coordinates = edwards_to_wei25519(output_bytes)?;
-        let linking_coordinates = edwards_to_wei25519(linking_bytes)?;
-        let commitment_coordinates = edwards_to_wei25519(commitment_bytes)?;
+        let output_coordinates = Zeroizing::new(edwards_to_wei25519(output_bytes)?);
+        let linking_coordinates = Zeroizing::new(edwards_to_wei25519(linking_bytes)?);
+        let commitment_coordinates = Zeroizing::new(edwards_to_wei25519(commitment_bytes)?);
+        let output_padding = Zeroizing::new([output_coordinates.0, output_coordinates.1]);
+        let linking_padding = Zeroizing::new([linking_coordinates.0, linking_coordinates.1]);
+        let input_blind_v_padding =
+            Zeroizing::new([input_blind_v.coordinates.0, input_blind_v.coordinates.1]);
+        let commitment_padding =
+            Zeroizing::new([commitment_coordinates.0, commitment_coordinates.1]);
 
         let (output_blind_claim, output_variables) = c1_tape.append_claimed_point(
             ED25519_DLOG_PARAMETERS,
             &output_blind.decomposition,
             &output_blind.divisor,
-            output_blind.coordinates,
-            &[output_coordinates.0, output_coordinates.1],
+            &output_blind.coordinates,
+            &output_padding[..],
         )?;
         let (input_blind_u_claim, linking_variables) = c1_tape.append_claimed_point(
             ED25519_DLOG_PARAMETERS,
             &input_blind_u.decomposition,
             &input_blind_u.divisor,
-            input_blind_u.coordinates,
-            &[linking_coordinates.0, linking_coordinates.1],
+            &input_blind_u.coordinates,
+            &linking_padding[..],
         )?;
         let (input_blind_v_divisor, _) = c1_tape.append_divisor(
             ED25519_DLOG_PARAMETERS,
             &input_blind_v.divisor,
-            Field25519::ZERO,
+            &Field25519::ZERO,
         )?;
         let (input_blind_blind_claim, input_blind_v_variables) = c1_tape.append_claimed_point(
             ED25519_DLOG_PARAMETERS,
             &input_blind_blind.decomposition,
             &input_blind_blind.divisor,
-            input_blind_blind.coordinates,
-            &[input_blind_v.coordinates.0, input_blind_v.coordinates.1],
+            &input_blind_blind.coordinates,
+            &input_blind_v_padding[..],
         )?;
         let (commitment_blind_claim, commitment_variables) = c1_tape.append_claimed_point(
             ED25519_DLOG_PARAMETERS,
             &commitment_blind.decomposition,
             &commitment_blind.divisor,
-            commitment_blind.coordinates,
-            &[commitment_coordinates.0, commitment_coordinates.1],
+            &commitment_blind.coordinates,
+            &commitment_padding[..],
         )?;
         if output_variables.len() != 2
             || linking_variables.len() != 2
@@ -1006,21 +1272,27 @@ fn prove_fcmp_plus_plus_once_v1(
             },
         });
     }
+    if ct_has_duplicate_digests(&generated_pseudo_outs) {
+        return Err(FcmpNativeErrorV1::DuplicatePseudoOut);
+    }
 
     // The first proof field opens Helios branch blinds; the second opens
     // Selene branch blinds.
     let mut c1_blind_claims = Vec::with_capacity(helios_blinds.len());
     for blind in &helios_blinds {
+        let coordinates = Zeroizing::new(
+            blind
+                .point
+                .coordinates()
+                .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?,
+        );
         c1_blind_claims.push(
             c1_tape
                 .append_claimed_point(
                     CYCLE_DLOG_PARAMETERS,
                     &blind.decomposition,
                     &blind.divisor,
-                    blind
-                        .point
-                        .coordinates()
-                        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?,
+                    &coordinates,
                     &[],
                 )?
                 .0,
@@ -1028,38 +1300,50 @@ fn prove_fcmp_plus_plus_once_v1(
     }
     let mut c2_blind_claims = Vec::with_capacity(selene_blinds.len());
     for blind in &selene_blinds {
+        let coordinates = Zeroizing::new(
+            blind
+                .point
+                .coordinates()
+                .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?,
+        );
         c2_blind_claims.push(
             c2_tape
                 .append_claimed_point(
                     CYCLE_DLOG_PARAMETERS,
                     &blind.decomposition,
                     &blind.divisor,
-                    blind
-                        .point
-                        .coordinates()
-                        .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?,
+                    &coordinates,
                     &[],
                 )?
                 .0,
         );
     }
 
+    if c1_tape.commitment_count() > c1_rows || c2_tape.commitment_count() > c2_rows {
+        return Err(FcmpNativeErrorV1::ArithmeticInvariant);
+    }
     let mut c1_masks = c1_branch_masks;
+    let c1_mask_allocation_capacity = c1_masks.capacity();
     while c1_masks.len() < c1_tape.commitment_count() {
+        require_preallocated_push(c1_masks.len(), c1_masks.capacity())?;
         c1_masks.push(random_proof_scalar(rng)?);
+        debug_assert_eq!(c1_masks.capacity(), c1_mask_allocation_capacity);
     }
     let mut c2_masks = c2_branch_masks;
+    let c2_mask_allocation_capacity = c2_masks.capacity();
     while c2_masks.len() < c2_tape.commitment_count() {
+        require_preallocated_push(c2_masks.len(), c2_masks.capacity())?;
         c2_masks.push(random_proof_scalar(rng)?);
+        debug_assert_eq!(c2_masks.capacity(), c2_mask_allocation_capacity);
     }
     let root_mask_c1 =
         (root.curve() == FcmpTreeCurveV1::Selene).then(|| c1_masks[root_commitment_index]);
     let root_mask_c2 =
         (root.curve() == FcmpTreeCurveV1::Helios).then(|| c2_masks[root_commitment_index]);
-    let (c1_commitments, c1_openings) = c1_tape
-        .commitments_and_openings::<SeleneSuite>(c1_generators, c1_masks.as_slice().to_vec())?;
-    let (c2_commitments, c2_openings) = c2_tape
-        .commitments_and_openings::<HeliosSuite>(c2_generators, c2_masks.as_slice().to_vec())?;
+    let (c1_commitments, c1_openings) =
+        c1_tape.commitments_and_openings::<SeleneSuite>(c1_generators, c1_masks.as_slice())?;
+    let (c2_commitments, c2_openings) =
+        c2_tape.commitments_and_openings::<HeliosSuite>(c2_generators, c2_masks.as_slice())?;
 
     let (root_blind_commitment, root_nonce_c1, root_nonce_c2) = match root.curve() {
         FcmpTreeCurveV1::Selene => {
@@ -1083,15 +1367,17 @@ fn prove_fcmp_plus_plus_once_v1(
         .iter()
         .map(|input| input.public)
         .collect::<Vec<_>>();
-    let mut pseudo_outs = BTreeSet::new();
-    let mut key_images = BTreeSet::new();
+    let mut pseudo_outs = zeroizing_digest_buffer(public_inputs.len())?;
+    let mut key_images = zeroizing_digest_buffer(public_inputs.len())?;
     for public in &public_inputs {
-        if !pseudo_outs.insert(public.pseudo_out) {
-            return Err(FcmpNativeErrorV1::DuplicatePseudoOut);
-        }
-        if !key_images.insert(public.key_image) {
-            return Err(FcmpNativeErrorV1::DuplicateKeyImage);
-        }
+        pseudo_outs.push(public.pseudo_out);
+        key_images.push(public.key_image);
+    }
+    if ct_has_duplicate_digests(&pseudo_outs) {
+        return Err(FcmpNativeErrorV1::DuplicatePseudoOut);
+    }
+    if ct_has_duplicate_digests(&key_images) {
+        return Err(FcmpNativeErrorV1::DuplicateKeyImage);
     }
     super::verify_fcmp_commitment_balance_v1(&public_inputs, &new_outputs)?;
 
@@ -1114,8 +1400,8 @@ fn prove_fcmp_plus_plus_once_v1(
         }
     };
 
-    let mut c1_circuit = Circuit::<SeleneSuite>::prove(c1_openings);
-    let mut c2_circuit = Circuit::<HeliosSuite>::prove(c2_openings);
+    let mut c1_circuit = Circuit::<SeleneSuite>::prove(c1_openings, c1_rows)?;
+    let mut c2_circuit = Circuit::<HeliosSuite>::prove(c2_openings, c2_rows)?;
     let mut c1_dlog_challenge = None;
     let mut c2_dlog_challenge = None;
     let mut c1_commitment_openings = c1_commitments
@@ -1183,9 +1469,17 @@ fn prove_fcmp_plus_plus_once_v1(
         return Err(FcmpNativeErrorV1::ArithmeticInvariant);
     }
     let (c1_statement, c1_witness) = c1_circuit.proving_statement(c1_generators, c1_commitments)?;
-    c1_statement.prove(rng, &mut transcript, c1_witness)?;
+    c1_statement.prove(
+        &mut FcmpProofRandomSource::new(rng),
+        &mut transcript,
+        c1_witness,
+    )?;
     let (c2_statement, c2_witness) = c2_circuit.proving_statement(c2_generators, c2_commitments)?;
-    c2_statement.prove(rng, &mut transcript, c2_witness)?;
+    c2_statement.prove(
+        &mut FcmpProofRandomSource::new(rng),
+        &mut transcript,
+        c2_witness,
+    )?;
     let circuit_proof = transcript.complete();
     let range_proof = prove_fcmp_range_with_checked_rng_v1(rng, context_hash, new_output_openings)?;
 
@@ -1269,48 +1563,47 @@ fn preflight_fcmp_plus_plus_v1(
         });
     }
 
-    let mut spent_outputs = BTreeSet::new();
-    let mut key_images = BTreeSet::new();
+    let mut spent_outputs = zeroizing_digest_buffer(inputs.len())?;
+    let mut key_images = zeroizing_digest_buffer(inputs.len())?;
     let mut public_inputs = Vec::with_capacity(inputs.len());
-    let paths = inputs
-        .iter()
-        .map(|input| {
-            if !spent_outputs.insert(input.output.output_id()) {
-                return Err(FcmpNativeErrorV1::DuplicateOutput);
-            }
-            let public = input.public_input()?;
-            if !key_images.insert(public.key_image) {
-                return Err(FcmpNativeErrorV1::DuplicateKeyImage);
-            }
-            public_inputs.push(public);
-            parse_path(input, root)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let shared_root = paths
+    let mut paths = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        spent_outputs.push(input.output.output_id());
+        let public = input.public_input()?;
+        key_images.push(public.key_image);
+        public_inputs.push(public);
+        paths.push(parse_path(input, root)?);
+    }
+    if ct_has_duplicate_digests(&spent_outputs) {
+        return Err(FcmpNativeErrorV1::DuplicateOutput);
+    }
+    if ct_has_duplicate_digests(&key_images) {
+        return Err(FcmpNativeErrorV1::DuplicateKeyImage);
+    }
+    let shared_root = &paths
         .first()
         .ok_or(FcmpNativeErrorV1::ArithmeticInvariant)?
-        .root
-        .clone();
-    if paths.iter().any(|path| path.root != shared_root) {
+        .root;
+    if !all_paths_share_root(&paths, shared_root) {
         return Err(FcmpNativeErrorV1::RootMismatch);
     }
 
-    let mut pseudo_outs = BTreeSet::new();
-    if public_inputs
-        .iter()
-        .any(|public| !pseudo_outs.insert(public.pseudo_out))
-    {
+    let mut pseudo_outs = zeroizing_digest_buffer(public_inputs.len())?;
+    for public in &public_inputs {
+        pseudo_outs.push(public.pseudo_out);
+    }
+    if ct_has_duplicate_digests(&pseudo_outs) {
         return Err(FcmpNativeErrorV1::DuplicatePseudoOut);
     }
     let new_outputs = new_output_openings
         .iter()
         .map(FcmpOutputCommitmentOpeningV1::output)
         .collect::<Vec<_>>();
-    let mut new_output_ids = BTreeSet::new();
-    if new_outputs
-        .iter()
-        .any(|output| !new_output_ids.insert(output.output_id()))
-    {
+    let mut new_output_ids = zeroizing_digest_buffer(new_outputs.len())?;
+    for output in &new_outputs {
+        new_output_ids.push(output.output_id());
+    }
+    if ct_has_duplicate_digests(&new_output_ids) {
         return Err(FcmpNativeErrorV1::DuplicateOutput);
     }
     super::verify_fcmp_commitment_balance_v1(&public_inputs, &new_outputs)?;
@@ -1525,6 +1818,241 @@ mod tests {
     }
 
     #[test]
+    fn constant_work_scan_primitives_visit_every_element_and_pair() {
+        let values = [11_u8, 22, 33, 44, 55];
+        for (target, expected) in [(11, true), (33, true), (55, true), (99, false)] {
+            let comparisons = std::cell::Cell::new(0_usize);
+            let found = ct_slice_contains_by(&values, &target, |left, right| {
+                comparisons.set(comparisons.get() + 1);
+                Choice::from(u8::from(left == right))
+            });
+            assert_eq!(bool::from(found), expected);
+            assert_eq!(comparisons.get(), values.len());
+        }
+
+        let duplicate_cases = [
+            ([7_u8, 7, 2, 3, 4], true),
+            ([0_u8, 7, 7, 3, 4], true),
+            ([0_u8, 1, 2, 7, 7], true),
+            ([0_u8, 1, 2, 3, 4], false),
+        ];
+        let expected_pairs = values.len() * (values.len() - 1) / 2;
+        for (values, expected) in duplicate_cases {
+            let comparisons = std::cell::Cell::new(0_usize);
+            let duplicate = ct_has_duplicate_by(&values, |left, right| {
+                comparisons.set(comparisons.get() + 1);
+                Choice::from(u8::from(left == right))
+            });
+            assert_eq!(bool::from(duplicate), expected);
+            assert_eq!(comparisons.get(), expected_pairs);
+        }
+
+        for mismatch in [Some(0_usize), Some(2), Some(4), None] {
+            let mut candidates = [9_u8; 5];
+            if let Some(index) = mismatch {
+                candidates[index] = 8;
+            }
+            let comparisons = std::cell::Cell::new(0_usize);
+            let all_match = ct_all_match_by(&candidates, &9, |left, right| {
+                comparisons.set(comparisons.get() + 1);
+                Choice::from(u8::from(left == right))
+            });
+            assert_eq!(bool::from(all_match), mismatch.is_none());
+            assert_eq!(comparisons.get(), candidates.len());
+        }
+
+        let left = [5_u8; 5];
+        for mismatch in [Some(0_usize), Some(2), Some(4), None] {
+            let mut right = left;
+            if let Some(index) = mismatch {
+                right[index] = 6;
+            }
+            let comparisons = std::cell::Cell::new(0_usize);
+            let equal = ct_equal_slices_by(&left, &right, |left, right| {
+                comparisons.set(comparisons.get() + 1);
+                Choice::from(u8::from(left == right))
+            });
+            assert_eq!(bool::from(equal), mismatch.is_none());
+            assert_eq!(comparisons.get(), left.len());
+        }
+    }
+
+    #[test]
+    fn typed_membership_and_duplicate_scans_cover_every_position() {
+        let digests = [[1_u8; 32], [2_u8; 32], [3_u8; 32], [4_u8; 32], [5_u8; 32]];
+        for (target, expected) in [
+            (digests[0], true),
+            (digests[2], true),
+            (digests[4], true),
+            ([9_u8; 32], false),
+        ] {
+            assert_eq!(ct_digest_slice_contains(&digests, &target), expected);
+        }
+
+        for (duplicate_pair, expected) in [
+            (Some((0_usize, 1_usize)), true),
+            (Some((1, 2)), true),
+            (Some((3, 4)), true),
+            (None, false),
+        ] {
+            let mut candidates = digests;
+            if let Some((source, destination)) = duplicate_pair {
+                candidates[destination] = candidates[source];
+            }
+            assert_eq!(ct_has_duplicate_digests(&candidates), expected);
+        }
+
+        let field_target = Field25519::ONE + Field25519::ONE;
+        for target_index in [0, FCMP_LAYER_ONE_LEN_V1 / 2, FCMP_LAYER_ONE_LEN_V1 - 1] {
+            let mut padded = vec![Field25519::ONE; FCMP_LAYER_ONE_LEN_V1];
+            padded[target_index] = field_target;
+            assert!(ct_field25519_slice_contains(&padded, field_target));
+        }
+        assert!(!ct_field25519_slice_contains(
+            &vec![Field25519::ONE; FCMP_LAYER_ONE_LEN_V1],
+            field_target,
+        ));
+
+        let helioselene_target = HelioseleneField::ONE + HelioseleneField::ONE;
+        for target_index in [0, FCMP_LAYER_TWO_LEN_V1 / 2, FCMP_LAYER_TWO_LEN_V1 - 1] {
+            let mut padded = vec![HelioseleneField::ONE; FCMP_LAYER_TWO_LEN_V1];
+            padded[target_index] = helioselene_target;
+            assert!(ct_helioselene_slice_contains(&padded, helioselene_target));
+        }
+        assert!(!ct_helioselene_slice_contains(
+            &vec![HelioseleneField::ONE; FCMP_LAYER_TWO_LEN_V1],
+            helioselene_target,
+        ));
+    }
+
+    #[test]
+    fn hidden_leaf_membership_and_duplicates_cover_first_middle_last_and_absent() {
+        let xs = [101_u64, 103, 107, 109, 113];
+        let ys = [127_u64, 131, 137, 139, 149];
+        let leaves: [FcmpOutputTupleV1; 5] = core::array::from_fn(|index| {
+            spendable_output(
+                Scalar::from(xs[index]),
+                Scalar::from(ys[index]),
+                Scalar::from(151_u64 + u64::try_from(index).expect("index")),
+                Scalar::from(163_u64 + u64::try_from(index).expect("index")),
+            )
+        });
+
+        for target_index in [0_usize, 2, 4] {
+            FcmpProverInputV1::new(
+                leaves[target_index],
+                Scalar::from(xs[target_index]).to_bytes(),
+                Scalar::from(ys[target_index]).to_bytes(),
+                rerandomization(173, 179, 181, 191),
+                leaves.to_vec(),
+                Vec::new(),
+            )
+            .expect("hidden output at any position is accepted");
+        }
+
+        let absent_x = Scalar::from(193_u64);
+        let absent_y = Scalar::from(197_u64);
+        let absent = spendable_output(
+            absent_x,
+            absent_y,
+            Scalar::from(199_u64),
+            Scalar::from(211_u64),
+        );
+        assert!(matches!(
+            FcmpProverInputV1::new(
+                absent,
+                absent_x.to_bytes(),
+                absent_y.to_bytes(),
+                rerandomization(223, 227, 229, 233),
+                leaves.to_vec(),
+                Vec::new(),
+            ),
+            Err(FcmpNativeErrorV1::ArithmeticInvariant)
+        ));
+
+        for duplicate_pair in [(0_usize, 1_usize), (1, 2), (3, 4)] {
+            let mut candidates = leaves;
+            candidates[duplicate_pair.1] = candidates[duplicate_pair.0];
+            assert!(matches!(
+                FcmpProverInputV1::new(
+                    leaves[0],
+                    Scalar::from(xs[0]).to_bytes(),
+                    Scalar::from(ys[0]).to_bytes(),
+                    rerandomization(239, 241, 251, 257),
+                    candidates.to_vec(),
+                    Vec::new(),
+                ),
+                Err(FcmpNativeErrorV1::DuplicateOutput)
+            ));
+        }
+    }
+
+    #[test]
+    fn shared_root_scan_covers_first_middle_last_and_absent_mismatches() {
+        let root_coordinates = [Field25519::ONE; 5];
+        let shared_root = RootValues::C1(root_coordinates.to_vec());
+        for mismatch in [Some(0_usize), Some(2), Some(4), None] {
+            let mut paths = Vec::with_capacity(5);
+            for path_index in 0..5 {
+                let mut coordinates = root_coordinates;
+                if mismatch == Some(path_index) {
+                    coordinates[2] += Field25519::ONE;
+                }
+                paths.push(PathValues {
+                    c1_non_root: Vec::new(),
+                    c2_non_root: Vec::new(),
+                    root: RootValues::C1(coordinates.to_vec()),
+                });
+            }
+            assert_eq!(
+                all_paths_share_root(&paths, &shared_root),
+                mismatch.is_none()
+            );
+        }
+
+        for mismatch in [Some(0_usize), Some(2), Some(4), None] {
+            let mut coordinates = root_coordinates;
+            if let Some(index) = mismatch {
+                coordinates[index] += Field25519::ONE;
+            }
+            let candidate = RootValues::C1(coordinates.to_vec());
+            assert_eq!(
+                bool::from(root_values_ct_eq(&candidate, &shared_root)),
+                mismatch.is_none()
+            );
+        }
+
+        let c2_coordinates = [HelioseleneField::ONE; 5];
+        let c2_shared_root = RootValues::C2(c2_coordinates.to_vec());
+        for mismatch in [Some(0_usize), Some(2), Some(4), None] {
+            let mut coordinates = c2_coordinates;
+            if let Some(index) = mismatch {
+                coordinates[index] += HelioseleneField::ONE;
+            }
+            let candidate = RootValues::C2(coordinates.to_vec());
+            assert_eq!(
+                bool::from(root_values_ct_eq(&candidate, &c2_shared_root)),
+                mismatch.is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn private_push_guard_forbids_vector_growth() {
+        let mut values = Vec::with_capacity(3);
+        let allocation_capacity = values.capacity();
+        for _ in 0..allocation_capacity {
+            require_preallocated_push(values.len(), values.capacity()).expect("preallocated slot");
+            values.push(Field25519::ONE);
+            assert_eq!(values.capacity(), allocation_capacity);
+        }
+        assert_eq!(
+            require_preallocated_push(values.len(), values.capacity()),
+            Err(FcmpNativeErrorV1::ArithmeticInvariant)
+        );
+    }
+
+    #[test]
     fn maximum_compiled_shape_has_canonical_paths_and_exact_resource_bound() {
         let (inputs, outputs, root) = maximum_bound_fixture();
         assert_eq!(inputs.len(), FCMP_MAX_INPUTS_NATIVE_V1);
@@ -1535,7 +2063,8 @@ mod tests {
             .map(|input| parse_path(input, root))
             .collect::<Result<Vec<_>, _>>()
             .expect("maximum-depth paths resolve");
-        assert!(paths.windows(2).all(|pair| pair[0].root == pair[1].root));
+        let shared_root = &paths.first().expect("at least one path").root;
+        assert!(all_paths_share_root(&paths, shared_root));
         assert_eq!(
             ipa_rows(inputs.len(), usize::from(root.layers())).expect("maximum IPA rows"),
             (2_048, 1_024)
@@ -1854,7 +2383,7 @@ mod tests {
             coordinates.extend([x, y]);
         }
         let active_leaf = hash_selene(&coordinates).expect("active leaf");
-        let mut root_branch = frontier.levels[0].clone();
+        let mut root_branch = duplicate_zeroizing_slice(&frontier.levels[0]);
         root_branch.push(encode_helioselene_scalar(
             active_leaf.x().expect("nonidentity leaf"),
         ));
@@ -1864,7 +2393,7 @@ mod tests {
             y.to_bytes(),
             rerandomization(137, 139, 149, 113),
             vec![output],
-            vec![root_branch],
+            vec![core::mem::take(&mut *root_branch)],
         )
         .expect("two-layer witness");
         let new_output = output_opening(127, 131, TEST_AMOUNT, 109 + 113);
@@ -1899,15 +2428,16 @@ mod tests {
         let y_2 = Scalar::from(137_u64);
         let output_1 = spendable_output(x_1, y_1, Scalar::from(139_u64), Scalar::from(149_u64));
         let output_2 = spendable_output(x_2, y_2, Scalar::from(151_u64), Scalar::from(157_u64));
-        let leaves = vec![output_1, output_2];
+        let mut leaves = Zeroizing::new(vec![output_1, output_2]);
         let root = build_fcmp_frontier_v1(&leaves).expect("tree").root;
+        let mut first_leaves = duplicate_zeroizing_slice(&leaves);
         let inputs = [
             FcmpProverInputV1::new(
                 output_1,
                 x_1.to_bytes(),
                 y_1.to_bytes(),
                 rerandomization(181, 191, 193, 163),
-                leaves.clone(),
+                core::mem::take(&mut *first_leaves),
                 Vec::new(),
             )
             .expect("first witness"),
@@ -1916,7 +2446,7 @@ mod tests {
                 x_2.to_bytes(),
                 y_2.to_bytes(),
                 rerandomization(197, 199, 211, 167),
-                leaves,
+                core::mem::take(&mut *leaves),
                 Vec::new(),
             )
             .expect("second witness"),
@@ -1979,14 +2509,15 @@ mod tests {
             Scalar::from(173_u64),
             Scalar::from(191_u64),
         );
-        let leaves = vec![first, second];
+        let mut leaves = Zeroizing::new(vec![first, second]);
         let root = build_fcmp_frontier_v1(&leaves).expect("tree").root;
+        let mut first_leaves = duplicate_zeroizing_slice(&leaves);
         let first_input = FcmpProverInputV1::new(
             first,
             x.to_bytes(),
             Scalar::from(167_u64).to_bytes(),
             rerandomization(229, 233, 239, 193),
-            leaves.clone(),
+            core::mem::take(&mut *first_leaves),
             Vec::new(),
         )
         .expect("first input");
@@ -1995,37 +2526,42 @@ mod tests {
             x.to_bytes(),
             Scalar::from(181_u64).to_bytes(),
             rerandomization(241, 251, 257, 197),
-            leaves,
+            core::mem::take(&mut *leaves),
             Vec::new(),
         )
         .expect("second input");
         let new_output = output_opening(199, 211, TEST_AMOUNT, 179 + 193);
         let mut rng = StdRng::seed_from_u64(0xfc_0004);
+        let duplicate_output_a = first_input.duplicate_for_test();
+        let duplicate_output_b = first_input.duplicate_for_test();
         assert_eq!(
             prove_fcmp_plus_plus_v1(
                 &mut rng,
                 [0x94; 32],
-                &[first_input.clone(), first_input.clone()],
+                &[duplicate_output_a, duplicate_output_b],
                 std::slice::from_ref(&new_output),
                 root,
             ),
             Err(FcmpNativeErrorV1::DuplicateOutput)
         );
+        let duplicate_key_image = first_input.duplicate_for_test();
         assert_eq!(
             prove_fcmp_plus_plus_v1(
                 &mut rng,
                 [0x94; 32],
-                &[first_input.clone(), second_input],
+                &[duplicate_key_image, second_input],
                 std::slice::from_ref(&new_output),
                 root,
             ),
             Err(FcmpNativeErrorV1::DuplicateKeyImage)
         );
+        let overflow_a = first_input.duplicate_for_test();
+        let overflow_b = first_input.duplicate_for_test();
         assert!(matches!(
             prove_fcmp_plus_plus_v1(
                 &mut rng,
                 [0x94; 32],
-                &[first_input.clone(), first_input.clone(), first_input],
+                &[overflow_a, overflow_b, first_input],
                 std::slice::from_ref(&new_output),
                 root,
             ),
@@ -2065,7 +2601,7 @@ mod tests {
         let leaf_x = leaf.x().expect("nonidentity leaf");
         let first_branch = vec![encode_helioselene_scalar(leaf_x)];
         let active_helios = hash_helios(&[leaf_x]).expect("second layer");
-        let mut second_branch = frontier.levels[1].clone();
+        let mut second_branch = duplicate_zeroizing_slice(&frontier.levels[1]);
         second_branch.push(encode_field25519_scalar(
             active_helios.x().expect("nonidentity second layer"),
         ));
@@ -2076,29 +2612,29 @@ mod tests {
             y.to_bytes(),
             rerandomization(227, 229, 233, 223),
             vec![output],
-            vec![first_branch, second_branch],
+            vec![first_branch, core::mem::take(&mut *second_branch)],
         )
         .expect("canonical path");
         parse_path(&valid, frontier.root).expect("canonical path resolves");
 
-        let mut reordered = valid.clone();
+        let mut reordered = valid.duplicate_for_test();
         reordered.additional_branches.swap(0, 1);
         assert!(matches!(
             parse_path(&reordered, frontier.root),
             Err(FcmpNativeErrorV1::ArithmeticInvariant)
         ));
 
-        let mut omitted = valid.clone();
+        let mut omitted = valid.duplicate_for_test();
         omitted.additional_branches.remove(0);
         assert!(matches!(
             parse_path(&omitted, frontier.root),
             Err(FcmpNativeErrorV1::ProofHeaderMismatch)
         ));
 
-        let mut duplicated = valid.clone();
+        let mut duplicated = valid.duplicate_for_test();
         duplicated
             .additional_branches
-            .push(valid.additional_branches[0].clone());
+            .push(valid.additional_branches[0].duplicate_for_test());
         assert!(matches!(
             parse_path(&duplicated, frontier.root),
             Err(FcmpNativeErrorV1::ProofHeaderMismatch)

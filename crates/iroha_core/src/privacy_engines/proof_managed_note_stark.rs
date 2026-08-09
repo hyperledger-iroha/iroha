@@ -205,8 +205,7 @@ fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> ProofManagedNoteS
             ProofManagedNoteStarkErrorV1::ProofWire
         }
         TransparentStarkErrorV1::FriDegree => ProofManagedNoteStarkErrorV1::Fri,
-        TransparentStarkErrorV1::InvalidMerkleOpening
-        | TransparentStarkErrorV1::InvalidMerkleShape => ProofManagedNoteStarkErrorV1::TraceOpening,
+        TransparentStarkErrorV1::InvalidMerkleShape => ProofManagedNoteStarkErrorV1::TraceOpening,
         TransparentStarkErrorV1::ChallengeSamplingExhausted
         | TransparentStarkErrorV1::QuerySamplingExhausted
         | TransparentStarkErrorV1::InvalidGrinding => ProofManagedNoteStarkErrorV1::Transcript,

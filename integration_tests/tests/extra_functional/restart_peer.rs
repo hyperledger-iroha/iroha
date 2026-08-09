@@ -116,11 +116,12 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
             .expect("default SoraFS pin fee asset id");
     let treasury =
         iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id();
-    let fee_name = fee_asset_id
-        .try_name()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| "xor".to_owned());
-    let fee_definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(fee_name);
+    let fee_definition = AssetDefinition::numeric(
+        fee_asset_id.clone(),
+        "xor".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    );
     let seed_amount = Quantity::from(10_000_000_000_000_u128);
 
     vec![
@@ -406,7 +407,7 @@ fn private_uploaded_model_execute_request(
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn restarted_peer_should_restore_its_state() -> Result<()> {
-    let asset_definition_id = AssetDefinitionId::new(
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "xor".parse()?,
     );
@@ -441,8 +442,12 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
                 [
                     Register::asset_definition({
                         let __asset_definition_id = asset_definition_clone.clone();
-                        AssetDefinition::numeric(__asset_definition_id.clone())
-                            .with_name(__asset_definition_id.name().to_string())
+                        AssetDefinition::numeric(
+                            __asset_definition_id.clone(),
+                            "xor".to_owned(),
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        )
                     })
                     .into(),
                     Mint::asset_quantity(
@@ -632,7 +637,8 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     };
 
     let domain_id = DomainId::try_new("paynet", "universal")?;
-    let asset_definition_id = AssetDefinitionId::new(domain_id.clone(), "routecoin".parse()?);
+    let asset_definition_id =
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "routecoin".parse()?);
     let account_keypair = KeyPair::random();
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let alias = iroha::data_model::account::rekey::AccountAlias::domainless(
@@ -662,8 +668,12 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
                     setup_alias,
                     Register::asset_definition({
                         let definition_id = submit_definition.clone();
-                        AssetDefinition::numeric(definition_id.clone())
-                            .with_name(definition_id.name().to_string())
+                        AssetDefinition::numeric(
+                            definition_id.clone(),
+                            "routecoin".to_owned(),
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        )
                     })
                     .into(),
                     Mint::asset_quantity(submit_quantity, submit_asset).into(),

@@ -76,7 +76,7 @@ mainnet wiring with read-only calls only:
 4. Fetch the latest known block with `iroha.blocks.get`.
 5. List recent transactions with `iroha.transactions.list`, then check one
    listed hash with `iroha.transactions.status`.
-6. Optionally call a Musubi read such as `iroha.musubi.alias.resolve`; a
+6. Optionally call a Musubi read such as `iroha.musubi.queries.alias`; a
    `404 not_found` means that alias is absent, not that the tool is broken.
 
 Do not use broad alias-index enumeration as a health check. It may be
@@ -106,11 +106,13 @@ permission_denied`.
    Confirmation Policy" before executing it.
 10. For Musubi package-registry writes, use the pre-signing helpers only when
     they are exposed by the Minamoto MCP server:
-    `iroha.musubi.instructions.publish_release`,
-    `iroha.musubi.instructions.yank_release`,
-    `iroha.musubi.instructions.set_alias`, and
-    `iroha.musubi.instructions.assert_release_exists`. They return unsigned
-    Norito-framed instructions; sign and submit them from the client side.
+    `iroha.musubi.instructions.release_publish`,
+    `iroha.musubi.instructions.release_yank_set`,
+    `iroha.musubi.instructions.alias_register`, and
+    `iroha.musubi.instructions.release_digest_assert` are the common V1 entry
+    points. Governance, archive, metadata, and member mutations have their own
+    typed V1 helpers. They return unsigned Norito-framed instructions; sign and
+    submit them from the client side.
 
 ## Minamoto vs Taira Differences
 
@@ -351,17 +353,21 @@ state after a contract call.
 Use the curated Musubi tools for package reads when the Minamoto MCP server
 exposes them:
 
-- `iroha.musubi.search` with `query`, optional `namespace`, `include_yanked`,
-  `offset`, and `limit`
-- `iroha.musubi.release.get` with `package = "namespace/name@version"`
-- `iroha.musubi.package.releases` with `package = "namespace/name"` and
-  optional `include_yanked`
-- `iroha.musubi.package.versions` with `package = "namespace/name"`
-- `iroha.musubi.alias.resolve` with `alias = "<short-name>"`
+- `iroha.musubi.queries.exact_package`
+- `iroha.musubi.queries.exact_release`
+- `iroha.musubi.queries.resolver_index`
+- `iroha.musubi.queries.versions`
+- `iroha.musubi.queries.maintainers`
+- `iroha.musubi.queries.archive_locations`
+- `iroha.musubi.queries.alias` and
+  `iroha.musubi.queries.alias_history`
+- `iroha.musubi.queries.ordered_prefix`
 
-Musubi namespaces intentionally do not use a leading `@`; use literals like
-`universal`, `dex.universal`, and `dex.universal/swap-core` when those
-namespaces exist on Minamoto.
+Pass the structural V1 package or release object required by the tool's
+`inputSchema`; human-facing `namespace/package` text is not accepted in place
+of `home_dataspace`, `scope`, and `name` on typed registry routes. Permanent
+aliases are normalized to structural package IDs before manifests or locks are
+created.
 
 ### Build Musubi instructions for local signing
 

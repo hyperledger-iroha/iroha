@@ -820,44 +820,6 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
             reason: err.to_string(),
         })
     }
-
-    /// Derive the full-bootstrap material proof statement digest, if present.
-    ///
-    /// The statement is separate from the zero-refresh bootstrap proof digest:
-    /// it binds admitted `FullBootstrapV1` material commitments to the
-    /// parameter set, public key, evaluation-key bundle digest, and
-    /// bootstrap-key metadata, while refresh-only bundles return `None`.
-    ///
-    /// Runtime admission recomputes this statement from signed key material
-    /// before accepting policy-bound full-bootstrap material proofs. The
-    /// crypto layer now derives deterministic release audit evidence for
-    /// generated artifact bundles; independent proof-producing backend audit
-    /// and release verification remain rollout concerns.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when public-key shape,
-    /// full-bootstrap material, evaluation-key material, or canonical
-    /// digesting fails.
-    pub fn full_bootstrap_material_proof_statement_digest_for_evaluation_keys(
-        &self,
-        params: &iroha_crypto::fhe_bfv::BfvParameters,
-        evaluation_keys: &BfvEvaluationKeyBundle,
-    ) -> Result<Option<Hash>, SoracloudManifestError> {
-        validate_bfv_public_key(params, &self.public_key).map_err(|err| {
-            SoracloudManifestError::InvalidField {
-                manifest: "bfv evaluation-key refresh transcript",
-                field: "public_key",
-                reason: err.to_string(),
-            }
-        })?;
-        evaluation_keys
-            .full_bootstrap_material_proof_statement_digest(params, &self.public_key)
-            .map_err(|err| SoracloudManifestError::InvalidField {
-                manifest: "bfv evaluation-key refresh transcript",
-                field: "full_bootstrap_material_proof_statement_digest",
-                reason: err.to_string(),
-            })
-    }
 }
 
 /// Deterministic execution policy for validator-side ciphertext operations.
@@ -889,10 +851,6 @@ pub struct FheExecutionPolicyV1 {
     /// Governed proof statement digest for bootstrap-capable public zero-refresh material.
     #[norito(default)]
     pub bootstrap_key_zero_refresh_proof_statement_digest: Option<Hash>,
-    /// Governed proof statement digest for full-bootstrap circuit/key material.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub full_bootstrap_material_proof_statement_digest: Option<Hash>,
     /// Release audit package approved for governed full-bootstrap artifact execution.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -1003,9 +961,6 @@ impl FheExecutionPolicyV1 {
         let has_zero_refresh_statement = self
             .bootstrap_key_zero_refresh_proof_statement_digest
             .is_some();
-        let has_full_bootstrap_statement = self
-            .full_bootstrap_material_proof_statement_digest
-            .is_some();
         let Some(public_key_statement_hash) = self.public_key_proof_statement_digest else {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe execution policy",
@@ -1027,13 +982,6 @@ impl FheExecutionPolicyV1 {
                 statement_hash,
             )?;
         }
-        if let Some(statement_hash) = self.full_bootstrap_material_proof_statement_digest {
-            validate_soracloud_fhe_statement_hash(
-                "fhe execution policy",
-                "full_bootstrap_material_proof_statement_digest",
-                statement_hash,
-            )?;
-        }
         let release_audit_field_count = [
             self.full_bootstrap_release_audit_package.is_some(),
             self.full_bootstrap_release_audit_package_digest.is_some(),
@@ -1045,15 +993,8 @@ impl FheExecutionPolicyV1 {
         .into_iter()
         .filter(|present| *present)
         .count();
+        let has_full_bootstrap_material = release_audit_field_count == 4;
         if release_audit_field_count > 0 {
-            if !has_full_bootstrap_statement {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "fhe execution policy",
-                    field: "full_bootstrap_release_audit_package",
-                    reason: "full-bootstrap release audit fields require a full-bootstrap material proof statement digest"
-                        .to_string(),
-                });
-            }
             if release_audit_field_count != 4 {
                 let (field, reason) = if self.full_bootstrap_release_audit_package.is_none() {
                     (
@@ -1178,17 +1119,18 @@ impl FheExecutionPolicyV1 {
                 reason: err.to_string(),
             })?;
         }
-        if has_zero_refresh_statement && has_full_bootstrap_statement {
+        if has_zero_refresh_statement && has_full_bootstrap_material {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe execution policy",
-                field: "full_bootstrap_material_proof_statement_digest",
-                reason: "bootstrap-capable policies must bind exactly one bootstrap proof statement digest"
-                    .to_string(),
+                field: "full_bootstrap_release_audit_package",
+                reason:
+                    "bootstrap-capable policies must select exactly one governed bootstrap mode"
+                        .to_string(),
             });
         }
         if self.max_bootstrap_count > 0
             && !has_zero_refresh_statement
-            && !has_full_bootstrap_statement
+            && !has_full_bootstrap_material
         {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe execution policy",
@@ -1206,11 +1148,11 @@ impl FheExecutionPolicyV1 {
                     .to_string(),
             });
         }
-        if self.max_bootstrap_count == 0 && has_full_bootstrap_statement {
+        if self.max_bootstrap_count == 0 && has_full_bootstrap_material {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe execution policy",
-                field: "full_bootstrap_material_proof_statement_digest",
-                reason: "policies without bootstrap budget must not bind full-bootstrap material proof statement digest"
+                field: "full_bootstrap_release_audit_package",
+                reason: "policies without bootstrap budget must not bind governed full-bootstrap material"
                     .to_string(),
             });
         }
@@ -1323,6 +1265,541 @@ impl FheGovernanceBundleV1 {
                     "production governance bundles must bind a public-key proof statement digest"
                         .to_string(),
             });
+        }
+        Ok(())
+    }
+}
+
+/// Exact immutable reference to one governed Soracloud FHE policy version.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudFhePolicyReferenceV1 {
+    /// Schema version; must equal [`SORACLOUD_FHE_POLICY_REFERENCE_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable policy identifier within the service.
+    pub policy_name: Name,
+    /// Exact monotonic policy-material version.
+    pub version: NonZeroU32,
+    /// Digest of the exact governed material authorized for execution.
+    pub material_digest: Hash,
+}
+
+impl SoracloudFhePolicyReferenceV1 {
+    /// Validate the exact governed-material reference.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the schema or digest is invalid.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORACLOUD_FHE_POLICY_REFERENCE_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "soracloud fhe policy reference",
+                expected: SORACLOUD_FHE_POLICY_REFERENCE_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        validate_soracloud_fhe_digest_hash(
+            "soracloud fhe policy reference",
+            "material_digest",
+            self.material_digest,
+        )
+    }
+}
+
+/// Exact service-and-policy scope carried by the FHE governance permission.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudFheGovernancePermissionScopeV1 {
+    /// Schema version; must equal [`SORACLOUD_FHE_GOVERNANCE_PERMISSION_SCOPE_VERSION_V1`].
+    pub schema_version: u16,
+    /// Service whose governed material may be changed.
+    pub service_name: Name,
+    /// Policy whose governed material may be changed.
+    pub policy_name: Name,
+}
+
+impl SoracloudFheGovernancePermissionScopeV1 {
+    /// Validate the permission scope version.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] for an unsupported schema version.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORACLOUD_FHE_GOVERNANCE_PERMISSION_SCOPE_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "soracloud fhe governance permission scope",
+                expected: SORACLOUD_FHE_GOVERNANCE_PERMISSION_SCOPE_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Immutable, governance-authenticated material for one Soracloud FHE policy version.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudFheGovernedMaterialV1 {
+    /// Schema version; must equal [`SORACLOUD_FHE_GOVERNED_MATERIAL_VERSION_V1`].
+    pub schema_version: u16,
+    /// Service to which this material is cryptographically scoped.
+    pub service_name: Name,
+    /// Stable policy identifier within the service.
+    pub policy_name: Name,
+    /// Monotonic material version for this service and policy.
+    pub version: NonZeroU32,
+    /// Governance-authored parameter set and execution policy.
+    pub governance_bundle: FheGovernanceBundleV1,
+    /// Exact public evaluation-key bundle admitted by governance.
+    pub evaluation_keys: BfvEvaluationKeyBundle,
+    /// Exact deterministic refresh transcript admitted by governance.
+    pub evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    /// Concrete governed artifacts required by full-bootstrap key material.
+    pub full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
+    /// Canonical domain-separated digest of every preceding material field.
+    pub material_digest: Hash,
+}
+
+impl SoracloudFheGovernedMaterialV1 {
+    const DIGEST_DOMAIN: &'static [u8] = b"iroha.soracloud.fhe.governed_material.v1";
+
+    /// Compute the canonical digest for this immutable governed material.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when canonical Norito encoding fails.
+    pub fn computed_material_digest(&self) -> Result<Hash, SoracloudManifestError> {
+        let bytes = norito::encode_canonical(&(
+            self.schema_version,
+            self.service_name.clone(),
+            self.policy_name.clone(),
+            self.version,
+            self.governance_bundle.clone(),
+            self.evaluation_keys.clone(),
+            self.evaluation_key_refresh_transcript.clone(),
+            self.full_bootstrap_circuit_artifacts.clone(),
+        ))
+        .map_err(|err| SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe governed material",
+            field: "material_digest",
+            reason: format!("canonical Norito encoding failed: {err}"),
+        })?;
+        Ok(Hash::new_from_chunks(&[Self::DIGEST_DOMAIN, &bytes]))
+    }
+
+    /// Return the exact immutable reference carried by execution instructions.
+    #[must_use]
+    pub fn policy_reference(&self) -> SoracloudFhePolicyReferenceV1 {
+        SoracloudFhePolicyReferenceV1 {
+            schema_version: SORACLOUD_FHE_POLICY_REFERENCE_VERSION_V1,
+            policy_name: self.policy_name.clone(),
+            version: self.version,
+            material_digest: self.material_digest,
+        }
+    }
+
+    /// Validate all governed material and its canonical digest.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when any policy, key, transcript,
+    /// artifact, release-audit, or digest binding is inconsistent.
+    #[allow(clippy::too_many_lines)]
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORACLOUD_FHE_GOVERNED_MATERIAL_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "soracloud fhe governed material",
+                expected: SORACLOUD_FHE_GOVERNED_MATERIAL_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        self.governance_bundle.validate_for_admission()?;
+        let policy = &self.governance_bundle.execution_policy;
+        if self.policy_name != policy.policy_name {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe governed material",
+                field: "policy_name",
+                reason: "must match governance_bundle.execution_policy.policy_name".to_string(),
+            });
+        }
+        if self.governance_bundle.param_set.lifecycle != FheParamLifecycleV1::Active {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe governed material",
+                field: "governance_bundle.param_set.lifecycle",
+                reason: "new governed versions require an active parameter set".to_string(),
+            });
+        }
+        let params = ram_lfe_bfv_parameters_v1();
+        self.evaluation_keys.validate(&params).map_err(|err| {
+            SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe governed material",
+                field: "evaluation_keys",
+                reason: err.to_string(),
+            }
+        })?;
+        let evaluation_key_digest = self.evaluation_keys.digest(&params).map_err(|err| {
+            SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe governed material",
+                field: "evaluation_keys",
+                reason: err.to_string(),
+            }
+        })?;
+        if evaluation_key_digest != policy.evaluation_key_digest {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe governed material",
+                field: "evaluation_keys",
+                reason: "digest does not match the governed execution policy".to_string(),
+            });
+        }
+        let refresh_digest = self
+            .evaluation_key_refresh_transcript
+            .digest_for_evaluation_keys_with_mode(
+                &params,
+                &self.evaluation_keys,
+                policy.refresh_transcript_mode,
+            )?;
+        if refresh_digest != policy.evaluation_key_refresh_transcript_digest {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe governed material",
+                field: "evaluation_key_refresh_transcript",
+                reason: "digest does not match the governed execution policy".to_string(),
+            });
+        }
+        let public_key_statement = self
+            .evaluation_key_refresh_transcript
+            .public_key_proof_statement_digest_with_mode(&params, policy.refresh_transcript_mode)?;
+        if Some(public_key_statement) != policy.public_key_proof_statement_digest {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe governed material",
+                field: "evaluation_key_refresh_transcript.public_key",
+                reason: "proof statement digest does not match the governed execution policy"
+                    .to_string(),
+            });
+        }
+
+        match self.evaluation_keys.bootstrap_key.as_ref() {
+            None => {
+                if self.full_bootstrap_circuit_artifacts.is_some() {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest: "soracloud fhe governed material",
+                        field: "full_bootstrap_circuit_artifacts",
+                        reason: "requires a FullBootstrapV1 evaluation key".to_string(),
+                    });
+                }
+            }
+            Some(bootstrap_key)
+                if bootstrap_key.mode
+                    == iroha_crypto::fhe_bfv::BfvBootstrapKeyMode::RefreshOnlyV1 =>
+            {
+                if self.full_bootstrap_circuit_artifacts.is_some() {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest: "soracloud fhe governed material",
+                        field: "full_bootstrap_circuit_artifacts",
+                        reason: "refresh-only bootstrap keys must not carry circuit artifacts"
+                            .to_string(),
+                    });
+                }
+                let statement = self
+                    .evaluation_key_refresh_transcript
+                    .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                        &params,
+                        &self.evaluation_keys,
+                        policy.refresh_transcript_mode,
+                    )?;
+                if statement != policy.bootstrap_key_zero_refresh_proof_statement_digest {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest: "soracloud fhe governed material",
+                        field: "evaluation_key_refresh_transcript.bootstrap_transcript",
+                        reason:
+                            "proof statement digest does not match the governed execution policy"
+                                .to_string(),
+                    });
+                }
+            }
+            Some(bootstrap_key) => {
+                if policy
+                    .bootstrap_key_zero_refresh_proof_statement_digest
+                    .is_some()
+                {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest: "soracloud fhe governed material",
+                        field: "governance_bundle.execution_policy.bootstrap_key_zero_refresh_proof_statement_digest",
+                        reason: "FullBootstrapV1 material must not use the refresh-only proof"
+                            .to_string(),
+                    });
+                }
+                let material = bootstrap_key
+                    .full_bootstrap_material
+                    .as_ref()
+                    .ok_or_else(|| SoracloudManifestError::InvalidField {
+                        manifest: "soracloud fhe governed material",
+                        field: "evaluation_keys.bootstrap_key.full_bootstrap_material",
+                        reason: "FullBootstrapV1 key must carry governed material".to_string(),
+                    })?;
+                let artifacts =
+                    self.full_bootstrap_circuit_artifacts
+                        .as_ref()
+                        .ok_or_else(|| SoracloudManifestError::InvalidField {
+                            manifest: "soracloud fhe governed material",
+                            field: "full_bootstrap_circuit_artifacts",
+                            reason: "FullBootstrapV1 key requires exact governed artifacts"
+                                .to_string(),
+                        })?;
+                iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
+                    &params, material, artifacts,
+                )
+                .map_err(|err| SoracloudManifestError::InvalidField {
+                    manifest: "soracloud fhe governed material",
+                    field: "full_bootstrap_circuit_artifacts",
+                    reason: err.to_string(),
+                })?;
+                let package = policy.full_bootstrap_release_audit_package.as_ref().ok_or_else(|| {
+                    SoracloudManifestError::InvalidField {
+                        manifest: "soracloud fhe governed material",
+                        field: "governance_bundle.execution_policy.full_bootstrap_release_audit_package",
+                        reason: "FullBootstrapV1 material requires an approved release audit package"
+                            .to_string(),
+                    }
+                })?;
+                iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_release_audit_package_for_artifacts_trusted_reviewer_and_digest_v1(
+                    &params,
+                    material,
+                    artifacts,
+                    package,
+                    policy.full_bootstrap_release_audit_package_digest.expect(
+                        "policy validation requires a release audit package digest",
+                    ),
+                    policy
+                        .full_bootstrap_release_audit_trusted_reviewer_id
+                        .as_deref()
+                        .expect("policy validation requires a release audit reviewer id"),
+                    policy
+                        .full_bootstrap_release_audit_trusted_reviewer_public_key
+                        .as_ref()
+                        .expect("policy validation requires a release audit reviewer key"),
+                )
+                .map_err(|err| SoracloudManifestError::InvalidField {
+                    manifest: "soracloud fhe governed material",
+                    field: "governance_bundle.execution_policy.full_bootstrap_release_audit_package",
+                    reason: err.to_string(),
+                })?;
+            }
+        }
+
+        let computed_digest = self.computed_material_digest()?;
+        if self.material_digest != computed_digest {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe governed material",
+                field: "material_digest",
+                reason: "does not match the canonical governed material".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Lifecycle of one immutable governed Soracloud FHE policy version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "lifecycle", content = "value"))]
+pub enum SoracloudFhePolicyVersionLifecycleV1 {
+    /// Exact version currently authorized for execution.
+    Active,
+    /// Immutable historical version replaced by a monotonic rotation.
+    Superseded,
+    /// Immutable historical version explicitly revoked by governance.
+    Revoked,
+}
+
+/// Lifecycle wrapper for one immutable governed material version.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudFhePolicyVersionStateV1 {
+    /// Immutable authenticated material.
+    pub material: SoracloudFheGovernedMaterialV1,
+    /// Canonical signed transaction hash that admitted this version.
+    pub admitted_by_transaction_hash: Hash,
+    /// Current lifecycle of this version.
+    pub lifecycle: SoracloudFhePolicyVersionLifecycleV1,
+    /// Governance transaction that superseded or revoked this version.
+    pub deactivated_by_transaction_hash: Option<Hash>,
+}
+
+impl SoracloudFhePolicyVersionStateV1 {
+    /// Validate immutable material and lifecycle metadata.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] for inconsistent lifecycle fields.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        self.material.validate()?;
+        validate_soracloud_fhe_digest_hash(
+            "soracloud fhe policy version state",
+            "admitted_by_transaction_hash",
+            self.admitted_by_transaction_hash,
+        )?;
+        match (self.lifecycle, self.deactivated_by_transaction_hash) {
+            (SoracloudFhePolicyVersionLifecycleV1::Active, None) => Ok(()),
+            (SoracloudFhePolicyVersionLifecycleV1::Active, Some(_)) => {
+                Err(SoracloudManifestError::InvalidField {
+                    manifest: "soracloud fhe policy version state",
+                    field: "deactivated_by_transaction_hash",
+                    reason: "active material must not carry a deactivation transaction".to_string(),
+                })
+            }
+            (_, Some(hash)) => validate_soracloud_fhe_digest_hash(
+                "soracloud fhe policy version state",
+                "deactivated_by_transaction_hash",
+                hash,
+            ),
+            (_, None) => Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe policy version state",
+                field: "deactivated_by_transaction_hash",
+                reason: "inactive material must identify its governance transition".to_string(),
+            }),
+        }
+    }
+}
+
+/// Complete monotonic lifecycle history for one service-scoped FHE policy.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudFhePolicyRecordV1 {
+    /// Schema version; must equal [`SORACLOUD_FHE_POLICY_RECORD_VERSION_V1`].
+    pub schema_version: u16,
+    /// Service that owns this policy history.
+    pub service_name: Name,
+    /// Stable policy identifier within the service.
+    pub policy_name: Name,
+    /// Exact active version, or `None` after permanent revocation.
+    pub active_version: Option<NonZeroU32>,
+    /// Immutable version history keyed by consecutive monotonic version.
+    pub versions: BTreeMap<NonZeroU32, SoracloudFhePolicyVersionStateV1>,
+}
+
+impl SoracloudFhePolicyRecordV1 {
+    /// Validate monotonic version history and active/revoked lifecycle invariants.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when keys, embedded identities,
+    /// versions, or lifecycle states are inconsistent.
+    #[allow(clippy::too_many_lines)]
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORACLOUD_FHE_POLICY_RECORD_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "soracloud fhe policy record",
+                expected: SORACLOUD_FHE_POLICY_RECORD_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.versions.is_empty() {
+            return Err(SoracloudManifestError::EmptyField {
+                manifest: "soracloud fhe policy record",
+                field: "versions",
+            });
+        }
+        let mut expected_version = 1_u32;
+        let mut active_count = 0_u32;
+        for (version, state) in &self.versions {
+            if version.get() != expected_version {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "soracloud fhe policy record",
+                    field: "versions",
+                    reason: "versions must be consecutive and begin at one".to_string(),
+                });
+            }
+            expected_version = expected_version.checked_add(1).ok_or_else(|| {
+                SoracloudManifestError::InvalidField {
+                    manifest: "soracloud fhe policy record",
+                    field: "versions",
+                    reason: "version sequence exceeds u32".to_string(),
+                }
+            })?;
+            state.validate()?;
+            if state.material.service_name != self.service_name
+                || state.material.policy_name != self.policy_name
+                || state.material.version != *version
+            {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "soracloud fhe policy record",
+                    field: "versions",
+                    reason: "map key and embedded service, policy, and version must match"
+                        .to_string(),
+                });
+            }
+            if state.lifecycle == SoracloudFhePolicyVersionLifecycleV1::Active {
+                active_count = active_count.saturating_add(1);
+                if self.active_version != Some(*version) {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest: "soracloud fhe policy record",
+                        field: "active_version",
+                        reason: "must identify the sole active version".to_string(),
+                    });
+                }
+            }
+        }
+        let latest_version = *self
+            .versions
+            .last_key_value()
+            .expect("non-empty history established above")
+            .0;
+        if let Some(active_version) = self.active_version {
+            if active_count != 1 || active_version != latest_version {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "soracloud fhe policy record",
+                    field: "active_version",
+                    reason: "the sole active version must be the latest version".to_string(),
+                });
+            }
+            for (version, state) in &self.versions {
+                if *version != active_version
+                    && state.lifecycle != SoracloudFhePolicyVersionLifecycleV1::Superseded
+                {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest: "soracloud fhe policy record",
+                        field: "versions.lifecycle",
+                        reason: "all older versions must be superseded".to_string(),
+                    });
+                }
+            }
+        } else {
+            if active_count != 0
+                || self.versions.get(&latest_version).is_none_or(|state| {
+                    state.lifecycle != SoracloudFhePolicyVersionLifecycleV1::Revoked
+                })
+            {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "soracloud fhe policy record",
+                    field: "active_version",
+                    reason:
+                        "revoked policies must have no active version and a revoked latest version"
+                            .to_string(),
+                });
+            }
+            for (version, state) in &self.versions {
+                if *version != latest_version
+                    && state.lifecycle != SoracloudFhePolicyVersionLifecycleV1::Superseded
+                {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest: "soracloud fhe policy record",
+                        field: "versions.lifecycle",
+                        reason: "all pre-revocation versions must be superseded".to_string(),
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -1706,111 +2183,6 @@ impl SoracloudFheBootstrapKeyProofV1 {
     }
 }
 
-/// Proof envelope admitting governed BFV full-bootstrap material commitments.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct SoracloudFheFullBootstrapMaterialProofV1 {
-    /// Schema version; must equal [`SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1`].
-    pub schema_version: u16,
-    /// Canonical full-bootstrap material statement hash carried as proof public input.
-    pub statement_hash: Hash,
-    /// Verifier-backed proof attachment for the full-bootstrap material statement.
-    pub proof: ProofAttachment,
-}
-
-impl SoracloudFheFullBootstrapMaterialProofV1 {
-    /// Validate proof-envelope structure before verifier execution.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when the envelope version is unsupported
-    /// or the nested proof attachment is malformed.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.schema_version != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1 {
-            return Err(SoracloudManifestError::UnsupportedVersion {
-                manifest: "soracloud fhe full-bootstrap material proof",
-                expected: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
-                found: self.schema_version,
-            });
-        }
-        validate_soracloud_fhe_statement_hash(
-            "soracloud fhe full-bootstrap material proof",
-            "statement_hash",
-            self.statement_hash,
-        )?;
-        if self.proof.backend.as_str().trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "soracloud fhe full-bootstrap material proof",
-                field: "proof.backend",
-            });
-        }
-        validate_soracloud_fhe_full_bootstrap_material_proof_backend(self.proof.backend.as_str())?;
-        if self.proof.proof.backend != self.proof.backend {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud fhe full-bootstrap material proof",
-                field: "proof.proof.backend",
-                reason: "must match proof.backend".to_string(),
-            });
-        }
-        if self.proof.proof.bytes.is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "soracloud fhe full-bootstrap material proof",
-                field: "proof.proof.bytes",
-            });
-        }
-        if self.proof.vk_ref.backend != self.proof.backend {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud fhe full-bootstrap material proof",
-                field: "proof.vk_ref.backend",
-                reason: "must match proof.backend".to_string(),
-            });
-        }
-        if self.proof.vk_ref.name.trim().is_empty() {
-            return Err(SoracloudManifestError::EmptyField {
-                manifest: "soracloud fhe full-bootstrap material proof",
-                field: "proof.vk_ref.name",
-            });
-        }
-        if self.proof.vk_ref.name != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud fhe full-bootstrap material proof",
-                field: "proof.vk_ref.name",
-                reason: "must use the canonical v1 circuit id".to_string(),
-            });
-        }
-        if let Some((field, reason)) = self.proof.structural_error() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud fhe full-bootstrap material proof",
-                field: "proof",
-                reason: format!("{field} {reason}"),
-            });
-        }
-        let vk_commitment =
-            self.proof
-                .vk_commitment
-                .ok_or_else(|| SoracloudManifestError::InvalidField {
-                    manifest: "soracloud fhe full-bootstrap material proof",
-                    field: "proof.vk_commitment",
-                    reason: "must be present and match verifier-key hash".to_string(),
-                })?;
-        if self.proof.envelope_hash.is_none() {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "soracloud fhe full-bootstrap material proof",
-                field: "proof.envelope_hash",
-                reason: "must be present and match proof bytes".to_string(),
-            });
-        }
-        validate_soracloud_fhe_full_bootstrap_material_proof_open_verify_envelope(
-            &self.proof.proof.bytes,
-            vk_commitment,
-            self.statement_hash,
-        )?;
-        Ok(())
-    }
-}
-
 /// Proof envelope admitting a governed BFV full-bootstrap execution output claim.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1952,19 +2324,6 @@ fn validate_soracloud_fhe_bootstrap_key_proof_backend(
         manifest: "soracloud fhe bootstrap key proof",
         field: "proof.backend",
         reason: "must use the canonical BFV STARK/FRI backend".to_string(),
-    })
-}
-
-fn validate_soracloud_fhe_full_bootstrap_material_proof_backend(
-    backend: &str,
-) -> Result<(), SoracloudManifestError> {
-    if backend == BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1 {
-        return Ok(());
-    }
-    Err(SoracloudManifestError::InvalidField {
-        manifest: "soracloud fhe full-bootstrap material proof",
-        field: "proof.backend",
-        reason: "must use the canonical BFV full-bootstrap STARK/FRI backend".to_string(),
     })
 }
 
@@ -2664,96 +3023,6 @@ fn validate_soracloud_fhe_bootstrap_key_proof_open_verify_envelope(
     Ok(())
 }
 
-fn validate_soracloud_fhe_full_bootstrap_material_proof_open_verify_envelope(
-    proof_bytes: &[u8],
-    vk_commitment: [u8; 32],
-    statement_hash: Hash,
-) -> Result<(), SoracloudManifestError> {
-    if proof_bytes.len() > SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_MAX_OPEN_VERIFY_BYTES {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap material proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope length {} exceeds maximum {}",
-                proof_bytes.len(),
-                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_MAX_OPEN_VERIFY_BYTES
-            ),
-        });
-    }
-    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
-        SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap material proof",
-            field: "proof.proof.bytes",
-            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
-        }
-    })?;
-    envelope
-        .validate_with_bounds(soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds())
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap material proof",
-            field: "proof.proof.bytes",
-            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
-        })?;
-    if envelope.backend != BackendTag::Stark {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap material proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
-        });
-    }
-    if envelope.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap material proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
-        });
-    }
-    if envelope.public_inputs != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-    {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap material proof",
-            field: "proof.proof.bytes",
-            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
-        });
-    }
-    if vk_commitment != envelope.vk_hash {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap material proof",
-            field: "proof.vk_commitment",
-            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
-        });
-    }
-    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-        .map_err(|err| SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap material proof",
-            field: "proof.proof.bytes",
-            reason: format!(
-                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
-            ),
-        })?;
-    if open_proof.version != 1 {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap material proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public-input wrapper version must be 1".to_string(),
-        });
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open_proof.public_inputs != expected_public_inputs {
-        return Err(SoracloudManifestError::InvalidField {
-            manifest: "soracloud fhe full-bootstrap material proof",
-            field: "proof.proof.bytes",
-            reason: "STARK public inputs must match statement_hash".to_string(),
-        });
-    }
-    validate_soracloud_fhe_stark_native_envelope_bytes(
-        "soracloud fhe full-bootstrap material proof",
-        &open_proof.envelope_bytes,
-        SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
-    )?;
-    Ok(())
-}
-
 fn validate_soracloud_fhe_full_bootstrap_execution_proof_open_verify_envelope(
     proof_bytes: &[u8],
     vk_commitment: [u8; 32],
@@ -2890,25 +3159,6 @@ pub fn soracloud_fhe_bootstrap_key_proof_open_verify_bounds() -> OpenVerifyEnvel
         max_circuit_id_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1.len(),
         max_public_input_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.len(),
         max_proof_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_STARK_WRAPPER_BYTES,
-        max_aux_bytes: 0,
-        allow_aux: false,
-        ..OpenVerifyEnvelopeBounds::default()
-    }
-}
-
-/// Return shared `OpenVerifyEnvelope` bounds for full-bootstrap material proofs.
-///
-/// Data-model validation and Core runtime admission both use these limits so
-/// outer envelope, STARK wrapper, canonical metadata, and auxiliary-byte policy
-/// cannot drift.
-#[must_use]
-pub fn soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds() -> OpenVerifyEnvelopeBounds
-{
-    OpenVerifyEnvelopeBounds {
-        max_circuit_id_bytes: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1.len(),
-        max_public_input_bytes: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-            .len(),
-        max_proof_bytes: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_MAX_STARK_WRAPPER_BYTES,
         max_aux_bytes: 0,
         allow_aux: false,
         ..OpenVerifyEnvelopeBounds::default()
@@ -4643,4 +4893,3 @@ impl SoraDeploymentBundleV1 {
         Ok(())
     }
 }
-

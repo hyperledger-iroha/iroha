@@ -275,18 +275,12 @@ fn grant_account_permission_for_test(
 fn seed_asset_definition_for_test(
     app: &SharedAppState,
     asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
+    owning_domain: Option<&DomainId>,
 ) {
-    let missing_domain = asset_definition_id
-        .try_domain()
-        .is_some_and(|domain_id| app.state.view().world().domain(domain_id).is_err());
-    if missing_domain {
-        bind_domain_name_for_test(
-            app,
-            &asset_definition_id
-                .try_domain()
-                .expect("missing domain implies a projected asset definition id")
-                .to_string(),
-        );
+    if let Some(domain_id) = owning_domain
+        && app.state.view().world().domain(domain_id).is_err()
+    {
+        bind_domain_name_for_test(app, &domain_id.to_string());
     }
 
     let next_height = app
@@ -304,24 +298,15 @@ fn seed_asset_definition_for_test(
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
 
-    if let Some(domain_id) = asset_definition_id.try_domain()
-        && app.state.view().world().domain(domain_id).is_err()
-    {
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&ALICE_ID, &mut tx)
-            .expect("register asset domain");
-    }
-
-    let mut asset_definition =
-        iroha_data_model::asset::AssetDefinition::numeric(asset_definition_id.clone()).with_name(
-            asset_definition_id
-                .try_name()
-                .map_or_else(String::new, ToString::to_string),
-        );
-    if asset_definition_requires_restricted_balance_policy_for_test(app, asset_definition_id) {
-        asset_definition =
-            asset_definition.with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted);
-    }
+    let balance_scope_policy = if asset_definition_requires_restricted_balance_policy_for_test(
+        app,
+        owning_domain,
+    ) {
+        AssetBalancePolicy::DataspaceRestricted
+    } else {
+        AssetBalancePolicy::Global
+    };
+    let asset_definition = iroha_data_model::asset::AssetDefinition::numeric(asset_definition_id.clone(), "asset-definition".to_owned(), balance_scope_policy, owning_domain.cloned());
 
     Register::asset_definition(asset_definition)
         .execute(&ALICE_ID, &mut tx)
@@ -333,9 +318,9 @@ fn seed_asset_definition_for_test(
 
 fn asset_definition_requires_restricted_balance_policy_for_test(
     app: &SharedAppState,
-    asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
+    owning_domain: Option<&DomainId>,
 ) -> bool {
-    let Some(domain_id) = asset_definition_id.try_domain() else {
+    let Some(domain_id) = owning_domain else {
         return false;
     };
     let dataspace_alias = domain_id.dataspace().as_ref();
@@ -675,9 +660,12 @@ fn install_lane_manifest_registry_with_torii_urls_for_test(
     state: &IrohaState,
     lanes: &[(LaneId, Vec<(AccountId, PeerId, Option<&str>)>)],
 ) {
+    static MANIFEST_ROOT_SEQ: AtomicUsize = AtomicUsize::new(0);
+
     let nexus = state.nexus_snapshot();
+    let manifest_root_seq = MANIFEST_ROOT_SEQ.fetch_add(1, Ordering::Relaxed);
     let manifest_root = std::env::temp_dir().join(format!(
-        "iroha-torii-manifests-{}-{}",
+        "iroha-torii-manifests-{}-{}-{manifest_root_seq}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1862,6 +1850,11 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         transaction_batch_max_bytes: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .unwrap_or(usize::MAX),
         state: state.clone(),
+        #[cfg(feature = "app_api")]
+        musubi_search: Arc::new(RwLock::new(
+            iroha_core::musubi_search::MusubiSearchIndexV1::default(),
+        )),
+        bootle_lantern_issuance_runtime: None,
         kiso,
         query_service: query_handle,
         query_inflight: Arc::new(tokio::sync::Semaphore::new(
@@ -1911,7 +1904,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         soranet_privacy_tokens: Arc::new(soranet_privacy_tokens),
         soranet_privacy_allow_nets: Arc::new(soranet_privacy_allow_nets),
         soranet_privacy_rate_limiter,
-        allow_nets: Arc::new(vec![]),
+        api_rate_limit_bypass_nets: Arc::new(vec![]),
+        internal_api_trusted_nets: Arc::new(limits::parse_cidrs(
+            &defaults::torii::internal_api_trusted_cidrs(),
+        )),
         trusted_proxy_nets: Arc::new(vec![]),
         norito_rpc_mtls_trusted_proxy_nets: Arc::new(limits::parse_cidrs(
             &norito_rpc_cfg.mtls_trusted_proxy_cidrs,
@@ -2042,6 +2038,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         #[cfg(feature = "app_api")]
         stream_token_issuer,
         #[cfg(feature = "app_api")]
+        stream_token_admission_capture: None,
+        #[cfg(feature = "app_api")]
         stream_token_concurrency: sorafs::StreamTokenConcurrencyTracker::default(),
         #[cfg(feature = "app_api")]
         stream_token_quota: sorafs::StreamTokenQuotaTracker::default(),
@@ -2063,11 +2061,12 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         #[cfg(feature = "app_api")]
         account_onboarding: None,
         vpn_helper_ticket_secret: None,
+        vpn_relay_trust: None,
         vpn_quotes: Arc::new(DashMap::new()),
         vpn_used_payments: Arc::new(DashMap::new()),
         vpn_sessions: Arc::new(DashMap::new()),
         vpn_receipts: Arc::new(DashMap::new()),
-        vpn_state_lock: Arc::new(tokio::sync::Mutex::new(())),
+        vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
         soracloud_runtime: None,
         #[cfg(feature = "app_api")]
         soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
@@ -2295,9 +2294,10 @@ async fn torii_ram_lfe_uses_config_runtime() {
     cfg.torii.ram_lfe = Some(iroha_config::parameters::actual::ToriiRamLfe {
         programs: vec![iroha_config::parameters::actual::ToriiRamLfeProgram {
             program_id: "phone_retail".parse().expect("program id"),
-            secret: vec![0x01, 0x02, 0x03, 0x04],
+            secret: iroha_crypto::RamLfeSecret::try_from(vec![0x01, 0x02, 0x03, 0x04])
+                .expect("valid RAM-LFE test secret"),
             hidden_program: iroha_crypto::default_bfv_programmed_hidden_program(),
-            signer_private_key: iroha_crypto::ExposedPrivateKey(signer.private_key().clone()),
+            signer_private_key: signer.private_key().clone(),
             receipt_ttl: Some(Duration::from_secs(30)),
         }],
     });

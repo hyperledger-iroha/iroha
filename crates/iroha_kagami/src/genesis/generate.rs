@@ -17,7 +17,7 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_executor_data_model::permission::{
-    account::CanRegisterAccount, parameter::CanSetParameters,
+    account::CanRegisterAccount, parameter::CanSetParameters, query::CanReadAllLedgerData,
 };
 use iroha_genesis::{GenesisBuilder, ManifestCrypto, RawGenesisTransaction};
 use iroha_primitives::json::Json;
@@ -438,10 +438,15 @@ fn append_public_xor_binding(
         builder = builder.append_instruction(Register::domain(Domain::new(public_xor_domain)));
     }
     if !has_asset_definition {
-        let definition = AssetDefinition::new(asset_definition_id.clone(), NumericSpec::default())
-            .with_name("xor".to_owned())
-            .confidential_policy(AssetConfidentialPolicy::convertible())
-            .with_metadata(Metadata::default());
+        let definition = AssetDefinition::new(
+            asset_definition_id.clone(),
+            "xor".to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .confidential_policy(AssetConfidentialPolicy::convertible())
+        .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
     }
     if !alias_bound {
@@ -649,9 +654,11 @@ pub fn generate_default(
         universal_dataspace.as_ref(),
     )?;
     let rose_asset_definition_id =
-        AssetDefinitionId::new(wonderland_domain.clone(), "rose".parse()?);
-    let cabbage_asset_definition_id =
-        AssetDefinitionId::new(garden_of_live_flowers_domain.clone(), "cabbage".parse()?);
+        AssetDefinitionId::derive_from_components(wonderland_domain.clone(), "rose".parse()?);
+    let cabbage_asset_definition_id = AssetDefinitionId::derive_from_components(
+        garden_of_live_flowers_domain.clone(),
+        "cabbage".parse()?,
+    );
 
     let mut wonderland = builder.domain_with_metadata(wonderland_domain.clone(), meta.clone());
     if genesis_account_id != *ALICE_ID {
@@ -680,6 +687,8 @@ pub fn generate_default(
     );
     let grant_permission_to_set_parameters =
         Grant::account_permission(CanSetParameters, ALICE_ID.clone());
+    let grant_permission_to_read_all_ledger_data =
+        Grant::account_permission(CanReadAllLedgerData, ALICE_ID.clone());
     let grant_permission_to_manage_soracloud = Grant::account_permission(
         Permission::new("CanManageSoracloud".into(), Json::new(())),
         ALICE_ID.clone(),
@@ -733,6 +742,7 @@ pub fn generate_default(
         .append_instruction(mint_cabbage)
         .append_instruction(transfer_rose_ownership)
         .append_instruction(grant_permission_to_set_parameters)
+        .append_instruction(grant_permission_to_read_all_ledger_data)
         .append_instruction(grant_permission_to_manage_soracloud)
         .append_instruction(grant_permission_to_register_accounts);
 
@@ -746,6 +756,36 @@ mod consensus_manifest_tests {
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
 
     use super::*;
+
+    fn account_permission_grants(manifest: &RawGenesisTransaction) -> Vec<(AccountId, Permission)> {
+        manifest
+            .transactions()
+            .iter()
+            .flat_map(iroha_genesis::RawGenesisTx::instructions)
+            .filter_map(|instruction| {
+                let iroha_data_model::isi::GrantBox::Permission(grant) =
+                    instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::GrantBox>()?
+                else {
+                    return None;
+                };
+                Some((grant.destination().clone(), grant.object().clone()))
+            })
+            .collect()
+    }
+
+    fn grants_global_reader_to(
+        manifest: &RawGenesisTransaction,
+        expected_authority: &AccountId,
+    ) -> bool {
+        let expected_permission: Permission = CanReadAllLedgerData.into();
+        account_permission_grants(manifest)
+            .iter()
+            .any(|(authority, permission)| {
+                authority == expected_authority && permission == &expected_permission
+            })
+    }
 
     #[test]
     fn synthetic_npos_genesis_has_canonical_metadata() {
@@ -854,6 +894,72 @@ mod consensus_manifest_tests {
             "the fresh-node world pre-seeds the genesis authority account"
         );
     }
+
+    #[test]
+    fn generated_default_grants_global_reader_to_bootstrap_alice() {
+        let manifest = generate_default(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("default-global-reader"),
+                PathBuf::from("."),
+            ),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Permissioned,
+            None,
+            None,
+        )
+        .expect("generate default genesis");
+
+        assert!(
+            grants_global_reader_to(&manifest, &ALICE_ID),
+            "the bootstrap operator must receive the immutable global query root"
+        );
+    }
+
+    #[test]
+    fn shipped_first_release_manifests_name_an_intentional_global_reader() {
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for relative_path in [
+            "defaults/genesis.json",
+            "defaults/kagami/iroha3-dev/genesis.json",
+            "defaults/kagami/iroha3-nexus/genesis.json",
+            "defaults/kagami/iroha3-taira/genesis.json",
+            "defaults/nexus/genesis.json",
+            "configs/soranexus/nexus/genesis.json",
+            "configs/soranexus/taira/genesis.json",
+        ] {
+            let manifest = RawGenesisTransaction::from_path(repository_root.join(relative_path))
+                .unwrap_or_else(|error| panic!("parse {relative_path}: {error}"));
+            let grants = account_permission_grants(&manifest);
+            let set_parameters: Vec<_> = grants
+                .iter()
+                .filter(|(_, permission)| permission == &Permission::from(CanSetParameters))
+                .collect();
+            assert_eq!(
+                set_parameters.len(),
+                1,
+                "{relative_path} must name exactly one bootstrap parameter operator"
+            );
+            let global_readers: Vec<_> = grants
+                .iter()
+                .filter(|(_, permission)| permission.name() == "CanReadAllLedgerData")
+                .collect();
+            assert_eq!(
+                global_readers.len(),
+                1,
+                "{relative_path} must name exactly one global reader root"
+            );
+            assert_eq!(
+                global_readers[0].1,
+                Permission::from(CanReadAllLedgerData),
+                "{relative_path} contains a malformed global reader grant"
+            );
+            assert_eq!(
+                global_readers[0].0, set_parameters[0].0,
+                "{relative_path} must grant global reads to its bootstrap parameter operator"
+            );
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -888,12 +994,16 @@ fn generate_synthetic(
         for asset_definition in 0..asset_definitions_per_domain {
             let asset_name_literal = format!("asset_{asset_definition}");
             let asset_name: Name = asset_name_literal.parse()?;
-            let asset_definition_id = AssetDefinitionId::new(domain_id.clone(), asset_name);
+            let asset_definition_id =
+                AssetDefinitionId::derive_from_components(domain_id.clone(), asset_name);
             synthetic_asset_definitions.push(asset_definition_id.clone());
-            builder = builder.append_instruction(Register::asset_definition(
-                AssetDefinition::new(asset_definition_id, NumericSpec::default())
-                    .with_name(asset_name_literal),
-            ));
+            builder = builder.append_instruction(Register::asset_definition(AssetDefinition::new(
+                asset_definition_id,
+                asset_name_literal,
+                NumericSpec::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )));
         }
 
         for _ in 0..accounts_per_domain {

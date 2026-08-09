@@ -1217,12 +1217,6 @@ pub fn soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1() -> [u8; 
     Hash::new(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1).into()
 }
 
-/// Return the Soracloud FHE full-bootstrap material proof public-input schema hash.
-#[must_use]
-pub fn soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1() -> [u8; 32] {
-    Hash::new(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1).into()
-}
-
 /// Return the Soracloud FHE full-bootstrap execution proof public-input schema hash.
 #[must_use]
 pub fn soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1() -> [u8; 32] {
@@ -1951,61 +1945,78 @@ struct FheJobRunProvenancePayloadV1<'a> {
     service_name: &'a str,
     binding_name: &'a str,
     job: FheJobSpecV1,
-    policy: FheExecutionPolicyV1,
-    param_set: FheParamSetV1,
-    evaluation_keys: BfvEvaluationKeyBundle,
-    evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    policy_reference: SoracloudFhePolicyReferenceV1,
     public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
     bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
-    full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
-    full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
     full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
-    governance_tx_hash: Hash,
 }
 
 /// Encode the canonical provenance signature payload for FHE job execution.
 ///
 /// The payload layout is the canonical Norito encoding of
 /// `FheJobRunProvenancePayloadV1`, preserving this exact field order:
-/// `service_name`, `binding_name`, `job`, `policy`, `param_set`,
-/// `evaluation_keys`, `evaluation_key_refresh_transcript`, `public_key_proof`,
-/// `bootstrap_key_zero_refresh_proof`, `full_bootstrap_material_proof`,
-/// `full_bootstrap_circuit_artifacts`, `full_bootstrap_execution_proofs`,
-/// `governance_tx_hash`.
+/// `service_name`, `binding_name`, `job`, `policy_reference`,
+/// `public_key_proof`, `bootstrap_key_zero_refresh_proof`, and
+/// `full_bootstrap_execution_proofs`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
-#[allow(clippy::too_many_arguments)]
 pub fn encode_fhe_job_run_provenance_payload(
     service_name: &str,
     binding_name: &str,
     job: FheJobSpecV1,
-    policy: FheExecutionPolicyV1,
-    param_set: FheParamSetV1,
-    evaluation_keys: BfvEvaluationKeyBundle,
-    evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    policy_reference: SoracloudFhePolicyReferenceV1,
     public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
     bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
-    full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
-    full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
     full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
-    governance_tx_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&FheJobRunProvenancePayloadV1 {
         service_name,
         binding_name,
         job,
-        policy,
-        param_set,
-        evaluation_keys,
-        evaluation_key_refresh_transcript,
+        policy_reference,
         public_key_proof,
         bootstrap_key_zero_refresh_proof,
-        full_bootstrap_material_proof,
-        full_bootstrap_circuit_artifacts,
         full_bootstrap_execution_proofs,
-        governance_tx_hash,
     })
+}
+
+/// Encode the canonical provenance payload for first FHE policy registration.
+///
+/// # Errors
+/// Returns an encoding error when canonical Norito serialization fails.
+pub fn encode_fhe_policy_register_provenance_payload(
+    service_name: &str,
+    material: &SoracloudFheGovernedMaterialV1,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::encode_canonical(&(service_name.to_owned(), material.clone()))
+}
+
+/// Encode the canonical provenance payload for monotonic FHE policy rotation.
+///
+/// # Errors
+/// Returns an encoding error when canonical Norito serialization fails.
+pub fn encode_fhe_policy_rotate_provenance_payload(
+    service_name: &str,
+    expected_active: &SoracloudFhePolicyReferenceV1,
+    material: &SoracloudFheGovernedMaterialV1,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::encode_canonical(&(
+        service_name.to_owned(),
+        expected_active.clone(),
+        material.clone(),
+    ))
+}
+
+/// Encode the canonical provenance payload for permanent FHE policy revocation.
+///
+/// # Errors
+/// Returns an encoding error when canonical Norito serialization fails.
+pub fn encode_fhe_policy_revoke_provenance_payload(
+    service_name: &str,
+    expected_active: &SoracloudFhePolicyReferenceV1,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::encode_canonical(&(service_name.to_owned(), expected_active.clone()))
 }
 
 /// Encode the canonical provenance signature payload for decryption requests.

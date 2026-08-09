@@ -32,6 +32,38 @@ pub struct CarVerificationReport {
     pub chunk_store: ChunkStore,
 }
 
+/// Canonical CAR whose complete plan, container bytes, and payload sections were verified.
+///
+/// The retained parsed view lets security-sensitive consumers make repeated bounded passes over
+/// the authenticated raw payload without cloning it out of the CAR. No instance is returned until
+/// the supplied multi-file plan has reproduced the exact canonical container and roots.
+pub struct VerifiedCanonicalCarV1<'a> {
+    parsed: ParsedCar<'a>,
+    stats: CarWriteStats,
+}
+
+impl VerifiedCanonicalCarV1<'_> {
+    /// Return statistics reproduced from the verified plan and canonical CAR.
+    #[must_use]
+    pub const fn stats(&self) -> &CarWriteStats {
+        &self.stats
+    }
+
+    /// Consume the retained view and return its reproduced writer statistics.
+    #[must_use]
+    pub fn into_stats(self) -> CarWriteStats {
+        self.stats
+    }
+
+    /// Open a fresh reader over the authenticated raw payload sections.
+    ///
+    /// Each call starts at payload byte zero and borrows the immutable verified CAR bytes. The
+    /// returned stream excludes CAR headers, DAG nodes, and the index.
+    pub fn payload_reader(&self) -> impl Read + '_ {
+        self.parsed.payload_reader()
+    }
+}
+
 /// Outcome returned after verifying a `dag-scope=block` CAR stream.
 #[derive(Debug)]
 pub struct BlockVerificationReport {
@@ -50,6 +82,47 @@ pub struct BlockVerificationReport {
 pub struct CarVerifier;
 
 impl CarVerifier {
+    /// Verifies that `car_bytes` are the exact canonical CARv2 encoding of
+    /// `plan` and returns statistics derived from the retained archive.
+    ///
+    /// Unlike [`Self::verify_full_car_with_plan`], this entry point does not
+    /// require a manifest. It is intended for callers that already retain and
+    /// authenticate the complete build plan alongside the archive.
+    pub fn verify_canonical_car_with_plan(
+        plan: &CarBuildPlan,
+        car_bytes: &[u8],
+    ) -> Result<CarWriteStats, CarVerifyError> {
+        Self::verify_canonical_car_with_plan_retained(plan, car_bytes)
+            .map(VerifiedCanonicalCarV1::into_stats)
+    }
+
+    /// Verify a canonical multi-file CAR while retaining a zero-copy authenticated payload view.
+    ///
+    /// This performs the same complete plan, root, and byte-for-byte canonical-container checks as
+    /// [`Self::verify_canonical_car_with_plan`]. It is intended for consumers that must reproduce
+    /// higher-level commitments or parse bundle members after the container has been authenticated.
+    pub fn verify_canonical_car_with_plan_retained<'a>(
+        plan: &CarBuildPlan,
+        car_bytes: &'a [u8],
+    ) -> Result<VerifiedCanonicalCarV1<'a>, CarVerifyError> {
+        let parsed = ParsedCar::parse(car_bytes)?;
+        validate_plan(plan, &parsed)?;
+        ensure_plan_offsets(plan)?;
+
+        let mut canonical_car = CanonicalCarComparator::new(car_bytes);
+        let mut payload_reader = parsed.payload_reader();
+        let stats = CarStreamingWriter::new(plan)
+            .write_from_reader(&mut payload_reader, &mut canonical_car)
+            .map_err(CarVerifyError::CanonicalCar)?;
+        if stats.root_cids != parsed.roots() {
+            return Err(CarVerifyError::PlanRootMismatch);
+        }
+        if !canonical_car.matches_exactly() {
+            return Err(CarVerifyError::NonCanonicalCar);
+        }
+        Ok(VerifiedCanonicalCarV1 { parsed, stats })
+    }
+
     /// Verifies a canonical single-file `dag-scope=full` CAR response against
     /// the supplied manifest.
     ///
@@ -645,6 +718,8 @@ pub enum CarVerifyError {
     ManifestCarDigestMismatch,
     #[error("manifest root CID mismatch")]
     ManifestRootMismatch,
+    #[error("CAR root CID does not match the canonical supplied plan")]
+    PlanRootMismatch,
     #[error("block CAR root CID does not match the canonical requested range root")]
     BlockRootMismatch,
     #[error("CAR contains non-canonical DAG, index, header, or trailing bytes")]
@@ -1321,7 +1396,7 @@ mod tests {
     use sorafs_manifest::{DagCodecId, GovernanceProofs, ManifestBuilder, PinPolicy, StorageClass};
 
     use super::*;
-    use crate::{CarChunk, CarWriter, ChunkProfile, FilePlan, encode_cid};
+    use crate::{CarChunk, CarWriter, ChunkProfile, FileEntry, FilePlan, encode_cid};
 
     fn sample_payload() -> Vec<u8> {
         let total_bytes = 512 * 1024; // ensure multiple chunks under the default profile
@@ -1478,6 +1553,74 @@ mod tests {
             CarVerifier::verify_full_car_with_plan(&manifest, &plan, &car_bytes).expect("verify");
         assert_eq!(report.stats.chunk_count, plan.chunks.len());
         assert_eq!(report.chunk_store.payload_len(), plan.content_length);
+    }
+
+    #[test]
+    fn canonical_car_verification_with_retained_plan_succeeds() {
+        let payload = sample_payload();
+        let plan = CarBuildPlan::single_file(&payload).expect("plan");
+        let mut car = Vec::new();
+        let expected = CarWriter::new(&plan, &payload)
+            .expect("writer")
+            .write_to(&mut car)
+            .expect("write CAR");
+
+        let actual = CarVerifier::verify_canonical_car_with_plan(&plan, &car)
+            .expect("retained plan and CAR must verify");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn retained_canonical_car_reopens_the_exact_multifile_payload_without_cloning() {
+        let (plan, payload) = CarBuildPlan::from_files(vec![
+            FileEntry {
+                path: vec!["src".to_owned(), "lib.ko".to_owned()],
+                data: b"fn main() {}\n".to_vec(),
+            },
+            FileEntry {
+                path: vec!["tests".to_owned(), "basic.ko".to_owned()],
+                data: b"test main\n".to_vec(),
+            },
+        ])
+        .expect("multi-file plan");
+        let mut car = Vec::new();
+        let expected = CarWriter::new(&plan, &payload)
+            .expect("writer")
+            .write_to(&mut car)
+            .expect("write CAR");
+
+        let verified = CarVerifier::verify_canonical_car_with_plan_retained(&plan, &car)
+            .expect("retain verified CAR");
+        assert_eq!(verified.stats(), &expected);
+        for _ in 0..2 {
+            let mut reopened = Vec::new();
+            verified
+                .payload_reader()
+                .read_to_end(&mut reopened)
+                .expect("read authenticated payload");
+            assert_eq!(reopened, payload);
+        }
+    }
+
+    #[test]
+    fn canonical_car_verification_rejects_substituted_plan_identity() {
+        let payload = sample_payload();
+        let mut plan = CarBuildPlan::single_file(&payload).expect("plan");
+        let mut car = Vec::new();
+        CarWriter::new(&plan, &payload)
+            .expect("writer")
+            .write_to(&mut car)
+            .expect("write CAR");
+        plan.payload_digest = blake3_hash(b"substituted payload identity");
+
+        let error = CarVerifier::verify_canonical_car_with_plan(&plan, &car)
+            .expect_err("a substituted plan identity must fail");
+
+        assert!(matches!(
+            error,
+            CarVerifyError::CanonicalCar(CarWriteError::PayloadDigestMismatch)
+        ));
     }
 
     #[test]

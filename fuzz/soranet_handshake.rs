@@ -5,13 +5,15 @@ use iroha_crypto::{
     Algorithm, KeyPair,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-        HandshakeSuite, RuntimeParams, SimulationParams, build_client_hello,
+        DEFAULT_TLS_SERVER_NAME, HandshakeSuite, RuntimeParams, SORANET_QUIC_ALPN,
+        SimulationParams, build_client_hello,
         client_handle_relay_hello, relay_finalize_handshake, simulate_handshake,
         simulation_report_json,
     },
 };
 use libfuzzer_sys::fuzz_target;
-use rand::{SeedableRng as _, rngs::ChaCha20Rng};
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 
 #[derive(Debug, Arbitrary)]
 struct ByteMutation {
@@ -37,7 +39,6 @@ struct FuzzInput {
     sig_id: u8,
     client_seed: [u8; 32],
     relay_seed: [u8; 32],
-    key_seed: [u8; 32],
 }
 
 fn build_suite_order(bytes: &[u8]) -> Vec<HandshakeSuite> {
@@ -123,7 +124,7 @@ fn run_simulation(case: &FuzzInput) {
     apply_mutations(&mut client_caps, &case.client_mutations);
     apply_mutations(&mut relay_caps, &case.relay_mutations);
 
-    let resume_vec = case.resume_hash.map(<[u8; 32]>::to_vec);
+    let resume_vec = case.resume_hash.map(|hash| hash.to_vec());
     let resume_slice = resume_vec.as_deref();
 
     let descriptor = if case.descriptor_commit == [0u8; 32] {
@@ -164,7 +165,7 @@ fn run_runtime_handshake(case: &FuzzInput) {
     apply_mutations(&mut client_caps, &case.client_mutations);
     apply_mutations(&mut relay_caps, &case.relay_mutations);
 
-    let resume_vec = case.resume_hash.map(<[u8; 32]>::to_vec);
+    let resume_vec = case.resume_hash.map(|hash| hash.to_vec());
     let resume_slice = resume_vec.as_deref();
     let descriptor = if case.descriptor_commit == [0u8; 32] {
         DEFAULT_DESCRIPTOR_COMMIT.as_slice()
@@ -173,19 +174,18 @@ fn run_runtime_handshake(case: &FuzzInput) {
     };
 
     let runtime = RuntimeParams {
-        descriptor_commit,
+        descriptor_commit: descriptor,
         client_capabilities: &client_caps,
         relay_capabilities: &relay_caps,
         kem_id: case.kem_id % 3,
         sig_id: if case.sig_id == 0 { 1 } else { case.sig_id },
+        transport_alpn: SORANET_QUIC_ALPN,
+        tls_server_name: DEFAULT_TLS_SERVER_NAME,
         resume_hash: resume_slice,
     };
 
     let mut rng_client = seed_rng(&case.client_seed);
     let mut rng_relay = seed_rng(&case.relay_seed);
-    let Some(client_keys) = seeded_keypair(&case.key_seed) else {
-        return;
-    };
     let Some(relay_keys) = seeded_keypair(&case.relay_seed) else {
         return;
     };
@@ -204,7 +204,7 @@ fn run_runtime_handshake(case: &FuzzInput) {
     let Ok((client_finish, _client_session)) = client_handle_relay_hello(
         client_state,
         &relay_message,
-        &client_keys,
+        relay_keys.public_key(),
         &runtime,
         &mut rng_client,
     ) else {

@@ -112,7 +112,8 @@ Proposal planning now defers lanes with unapplied artifacts/certified blocks,
 Kura can rebuild missing lane-block artifact sidecars from local canonical block
 bodies, and lane-payload ownership status preserves unrelated lanes by
 lane/dataspace upsert. The remaining open work is the DvP lane-block
-application liveness gap: under the 12-peer localnet, route probes can still
+application liveness gap: under the 13-peer global localnet (twelve lane
+validators), route probes can still
 stall before committed/applied lane-block convergence, with one DS lane split
 between executable-payload wait and canonical application while the other DS
 lane has no committed lane-block row. The default 10-iteration soak must be
@@ -6170,9 +6171,8 @@ redistributable schemas, and official trust/revocation bundles.
   wallet-flow hex dump account fixtures now use checked random key generation
   before emitting canonical instruction encodings; account-controller multisig
   member fixtures now use checked default and Secp256k1 random helpers while
-  preserving the deterministic CTAP2 seed-vector coverage; the Private Kaigi
-  sample relay-manifest account fixture now uses checked random public-key
-  generation; account-address Secp256k1/ML-DSA controller fixtures, transparent
+  preserving the deterministic CTAP2 seed-vector coverage; account-address
+  Secp256k1/ML-DSA controller fixtures, transparent
   event-filter account fixtures, smart-contract payload, contract-address, and
   manifest-signing fixtures, plus SoraNet VPN helper-ticket and usage-voucher
   fixtures now use checked random key helpers; signed-transaction builder,
@@ -6189,9 +6189,7 @@ redistributable schemas, and official trust/revocation bundles.
   `MultisigRegister::from_spec` now also returns `Result` and generates its
   temporary registration anchor account through checked default key generation;
   the transaction-gossip frame-cap probe now uses a fixed checked Ed25519 seed
-  instead of drawing a runtime dummy key;
-  Private Kaigi fee-spend execution now derives its synthetic fee-payer account
-  through checked Ed25519 seed expansion from the action hash; SoraFS hybrid
+  instead of drawing a runtime dummy key; SoraFS hybrid
   KEM derived material now binds the recipient public keys and encapsulated
   public transcript components through length-prefixed HKDF input with checked
   capacity accounting, and SoraNet session-key HKDF extraction now
@@ -6696,13 +6694,12 @@ redistributable schemas, and official trust/revocation bundles.
   CRT-NTT helper path now rejects invalid operand lengths, unsupported NTT
   lengths, and CRT reconstruction overflow before using that same fallback
   instead of relying on panic-only degree or NTT arithmetic;
-  confidential encrypted shield payloads now require supported versions,
-  non-empty ciphertext, and low-order-free X25519 ephemeral keys before
-  `Shield` execution burns public balance or records note commitments, and the
-  CLI plus Connect/Norito bridge shield payload builders now run that same
-  preflight before instruction construction, raw payload emission, or signing,
-  with Swift fallback serialization enforcing matching empty-ciphertext and
-  X25519 low-order admission;
+  confidential encrypted memo payloads require supported versions, non-empty
+  ciphertext, and low-order-free X25519 ephemeral keys before envelope use;
+  this structural validation is not value authorization. The proofless generic
+  `zk::Shield` instruction and CLI/native/SDK transaction encoders are removed,
+  public-to-confidential ingress requires the proof-bound Kagemusha V4 top-up,
+  and the standalone envelope utility retains the same payload preflight;
   standalone ML-KEM public-key validation, secret-key validation,
   encapsulation, and decapsulation now reject all-zero public keys, all-zero
   secret keys, all-zero embedded secret-key public keys, all-zero secret-key
@@ -7186,7 +7183,8 @@ redistributable schemas, and official trust/revocation bundles.
   adversarial boundary: tampered pending transition metadata, survivor catalog
   rows, preserved retired-lane catalogs, and derived lane configs all abort
   before retired-lane Kura/tiered storage or committed catalog publication.
-  The 12-peer cross-dataspace localnet route-probe corridor now also requires
+  The 13-peer global cross-dataspace localnet route-probe corridor (twelve lane
+  validators) now also requires
   observable replayable lane-payload ownership for DS1 and DS2 with exact
   dataspace IDs, the expected four-validator lane committee, and the
   deterministic three-vote quorum. The route-probe parser now requires those
@@ -9641,9 +9639,9 @@ redistributable schemas, and official trust/revocation bundles.
     the adjacent unservable-payload deferral check. Rerun the full
     `cargo test -p iroha_core --lib` corridor before the next consensus sweep.
   - The 2026-05-06 canonical proposal/block entrypoint-ordering fix is covered
-    by focused ordering, mixed-entrypoint builder, rejection mapping,
-    noncanonical static/unchecked-validation, and PrivateKaigi entrypoint
-    execution regressions. Rerun the full `cargo test -p iroha_core --lib`
+    by focused ordering, mixed-entrypoint builder, rejection mapping, and
+    noncanonical static/unchecked-validation regressions. Rerun the full
+    `cargo test -p iroha_core --lib`
     corridor before the next consensus sweep.
   - The 2026-05-03 `cargo test -p iroha_core --lib` rerun is green
     (`5129` passed, `22` ignored) after fixing execution-witness recorder
@@ -10272,16 +10270,16 @@ redistributable schemas, and official trust/revocation bundles.
     generation before verifier-key registration, election finalization, and
     tally syscall regressions consume account material;
     core ZK roots cap fixtures now use checked random Ed25519 key generation
-    before root-history mint/shield setup and roots-get syscall regressions
-    consume account material;
+    before authenticated confidential-state setup and roots-get syscall
+    regressions consume account material;
     core ZK root-hint fixtures now use checked random Ed25519 key generation
     before stale/recent root-window regressions consume account material;
-    core ZK shield-transfer audit fixtures now use checked random Ed25519 key
-    generation before shield/transfer audit regressions consume account
-    material;
+    core Kagemusha and native anonymous-escrow audit fixtures now use checked
+    random Ed25519 key generation before protocol-bound confidential-state
+    regressions consume account material;
     core ZK asset verifier-key enforcement fixtures now use checked random
-    Ed25519 key generation before transfer/unshield VK binding regressions
-    consume account material;
+    Ed25519 key generation before Kagemusha and native anonymous-escrow VK-role
+    binding regressions consume account material;
     core fraud monitoring authority and attester fixtures now use checked
     random Ed25519 key generation before admission and attestation regressions
     consume signing material;
@@ -10662,10 +10660,7 @@ redistributable schemas, and official trust/revocation bundles.
     failure regressions consume them;
     SoraFS treasury payout account helpers now use checked deterministic
     Ed25519 seed expansion before payout, reconciliation, and dispute
-    regressions consume them;
-    core Private Kaigi opaque account derivation now uses checked Ed25519 seed
-    expansion and propagates seed rejection as an instruction invariant error;
-    client
+    regressions consume them; client
     transaction build/sign helpers now use `TransactionBuilder::try_sign` and
     return contextual `eyre` errors from fallible construction/submission paths
     while retaining compatibility wrappers for existing infallible callers;

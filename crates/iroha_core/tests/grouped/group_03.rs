@@ -16,12 +16,8 @@ mod ivm_codec_helpers;
 mod ivm_corehost_axt;
 #[path = "../ivm_corehost_domain.rs"]
 mod ivm_corehost_domain;
-#[path = "../ivm_corehost_envelope_hash_bind.rs"]
-mod ivm_corehost_envelope_hash_bind;
 #[path = "../ivm_corehost_goldilocks.rs"]
 mod ivm_corehost_goldilocks;
-#[path = "../ivm_corehost_halo2_disabled_latch.rs"]
-mod ivm_corehost_halo2_disabled_latch;
 #[path = "../ivm_corehost_halo2_enabled_vendor_ok.rs"]
 mod ivm_corehost_halo2_enabled_vendor_ok;
 #[path = "../ivm_corehost_tlv_neg.rs"]

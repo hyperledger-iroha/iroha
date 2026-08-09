@@ -894,7 +894,7 @@ impl RelayDirectory {
                     }
                 }
                 endpoints.push(Endpoint {
-                    url: endpoint.url.clone(),
+                    url: endpoint.quic_multiaddr.clone(),
                     priority: endpoint.priority,
                     tags,
                 });
@@ -2640,7 +2640,7 @@ mod tests {
         let preferred_kem_suite = MlKemSuite::MlKem1024;
 
         let certificate = RelayCertificateV2 {
-            relay_id: [0x11; 32],
+            relay_id: ed_public,
             identity_ed25519: ed_public,
             identity_mldsa65: vec![0x44; 1952],
             descriptor_commit: [0x22; 32],
@@ -2653,7 +2653,9 @@ mod tests {
             bandwidth_bytes_per_sec: 2_500_000,
             reputation_weight: 90,
             endpoints: vec![RelayEndpointV2 {
-                url: "soranet://relay.v2.example:443".to_string(),
+                quic_multiaddr: "/dns/relay.v2.example/udp/443/quic".to_string(),
+                tls_server_name: "relay.v2.example".to_string(),
+                tls_spki_sha256: [0xA5; 32],
                 priority: 0,
                 tags: vec![EndpointTag::NoritoStream.as_label().to_string()],
             }],
@@ -2913,7 +2915,7 @@ mod tests {
     fn asset_definition(name: &str) -> AssetDefinitionId {
         let domain = DomainId::try_new("sora", "universal").expect("domain id");
         let asset_name = Name::from_str(name).expect("asset name");
-        AssetDefinitionId::new(domain, asset_name)
+        AssetDefinitionId::derive_from_components(domain, asset_name)
     }
 
     fn bond_policy(minimum: &str, asset: &AssetDefinitionId) -> RelayBondPolicyV1 {

@@ -24,15 +24,17 @@ use crate::{
             MutateSoracloudState, PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
             RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
             RecordSoracloudMailboxMessage, RecordSoracloudPrivateUploadedModelExecutionReceipt,
-            RecordSoracloudRuntimeReceipt, RegisterSoracloudModelArtifact,
-            RegisterSoracloudModelWeight, RegisterSoracloudUploadedModelBundle,
-            RenewSoracloudAgentLease, RenewSoracloudHfSharedLease,
-            ReportSoracloudServiceLeaseUsage, RequestSoracloudAgentWalletSpend,
-            RestartSoracloudAgentApartment, RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy,
-            RollbackSoracloudModelWeight, RollbackSoracloudService, RunSoracloudAgentAutonomy,
-            RunSoracloudFheJob, SetSoracloudInrouReplicaRuntimeState, SetSoracloudRuntimeState,
-            SetSoracloudServiceConfig, SetSoracloudServiceSecret, StartSoracloudTrainingJob,
-            UpgradeSoracloudService, WithdrawSoracloudInrouHost, WithdrawSoracloudModelHost,
+            RecordSoracloudRuntimeReceipt, RegisterSoracloudFhePolicy,
+            RegisterSoracloudModelArtifact, RegisterSoracloudModelWeight,
+            RegisterSoracloudUploadedModelBundle, RenewSoracloudAgentLease,
+            RenewSoracloudHfSharedLease, ReportSoracloudServiceLeaseUsage,
+            RequestSoracloudAgentWalletSpend, RestartSoracloudAgentApartment,
+            RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy, RevokeSoracloudFhePolicy,
+            RollbackSoracloudModelWeight, RollbackSoracloudService, RotateSoracloudFhePolicy,
+            RunSoracloudAgentAutonomy, RunSoracloudFheJob, SetSoracloudInrouReplicaRuntimeState,
+            SetSoracloudRuntimeState, SetSoracloudServiceConfig, SetSoracloudServiceSecret,
+            StartSoracloudTrainingJob, UpgradeSoracloudService, WithdrawSoracloudInrouHost,
+            WithdrawSoracloudModelHost,
         },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
@@ -50,9 +52,16 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         || visit_soracloud_agent_instruction(visitor, isi)
         || visit_soracloud_training_instruction(visitor, isi))
     {
-        unreachable!("Unknown instruction type");
+        visitor.visit_unclassified_instruction(isi);
     }
 }
+
+/// Visit an instruction that has no typed hook in the generic data-model walker.
+///
+/// Registered native extensions are valid [`InstructionBox`] values even when
+/// this intentionally small walker does not expose their semantics. The default
+/// is therefore a leaf visit instead of a process-terminating assertion.
+pub fn visit_unclassified_instruction<V: Visit + ?Sized>(_visitor: &mut V, _isi: &InstructionBox) {}
 
 fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
     visit_core_setup_instruction(visitor, isi)
@@ -138,7 +147,19 @@ fn visit_core_box_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &Instruct
     true
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exhaustive privacy instruction inventory stays in one dispatch chain so new variants cannot silently become no-ops"
+)]
 fn visit_privacy_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
+    visit_privacy_protocol_instruction(visitor, isi)
+        || visit_privacy_issuer_and_proof_instruction(visitor, isi)
+}
+
+fn visit_privacy_protocol_instruction<V: Visit + ?Sized>(
+    visitor: &mut V,
+    isi: &InstructionBox,
+) -> bool {
     if let Some(v) = isi
         .as_any()
         .downcast_ref::<crate::isi::privacy::RegisterPrivacyProtocolActivationV1>()
@@ -199,9 +220,19 @@ fn visit_privacy_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &Instructi
         .downcast_ref::<crate::isi::privacy::RevokePrivacyZkAcePolicyV1>()
     {
         visitor.visit_revoke_privacy_zk_ace_policy_v1(v);
-    } else if let Some(v) =
-        isi.as_any()
-            .downcast_ref::<crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1>()
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_privacy_issuer_and_proof_instruction<V: Visit + ?Sized>(
+    visitor: &mut V,
+    isi: &InstructionBox,
+) -> bool {
+    if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1>()
     {
         visitor.visit_register_privacy_bootle_lantern_issuer_policy_v1(v);
     } else if let Some(v) =
@@ -400,6 +431,12 @@ fn visit_soracloud_service_instruction<V: Visit + ?Sized>(
         visitor.visit_delete_soracloud_service_secret(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<MutateSoracloudState>() {
         visitor.visit_mutate_soracloud_state(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RegisterSoracloudFhePolicy>() {
+        visitor.visit_register_soracloud_fhe_policy(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RotateSoracloudFhePolicy>() {
+        visitor.visit_rotate_soracloud_fhe_policy(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RevokeSoracloudFhePolicy>() {
+        visitor.visit_revoke_soracloud_fhe_policy(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RunSoracloudFheJob>() {
         visitor.visit_run_soracloud_fhe_job(v);
     } else if let Some(v) = isi
@@ -831,6 +868,9 @@ macro_rules! instruction_visitors {
             visit_set_soracloud_service_secret(&SetSoracloudServiceSecret),
             visit_delete_soracloud_service_secret(&DeleteSoracloudServiceSecret),
             visit_mutate_soracloud_state(&MutateSoracloudState),
+            visit_register_soracloud_fhe_policy(&RegisterSoracloudFhePolicy),
+            visit_rotate_soracloud_fhe_policy(&RotateSoracloudFhePolicy),
+            visit_revoke_soracloud_fhe_policy(&RevokeSoracloudFhePolicy),
             visit_run_soracloud_fhe_job(&RunSoracloudFheJob),
             visit_record_soracloud_decryption_request(&RecordSoracloudDecryptionRequest),
             visit_join_soracloud_hf_shared_lease(&JoinSoracloudHfSharedLease),
@@ -948,7 +988,7 @@ mod tests {
                 })
                 .collect(),
         });
-        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+        BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
             .expect("canonical visitor degree-512 multiplication matrix")
     }
 
@@ -1007,6 +1047,31 @@ mod tests {
         });
         visit_instruction(&mut visitor, &isi);
         assert_eq!(visitor.logs, 1);
+    }
+
+    #[test]
+    fn unclassified_native_instruction_uses_fallback_hook() {
+        struct FallbackVisitor {
+            calls: usize,
+        }
+
+        impl Visit for FallbackVisitor {
+            fn visit_unclassified_instruction(&mut self, _: &InstructionBox) {
+                self.calls += 1;
+            }
+        }
+
+        let isi = Box::new(crate::isi::ram_lfe::ActivateRamLfeProgramPolicy {
+            program_id: "visitor_fallback"
+                .parse()
+                .expect("valid RAM-LFE program id"),
+        })
+        .into_instruction_box();
+        let mut visitor = FallbackVisitor { calls: 0 };
+
+        visit_instruction(&mut visitor, &isi);
+
+        assert_eq!(visitor.calls, 1);
     }
 
     #[test]

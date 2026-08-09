@@ -448,6 +448,9 @@ pub enum PrivacyStatementValidationError {
     /// A transparent transfer amount is zero.
     #[error("privacy statement transfer amount must be non-zero")]
     ZeroAmount,
+    /// The universal coordinator was supplied as a concrete balance partition.
+    #[error("privacy statement public balance scope cannot be the universal dataspace")]
+    UniversalPublicBalanceScope,
     /// Public value-balance direction and magnitude are inconsistent.
     #[error("privacy value balance {direction:?} has invalid amount {amount}")]
     InvalidValueBalance {
@@ -630,6 +633,22 @@ pub enum PrivacyStatementValidationError {
         count: u32,
         /// Approved maximum.
         max: u32,
+    },
+    /// A Jindo statement does not use the frozen first-release batch shape.
+    #[error("Jindo polynomial count {count} differs from the required exact count {expected}")]
+    InvalidJindoPolynomialCount {
+        /// Observed polynomial count.
+        count: u32,
+        /// Exact count compiled into the parameter and transcript profile.
+        expected: u32,
+    },
+    /// A consensus resource limit cannot contain the frozen Jindo batch shape.
+    #[error("Jindo requires capacity for {required} commitments, but consensus permits {maximum}")]
+    InsufficientJindoCommitmentCapacity {
+        /// Consensus commitment ceiling.
+        maximum: u32,
+        /// Exact count required by the compiled Jindo profile.
+        required: u32,
     },
     /// A ZK-AMS admission anchor has a zero PHC hash.
     #[error("ZK-AMS admission anchor {index} has a zero PHC hash")]
@@ -1505,7 +1524,7 @@ mod exact12_fixture {
     }
 
     pub(super) fn asset_definition_id() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("asset").expect("asset name"),
         )
@@ -1763,7 +1782,7 @@ mod exact12_fixture {
                 .collect(),
         });
         let issuer_public_matrix =
-            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(first_column)
+            BootleLanternIssuerPublicMatrixV1::from_r512_first_column_blocks_v1(&first_column)
                 .expect("canonical degree-512 multiplication matrix");
         let allowed_values = (0..BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1)
             .map(|index| BootleLanternAllowedAttributeValuesV1 {
@@ -1814,6 +1833,7 @@ mod exact12_fixture {
                 source: account(13),
                 destination: account(14),
                 asset_definition_id: asset.clone(),
+                public_balance_scope: AssetBalanceScope::Global,
                 amount: 1_000,
                 authorization_epoch: 7,
                 replay_nullifier: nullifier(15),
@@ -1925,9 +1945,9 @@ mod exact12_fixture {
             PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
                 IrohaJindoPolynomialCommitmentStatementV1 {
                     context: context(),
-                    polynomial_commitments: vec![jindo_commitment(70), jindo_commitment(71)],
+                    polynomial_commitments: (70..74).map(jindo_commitment).collect(),
                     evaluation_point: jindo_field(1),
-                    claimed_evaluations: vec![jindo_field(4), jindo_field(5)],
+                    claimed_evaluations: (4..8).map(jindo_field).collect(),
                 },
             ),
             PrivacyStatementV1::IrohaBootleLanternAnoncredV1(
@@ -1961,6 +1981,7 @@ mod exact12_fixture {
             PrivacyStatementV1::OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
                 context: context(),
                 asset_definition_id: asset.clone(),
+                public_balance_scope: AssetBalanceScope::Global,
                 pool_id: PrivacyPoolIdV1::new(raw(81)),
                 anchor: PrivacyRootV1::new(raw(82)),
                 anchor_epoch: 13,
@@ -1988,6 +2009,7 @@ mod exact12_fixture {
                 let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
                     context: context(),
                     asset_definition_id: asset.clone(),
+                    public_balance_scope: AssetBalanceScope::Global,
                     pool_id: PrivacyPoolIdV1::new(raw(94)),
                     program_id: PrivacyProgramIdV1::new(raw(95)),
                     action_digest: PrivacyActionDigestV1::new([0; 32]),

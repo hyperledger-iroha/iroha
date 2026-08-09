@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { blake2b256 } from "../src/blake2b.js";
-import { parseStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
+import { parseStrictLosslessIntegerJson } from "../src/numericV1.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), "..", "..", "..");
@@ -495,7 +495,7 @@ function externalTransactionEntrypointHashHex(canonicalPayload) {
 
 function makeSourceFixture(name = "alpha") {
   const common = {
-    authority: "sorau-example",
+    authority: "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     chain: "00000002",
     creation_time_ms: 1,
     nonce: null,
@@ -522,7 +522,7 @@ function makeSourceFixture(name = "alpha") {
 
 function makeManifestFixture(name = "alpha") {
   return {
-    authority: "sorau-example",
+    authority: "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     chain: "00000002",
     creation_time_ms: 1,
     encoded_file: `${name}.norito`,
@@ -598,7 +598,7 @@ test("source descriptors require exact fields and one executable variant", () =>
       ...fixture.payload,
       executable: {
         ContractCall: {
-          contract_address: "tairac1example",
+          contract_address: "irohac1example",
           expected_code_hash: "hash:example",
           entrypoint: "main",
           arguments: [],
@@ -617,7 +617,7 @@ test("executable variant bodies use the exact first-release schema", () => {
     payload_base64: "AQ==",
   };
   const contractCall = {
-    contract_address: "tairac1example",
+    contract_address: "irohac1example",
     expected_code_hash: "hash:example",
     entrypoint: "main",
     arguments: [0, 255],

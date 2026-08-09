@@ -30,7 +30,7 @@ ReleaseLiveEvidenceIsRepresentative ==
 
 Init ==
   /\ phase = "GenericSafety"
-  /\ ~liveClaim
+  /\ liveClaim = FALSE
 
 AdmitReleaseLiveEvidence ==
   /\ phase = "GenericSafety"

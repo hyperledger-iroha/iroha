@@ -20,7 +20,6 @@ async fn proof_tags_returns_ascii_tags() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
-    let mut state = state;
 
     // Insert tag index directly (prototype path)
     let backend = "halo2/ipa";
@@ -30,18 +29,21 @@ async fn proof_tags_returns_ascii_tags() {
         proof_hash,
     };
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    stx.world
-        .proof_tags_mut_for_testing()
-        .insert(id.clone(), vec![*b"PROF", *b"I10P"]);
-    stx.world
-        .proofs_by_tag_mut_for_testing()
-        .insert(*b"PROF", vec![id.clone()]);
-    stx.world
-        .proofs_by_tag_mut_for_testing()
-        .insert(*b"I10P", vec![id.clone()]);
-    stx.apply();
+    {
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        stx.world
+            .proof_tags_mut_for_testing()
+            .insert(id.clone(), vec![*b"PROF", *b"I10P"]);
+        stx.world
+            .proofs_by_tag_mut_for_testing()
+            .insert(*b"PROF", vec![id.clone()]);
+        stx.world
+            .proofs_by_tag_mut_for_testing()
+            .insert(*b"I10P", vec![id.clone()]);
+        stx.apply();
+        block.commit().expect("commit proof tag indexes");
+    }
 
     let state = Arc::new(state);
     let app = Router::new().route(

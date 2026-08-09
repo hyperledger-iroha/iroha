@@ -2,7 +2,7 @@
 //! Integration test for /v1/zk/roots using a minimal in-memory state.
 #![allow(clippy::too_many_lines)]
 
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
 
 use axum::{Router, routing::post};
 use http_body_util::BodyExt as _;
@@ -22,8 +22,8 @@ const ACCOUNT_SIGNATORY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const NORITO_MIME_TYPE: &str = "application/x-norito";
 
-fn zk_config_with_root_history_cap(
-    root_history_cap: usize,
+fn zk_config_with_tree_roots_history_len(
+    tree_roots_history_len: NonZeroUsize,
 ) -> iroha_config::parameters::actual::Zk {
     iroha_config::parameters::actual::Zk {
         halo2: iroha_config::parameters::actual::Halo2 {
@@ -57,10 +57,7 @@ fn zk_config_with_root_history_cap(
         },
         stark: iroha_config::parameters::actual::Stark::default(),
         sccp: iroha_config::parameters::actual::Sccp::default(),
-        root_history_cap,
         ballot_history_cap: iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,
-        empty_root_on_empty: iroha_config::parameters::defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,
-        merkle_depth: iroha_config::parameters::defaults::zk::ledger::EMPTY_ROOT_DEPTH,
         preverify_max_bytes: iroha_config::parameters::defaults::zk::preverify::MAX_BYTES,
         preverify_budget_bytes: iroha_config::parameters::defaults::zk::preverify::BUDGET_BYTES,
         proof_history_cap: iroha_config::parameters::defaults::zk::proof::RECORD_HISTORY_CAP,
@@ -101,8 +98,7 @@ fn zk_config_with_root_history_cap(
             iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
         policy_transition_window_blocks:
             iroha_config::parameters::defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
-        tree_roots_history_len:
-            iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
+        tree_roots_history_len,
         tree_frontier_checkpoint_interval:
             iroha_config::parameters::defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
         registry_max_vk_entries:
@@ -123,18 +119,20 @@ fn zk_config_with_root_history_cap(
 }
 
 fn seeded_zk_roots_state(
-    root_history_cap: usize,
+    tree_roots_history_len: NonZeroUsize,
     commitment_count: u8,
 ) -> (Arc<State>, AssetDefinitionId, String, Vec<[u8; 32]>) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query);
     state
-        .set_zk(zk_config_with_root_history_cap(root_history_cap))
+        .set_zk(zk_config_with_tree_roots_history_len(
+            tree_roots_history_len,
+        ))
         .expect("empty SCCP outbox accepts roots test configuration");
 
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
-    let asset_def_id = AssetDefinitionId::new(
+    let asset_def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("zkd", "universal").expect("domain id"),
         "rose".parse().expect("asset definition name"),
     );
@@ -145,8 +143,12 @@ fn seeded_zk_roots_state(
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-        let definition =
-            AssetDefinition::numeric(asset_def_id.clone()).with_name("rose".to_owned());
+        let definition = AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        );
         let init_instrs: [InstructionBox; 5] = [
             Register::domain(Domain::new(domain_id.clone())).into(),
             Register::account(NewAccount::new(owner.clone())).into(),
@@ -158,7 +160,6 @@ fn seeded_zk_roots_state(
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
                 true,
                 true,
-                None,
                 None,
                 None,
             )
@@ -178,27 +179,21 @@ fn seeded_zk_roots_state(
         )
         .execute(&owner, &mut stx)
         .expect("bind asset alias");
+        let mut zk_state = stx
+            .world
+            .zk_assets()
+            .get(&asset_def_id)
+            .cloned()
+            .expect("registered confidential asset state");
         for i in 0..commitment_count {
             let mut note = [0u8; 32];
-            note[0] = i;
-            let ib: InstructionBox = iroha_data_model::isi::zk::Shield::new(
-                asset_def_id.clone(),
-                owner.clone(),
-                1u128,
-                note,
-                iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
-                    [0xA1; 32],
-                    [0xB2; 24],
-                    vec![0xC3, i],
-                ),
-            )
-            .into();
-            stx.world
-                .executor()
-                .clone()
-                .execute_instruction(&mut stx, &owner, ib)
-                .unwrap();
+            note[0] = i.saturating_add(1);
+            zk_state
+                .push_commitment(note, nonzero!(64_usize))
+                .expect("seed authenticated commitment root");
         }
+        stx.world.zk_assets.remove(asset_def_id.clone());
+        stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
         stx.apply();
         block.transactions.insert_block(
             HashSet::<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>::new(
@@ -238,7 +233,8 @@ fn zk_roots_router(state: Arc<State>) -> Router {
 
 #[tokio::test]
 async fn zk_roots_endpoint_returns_bounded_recent_roots() {
-    let (state, _asset_def_id, asset_alias, roots_all) = seeded_zk_roots_state(3, 5);
+    let (state, _asset_def_id, asset_alias, roots_all) =
+        seeded_zk_roots_state(nonzero!(3_usize), 5);
     let app = zk_roots_router(state.clone());
 
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
@@ -300,7 +296,8 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
 
 #[tokio::test]
 async fn zk_roots_endpoint_returns_all_roots_when_request_exceeds_history() {
-    let (state, asset_def_id, _asset_alias, roots_all) = seeded_zk_roots_state(10, 2);
+    let (state, asset_def_id, _asset_alias, roots_all) =
+        seeded_zk_roots_state(nonzero!(10_usize), 2);
     let app = zk_roots_router(state.clone());
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", asset_def_id.to_string()),
@@ -354,7 +351,8 @@ async fn zk_roots_endpoint_returns_all_roots_when_request_exceeds_history() {
 
 #[tokio::test]
 async fn zk_roots_endpoint_bounds_nonzero_max_by_cap() {
-    let (state, _asset_def_id, asset_alias, roots_all) = seeded_zk_roots_state(3, 5);
+    let (state, _asset_def_id, asset_alias, roots_all) =
+        seeded_zk_roots_state(nonzero!(3_usize), 5);
     let app = zk_roots_router(state.clone());
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", asset_alias),
@@ -396,12 +394,14 @@ async fn zk_roots_endpoint_bounds_nonzero_max_by_cap() {
 }
 
 #[tokio::test]
-async fn zk_roots_endpoint_returns_empty_window_when_cap_is_zero() {
-    let (state, asset_def_id, _asset_alias, roots_all) = seeded_zk_roots_state(0, 3);
-    let app = zk_roots_router(state.clone());
+async fn zk_roots_endpoint_returns_profile_defined_empty_root() {
+    let (state, asset_def_id, _asset_alias, roots_all) =
+        seeded_zk_roots_state(nonzero!(3_usize), 0);
+    assert!(roots_all.is_empty());
+    let app = zk_roots_router(state);
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", asset_def_id.to_string()),
-        iroha_torii::json_entry("max", 10u64),
+        iroha_torii::json_entry("max", 0u64),
     ]))
     .expect("json serialization");
     let req = http::Request::builder()
@@ -411,40 +411,30 @@ async fn zk_roots_endpoint_returns_empty_window_when_cap_is_zero() {
         .body(axum::body::Body::from(req_body))
         .unwrap();
 
-    let resp = app.clone().oneshot(req).await.unwrap();
+    let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let payload: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-
+    let empty_root = iroha_core::state::ConfidentialTreeProfile::PoseidonPastaV1.empty_root();
+    let expected = hex::encode(empty_root);
+    assert_eq!(
+        payload.get("latest").and_then(norito::json::Value::as_str),
+        Some(expected.as_str())
+    );
     assert_eq!(
         payload
             .get("roots")
             .and_then(norito::json::Value::as_array)
-            .map(std::vec::Vec::len),
-        Some(0)
-    );
-    assert_eq!(
-        payload.get("latest").and_then(norito::json::Value::as_str),
-        Some(hex::encode(roots_all.last().copied().unwrap()).as_str())
-    );
-    assert_eq!(
-        payload
-            .get("evaluated_block_height")
-            .and_then(norito::json::Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        payload
-            .get("evaluated_block_hash")
-            .and_then(norito::json::Value::as_str)
-            .map(str::len),
-        Some(64)
+            .and_then(|roots| roots.first())
+            .and_then(norito::json::Value::as_str),
+        Some(expected.as_str())
     );
 }
 
 #[tokio::test]
 async fn zk_roots_endpoint_accepts_trimmed_alias_literal() {
-    let (state, _asset_def_id, asset_alias, roots_all) = seeded_zk_roots_state(3, 4);
+    let (state, _asset_def_id, asset_alias, roots_all) =
+        seeded_zk_roots_state(nonzero!(3_usize), 4);
     let app = zk_roots_router(state.clone());
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", format!("  {asset_alias}  ")),
@@ -481,7 +471,8 @@ async fn zk_roots_endpoint_accepts_trimmed_alias_literal() {
 
 #[tokio::test]
 async fn zk_roots_endpoint_negotiates_norito_for_non_empty_payload() {
-    let (state, _asset_def_id, asset_alias, roots_all) = seeded_zk_roots_state(3, 4);
+    let (state, _asset_def_id, asset_alias, roots_all) =
+        seeded_zk_roots_state(nonzero!(3_usize), 4);
     let app = zk_roots_router(state.clone());
     let expected = iroha_torii::handle_v1_zk_roots(
         state.clone(),
@@ -523,7 +514,8 @@ async fn zk_roots_endpoint_negotiates_norito_for_non_empty_payload() {
 
 #[tokio::test]
 async fn zk_roots_endpoint_returns_406_for_unsupported_accept_header() {
-    let (state, asset_def_id, _asset_alias, _roots_all) = seeded_zk_roots_state(3, 2);
+    let (state, asset_def_id, _asset_alias, _roots_all) =
+        seeded_zk_roots_state(nonzero!(3_usize), 2);
     let app = zk_roots_router(state.clone());
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", asset_def_id.to_string()),

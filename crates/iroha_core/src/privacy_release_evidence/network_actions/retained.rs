@@ -29,6 +29,7 @@ use iroha_data_model::{
     transaction::SignedTransaction,
     zk::{ZkAcePrivacyPublicInputsV1, derive_zk_ace_privacy_authorization_digest},
 };
+use rand_core_06::{CryptoRng, Error as RngError06, RngCore};
 
 use super::{
     PrivacyReleaseTransactionContextV1, network_seed_v1, signed_payload_v1, statement_context_v1,
@@ -51,9 +52,12 @@ use crate::{
         },
         bootle_lantern::{
             issuer::{
+                BootleLanternBlindIssuanceResponseV1, BootleLanternFileIssuanceStoreV1,
+                BootleLanternIssuanceAuthorizationV1, BootleLanternIssuanceStoreConfigV1,
                 BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
                 holder_finalize_blind_issuance_v1, holder_prepare_blind_issuance_with_rng_v1,
-                issuer_blind_issue_with_rng_v1,
+                issuer_authorize_blind_issuance_with_rng_v1,
+                issuer_blind_issue_once_encoded_with_rng_v1,
             },
             prove_bound_presentation_v1,
         },
@@ -76,6 +80,28 @@ use crate::{
     privacy_release_evidence::{EvidenceRng06, EvidenceRng09, PrivacyReleaseEvidenceErrorClassV1},
     privacy_state::compute_privacy_pgc_account_state_root_v1,
 };
+
+struct UnavailableIssuanceRngV1;
+
+impl RngCore for UnavailableIssuanceRngV1 {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+
+    fn fill_bytes(&mut self, destination: &mut [u8]) {
+        destination.fill(0);
+    }
+
+    fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError06> {
+        Err(RngError06::new("cached issuance must not read randomness"))
+    }
+}
+
+impl CryptoRng for UnavailableIssuanceRngV1 {}
 /// One canonical network-bound VeRange action.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseVeRangeNetworkActionV1 {
@@ -312,6 +338,7 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
         source,
         destination,
         asset_definition_id,
+        public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
         amount,
         authorization_epoch: policy.authorization_epoch,
         replay_nullifier: iroha_data_model::privacy::PrivacyNullifierV1::new([0; 32]),
@@ -490,6 +517,36 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
             allowed_values: allowed_values.clone(),
         })
         .map_err(|_| evidence_error())?;
+    let issuance_store_directory = tempfile::tempdir().map_err(|_| evidence_error())?;
+    let issuance_store_root = issuance_store_directory
+        .path()
+        .join("bootle-issuance-store");
+    let issuance_store = BootleLanternFileIssuanceStoreV1::open(
+        &issuance_store_root,
+        BootleLanternIssuanceStoreConfigV1::default(),
+    )
+    .map_err(|_| evidence_error())?;
+    let mut authorization_rng = EvidenceRng06::new(network_seed_v1(
+        fixture_seed,
+        b"bootle-issuer-authorization",
+        0,
+    ));
+    let authorization = issuer_authorize_blind_issuance_with_rng_v1(
+        &issuer_key_pair,
+        &context,
+        transaction_context.genesis_hash,
+        &policy,
+        network_seed_v1(fixture_seed, b"bootle-requester-authorization", 0),
+        100,
+        200,
+        &issuance_store,
+        &mut authorization_rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let authorization = BootleLanternIssuanceAuthorizationV1::decode_exact(
+        &authorization.encode().map_err(|_| evidence_error())?,
+    )
+    .map_err(|_| evidence_error())?;
 
     let mut statement = IrohaBootleLanternAnoncredStatementV1 {
         context: context.clone(),
@@ -516,36 +573,65 @@ pub fn build_privacy_release_bootle_lantern_network_action_v1(
 
     let mut attributes = [[0_u8; 8]; 8];
     attributes[1] = [1; 8];
-    let mut holder_mask_rng =
-        EvidenceRng06::new(network_seed_v1(fixture_seed, b"bootle-holder-mask", 0));
-    let mut holder_request_proof_rng = EvidenceRng06::new(network_seed_v1(
+    let mut holder_issuance_rng = EvidenceRng06::new(network_seed_v1(
         fixture_seed,
-        b"bootle-holder-request-proof",
+        b"bootle-holder-issuance-master",
         0,
     ));
     let (issuance_request, issuance_state) = holder_prepare_blind_issuance_with_rng_v1(
         &context,
         transaction_context.genesis_hash,
         &policy,
+        &authorization,
         attributes,
-        &mut holder_mask_rng,
-        &mut holder_request_proof_rng,
+        &mut holder_issuance_rng,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
-    let mut issuer_tag_rng =
-        EvidenceRng06::new(network_seed_v1(fixture_seed, b"bootle-issuer-tag", 0));
-    let mut issuer_preimage_rng =
-        EvidenceRng06::new(network_seed_v1(fixture_seed, b"bootle-issuer-preimage", 0));
-    let issuance_response = issuer_blind_issue_with_rng_v1(
+    let issuance_request_wire = issuance_request
+        .encode()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let mut issuer_issuance_rng = EvidenceRng06::new(network_seed_v1(
+        fixture_seed,
+        b"bootle-issuer-issuance-master",
+        0,
+    ));
+    let issuance_response = issuer_blind_issue_once_encoded_with_rng_v1(
         &issuer_key_pair,
         &context,
         transaction_context.genesis_hash,
         &policy,
-        &issuance_request,
-        &mut issuer_tag_rng,
-        &mut issuer_preimage_rng,
+        &authorization,
+        &issuance_request_wire,
+        100,
+        &issuance_store,
+        &mut issuer_issuance_rng,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let response_wire = issuance_response.encode().map_err(|_| evidence_error())?;
+    drop(issuance_store);
+    let issuance_store = BootleLanternFileIssuanceStoreV1::open(
+        &issuance_store_root,
+        BootleLanternIssuanceStoreConfigV1::default(),
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let mut unavailable_issuance_rng = UnavailableIssuanceRngV1;
+    let cached_response = issuer_blind_issue_once_encoded_with_rng_v1(
+        &issuer_key_pair,
+        &context,
+        transaction_context.genesis_hash,
+        &policy,
+        &authorization,
+        &issuance_request_wire,
+        201,
+        &issuance_store,
+        &mut unavailable_issuance_rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    if cached_response.encode().map_err(|_| evidence_error())? != response_wire {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let issuance_response = BootleLanternBlindIssuanceResponseV1::decode_exact(&response_wire)
+        .map_err(|_| evidence_error())?;
     let credential = holder_finalize_blind_issuance_v1(
         issuance_state,
         &context,
@@ -1114,6 +1200,7 @@ pub fn build_privacy_release_ivm_private_note_network_action_v1(
         PrivacyIvmPrivateNotePoolBootstrapV1 {
             pool_id,
             asset_definition_id,
+            public_balance_scope: fixture.statement.public_balance_scope,
             reserve_account,
             program_id: fixture.statement.program_id,
             initial_note_commitments: input_commitments,
@@ -1207,7 +1294,7 @@ mod tests {
     }
 
     fn asset() -> AssetDefinitionId {
-        AssetDefinitionId::new(
+        AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             "release_asset".parse::<Name>().expect("asset name"),
         )

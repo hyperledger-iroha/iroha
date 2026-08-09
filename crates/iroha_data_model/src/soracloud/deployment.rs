@@ -18,6 +18,12 @@ pub enum SoraServiceLifecycleActionV1 {
     StateMutation,
     /// Deterministic FHE execution that materialized a ciphertext result.
     FheJobRun,
+    /// First admission of governance-authenticated FHE material.
+    FhePolicyRegister,
+    /// Monotonic rotation to a new governance-authenticated FHE material version.
+    FhePolicyRotate,
+    /// Permanent revocation of the active FHE policy version.
+    FhePolicyRevoke,
     /// Policy-gated decryption or health-access request.
     DecryptionRequest,
     /// Certified ciphertext metadata query served from authoritative state.
@@ -239,6 +245,8 @@ pub struct SoraServiceDeploymentStateV1 {
     /// Authoritative encrypted secret entries scoped to the active service deployment.
     #[norito(default)]
     pub service_secrets: BTreeMap<String, SoraServiceSecretEntryV1>,
+    /// Versioned governance-authenticated FHE policy material scoped to this service.
+    pub fhe_policy_records: BTreeMap<Name, SoracloudFhePolicyRecordV1>,
     /// Active rollout, when the candidate is still under evaluation.
     #[norito(default)]
     pub active_rollout: Option<SoraServiceRolloutStateV1>,
@@ -260,6 +268,10 @@ impl SoraServiceDeploymentStateV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when version, sequence, or rollout
     /// invariants are violated.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "deployment validation keeps the ordered cross-field checks and stable first-error precedence together"
+    )]
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service deployment state",
@@ -320,6 +332,20 @@ impl SoraServiceDeploymentStateV1 {
                     reason: format!(
                         "map key `{secret_name}` must match embedded secret_name `{}`",
                         entry.secret_name
+                    ),
+                });
+            }
+        }
+
+        for (policy_name, record) in &self.fhe_policy_records {
+            record.validate()?;
+            if record.service_name != self.service_name || record.policy_name != *policy_name {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "sora service deployment state",
+                    field: "fhe_policy_records",
+                    reason: format!(
+                        "map key `{policy_name}` and embedded service/policy must match deployment `{}`",
+                        self.service_name
                     ),
                 });
             }

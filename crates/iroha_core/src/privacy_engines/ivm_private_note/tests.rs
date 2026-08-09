@@ -32,7 +32,7 @@ fn bytes(seed: u8) -> [u8; 32] {
 }
 
 fn asset() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal").expect("test domain"),
         iroha_data_model::name::Name::from_str("ivmnote").expect("test asset"),
     )
@@ -122,6 +122,7 @@ pub(super) fn fixture() -> Fixture {
     let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
         context: context(),
         asset_definition_id: asset(),
+        public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
         pool_id,
         program_id,
         action_digest: PrivacyActionDigestV1::new([0; 32]),

@@ -57,7 +57,7 @@ PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX = (
 PROVENANCE_VERIFICATION_KEY_FINGERPRINT_HEX = hashlib.sha256(
     bytes.fromhex(PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX)
 ).hexdigest()
-TOPOLOGY_SIGNER_IDENTITY = "sorafs-sf11-topology-qualification-hsm"
+TOPOLOGY_SIGNER_IDENTITY = "sorafs-sf11-topology-qualification-software"
 TOPOLOGY_SIGNER_KEY_REVISION = 7
 TOPOLOGY_SIGNER_POLICY_DIGEST_HEX = hashlib.sha256(
     b"sorafs-sf11-topology-signer-policy-v1"
@@ -138,8 +138,12 @@ def signed_manifest(
     *,
     private_key_absent: bool = True,
     signature_algorithm: str = "ed25519",
-    signing_provider: str = "external_ed25519_hsm",
+    signing_provider: str = "authenticated_external_signer",
+    signing_backend: str = "software",
     signing_provider_revision: int = 1,
+    signer_response_verified: bool = True,
+    policy_digest_hex: str = DIGEST,
+    public_key_fingerprint_hex: str = DIGEST,
 ) -> dict:
     payload = base("sorafs.reference_sdk.signed_manifest_canary.v1")
     payload.update(
@@ -152,11 +156,12 @@ def signed_manifest(
             "private_key_absent": private_key_absent,
             "signature_algorithm": signature_algorithm,
             "signing_provider": signing_provider,
+            "signing_backend": signing_backend,
             "signing_provider_revision": signing_provider_revision,
-            "hsm_signature_verified": True,
+            "signer_response_verified": signer_response_verified,
             "manifest_digest_hex": DIGEST,
-            "policy_digest_hex": DIGEST,
-            "public_key_fingerprint_hex": DIGEST,
+            "policy_digest_hex": policy_digest_hex,
+            "public_key_fingerprint_hex": public_key_fingerprint_hex,
             "raw_manifest_included": False,
         }
     )
@@ -446,7 +451,7 @@ def write_topology_qualification(
         "storage_provider_count": 2,
         "gateway_count": 2,
         "governance_dag_instance_count": 2,
-        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_handle_kinds": ["monitoring", "external_signer", "kms", "webauthn"],
         "runtime_material_policy_valid": True,
         "signed_model_artifact_count": 1,
         "required_lane_slots": list(TOPOLOGY.CANONICAL_READINESS_LANES),
@@ -465,6 +470,7 @@ def write_topology_qualification(
         "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
         **binding,
         "signer_identity": TOPOLOGY_SIGNER_IDENTITY,
+        "signer_backend": "software",
         "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,
         "signer_key_fingerprint_hex": hashlib.sha256(
             TOPOLOGY_VERIFICATION_PUBLIC_KEY
@@ -1202,14 +1208,123 @@ def test_signed_manifest_rejects_private_key_presence(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
-def test_signed_manifest_requires_external_hsm_provider(tmp_path: Path) -> None:
+@pytest.mark.parametrize("provider", ("external_ed25519_hsm", "local_file"))
+def test_signed_manifest_rejects_legacy_or_unapproved_provider(
+    tmp_path: Path,
+    provider: str,
+) -> None:
     write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
     write_json(
         tmp_path / "signed-manifest.json",
-        signed_manifest(signing_provider="local_file"),
+        signed_manifest(signing_provider=provider),
     )
 
-    assert run_gate(tmp_path) == 1
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    artifact = json.loads(summary.read_text(encoding="utf-8"))["required"][
+        "signed_manifest"
+    ]["artifacts"][0]
+    assert (
+        "signing_provider must be `authenticated_external_signer`"
+        in artifact["errors"]
+    )
+
+
+def test_signed_manifest_rejects_non_software_backend(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "signed-manifest.json",
+        signed_manifest(signing_backend="hsm"),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    artifact = json.loads(summary.read_text(encoding="utf-8"))["required"][
+        "signed_manifest"
+    ]["artifacts"][0]
+    assert "signing_backend must be `software`" in artifact["errors"]
+
+
+def test_signed_manifest_rejects_legacy_hsm_verification_field(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = signed_manifest()
+    payload["hsm_signature_verified"] = payload.pop("signer_response_verified")
+    write_json(tmp_path / "signed-manifest.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    artifact = json.loads(summary.read_text(encoding="utf-8"))["required"][
+        "signed_manifest"
+    ]["artifacts"][0]
+    assert (
+        "signed_manifest evidence fields must match the schema-closed contract"
+        in artifact["errors"]
+    )
+    assert "signer_response_verified must be true" in artifact["errors"]
+
+
+def test_signed_manifest_requires_verified_signer_response(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "signed-manifest.json",
+        signed_manifest(signer_response_verified=False),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    artifact = json.loads(summary.read_text(encoding="utf-8"))["required"][
+        "signed_manifest"
+    ]["artifacts"][0]
+    assert "signer_response_verified must be true" in artifact["errors"]
+
+
+@pytest.mark.parametrize(
+    ("field", "expected_error"),
+    (
+        ("policy_digest_hex", "policy_digest_hex must not be zero"),
+        (
+            "public_key_fingerprint_hex",
+            "public_key_fingerprint_hex must not be zero",
+        ),
+    ),
+)
+def test_signed_manifest_rejects_zero_policy_or_key_binding(
+    tmp_path: Path,
+    field: str,
+    expected_error: str,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = signed_manifest()
+    payload[field] = "0" * 64
+    write_json(tmp_path / "signed-manifest.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    artifact = json.loads(summary.read_text(encoding="utf-8"))["required"][
+        "signed_manifest"
+    ]["artifacts"][0]
+    assert expected_error in artifact["errors"]
+
+
+def test_signed_manifest_requires_positive_provider_revision(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "signed-manifest.json",
+        signed_manifest(signing_provider_revision=0),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    artifact = json.loads(summary.read_text(encoding="utf-8"))["required"][
+        "signed_manifest"
+    ]["artifacts"][0]
+    assert "signing_provider_revision must be a positive integer" in artifact["errors"]
 
 
 def test_supply_chain_requires_all_five_targets(tmp_path: Path) -> None:

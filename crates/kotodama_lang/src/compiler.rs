@@ -114,7 +114,6 @@ const HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE: &str =
 const ACCOUNT_WILDCARD_KEY: &str = "account:*";
 const ASSET_WILDCARD_KEY: &str = "asset:*";
 const ASSET_DEF_WILDCARD_KEY: &str = "asset_def:*";
-const ZK_ASSET_WILDCARD_KEY: &str = "zk_asset:*";
 const NFT_COARSE_KEY: &str = "nft";
 const AUTHORITY_ACCOUNT_KEY: &str = "account:$authority";
 const AUTHORITY_PLACEHOLDER: &str = "$authority";
@@ -1535,32 +1534,6 @@ fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
     Ok(raw.as_bytes().to_vec())
 }
 
-fn decode_fixed32_chunks(
-    raw: &str,
-    label: &str,
-    allow_empty: bool,
-) -> Result<Vec<[u8; 32]>, String> {
-    let bytes = decode_hex_or_raw_bytes(raw).map_err(|err| format!("{label} literal {err}"))?;
-    if bytes.is_empty() {
-        return if allow_empty {
-            Ok(Vec::new())
-        } else {
-            Err(format!("{label} must contain one or more 32-byte chunks"))
-        };
-    }
-    if bytes.len() % 32 != 0 {
-        return Err(format!("{label} must be a multiple of 32 bytes"));
-    }
-    Ok(bytes
-        .chunks_exact(32)
-        .map(|chunk| {
-            let mut out = [0u8; 32];
-            out.copy_from_slice(chunk);
-            out
-        })
-        .collect())
-}
-
 fn state_path_literal_data_key(
     func_idx: usize,
     path: ir::Temp,
@@ -1765,11 +1738,11 @@ fn parse_u64_literal(raw: &str) -> Option<u64> {
 
 // Kotodama ZK capabilities are supported by semantic/IR lowering:
 //   - namespaced verification operations lower to their typed ABI-v1 syscalls;
-//   - namespaced governance and unshield operations build their exact
-//     instruction payloads inside the compiler before host submission.
+//   - namespaced governance operations build their exact instruction payloads
+//     inside the compiler before host submission.
 // Raw instruction submission and direct syscall spellings are not source APIs.
 // See `kotodama::semantic`, `kotodama::ir`, and the sample
-// `crates/kotodama_lang/src/samples/zk_vote_and_unshield.ko`.
+// `crates/kotodama_lang/src/samples/zk_vote_ballot.ko`.
 
 /// Compiler entry point for translating KOTODAMA programs into IVM bytecode.
 #[derive(Clone)]
@@ -2052,8 +2025,6 @@ seiyaku AxtLiteralValidation {
             IrAccessClass::Ledger(BuiltinAccess::LedgerRead)
         );
         for number in [
-            syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-            syscalls::SYSCALL_ZK_VERIFY_UNSHIELD,
             syscalls::SYSCALL_ZK_VERIFY_BATCH,
             syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
             syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
@@ -2132,7 +2103,7 @@ seiyaku AxtLiteralValidation {
         assert!(skips.is_empty());
 
         let (access, skips) = unresolved_world_access(&ir::Instr::ZkVerify {
-            number: syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+            number: syscalls::SYSCALL_ZK_VERIFY_BATCH,
             payload: temp,
         });
         assert_eq!(
@@ -4126,81 +4097,6 @@ kotoage fn main() authorize("CompilerFixture") {
     }
 
     #[test]
-    fn native_anonymous_escrow_builtins_emit_escrow_syscalls() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn main() authorize("CompilerFixture") {
-  let request = b"00";
-  let evidence = b"01";
-  ledger::escrow::anonymous::open_offer(request);
-  ledger::escrow::anonymous::accept(Name::parse("shielded_offer"));
-  ledger::escrow::anonymous::mark_payment_sent(Name::parse("shielded_offer"));
-  ledger::escrow::anonymous::release(request);
-  ledger::escrow::anonymous::cancel(request);
-  ledger::escrow::anonymous::open_dispute(Name::parse("shielded_offer"), evidence);
-  ledger::escrow::anonymous::resolve_dispute(request);
-  ledger::escrow::anonymous::open_offer(request);
-  ledger::escrow::anonymous::accept(Name::parse("shielded_offer_call"));
-  ledger::escrow::anonymous::mark_payment_sent(Name::parse("shielded_offer_call"));
-  ledger::escrow::anonymous::release(request);
-  ledger::escrow::anonymous::cancel(request);
-  ledger::escrow::anonymous::open_dispute(Name::parse("shielded_offer_call"), evidence);
-  ledger::escrow::anonymous::resolve_dispute(request);
-}
-
-}
-"#;
-        let compiler = test_mode_compiler();
-        let bytes = compiler
-            .compile_source(src)
-            .expect("compile native anonymous escrow builtins");
-        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-        let code = &bytes[parsed.code_offset..];
-
-        for (syscall, label) in [
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER,
-                "ANONYMOUS_ESCROW_OPEN_OFFER",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT,
-                "ANONYMOUS_ESCROW_ACCEPT",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT,
-                "ANONYMOUS_ESCROW_MARK_PAYMENT_SENT",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE,
-                "ANONYMOUS_ESCROW_RELEASE",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL,
-                "ANONYMOUS_ESCROW_CANCEL",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
-                "ANONYMOUS_ESCROW_OPEN_DISPUTE",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
-                "ANONYMOUS_ESCROW_RESOLVE_DISPUTE",
-            ),
-        ] {
-            let needle = encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(syscall).expect("anonymous escrow syscall id fits in u8"),
-            )
-            .to_le_bytes();
-            assert!(
-                code.windows(needle.len()).any(|window| window == needle),
-                "expected {label} syscall in compiled code"
-            );
-        }
-    }
-
-    #[test]
     fn native_escrow_builtins_report_literal_access_hints() {
         let asset_def = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let src = format!(
@@ -4250,122 +4146,6 @@ kotoage fn main() authorize("EscrowAdmin") {{
         }
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
-            .find(|entry| entry.name == "main")
-            .expect("main entrypoint");
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
-    }
-
-    #[test]
-    fn named_anonymous_escrow_builtins_report_literal_access_hints() {
-        let src = r#"
-seiyaku CompilerFixture {
-
-kotoage fn main() authorize("EscrowAdmin") {
-  let evidence = b"01";
-  ledger::escrow::anonymous::accept(Name::parse("shielded_offer"));
-  ledger::escrow::anonymous::mark_payment_sent(Name::parse("shielded_offer"));
-  ledger::escrow::anonymous::open_dispute(Name::parse("shielded_offer"), evidence);
-}
-
-}
-"#;
-        let compiler = Compiler::new();
-        let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(src)
-            .expect("compile anonymous escrow access hints");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected anonymous escrow access hints");
-        let escrow_hash = kotodama_escrow_hex("shielded_offer");
-        for key in [
-            format!("escrow_id:{escrow_hash}"),
-            format!("anonymous_asset_escrow:{escrow_hash}"),
-        ] {
-            assert!(hints.read_keys.contains(&key), "missing read key {key}");
-            assert!(hints.write_keys.contains(&key), "missing write key {key}");
-        }
-
-        let entrypoints = manifest.entrypoints.expect("entrypoints present");
-        let main = entrypoints
-            .iter()
-            .find(|entry| entry.name == "main")
-            .expect("main entrypoint");
-        assert_eq!(main.access_hints_complete, Some(true));
-        assert!(main.access_hints_skipped.is_empty());
-    }
-
-    #[test]
-    fn literal_anonymous_escrow_request_reports_access_hints() {
-        use iroha_data_model::{
-            asset::AssetDefinitionId,
-            isi::escrow::OpenAnonymousAssetEscrow,
-            proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-        };
-
-        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
-            .parse()
-            .expect("asset definition");
-        let escrow_name: iroha_data_model::name::Name =
-            "shielded_offer".parse().expect("escrow name");
-        let escrow_id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&escrow_name);
-        let backend = "halo2/ipa/poly-open".to_string();
-        let proof = ProofAttachment::new_ref(
-            backend.clone(),
-            ProofBox::new(backend.clone(), vec![1, 2, 3]),
-            VerifyingKeyId::new(backend, "escrow_vk"),
-        );
-        let request = OpenAnonymousAssetEscrow::new(
-            escrow_id,
-            asset_def.clone(),
-            vec![[0x11; 32]],
-            [0x22; 32],
-            proof,
-            None,
-        );
-        let payload = norito::to_bytes(&request).expect("encode anonymous escrow request");
-        let payload_literal = kotodama_bytes_literal(&payload);
-        let src = format!(
-            r#"
-seiyaku CompilerFixture {{
-
-kotoage fn main() authorize("EscrowAdmin") {{
-  ledger::escrow::anonymous::open_offer(b"{payload_literal}");
-}}
-
-}}
-"#
-        );
-
-        let compiler = Compiler::new();
-        let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(&src)
-            .expect("compile literal anonymous escrow request");
-        let hints = manifest
-            .access_set_hints
-            .expect("expected anonymous request access hints");
-        let escrow_hash = kotodama_escrow_hex("shielded_offer");
-        for key in [
-            format!("escrow_id:{escrow_hash}"),
-            format!("anonymous_asset_escrow:{escrow_hash}"),
-            format!("zk_asset:{asset_def}"),
-        ] {
-            assert!(hints.read_keys.contains(&key), "missing read key {key}");
-            assert!(hints.write_keys.contains(&key), "missing write key {key}");
-        }
-        let asset_def_key = format!("asset_def:{asset_def}");
-        assert!(
-            hints.read_keys.contains(&asset_def_key),
-            "missing read key {asset_def_key}"
-        );
-        assert!(
-            !hints.write_keys.contains(&asset_def_key),
-            "anonymous escrow open should not write asset definition key {asset_def_key}"
-        );
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
@@ -4434,42 +4214,6 @@ fn main() {
 }
 "#,
                 "ledger::escrow::resolve_dispute expects (Name, quantity, quantity[, bytes evidence_hashes])",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::escrow::anonymous::open_offer(Name::parse("deal"));
-}
-
-}
-"#,
-                "ledger::escrow::anonymous::open_offer expects (bytes) Norito request payload",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::escrow::anonymous::accept(1);
-}
-
-}
-"#,
-                "ledger::escrow::anonymous::accept expects (Name)",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::escrow::anonymous::open_dispute(Name::parse("deal"), 1);
-}
-
-}
-"#,
-                "ledger::escrow::anonymous::open_dispute expects (Name[, bytes evidence_hashes])",
             ),
         ] {
             let parsed = parse(src).expect("parse invalid escrow source");
@@ -5405,16 +5149,12 @@ kotoage fn main() authorize("CompilerFixture") {
   let trigger_id = Name::parse("wake");
   ledger::peer::register(Json::parse("{}"));
   ledger::peer::unregister(Json::parse("{}"));
-  ledger::trigger::create(Json::parse("{}"));
   ledger::trigger::register(Json::parse("{}"));
-  ledger::trigger::remove(trigger_id);
   ledger::trigger::unregister(trigger_id);
   ledger::trigger::set_enabled(trigger_id, 1);
   ledger::peer::register(Json::parse("{}"));
   ledger::peer::unregister(Json::parse("{}"));
-  ledger::trigger::create(Json::parse("{}"));
   ledger::trigger::register(Json::parse("{}"));
-  ledger::trigger::remove(trigger_id);
   ledger::trigger::unregister(trigger_id);
   ledger::trigger::set_enabled(trigger_id, 0);
 }
@@ -5460,10 +5200,8 @@ seiyaku CompilerFixture {
 
 kotoage fn main() authorize("CompilerFixture") {
   let trigger_id = Name::parse("wake");
-  ledger::trigger::remove(trigger_id);
   ledger::trigger::unregister(trigger_id);
   ledger::trigger::set_enabled(trigger_id, 1);
-  ledger::trigger::remove(trigger_id);
   ledger::trigger::unregister(trigger_id);
   ledger::trigger::set_enabled(trigger_id, 0);
 }
@@ -5583,12 +5321,12 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn main() {
-  ledger::trigger::create(Name::parse("bad"));
+  ledger::trigger::register(Name::parse("bad"));
 }
 
 }
 "#,
-                "ledger::trigger::create expects (Json)",
+                "ledger::trigger::register expects (Json)",
             ),
             (
                 r#"
@@ -6815,16 +6553,12 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn verify(bytes payload) {
-  crypto::zk::verify_transfer(payload);
-  crypto::zk::verify_unshield(payload);
   crypto::zk::verify_batch(payload);
   ledger::governance::verify_ballot(payload);
   ledger::governance::verify_tally(payload);
 }
 
 fn verify_namespaced(bytes payload) {
-  crypto::zk::verify_transfer(payload);
-  crypto::zk::verify_unshield(payload);
   crypto::zk::verify_batch(payload);
   ledger::governance::verify_ballot(payload);
   ledger::governance::verify_tally(payload);
@@ -6849,14 +6583,6 @@ kotoage fn main() authorize("CompilerFixture") {
             (
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
                 "INPUT_PUBLISH_TLV",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-                "ZK_VERIFY_TRANSFER",
-            ),
-            (
-                ivm_abi::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD,
-                "ZK_VERIFY_UNSHIELD",
             ),
             (
                 ivm_abi::syscalls::SYSCALL_ZK_VERIFY_BATCH,
@@ -6891,12 +6617,12 @@ kotoage fn main() authorize("CompilerFixture") {
 seiyaku CompilerFixture {
 
 fn main() {
-  crypto::zk::verify_transfer(1);
+  crypto::zk::verify_batch(1);
 }
 
 }
 "#,
-                "crypto::zk::verify_transfer expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
+                "crypto::zk::verify_batch expects (bytes) where the argument is a pointer to NoritoBytes TLV in INPUT",
             ),
             (
                 r#"
@@ -6922,11 +6648,8 @@ fn main() {
     }
 
     #[test]
-    fn inline_zk_builder_builtins_lower_to_ir() {
-        let account = sample_account_literal();
-        let input = "\\x00".repeat(32);
+    fn inline_submit_ballot_builtin_lowers_to_ir() {
         let nullifier = "\\x00".repeat(32);
-        let outputs = format!("{}{}", "\\x11".repeat(32), "\\x22".repeat(32));
         let src = format!(
             r#"
 seiyaku CompilerFixture {{
@@ -6940,25 +6663,6 @@ fn main() {{
     proof: b"proof",
     verification_key: b"vk",
   );
-  let _unshield = crypto::zk::build_unshield(
-    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    destination: AccountId::parse("{account}"),
-    amount: 5,
-    inputs: b"{input}",
-    backend: "halo2",
-    proof: b"proof",
-    verification_key: b"vk",
-  );
-  let _unshield_with_outputs = crypto::zk::build_unshield(
-    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    destination: AccountId::parse("{account}"),
-    amount: 6,
-    inputs: b"{input}",
-    outputs: b"{outputs}",
-    backend: "halo2",
-    proof: b"proof",
-    verification_key: b"vk",
-  );
 }}
 
 }}
@@ -6968,234 +6672,130 @@ fn main() {{
         let typed = analyze(&parsed).expect("analyze inline builder source");
         let ir = ir::lower(&typed).expect("lower inline builder source");
 
-        let mut saw_submit = false;
-        let mut saw_unshield_without_outputs = false;
-        let mut saw_unshield_with_outputs = false;
-        for instr in ir
-            .functions
-            .iter()
-            .flat_map(|function| function.blocks.iter())
-            .flat_map(|block| block.instrs.iter())
-        {
-            match instr {
-                ir::Instr::BuildSubmitBallotInline { .. } => saw_submit = true,
-                ir::Instr::BuildUnshieldInline { outputs, .. } => {
-                    if outputs.is_some() {
-                        saw_unshield_with_outputs = true;
-                    } else {
-                        saw_unshield_without_outputs = true;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        assert!(saw_submit, "expected BuildSubmitBallotInline IR");
         assert!(
-            saw_unshield_without_outputs,
-            "expected legacy BuildUnshieldInline IR"
-        );
-        assert!(
-            saw_unshield_with_outputs,
-            "expected BuildUnshieldInline IR with private change outputs"
+            ir.functions
+                .iter()
+                .flat_map(|function| function.blocks.iter())
+                .flat_map(|block| block.instrs.iter())
+                .any(|instr| matches!(instr, ir::Instr::BuildSubmitBallotInline { .. })),
+            "expected BuildSubmitBallotInline IR"
         );
     }
 
     #[test]
-    fn unshield_inline_literal_encodes_input_and_output_chunks() {
-        let asset = ir::Temp(0);
-        let to = ir::Temp(1);
-        let amount = ir::Temp(2);
-        let inputs = ir::Temp(3);
-        let outputs = ir::Temp(4);
-        let backend = ir::Temp(5);
-        let proof = ir::Temp(6);
-        let vk = ir::Temp(7);
+    fn inline_submit_ballot_requires_a_canonical_governance_selector() {
+        let nullifier = "\\x00".repeat(32);
+        let source = |selector: &str| {
+            format!(
+                r#"
+seiyaku CompilerFixture {{
+
+fn main() {{
+  let _ballot = ledger::governance::build_submit_ballot(
+    election_id: "{selector}",
+    ciphertext: b"00",
+    nullifier: b"{nullifier}",
+    backend: "halo2",
+    proof: b"proof",
+    verification_key: b"vk",
+  );
+}}
+
+}}
+"#
+            )
+        };
+
+        Compiler::new()
+            .compile_source(&source(&"a".repeat(128)))
+            .expect("a 128-byte canonical governance selector must compile");
+
+        let overlong = "a".repeat(129);
+        for (case, selector) in [
+            ("empty", ""),
+            ("dot", "."),
+            ("leading dot", ".hidden"),
+            ("slash", "a/b"),
+            ("percent", "a%2Fb"),
+            ("whitespace", "a b"),
+            ("Unicode", "投票"),
+            ("overlong", overlong.as_str()),
+        ] {
+            let error = Compiler::new()
+                .compile_source(&source(selector))
+                .expect_err("a noncanonical governance selector must fail compilation");
+            assert!(
+                error.contains(
+                    "election_id must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot"
+                ),
+                "case={case}: unexpected diagnostic: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn noncanonical_inline_submit_ballot_cannot_seed_access_hints() {
+        let election_id = ir::Temp(0);
+        let ciphertext = ir::Temp(1);
+        let nullifier = ir::Temp(2);
+        let backend = ir::Temp(3);
+        let proof = ir::Temp(4);
+        let vk = ir::Temp(5);
         let func_idx = 0;
-        let mut string_map = HashMap::new();
-        string_map.insert(
-            (func_idx, asset),
-            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_string(),
-        );
-        string_map.insert((func_idx, to), sample_account_literal());
-        string_map.insert(
-            (func_idx, inputs),
-            format!("0x{}{}", "11".repeat(32), "12".repeat(32)),
-        );
-        string_map.insert(
-            (func_idx, outputs),
-            format!("0x{}{}", "21".repeat(32), "22".repeat(32)),
-        );
-        string_map.insert((func_idx, backend), "halo2/ipa".to_string());
-        string_map.insert((func_idx, proof), "0xab".to_string());
-        string_map.insert((func_idx, vk), "vk_unshield_outputs".to_string());
-        let public_amount = u128::try_from(i64::MAX).expect("i64::MAX is non-negative") + 1;
-        string_map.insert((func_idx, amount), public_amount.to_string());
-
-        let raw = super::unshield_inline_instruction_literal(
-            &string_map,
-            func_idx,
-            asset,
-            to,
-            amount,
-            inputs,
-            Some(outputs),
-            backend,
-            proof,
-            vk,
-        )
-        .expect("fold unshield inline literal");
-        let payload = super::decode_norito_literal_payload(&raw).expect("literal payload");
-        let boxed: iroha_data_model::isi::InstructionBox =
-            norito::decode_from_bytes(&payload).expect("decode InstructionBox");
-        let unshield = boxed
-            .as_any()
-            .downcast_ref::<iroha_data_model::isi::zk::Unshield>()
-            .expect("Unshield instruction");
-        assert_eq!(
-            unshield.public_amount().to_string(),
-            public_amount.to_string()
-        );
-        assert_eq!(unshield.inputs().as_slice(), &[[0x11u8; 32], [0x12u8; 32]]);
-        assert_eq!(unshield.outputs().as_slice(), &[[0x21u8; 32], [0x22u8; 32]]);
-    }
-
-    #[test]
-    fn unshield_literal_parser_preserves_quantity_and_checks_v1_scalar_boundary() {
-        let maximum = u128::MAX.to_string();
-        let quantity = super::parse_unshield_public_amount(&maximum)
-            .expect("u128::MAX is a valid whole quantity proof scalar");
-        assert_eq!(quantity.to_string(), maximum);
-        assert_eq!(quantity.scale(), 0);
-
-        for (raw, expected) in [
-            ("1.5", "whole quantity with canonical scale 0"),
-            (
-                "340282366920938463463374607431768211456",
-                "exceeds the u128 V1 proof-scalar range",
-            ),
-            ("-1", "canonical non-negative quantity literal"),
-        ] {
-            let error = super::parse_unshield_public_amount(raw)
-                .expect_err("invalid V1 unshield proof scalar must fail");
-            assert!(
-                error.contains(expected),
-                "raw={raw}: expected `{expected}` in `{error}`"
-            );
-        }
-    }
-
-    #[test]
-    fn unshield_inline_amount_uses_the_explicit_u128_protocol_domain() {
-        let account = sample_account_literal();
-        let inputs = "\\x00".repeat(32);
-        let source = |amount: &str| {
-            format!(
-                r#"
-seiyaku UnshieldAmount {{
-  view fn build() -> bytes {{
-    return crypto::zk::build_unshield(
-      asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      destination: AccountId::parse("{account}"),
-      amount: {amount},
-      inputs: b"{inputs}",
-      backend: "halo2",
-      proof: b"proof",
-      verification_key: b"vk",
-    );
-  }}
-}}
-"#
+        let base_map = |selector: &str| {
+            let mut string_map = HashMap::new();
+            string_map.insert((func_idx, election_id), selector.to_owned());
+            string_map.insert((func_idx, ciphertext), "0x00".to_owned());
+            string_map.insert((func_idx, nullifier), format!("0x{}", "00".repeat(32)));
+            string_map.insert((func_idx, backend), "halo2/ipa".to_owned());
+            string_map.insert((func_idx, proof), "0x01".to_owned());
+            string_map.insert((func_idx, vk), "vk_ballot".to_owned());
+            string_map
+        };
+        let fold = |selector: &str| {
+            super::submit_ballot_inline_instruction_literal(
+                &base_map(selector),
+                func_idx,
+                election_id,
+                ciphertext,
+                nullifier,
+                backend,
+                proof,
+                vk,
             )
         };
 
-        Compiler::new()
-            .compile_source(&source("9223372036854775808"))
-            .expect("a contextual whole quantity above i64 but inside u128 must compile");
+        let maximum = "a".repeat(128);
+        for selector in ["a", maximum.as_str()] {
+            let raw = fold(selector).expect("canonical selector must produce a literal");
+            assert!(
+                super::access_for_instruction_literal(&raw).is_some(),
+                "canonical selector must remain eligible for static access hints"
+            );
+        }
 
-        let quantity_const = source("AMOUNT").replacen(
-            "seiyaku UnshieldAmount {",
-            "seiyaku UnshieldAmount { const quantity AMOUNT = 7;",
-            1,
-        );
-        Compiler::new()
-            .compile_source(&quantity_const)
-            .expect("an explicit quantity constant must compile");
-
-        for (amount, expected) in [
-            ("1.5", "requires a whole quantity with scale 0"),
-            (
-                "340282366920938463463374607431768211456",
-                "quantity exceeds the u128 V1 proof-scalar range",
-            ),
+        let overlong = "a".repeat(129);
+        for selector in [
+            "",
+            ".",
+            ".hidden",
+            "a/b",
+            "a%2Fb",
+            "a b",
+            "a\0b",
+            "投票",
+            overlong.as_str(),
         ] {
-            let error = Compiler::new()
-                .compile_source(&source(amount))
-                .expect_err("amount outside the protocol u128 domain must fail");
             assert!(
-                error.contains(expected),
-                "amount={amount}: expected `{expected}` in {error}"
+                fold(selector).is_none(),
+                "noncanonical selector {selector:?} must not produce an instruction literal or access hints"
             );
         }
-
-        let error = Compiler::new()
-            .compile_source(&source("-1"))
-            .expect_err("negative contextual quantity must fail");
-        assert!(
-            error.contains("E_NEGATIVE_QUANTITY")
-                && error.contains("contextual quantity literal cannot be negative"),
-            "negative amount must use the stable quantity diagnostic: {error}"
-        );
     }
 
     #[test]
-    fn unshield_inline_rejects_runtime_non_quantity_and_non_literal_amounts() {
-        let account = sample_account_literal();
-        let inputs = "\\x00".repeat(32);
-        let source = |amount_type: &str| {
-            format!(
-                r#"
-seiyaku RuntimeUnshieldAmount {{
-  view fn build({amount_type} amount) {{
-    let _bytes = crypto::zk::build_unshield(
-      asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      destination: AccountId::parse("{account}"),
-      amount: amount,
-      inputs: b"{inputs}",
-      backend: "halo2",
-      proof: b"proof",
-      verification_key: b"vk",
-    );
-  }}
-}}
-"#
-            )
-        };
-
-        for amount_type in ["int", "decimal"] {
-            let error = Compiler::new()
-                .compile_source(&source(amount_type))
-                .expect_err("runtime non-quantity amount must fail semantic validation");
-            assert!(
-                error.contains("AssetDefinitionId, AccountId, quantity amount"),
-                "type={amount_type}: unexpected diagnostic: {error}"
-            );
-        }
-
-        let error = Compiler::new()
-            .compile_source(&source("quantity"))
-            .expect_err("the V1 inline builder still requires a literal quantity");
-        assert!(
-            error.contains("build_unshield_inline requires literal amount"),
-            "runtime quantity must retain the literal-builder diagnostic: {error}"
-        );
-    }
-
-    #[test]
-    fn inline_zk_builder_builtins_reject_invalid_arguments() {
-        for (src, expected) in [
-            (
-                r#"
+    fn inline_submit_ballot_builtin_rejects_invalid_arguments() {
+        let src = r#"
 seiyaku CompilerFixture {
 
 fn main() {
@@ -7210,59 +6810,16 @@ fn main() {
 }
 
 }
-"#,
-                "ledger::governance::build_submit_ballot expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bytes = crypto::zk::build_unshield(
-    asset_definition: Name::parse("asset"),
-    destination: context::authority(),
-    amount: 1,
-    inputs: b"00",
-    backend: "halo2",
-    proof: b"proof",
-    verification_key: b"vk",
-  );
-}
-
-}
-"#,
-                "crypto::zk::build_unshield expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bytes = crypto::zk::build_unshield(
-    asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-    destination: context::authority(),
-    amount: 1,
-    inputs: b"00",
-    backend: "halo2",
-    proof: 1,
-    verification_key: b"vk",
-  );
-}
-
-}
-"#,
-                "crypto::zk::build_unshield expects (AssetDefinitionId, AccountId, quantity amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)",
-            ),
-        ] {
-            let parsed = parse(src).expect("parse invalid inline builder source");
-            let err =
-                analyze(&parsed).expect_err("semantic analysis should reject inline builder args");
-            assert!(
-                err.message.contains(expected),
-                "expected error containing {expected:?}, got {}",
-                err.message
-            );
-        }
+"#;
+        let expected = "ledger::governance::build_submit_ballot expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)";
+        let parsed = parse(src).expect("parse invalid inline builder source");
+        let err =
+            analyze(&parsed).expect_err("semantic analysis should reject inline builder args");
+        assert!(
+            err.message.contains(expected),
+            "expected error containing {expected:?}, got {}",
+            err.message
+        );
     }
 
     #[test]
@@ -7273,7 +6830,6 @@ seiyaku CompilerFixture {
 kotoage fn run(bytes payload) authorize("Admin") {
   ledger::sccp::record(payload);
   ledger::governance::submit_ballot(payload);
-  crypto::zk::submit_unshield(payload);
   ledger::subscription::bill();
   ledger::subscription::record_usage();
 }
@@ -7302,17 +6858,13 @@ kotoage fn run(bytes payload) authorize("Admin") {
             .filter(|window| *window == execute_instruction)
             .count();
         assert_eq!(
-            execute_instruction_count, 3,
-            "typed SCCP/governance/ZK operations should lower to SMARTCONTRACT_EXECUTE_INSTRUCTION"
+            execute_instruction_count, 2,
+            "typed SCCP and governance operations should lower to SMARTCONTRACT_EXECUTE_INSTRUCTION"
         );
         for (tag, label) in [
             (
                 ivm_abi::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
                 "SubmitBallot",
-            ),
-            (
-                ivm_abi::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD,
-                "Unshield",
             ),
             (
                 ivm_abi::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
@@ -9431,11 +8983,11 @@ seiyaku NativeJson {
     }
 
     #[test]
-    fn manifest_access_set_hints_include_create_trigger_from_json() {
+    fn manifest_access_set_hints_include_register_trigger_from_json() {
         let src = r#"
 seiyaku Test {
   kotoage fn make() authorize("Admin") {
-    ledger::trigger::create(Json::parse("{\"id\":\"t1\"}"));
+    ledger::trigger::register(Json::parse("{\"id\":\"t1\"}"));
   }
 }
 "#;
@@ -9744,27 +9296,14 @@ kotoage fn main() authorize("AssetAdmin") {{
     }
 
     #[test]
-    fn manifest_access_set_hints_include_inline_zk_vendor_payloads() {
-        use iroha_data_model::{
-            account::{AccountId, ParsedAccountId},
-            asset::id::{AssetDefinitionId, AssetId},
-        };
-
+    fn manifest_access_set_hints_include_inline_ballot_vendor_payload() {
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(include_str!("samples/zk_vote_and_unshield.ko"))
+            .compile_source_with_manifest(include_str!("samples/zk_vote_ballot.ko"))
             .expect("compile sample manifest");
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        let asset_def = AssetDefinitionId::parse_address_literal("6pEP9RjNoZ7beWkT3pLfKoM1dyfi")
-            .expect("sample asset definition");
-        let account =
-            AccountId::parse_encoded("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-                .map(ParsedAccountId::into_account_id)
-                .expect("sample account");
-        let asset = AssetId::of(asset_def.clone(), account.clone());
-
         assert!(
             hints
                 .write_keys
@@ -9774,13 +9313,6 @@ kotoage fn main() authorize("AssetAdmin") {{
             hints
                 .write_keys
                 .contains(&"zk:election:election-1:nullifiers".to_string())
-        );
-        assert!(hints.write_keys.contains(&format!("zk_asset:{asset_def}")));
-        assert!(hints.write_keys.contains(&format!("asset:{asset}")));
-        assert!(
-            hints
-                .write_keys
-                .contains(&format!("asset_def.detail:{asset_def}:zk.unshield.last"))
         );
         assert_conservative_ledger_read(&hints.read_keys, &hints.write_keys);
 
@@ -9793,7 +9325,7 @@ kotoage fn main() authorize("AssetAdmin") {{
         assert_eq!(
             demo.access_hints_skipped,
             vec![HINT_SKIP_OPAQUE_ISI.to_owned()],
-            "opaque proof envelopes require a conservative read wildcard even when the built instruction payloads are exact"
+            "opaque proof envelopes require a conservative read wildcard even when the ballot instruction payload is exact"
         );
     }
 
@@ -10190,7 +9722,7 @@ seiyaku Test {
     fn internal_lifecycle_access_derivation_decodes_typed_requests() {
         let code_hash = iroha_crypto::Hash::new(b"kotodama lifecycle access hints");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            7,
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             &sample_account_id(),
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -10633,331 +10165,7 @@ seiyaku Hello {
         );
     }
 
-    #[test]
-    fn staged_mint_helper_keeps_state_map_base_literals_after_call_propagation() {
-        let src = r#"
-seiyaku StagedMintRequest {
-  state int MintRequestNextSequence;
-  state StateMap<Name, int> MintRequestSequenceById;
-  state StateMap<int, int> MintRequestSequences;
-  state StateMap<int, Name> MintRequestRequestIds;
-  state StateMap<int, Name> MintRequestFiIds;
-  state StateMap<int, AccountId> MintRequestFiAuthorities;
-  state StateMap<int, AccountId> MintRequestToAccounts;
-  state StateMap<int, int> MintRequestAmounts;
-  state StateMap<int, Json> MintRequestRequestedBy;
-  state StateMap<int, int> MintRequestStates;
-  state StateMap<int, int> MintRequestCreatedAt;
-  state StateMap<int, int> MintRequestExpiresAt;
-  state StateMap<int, int> MintRequestFinalizedAt;
-  state StateMap<int, int> MintRequestCanceledAt;
-
-  hajimari() { MintRequestNextSequence = 0; }
-
-  fn update_record(int sequence,
-                   Name request_id,
-                   Name fi_id,
-                   AccountId fi_multisig_account_id,
-                   AccountId to_account_id,
-                   int amount_i64,
-                   Json requested_by_actor_id,
-                   int state_code,
-                   int created_at_ms,
-                   int expires_at_ms,
-                   int finalized_at_ms,
-                   int canceled_at_ms) {
-    MintRequestSequences[sequence] = sequence;
-    MintRequestRequestIds[sequence] = request_id;
-    MintRequestFiIds[sequence] = fi_id;
-    MintRequestFiAuthorities[sequence] = fi_multisig_account_id;
-    MintRequestToAccounts[sequence] = to_account_id;
-    MintRequestAmounts[sequence] = amount_i64;
-    MintRequestRequestedBy[sequence] = requested_by_actor_id;
-    MintRequestStates[sequence] = state_code;
-    MintRequestCreatedAt[sequence] = created_at_ms;
-    MintRequestExpiresAt[sequence] = expires_at_ms;
-    MintRequestFinalizedAt[sequence] = finalized_at_ms;
-    MintRequestCanceledAt[sequence] = canceled_at_ms;
-  }
-
-  fn run() {
-    let ev = context::trigger_event();
-    let action_key = Name::parse("action");
-    let request_id_key = Name::parse("request_id");
-    let fi_id_key = Name::parse("fi_id");
-    let to_account_id_key = Name::parse("to_account_id");
-    let amount_i64_key = Name::parse("amount_i64");
-    let requested_by_actor_id_key = Name::parse("requested_by_actor_id");
-    let created_at_ms_key = Name::parse("created_at_ms");
-    let expires_at_ms_key = Name::parse("expires_at_ms");
-
-    let action = ev.get_name(action_key).unwrap_or(Name::parse("missing"));
-    if (action == Name::parse("create")) {
-      let request_id = ev.get_name(request_id_key).unwrap_or(Name::parse("missing"));
-      let sequence = MintRequestNextSequence + 1;
-      let fi_id = ev.get_name(fi_id_key).unwrap_or(Name::parse("missing"));
-      let to_account_id = ev.get_account_id(to_account_id_key).unwrap_or(context::authority());
-      let amount_i64 = ev.get_int(amount_i64_key).unwrap_or(0);
-      let requested_by_actor_id = ev.get_json(requested_by_actor_id_key).unwrap_or(Json::parse("{}"));
-      let created_at_ms = ev.get_int(created_at_ms_key).unwrap_or(0);
-      let expires_at_ms = ev.get_int(expires_at_ms_key).unwrap_or(0);
-      update_record(
-        sequence: sequence,
-        request_id: request_id,
-        fi_id: fi_id,
-        fi_multisig_account_id: to_account_id,
-        to_account_id: to_account_id,
-        amount_i64: amount_i64,
-        requested_by_actor_id: requested_by_actor_id,
-        state_code: 0,
-        created_at_ms: created_at_ms,
-        expires_at_ms: expires_at_ms,
-        finalized_at_ms: 0,
-        canceled_at_ms: 0,
-      );
-    }
-  }
-}
-"#;
-
-        let program = parse(src).expect("parse");
-        let typed = analyze(&program).expect("analyze");
-        let ir_prog =
-            ir::lower_with_cap(&typed, usize::from(COLLECTION_ITERATION_CAP)).expect("lower");
-        let typed_functions: Vec<_> = typed
-            .items
-            .iter()
-            .map(|item| match item {
-                crate::semantic::TypedItem::Function(func) => func,
-            })
-            .collect();
-
-        let mut string_map: HashMap<(usize, ir::Temp), String> = HashMap::new();
-        let mut string_literal_temps: HashSet<(usize, ir::Temp)> = HashSet::new();
-        let mut dataref_kind_map: HashMap<(usize, ir::Temp), ir::DataRefKind> = HashMap::new();
-        let mut int_const_map: HashMap<(usize, ir::Temp), i64> = HashMap::new();
-        let mut param_temp_map: HashMap<(usize, usize), ir::Temp> = HashMap::new();
-        let multiply_defined_dests = super::multiply_defined_temps(&ir_prog);
-
-        use crate::ast::UnaryOp;
-        use crate::ir::DataRefKind as DRK;
-        for (func_idx, func) in ir_prog.functions.iter().enumerate() {
-            for bb in &func.blocks {
-                for instr in &bb.instrs {
-                    if let ir::Instr::Binary { dest, .. } = instr {
-                        int_const_map.remove(&(func_idx, *dest));
-                    }
-                    if let ir::Instr::Copy { dest, src } = instr {
-                        if dest != src {
-                            let dest_key = (func_idx, *dest);
-                            string_map.remove(&dest_key);
-                            dataref_kind_map.remove(&dest_key);
-                            int_const_map.remove(&dest_key);
-                            string_literal_temps.remove(&dest_key);
-                            if !multiply_defined_dests.contains(&dest_key) {
-                                if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
-                                    string_map.insert(dest_key, val);
-                                }
-                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied()
-                                {
-                                    dataref_kind_map.insert(dest_key, kind);
-                                }
-                                if let Some(val) = int_const_map.get(&(func_idx, *src)).copied() {
-                                    int_const_map.insert(dest_key, val);
-                                }
-                                if string_literal_temps.contains(&(func_idx, *src)) {
-                                    string_literal_temps.insert(dest_key);
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                    if let ir::Instr::StringConst { dest, value } = instr {
-                        string_map.insert((func_idx, *dest), value.clone());
-                        string_literal_temps.insert((func_idx, *dest));
-                        dataref_kind_map.insert((func_idx, *dest), DRK::Blob);
-                    }
-                    if let ir::Instr::PointerFromString { dest, kind, src } = instr
-                        && let Some(s) = string_map.get(&(func_idx, *src)).cloned()
-                    {
-                        string_map.insert((func_idx, *dest), s);
-                        dataref_kind_map.insert((func_idx, *dest), *kind);
-                    }
-                    if let ir::Instr::Const { dest, value } = instr {
-                        int_const_map.insert((func_idx, *dest), *value);
-                    }
-                    if let ir::Instr::Unary {
-                        dest,
-                        op: UnaryOp::Neg,
-                        operand,
-                    } = instr
-                        && let Some(value) = int_const_map.get(&(func_idx, *operand)).copied()
-                        && let Some(neg) = value.checked_neg()
-                    {
-                        int_const_map.insert((func_idx, *dest), neg);
-                    }
-                    if let ir::Instr::DataRef { dest, kind, value } = instr {
-                        string_map.insert((func_idx, *dest), value.clone());
-                        dataref_kind_map.insert((func_idx, *dest), *kind);
-                    }
-                    if let ir::Instr::PointerFromNorito { dest, kind, .. } = instr {
-                        dataref_kind_map.insert((func_idx, *dest), *kind);
-                    }
-                    if let ir::Instr::StateGet { dest, .. }
-                    | ir::Instr::StateKeys { dest, .. }
-                    | ir::Instr::StateMapKeyAt { dest, .. } = instr
-                    {
-                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
-                    }
-                    if let ir::Instr::PointerToNorito { dest, value } = instr {
-                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
-                        let literal_kind = dataref_kind_map.get(&(func_idx, *value)).copied();
-                        let literal_raw = string_map.get(&(func_idx, *value)).cloned();
-                        if let (Some(kind), Some(raw)) = (literal_kind, literal_raw)
-                            && let Some(tlv_bytes) = super::encode_pointer_tlv_bytes(kind, &raw)
-                        {
-                            let hex = hex::encode(tlv_bytes);
-                            string_map.insert((func_idx, *dest), format!("0x{hex}"));
-                        }
-                    }
-                    if let ir::Instr::ActorAccount { dest, .. } = instr {
-                        dataref_kind_map.insert((func_idx, *dest), DRK::Account);
-                    }
-                    if let ir::Instr::ActorPublicKey { dest, .. }
-                    | ir::Instr::ActorSign { dest, .. } = instr
-                    {
-                        dataref_kind_map.insert((func_idx, *dest), DRK::Blob);
-                    }
-                    if let ir::Instr::LoadVar { dest, name } = instr
-                        && let Some(param_idx) = func.params.iter().position(|p| p == name)
-                    {
-                        param_temp_map.entry((func_idx, param_idx)).or_insert(*dest);
-                    }
-                    crate::regalloc::visit_instr_defs(instr, |dest| {
-                        let key = (func_idx, dest);
-                        if multiply_defined_dests.contains(&key) {
-                            string_map.remove(&key);
-                            dataref_kind_map.remove(&key);
-                            int_const_map.remove(&key);
-                            string_literal_temps.remove(&key);
-                        }
-                    });
-                }
-            }
-        }
-
-        let fn_index_by_name: HashMap<String, usize> = typed_functions
-            .iter()
-            .enumerate()
-            .map(|(idx, func)| (func.name.clone(), idx))
-            .collect();
-        let mut literal_param_conflicts: HashSet<(usize, ir::Temp)> = HashSet::new();
-        for (caller_idx, func) in ir_prog.functions.iter().enumerate() {
-            for bb in &func.blocks {
-                for instr in &bb.instrs {
-                    if let Some((name, args)) = match instr {
-                        ir::Instr::Call { callee, args, .. }
-                        | ir::Instr::CallMulti { callee, args, .. } => {
-                            Some((callee.as_str(), args.as_slice()))
-                        }
-                        _ => None,
-                    } && let Some(&callee_idx) = fn_index_by_name.get(name)
-                    {
-                        let callee = &ir_prog.functions[callee_idx];
-                        let count = usize::min(args.len(), callee.params.len());
-                        for (i, &arg_temp) in args.iter().take(count).enumerate() {
-                            let Some(&param_temp) = param_temp_map.get(&(callee_idx, i)) else {
-                                continue;
-                            };
-                            let param_key = (callee_idx, param_temp);
-                            if literal_param_conflicts.contains(&param_key) {
-                                continue;
-                            }
-                            let arg_has_literal = string_literal_temps
-                                .contains(&(caller_idx, arg_temp))
-                                || dataref_kind_map.contains_key(&(caller_idx, arg_temp));
-                            let Some(value) = string_map.get(&(caller_idx, arg_temp)).cloned()
-                            else {
-                                if string_map.contains_key(&param_key) {
-                                    string_map.remove(&param_key);
-                                    string_literal_temps.remove(&param_key);
-                                    dataref_kind_map.remove(&param_key);
-                                    literal_param_conflicts.insert(param_key);
-                                }
-                                continue;
-                            };
-                            if !arg_has_literal {
-                                if string_map.contains_key(&param_key) {
-                                    string_map.remove(&param_key);
-                                    string_literal_temps.remove(&param_key);
-                                    dataref_kind_map.remove(&param_key);
-                                    literal_param_conflicts.insert(param_key);
-                                }
-                                continue;
-                            }
-                            if let Some(existing) = string_map.get(&param_key) {
-                                if existing != &value {
-                                    string_map.remove(&param_key);
-                                    string_literal_temps.remove(&param_key);
-                                    dataref_kind_map.remove(&param_key);
-                                    literal_param_conflicts.insert(param_key);
-                                    continue;
-                                }
-                            } else {
-                                string_map.insert(param_key, value);
-                            }
-                            if string_literal_temps.contains(&(caller_idx, arg_temp)) {
-                                string_literal_temps.insert(param_key);
-                            }
-                            if let Some(kind) =
-                                dataref_kind_map.get(&(caller_idx, arg_temp)).copied()
-                            {
-                                dataref_kind_map.insert(param_key, kind);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let update_record_idx = ir_prog
-            .functions
-            .iter()
-            .position(|func| func.name == "update_record")
-            .expect("update_record index");
-        let update_record = &ir_prog.functions[update_record_idx];
-        let mut bases = Vec::new();
-        for bb in &update_record.blocks {
-            for instr in &bb.instrs {
-                if let ir::Instr::PathMapKeyNorito { base, .. } = instr {
-                    bases.push(
-                        string_map
-                            .get(&(update_record_idx, *base))
-                            .cloned()
-                            .expect("PathMapKey base should be a literal name"),
-                    );
-                }
-            }
-        }
-
-        assert_eq!(
-            bases,
-            vec![
-                "MintRequestSequences",
-                "MintRequestRequestIds",
-                "MintRequestFiIds",
-                "MintRequestFiAuthorities",
-                "MintRequestToAccounts",
-                "MintRequestAmounts",
-                "MintRequestRequestedBy",
-                "MintRequestStates",
-                "MintRequestCreatedAt",
-                "MintRequestExpiresAt",
-                "MintRequestFinalizedAt",
-                "MintRequestCanceledAt",
-            ]
-        );
-    }
+    include!("compiler/tests/staged_mint_access_hints.rs");
 
     #[test]
     fn manifest_trigger_decl_lowers_structured_data_filter() {
@@ -10969,7 +10177,7 @@ seiyaku StagedMintRequest {
             },
         };
 
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
@@ -11040,7 +10248,7 @@ seiyaku Test {{
         let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
         let peer: PeerId = peer_literal.parse().expect("peer");
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
-        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
@@ -11330,7 +10538,7 @@ seiyaku Test {
         let src = r#"
 seiyaku Test {
   kotoage fn register() authorize("Admin") {
-    ledger::trigger::create(Json::parse("{\"name\":\"t1\"}"));
+    ledger::trigger::register(Json::parse("{\"name\":\"t1\"}"));
   }
 }
 "#;
@@ -11389,7 +10597,7 @@ seiyaku Test {
         let src = r#"
 seiyaku Test {
   kotoage fn register() authorize("Admin") {
-    ledger::trigger::create(Json::parse("{\"name\":\"t1\"}"));
+    ledger::trigger::register(Json::parse("{\"name\":\"t1\"}"));
   }
 }
 "#;
@@ -11864,13 +11072,14 @@ seiyaku Test {
             Repeats::Indefinitely,
             authority,
             filter,
-        );
+        )
+        .expect("trigger action fixture satisfies validation invariants");
         let trigger = Trigger::new(trigger_id.clone(), action);
         let json_value = norito::json::to_value(&trigger).expect("trigger json value");
         let raw_json = norito::json::to_string(&json_value).expect("trigger json");
         let escaped = raw_json.replace('\\', "\\\\").replace('"', "\\\"");
         let src = format!(
-            r#"seiyaku Test {{ kotoage fn main() authorize("Admin") {{ ledger::trigger::create(Json::parse("{escaped}")); }} }}"#
+            r#"seiyaku Test {{ kotoage fn main() authorize("Admin") {{ ledger::trigger::register(Json::parse("{escaped}")); }} }}"#
         );
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
@@ -14193,36 +13402,6 @@ impl Compiler {
                         string_map.insert((func_idx, *dest), raw);
                         dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
                     }
-                    if let ir::Instr::BuildUnshieldInline {
-                        dest,
-                        asset,
-                        to,
-                        amount,
-                        inputs,
-                        outputs,
-                        backend,
-                        proof,
-                        vk,
-                    } = instr
-                        && let Some(raw) = unshield_inline_instruction_literal(
-                            &string_map,
-                            func_idx,
-                            *asset,
-                            *to,
-                            *amount,
-                            *inputs,
-                            *outputs,
-                            *backend,
-                            *proof,
-                            *vk,
-                        )
-                    {
-                        if let Some(access) = access_for_instruction_literal(&raw) {
-                            instruction_literal_access_map.insert((func_idx, *dest), access);
-                        }
-                        string_map.insert((func_idx, *dest), raw);
-                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
-                    }
                     if let ir::Instr::ActorAccount { dest, .. } = instr {
                         dataref_kind_map.insert((func_idx, *dest), DRK::Account);
                     }
@@ -16097,9 +15276,6 @@ impl Compiler {
                                 ir::VendorInstructionKind::SubmitBallot => {
                                     syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT
                                 }
-                                ir::VendorInstructionKind::Unshield => {
-                                    syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD
-                                }
                                 ir::VendorInstructionKind::RecordSccpMessage => {
                                     syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE
                                 }
@@ -16410,6 +15586,15 @@ impl Compiler {
                                     Err(i18n::translate(self.lang, Message::SemanticError(&err)))
                                 };
                             let eid = require_literal("election_id", election_id)?;
+                            if !iroha_data_model::governance::is_valid_governance_selector_v1(&eid)
+                            {
+                                let err = "build_submit_ballot_inline election_id must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot"
+                                    .to_owned();
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::SemanticError(&err),
+                                ));
+                            }
                             let backend_str = require_literal("backend", backend)?;
                             let ct_literal = require_literal("ciphertext", ciphertext)?;
                             let ct_bytes = decode_hex_or_raw_bytes(&ct_literal).map_err(|e| {
@@ -16461,106 +15646,6 @@ impl Compiler {
                                         i18n::translate(self.lang, Message::SemanticError(&err))
                                     })?;
                             // Store as NoritoBytes in data and emit load into dest
-                            let hex_payload = hex::encode(bytes);
-                            let key = DataKey(DataKind::NoritoBytes, hex_payload);
-                            let (rd, spilled, imm) = dst_reg(dest);
-                            emit_literal_load(&mut code, &fixups, rd, key);
-                            spill_back(dest, rd, spilled, imm, &mut code)?;
-                        }
-                        Instr::BuildUnshieldInline {
-                            dest,
-                            asset,
-                            to,
-                            amount,
-                            inputs,
-                            outputs,
-                            backend,
-                            proof,
-                            vk,
-                        } => {
-                            use iroha_data_model::{
-                                isi::zk as DMZk,
-                                prelude::*,
-                                proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-                            };
-                            let require_literal =
-                                |label: &str, temp: &ir::Temp| -> Result<String, String> {
-                                    if let Some(value) = string_map.get(&(func_idx, *temp)) {
-                                        return Ok(value.clone());
-                                    }
-                                    let err =
-                                        format!("build_unshield_inline requires literal {label}");
-                                    Err(i18n::translate(self.lang, Message::SemanticError(&err)))
-                                };
-                            let asset_id_str = require_literal("asset", asset)?;
-                            let to_str = require_literal("to", to)?;
-                            let amount_literal = require_literal("amount", amount)?;
-                            let amt =
-                                parse_unshield_public_amount(&amount_literal).map_err(|err| {
-                                    i18n::translate(self.lang, Message::SemanticError(&err))
-                                })?;
-                            let ad = AssetDefinitionId::parse_address_literal(&asset_id_str)
-                                .map_err(|e| {
-                                let err = format!(
-                                    "build_unshield_inline invalid AssetDefinitionId literal `{asset_id_str}`: {e}"
-                                );
-                                i18n::translate(self.lang, Message::SemanticError(&err))
-                            })?;
-                            let acct = AccountId::parse_encoded(&to_str)
-                                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                                .map_err(|e| {
-                                    let err = format!(
-                                        "build_unshield_inline invalid AccountId literal `{to_str}`: {e}"
-                                    );
-                                    i18n::translate(self.lang, Message::SemanticError(&err))
-                                })?;
-                            let inputs_literal = require_literal("inputs", inputs)?;
-                            let ins = decode_fixed32_chunks(&inputs_literal, "inputs", false)
-                                .map_err(|e| {
-                                    let err = format!("build_unshield_inline {e}");
-                                    i18n::translate(self.lang, Message::SemanticError(&err))
-                                })?;
-                            let outs = if let Some(outputs) = outputs {
-                                let outputs_literal = require_literal("outputs", outputs)?;
-                                decode_fixed32_chunks(&outputs_literal, "outputs", true).map_err(
-                                    |e| {
-                                        let err = format!("build_unshield_inline {e}");
-                                        i18n::translate(self.lang, Message::SemanticError(&err))
-                                    },
-                                )?
-                            } else {
-                                Vec::new()
-                            };
-                            let backend_str = require_literal("backend", backend)?;
-                            let proof_literal = require_literal("proof", proof)?;
-                            let proof_bytes =
-                                decode_hex_or_raw_bytes(&proof_literal).map_err(|e| {
-                                    let err = format!("build_unshield_inline proof literal {e}");
-                                    i18n::translate(self.lang, Message::SemanticError(&err))
-                                })?;
-                            let vk_ref = require_literal("vk_ref", vk)?;
-                            let pa = ProofAttachment::new_ref(
-                                backend_str.clone(),
-                                ProofBox::new(backend_str.clone(), proof_bytes),
-                                VerifyingKeyId::new(backend_str, vk_ref),
-                            );
-                            let uz = DMZk::Unshield {
-                                asset: ad,
-                                to: acct,
-                                public_amount: amt,
-                                inputs: ins,
-                                outputs: outs,
-                                proof: pa,
-                                root_hint: None,
-                            };
-                            let bytes =
-                                ivm_abi::codec::encode_canonical_norito(&InstructionBox::from(uz))
-                                    .map_err(|e| {
-                                        let err = format!(
-                                            "build_unshield_inline encode InstructionBox: {e}"
-                                        );
-                                        i18n::translate(self.lang, Message::SemanticError(&err))
-                                    })?;
                             let hex_payload = hex::encode(bytes);
                             let key = DataKey(DataKind::NoritoBytes, hex_payload);
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -16995,100 +16080,6 @@ impl Compiler {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
-                        }
-                        Instr::AnonymousEscrowOpenOffer { request }
-                        | Instr::AnonymousEscrowRelease { request }
-                        | Instr::AnonymousEscrowCancel { request }
-                        | Instr::AnonymousEscrowResolveDispute { request } => {
-                            if let Some(pstr) = string_map.get(&(func_idx, *request)) {
-                                let key = DataKey(DataKind::NoritoBytes, pstr.clone());
-                                emit_literal_load(&mut code, &fixups, 10, key);
-                            } else {
-                                let r_request = src_reg(request, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r_request, 0)?);
-                            }
-                            let pub_word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-                            );
-                            code.extend_from_slice(&pub_word.to_le_bytes());
-                            let syscall = match instr {
-                                Instr::AnonymousEscrowOpenOffer { .. } => {
-                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
-                                }
-                                Instr::AnonymousEscrowRelease { .. } => {
-                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE
-                                }
-                                Instr::AnonymousEscrowCancel { .. } => {
-                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL
-                                }
-                                Instr::AnonymousEscrowResolveDispute { .. } => {
-                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE
-                                }
-                                _ => unreachable!(),
-                            };
-                            push_syscall(&mut code, syscall);
-                        }
-                        Instr::AnonymousEscrowAccept { escrow }
-                        | Instr::AnonymousEscrowMarkPaymentSent { escrow } => {
-                            if let Some(escrow_str) = string_map
-                                .get(&(func_idx, *escrow))
-                                .map(|s| DataKey(DataKind::Name, s.clone()))
-                            {
-                                emit_literal_load(&mut code, &fixups, 10, escrow_str);
-                            } else {
-                                let r_escrow = src_reg(escrow, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r_escrow, 0)?);
-                            }
-                            let pub_word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-                            );
-                            code.extend_from_slice(&pub_word.to_le_bytes());
-                            let syscall = match instr {
-                                Instr::AnonymousEscrowAccept { .. } => {
-                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT
-                                }
-                                Instr::AnonymousEscrowMarkPaymentSent { .. } => {
-                                    syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
-                                }
-                                _ => unreachable!(),
-                            };
-                            push_syscall(&mut code, syscall);
-                        }
-                        Instr::AnonymousEscrowOpenDispute {
-                            escrow,
-                            evidence_hashes,
-                        } => {
-                            if let Some(escrow_str) = string_map
-                                .get(&(func_idx, *escrow))
-                                .map(|s| DataKey(DataKind::Name, s.clone()))
-                            {
-                                emit_literal_load(&mut code, &fixups, 10, escrow_str);
-                            } else {
-                                let r_escrow = src_reg(escrow, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r_escrow, 0)?);
-                            }
-                            let pub_word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-                            );
-                            code.extend_from_slice(&pub_word.to_le_bytes());
-                            if let Some(evidence_hashes) = evidence_hashes {
-                                push_word(&mut code, encode_addi(14, 10, 0)?);
-                                let r_evidence = src_reg(evidence_hashes, scratch2, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r_evidence, 0)?);
-                                code.extend_from_slice(&pub_word.to_le_bytes());
-                                push_word(&mut code, encode_addi(11, 10, 0)?);
-                                push_word(&mut code, encode_addi(10, 14, 0)?);
-                            } else {
-                                push_word(&mut code, encode_addi(11, 0, 0)?);
-                            }
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
@@ -22202,70 +21193,6 @@ fn record_isi_access(
             };
             record_asset_escrow_close_access(access_set, &escrow_id);
         }
-        ir::Instr::AnonymousEscrowOpenOffer { request } => {
-            let Some(raw) = string_map.get(&(func_idx, *request)) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            if record_anonymous_escrow_request_access(
-                raw,
-                AnonymousEscrowRequestKind::OpenOffer,
-                access_set,
-            )
-            .is_none()
-            {
-                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            }
-        }
-        ir::Instr::AnonymousEscrowRelease { request } => {
-            let Some(raw) = string_map.get(&(func_idx, *request)) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            if record_anonymous_escrow_request_access(
-                raw,
-                AnonymousEscrowRequestKind::Release,
-                access_set,
-            )
-            .is_none()
-            {
-                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            }
-        }
-        ir::Instr::AnonymousEscrowCancel { request } => {
-            let Some(raw) = string_map.get(&(func_idx, *request)) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            if record_anonymous_escrow_request_access(
-                raw,
-                AnonymousEscrowRequestKind::Cancel,
-                access_set,
-            )
-            .is_none()
-            {
-                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            }
-        }
-        ir::Instr::AnonymousEscrowResolveDispute { request } => {
-            let Some(raw) = string_map.get(&(func_idx, *request)) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            if record_anonymous_escrow_request_access(
-                raw,
-                AnonymousEscrowRequestKind::ResolveDispute,
-                access_set,
-            )
-            .is_none()
-            {
-                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            }
-        }
-        ir::Instr::AnonymousEscrowAccept { escrow }
-        | ir::Instr::AnonymousEscrowMarkPaymentSent { escrow }
-        | ir::Instr::AnonymousEscrowOpenDispute { escrow, .. } => {
-            let Some(escrow_id) = escrow_id_from_name_temp(string_map, func_idx, *escrow) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
-            };
-            record_anonymous_asset_escrow_lifecycle_access(access_set, &escrow_id);
-        }
         ir::Instr::TransferAsset {
             from,
             to,
@@ -22357,7 +21284,7 @@ fn record_isi_access(
         }
         ir::Instr::UnregisterAsset { asset } => {
             if let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
-                add_asset_def_domain_r_if_projected(access_set, &id);
+                add_asset_definition_ownership_r(access_set, &id);
                 add_asset_def_rw(access_set, &id);
             } else {
                 add_dynamic_asset_definition_rw(access_set);
@@ -22469,7 +21396,7 @@ fn record_isi_access(
         }
         ir::Instr::RegisterAsset { asset, .. } => {
             if let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
-                add_asset_def_domain_r_if_projected(access_set, &id);
+                add_asset_definition_ownership_r(access_set, &id);
                 add_asset_def_rw(access_set, &id);
             } else {
                 add_dynamic_asset_definition_rw(access_set);
@@ -22483,7 +21410,7 @@ fn record_isi_access(
                 *account,
             );
             if let Some(asset_def) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
-                add_asset_def_domain_r_if_projected(access_set, &asset_def);
+                add_asset_definition_ownership_r(access_set, &asset_def);
                 add_asset_def_rw(access_set, &asset_def);
                 add_asset_rw_for_optional_account_hint(access_set, &asset_def, account.as_ref());
             } else {
@@ -22616,7 +21543,7 @@ fn record_isi_access(
                 apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
         }
-        ir::Instr::BuildSubmitBallotInline { .. } | ir::Instr::BuildUnshieldInline { .. } => {}
+        ir::Instr::BuildSubmitBallotInline { .. } => {}
         ir::Instr::TransferDomain { domain, to } => {
             let (Some(domain), Some(to)) = (
                 parse_domain_temp(string_map, func_idx, *domain),
@@ -22744,50 +21671,6 @@ fn access_for_instruction_literal(raw: &str) -> Option<AccessSets> {
     let mut access = AccessSets::default();
     record_instruction_box_access(&instr, &mut access)?;
     Some(access)
-}
-
-enum AnonymousEscrowRequestKind {
-    OpenOffer,
-    Release,
-    Cancel,
-    ResolveDispute,
-}
-
-fn record_anonymous_escrow_request_access(
-    raw: &str,
-    kind: AnonymousEscrowRequestKind,
-    access_set: &mut AccessSets,
-) -> Option<()> {
-    use iroha_data_model::isi::escrow as DMEscrow;
-
-    let payload = decode_norito_literal_payload(raw)?;
-    match kind {
-        AnonymousEscrowRequestKind::OpenOffer => {
-            let request: DMEscrow::OpenAnonymousAssetEscrow =
-                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            record_anonymous_asset_escrow_open_access(
-                access_set,
-                &request.escrow_id,
-                &request.asset_definition,
-            );
-        }
-        AnonymousEscrowRequestKind::Release => {
-            let request: DMEscrow::ReleaseAnonymousAssetEscrow =
-                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            record_anonymous_asset_escrow_close_access(access_set, &request.escrow_id);
-        }
-        AnonymousEscrowRequestKind::Cancel => {
-            let request: DMEscrow::CancelAnonymousAssetEscrow =
-                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            record_anonymous_asset_escrow_close_access(access_set, &request.escrow_id);
-        }
-        AnonymousEscrowRequestKind::ResolveDispute => {
-            let request: DMEscrow::ResolveAnonymousEscrowDispute =
-                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
-            record_anonymous_asset_escrow_close_access(access_set, &request.escrow_id);
-        }
-    }
-    Some(())
 }
 
 fn decode_query_request_literal(raw: &str) -> Option<QueryRequest> {
@@ -23087,6 +21970,9 @@ fn submit_ballot_inline_instruction_literal(
 
     let literal = |temp| string_map.get(&(func_idx, temp)).cloned();
     let eid = literal(election_id)?;
+    if !iroha_data_model::governance::is_valid_governance_selector_v1(&eid) {
+        return None;
+    }
     let backend_str = literal(backend)?;
     let ct_bytes = decode_hex_or_raw_bytes(&literal(ciphertext)?).ok()?;
     let nf_bytes = decode_hex_or_raw_bytes(&literal(nullifier)?).ok()?;
@@ -23105,78 +21991,6 @@ fn submit_ballot_inline_instruction_literal(
         nullifier: null32,
     };
     let boxed = InstructionBox::from(submit);
-    let bytes = ivm_abi::codec::encode_canonical_norito(&boxed).ok()?;
-    Some(format!("0x{}", hex::encode(bytes)))
-}
-
-fn parse_unshield_public_amount(raw: &str) -> Result<iroha_primitives::numeric::Quantity, String> {
-    let quantity = raw
-        .parse::<iroha_primitives::numeric::Quantity>()
-        .map_err(|_| {
-            "build_unshield_inline requires a canonical non-negative quantity literal amount"
-                .to_owned()
-        })?;
-    if quantity.scale() != 0 {
-        return Err(
-            "build_unshield_inline requires a whole quantity with canonical scale 0".to_owned(),
-        );
-    }
-    if quantity.as_numeric().try_mantissa_u128().is_none() {
-        return Err(
-            "build_unshield_inline quantity exceeds the u128 V1 proof-scalar range".to_owned(),
-        );
-    }
-    Ok(quantity)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn unshield_inline_instruction_literal(
-    string_map: &HashMap<(usize, ir::Temp), String>,
-    func_idx: usize,
-    asset: ir::Temp,
-    to: ir::Temp,
-    amount: ir::Temp,
-    inputs: ir::Temp,
-    outputs: Option<ir::Temp>,
-    backend: ir::Temp,
-    proof: ir::Temp,
-    vk: ir::Temp,
-) -> Option<String> {
-    use iroha_data_model::{
-        isi::zk as DMZk,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-    };
-
-    let literal = |temp| string_map.get(&(func_idx, temp)).cloned();
-    let asset_id = AssetDefinitionId::parse_address_literal(&literal(asset)?).ok()?;
-    let account = AccountId::parse_encoded(&literal(to)?)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .ok()?;
-    let public_amount = parse_unshield_public_amount(&literal(amount)?).ok()?;
-    let inputs = decode_fixed32_chunks(&literal(inputs)?, "inputs", false).ok()?;
-    let outputs = if let Some(outputs) = outputs {
-        decode_fixed32_chunks(&literal(outputs)?, "outputs", true).ok()?
-    } else {
-        Vec::new()
-    };
-    let backend_str = literal(backend)?;
-    let proof_bytes = decode_hex_or_raw_bytes(&literal(proof)?).ok()?;
-    let vk_ref = literal(vk)?;
-    let proof = ProofAttachment::new_ref(
-        backend_str.clone(),
-        ProofBox::new(backend_str.clone(), proof_bytes),
-        VerifyingKeyId::new(backend_str, vk_ref),
-    );
-    let unshield = DMZk::Unshield {
-        asset: asset_id,
-        to: account,
-        public_amount,
-        inputs,
-        outputs,
-        proof,
-        root_hint: None,
-    };
-    let boxed = InstructionBox::from(unshield);
     let bytes = ivm_abi::codec::encode_canonical_norito(&boxed).ok()?;
     Some(format!("0x{}", hex::encode(bytes)))
 }
@@ -23201,16 +22015,6 @@ fn record_instruction_box_access(
     }
     if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::zk::FinalizeElection>() {
         add_zk_election_tally_w(access_set, instr.election_id());
-        return Some(());
-    }
-    if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::zk::Unshield>() {
-        let asset = AssetId::of(instr.asset().clone(), instr.to().clone());
-        add_asset_rw(access_set, &asset);
-        add_zk_asset_rw(access_set, instr.asset());
-        let Ok(key) = "zk.unshield.last".parse::<Name>() else {
-            return None;
-        };
-        add_asset_def_detail_rw(access_set, instr.asset(), &key);
         return Some(());
     }
     if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::transfer::TransferAssetBatch>() {
@@ -23250,38 +22054,6 @@ fn record_instruction_box_access(
         }
         if let Some(instr) = any.downcast_ref::<DMEscrow::ResolveEscrowDispute>() {
             record_asset_escrow_close_access(access_set, &instr.escrow_id);
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::OpenAnonymousAssetEscrow>() {
-            record_anonymous_asset_escrow_open_access(
-                access_set,
-                &instr.escrow_id,
-                &instr.asset_definition,
-            );
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::AcceptAnonymousAssetEscrow>() {
-            record_anonymous_asset_escrow_lifecycle_access(access_set, &instr.escrow_id);
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::MarkAnonymousEscrowPaymentSent>() {
-            record_anonymous_asset_escrow_lifecycle_access(access_set, &instr.escrow_id);
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::ReleaseAnonymousAssetEscrow>() {
-            record_anonymous_asset_escrow_close_access(access_set, &instr.escrow_id);
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::CancelAnonymousAssetEscrow>() {
-            record_anonymous_asset_escrow_close_access(access_set, &instr.escrow_id);
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::OpenAnonymousEscrowDispute>() {
-            record_anonymous_asset_escrow_lifecycle_access(access_set, &instr.escrow_id);
-            return Some(());
-        }
-        if let Some(instr) = any.downcast_ref::<DMEscrow::ResolveAnonymousEscrowDispute>() {
-            record_anonymous_asset_escrow_close_access(access_set, &instr.escrow_id);
             return Some(());
         }
     }
@@ -23394,7 +22166,9 @@ fn record_instruction_box_access(
                 add_account_rw(access_set, r.object.id());
             }
             RegisterBox::AssetDefinition(r) => {
-                add_asset_def_domain_r_if_projected(access_set, r.object.id());
+                if let Some(domain_id) = r.object.owning_domain.as_ref() {
+                    add_domain_r(access_set, domain_id);
+                }
                 add_asset_def_rw(access_set, r.object.id());
             }
             RegisterBox::Nft(r) => add_nft_rw(access_set, r.object.id()),
@@ -23862,13 +22636,6 @@ fn key_asset_escrow(id: &EscrowId) -> String {
     format!("asset_escrow:{}", hex::encode(id.as_hash().as_ref()))
 }
 
-fn key_anonymous_asset_escrow(id: &EscrowId) -> String {
-    format!(
-        "anonymous_asset_escrow:{}",
-        hex::encode(id.as_hash().as_ref())
-    )
-}
-
 fn key_asset(id: &AssetId) -> String {
     format!("asset:{id}")
 }
@@ -24058,16 +22825,14 @@ fn add_asset_def_r(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(key_asset_def(id));
 }
 
-fn add_asset_def_domain_r_if_projected(set: &mut AccessSets, id: &AssetDefinitionId) {
-    if let Some(domain) = id.try_domain() {
-        add_domain_r(set, domain);
-    }
+fn add_asset_definition_ownership_r(set: &mut AccessSets, id: &AssetDefinitionId) {
+    add_asset_def_r(set, id);
 }
 
 fn add_asset_r(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key_asset(id));
     add_account_r(set, id.account());
-    add_asset_def_domain_r_if_projected(set, id.definition());
+    add_asset_definition_ownership_r(set, id.definition());
     add_asset_def_r(set, id.definition());
 }
 
@@ -24079,7 +22844,7 @@ fn add_asset_r_for_account_hint(
     set.reads
         .insert(key_asset_for_account_hint(definition, account));
     add_account_hint_r(set, account);
-    add_asset_def_domain_r_if_projected(set, definition);
+    add_asset_definition_ownership_r(set, definition);
     add_asset_def_r(set, definition);
 }
 
@@ -24090,19 +22855,8 @@ fn add_asset_def_detail_rw(set: &mut AccessSets, id: &AssetDefinitionId, key: &N
     set.writes.insert(detail);
 }
 
-fn add_zk_asset_rw(set: &mut AccessSets, id: &AssetDefinitionId) {
-    let key = key_zk_asset(id);
-    set.reads.insert(key.clone());
-    set.writes.insert(key);
-}
-
 fn add_zk_asset_r(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(key_zk_asset(id));
-}
-
-fn add_dynamic_zk_asset_rw(set: &mut AccessSets) {
-    set.reads.insert(ZK_ASSET_WILDCARD_KEY.to_string());
-    set.writes.insert(ZK_ASSET_WILDCARD_KEY.to_string());
 }
 
 fn add_escrow_id_rw(set: &mut AccessSets, id: &EscrowId) {
@@ -24114,13 +22868,6 @@ fn add_escrow_id_rw(set: &mut AccessSets, id: &EscrowId) {
 fn add_asset_escrow_rw(set: &mut AccessSets, id: &EscrowId) {
     add_escrow_id_rw(set, id);
     let key = key_asset_escrow(id);
-    set.reads.insert(key.clone());
-    set.writes.insert(key);
-}
-
-fn add_anonymous_asset_escrow_rw(set: &mut AccessSets, id: &EscrowId) {
-    add_escrow_id_rw(set, id);
-    let key = key_anonymous_asset_escrow(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
@@ -24197,7 +22944,7 @@ fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key.clone());
     set.writes.insert(key);
     add_account_r(set, id.account());
-    add_asset_def_domain_r_if_projected(set, id.definition());
+    add_asset_definition_ownership_r(set, id.definition());
     add_asset_def_r(set, id.definition());
 }
 
@@ -24212,7 +22959,7 @@ fn add_asset_rw_for_account_hint(
     set.reads.insert(key.clone());
     set.writes.insert(key);
     add_account_hint_r(set, account);
-    add_asset_def_domain_r_if_projected(set, definition);
+    add_asset_definition_ownership_r(set, definition);
     add_asset_def_r(set, definition);
 }
 
@@ -24228,7 +22975,7 @@ fn add_scoped_asset_rw_for_account_hint(
     set.reads.insert(key.clone());
     set.writes.insert(key);
     add_account_hint_r(set, account);
-    add_asset_def_domain_r_if_projected(set, definition);
+    add_asset_definition_ownership_r(set, definition);
     add_asset_def_r(set, definition);
 }
 
@@ -24236,7 +22983,7 @@ fn add_dynamic_asset_account_rw(set: &mut AccessSets, definition: &AssetDefiniti
     set.reads.insert(ASSET_WILDCARD_KEY.to_string());
     set.writes.insert(ASSET_WILDCARD_KEY.to_string());
     set.reads.insert(ACCOUNT_WILDCARD_KEY.to_string());
-    add_asset_def_domain_r_if_projected(set, definition);
+    add_asset_definition_ownership_r(set, definition);
     add_asset_def_rw(set, definition);
 }
 
@@ -24457,7 +23204,7 @@ fn record_asset_escrow_open_access(
     set.reads.insert(ACCOUNT_WILDCARD_KEY.to_string());
     set.writes.insert(ACCOUNT_WILDCARD_KEY.to_string());
     if let Some(asset_definition) = asset_definition {
-        add_asset_def_domain_r_if_projected(set, asset_definition);
+        add_asset_definition_ownership_r(set, asset_definition);
         add_asset_rw_for_account_hint(set, asset_definition, &AccountAccessHint::Authority);
         add_dynamic_asset_account_rw(set, asset_definition);
     } else {
@@ -24475,26 +23222,6 @@ fn record_asset_escrow_lifecycle_access(set: &mut AccessSets, escrow_id: &Escrow
 fn record_asset_escrow_close_access(set: &mut AccessSets, escrow_id: &EscrowId) {
     add_asset_escrow_rw(set, escrow_id);
     add_dynamic_asset_definition_rw(set);
-}
-
-fn record_anonymous_asset_escrow_open_access(
-    set: &mut AccessSets,
-    escrow_id: &EscrowId,
-    asset_definition: &AssetDefinitionId,
-) {
-    add_anonymous_asset_escrow_rw(set, escrow_id);
-    add_asset_def_domain_r_if_projected(set, asset_definition);
-    add_asset_def_r(set, asset_definition);
-    add_zk_asset_rw(set, asset_definition);
-}
-
-fn record_anonymous_asset_escrow_lifecycle_access(set: &mut AccessSets, escrow_id: &EscrowId) {
-    add_anonymous_asset_escrow_rw(set, escrow_id);
-}
-
-fn record_anonymous_asset_escrow_close_access(set: &mut AccessSets, escrow_id: &EscrowId) {
-    add_anonymous_asset_escrow_rw(set, escrow_id);
-    add_dynamic_zk_asset_rw(set);
 }
 
 fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
@@ -24613,27 +23340,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::EscrowResolveDispute { .. } => {
             access_class_for_builtin(Builtin::EscrowResolveDispute)
         }
-        ir::Instr::AnonymousEscrowOpenOffer { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowOpenOffer)
-        }
-        ir::Instr::AnonymousEscrowAccept { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowAccept)
-        }
-        ir::Instr::AnonymousEscrowMarkPaymentSent { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowMarkPaymentSent)
-        }
-        ir::Instr::AnonymousEscrowRelease { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowRelease)
-        }
-        ir::Instr::AnonymousEscrowCancel { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowCancel)
-        }
-        ir::Instr::AnonymousEscrowOpenDispute { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowOpenDispute)
-        }
-        ir::Instr::AnonymousEscrowResolveDispute { .. } => {
-            access_class_for_builtin(Builtin::AnonymousEscrowResolveDispute)
-        }
         ir::Instr::TransferBatchBegin => access_class_for_builtin(Builtin::TransferV1BatchBegin),
         ir::Instr::TransferBatchEnd => access_class_for_builtin(Builtin::TransferV1BatchEnd),
         ir::Instr::TransferBatchApply { .. } => {
@@ -24664,8 +23370,8 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::UnregisterAccount { .. } => access_class_for_builtin(Builtin::UnregisterAccount),
         ir::Instr::RegisterPeer { .. } => access_class_for_builtin(Builtin::RegisterPeer),
         ir::Instr::UnregisterPeer { .. } => access_class_for_builtin(Builtin::UnregisterPeer),
-        ir::Instr::CreateTrigger { .. } => access_class_for_builtin(Builtin::CreateTrigger),
-        ir::Instr::RemoveTrigger { .. } => access_class_for_builtin(Builtin::RemoveTrigger),
+        ir::Instr::CreateTrigger { .. } => access_class_for_builtin(Builtin::RegisterTrigger),
+        ir::Instr::RemoveTrigger { .. } => access_class_for_builtin(Builtin::UnregisterTrigger),
         ir::Instr::SetTriggerEnabled { .. } => access_class_for_builtin(Builtin::SetTriggerEnabled),
         ir::Instr::GrantPermission { .. } => access_class_for_builtin(Builtin::GrantPermission),
         ir::Instr::RevokePermission { .. } => access_class_for_builtin(Builtin::RevokePermission),
@@ -24706,12 +23412,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::ActorPublicKey { .. } => access_class_for_builtin(Builtin::TestActorPublicKey),
         ir::Instr::ActorSign { .. } => access_class_for_builtin(Builtin::TestActorSign),
         ir::Instr::ZkVerify { number, .. } => match *number {
-            ivm_abi::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
-                access_class_for_builtin(Builtin::ZkVerifyTransfer)
-            }
-            ivm_abi::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => {
-                access_class_for_builtin(Builtin::ZkVerifyUnshield)
-            }
             ivm_abi::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
                 access_class_for_builtin(Builtin::ZkVerifyBatch)
             }
@@ -24733,7 +23433,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::VerifyProof { .. } => access_class_for_builtin(Builtin::VerifyProof),
         ir::Instr::VendorExecuteInstruction { kind, .. } => access_class_for_builtin(match kind {
             ir::VendorInstructionKind::SubmitBallot => Builtin::ScExecuteSubmitBallot,
-            ir::VendorInstructionKind::Unshield => Builtin::ScExecuteUnshield,
             ir::VendorInstructionKind::RecordSccpMessage => Builtin::RecordSccpMessage,
         }),
         ir::Instr::VendorExecuteQuery { .. } => access_class_for_builtin(Builtin::ExecuteQuery),
@@ -24781,9 +23480,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::StateCount { .. } => access_class_for_builtin(Builtin::StateCount),
         ir::Instr::BuildSubmitBallotInline { .. } => {
             access_class_for_builtin(Builtin::BuildSubmitBallotInline)
-        }
-        ir::Instr::BuildUnshieldInline { .. } => {
-            access_class_for_builtin(Builtin::BuildUnshieldInline)
         }
         ir::Instr::VrfVerify { .. } => access_class_for_builtin(Builtin::VrfVerify),
         ir::Instr::VrfVerifyBatch { .. } => access_class_for_builtin(Builtin::VrfVerifyBatch),

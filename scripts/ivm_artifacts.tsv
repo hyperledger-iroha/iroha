@@ -40,7 +40,7 @@ kotodama-standard	crates/kotodama_lang/src/samples/subscription_billing_trigger.
 kotodama-standard	crates/kotodama_lang/src/samples/subscription_usage_recorder.ko	crates/kotodama_lang/src/samples/subscription_usage_recorder.to
 kotodama-standard	crates/kotodama_lang/src/samples/threshold_escrow.ko	crates/kotodama_lang/src/samples/threshold_escrow.to
 kotodama-standard	crates/kotodama_lang/src/samples/tuple_return_demo.ko	crates/kotodama_lang/src/samples/tuple_return_demo.to
-kotodama-zk	crates/kotodama_lang/src/samples/zk_vote_and_unshield.ko	crates/kotodama_lang/src/samples/zk_vote_and_unshield.to
+kotodama-zk	crates/kotodama_lang/src/samples/zk_vote_ballot.ko	crates/kotodama_lang/src/samples/zk_vote_ballot.to
 kotodama-standard	demo/authority_probe.ko	demo/authority_probe.to
 kotodama-standard	crates/kotodama_lang/src/samples/irohaswap.ko	demo/irohaswap.to
 kotodama-standard	demo/ivm_smoke.ko	demo/ivm_smoke.to
@@ -50,8 +50,6 @@ kotodama-standard	examples/hello/hello.ko	examples/hello/hello.to
 kotodama-standard	examples/map/map.ko	examples/map/map.to
 kotodama-standard	examples/nft/nft.ko	examples/nft/nft.to
 kotodama-standard	examples/transfer/transfer.ko	examples/transfer/transfer.to
-kotodama-zk	fuzz/attachments/zk/kotodama/zk_shield_example.ko	fuzz/attachments/zk/kotodama/zk_shield_example.to
-kotodama-zk	fuzz/attachments/zk/kotodama/zk_unshield_verify_example.ko	fuzz/attachments/zk/kotodama/zk_unshield_verify_example.to
 kotodama-standard	crates/kotodama_lang/src/samples/create_nft_for_every_user_trigger.ko	integration_tests/fixtures/ivm/create_nft_for_every_user_trigger.to
 kotodama-standard	crates/kotodama_lang/src/samples/mint_rose_trigger.ko	integration_tests/fixtures/ivm/mint_rose_trigger.to
 kotodama-standard	crates/kotodama_lang/src/samples/query_assets_and_save_cursor.ko	integration_tests/fixtures/ivm/query_assets_and_save_cursor.to

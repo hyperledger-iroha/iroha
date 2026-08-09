@@ -85,11 +85,17 @@ fn load_consensus_sections(path: &Path) -> Result<Root, Box<dyn std::error::Erro
         b"sumeragi-v2-context-projection-streaming".to_vec(),
         Algorithm::Ed25519,
     )?;
+    let soranet_transport = KeyPair::try_from_seed(
+        b"sumeragi-v2-context-projection-soranet-transport-v1".to_vec(),
+        Algorithm::Ed25519,
+    )?;
     let mut projected = format!(
         r#"{chain}
 {chain_discriminant}
 public_key = "{validator_public}"
 private_key = "{validator_private}"
+soranet_transport_public_key = "{soranet_transport_public}"
+soranet_transport_private_key = "{soranet_transport_private}"
 trusted_peers_pop = [
   {{ public_key = "{validator_public}", pop_hex = "{validator_pop}" }}
 ]
@@ -103,6 +109,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "{genesis_public}"
+expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [streaming]
 identity_public_key = "{streaming_public}"
@@ -111,6 +118,8 @@ identity_private_key = "{streaming_private}"
         validator_public = validator.public_key(),
         validator_private = ExposedPrivateKey(validator.private_key().clone()),
         validator_pop = hex::encode(validator_pop),
+        soranet_transport_public = soranet_transport.public_key(),
+        soranet_transport_private = ExposedPrivateKey(soranet_transport.private_key().clone()),
         genesis_public = genesis.public_key(),
         streaming_public = streaming.public_key(),
         streaming_private = ExposedPrivateKey(streaming.private_key().clone()),

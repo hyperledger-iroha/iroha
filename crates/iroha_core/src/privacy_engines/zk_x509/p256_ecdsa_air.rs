@@ -13,9 +13,6 @@ use super::p256_group_air::{
 };
 use super::p256_window_air::P256WindowScalarV1;
 
-/// Stable descriptor for the complete ECDSA equation layer.
-pub(crate) const ZK_X509_P256_ECDSA_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-ecdsa-air-v1-incompatible:strict-der-r-s-bound-externally:canonical-n-scalar-inputs:r-and-s-nonzero-by-inverse:digest-reduce-one-subtraction:w=s-inverse:u1=z-times-w:u2=r-times-w:complete-straus-u1G-plus-u2Q:public-key-affine-oncurve:result-nonidentity:x-affine-reduce-one-subtraction:reduced-x-equals-r:wallet-low-s:certificate-and-crl-high-or-low-s:fixed-topology:no-native-verifier-recheck:integration=complete-via-p256-aggregate-adapter:standalone-activation=not-applicable";
-
 /// Verifier-fixed signature role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256EcdsaRoleV1 {
@@ -49,6 +46,7 @@ impl core::fmt::Debug for P256EcdsaWitnessV1 {
 
 impl P256EcdsaWitnessV1 {
     /// Overwrite the complete private ECDSA input tuple.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn zeroize_private_v1(&mut self) {
         self.public_key_x_be.fill(0);
         self.public_key_y_be.fill(0);
@@ -97,9 +95,11 @@ pub(crate) trait P256EcdsaCircuitV1: P256WindowCircuitV1 {
     type Scalar: Copy;
 
     /// Allocate a private base-field value bound to DER/P-256 byte I/O.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn base_input_v1(&mut self, value_be: [u8; 32]) -> Result<Self::Value, Self::Error>;
 
     /// Allocate a private canonical scalar bound to strict DER output.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn scalar_input_v1(&mut self, value_be: [u8; 32]) -> Result<Self::Scalar, Self::Error>;
 
     /// Allocate an inverse and constrain `value * inverse = 1 mod n`.
@@ -123,6 +123,7 @@ pub(crate) trait P256EcdsaCircuitV1: P256WindowCircuitV1 {
     ) -> Result<(), Self::Error>;
 
     /// Reduce an exact SHA-256 word with the one-subtraction reduction AIR.
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn reduce_digest_v1(&mut self, digest_be: [u8; 32]) -> Result<Self::Scalar, Self::Error>;
 
     /// Reduce an assigned canonical base-field coordinate modulo n.
@@ -160,11 +161,13 @@ pub(crate) trait P256EcdsaInputSourceV1<C: P256EcdsaCircuitV1> {
     fn reduced_digest_v1(&mut self, circuit: &mut C) -> Result<C::Scalar, C::Error>;
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 #[derive(Clone, Copy)]
 struct P256EcdsaWitnessInputSourceV1 {
     witness: P256EcdsaWitnessV1,
 }
 
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<C: P256EcdsaCircuitV1> P256EcdsaInputSourceV1<C> for P256EcdsaWitnessInputSourceV1 {
     fn public_key_v1(&mut self, circuit: &mut C) -> Result<(C::Value, C::Value), C::Error> {
         Ok((
@@ -241,6 +244,7 @@ pub(crate) fn constrain_p256_ecdsa_from_source_v1<
 
 /// Constrain one complete P-256 ECDSA verification equation from native
 /// witness bytes.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn constrain_p256_ecdsa_v1<C: P256EcdsaCircuitV1>(
     circuit: &mut C,
     generator_table: &[P256ProjectiveValueV1<C::Value>; 16],

@@ -20,7 +20,7 @@ use thiserror::Error;
 use super::v2::VerifiedHeightContext;
 
 const FILE_MAGIC: &[u8; 8] = b"SUMV2CTX";
-const FRAME_VERSION: u16 = 2;
+const FRAME_VERSION: u16 = 3;
 const HASH_LEN: usize = 32;
 // Sumeragi v2 admits only BLS-normal validators. Its PoP is one canonical G2
 // signature, not an arbitrary consensus-signature-sized blob.
@@ -123,37 +123,6 @@ impl V2ContextStore {
             #[cfg(test)]
             publication_pause: std::sync::Arc::new(std::sync::Mutex::new(None)),
         })
-    }
-
-    /// Open an already-created context store without mutating the filesystem.
-    ///
-    /// Evidence validation uses this path so an untrusted payload cannot
-    /// create storage directories as a side effect. `None` means the immutable
-    /// history is absent and the caller must fail admission closed.
-    pub(crate) fn open_existing(
-        root: impl AsRef<Path>,
-    ) -> Result<Option<Self>, V2ContextStoreError> {
-        let root = root.as_ref().to_path_buf();
-        let Some(stable_root) = stable_directory(&root, &root)? else {
-            return Ok(None);
-        };
-        let directory = root.join("contexts");
-        let Some(stable_contexts) = stable_directory(&root, &directory)? else {
-            require_root_identity(&root, &stable_root.metadata)?;
-            return Ok(None);
-        };
-        Ok(Some(Self {
-            root,
-            root_identity: stable_root.metadata,
-            directory,
-            directory_identity: stable_contexts.metadata,
-            #[cfg(test)]
-            lookup_pause: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            #[cfg(test)]
-            read_pause: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            #[cfg(test)]
-            publication_pause: std::sync::Arc::new(std::sync::Mutex::new(None)),
-        }))
     }
 
     /// Read one context directly from a storage root without creating or synchronizing paths.
@@ -1171,12 +1140,12 @@ mod tests {
             nexus_amx_context_hash: Hash::new(b"context-store-nexus-amx"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 64,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4096,
-                max_chunk_count: 64,
+                max_chunk_count: 128,
             },
             leader_seed: [0x51; 32],
         };
@@ -1195,6 +1164,26 @@ mod tests {
         store.persist(&record).expect("persist record");
         store.persist(&record).expect("repeat exact record");
         assert_eq!(store.load(1).expect("load record"), Some(record));
+    }
+
+    #[test]
+    fn legacy_v2_frame_is_rejected() {
+        const LEGACY_VERSION: u16 = 2;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let store = V2ContextStore::open(root.path()).expect("open store");
+        let record = record();
+        store.persist(&record).expect("persist current record");
+        let path = store.path(record.context().height);
+        let mut frame = fs::read(&path).expect("read context frame");
+        frame[FILE_MAGIC.len()..FILE_MAGIC.len() + std::mem::size_of::<u16>()]
+            .copy_from_slice(&LEGACY_VERSION.to_le_bytes());
+        fs::write(&path, frame).expect("write legacy context frame");
+
+        assert!(matches!(
+            store.load(record.context().height),
+            Err(V2ContextStoreError::UnsupportedVersion(LEGACY_VERSION))
+        ));
     }
 
     #[test]

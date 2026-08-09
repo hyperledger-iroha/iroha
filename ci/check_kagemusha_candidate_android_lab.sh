@@ -20,8 +20,11 @@ paths = {
     "export": root / "kotlin/kagemusha-candidate-evidence-lab/src/androidTest/java/org/hyperledger/iroha/sdk/kagemusha/candidate/lab/KagemushaCandidateArtifactExportInstrumentedTest.kt",
     "runner": root / "scripts/run_kagemusha_candidate_android_lab.sh",
     "native_builder": root / "scripts/build_kagemusha_candidate_android_native.sh",
+    "artifact_stager": root / "scripts/stage_kagemusha_candidate_android_artifacts.py",
     "validator": root / "scripts/check_android_device_lab_slot.py",
     "compile_check": root / "ci/check_kagemusha_candidate_android_lab_compile.sh",
+    "stager": root / "scripts/stage_kagemusha_candidate_android_lab.py",
+    "staging_spec": root / "specs/sdk/android/readiness/kagemusha_candidate_lab_staging.md",
     "source_seal": root / "scripts/kagemusha_source_tree_seal.py",
     "packaging": root / "scripts/check_mobile_sdk_artifacts.sh",
     "rust": root / "crates/connect_norito_bridge/src/lib.rs",
@@ -43,6 +46,39 @@ for label, path in paths.items():
 def require(label: str, needle: str, message: str) -> None:
     if needle not in text[label]:
         errors.append(message)
+
+legacy_stage_markers = (
+    "candidate-stage-manifest-" + "v1",
+    "android_candidate_stage_manifest." + "v1",
+    "candidate-validation-" + "v1",
+    "candidate_validation." + "v1",
+    "validate_kagemusha_candidate_stage_manifest_" + "v1",
+    "exactly " + "44 entries",
+    "44 non-self " + "files",
+)
+for label in (
+    "gradle", "harness", "runner", "native_builder", "artifact_stager",
+    "validator", "compile_check", "stager", "staging_spec",
+):
+    for marker in legacy_stage_markers:
+        if marker in text[label]:
+            errors.append(f"{label} resurrects retired candidate stage contract: {marker}")
+
+for label in ("gradle", "harness", "validator", "compile_check", "stager"):
+    for required in (
+        "candidate-stage-manifest-v2.json",
+        "candidate-validation-v2.json",
+        "recursive-step-two-qualification-v4.norito",
+        "self-physical-footprint-v1",
+    ):
+        require(label, required, f"{label} is missing V2 candidate binding {required}")
+
+for label in ("runner", "native_builder", "artifact_stager"):
+    require(
+        label,
+        "validate_kagemusha_candidate_stage_manifest_v2",
+        f"{label} is not wired to the sole V2 candidate-stage validator",
+    )
 
 marker = "KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
 package = "org.hyperledger.iroha.sdk.kagemusha.candidate.lab"
@@ -77,7 +113,7 @@ for needle, message in (
     ('addGeneratedSourceDirectory', "candidate lab generated inputs must use the AGP Variant API"),
     ('androidTestImplementation(project(":core-jvm"))', "candidate lab must declare its AccountAddress dependency"),
     ('stageCandidateLabTestApk', "candidate lab must retain the exact androidTest APK"),
-    ('candidate-stage-manifest-v1.json', "candidate lab must bind the exact stage manifest"),
+    ('candidate-stage-manifest-v2.json', "candidate lab must bind the exact stage manifest"),
 ):
     if needle not in gradle:
         errors.append(message)
@@ -381,7 +417,8 @@ for needle in (
     "--trusted-signer-public-key",
     "--android-attestation-trust-root-sha256",
     "--android-attestation-revocation-status-sha256",
-    "--apksigner-sha256",
+    "--java-sha256",
+    "--apksigner-jar-sha256",
     "--openssl-sha256",
     "kagemusha-candidate-evidence-lab-DO-NOT-SHIP-$CANDIDATE_SHA256-debug.apk",
     "kagemusha-candidate-evidence-lab-DO-NOT-SHIP-$CANDIDATE_SHA256-debug-androidTest.apk",
@@ -411,6 +448,11 @@ if runner.index('"$LIFECYCLE_CLASS"') > runner.index('"$EXPORT_CLASS"'):
     errors.append("candidate lifecycle instrumentation must run before restart/export")
 if "kagemushaCandidateCompileOnly" in runner:
     errors.append("physical evidence runner must never enable the compile-only fixture contract")
+for label in ("runner", "validator"):
+    if '"--apksigner-sha256"' in text[label]:
+        errors.append(
+            f"{label} must pin Java and apksigner.jar, not the dependency-loading shell launcher"
+        )
 
 builder = text["native_builder"]
 for needle in (
@@ -444,7 +486,9 @@ for needle in (
     "KAGEMUSHA_ANDROID_PRODUCTION_RAW_EXPORT_COMMAND",
     "derive_kagemusha_strongbox_challenge_v1",
     "extract_apk_signing_certificate_sha256",
-    "validate_kagemusha_candidate_stage_manifest_v1",
+    '"-jar"',
+    '"apksigner_jar"',
+    "validate_kagemusha_candidate_stage_manifest_v2",
     "validate_kagemusha_android_confirmation",
     "KAGEMUSHA_ANDROID_CONFIRMATION_COMPARISON_SCHEMA_V1",
     "--trusted-signer-public-key",
@@ -475,7 +519,7 @@ for needle in (
 
 source_seal = text["source_seal"]
 for needle in (
-    "iroha.kagemusha.full-source-tree-sha256.v3",
+    "iroha.kagemusha.full-source-tree-sha256.v4",
     '"status",',
     '"--porcelain=v1",',
     '"-z",',

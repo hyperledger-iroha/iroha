@@ -307,6 +307,7 @@ impl NoritoFieldAttrs {
     fn from_attributes(attrs: &[syn::Attribute]) -> darling::Result<Self> {
         let mut parsed = Self::default();
         let mut skip = false;
+        let mut required = false;
         let mut default = false;
         let mut skip_serializing_if = false;
         let mut with = false;
@@ -332,6 +333,14 @@ impl NoritoFieldAttrs {
                         return Err(meta.error("duplicate `skip` attribute"));
                     }
                     skip = true;
+                } else if meta.path.is_ident("required") {
+                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
+                        return Err(meta.error("`required` does not take a value"));
+                    }
+                    if required {
+                        return Err(meta.error("duplicate `required` attribute"));
+                    }
+                    required = true;
                 } else if meta.path.is_ident("default") {
                     if default {
                         return Err(meta.error("duplicate `default` attribute"));
@@ -860,15 +869,14 @@ fn explicit_variant_discriminant(
         );
         return None;
     };
-    match literal.base10_parse::<u32>() {
-        Ok(value) => Some(value),
-        Err(_) => {
-            emit!(
-                emitter,
-                "Norito enum discriminants must be integer literals in 0..=u32::MAX"
-            );
-            None
-        }
+    if let Ok(value) = literal.base10_parse::<u32>() {
+        Some(value)
+    } else {
+        emit!(
+            emitter,
+            "Norito enum discriminants must be integer literals in 0..=u32::MAX"
+        );
+        None
     }
 }
 
@@ -883,17 +891,14 @@ fn enum_variant_indices(emitter: &mut Emitter, variants: &[IntoSchemaVariant]) -
         let explicit = explicit_variant_discriminant(emitter, variant);
         let rust_discriminant = if has_explicit {
             explicit.unwrap_or_default()
+        } else if let Some(discriminant) = next_rust_discriminant {
+            discriminant
         } else {
-            match next_rust_discriminant {
-                Some(discriminant) => discriminant,
-                None => {
-                    emit!(
-                        emitter,
-                        "implicit Norito enum discriminant exceeds u32::MAX"
-                    );
-                    0
-                }
-            }
+            emit!(
+                emitter,
+                "implicit Norito enum discriminant exceeds u32::MAX"
+            );
+            0
         };
         next_rust_discriminant = rust_discriminant.checked_add(1);
 
@@ -1014,6 +1019,24 @@ mod tests {
                 .to_string()
                 .contains("duplicate reuse_archived attribute")
         );
+    }
+
+    #[test]
+    fn required_json_field_marker_is_accepted_and_validated() {
+        let field: syn::Field = parse_quote! {
+            #[norito(required)]
+            value: Option<u32>
+        };
+        NoritoFieldAttrs::from_attributes(&field.attrs)
+            .expect("schema derive accepts the JSON-only required marker");
+
+        let duplicate: syn::Field = parse_quote! {
+            #[norito(required, required)]
+            value: Option<u32>
+        };
+        let error = NoritoFieldAttrs::from_attributes(&duplicate.attrs)
+            .expect_err("duplicate required marker must reject");
+        assert!(error.to_string().contains("duplicate `required` attribute"));
     }
 }
 

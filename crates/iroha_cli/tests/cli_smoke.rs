@@ -65,7 +65,7 @@ const SAMPLE_BUDGET_APPROVAL_ID: &str =
     "4f1a7b86d6c16245d9b5c0e9bd4732a6d01356f3172bbfa5ef5d9cde8790f221";
 
 fn xor_asset_id() -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
         "xor".parse().unwrap(),
     )
@@ -979,7 +979,7 @@ fn gov_deploy_meta_outputs_metadata_stub() {
             "deploy",
             "meta",
             "--contract-address",
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         ])
         .output()
         .expect("failed to execute iroha app gov deploy meta");
@@ -993,7 +993,7 @@ fn gov_deploy_meta_outputs_metadata_stub() {
         norito::json::from_str(stdout.trim()).expect("parse deploy meta output");
     assert_eq!(
         value.get("gov_contract_address").and_then(|v| v.as_str()),
-        Some("tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7")
+        Some("irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw")
     );
     assert!(
         value.get("gov_manifest_approvers").is_none(),
@@ -1020,7 +1020,7 @@ fn gov_deploy_meta_accepts_manifest_approvers() {
             "deploy",
             "meta",
             "--contract-address",
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
         ])
         .args(["--approver", validator.as_str(), "--approver", bob.as_str()])
         .output()
@@ -1082,7 +1082,7 @@ fn gov_propose_deploy_against_mock() {
 
     let code_hash = "00".repeat(32);
     let abi_hash = "11".repeat(32);
-    let contract_address = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+    let contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
 
     let summary = command()
         .arg("--config")
@@ -1182,9 +1182,9 @@ fn gov_finalize_against_mock() {
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
 
-    let referendum_id = "ref-plain";
     let proposal_id =
         "feedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed".to_string();
+    let referendum_id = proposal_id.as_str();
 
     let summary = command()
         .arg("--config")
@@ -2367,7 +2367,9 @@ fn gov_vote_zk_against_mock() {
             "ref-zk",
             "--mode",
             "zk",
-            "--proof-b64",
+            "--backend",
+            "halo2/ipa",
+            "--envelope-b64",
             "AAA=",
             "--owner",
             &owner_str,
@@ -2510,7 +2512,9 @@ fn gov_vote_zk_emits_summary_and_json() {
             "ref-zk",
             "--mode",
             "zk",
-            "--proof-b64",
+            "--backend",
+            "halo2/ipa",
+            "--envelope-b64",
             "BBB=",
             "--owner",
             &owner_str,
@@ -2547,7 +2551,9 @@ fn gov_vote_zk_emits_summary_and_json() {
             "ref-zk",
             "--mode",
             "zk",
-            "--proof-b64",
+            "--backend",
+            "halo2/ipa",
+            "--envelope-b64",
             "BBB=",
             "--owner",
             &owner_str,
@@ -2613,6 +2619,60 @@ fn gov_vote_zk_emits_summary_and_json() {
         entry.get("nullifier").and_then(norito::json::Value::as_str),
         Some(nullifier.as_str())
     );
+}
+
+#[test]
+fn gov_vote_rejects_retired_zk_flag_aliases() {
+    for (flag, value) in [
+        ("--proof-b64", "AAA="),
+        ("--lock-amount", "1"),
+        ("--lock-duration-blocks", "1"),
+    ] {
+        let output = command()
+            .args([
+                "app",
+                "gov",
+                "vote",
+                "--referendum-id",
+                "ref-zk",
+                "--mode",
+                "zk",
+                "--backend",
+                "halo2/ipa",
+                "--envelope-b64",
+                "AAA=",
+                flag,
+                value,
+            ])
+            .output()
+            .expect("run CLI with a retired ZK flag");
+        assert!(!output.status.success(), "{flag} must be absent");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unexpected argument") && stderr.contains(flag),
+            "unexpected diagnostic for {flag}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn gov_queries_reject_retired_id_alias() {
+    for (label, query) in [
+        ("referendum get", ["app", "gov", "referendum", "get"]),
+        ("tally get", ["app", "gov", "tally", "get"]),
+    ] {
+        let output = command()
+            .args(query)
+            .args(["--id", "ref-plain"])
+            .output()
+            .expect("run governance query with retired --id alias");
+        assert!(!output.status.success(), "{label} must reject --id");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unexpected argument") && stderr.contains("--id"),
+            "unexpected {label} diagnostic: {stderr}"
+        );
+    }
 }
 
 #[test]
@@ -2742,7 +2802,7 @@ fn gov_audit_deploy_reports_results_against_mock() {
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
 
-    let contract_address = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+    let contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     let code_bytes = b"mock-contract-code";
     let abi_bytes = b"mock-contract-abi";
     let code_hash = CryptoHash::new(code_bytes);
@@ -4198,7 +4258,7 @@ fn sumeragi_summary_commands_against_torii_mock() {
         mock.base_url(),
         &norito::json!({
             "status": {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "node_fingerprint": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
                 "build_fingerprint": "hash:1212121212121212121212121212121212121212121212121212121212121213#E183",
                 "config_fingerprint": "hash:1313131313131313131313131313131313131313131313131313131313131313#9CE1",
@@ -5021,69 +5081,7 @@ fn address_audit_rejects_domain_suffix() {
     );
 }
 
-#[test]
-fn address_audit_supports_csv_output() {
-    use torii_mock_support::TempDir;
-
-    let account = account_id_for_domain("atlas", 0xF7);
-    let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
-
-    let temp_dir = TempDir::new("address_audit_csv").expect("temp dir");
-    let path = temp_dir.path().join("addresses.txt");
-    fs::write(&path, format!("{i105}\ninvalid-address\n")).expect("write addresses");
-
-    let output = command()
-        .current_dir(workspace_root())
-        .args([
-            "--config",
-            "defaults/client.toml",
-            "tools",
-            "address",
-            "audit",
-            "--input",
-            path.to_str().expect("utf8 path"),
-            "--network-prefix",
-            "753",
-            "--allow-errors",
-            "--format",
-            "csv",
-        ])
-        .output()
-        .expect("run address audit csv");
-    assert!(
-        output.status.success(),
-        "audit exited with {:?}: {}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let csv_stream = if stdout.contains("input,status,format,domain_kind,i105,canonical_hex") {
-        stdout.as_ref()
-    } else {
-        stderr.as_ref()
-    };
-    let mut lines = csv_stream.lines().filter(|line| {
-        !line.is_empty() && !line.starts_with("CLI started") && !line.starts_with("Build line:")
-    });
-    assert_eq!(
-        lines.next(),
-        Some("input,status,format,domain_kind,i105,canonical_hex,error_code,error_message")
-    );
-    let rows: Vec<&str> = lines.collect();
-    assert_eq!(rows.len(), 2, "expected two CSV rows");
-    assert!(
-        rows[0].starts_with(&i105),
-        "parsed row should contain i105 literal: {}",
-        rows[0]
-    );
-    assert!(
-        rows[1].contains(",error,"),
-        "error row should include status=error: {}",
-        rows[1]
-    );
-}
+include!("cli_smoke_address_audit_csv_test.rs");
 
 fn assert_address_audit_stats(stats_value: &Value) {
     let stats = stats_value

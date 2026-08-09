@@ -20,9 +20,10 @@ roadmap item “Documentation & rollout” by turning the supervisor behaviours 
    `MOCHI_CARGO_TARGET_DIR` overrides it.
 2. Run `./ci/check_mochi.sh` from the workspace root. This validates the core,
    UI, and integration crates before you begin modifying configs.
-3. Note the preset (`single-peer` or `four-peer-bft`). The generated topology
-   determines how many peer folders/logs you should expect under the sandbox
-   root.
+3. Note the preset (`four-peer-bft`, or a custom exact 3f+1 committee). The
+   generated topology determines how many peer folders/logs you should expect
+   under the sandbox root. Historical configs named `single-peer` also launch
+   four validators.
 4. If you are using the shell helper, capture:
    - `scripts/mochi_local_sandbox.sh status`
    - `<workspace>/.mochi/sandbox/<profile>/serve.log`
@@ -37,18 +38,48 @@ roadmap item “Documentation & rollout” by turning the supervisor behaviours 
 
 ## 2. Collect logs & telemetry evidence
 
-`NetworkPaths::ensure` (see `mochi/mochi-core/src/config.rs`) creates a stable
-layout:
+`NetworkPaths::ensure` (see `mochi/mochi-core/src/config.rs`) creates the
+network root. A successful generation transaction then publishes one immutable
+configuration generation plus generation-bound mutable storage:
 
 ```
 <sandbox_root>/
-  peers/<alias>/...
+  .supervisor.lock
+  current-generation
+  generations/<config-generation-id>/
+    genesis/...
+    peers/<alias>/config.toml
+  peers/<alias>/storage-generations/<storage-generation-id>/
+    snapshot/generations/...
+    kura/...
+    torii/...
   logs/<alias>.log
-  genesis/
   snapshots/
   session.json
   serve.log
 ```
+
+Do not infer a mutable path such as `peers/<alias>/storage`. Read
+`current-generation`, validate that generation's `generation.json`, then parse
+its immutable `peers/<alias>/config.toml`. The canonical parent of
+`snapshot.store_dir` is the selected mutable storage root. Config-only overlays
+can select a newer config generation while intentionally retaining an older
+storage generation. `resolve_selected_peer_storage_paths` performs these checks
+for detached tooling and returns a shared generation-selection lease. Keep the
+returned `SelectedPeerStoragePaths` value alive for the entire operation; a
+copied `PathBuf` does not retain that protection. An active `PeerHandle`
+exposes the already-selected `storage_dir()` and `snapshot_dir()` paths. Before
+start, export, restore, overlay, or wipe operations, the supervisor revalidates
+every cached peer path against the selected config while retaining one shared
+or exclusive generation lock; intermediate symlinks fail closed.
+
+Only one live `Supervisor` may own a sandbox root. The owner-only
+`.supervisor.lock` is acquired before Mochi creates logs, peer containers,
+snapshots, onboarding material, or generation candidates. Managed peers reserve
+stdin for an inherited duplicate of that ownership descriptor, so a peer
+orphaned by a controller crash keeps the root fenced until it exits. Use the
+consuming supervisor-replacement flow for in-process settings rebuilds; do not
+construct a second handle for the same root.
 
 Follow these steps before making changes:
 
@@ -142,7 +173,7 @@ include the sample domain/assets.
 ### Genesis and storage corruption
 
 If Kagami exits before emitting a manifest, peers will crash immediately. Check
-`genesis/*.json`/`.toml` inside the data root. Re-run with
+the validated selected generation's `genesis/` directory. Re-run with
 `--kagami /path/to/kagami` or point the **Settings** dialog at the right binary.
 For storage corruption, use the Maintenance section’s **Wipe & re-genesis**
 button (covered below) instead of deleting folders by hand; it recreates the
@@ -154,14 +185,15 @@ config with the validator-safe defaults Mochi now pins automatically:
 - `nexus.enabled = false` for local permissioned profiles unless you explicitly
   enable Nexus.
 - `confidential.enabled = true` for validator peers.
-- `sumeragi.consensus_mode` must match the genesis block consensus mode Mochi
-  asked Kagami to generate.
+- Consensus mode is carried by the signed genesis/height context. Mochi does
+  not emit the retired mutable `sumeragi.consensus_mode` config field; select
+  the matching profile instead of adding that field by hand.
 - `[torii.mcp]` should be enabled with `profile = "writer"` on local sandboxes.
 - `[torii.transport.norito_rpc]` should have `enabled = true`,
   `require_mtls = false`, and `stage = "ga"` for the local SDK/RPC path.
 
-When you explicitly enable Nexus, Mochi now rejects permissioned profiles before
-launch and requires `sumeragi.consensus_mode = "npos"`.
+When you explicitly enable Nexus, Mochi rejects permissioned profiles before
+launch and requires a profile that generates an NPoS signed genesis.
 
 ### Tuning automatic restarts
 
@@ -177,18 +209,23 @@ to tighten the retry window for CI jobs that must fail fast.
    refuses to wipe storage while a peer is running (`PeerHandle::wipe_storage`
    returns `PeerStillRunning`).
 2. Navigate to **Maintenance → Wipe & re-genesis**. MOCHI will:
-   - delete `peers/<alias>/storage`;
-   - rerun Kagami to rebuild configs/genesis under `genesis/`; and
-   - restart peers with the preserved CLI/environment overrides.
+   - prepare and validate a new immutable config/genesis generation;
+   - allocate a fresh `peers/<alias>/storage-generations/<new-id>` tree without
+     deleting the retired generation's state;
+   - atomically select the new config generation; and
+   - restore exactly the peers that were running before the operation. A
+     partial-running topology remains partial.
 3. If you must do this manually:
    ```bash
    MOCHI_WORKSPACE_ROOT=/tmp/mochi-app MOCHI_PROFILE=four-peer-bft scripts/mochi_local_sandbox.sh reset
    ```
    Afterwards, restart MOCHI so `NetworkPaths::ensure` recreates the tree.
 
-Always archive the `snapshots/<timestamp>` folder before wiping, even in local
-development—those bundles capture the precise `irohad` logs and configs needed
-to reproduce bugs.
+Never delete a path chosen only by directory naming. Use the validated selected
+config and its managed storage paths. Retired immutable and storage generations
+remain available for diagnosis; archive a `snapshots/<timestamp>` bundle before
+intentional cleanup because it captures the precise `irohad` logs and configs
+needed to reproduce bugs.
 
 ### 4.1 Restoring from snapshots
 
@@ -197,10 +234,15 @@ dialog’s **Restore snapshot** button (or call `Supervisor::restore_snapshot`) 
 directories manually. Provide either an absolute path to the bundle or the sanitised folder name
 under `snapshots/`. The supervisor will:
 
-1. stop any running peers;
+1. retain a shared generation-selection lease and strictly revalidate every selected peer storage
+   hierarchy before stopping or copying anything;
 2. verify that the snapshot’s `metadata.json` matches the current `chain_id` and peer count;
-3. copy `peers/<alias>/{storage,snapshot,config.toml,latest.log}` back into the active profile; and
-4. restore `genesis/genesis.json` before restarting peers if they were running beforehand.
+3. verify byte-for-byte that its manifest, signed genesis, and every peer config match the
+   validated selected immutable generation;
+4. verify every copied storage tree against its recorded integrity hash; and
+5. capture and stop exactly the currently running peer aliases, replace only selected mutable
+   storage and logs, then restore that exact set on success or failure. Immutable config/genesis
+   artifacts are never overwritten.
 
 If the snapshot was created for a different preset or chain identifier the restore call returns a
 `SupervisorError::Config` so you can grab a matching bundle instead of silently mixing artefacts.

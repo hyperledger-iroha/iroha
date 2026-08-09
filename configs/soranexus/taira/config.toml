@@ -3,14 +3,17 @@
 # Render a per-validator config first, then start with:
 # `irohad --sora --config <rendered-validator-config.toml>`
 # This is the checked-in peer-1 template. Runtime-only validator private keys,
-# onboarding/faucet authorities, and streaming identity keys must come from a
-# user-local `validator_secrets.local.toml` rendered through
+# SoraNet transport identities, onboarding/faucet authorities, and streaming
+# identity keys must come from a user-local `validator_secrets.local.toml`
+# rendered through:
 # `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`.
 
 chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 chain_discriminant = 369
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"
+soranet_transport_public_key = "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY"
+soranet_transport_private_key = "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY"
 
 trusted_peers = [
   "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@taira-validator-1.sora.org:1337",
@@ -59,6 +62,7 @@ enforcement_mode = "reject"
 
 [torii]
 address = "addr:0.0.0.0:18080#2F16"
+preauth_ban_capacity = 4096
 preauth_allow_cidrs = ["127.0.0.1/32", "207.254.29.242/32"]
 max_content_len = 1_073_741_824
 deploy_rate_per_origin_per_sec = 4
@@ -67,6 +71,20 @@ query_rate_per_authority_per_sec = 160
 query_burst_per_authority = 320
 webhooks_enabled = false
 zk_attachments_enabled = false
+
+# First-release Bootle/Lantern issuance is deliberately staged disabled in the
+# shared template. The peer-1 renderer may enable it only after binding the
+# exact public provider policy and the governed on-chain issuer policy. The
+# provider owns all authentication and Falcon trapdoor material; no secret is
+# accepted in this file.
+[torii.privacy_bootle_lantern_issuer]
+enabled = false
+state_dir = "/var/lib/iroha/taira-validator-1/privacy/bootle-lantern/issuer"
+max_inflight = 2
+authorization_lifetime_blocks = 300
+max_records = 4096
+max_total_bytes = 13557760
+terminal_retention_blocks = 4096
 
 [torii.cors]
 enabled = true
@@ -227,7 +245,7 @@ max_bytes_per_minute = 104857600
 
 [sumeragi.block]
 max_transactions = 96
-max_payload_bytes = 22020096
+max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
 
 [sumeragi.queues]
@@ -236,8 +254,8 @@ proposal_queue_scan_multiplier = 4
 # The validator-bundle renderer scales body_bytes to at least
 # (N + authenticated_non_validator_sources + 1) * body_source_bytes.
 authenticated_non_validator_sources = 2
-body_bytes = 315621376
-body_source_bytes = 45088768
+body_bytes = 242221056
+body_source_bytes = 34603008
 
 [confidential]
 enabled = true
@@ -294,6 +312,7 @@ volatility_class = "stable"
 
 [genesis]
 public_key = "ed0120CEF83A365F125EF1CB8F040290A4C5D23561A24CC4C6782AC07506C77003AF00"
+expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
 
 [streaming]
 identity_public_key = "REPLACE_WITH_STREAMING_IDENTITY_PUBLIC_KEY"
@@ -470,27 +489,6 @@ dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "smartcontract::deploy"
 description = "Route contract deployments to the external `is` dataspace routing container for PoC proof tracking"
-
-[[nexus.routing_policy.rules]]
-lane = 3
-dataspace = "is"
-[nexus.routing_policy.rules.matcher]
-instruction = "shield"
-description = "Route shield instructions to the external `is` dataspace routing container for dataspace-scoped balances"
-
-[[nexus.routing_policy.rules]]
-lane = 3
-dataspace = "is"
-[nexus.routing_policy.rules.matcher]
-instruction = "zk::zk_transfer"
-description = "Route private ZK transfers to the external `is` dataspace routing container for dataspace-scoped balances"
-
-[[nexus.routing_policy.rules]]
-lane = 3
-dataspace = "is"
-[nexus.routing_policy.rules.matcher]
-instruction = "unshield"
-description = "Route unshield instructions to the external `is` dataspace routing container for dataspace-scoped balances"
 
 [nexus.fusion]
 floor_teu = 2500

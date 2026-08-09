@@ -14,7 +14,7 @@ use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_core::zk::confidential_v2;
-use iroha_crypto::{ExposedPrivateKey, Hash, KeyPair};
+use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     alias_setup::{
@@ -24,7 +24,10 @@ use iroha_data_model::{
         ResolvedDomainV1,
     },
     asset::AssetDefinitionAlias,
-    block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT,
+    block::{
+        BlockHeader,
+        consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
+    },
     da::commitment::DaProofPolicyBundle,
     isi::{
         GrantBox, RegisterBox, RevokeBox, SetAssetDefinitionAlias,
@@ -395,12 +398,13 @@ pub(crate) fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str 
 const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const LOCALNET_CHAIN_ID_ENV: &str = "IROHA_LOCALNET_CHAIN_ID";
 pub(crate) const GENESIS_SEED: &[u8; 7] = b"genesis";
+const SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:soranet-transport:v1|";
 /// Serialized reducer command queue capacity for generated localnets.
 const LOCALNET_SUMERAGI_QUEUE_COMMANDS: usize = 8_192;
 /// Certified-body and block-sync outer-ingress capacity for generated localnets.
 ///
-/// This inherits the production 4N+2H+2 geometry at the protocol's maximum
-/// validator roster: four owners per validator, two per authenticated
+/// This inherits the production 5N+3H+2 geometry at the protocol's maximum
+/// validator roster: five owners per validator, three per authenticated
 /// non-validator source, and two for anonymous delivery.
 const LOCALNET_SUMERAGI_QUEUE_BODIES: usize =
     iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
@@ -440,6 +444,11 @@ fn localnet_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
     if validator_count > MAX_VALIDATORS_PER_HEIGHT {
         return Err(eyre!(
             "localnet validator count {validator_count} exceeds the Sumeragi v2 protocol maximum of {MAX_VALIDATORS_PER_HEIGHT}"
+        ));
+    }
+    if !is_valid_committee_size(validator_count) {
+        return Err(eyre!(
+            "localnet validator count {validator_count} is not an exact Sumeragi v2 3f+1 committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}"
         ));
     }
     let source_count = validator_count
@@ -530,6 +539,8 @@ const LOCALNET_TORII_MAX_CONTENT_LEN: u64 =
     iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
 /// Torii pre-auth allowlist to keep localnet CLI traffic from tripping bans.
 const LOCALNET_PREAUTH_ALLOW_CIDRS: [&str; 2] = ["127.0.0.0/8", "::1/128"];
+/// Exact Torii transport sources trusted for internal localnet reads and routing.
+const LOCALNET_INTERNAL_API_TRUSTED_CIDRS: [&str; 2] = ["127.0.0.1/32", "::1/128"];
 /// Default localnet telemetry toggle (mirrors config defaults).
 const LOCALNET_TELEMETRY_ENABLED: bool = true;
 /// Default localnet telemetry profile (mirrors config defaults).
@@ -579,7 +590,7 @@ pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
 const LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY: u64 = 1_000_000_000;
 const LOCALNET_KAGEMUSHA_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
 const LOCALNET_KAGEMUSHA_ASSET_NAME: &str = "usd";
-const LOCALNET_KAGEMUSHA_ASSET_ALIAS: &str = "usd#wonderland";
+const LOCALNET_KAGEMUSHA_ASSET_ALIAS: &str = "usd#wonderland.universal";
 const LOCALNET_KAGEMUSHA_INITIAL_QUANTITY: u64 = 100;
 const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
 /// Minimum faucet reserve before startup auto-mints a replenishment.
@@ -731,7 +742,7 @@ fn localnet_uses_alias_multilane_catalog(sora_profile: Option<SoraProfile>) -> b
 }
 
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
-    AssetDefinitionId::new(
+    AssetDefinitionId::derive_from_components(
         DomainId::parse_fully_qualified(domain)
             .expect("static asset definition domain must remain valid"),
         name.parse()
@@ -813,13 +824,8 @@ fn localnet_fee_sponsor_revision(
 }
 
 const LOCALNET_FEE_ZK_VK_BACKEND: &str = "halo2/ipa";
-const LOCALNET_FEE_ZK_VK_TRANSFER_NAME: &str = "vk_transfer";
 const LOCALNET_FEE_ZK_VK_UNSHIELD_NAME: &str = "vk_unshield";
 const LOCALNET_FEE_ASSET_SCALE: u32 = 9;
-
-fn localnet_fee_vk_transfer_id() -> VerifyingKeyId {
-    VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_TRANSFER_NAME)
-}
 
 fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
     VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_UNSHIELD_NAME)
@@ -827,10 +833,6 @@ fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
 
 fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<VerifyingKeyRecord> {
     match name {
-        LOCALNET_FEE_ZK_VK_TRANSFER_NAME => {
-            confidential_v2::confidential_transfer_v2_vk_record(name, version)
-                .map_err(|error| eyre!(error))
-        }
         LOCALNET_FEE_ZK_VK_UNSHIELD_NAME => {
             confidential_v2::confidential_unshield_v2_vk_record(name, version)
                 .map_err(|error| eyre!(error))
@@ -839,18 +841,12 @@ fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<Verif
     }
 }
 
-fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, VerifyingKeyRecord); 2]>
+fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, VerifyingKeyRecord); 1]>
 {
-    Ok([
-        (
-            localnet_fee_vk_transfer_id(),
-            localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_TRANSFER_NAME, 1)?,
-        ),
-        (
-            localnet_fee_vk_unshield_id(),
-            localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_UNSHIELD_NAME, 2)?,
-        ),
-    ])
+    Ok([(
+        localnet_fee_vk_unshield_id(),
+        localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_UNSHIELD_NAME, 2)?,
+    )])
 }
 
 fn localnet_sample_asset_literal() -> String {
@@ -1068,6 +1064,8 @@ impl<T: Write> RunArgs<T> for Args {
 struct Peer {
     public_key: iroha_crypto::PublicKey,
     private_key: iroha_crypto::ExposedPrivateKey,
+    soranet_transport_public_key: iroha_crypto::PublicKey,
+    soranet_transport_private_key: iroha_crypto::ExposedPrivateKey,
     bls_public_key: iroha_crypto::PublicKey,
     bls_pop: Vec<u8>,
     api_port: u16,
@@ -1110,6 +1108,11 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
     if validator_count > MAX_VALIDATORS_PER_HEIGHT {
         return Err(eyre!(
             "`--peers` ({validator_count}) exceeds the Sumeragi v2 protocol maximum validator roster of {MAX_VALIDATORS_PER_HEIGHT}"
+        ));
+    }
+    if !is_valid_committee_size(validator_count) {
+        return Err(eyre!(
+            "`--peers` ({validator_count}) must form an exact Sumeragi v2 3f+1 validator committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}"
         ));
     }
     if opts.sora_profile.is_some() && !opts.build_line.is_iroha3() {
@@ -1365,6 +1368,7 @@ fn generate_localnet_with_line<T: Write>(
         write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
     let genesis_json_path = out_dir.join("genesis.json");
     let genesis_signed_path = out_dir.join("genesis.signed.nrt");
+    let genesis_expected_hash_path = out_dir.join(GENESIS_EXPECTED_HASH_FILE);
     let gas_account_id = gas_account_id
         .as_ref()
         .map(|account_id| account_id_runtime_literal(account_id, chain_discriminant));
@@ -1402,6 +1406,7 @@ fn generate_localnet_with_line<T: Write>(
         &peer_telemetry_urls,
         &genesis_public_key,
         &genesis_signed_path,
+        HashOf::from_untyped_unchecked(Hash::new(b"Kagami localnet policy-derivation placeholder")),
         &bls_entries,
         &bootstrap_kura_dir,
         &bootstrap_runtime_state_dir,
@@ -1448,7 +1453,7 @@ fn generate_localnet_with_line<T: Write>(
         &genesis_private,
         redact_seed_metadata,
     )?;
-    write_genesis(GenesisWriteContext {
+    let genesis_expected_hash = write_genesis(GenesisWriteContext {
         manifest: &genesis,
         public_key: &genesis_public_key,
         private_key: genesis_private.clone(),
@@ -1461,6 +1466,11 @@ fn generate_localnet_with_line<T: Write>(
             confidential_policy_hash,
         },
     })?;
+    write_and_validate_genesis_expected_hash(
+        &genesis_expected_hash_path,
+        &genesis_signed_path,
+        genesis_expected_hash,
+    )?;
     tui::status("Genesis staged and bootstrap-validated");
 
     tui::status("Writing peer configs");
@@ -1496,6 +1506,7 @@ fn generate_localnet_with_line<T: Write>(
             &peer_telemetry_urls,
             &genesis_public_key,
             &genesis_signed_path,
+            genesis_expected_hash,
             &bls_entries,
             &kura_dir,
             &runtime_state_dir,
@@ -1526,9 +1537,16 @@ fn generate_localnet_with_line<T: Write>(
             queue_capacity,
             sumeragi_body_bytes,
         );
-        parse_localnet_peer_config(&rendered).wrap_err_with(|| {
+        let parsed_config = parse_localnet_peer_config(&rendered).wrap_err_with(|| {
             format!("generated validator config peer{idx}.toml failed Config/Catalog validation")
         })?;
+        if parsed_config.genesis.expected_hash != genesis_expected_hash {
+            return Err(eyre!(
+                "generated validator config peer{idx}.toml has genesis hash {}, expected {}",
+                parsed_config.genesis.expected_hash,
+                genesis_expected_hash
+            ));
+        }
         let path = out_dir.join(format!("peer{idx}.toml"));
         write_owner_only_localnet_file(&path, rendered.as_bytes())
             .wrap_err_with(|| format!("write validator config {}", path.display()))?;
@@ -1574,6 +1592,7 @@ fn generate_localnet_with_line<T: Write>(
         &primary_torii_url,
         &genesis_json_path,
         &genesis_signed_path,
+        &genesis_expected_hash_path,
         &genesis_public_key_path,
         &genesis_private_key_path,
         &client_config_path,
@@ -1605,6 +1624,11 @@ fn generate_localnet_with_line<T: Write>(
     writeln!(writer, "torii_url: {}", primary_torii_url)?;
     writeln!(writer, "genesis_json: {}", genesis_json_path.display())?;
     writeln!(writer, "genesis_signed: {}", genesis_signed_path.display())?;
+    writeln!(
+        writer,
+        "genesis_expected_hash: {}",
+        genesis_expected_hash_path.display()
+    )?;
     writeln!(
         writer,
         "genesis_public_key: {}",
@@ -1670,9 +1694,15 @@ fn build_peers(count: u16, seed: Option<&[u8]>, base_api: u16, base_p2p: u16) ->
         .map(|nth| {
             let (bls_public, bls_secret, pop) = generate_bls_key_pair(seed, &nth.to_be_bytes())
                 .wrap_err_with(|| format!("failed to generate BLS key pair for peer {nth}"))?;
+            let (soranet_transport_public_key, soranet_transport_private_key) =
+                generate_soranet_transport_key_pair(seed, &nth.to_be_bytes()).wrap_err_with(
+                    || format!("failed to generate SoraNet transport key pair for peer {nth}"),
+                )?;
             Ok(Peer {
                 public_key: bls_public.clone(),
                 private_key: bls_secret,
+                soranet_transport_public_key,
+                soranet_transport_private_key,
                 bls_public_key: bls_public,
                 bls_pop: pop,
                 api_port: base_api + nth,
@@ -2199,6 +2229,7 @@ fn render_peer_config(
     peer_telemetry_urls: &[String],
     genesis_public_key: &iroha_crypto::PublicKey,
     genesis_signed_path: &Path,
+    genesis_expected_hash: HashOf<BlockHeader>,
     bls_entries: &[BlsEntry],
     kura_store_dir: &Path,
     runtime_state_root: &Path,
@@ -2274,6 +2305,14 @@ fn render_peer_config(
     root.insert(
         "public_key".into(),
         Value::String(peer.public_key.to_string()),
+    );
+    root.insert(
+        "soranet_transport_private_key".into(),
+        Value::String(peer.soranet_transport_private_key.to_string()),
+    );
+    root.insert(
+        "soranet_transport_public_key".into(),
+        Value::String(peer.soranet_transport_public_key.to_string()),
     );
     root.insert("trusted_peers".into(), Value::Array(trusted_list));
     root.insert("trusted_peers_pop".into(), Value::Array(pops));
@@ -2688,6 +2727,13 @@ fn render_peer_config(
         "public_key".into(),
         Value::String(genesis_public_key.to_string()),
     );
+    genesis.insert(
+        "expected_hash".into(),
+        Value::String(norito::literal::format(
+            "hash",
+            &genesis_expected_hash.to_string().to_ascii_uppercase(),
+        )),
+    );
     root.insert("genesis".into(), Value::Table(genesis));
 
     let mut logger = Table::new();
@@ -2869,9 +2915,18 @@ fn render_peer_config(
         Value::Integer(i64::from(LOCALNET_TORII_PREAUTH_BURST_PER_IP)),
     );
     torii.insert(
-        "api_allow_cidrs".into(),
+        "api_rate_limit_bypass_cidrs".into(),
         Value::Array(
             LOCALNET_PREAUTH_ALLOW_CIDRS
+                .iter()
+                .map(|cidr| Value::String((*cidr).to_string()))
+                .collect::<Vec<_>>(),
+        ),
+    );
+    torii.insert(
+        "internal_api_trusted_cidrs".into(),
+        Value::Array(
+            LOCALNET_INTERNAL_API_TRUSTED_CIDRS
                 .iter()
                 .map(|cidr| Value::String((*cidr).to_string()))
                 .collect::<Vec<_>>(),
@@ -3070,9 +3125,14 @@ fn extend_genesis(
         }
         let asset_def = AssetDefinitionId::parse_address_literal(&asset.id)
             .wrap_err("invalid asset definition id")?;
-        let definition = AssetDefinition::new(asset_def.clone(), NumericSpec::default())
-            .with_name(asset.name.clone())
-            .with_metadata(Metadata::default());
+        let definition = AssetDefinition::new(
+            asset_def.clone(),
+            asset.name.clone(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
         if let Some(alias_literal) = asset.alias.as_deref() {
             let alias = alias_literal
@@ -3359,9 +3419,11 @@ fn append_localnet_alias_fee_bootstrap(
     if registrations.asset_defs.insert(fee_asset_id.clone()) {
         let definition = AssetDefinition::new(
             fee_asset_id.clone(),
+            "XOR".to_owned(),
             NumericSpec::fractional(LOCALNET_FEE_ASSET_SCALE),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
-        .with_name("XOR".to_owned())
         .with_metadata(Metadata::default())
         .confidential_policy(
             iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
@@ -3715,18 +3777,25 @@ fn append_localnet_npos_bootstrap_for_services(
     }
 
     if !registrations.asset_defs.contains(&stake_asset_id) {
-        let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
-            .with_name("Localnet Stake".to_owned())
-            .with_metadata(Metadata::default());
+        let definition = AssetDefinition::new(
+            stake_asset_id.clone(),
+            "Localnet Stake".to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(stake_asset_id.clone());
     }
     if !registrations.asset_defs.contains(&fee_asset_id) {
         let definition = AssetDefinition::new(
             fee_asset_id.clone(),
+            "XOR".to_owned(),
             NumericSpec::fractional(LOCALNET_FEE_ASSET_SCALE),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
         )
-        .with_name("XOR".to_owned())
         .with_metadata(Metadata::default())
         .confidential_policy(
             iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
@@ -3734,7 +3803,6 @@ fn append_localnet_npos_bootstrap_for_services(
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(fee_asset_id.clone());
     }
-    let fee_vk_transfer_id = localnet_fee_vk_transfer_id();
     let fee_vk_unshield_id = localnet_fee_vk_unshield_id();
     for (id, record) in localnet_confidential_fee_vk_registrations()? {
         if registrations.verifying_keys.insert(id.clone()) {
@@ -3748,7 +3816,6 @@ fn append_localnet_npos_bootstrap_for_services(
             iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
             true,
             true,
-            Some(fee_vk_transfer_id),
             Some(fee_vk_unshield_id),
             None,
         ));
@@ -4090,7 +4157,7 @@ struct GenesisWriteContext<'a> {
     policies: GenesisConsensusPolicies,
 }
 
-fn write_genesis(context: GenesisWriteContext<'_>) -> Result<()> {
+fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>> {
     let GenesisWriteContext {
         manifest,
         public_key,
@@ -4115,17 +4182,86 @@ fn write_genesis(context: GenesisWriteContext<'_>) -> Result<()> {
 
     let genesis_key_pair =
         KeyPair::new(public_key.clone(), private_key.0).wrap_err("make genesis key pair")?;
-    let block = crate::genesis::bind_staged_sumeragi_v2_context(
+    let (bound_manifest, block) = crate::genesis::bind_and_sign_staged_sumeragi_v2_context(
         persisted_genesis,
         &genesis_key_pair,
         Some(config),
         policies.da_proof_policies,
         policies.confidential_policy_hash,
+        None,
     )
     .wrap_err("stage and sign genesis block")?;
+    let mut bound_json =
+        norito::json::to_json_pretty(&bound_manifest).wrap_err("encode bound genesis manifest")?;
+    bound_json.push('\n');
+    fs::write(json_path, bound_json).wrap_err("write bound genesis.json")?;
+    let expected_hash = block.0.hash();
     let framed = block.0.encode_wire().wrap_err("frame genesis block")?;
     let mut file = BufWriter::new(File::create(signed_path)?);
     file.write_all(&framed)?;
+    Ok(expected_hash)
+}
+
+fn write_and_validate_genesis_expected_hash(
+    expected_hash_path: &Path,
+    signed_path: &Path,
+    expected_hash: HashOf<BlockHeader>,
+) -> Result<()> {
+    let signed = fs::read(signed_path)
+        .wrap_err_with(|| format!("read signed genesis body {}", signed_path.display()))?;
+    let decoded = iroha_data_model::block::decode_framed_signed_block(&signed)
+        .wrap_err("decode the generated signed genesis body")?;
+    if decoded.hash() != expected_hash {
+        return Err(eyre!(
+            "generated signed genesis body hashes to {}, expected {}",
+            decoded.hash(),
+            expected_hash
+        ));
+    }
+
+    let canonical = expected_hash.to_string();
+    let canonical_bytes = canonical.as_bytes();
+    let has_canonical_syntax = canonical_bytes.len() == 64
+        && canonical_bytes
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        && canonical_bytes.last().is_some_and(|byte| {
+            matches!(*byte, b'1' | b'3' | b'5' | b'7' | b'9' | b'b' | b'd' | b'f')
+        });
+    if !has_canonical_syntax {
+        return Err(eyre!(
+            "generated genesis hash is not a canonical Iroha hash record: {canonical}"
+        ));
+    }
+
+    let record = format!("{canonical}\n");
+    write_owner_only_localnet_file(expected_hash_path, record.as_bytes()).wrap_err_with(|| {
+        format!(
+            "write exact genesis hash file {}",
+            expected_hash_path.display()
+        )
+    })?;
+    let persisted = fs::read_to_string(expected_hash_path).wrap_err_with(|| {
+        format!(
+            "read exact genesis hash file {}",
+            expected_hash_path.display()
+        )
+    })?;
+    if persisted != record {
+        return Err(eyre!(
+            "persisted exact genesis hash file is not the canonical generated record"
+        ));
+    }
+    let parsed = persisted
+        .strip_suffix('\n')
+        .expect("canonical record always ends in a newline")
+        .parse::<HashOf<BlockHeader>>()
+        .wrap_err("parse persisted exact genesis hash")?;
+    if parsed != expected_hash {
+        return Err(eyre!(
+            "persisted exact genesis hash changed from {expected_hash} to {parsed}"
+        ));
+    }
     Ok(())
 }
 
@@ -4241,6 +4377,25 @@ fn generate_bls_key_pair(
     let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())?;
     let (public_key, private_key) = kp.into_parts();
     Ok((public_key, ExposedPrivateKey(private_key), pop))
+}
+
+fn generate_soranet_transport_key_pair(
+    base_seed: Option<&[u8]>,
+    peer_index: &[u8],
+) -> Result<(iroha_crypto::PublicKey, ExposedPrivateKey)> {
+    let key_pair = match base_seed {
+        Some(seed) => KeyPair::try_from_seed(
+            seed.iter()
+                .chain(SORANET_TRANSPORT_SEED_DOMAIN)
+                .chain(peer_index)
+                .copied()
+                .collect::<Vec<_>>(),
+            iroha_crypto::Algorithm::Ed25519,
+        )?,
+        None => KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)?,
+    };
+    let (public_key, private_key) = key_pair.into_parts();
+    Ok((public_key, ExposedPrivateKey(private_key)))
 }
 
 fn repo_root_path() -> PathBuf {
@@ -4686,7 +4841,9 @@ const CLIENT_ACCOUNT_PRIVATE: &str =
     "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
 /// Public genesis verifier key emitted for runtime configuration.
 pub const GENESIS_PUBLIC_KEY_FILE: &str = "genesis.public_key";
-/// Owner-only genesis signing key emitted for runtime custody.
+/// Exact signed-genesis consensus-header hash emitted for runtime configuration.
+pub const GENESIS_EXPECTED_HASH_FILE: &str = "genesis.expected_hash";
+/// Owner-only genesis signing key emitted for offline custody.
 pub const GENESIS_PRIVATE_KEY_FILE: &str = "genesis.private_key";
 
 struct LocalnetClientIdentity {
@@ -4898,6 +5055,7 @@ fn write_localnet_readme(
     torii_url: &str,
     genesis_json_path: &Path,
     genesis_signed_path: &Path,
+    genesis_expected_hash_path: &Path,
     genesis_public_key_path: &Path,
     genesis_private_key_path: &Path,
     client_config_path: &Path,
@@ -4930,6 +5088,7 @@ fn write_localnet_readme(
             "- Primary Torii URL: `{torii_url}`\n",
             "- Genesis JSON: `{genesis_json}`\n",
             "- Signed genesis: `{genesis_signed}`\n",
+            "- Approved exact genesis hash: `{genesis_expected_hash}`\n",
             "- Genesis verifier key: `{genesis_public_key}`\n",
             "- Owner-held genesis signing key: `{genesis_private_key}`\n",
             "- Client config: `{client_config}`\n\n",
@@ -4945,8 +5104,11 @@ fn write_localnet_readme(
             "- Offline escrow account: deterministic account derived from the chain id and asset definition\n",
             "- Generated peer configs enable structural `torii.account_onboarding` and Kagemusha escrow routing\n",
             "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
-            "The genesis key files can be supplied directly to `kagami docker` output through ",
-            "`IROHA_GENESIS_PUBLIC_KEY_FILE` and `IROHA_GENESIS_PRIVATE_KEY_FILE`. Never commit the private file.\n\n",
+            "Run `kagami docker` without `--seed` against this directory to validate the exact ",
+            "validator identities, PoPs, signed body, verifier key, and expected hash as one ",
+            "authoritative prepared bundle. The resulting Compose manifest embeds only read-only ",
+            "paths to the three public runtime artifacts. The signing key is never mounted at ",
+            "runtime; keep it offline and never commit it.\n\n",
             "- Start script: `{start_script}`\n",
             "- Stop script: `{stop_script}`\n\n",
             "## Next steps\n\n",
@@ -4966,6 +5128,7 @@ fn write_localnet_readme(
         torii_url = torii_url,
         genesis_json = genesis_json_path.display(),
         genesis_signed = genesis_signed_path.display(),
+        genesis_expected_hash = genesis_expected_hash_path.display(),
         genesis_public_key = genesis_public_key_path.display(),
         genesis_private_key = genesis_private_key_path.display(),
         client_config = client_config_path.display(),
@@ -5765,9 +5928,29 @@ mod tests {
 
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
 
-        let source =
-            TomlSource::from_file(temp.path().join("peer0.toml")).expect("read generated config");
-        actual::Root::from_toml_source(source).expect("generated config must parse");
+        let expected_hash_record = fs::read_to_string(temp.path().join(GENESIS_EXPECTED_HASH_FILE))
+            .expect("read generated exact genesis hash");
+        assert!(expected_hash_record.ends_with('\n'));
+        assert_eq!(expected_hash_record.matches('\n').count(), 1);
+        let expected_hash = expected_hash_record
+            .strip_suffix('\n')
+            .expect("hash record has final newline")
+            .parse::<HashOf<BlockHeader>>()
+            .expect("exact genesis hash parses");
+        assert_eq!(expected_hash_record, format!("{expected_hash}\n"));
+
+        let signed = fs::read(temp.path().join("genesis.signed.nrt"))
+            .expect("read generated signed genesis");
+        let decoded = decode_framed_signed_block(&signed).expect("decode generated signed genesis");
+        assert_eq!(decoded.hash(), expected_hash);
+
+        for index in 0..opts.peers.get() {
+            let source = TomlSource::from_file(temp.path().join(format!("peer{index}.toml")))
+                .expect("read generated config");
+            let config =
+                actual::Root::from_toml_source(source).expect("generated config must parse");
+            assert_eq!(config.genesis.expected_hash, expected_hash);
+        }
     }
 
     #[test]
@@ -6451,6 +6634,14 @@ mod tests {
             peer_cfg.get("private_key").is_some(),
             "private_key is required"
         );
+        assert!(
+            peer_cfg.get("soranet_transport_public_key").is_some(),
+            "soranet_transport_public_key is required"
+        );
+        assert!(
+            peer_cfg.get("soranet_transport_private_key").is_some(),
+            "soranet_transport_private_key is required"
+        );
         assert!(peer_cfg.get("genesis").is_some(), "genesis is required");
 
         let network = peer_cfg
@@ -6475,6 +6666,49 @@ mod tests {
             assert!(
                 body.contains(':'),
                 "expected host:port in {label}, got {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_peers_use_dedicated_deterministic_soranet_transport_identities() {
+        let seed = b"kagami-transport-identity-test";
+        let peers = build_peers(4, Some(seed), 21_080, 24_337).expect("build peers");
+        let replay = build_peers(4, Some(seed), 21_080, 24_337).expect("rebuild peers");
+        let mut transport_public_keys = std::collections::BTreeSet::new();
+
+        for (peer, replay_peer) in peers.iter().zip(&replay) {
+            KeyPair::new(
+                peer.soranet_transport_public_key.clone(),
+                peer.soranet_transport_private_key.0.clone(),
+            )
+            .expect("generated SoraNet transport key pair must match");
+            assert_eq!(
+                peer.soranet_transport_public_key
+                    .try_algorithm()
+                    .expect("transport public-key algorithm"),
+                iroha_crypto::Algorithm::Ed25519
+            );
+            assert_ne!(peer.soranet_transport_public_key, peer.public_key);
+            assert_ne!(
+                peer.soranet_transport_public_key.to_string(),
+                STREAM_ID_PUBLIC
+            );
+            assert_ne!(
+                peer.soranet_transport_private_key.to_string(),
+                STREAM_ID_PRIVATE
+            );
+            assert_eq!(
+                peer.soranet_transport_public_key,
+                replay_peer.soranet_transport_public_key
+            );
+            assert_eq!(
+                peer.soranet_transport_private_key.to_string(),
+                replay_peer.soranet_transport_private_key.to_string()
+            );
+            assert!(
+                transport_public_keys.insert(peer.soranet_transport_public_key.clone()),
+                "each localnet peer must receive a unique SoraNet transport identity"
             );
         }
     }
@@ -6623,14 +6857,26 @@ mod tests {
         let allowlist = peer_cfg
             .get("torii")
             .and_then(toml::Value::as_table)
-            .and_then(|torii| torii.get("api_allow_cidrs"))
+            .and_then(|torii| torii.get("api_rate_limit_bypass_cidrs"))
             .and_then(toml::Value::as_array)
-            .expect("api_allow_cidrs array");
+            .expect("api_rate_limit_bypass_cidrs array");
         let allowlist = allowlist
             .iter()
             .filter_map(toml::Value::as_str)
             .collect::<Vec<_>>();
         assert_eq!(allowlist, LOCALNET_PREAUTH_ALLOW_CIDRS);
+
+        let internal_trust = peer_cfg
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("internal_api_trusted_cidrs"))
+            .and_then(toml::Value::as_array)
+            .expect("internal_api_trusted_cidrs array");
+        let internal_trust = internal_trust
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(internal_trust, LOCALNET_INTERNAL_API_TRUSTED_CIDRS);
 
         assert_eq!(
             peer_cfg
@@ -7475,6 +7721,14 @@ mod tests {
     fn localnet_body_ingress_budget_enforces_protocol_roster_limit() {
         localnet_sumeragi_body_bytes(MAX_VALIDATORS_PER_HEIGHT)
             .expect("the protocol-maximum roster must remain representable");
+        let geometry_error = localnet_sumeragi_body_bytes(5)
+            .expect_err("a non-3f+1 roster must fail before capacity arithmetic");
+        assert!(
+            geometry_error
+                .to_string()
+                .contains("exact Sumeragi v2 3f+1"),
+            "unexpected error: {geometry_error}"
+        );
         let error = localnet_sumeragi_body_bytes(MAX_VALIDATORS_PER_HEIGHT + 1)
             .expect_err("an oversized roster must fail before capacity arithmetic");
         assert!(
@@ -8847,7 +9101,6 @@ mod tests {
             "generated fee asset must stay shield-capable for TAIRA wallet flows"
         );
 
-        let transfer_vk_id = localnet_fee_vk_transfer_id();
         let unshield_vk_id = localnet_fee_vk_unshield_id();
         let zk_registration = raw_genesis
             .instructions()
@@ -8863,11 +9116,6 @@ mod tests {
             "generated fee asset must emit a RegisterZkAsset instruction for shield flows"
         );
         assert_eq!(
-            zk_registration.vk_transfer(),
-            &Some(transfer_vk_id.clone()),
-            "generated fee asset must advertise a transfer verifier for shielded sends"
-        );
-        assert_eq!(
             zk_registration.vk_unshield(),
             &Some(unshield_vk_id.clone()),
             "generated fee asset must advertise an unshield verifier for withdrawals"
@@ -8881,17 +9129,6 @@ mod tests {
                     .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
             })
             .collect::<Vec<_>>();
-        assert!(
-            vk_registrations.iter().any(|register| {
-                register.id == transfer_vk_id
-                    && register.record.is_active()
-                    && register.record.key.is_some()
-                    && register.record.max_proof_bytes > 0
-                    && register.record.circuit_id
-                        == confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
-            }),
-            "generated fee asset must register an active confidential transfer verifier"
-        );
         assert!(
             vk_registrations.iter().any(|register| {
                 register.id == unshield_vk_id
@@ -8978,6 +9215,7 @@ mod tests {
             "http://127.0.0.1:29080/",
             &tmp.path().join("genesis.json"),
             &tmp.path().join("genesis.signed.nrt"),
+            &tmp.path().join(GENESIS_EXPECTED_HASH_FILE),
             &tmp.path().join(GENESIS_PUBLIC_KEY_FILE),
             &tmp.path().join(GENESIS_PRIVATE_KEY_FILE),
             &tmp.path().join("client.toml"),
@@ -8995,6 +9233,11 @@ mod tests {
         assert!(!contents.contains("- Base seed: `Iroha`"));
         assert!(!contents.contains("`Iroha`"));
         assert!(contents.contains(LOCALNET_KAGEMUSHA_ASSET_ALIAS));
+        assert!(contents.contains("genesis.expected_hash"));
+        assert!(contents.contains("`kagami docker` without `--seed`"));
+        assert!(!contents.contains("IROHA_GENESIS_SIGNED_FILE"));
+        assert!(!contents.contains("IROHA_GENESIS_EXPECTED_HASH_FILE"));
+        assert!(!contents.contains("IROHA_GENESIS_PRIVATE_KEY_FILE"));
         assert!(contents.contains("- Ephemeral operator authority: `"));
         assert!(contents.contains("- Ephemeral onboarding authority: `"));
         assert!(
@@ -9025,6 +9268,7 @@ mod tests {
             "http://127.0.0.1:29080/",
             &tmp.path().join("genesis.json"),
             &tmp.path().join("genesis.signed.nrt"),
+            &tmp.path().join(GENESIS_EXPECTED_HASH_FILE),
             &tmp.path().join(GENESIS_PUBLIC_KEY_FILE),
             &tmp.path().join(GENESIS_PRIVATE_KEY_FILE),
             &tmp.path().join("client.toml"),
@@ -9264,10 +9508,38 @@ mod tests {
 
         let error = validate_localnet_options(&opts)
             .expect_err("the CLI must reject a roster above the wire-protocol limit");
+        let expected = format!(
+            "`--peers` ({oversized}) exceeds the Sumeragi v2 protocol maximum validator roster of {MAX_VALIDATORS_PER_HEIGHT}"
+        );
         assert!(
-            error.to_string().contains(
-                "`--peers` (129) exceeds the Sumeragi v2 protocol maximum validator roster of 128"
-            ),
+            error.to_string().contains(&expected),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_localnet_options_rejects_non_three_f_plus_one_roster() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(5).expect("non-zero"),
+            seed: None,
+            bind_host: DEFAULT_BIND_HOST.to_string(),
+            public_host: DEFAULT_PUBLIC_HOST.to_string(),
+            base_api_port: 28_080,
+            base_p2p_port: 28_337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_cadence_ms: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+        };
+
+        let error = validate_localnet_options(&opts)
+            .expect_err("the CLI must reject a non-3f+1 validator roster");
+        assert!(
+            error.to_string().contains("exact Sumeragi v2 3f+1"),
             "unexpected error: {error}"
         );
     }
@@ -9554,72 +9826,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn private_dataspace_peer_configs_use_direct_fee_settlement() {
-        let temp = tempfile::tempdir().expect("tmp dir");
-        for (profile, label, base_port) in [
-            (SoraProfile::PrivateSbp, "sbp", 28_080_u16),
-            (SoraProfile::PrivateCbuae, "cbuae", 29_080_u16),
-        ] {
-            let out_dir = temp.path().join(label);
-            let opts = LocalnetOptions {
-                build_line: BuildLine::Iroha3,
-                sora_profile: Some(profile),
-                perf_profile: None,
-                peers: NonZeroU16::new(4).expect("non-zero"),
-                seed: Some(format!("private-direct-settlement-{label}")),
-                bind_host: DEFAULT_BIND_HOST.to_owned(),
-                public_host: DEFAULT_PUBLIC_HOST.to_owned(),
-                base_api_port: base_port,
-                base_p2p_port: base_port.saturating_add(257),
-                out_dir: out_dir.clone(),
-                extra_accounts: 0,
-                assets: Vec::new(),
-                block_cadence_ms: None,
-                consensus_mode: SumeragiConsensusMode::Npos,
-            };
-
-            generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
-                .unwrap_or_else(|error| panic!("generate {label} localnet: {error:#}"));
-            for peer in 0..4 {
-                let peer_cfg: toml::Value = toml::from_str(
-                    &fs::read_to_string(out_dir.join(format!("peer{peer}.toml")))
-                        .expect("read generated peer config"),
-                )
-                .expect("parse peer config");
-                let fees = peer_cfg
-                    .get("nexus")
-                    .and_then(toml::Value::as_table)
-                    .and_then(|nexus| nexus.get("fees"))
-                    .and_then(toml::Value::as_table)
-                    .expect("nexus fees table");
-
-                assert_eq!(
-                    fees.get("per_gas_unit_fee").and_then(toml::Value::as_str),
-                    Some("0.00005")
-                );
-                assert_eq!(
-                    fees.get("settlement_mode").and_then(toml::Value::as_str),
-                    Some("direct"),
-                    "private {label} peer {peer} must use genesis-compatible direct fee settlement"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn account_id_raw_string_parses_as_account_id() {
-        let seed_bytes = Some(b"localnet-gas-parse".as_slice());
-        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
-            .expect("test localnet genesis key generation should succeed");
-        let gas_account_id = localnet_gas_account_id(&genesis_public_key)
-            .expect("test localnet gas account derivation should succeed");
-        let encoded = account_id_raw_string(&gas_account_id);
-        let parsed = AccountId::parse_encoded(&encoded)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("account id parse");
-        assert_eq!(parsed, gas_account_id);
-    }
+    include!("localnet/private_fee_and_account_tests.rs");
 
     #[test]
     fn account_id_runtime_literal_uses_encoded_literal() {
@@ -9697,321 +9904,7 @@ mod tests {
         );
     }
 
-    #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the test validates one multi-file localnet path-normalization contract end to end"
-    )]
-    fn relative_out_dir_paths_are_absolute_in_configs() {
-        struct DirGuard {
-            prev: PathBuf,
-        }
-
-        impl Drop for DirGuard {
-            fn drop(&mut self) {
-                env::set_current_dir(&self.prev).expect("restore current dir");
-            }
-        }
-
-        let base = tempfile::tempdir().expect("tmp dir");
-        let previous = env::current_dir().expect("current dir");
-        env::set_current_dir(base.path()).expect("chdir into temp");
-        let _guard = DirGuard { prev: previous };
-
-        let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
-            sora_profile: None,
-            perf_profile: None,
-            peers: NonZeroU16::new(4).unwrap(),
-            seed: Some("absolute-paths".to_owned()),
-            bind_host: DEFAULT_BIND_HOST.to_owned(),
-            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
-            base_api_port: 19081,
-            base_p2p_port: 23338,
-            out_dir: PathBuf::from("localnet"),
-            extra_accounts: 0,
-            assets: Vec::new(),
-            block_cadence_ms: None,
-            consensus_mode: SumeragiConsensusMode::Npos,
-        };
-
-        generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
-            .expect("generate localnet with relative path");
-
-        let out_dir = base.path().join("localnet");
-        let peer_cfg = fs::read_to_string(out_dir.join("peer0.toml")).expect("read peer config");
-        let parsed: toml::Value = toml::from_str(&peer_cfg).expect("parse peer config");
-        let genesis_path = parsed
-            .get("genesis")
-            .and_then(toml::Value::as_table)
-            .and_then(|t| t.get("file"))
-            .and_then(toml::Value::as_str)
-            .expect("genesis path");
-        let kura_path = parsed
-            .get("kura")
-            .and_then(toml::Value::as_table)
-            .and_then(|t| t.get("store_dir"))
-            .and_then(toml::Value::as_str)
-            .expect("kura store");
-        let soracloud_runtime_path = parsed
-            .get("soracloud_runtime")
-            .and_then(toml::Value::as_table)
-            .and_then(|t| t.get("state_dir"))
-            .and_then(toml::Value::as_str)
-            .expect("soracloud runtime state dir");
-        let tiered_state = parsed
-            .get("tiered_state")
-            .and_then(toml::Value::as_table)
-            .expect("tiered_state table");
-        let tiered_root = tiered_state
-            .get("cold_store_root")
-            .and_then(toml::Value::as_str)
-            .expect("tiered_state cold_store_root");
-        let da_root = tiered_state
-            .get("da_store_root")
-            .and_then(toml::Value::as_str)
-            .expect("tiered_state da_store_root");
-        let rans_tables_path = parsed
-            .get("streaming")
-            .and_then(toml::Value::as_table)
-            .and_then(|streaming| streaming.get("codec"))
-            .and_then(toml::Value::as_table)
-            .and_then(|codec| codec.get("rans_tables_path"))
-            .and_then(toml::Value::as_str)
-            .expect("streaming codec rANS tables path");
-        assert!(
-            Path::new(genesis_path).is_absolute(),
-            "genesis path should be absolute"
-        );
-        assert!(
-            Path::new(kura_path).is_absolute(),
-            "kura store path should be absolute"
-        );
-        assert!(
-            Path::new(soracloud_runtime_path).is_absolute(),
-            "soracloud runtime state_dir should be absolute"
-        );
-        let peer_state_path = Path::new(kura_path)
-            .parent()
-            .and_then(Path::parent)
-            .expect("Kura path lives below the localnet output root")
-            .join("state")
-            .join("peer0");
-        assert!(
-            Path::new(soracloud_runtime_path).starts_with(&peer_state_path)
-                && !Path::new(soracloud_runtime_path).starts_with(Path::new(kura_path)),
-            "soracloud runtime state_dir must remain outside the pristine Kura root"
-        );
-        assert!(
-            Path::new(tiered_root).is_absolute(),
-            "tiered_state cold_store_root should be absolute"
-        );
-        assert!(
-            Path::new(da_root).is_absolute(),
-            "tiered_state da_store_root should be absolute"
-        );
-        let expected_rans_tables_path =
-            fs::canonicalize(out_dir.join(LOCALNET_RANS_TABLE_RELATIVE_PATH))
-                .expect("canonical generated rANS table");
-        assert!(
-            Path::new(rans_tables_path).is_absolute(),
-            "streaming codec rANS tables path should be absolute"
-        );
-        assert_eq!(
-            Path::new(rans_tables_path),
-            expected_rans_tables_path,
-            "streaming codec must bind the rANS table emitted into its output directory"
-        );
-        assert!(
-            Path::new(tiered_root).starts_with(&peer_state_path)
-                && Path::new(da_root).starts_with(&peer_state_path)
-                && !Path::new(tiered_root).starts_with(Path::new(kura_path))
-                && !Path::new(da_root).starts_with(Path::new(kura_path)),
-            "auxiliary state roots must remain outside the pristine Kura root"
-        );
-        assert!(
-            fs::read_dir(kura_path)
-                .expect("read pristine Kura root")
-                .next()
-                .is_none(),
-            "generated localnet must leave the Kura root pristine for catalog binding"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn start_and_stop_scripts_are_executable() {
-        let temp = tempfile::tempdir().expect("tmp dir");
-        let client_account_literal = localnet_client_account_literal(None);
-        let fee_asset_definition_id = localnet_fee_asset_literal();
-        write_scripts(
-            temp.path(),
-            1,
-            BuildLine::Iroha3,
-            false,
-            &client_account_literal,
-            &fee_asset_definition_id,
-        )
-        .expect("write scripts");
-
-        let start_path = temp.path().join("start.sh");
-        let stop_path = temp.path().join("stop.sh");
-        let start_mode = fs::metadata(&start_path)
-            .expect("start metadata")
-            .permissions()
-            .mode();
-        let stop_mode = fs::metadata(&stop_path)
-            .expect("stop metadata")
-            .permissions()
-            .mode();
-        assert_ne!(
-            start_mode & 0o111,
-            0,
-            "start script should be marked executable"
-        );
-        assert_ne!(
-            stop_mode & 0o111,
-            0,
-            "stop script should be marked executable"
-        );
-
-        let start_contents = fs::read_to_string(&start_path).expect("read start script");
-        assert_eq!(
-            start_contents.lines().take(3).collect::<Vec<_>>(),
-            ["#!/usr/bin/env bash", "set -euo pipefail", "umask 077"],
-            "generated startup must keep logs, pidfiles, and runtime directories owner-only",
-        );
-        let (debug_path, release_path) = default_irohad_bin_paths();
-        let expected_debug = format!("DEFAULT_IROHAD_BIN_DEBUG=\"{}\"", debug_path.display());
-        let expected_release = format!("DEFAULT_IROHAD_BIN_RELEASE=\"{}\"", release_path.display());
-        assert!(
-            start_contents.lines().any(|line| line == expected_debug),
-            "start script should set debug default"
-        );
-        assert!(
-            start_contents.lines().any(|line| line == expected_release),
-            "start script should set release default"
-        );
-        assert!(
-            start_contents.contains("if [ -x \"$DEFAULT_IROHAD_BIN_DEBUG\" ]; then"),
-            "start script should prefer the debug irohad for local contract development"
-        );
-        assert!(
-            start_contents.contains("elif [ -x \"$DEFAULT_IROHAD_BIN_RELEASE\" ]; then"),
-            "start script should fall back to the release irohad when no debug binary exists"
-        );
-        assert!(
-            start_contents.contains("DEFAULT_IROHA_CLI_RELEASE="),
-            "start script should also wire the iroha CLI defaults"
-        );
-        assert!(
-            start_contents.contains("FAUCET_RESERVE_TARGET="),
-            "start script should declare a faucet reserve target"
-        );
-        assert!(
-            start_contents.contains("FAUCET_RESERVE_RETRIES="),
-            "start script should make faucet reserve retries configurable"
-        );
-        assert!(
-            start_contents
-                .contains("ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\""),
-            "start script should mint the fee asset back to the faucet when reserve is low"
-        );
-        assert!(
-            start_contents.contains("--fee-payer authority --output-format json"),
-            "start script should explicitly select authority-paid typed fees for faucet reserve top-ups"
-        );
-        assert!(!start_contents.contains("faucet-topup.metadata.json"));
-        assert!(!start_contents.contains("gas_asset_id"));
-        assert!(
-            start_contents
-                .lines()
-                .any(|line| line == "export IROHA_BUILD_LINE=\"iroha3\""),
-            "start script should export build line"
-        );
-        assert!(
-            start_contents.contains("start_new_session=True"),
-            "start script should detach peers into a new session when python3 is available"
-        );
-        assert!(
-            start_contents.contains("nohup env SNAPSHOT_STORE_DIR="),
-            "start script should keep a nohup fallback for minimal shells"
-        );
-        assert!(
-            start_contents.contains("SNAPSHOT_STORE_DIR=\"$DIR/state/peer${i}/snapshot\""),
-            "snapshot state must remain outside the pristine Kura root"
-        );
-        assert!(
-            start_contents.contains("mkdir -p \"$SNAPSHOT_STORE_DIR/generations\""),
-            "start script should create the snapshot generations directory"
-        );
-        assert!(
-            start_contents.contains("peer$i already running with pid $existing_pid"),
-            "start script should refuse to overwrite live pidfiles"
-        );
-        assert!(
-            start_contents.contains("pid_is_running()")
-                && start_contents.contains("pid_is_running \"$existing_pid\""),
-            "start script should probe pid liveness without null signals"
-        );
-        assert!(
-            start_contents.contains("command -v ps >/dev/null 2>&1 || return 0"),
-            "start script should treat missing ps as live rather than stale"
-        );
-        assert!(
-            !start_contents.contains("kill -0"),
-            "start script should not use null-signal pid probes"
-        );
-        assert!(
-            start_contents.contains("rm -f \"$PIDFILE\""),
-            "start script should clear stale pidfiles before relaunch"
-        );
-        let stop_contents = fs::read_to_string(&stop_path).expect("read stop script");
-        assert_eq!(
-            stop_contents.lines().take(3).collect::<Vec<_>>(),
-            ["#!/usr/bin/env bash", "set -euo pipefail", "umask 077"],
-            "generated shutdown must preserve owner-only runtime custody",
-        );
-        assert!(
-            stop_contents.contains("pid_matches_peer()"),
-            "stop script should validate pid ownership before signaling"
-        );
-        assert!(
-            stop_contents.contains("pid_is_running()"),
-            "stop script should probe pid liveness without null signals"
-        );
-        assert!(
-            stop_contents.contains("command -v ps >/dev/null 2>&1 || return 0"),
-            "stop script should treat missing ps as live rather than stale"
-        );
-        assert!(
-            !stop_contents.contains("kill -0"),
-            "stop script should not use null-signal pid probes"
-        );
-        assert!(
-            stop_contents.contains("grep -F -- \"--config $config\""),
-            "stop script should bind live pid checks to the peer config path"
-        );
-        assert!(
-            stop_contents.contains("live pid $pid does not match $config"),
-            "stop script should leave reused pidfiles untouched"
-        );
-        assert!(
-            !stop_contents.contains("kill -9 \"$pid\""),
-            "stop script should not escalate to SIGKILL"
-        );
-        assert!(
-            stop_contents.contains("localnet peer $peer_name pid $pid is still running"),
-            "stop script should leave still-running owned peers visible"
-        );
-        assert!(
-            stop_contents.contains("rm -f \"$pidfile\""),
-            "stop script should clean pidfiles after shutdown"
-        );
-    }
-
-    #[cfg(unix)]
+    include!("localnet/path_and_script_tests.rs");
     #[test]
     fn start_script_includes_sora_flag_when_enabled() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -10034,122 +9927,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn copy_rans_tables_writes_seed_table() {
-        let temp = tempfile::tempdir().expect("tmp dir");
-        let emitted_path = copy_rans_tables(temp.path()).expect("copy rANS tables");
-        let seed_path = temp
-            .path()
-            .join("codec")
-            .join("rans")
-            .join("tables")
-            .join("rans_seed0.toml");
-        assert!(emitted_path.is_absolute());
-        assert_eq!(
-            emitted_path,
-            fs::canonicalize(&seed_path).expect("canonical emitted rANS table")
-        );
-        let bytes = fs::read(&emitted_path).expect("read rANS seed table");
-        assert_eq!(bytes, RANS_SEED0_TABLE);
-    }
-
-    #[test]
-    fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
-        let temp = tempfile::tempdir().expect("tmp dir");
-        let profiles = [
-            ("generic", None, SumeragiConsensusMode::Permissioned),
-            (
-                "nexus",
-                Some(SoraProfile::Nexus),
-                SumeragiConsensusMode::Npos,
-            ),
-            (
-                "paynet",
-                Some(SoraProfile::Dataspace),
-                SumeragiConsensusMode::Npos,
-            ),
-            (
-                "sbp",
-                Some(SoraProfile::PrivateSbp),
-                SumeragiConsensusMode::Npos,
-            ),
-            (
-                "cbuae",
-                Some(SoraProfile::PrivateCbuae),
-                SumeragiConsensusMode::Npos,
-            ),
-        ];
-        let mut generated_paths = std::collections::BTreeSet::new();
-
-        for (label, sora_profile, consensus_mode) in profiles {
-            let out_dir = temp.path().join(label);
-            let opts = LocalnetOptions {
-                build_line: BuildLine::Iroha3,
-                sora_profile,
-                perf_profile: None,
-                peers: NonZeroU16::new(4).expect("non-zero"),
-                seed: Some(format!("rans-table-{label}")),
-                bind_host: DEFAULT_BIND_HOST.to_owned(),
-                public_host: DEFAULT_PUBLIC_HOST.to_owned(),
-                base_api_port: 19080,
-                base_p2p_port: 23337,
-                out_dir: out_dir.clone(),
-                extra_accounts: 0,
-                assets: Vec::new(),
-                block_cadence_ms: None,
-                consensus_mode,
-            };
-
-            generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
-                .unwrap_or_else(|error| panic!("generate {label} localnet: {error:#}"));
-
-            let canonical_out_dir =
-                fs::canonicalize(&out_dir).expect("canonical generated output directory");
-            let expected_path =
-                fs::canonicalize(canonical_out_dir.join(LOCALNET_RANS_TABLE_RELATIVE_PATH))
-                    .expect("canonical generated rANS table");
-            assert!(
-                expected_path.starts_with(&canonical_out_dir),
-                "{label} rANS table must remain inside its generated output"
-            );
-            assert_eq!(
-                fs::read(&expected_path).expect("read generated rANS table"),
-                RANS_SEED0_TABLE
-            );
-
-            for peer_index in 0..opts.peers.get() {
-                let config_path = out_dir.join(format!("peer{peer_index}.toml"));
-                let peer_config: toml::Value = toml::from_str(
-                    &fs::read_to_string(&config_path).expect("read generated peer config"),
-                )
-                .expect("parse generated peer config");
-                let configured_path = peer_config
-                    .get("streaming")
-                    .and_then(toml::Value::as_table)
-                    .and_then(|streaming| streaming.get("codec"))
-                    .and_then(toml::Value::as_table)
-                    .and_then(|codec| codec.get("rans_tables_path"))
-                    .and_then(toml::Value::as_str)
-                    .map(PathBuf::from)
-                    .expect("generated streaming codec rANS tables path");
-                assert!(
-                    configured_path.is_absolute(),
-                    "{label} peer {peer_index} rANS table path must be absolute"
-                );
-                assert_eq!(
-                    configured_path, expected_path,
-                    "{label} peer {peer_index} must bind its own generated rANS table"
-                );
-            }
-
-            assert!(
-                generated_paths.insert(expected_path),
-                "{label} must not reuse another generated network's rANS table"
-            );
-        }
-
-        assert_eq!(generated_paths.len(), profiles.len());
-    }
+    // Keep the generated rANS table contract tests in a focused child while
+    // retaining their paths under `localnet::tests`.
+    include!("localnet/rans_table_tests.rs");
 
     #[test]
     fn localnet_defaults_to_permissioned_without_profile_or_perf_preset() {

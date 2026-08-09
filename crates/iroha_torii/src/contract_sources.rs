@@ -804,9 +804,9 @@ fn locate_instruction_box(
                     TransactionEntrypoint::SealedReveal(reveal) => {
                         reveal.signed_transaction().clone()
                     }
-                    TransactionEntrypoint::SealedCommitment(_)
-                    | TransactionEntrypoint::PrivateKaigi(_)
-                    | TransactionEntrypoint::Time(_) => return Err(not_found()),
+                    TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                        return Err(not_found());
+                    }
                 };
                 let instruction = tx
                     .instructions()
@@ -1492,8 +1492,9 @@ mod tests {
         ));
 
         let code = crate::test_utils::minimal_ivm_program(1);
+        let chain_id = state.view().chain_id().clone();
         let contract_address =
-            dm::ContractAddress::derive(0, &authority, 0, dm::DataSpaceId::UNIVERSAL)
+            dm::ContractAddress::derive(&chain_id, &authority, 0, dm::DataSpaceId::UNIVERSAL)
                 .expect("contract address");
         let code_hash = install_contract_instance(
             state.as_ref(),

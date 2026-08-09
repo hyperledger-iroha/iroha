@@ -1046,7 +1046,8 @@ internal class TransactionPayloadAdapter private constructor(
             ProofAttachmentListAdapter()
         private val ATTACHMENTS_OPTION_ADAPTER: TypeAdapter<Optional<List<ProofAttachment>>> =
             NoritoAdapters.option(PROOF_ATTACHMENT_LIST_ADAPTER)
-        private const val INSTRUCTION_BOX_SCHEMA = "iroha.data_model.isi.InstructionBox.v1"
+        private const val INSTRUCTION_BOX_SCHEMA =
+            "(alloc::string::String, alloc::vec::Vec<u8>)"
         private const val FEE_PAYER_AUTHORITY_TAG = 0L
         private const val FEE_PAYER_SPONSOR_TAG = 1L
         private const val FEE_CHARGE_NEXUS_TAG = 0L

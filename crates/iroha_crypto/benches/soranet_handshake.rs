@@ -4,8 +4,8 @@ use criterion::Criterion;
 use iroha_crypto::{
     Algorithm, KeyPair,
     soranet::handshake::{
-        DEFAULT_DESCRIPTOR_COMMIT, HandshakeSuite, RuntimeParams, build_client_hello,
-        client_handle_relay_hello, relay_finalize_handshake,
+        DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_TLS_SERVER_NAME, HandshakeSuite, RuntimeParams,
+        SORANET_QUIC_ALPN, build_client_hello, client_handle_relay_hello, relay_finalize_handshake,
     },
 };
 use rand::SeedableRng as _;
@@ -40,6 +40,8 @@ impl HandshakeScenario {
             relay_capabilities: &self.relay_caps,
             kem_id: 1,
             sig_id: 1,
+            transport_alpn: SORANET_QUIC_ALPN,
+            tls_server_name: DEFAULT_TLS_SERVER_NAME,
             resume_hash: None,
         }
     }
@@ -51,7 +53,6 @@ fn run_handshake(preferred: HandshakeSuite) {
 
     let mut rng_client = ChaCha20Rng::from_seed([0xA5; 32]);
     let mut rng_relay = ChaCha20Rng::from_seed([0x5A; 32]);
-    let client_keys = checked_seeded_keypair(0x11);
     let relay_keys = checked_seeded_keypair(0x22);
 
     let (client_hello, client_state) =
@@ -66,7 +67,7 @@ fn run_handshake(preferred: HandshakeSuite) {
     let (client_finish, _) = client_handle_relay_hello(
         client_state,
         &relay_message,
-        &client_keys,
+        relay_keys.public_key(),
         &params,
         &mut rng_client,
     )

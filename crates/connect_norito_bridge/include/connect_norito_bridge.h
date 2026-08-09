@@ -240,9 +240,8 @@ int32_t connect_norito_decode_ciphertext_frame(
 #define CONNECT_NORITO_KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS 2
 
 // Returns canonical Norito `KagemushaRecursiveSpendNativeCapabilitiesV4`.
-// ABI21 callers must require `proof_backend_available`; this build reports
-// false until authenticated V4 artifacts and every external evidence gate are
-// complete.
+// ABI21 callers must require `proof_backend_available`; the production bridge
+// reports true after an authenticated V4 artifact release is installed.
 int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
     uint8_t** out_capabilities_ptr,
     unsigned long* out_capabilities_len);
@@ -255,8 +254,8 @@ int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
 // a parallel JSON projection or generation label. Returns 0 only after the
 // manifest and roster digests, full anchor bindings, Commit-QC aggregate, and
 // exact anchor path all verify. Recursive init performs this same verification
-// inside its native boundary. This standalone symbol remains unavailable until
-// the authenticated release-envelope trust root is wired.
+// inside its native boundary. The standalone symbol is active in the ABI-21
+// production bridge and does not treat a content address as a trust root.
 int32_t connect_norito_kagemusha_topup_finality_verify_v4(
     const uint8_t* proof_norito_ptr,
     unsigned long proof_norito_len,
@@ -1508,111 +1507,6 @@ int32_t connect_norito_encode_transfer_instruction_box(
     const char* destination, unsigned long destination_len,
     uint8_t** out_instruction_ptr, unsigned long* out_instruction_len);
 
-int32_t connect_norito_encode_shield_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    const char* asset_definition, unsigned long asset_definition_len,
-    const char* from_account, unsigned long from_len,
-    const char* amount, unsigned long amount_len,
-    const uint8_t* note_commitment, unsigned long note_commitment_len,
-    const uint8_t* payload_ephemeral, unsigned long payload_ephemeral_len,
-    const uint8_t* payload_nonce, unsigned long payload_nonce_len,
-    const uint8_t* payload_ciphertext, unsigned long payload_ciphertext_len,
-    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
-int32_t connect_norito_encode_shield_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    const char* asset_definition, unsigned long asset_definition_len,
-    const char* from_account, unsigned long from_len,
-    const char* amount, unsigned long amount_len,
-    const uint8_t* note_commitment, unsigned long note_commitment_len,
-    const uint8_t* payload_ephemeral, unsigned long payload_ephemeral_len,
-    const uint8_t* payload_nonce, unsigned long payload_nonce_len,
-    const uint8_t* payload_ciphertext, unsigned long payload_ciphertext_len,
-    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t algorithm,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
-int32_t connect_norito_encode_unshield_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    const char* asset_definition, unsigned long asset_definition_len,
-    const char* destination, unsigned long destination_len,
-    const char* public_amount, unsigned long public_amount_len,
-    const uint8_t* inputs, unsigned long inputs_len,
-    const char* proof_json, unsigned long proof_json_len,
-    const uint8_t* root_hint, unsigned long root_hint_len,
-    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
-int32_t connect_norito_encode_unshield_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    const char* asset_definition, unsigned long asset_definition_len,
-    const char* destination, unsigned long destination_len,
-    const char* public_amount, unsigned long public_amount_len,
-    const uint8_t* inputs, unsigned long inputs_len,
-    const char* proof_json, unsigned long proof_json_len,
-    const uint8_t* root_hint, unsigned long root_hint_len,
-    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t algorithm,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
-int32_t connect_norito_encode_zk_transfer_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    const char* asset_definition, unsigned long asset_definition_len,
-    const uint8_t* inputs, unsigned long inputs_len,
-    const uint8_t* outputs, unsigned long outputs_len,
-    const char* proof_json, unsigned long proof_json_len,
-    const uint8_t* root_hint, unsigned long root_hint_len,
-    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
-int32_t connect_norito_encode_zk_transfer_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    const char* asset_definition, unsigned long asset_definition_len,
-    const uint8_t* inputs, unsigned long inputs_len,
-    const uint8_t* outputs, unsigned long outputs_len,
-    const char* proof_json, unsigned long proof_json_len,
-    const uint8_t* root_hint, unsigned long root_hint_len,
-    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t algorithm,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
 int32_t connect_norito_encode_register_zk_asset_signed_transaction(
     const char* chain_id, unsigned long chain_len,
     const char* authority, unsigned long authority_len,
@@ -1623,7 +1517,6 @@ int32_t connect_norito_encode_register_zk_asset_signed_transaction(
     uint8_t mode_code,
     uint8_t allow_shield,
     uint8_t allow_unshield,
-    const char* vk_transfer, unsigned long vk_transfer_len, uint8_t vk_transfer_present,
     const char* vk_unshield, unsigned long vk_unshield_len, uint8_t vk_unshield_present,
     const char* vk_shield, unsigned long vk_shield_len, uint8_t vk_shield_present,
     const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
@@ -1641,7 +1534,6 @@ int32_t connect_norito_encode_register_zk_asset_signed_transaction_alg(
     uint8_t mode_code,
     uint8_t allow_shield,
     uint8_t allow_unshield,
-    const char* vk_transfer, unsigned long vk_transfer_len, uint8_t vk_transfer_present,
     const char* vk_unshield, unsigned long vk_unshield_len, uint8_t vk_unshield_present,
     const char* vk_shield, unsigned long vk_shield_len, uint8_t vk_shield_present,
     const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,

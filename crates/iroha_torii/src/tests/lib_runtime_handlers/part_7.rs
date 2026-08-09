@@ -114,6 +114,7 @@
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        fhe_policy_records: BTreeMap::new(),
                         service_lease: if bundle.service.execution_plane
                             == iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
                         {
@@ -598,6 +599,7 @@
                     secret_generation: 0,
                     service_configs: BTreeMap::new(),
                     service_secrets: BTreeMap::new(),
+                    fhe_policy_records: BTreeMap::new(),
                     service_lease: Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
                         schema_version:
                             iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,

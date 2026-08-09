@@ -31,20 +31,24 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
    first launch. The `[supervisor.restart]` table lets you disable automatic
    restarts (`mode = "never"`) or adjust the retry count/backoff for flaky
    development environments.
-   You can also switch topology profiles: presets use `profile = "single-peer"`
-   or `profile = "four-peer-bft"`, while custom profiles use a table such as
-   `profile = { peer_count = 3, consensus_mode = "permissioned" }`. For NPoS
+   You can also switch topology profiles: use the
+   `profile = "four-peer-bft"` preset, while custom profiles use a table such
+   as `profile = { peer_count = 7, consensus_mode = "permissioned" }`. Custom
+   peer counts must form an exact Sumeragi committee (`3f+1`), so this bundle
+   accepts 4 or 7 peers. The historical `single-peer` name is accepted only
+   for saved-config compatibility and now launches four validators. For NPoS
    genesis presets, set `consensus_mode = "npos"` and include
    `genesis_profile = "iroha3-dev"` in the same table (or set
    `supervisor.genesis_profile` when using presets).
    CLI runs accept the same presets or an inline profile table via
-   `--profile '{ peer_count = 3, consensus_mode = "permissioned" }'`.
+   `--profile '{ peer_count = 7, consensus_mode = "permissioned" }'`.
    For multi-lane/Nexus profiles, populate the `[nexus]` and `[sumeragi]`
    sections in `config/local.toml` (or pass `--nexus-config`, `--enable-nexus`,
    on the CLI). MOCHI validates `nexus.enabled` against lane
    counts and forces `sumeragi.da.enabled = true` when Nexus is enabled, because
-   Iroha 3 always runs with DA gating enabled. Use `[torii.da_ingest]` to pin
-   DA replay/manifest spool roots if you do not want the per-peer defaults.
+   Iroha 3 always runs with DA gating enabled. Torii DA replay and manifest
+   roots are immutable per-generation managed paths; configured overrides are
+   rejected before publication.
 3. Start the supervisor via `./bin/mochi`. The egui application will create the
    per-profile data tree on demand and generate a Kagami-aligned genesis block.
    The dashboard shows a compatibility summary (binary build-line/version and
@@ -72,22 +76,12 @@ Use these quick snippets inside `config/local.toml` to match common layouts:
 
 ```
 [supervisor]
-profile = "single-peer" # 1 node
+profile = "four-peer-bft" # 4 validators
 ```
 
 ```
 [supervisor]
-profile = { peer_count = 3, consensus_mode = "permissioned" } # 3 nodes
-```
-
-```
-[supervisor]
-profile = "four-peer-bft" # 4 nodes
-```
-
-```
-[supervisor]
-profile = { peer_count = 5, consensus_mode = "permissioned" } # 5 nodes
+profile = { peer_count = 7, consensus_mode = "permissioned" } # 7 validators
 ```
 
 For NPoS/Nexus runs, switch to `consensus_mode = "npos"` and include a genesis
@@ -134,20 +128,14 @@ id = 0
 Alternatively, store the `[nexus]` block above in a standalone TOML file and
 load it with `--nexus-config path/to/nexus.toml` plus `--enable-nexus`.
 
-To override Torii DA ingest spool roots, add:
-
-```
-[torii]
-[torii.da_ingest]
-replay_cache_store_dir = "/path/to/da_replay"
-manifest_store_dir = "/path/to/da_manifests"
-```
+Torii DA ingest replay and manifest roots are generated inside each peer's
+selected storage generation. They cannot be redirected by bundle settings.
 
 ## Lane maintenance and status
 
-The Settings dialog exposes lane catalogs, DA toggles, and DA spool roots, plus
-a per-lane Kura/merge-log path preview (the generated peer configs include the
-same paths in their header). Use the Maintenance bar to reset a single lane:
+The Settings dialog exposes lane catalogs and DA toggles, plus a per-lane
+Kura/merge-log path preview (the generated peer configs include the same paths
+in their header). Use the Maintenance bar to reset a single lane:
 MOCHI submits a signed retire/add lifecycle replacement via Torii and leaves the
 authenticated storage transition to Kura. The Lane status panel surfaces DA cursors, relay lag, RBC bytes,
 and relay ingest state per peer so operators can spot lagging lanes quickly.

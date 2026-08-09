@@ -95,6 +95,7 @@ pub(crate) enum ZkX509FixedAlgebraicErrorV1 {
     #[error("zk-X509 algebraic fixed attempted to invert zero")]
     DivisionByZero,
     /// A compiled schedule does not match its expected descriptor digest.
+    #[cfg(test)]
     #[error("zk-X509 algebraic fixed descriptor digest mismatch")]
     DescriptorMismatch,
     /// An invariant of an already checked schedule was violated.
@@ -176,16 +177,19 @@ impl ZkX509FixedAlgebraicDomainV1 {
     }
 
     /// Native-domain base-two logarithm.
+    #[cfg(test)]
     pub(crate) const fn native_log2_v1(self) -> u8 {
         self.native_log2
     }
 
     /// Extension-domain base-two logarithm.
+    #[cfg(test)]
     pub(crate) const fn lde_log2_v1(self) -> u8 {
         self.lde_log2
     }
 
     /// Canonical multiplicative coset shift.
+    #[cfg(test)]
     pub(crate) const fn coset_shift_v1(self) -> F {
         self.coset_shift
     }
@@ -212,6 +216,7 @@ impl ZkX509FixedAlgebraicDomainV1 {
     }
 
     /// Map one canonical extension-domain index to its verifier point.
+    #[cfg(test)]
     pub(crate) fn query_point_v1(self, query_index: u64) -> Result<F, ZkX509FixedAlgebraicErrorV1> {
         if query_index >= self.lde_size_v1()? {
             return Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery);
@@ -486,6 +491,7 @@ impl ZkX509FixedAlgebraicAtomV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     fn contribution_at_native_row_v1(
         self,
         row: u64,
@@ -592,20 +598,6 @@ impl ZkX509FixedAlgebraicScheduleBuilderV1 {
             end,
             start_value,
             step,
-        )?)
-    }
-
-    /// Add a constant repeated contribution.
-    pub(crate) fn push_repeated_v1(
-        &mut self,
-        column: u16,
-        first: u64,
-        count: u64,
-        stride: u64,
-        value: F,
-    ) -> Result<(), ZkX509FixedAlgebraicErrorV1> {
-        self.push_atom_v1(ZkX509FixedAlgebraicAtomV1::repeated_v1(
-            column, first, count, stride, value,
         )?)
     }
 
@@ -795,6 +787,7 @@ impl ZkX509FixedAlgebraicScheduleV1 {
     }
 
     /// Fail closed unless the compiled profile pins this exact schedule.
+    #[cfg(test)]
     pub(crate) fn verify_descriptor_digest_v1(
         &self,
         expected: &[u8; 32],
@@ -806,6 +799,7 @@ impl ZkX509FixedAlgebraicScheduleV1 {
     }
 
     /// Evaluate one native row without constructing a native matrix.
+    #[cfg(test)]
     pub(crate) fn native_row_v1(
         &self,
         row: u64,
@@ -832,6 +826,7 @@ impl ZkX509FixedAlgebraicScheduleV1 {
     /// The caller owns exactly `native_size` fields.  The method clears that
     /// buffer and applies only atoms for `column`, so its working memory is
     /// `O(native_size)` and never `native_size * width`.
+    #[cfg(test)]
     pub(crate) fn fill_native_column_v1(
         &self,
         column: u16,

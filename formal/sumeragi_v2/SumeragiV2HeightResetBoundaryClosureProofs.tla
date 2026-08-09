@@ -1213,7 +1213,7 @@ runner removes an owner.
 ***************************************************************************)
 
 THEOREM PositivePhysicalCompletionDebtAdmissionPreservesDebt ==
-  \A blocked,
+  \A blocked \in AsyncNetworkItems,
      recipient \in ValidatorIds,
      source \in AsyncIngressSources:
     /\ AsyncStrongTypeInvariant
@@ -2515,15 +2515,68 @@ THEOREM FairRuntimeReadyReachesExitOrLocalIngressContinuation ==
              ~> (HeightResetNodeExit(node)
                    \/ HeightResetNodeLocalIngressContinuationPending(
                         initialContext, node))
-BY AsyncLiveSpecProjectsAsyncSpec,
-   AsyncSpecAlwaysProgressOwnershipInvariant,
-   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
-   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
-   HeightResetNodeRuntimeReadyEnablesFairRuntimeReset,
-   HeightResetNodeRuntimeReadyFrame,
-   HeightResetNodeRuntimeResetReachesExitOrLocalIngressContinuation,
-   WF1, PTL, Isa
-   DEF AsyncLiveSpecAt, AsyncSpecAt, AsyncFairnessAt
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncLiveSpecAt(initialContext)
+         PROVE \A node \in AsyncVotersAt(initialContext):
+                 HeightResetNodeRuntimeReady(initialContext, node)
+                   ~> (HeightResetNodeExit(node)
+                         \/ HeightResetNodeLocalIngressContinuationPending(
+                              initialContext, node))
+    <2>1. ASSUME NEW node \in AsyncVotersAt(initialContext)
+           PROVE HeightResetNodeRuntimeReady(initialContext, node)
+                   ~> (HeightResetNodeExit(node)
+                         \/ HeightResetNodeLocalIngressContinuationPending(
+                              initialContext, node))
+      <3>1. []AsyncProgressOwnershipInvariant
+        BY <1>1, AsyncLiveSpecProjectsAsyncSpec,
+           AsyncSpecAlwaysProgressOwnershipInvariant, PTL
+      <3>2. []AsyncCandidateProducerContinuationExternalCoverageInvariant
+        BY <1>1, AsyncLiveSpecProjectsAsyncSpec,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage, PTL
+      <3>3. []AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+        BY <1>1, AsyncLiveSpecProjectsAsyncSpec,
+           AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+           PTL
+      <3>4. [](HeightResetNodeRuntimeReady(initialContext, node)
+                /\ ~(HeightResetNodeExit(node)
+                      \/ HeightResetNodeLocalIngressContinuationPending(
+                           initialContext, node))
+               => ENABLED <<PostGstRunNode(node)>>_AsyncAllVars)
+        BY <3>2, <3>3,
+           HeightResetNodeRuntimeReadyEnablesFairRuntimeReset, PTL
+      <3>5. (HeightResetNodeRuntimeReady(initialContext, node)
+                /\ ~(HeightResetNodeExit(node)
+                      \/ HeightResetNodeLocalIngressContinuationPending(
+                           initialContext, node))
+                /\ <<PostGstRunNode(node)>>_AsyncAllVars
+               => (HeightResetNodeExit(node)
+                     \/ HeightResetNodeLocalIngressContinuationPending(
+                          initialContext, node))')
+        BY <3>2, <3>3,
+           HeightResetNodeRuntimeResetReachesExitOrLocalIngressContinuation,
+           <1>1, AsyncLiveSpecProjectsAsyncSpec, PTL
+           DEF AsyncSpecAt
+      <3>6. (HeightResetNodeRuntimeReady(initialContext, node)
+                /\ ~(HeightResetNodeExit(node)
+                      \/ HeightResetNodeLocalIngressContinuationPending(
+                           initialContext, node))
+                /\ [AsyncNext]_AsyncAllVars
+               => \/ (HeightResetNodeExit(node)
+                        \/ HeightResetNodeLocalIngressContinuationPending(
+                             initialContext, node))'
+                  \/ HeightResetNodeRuntimeReady(initialContext, node)')
+        BY <3>1, <3>2, <3>3,
+           HeightResetNodeRuntimeReadyFrame,
+           HeightResetNodeRuntimeResetReachesExitOrLocalIngressContinuation,
+           PTL
+      <3>7. WF_AsyncAllVars(PostGstRunNode(node))
+        BY <1>1, <2>1 DEF AsyncLiveSpecAt, AsyncSpecAt, AsyncFairnessAt
+      <3>8. [][AsyncNext]_AsyncAllVars
+        BY <1>1, AsyncLiveSpecProjectsAsyncSpec DEF AsyncSpecAt
+      <3> QED BY <3>4, <3>5, <3>6, <3>7, <3>8, PTL
+    <2> QED BY <2>1
+  <1> QED BY <1>1
 
 THEOREM FairLocalIngressContinuationReachesExit ==
   \A initialContext:

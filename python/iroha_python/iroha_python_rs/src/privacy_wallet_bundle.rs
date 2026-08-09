@@ -19,7 +19,7 @@ use iroha_core::privacy_engines::{
     },
     jindo::JindoPrivacyActionWitnessV1,
     orchard::{OrchardChangeProverInputV1, OrchardSpendProverInputV1},
-    p256::SecretScalarV1,
+    p256::{DeviceSigningKeyV1, SecretScalarV1},
     pq_masp::{PqMaspInputWitnessV1, PqMaspNotePlaintextV1, PqMaspOutputWitnessV1},
     vega::{VegaPrivacyActionPublicInputV1, VegaPrivacyActionWitnessMaterialV1},
     verange::VeRangeBitLengthV1,
@@ -28,7 +28,7 @@ use iroha_core::privacy_engines::{
 };
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey};
 use iroha_data_model::{
-    asset::AssetDefinitionId,
+    asset::{AssetBalanceScope, AssetDefinitionId},
     prelude::AccountId,
     privacy::{
         BootleLanternIssuerPolicyV1, PrivacyAuthorizationKeyDigestV1, PrivacyChallengeV1,
@@ -138,7 +138,6 @@ struct BundleParts<'a> {
     wallet_id: &'a str,
     authority: &'a str,
     protocol_id: PrivacyProtocolIdV1,
-    operation_schema: &'a str,
     public_action: &'a [u8],
     signer_seed: &'a [u8; 32],
     protocol_witness: &'a [u8],
@@ -310,7 +309,6 @@ fn parse_parts(bytes: &[u8]) -> Result<BundleParts<'_>, PrivacyWalletBundleError
         wallet_id,
         authority,
         protocol_id,
-        operation_schema,
         public_action,
         signer_seed,
         protocol_witness,
@@ -722,8 +720,14 @@ fn decode_zk_ace_request_v1(
         "zk-ace-destination",
     )?;
     let amount = take_decimal_u128(&mut public, "amount_decimal", "zk-ace-amount", false)?;
-    let transfer = ZkAcePrivacyTransferV1::try_new(policy, source, destination, amount)
-        .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ace-transfer"))?;
+    let transfer = ZkAcePrivacyTransferV1::try_new(
+        policy,
+        source,
+        destination,
+        AssetBalanceScope::Global,
+        amount,
+    )
+    .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ace-transfer"))?;
 
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(
@@ -1171,7 +1175,7 @@ fn decode_vega_request_v1(
         "vega-device-signing-key",
         false,
     )?);
-    let device_signing_key = p256::ecdsa::SigningKey::from_bytes((&*device_key).into())
+    let device_signing_key = DeviceSigningKeyV1::from_bytes((&*device_key).into())
         .map_err(|_| PrivacyWalletBundleErrorV1::at("vega-device-signing-key"))?;
     device_key.zeroize();
     Ok(PrivacyNativeActionRequestV1::Vega(
