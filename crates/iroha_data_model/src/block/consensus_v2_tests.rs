@@ -100,7 +100,10 @@ mod tests {
         let parent = Hash::new(b"parent");
         let ordinary = Hash::new(b"ordinary writes");
         let topup = Hash::new(b"topup tree");
-        let executed = Hash::new(b"executed block wire");
+        let executed_block_wire = b"executed block wire";
+        let executed_block_wire_len =
+            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
+        let executed = Hash::new(executed_block_wire);
         let post = ExecutionCommitment::topup_post_state_root(2, ordinary, topup);
         let canonical = ExecutionCommitment::new_without_merge_carrier(
             parent,
@@ -108,7 +111,7 @@ mod tests {
             ordinary,
             Some(topup),
             2,
-            1,
+            executed_block_wire_len,
             executed,
         )
         .expect("canonical top-up commitment");
@@ -129,7 +132,7 @@ mod tests {
                 ordinary,
                 Some(topup),
                 2,
-                1,
+                executed_block_wire_len,
                 executed,
             ),
             Err(ValidationError::ExecutionCommitmentPostRootMismatch)
@@ -141,7 +144,7 @@ mod tests {
                 ordinary,
                 Some(topup),
                 0,
-                1,
+                executed_block_wire_len,
                 executed,
             ),
             Err(ValidationError::InvalidExecutionCommitment)
@@ -153,7 +156,7 @@ mod tests {
                 ordinary,
                 Some(topup),
                 MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
-                1,
+                executed_block_wire_len,
                 executed,
             ),
             Err(ValidationError::TooManyKagemushaTopupAnchors)
@@ -190,10 +193,17 @@ mod tests {
         let parent = Hash::new(b"native manifest parent");
         let post = Hash::new(b"native manifest post");
         let ordinary = Hash::new(b"native manifest ordinary");
-        let executed = Hash::new(b"native manifest executed wire");
+        let executed_block_wire = b"native manifest executed wire";
+        let executed_block_wire_len =
+            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
+        let executed = Hash::new(executed_block_wire);
         let root = Hash::new(b"native manifest non-empty root");
         let empty = ExecutionCommitment::without_topups_or_merge_carrier(
-            parent, post, ordinary, 1, executed,
+            parent,
+            post,
+            ordinary,
+            executed_block_wire_len,
+            executed,
         );
         assert_eq!(
             empty.native_amx_application_manifest_root,
@@ -225,7 +235,7 @@ mod tests {
             native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
             native_amx_application_manifest_count: 0,
             merge_carrier: None,
-            executed_block_wire_len: 1,
+            executed_block_wire_len,
             executed_block_wire_hash: executed,
         }
         .encode();
@@ -244,7 +254,7 @@ mod tests {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 root,
                 1,
-                1,
+                executed_block_wire_len,
                 executed,
             )
             .expect("canonical Native AMX manifest commitment");
@@ -260,7 +270,7 @@ mod tests {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 root,
                 0,
-                1,
+                executed_block_wire_len,
                 executed,
             ),
             Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment)
@@ -275,7 +285,7 @@ mod tests {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 root,
                 MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1,
-                1,
+                executed_block_wire_len,
                 executed,
             ),
             Err(ValidationError::TooManyNativeAmxApplicationManifestLeaves)
@@ -290,7 +300,7 @@ mod tests {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION + 1,
                 root,
                 1,
-                1,
+                executed_block_wire_len,
                 executed,
             ),
             Err(ValidationError::InvalidNativeAmxApplicationManifestVersion)
@@ -458,14 +468,15 @@ mod tests {
     }
 
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
+        let executed_block_wire = [seed, 6];
         ExecutionCommitment::new_without_merge_carrier(
             Hash::new([seed, 3]),
             Hash::new([seed, 4]),
             Hash::new([seed, 5]),
             None,
             0,
-            1,
-            Hash::new([seed, 6]),
+            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64"),
+            Hash::new(executed_block_wire),
         )
         .expect("canonical fixture execution commitment")
     }
@@ -812,6 +823,7 @@ mod tests {
             height: 1,
             view: 0,
         };
+        let invalid_parent_executed_block_wire = b"executed block wire";
         invalid_parent_execution.parent_commit_qc = Some(QuorumCertificate {
             round: invalid_parent_round,
             proposal_round: invalid_parent_round,
@@ -828,8 +840,9 @@ mod tests {
                 native_amx_application_manifest_count: 0,
                 lane_finality_manifest: None,
                 merge_carrier: None,
-                executed_block_wire_len: 1,
-                executed_block_wire_hash: Hash::new(b"executed block wire"),
+                executed_block_wire_len: u64::try_from(invalid_parent_executed_block_wire.len())
+                    .expect("fixture wire length fits u64"),
+                executed_block_wire_hash: Hash::new(invalid_parent_executed_block_wire),
             },
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0x62; 48],

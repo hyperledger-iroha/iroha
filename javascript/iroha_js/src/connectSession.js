@@ -9,6 +9,30 @@ const NONCE_LENGTH = 16;
 const X25519_KEY_LENGTH = 32;
 const CONNECT_URI_VERSION = "1";
 const CONNECT_URI_SCHEME = "iroha://connect";
+const CONNECT_RESPONSE_FIELDS = new Set([
+  "sid",
+  "network_id",
+  "app_pk",
+  "nonce",
+  "wallet_uri",
+  "app_uri",
+  "token_app",
+  "token_wallet",
+  "token_management",
+  "token_relay",
+]);
+const CONNECT_URI_FIELDS = new Set([
+  "sid",
+  "network_id",
+  "app_pk",
+  "nonce",
+  "node",
+  "v",
+  "role",
+  "token",
+  "relay",
+]);
+const CONNECT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 /**
  * Generate a Connect session identifier deterministically.
@@ -96,6 +120,111 @@ export function createConnectSessionPreview(options = {}) {
       "app",
     ),
   };
+}
+
+/**
+ * Fail closed when Torii substitutes any committed session field or deep-link
+ * authorization value.
+ * @param {Record<string, unknown>} session Parsed response (or a normalized
+ * response carrying the original object as `raw`).
+ * @param {{sid: string; networkId: string; appPk: string; nonce: string; node?: string | null}} expected
+ */
+export function validateConnectSessionResponseIdentity(session, expected) {
+  if (!session || typeof session !== "object" || !expected || typeof expected !== "object") {
+    throw new TypeError("Connect session response and expected identity must be objects");
+  }
+  const raw = session.raw && typeof session.raw === "object" ? session.raw : session;
+  for (const field of Object.keys(raw)) {
+    if (!CONNECT_RESPONSE_FIELDS.has(field)) {
+      throw new Error(`Connect session response contains unsupported field ${field}`);
+    }
+  }
+  const identity = {
+    sid: requireExactString(raw.sid, "session.sid"),
+    networkId: requireExactString(raw.network_id, "session.network_id"),
+    appPk: requireExactString(raw.app_pk, "session.app_pk"),
+    nonce: requireExactString(raw.nonce, "session.nonce"),
+  };
+  if (
+    identity.sid !== expected.sid
+    || identity.networkId !== expected.networkId
+    || identity.appPk !== expected.appPk
+    || identity.nonce !== expected.nonce
+  ) {
+    throw new Error("Torii substituted the canonical Connect session identity");
+  }
+  const tokens = {
+    app: requireConnectToken(raw.token_app, "session.token_app"),
+    wallet: requireConnectToken(raw.token_wallet, "session.token_wallet"),
+    management: requireConnectToken(raw.token_management, "session.token_management"),
+    relay: requireConnectToken(raw.token_relay, "session.token_relay"),
+  };
+  validateConnectLaunchUri(raw.wallet_uri, "wallet", identity, expected.node, tokens.wallet, tokens.relay);
+  validateConnectLaunchUri(raw.app_uri, "app", identity, expected.node, tokens.app, tokens.relay);
+}
+
+function validateConnectLaunchUri(value, role, identity, node, token, relay) {
+  const literal = requireExactString(value, `session.${role}_uri`);
+  let parsed;
+  try {
+    parsed = new URL(literal);
+  } catch {
+    throw new Error(`session.${role}_uri must be an absolute Connect URI`);
+  }
+  if (
+    parsed.protocol !== "iroha:"
+    || parsed.host !== "connect"
+    || parsed.pathname !== ""
+    || parsed.hash !== ""
+  ) {
+    throw new Error(`session.${role}_uri must use iroha://connect without a path or fragment`);
+  }
+  const query = new Map();
+  for (const [key, entry] of parsed.searchParams) {
+    if (!CONNECT_URI_FIELDS.has(key)) {
+      throw new Error(`session.${role}_uri contains unsupported parameter ${key}`);
+    }
+    if (query.has(key)) {
+      throw new Error(`session.${role}_uri contains duplicate parameter ${key}`);
+    }
+    query.set(key, entry);
+  }
+  for (const field of CONNECT_URI_FIELDS) {
+    if (!query.has(field)) {
+      throw new Error(`session.${role}_uri is missing required parameter ${field}`);
+    }
+  }
+  const expectedValues = {
+    sid: identity.sid,
+    network_id: identity.networkId,
+    app_pk: identity.appPk,
+    nonce: identity.nonce,
+    node: node ?? "",
+    v: CONNECT_URI_VERSION,
+    role,
+    token,
+    relay,
+  };
+  for (const [field, expectedValue] of Object.entries(expectedValues)) {
+    if (query.get(field) !== expectedValue) {
+      throw new Error(`session.${role}_uri substituted Connect parameter ${field}`);
+    }
+  }
+}
+
+function requireExactString(value, name) {
+  if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
+    throw new TypeError(`${name} must be an exact non-empty string`);
+  }
+  return value;
+}
+
+function requireConnectToken(value, name) {
+  const token = requireExactString(value, name);
+  if (!CONNECT_TOKEN_PATTERN.test(token)) {
+    throw new TypeError(`${name} must be a canonical 32-byte unpadded base64url token`);
+  }
+  return token;
 }
 
 function normalizeKeyPair(pair) {

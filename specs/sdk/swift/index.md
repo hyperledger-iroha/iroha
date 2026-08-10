@@ -528,11 +528,11 @@ you need the full decrypted payload (sign results, encrypted controls), or
 
 ### Session identifiers & directional keys
 
-- Use `ConnectSid.generate(chainId:appPublicKey:nonce16:)` to reproduce the strawman SID
-  derivation (`BLAKE2b-256("iroha-connect|sid|" || chain || pk || nonce)`) before posting
-  to `/v1/connect/session`. The helper stores the raw bytes plus the base64url form needed
-  for the REST payload.
-- `ConnectCrypto.deriveDirectionKeys(sharedSecret:sid:)` expands the shared secret via
+- Use `ConnectCrypto.deriveSessionID(networkID:appPublicKey:nonce:)` for the exact SID
+  derivation `BLAKE2b-256("iroha-connect|sid|" || NetworkId_bytes || app_pk || nonce16)`.
+  `ToriiClient.createConnectSession` sends all four identity fields and rejects a response
+  that substitutes any of them.
+- `ConnectCrypto.deriveDirectionKeys(localPrivateKey:peerPublicKey:sessionID:)` expands the X25519 secret via
   the bridge-backed HKDF (`iroha-connect|k_app` / `iroha-connect|k_wallet` labels) so
   both directions get a deterministic ChaCha20-Poly1305 key. Feed the resulting
   `ConnectDirectionKeys` into `ConnectSession.setDirectionKeys(_:)` immediately after the
@@ -541,26 +541,21 @@ you need the full decrypted payload (sign results, encrypted controls), or
   writes to Application Support with an attestation bundle (SHA-256 of the public key,
   device label, created-at). Bridge-backed keys load automatically when you call
   `generateOrLoad(label:)`, and the returned attestation can be forwarded with approval
-  frames. Integrity checks use a canonical JSON ordering while legacy orderings remain
-  accepted for backward compatibility. Secure Enclave storage can be layered later by
+  frames. Integrity checks require canonical JSON ordering. Secure Enclave storage can be layered later by
   swapping the keystore backing.
 - Queue/journal telemetry exports via `ConnectQueueJournal` + `ConnectQueueStateTracker`
   (see `ConnectQueueDiagnosticsTests`/`ConnectReplayRecorderTests`). Use
   `ConnectSessionDiagnostics.snapshot()` when wiring events into dashboards; evidence
   bundles can be emitted with `ConnectReplayRecorder.exportBundle`.
-- Enforce inbound flow-control windows by passing `flowControl:` to `ConnectSession`
-  or calling `setFlowControlWindow(_:)`; tokens are consumed per ciphertext frame and
-  can be replenished with `grantFlowControl(direction:tokens:)` to mirror wallet-issued
-  windows.
+- You may bound local inbound work by passing `flowControl:` to `ConnectSession` or
+  calling `setFlowControlWindow(_:)`. This limiter is strictly SDK-local and never
+  serializes a Connect control frame.
 
 ### Flow control, journalling, telemetry
 
-- Each direction maintains a 64-bit `sequence`. `ConnectSession.sequenceOverflowGuard` trips
-  `ConnectError.sequenceOverflow` before wrap-around and triggers the rotation handshake
-  (`Control::RotateKeys`) so queues never reuse nonces.
-- Wallet-issued flow-control windows surface as `ConnectSession.FlowControl` values.
-  Read them via `ConnectSession.nextControlFrame()` and only dequeue plaintext envelopes
-  when a token is available to avoid overrunning the wallet.
+- Each direction maintains a 64-bit `sequence`; overflow fails the session before nonce
+  reuse. Connect V1 has no `FlowControl`, `Resume`, or `Rotate` wire controls. Queue
+  limiting, reconnect summaries, and key replacement are local application concerns.
 - Journals now derive from `ConnectQueueStateTracker` and `ConnectSessionDiagnostics`.
   Call `ConnectQueueStateTracker.updateSnapshot` whenever queue depth or health changes,
   and `recordMetric(_:)` to append NDJSON rows (`metrics.ndjson`) so `iroha connect queue inspect`
@@ -571,10 +566,8 @@ you need the full decrypted payload (sign results, encrypted controls), or
   a temporary directory alongside the Norito manifest expected by the CLI. Queue files are
   stream-parsed with a default cap of 32 records and 1 MiB per direction; oversize or truncated
   files raise `ConnectQueueError` instead of being loaded wholesale.
-- After reconnecting, call `ConnectSession.resumeSummary()` to emit the `{seqAppMax,
-  seqWalletMax, queueDepths}` payload required by the telemetry plan. Hook the result into
-  your `ConnectEventObserver` to drive `connect.resume_latency_ms` and
-  `connect.replay_success_total`.
+- Local diagnostics may record reconnect and queue summaries, but must not encode those
+  summaries as Connect V1 controls.
 - Use `ConnectSession.eventStream(filter:)` (iOS 15/macOS 12+) to iterate `ConnectEvent`
   values directly, or `eventsPublisher(filter:)` when you need a Combine pipeline for SwiftUI.
   The payloads cover sign requests/results, display prompts, control-close/reject envelopes,

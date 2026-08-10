@@ -325,17 +325,43 @@ public final class ConnectFrameCodec {
       new TypeAdapter<>() {
         @Override
         public void encode(final NoritoEncoder encoder, final Constraints value) {
+          final boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+          encoder.writeLength(NetworkId.BYTE_LENGTH, compactLen);
           encoder.writeBytes(value.networkId.bytes());
         }
 
         @Override
         public Constraints decode(final NoritoDecoder decoder) {
-          if (decoder.remaining() != NetworkId.BYTE_LENGTH) {
+          final long length = decoder.readLength(decoder.compactLenActive());
+          if (length != NetworkId.BYTE_LENGTH || decoder.remaining() != NetworkId.BYTE_LENGTH) {
             throw new IllegalArgumentException("Connect NetworkId must contain exactly 32 bytes");
           }
           return new Constraints(NetworkId.fromBytes(decoder.readBytes(NetworkId.BYTE_LENGTH)));
         }
       };
+
+  /** Encodes the launch-bound, first app-to-wallet {@code Open} control frame. */
+  public static byte[] encodeOpenFrame(
+      final byte[] sessionId, final byte[] appPublicKey, final NetworkId networkId)
+      throws ConnectProtocolException {
+    final byte[] appPkField = encodeField(appPublicKey, FIXED_ARRAY_U8_32, "open.app_pk");
+    final byte[] appMetaField =
+        encodeField(Optional.empty(), OPTIONAL_PLACEHOLDER, "open.app_meta");
+    final byte[] constraintsField =
+        encodeField(new Constraints(networkId), CONSTRAINTS_ADAPTER, "open.constraints");
+    final byte[] permissionsField =
+        encodeField(Optional.empty(), OPTIONAL_PLACEHOLDER, "open.permissions");
+
+    final ByteArrayOutputStream body = new ByteArrayOutputStream();
+    writeLengthPrefixed(body, appPkField);
+    writeLengthPrefixed(body, appMetaField);
+    writeLengthPrefixed(body, constraintsField);
+    writeLengthPrefixed(body, permissionsField);
+
+    final byte[] controlPayload = wrapTaggedPayload(CONTROL_OPEN, body.toByteArray());
+    final byte[] kindPayload = wrapTaggedPayload(FRAME_KIND_CONTROL, controlPayload);
+    return encodeFrame(sessionId, ConnectDirection.APP_TO_WALLET, 1L, kindPayload);
+  }
 
   private static final TypeAdapter<WalletSignature> WALLET_SIGNATURE_ADAPTER =
       new TypeAdapter<>() {

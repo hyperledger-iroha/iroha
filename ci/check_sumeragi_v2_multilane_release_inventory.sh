@@ -49,7 +49,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=845
+readonly canonical_production_test_count=849
 
 require_nonignored_test() {
   local path="$1"
@@ -192,7 +192,7 @@ require_exact_token \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=86"
+  "  readonly expected_corridor_leg_count=87"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -431,13 +431,13 @@ if (
         f"{canonical_production_test_count}"
     )
 production_modules = receipt_assignments.get("_PRODUCTION_MODULES")
-if not isinstance(production_modules, tuple) or len(production_modules) != 39:
-    reject("receipt writer must bind exactly 39 production modules")
+if not isinstance(production_modules, tuple) or len(production_modules) != 40:
+    reject("receipt writer must bind exactly 40 production modules")
 module_counts = {
     module: count for _leg_id, module, count in production_modules
 }
 if (
-    len(module_counts) != 39
+    len(module_counts) != 40
     or sum(module_counts.values()) != canonical_production_test_count
 ):
     reject(
@@ -496,13 +496,14 @@ if (
         "plus the one layout-only result"
     )
 expected_changed_module_counts = {
-    "kura::tests": 14,
+    "kura::tests": 17,
     "sumeragi::authoritative_runtime_gate_tests": 43,
     "sumeragi::serviced_candidate_store::tests": 1,
     "sumeragi::v2_effects::tests": 71,
     "sumeragi::v2::tests": 46,
     "sumeragi::v2_runtime::tests": 68,
     "merge_sidecar::tests": 118,
+    "state::tests": 1,
     "sumeragi::v2_lane_work::tests": 60,
     "sumeragi::v2_lifecycle_recovery::tests": 5,
     "sumeragi::v2_runner::tests": 37,
@@ -533,8 +534,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "7682213e3d64750910cf8e72c7255664"
-    "1cc04d5a34d931f1b2e0135f290c9599"
+    "15f837d911644b557c5a36064a1cff9c"
+    "512f0cf2b120f5cc6fb21e7cfa530d83"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -2069,4 +2070,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] 86 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 39 modules, exact 524/524 G-UNIT (318 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 87 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 40 modules, exact 524/524 G-UNIT (318 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

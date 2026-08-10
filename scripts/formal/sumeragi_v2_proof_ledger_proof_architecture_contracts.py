@@ -845,6 +845,8 @@ WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
         ) + (
             "asyncFixedCorridorDeadlines <- "
             "IndexedFixedCorridorDeadlines(initialContext)",
+            "asyncServeProducerEpisodeDue <- "
+            "IndexedServeProducerEpisodeDue(initialContext)",
         )
         for module, symbol, instance_module in (
             HISTORICAL_INDEXED_INSTANCE_CONTRACTS
@@ -874,7 +876,7 @@ WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
                     f"{module}.tla:{line}: {symbol} must instantiate exactly "
                     f"{instance_module} with the reviewed 49 Core, 46 "
                     "scheduler, 5 recovery, 3 producer-journal, and "
-                    "fixed-corridor projections"
+                    "fixed-corridor/Serve-producer-debt projections"
                 )
 
     def check_historical_finite_runner_provider_contract() -> None:

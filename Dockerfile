@@ -23,7 +23,7 @@ ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
-ARG BINARIES="iroha3d sorafs_governance_dag iroha kagami attachment_sanitizer"
+ARG BINARIES="iroha3d sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
 ARG USE_PREBUILT="0"
 ARG IROHA_GIT_COMMIT_HASH=""
 ARG VALIDATOR_LOCK_SHA256=""
@@ -303,9 +303,18 @@ COPY --from=builder /outbin/ $BIN_PATH
 COPY --from=builder /outprovenance/ $APP_DIR/provenance/
 COPY --from=builder /app/scripts/docker_entrypoint.sh $BIN_PATH
 COPY --from=builder /app/configs/soranexus/taira $APP_DIR/configs/soranexus/taira
+COPY --from=builder /app/configs/sorafs/external_software_signer $APP_DIR/install/sorafs/external_software_signer
+COPY --from=builder /app/configs/sorafs/runtime_provider_broker $APP_DIR/install/sorafs/runtime_provider_broker
 COPY --from=builder /app/codec/rans/tables $APP_DIR/codec/rans/tables
 COPY --from=builder /app/defaults /tmp/defaults
 RUN set -eu; \
+  test -x "${BIN_PATH}/sorafs_external_software_signer"; \
+  mkdir -p /usr/local/libexec; \
+  cp "${BIN_PATH}/sorafs_external_software_signer" /usr/local/libexec/iroha-runtime-provider-broker-v1; \
+  chmod 0555 /usr/local/libexec/iroha-runtime-provider-broker-v1; \
+  cmp "${BIN_PATH}/sorafs_external_software_signer" /usr/local/libexec/iroha-runtime-provider-broker-v1; \
+  "${BIN_PATH}/sorafs_external_software_signer" --help >/dev/null; \
+  /usr/local/libexec/iroha-runtime-provider-broker-v1 --help >/dev/null; \
   case "${CONFIG_PROFILE}" in \
     single) \
       cp /tmp/defaults/genesis.json "${CONFIG_DIR}/genesis.json"; \

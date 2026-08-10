@@ -1,7 +1,8 @@
 use super::*;
 use crate::{
     FilesystemGovernancePublisher, GovernanceDagCanonicalRequestHeaderV1,
-    GovernanceDagRuntimeSigner, GovernancePublisher, NodeHandle, NodeRuntimeDeps,
+    GovernanceDagRuntimeSigner, GovernanceDagSigningPurposeV1, GovernancePublisher, NodeHandle,
+    NodeRuntimeDeps,
     config::StorageConfig,
     governance::{
         qualify_governance_dag_runtime_checkpoint_store,
@@ -1640,7 +1641,11 @@ impl GovernanceDagRuntimeSigner for PublisherTestSigner {
         self.signer.public_key
     }
 
-    fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
+    fn sign(
+        &self,
+        _purpose: GovernanceDagSigningPurposeV1,
+        payload: &[u8],
+    ) -> Result<[u8; 64], String> {
         self.signer
             .sign(payload)
             .signature

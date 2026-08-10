@@ -5,8 +5,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
+using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Numeric;
+using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
@@ -1032,7 +1034,16 @@ public sealed class TransactionBuilderTests
             };
         });
 
-        using var client = new IrohaClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = new IrohaClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                LocalSigningContext = new ToriiLocalSigningContext(FixtureNetworkId),
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    FixtureAccountId,
+                    Convert.FromHexString(FixtureSeedHex)),
+            });
         var status = await client.Ledger.SubmitAndWaitAsync(
             transaction,
             new PipelineSubmitOptions

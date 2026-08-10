@@ -39,7 +39,7 @@ use crate::{
             ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
             ZkAmsT256BulletproofSuiteV1, ZkAmsT256MembershipProofV1,
         },
-        sponge::{Keccak256, Shake256Reader},
+        sponge::Keccak256,
     },
 };
 
@@ -68,6 +68,13 @@ use super::{
     },
     signed_mod,
     wire::ZkAmsMkheAuthenticationWireV1,
+};
+
+#[path = "cpk_relation_common_a.rs"]
+mod common_a;
+pub(super) use common_a::{
+    ZkAmsMkhePreparedCollectivePublicAContextV1, active_collective_public_a_limb_frame_bytes_v1,
+    derive_active_collective_public_a_limb_v1, prepare_active_collective_public_a_v1,
 };
 
 const CPK_SHARE_STATEMENT_MAGIC_V1: [u8; 4] = *b"ZCPS";
@@ -2114,70 +2121,6 @@ fn cpk_public_a_context_digest_v1(
     hash.update(&(derivation_context.len() as u32).to_be_bytes());
     hash.update(&derivation_context);
     Ok(hash.finalize())
-}
-
-pub(super) fn derive_active_collective_public_a_limb_v1(
-    profile: &BgvProfile,
-    roster: &ZkAmsMkheGovernedActiveRosterV1,
-    cpk_transcript_digest: [u8; 32],
-    limb: usize,
-) -> Result<Vec<u64>, ZkAmsMkheCpkRelationErrorV1> {
-    profile
-        .validate()
-        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?;
-    if limb >= profile.moduli.len() {
-        return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
-    }
-    let context = active_collective_public_a_context_v1(roster, cpk_transcript_digest)?;
-    let profile_digest = profile
-        .digest()
-        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?;
-    let mut frame = Vec::new();
-    let frame_bytes = ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1
-        .len()
-        .checked_add(profile_digest.len())
-        .and_then(|value| value.checked_add(4))
-        .and_then(|value| value.checked_add(context.len()))
-        .and_then(|value| value.checked_add(2))
-        .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
-    frame
-        .try_reserve_exact(frame_bytes)
-        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
-    frame.extend_from_slice(ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1);
-    frame.extend_from_slice(&profile_digest);
-    frame.extend_from_slice(
-        &u32::try_from(context.len())
-            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?
-            .to_be_bytes(),
-    );
-    frame.extend_from_slice(&context);
-    frame.extend_from_slice(
-        &u16::try_from(limb)
-            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?
-            .to_be_bytes(),
-    );
-
-    let modulus = profile.moduli[limb];
-    let zone = u64::MAX - u64::MAX % modulus;
-    let mut stream = Shake256Reader::new(&frame);
-    let mut coefficients = Vec::new();
-    coefficients
-        .try_reserve_exact(profile.ring_degree)
-        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
-    for _ in 0..profile.ring_degree {
-        let mut accepted = None;
-        for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
-            let mut bytes = [0_u8; 8];
-            stream.read(&mut bytes);
-            let candidate = u64::from_le_bytes(bytes);
-            if candidate < zone {
-                accepted = Some(candidate % modulus);
-                break;
-            }
-        }
-        coefficients.push(accepted.ok_or(ZkAmsMkheCpkRelationErrorV1::NativeRelation)?);
-    }
-    Ok(coefficients)
 }
 
 fn t256_scalar_from_signed_i64_v1(value: i64) -> Scalar {

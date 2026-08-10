@@ -82,7 +82,7 @@ fn production_unary_binding_caps_accept_defaults_and_reject_cap_plus_one() {
             .expect("construct checkpoint Ed25519 public key");
     let mut appeal = plain_runtime_binding(
         IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint,
-        "hsm://sorafs/appeal-finance/checkpoint-primary",
+        "sealed://sorafs/appeal-finance/checkpoint-primary",
     );
     appeal.appeal_finance_checkpoint_binding = Some(AppealFinanceCheckpointBindingWireV1 {
         public_key: checkpoint_public_key,
@@ -116,7 +116,7 @@ fn production_unary_binding_caps_accept_defaults_and_reject_cap_plus_one() {
     );
 
     let signer_details = ProviderIngestSignerBindingWireV1 {
-        runtime_handle: "pkcs11://sorafs/provider-ingest/signer-primary".to_owned(),
+        runtime_handle: "software://sorafs/provider-ingest/signer-primary".to_owned(),
         adapter_revision: 3,
         signer_policy_id: [0xA1; 32],
         signer_policy_revision: 1,
@@ -715,7 +715,11 @@ fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalifica
             TEST_SIGNER_KEY
         }
 
-        fn sign(&self, _payload: &[u8]) -> Result<[u8; 64], String> {
+        fn sign(
+            &self,
+            _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
+            _payload: &[u8],
+        ) -> Result<[u8; 64], String> {
             Ok([0xA5; 64])
         }
     }
@@ -890,7 +894,11 @@ fn broker_server_requalifies_complete_catalog_immediately_before_ready() {
             TEST_SIGNER_KEY
         }
 
-        fn sign(&self, _payload: &[u8]) -> Result<[u8; 64], String> {
+        fn sign(
+            &self,
+            _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
+            _payload: &[u8],
+        ) -> Result<[u8; 64], String> {
             Ok([0xA5; 64])
         }
     }
@@ -961,7 +969,11 @@ fn broker_server_preserves_requalification_failure_during_shutdown() {
             TEST_SIGNER_KEY
         }
 
-        fn sign(&self, _payload: &[u8]) -> Result<[u8; 64], String> {
+        fn sign(
+            &self,
+            _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
+            _payload: &[u8],
+        ) -> Result<[u8; 64], String> {
             Ok([0xA5; 64])
         }
     }

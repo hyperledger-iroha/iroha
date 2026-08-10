@@ -501,16 +501,12 @@ mod tests {
 
     #[test]
     fn required_api_token_authentication_is_exactly_scoped() {
-        let required_routes = iso20022::ROUTES
-            .iter()
-            .copied()
-            .chain([
-                sorafs::STORAGE_TOKEN,
-                application_api::WEBHOOKS_GET,
-                application_api::WEBHOOKS_POST,
-                application_api::WEBHOOKS_BY_ID_DELETE,
-            ])
-            .collect::<Vec<_>>();
+        let required_routes = [
+            sorafs::STORAGE_TOKEN,
+            application_api::WEBHOOKS_GET,
+            application_api::WEBHOOKS_POST,
+            application_api::WEBHOOKS_BY_ID_DELETE,
+        ];
         for route in &required_routes {
             assert_eq!(
                 route.authentication(),
@@ -529,6 +525,17 @@ mod tests {
             required_routes.len(),
             "no unrelated route may inherit the unconditional API-token policy"
         );
+    }
+
+    #[test]
+    fn iso20022_routes_require_fresh_operator_signatures() {
+        for route in iso20022::ROUTES {
+            assert_eq!(route.admission(), AdmissionPolicy::Operator);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OperatorSignature
+            );
+        }
     }
 
     #[test]
@@ -743,6 +750,41 @@ mod tests {
             assert!(
                 route.cors_options(),
                 "{} must expose the cataloged CORS preflight",
+                route.stable_route_id()
+            );
+        }
+    }
+
+    #[test]
+    fn sorafs_pop_routes_declare_their_authenticated_protocol_effects() {
+        let routes = [
+            (sorafs::POP_ENROLLMENT, RouteEffect::Mutation),
+            (sorafs::POP_ENROLLMENT_STATUS, RouteEffect::ReadOnly),
+            (sorafs::POP_APPROVAL, RouteEffect::Mutation),
+            (sorafs::POP_ISSUE, RouteEffect::Mutation),
+            (sorafs::POP_REVOCATION, RouteEffect::Mutation),
+            (sorafs::POP_REGISTRY_SUBMIT, RouteEffect::Mutation),
+            (sorafs::POP_REGISTRY_RECONCILE, RouteEffect::Mutation),
+            (sorafs::POP_REGISTRY_PROJECTION, RouteEffect::ReadOnly),
+            (sorafs::POP_WALLET_DELIVERY, RouteEffect::ReadOnly),
+            (sorafs::POP_WALLET_IMPORT, RouteEffect::Mutation),
+            (sorafs::POP_WALLET_ACKNOWLEDGE, RouteEffect::Mutation),
+            (sorafs::POP_WALLET_SYNCHRONIZE, RouteEffect::Mutation),
+            (sorafs::POP_WALLET_PROVE, RouteEffect::ExpensiveCompute),
+            (sorafs::POP_VERIFY, RouteEffect::Mutation),
+        ];
+        for (route, effect) in routes {
+            assert_eq!(route.effect(), effect, "{} effect", route.stable_route_id());
+            assert_eq!(
+                route.admission(),
+                AdmissionPolicy::AuthenticatedProtocolPrincipal,
+                "{} admission",
+                route.stable_route_id()
+            );
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::ProtocolHandshake,
+                "{} authentication",
                 route.stable_route_id()
             );
         }
@@ -1017,6 +1059,23 @@ mod tests {
             sorafs::PIN_REGISTER.authentication(),
             AuthenticationPolicy::CanonicalSignedBody
         );
+    }
+
+    #[test]
+    fn app_api_post_dispatch_is_an_authenticated_compute_boundary() {
+        for route in [
+            application_api::APP_API_CID_BY_CID_BY_PATH_POST,
+            application_api::APP_API_ACTIVE_BY_PATH_POST,
+            application_api::API_CID_BY_CID_BY_PATH_POST,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+            assert_eq!(route.route_match(), RouteMatch::Wildcard);
+        }
     }
 
     #[test]
@@ -1599,6 +1658,16 @@ mod tests {
             )
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature),
             RouteDescriptor::new(
+                "test.protocol_principal_without_handshake",
+                HttpMethod::Post,
+                "/v1/tests/protocol-principal-without-handshake",
+                ApiSurface::Public,
+                Listener::Torii,
+                RouteEffect::Mutation,
+                AdmissionPolicy::AuthenticatedProtocolPrincipal,
+            )
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature),
+            RouteDescriptor::new(
                 "test.post_stream",
                 HttpMethod::Post,
                 "/v1/tests/post-stream",
@@ -1615,6 +1684,7 @@ mod tests {
             CatalogValidationErrorKind::PublicMutation,
             CatalogValidationErrorKind::PublicExpensiveCompute,
             CatalogValidationErrorKind::AuthenticatedAccountRequiresAuthentication,
+            CatalogValidationErrorKind::AuthenticatedProtocolPrincipalRequiresHandshake,
             CatalogValidationErrorKind::ValidatorAdmissionRequiresAuthentication,
             CatalogValidationErrorKind::LongLivedStreamRequiresGetOrAny,
         ] {

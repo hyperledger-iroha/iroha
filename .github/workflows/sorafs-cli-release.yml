@@ -19,6 +19,15 @@ on:
       - "scripts/check_sorafs_reference_sdk_release_evidence.py"
       - "scripts/build_sorafs_reference_sdk_release_canary.py"
       - "scripts/build_sorafs_reference_sdk_supply_chain_sources.py"
+      - "scripts/build_sorafs_foundational_prerequisite.py"
+      - "scripts/check_sorafs_production_readiness.py"
+      - "scripts/run_sorafs_production_readiness.py"
+      - "scripts/run_sorafs_production_readiness_negative_archive.py"
+      - "scripts/sorafs_l1_lane_evidence_inventory.py"
+      - "scripts/sorafs_l1_lane_inventory_integration.py"
+      - "scripts/sorafs_production_readiness_contract.py"
+      - "scripts/sorafs_software_signer_evidence.py"
+      - "scripts/sorafs_software_signer_receipt.py"
       - "scripts/sorafs_reference_sdk_supply_chain.py"
       - "scripts/sorafs_topology_qualification.py"
       - "scripts/run_sorafs_reference_sdk_release_evidence.py"
@@ -42,6 +51,9 @@ on:
       - "scripts/write_release_sha256sums.py"
       - "scripts/validate_release_image_bases.py"
       - "scripts/examples/sorafs_reference_sdk_release_*.args.example"
+      - "scripts/examples/sorafs_foundational_prerequisite_*.args.example"
+      - "scripts/examples/sorafs_l1_lane_evidence_inventory.md"
+      - "scripts/examples/sorafs_production_readiness*.args.example"
       - "scripts/requirements.txt"
       - "scripts/package_sorafs_cli_candidate.py"
       - "scripts/package_sorafs_validate_release.sh"
@@ -52,6 +64,14 @@ on:
       - "scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py"
       - "scripts/tests/build_sorafs_reference_sdk_release_canary_test.py"
       - "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py"
+      - "scripts/tests/build_sorafs_foundational_prerequisite_test.py"
+      - "scripts/tests/check_sorafs_production_readiness_test.py"
+      - "scripts/tests/run_sorafs_production_readiness_test.py"
+      - "scripts/tests/run_sorafs_production_readiness_negative_archive_test.py"
+      - "scripts/tests/sorafs_l1_lane_evidence_inventory_test.py"
+      - "scripts/tests/sorafs_l1_lane_inventory_test_support.py"
+      - "scripts/tests/sorafs_production_artifact_cases.py"
+      - "scripts/tests/sorafs_production_foundational_cases.py"
       - "scripts/tests/sorafs_reference_sdk_supply_chain_test.py"
       - "scripts/tests/sorafs_topology_qualification_test.py"
       - "scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py"
@@ -78,6 +98,9 @@ on:
       - "release/version-map.toml"
       - "specs/sorafs/runbooks/release_rollback_yank.md"
       - "specs/sorafs/developer/releases.md"
+      - "specs/sorafs/foundational_prerequisite_signing.md"
+      - "specs/sorafs/l1_lane_evidence_inventory.md"
+      - "specs/sorafs/negative_promotion_archive.md"
       - "specs/sorafs/runbooks/index.md"
       - "fixtures/documentation/sorafs_release_notes.md"
       - "specs/sorafs_release_pipeline_plan*.md"
@@ -86,6 +109,10 @@ on:
       - "specs/release_artifact_selection*.md"
       - "specs/sora_nexus_operator_onboarding*.md"
       - "configs/sorafs/runtime_provider_broker/**"
+      - "configs/sorafs/external_software_signer/**"
+      - "crates/irohad/src/bin/sorafs_external_software_signer.rs"
+      - "crates/irohad/src/external_software_signer.rs"
+      - "crates/irohad/src/external_software_signer/**"
       - "crates/irohad/src/runtime_provider_broker.rs"
       - "crates/irohad/src/runtime_provider_broker/**"
       - "crates/irohad/src/sorafs_pop_runtime.rs"
@@ -260,6 +287,48 @@ jobs:
           cp release/version-map.toml artifacts/sorafs-cli/version-map.toml
           cp specs/sorafs/runbooks/release_rollback_yank.md artifacts/sorafs-cli/ROLLBACK-YANK.md
           cp CHANGELOG.md LICENSE artifacts/sorafs-cli/
+          if [[ "$target" == *-windows-* ]]; then
+            cp configs/sorafs/external_software_signer/WINDOWS-UNSUPPORTED.md \
+              artifacts/sorafs-cli/WINDOWS-UNSUPPORTED-EXTERNAL-SOFTWARE-SIGNER.md
+            test ! -e "artifacts/sorafs-cli/sorafs_external_software_signer.exe"
+            test ! -e "artifacts/sorafs-cli/libexec/iroha-runtime-provider-broker-v1.exe"
+          else
+            cargo build --locked --release -p irohad \
+              --bin sorafs_external_software_signer --target "$target"
+            install -m 0555 \
+              "target/${target}/release/sorafs_external_software_signer" \
+              artifacts/sorafs-cli/sorafs_external_software_signer
+            mkdir -p artifacts/sorafs-cli/libexec
+            install -m 0555 \
+              "target/${target}/release/sorafs_external_software_signer" \
+              artifacts/sorafs-cli/libexec/iroha-runtime-provider-broker-v1
+            cmp artifacts/sorafs-cli/sorafs_external_software_signer \
+              artifacts/sorafs-cli/libexec/iroha-runtime-provider-broker-v1
+            artifacts/sorafs-cli/sorafs_external_software_signer --help \
+              > artifacts/sorafs-cli/sorafs_external_software_signer.help.txt
+            artifacts/sorafs-cli/libexec/iroha-runtime-provider-broker-v1 --help \
+              > artifacts/sorafs-cli/iroha-runtime-provider-broker-v1.help.txt
+            asset_root=artifacts/sorafs-cli/share/iroha/sorafs
+            mkdir -p "$asset_root/external_software_signer" \
+              "$asset_root/runtime_provider_broker"
+            cp configs/sorafs/external_software_signer/README.md \
+              "$asset_root/external_software_signer/README.md"
+            cp configs/sorafs/runtime_provider_broker/README.md \
+              "$asset_root/runtime_provider_broker/README.md"
+            if [[ "$target" == *-linux-* ]]; then
+              cp configs/sorafs/external_software_signer/sorafs-external-software-signer@.service \
+                "$asset_root/external_software_signer/"
+              cp -R configs/sorafs/external_software_signer/systemd \
+                "$asset_root/external_software_signer/"
+              cp -R configs/sorafs/runtime_provider_broker/systemd \
+                "$asset_root/runtime_provider_broker/"
+            else
+              cp -R configs/sorafs/external_software_signer/launchd \
+                "$asset_root/external_software_signer/"
+              cp -R configs/sorafs/runtime_provider_broker/launchd \
+                "$asset_root/runtime_provider_broker/"
+            fi
+          fi
 
       - name: Package reference validator and FFI header reproducibly
         shell: bash
@@ -424,7 +493,7 @@ jobs:
             sha256sum release_manifest.json > release_manifest.json.sha256
           )
           rm release-manifest/release_manifest.replay.json
-      - name: Upload unsigned foundational manifest for external HSM signing
+      - name: Upload unsigned foundational manifest for external software signing
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sorafs-release-foundational-manifest-${{ github.run_id }}
@@ -728,8 +797,10 @@ jobs:
       SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH }}
       SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH }}
       SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX }}
-      SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY }}
+      SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID }}
+      SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID }}
       SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION }}
+      SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_REVISION: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_REVISION }}
       SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -894,12 +965,24 @@ jobs:
             echo "topology and provenance verification keys must be independently administered" >&2
             exit 1
           fi
-          if [[ ! "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$ ]]; then
-            echo "trusted topology signer identity must be a canonical public label" >&2
+          if [[ ! "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$ ]]; then
+            echo "trusted topology signer service ID must be a canonical public label" >&2
+            exit 1
+          fi
+          if [[ ! "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$ ]]; then
+            echo "trusted topology signer administrator ID must be a canonical public label" >&2
+            exit 1
+          fi
+          if [[ "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID" == "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID" ]]; then
+            echo "trusted topology signer service and administrator IDs must differ" >&2
             exit 1
           fi
           if [[ ! "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION" =~ ^[1-9][0-9]{0,18}$ ]]; then
             echo "trusted topology signer key revision must be a positive integer" >&2
+            exit 1
+          fi
+          if [[ ! "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_REVISION" =~ ^[1-9][0-9]{0,18}$ ]]; then
+            echo "trusted topology signer policy revision must be a positive integer" >&2
             exit 1
           fi
           if [[ ! "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX" =~ ^[0-9a-f]{64}$ || "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX" == "0000000000000000000000000000000000000000000000000000000000000000" ]]; then
@@ -1070,12 +1153,21 @@ jobs:
               "verification_public_key_hex": os.environ[
                   "SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX"
               ],
-              "signer_identity": os.environ[
-                  "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY"
+              "signer_backend": "software",
+              "signer_service_id": os.environ[
+                  "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID"
+              ],
+              "signer_administrator_id": os.environ[
+                  "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID"
               ],
               "signer_key_revision": int(
                   os.environ[
                       "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION"
+                  ]
+              ),
+              "signer_policy_revision": int(
+                  os.environ[
+                      "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_REVISION"
                   ]
               ),
               "signer_policy_digest_hex": os.environ[
@@ -1146,10 +1238,14 @@ jobs:
               artifacts/reference-sdk-evidence/l1-topology-qualification.envelope.json \
             --topology-qualification-verification-public-key-hex \
               "$SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX" \
-            --topology-qualification-signer-identity \
-              "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY" \
+            --topology-qualification-signer-service-id \
+              "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID" \
+            --topology-qualification-signer-administrator-id \
+              "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID" \
             --topology-qualification-signer-key-revision \
               "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION" \
+            --topology-qualification-signer-policy-revision \
+              "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_REVISION" \
             --topology-qualification-signer-policy-digest-hex \
               "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX" \
             --max-topology-qualification-review-age-secs 1209600 \

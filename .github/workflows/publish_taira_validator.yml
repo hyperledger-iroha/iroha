@@ -413,7 +413,9 @@ jobs:
           target_root="$RUNNER_TEMP/taira-macos-target"; mkdir -m 0700 "$target_root"
           clean=(env -i "HOME=$HOME" "PATH=$PATH" "TMPDIR=${TMPDIR:-/tmp}" LANG=C LC_ALL=C CARGO_TARGET_DIR="$target_root" CARGO_BUILD_JOBS=1 "IROHA_DPN_VALIDATOR_RELEASE_COMMIT=$TAIRA_INPUT_VALIDATOR_RELEASE_REF")
           for name in CARGO_HOME RUSTUP_HOME; do if [[ -n "${!name:-}" ]]; then clean+=("$name=${!name}"); fi; done
-          "${clean[@]}" cargo build --locked --release -p irohad --bin iroha3d --features embedded-soracloud-runtime,zk-stark
+          "${clean[@]}" cargo build --locked --release -p irohad \
+            --bin iroha3d --bin sorafs_external_software_signer \
+            --features embedded-soracloud-runtime,zk-stark
           network_messages="$RUNNER_TEMP/taira-network-driver.jsonl"
           jindo_messages="$RUNNER_TEMP/taira-jindo-driver.jsonl"
           action_messages="$RUNNER_TEMP/taira-action-driver.jsonl"
@@ -471,12 +473,35 @@ jobs:
           print(found[0])
           PY
           )"
-          stage="$RUNNER_TEMP/taira-macos-build-handoff"; mkdir -m 0700 "$stage" "$stage/bin" "$stage/drivers" "$stage/privacy"
+          stage="$RUNNER_TEMP/taira-macos-build-handoff"
+          mkdir -m 0700 "$stage" "$stage/bin" "$stage/drivers" "$stage/privacy" \
+            "$stage/libexec" "$stage/smoke"
           install -m 0500 "$target_root/release/iroha3d" "$stage/bin/iroha3d"
           install -m 0500 "$network_driver" "$stage/drivers/network-functional"
           install -m 0500 "$jindo_driver" "$stage/drivers/iroha-core-tests"
           install -m 0500 "$action_driver" "$stage/drivers/privacy-exact12-action-driver"
           install -m 0600 "$GITHUB_WORKSPACE/fixtures/privacy/exact12_v1.tsv" "$stage/privacy/exact12_v1.tsv"
+          install -m 0500 "$target_root/release/sorafs_external_software_signer" \
+            "$stage/bin/sorafs_external_software_signer"
+          install -m 0500 "$target_root/release/sorafs_external_software_signer" \
+            "$stage/libexec/iroha-runtime-provider-broker-v1"
+          cmp "$stage/bin/sorafs_external_software_signer" \
+            "$stage/libexec/iroha-runtime-provider-broker-v1"
+          "$stage/bin/sorafs_external_software_signer" --help \
+            >"$stage/smoke/sorafs_external_software_signer.help.txt"
+          "$stage/libexec/iroha-runtime-provider-broker-v1" --help \
+            >"$stage/smoke/iroha-runtime-provider-broker-v1.help.txt"
+          asset_root="$stage/share/iroha/sorafs"
+          mkdir -p "$asset_root/external_software_signer" \
+            "$asset_root/runtime_provider_broker"
+          cp configs/sorafs/external_software_signer/README.md \
+            "$asset_root/external_software_signer/README.md"
+          cp -R configs/sorafs/external_software_signer/launchd \
+            "$asset_root/external_software_signer/"
+          cp configs/sorafs/runtime_provider_broker/README.md \
+            "$asset_root/runtime_provider_broker/README.md"
+          cp -R configs/sorafs/runtime_provider_broker/launchd \
+            "$asset_root/runtime_provider_broker/"
           install -m 0600 "$source_root/taira-source-identity-v1.json" "$stage/taira-source-identity-v1.json"
           /usr/bin/python3 -I -S - "$stage" macos-build <<'PY'
           import hashlib,json,os,stat,sys

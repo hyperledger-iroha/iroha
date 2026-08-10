@@ -90,7 +90,7 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
         "KuraReplicaAdvertV1",
         (
             "version: u16",
-            "chain_id: ChainId",
+            "network_id: NetworkId",
             "height: u64",
             "block_hash: HashOf<BlockHeader>",
             "executed_block_wire_len: u64",
@@ -108,7 +108,7 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
         (
             "KURA_REPLICA_ADVERT_SIGNATURE_DOMAIN_V1",
             "version: self.version",
-            "chain_id: self.chain_id.clone()",
+            "network_id: self.network_id",
             "height: self.height",
             "block_hash: self.block_hash",
             "executed_block_wire_len: self.executed_block_wire_len",
@@ -186,7 +186,7 @@ KURA_RETENTION_REQUIRED_BINDINGS = (
         "struct",
         "KuraReplicaAdvertSourceV1",
         (
-            "chain_id: ChainId",
+            "network_id: NetworkId",
             "height: u64",
             "block_hash: HashOf<BlockHeader>",
             "executed_block_wire_len: u64",

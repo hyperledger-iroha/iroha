@@ -190,7 +190,7 @@ struct AppealFinanceCheckpointBindingWireV1 {
 struct PopCredentialRuntimeBindingWireV1 {
     issuer_policy_digest: [u8; 32],
     issuer_id: String,
-    issuer_hsm_key_id: String,
+    issuer_signer_handle: String,
     issuer_public_key: [u8; 32],
     enrollment_recipient_key_id: String,
     enrollment_recipient_public_key_digest: [u8; 32],
@@ -896,7 +896,7 @@ impl RuntimeProviderBindingWireV1 {
                 binding.pop_credential_runtime_binding = Some(PopCredentialRuntimeBindingV1 {
                     issuer_policy_digest: exact.issuer_policy_digest,
                     issuer_id: exact.issuer_id.clone(),
-                    issuer_hsm_key_id: exact.issuer_hsm_key_id.clone(),
+                    issuer_signer_handle: exact.issuer_signer_handle.clone(),
                     issuer_public_key: exact.issuer_public_key,
                     enrollment_recipient_key_id: exact.enrollment_recipient_key_id.clone(),
                     enrollment_recipient_public_key_digest: exact
@@ -1178,7 +1178,7 @@ fn validate_pop_binding(
             > sorafs_manifest::pop_credentials::POP_IDENTITY_TEXT_MAX_BYTES_V1
         || binding.issuer_id.trim() != binding.issuer_id
         || binding.issuer_id.chars().any(char::is_control)
-        || !is_production_runtime_handle(&binding.issuer_hsm_key_id)
+        || !is_production_runtime_handle(&binding.issuer_signer_handle)
         || !is_production_runtime_handle(&binding.enrollment_recipient_key_id)
         || !is_production_runtime_handle(&binding.wallet_recipient_key_id)
         || !is_production_runtime_handle(&binding.wallet_wrapping_key_id)
@@ -1275,7 +1275,7 @@ impl From<&PopCredentialRuntimeBindingV1> for PopCredentialRuntimeBindingWireV1 
         Self {
             issuer_policy_digest: binding.issuer_policy_digest,
             issuer_id: binding.issuer_id.clone(),
-            issuer_hsm_key_id: binding.issuer_hsm_key_id.clone(),
+            issuer_signer_handle: binding.issuer_signer_handle.clone(),
             issuer_public_key: binding.issuer_public_key,
             enrollment_recipient_key_id: binding.enrollment_recipient_key_id.clone(),
             enrollment_recipient_public_key_digest: binding.enrollment_recipient_public_key_digest,
@@ -1703,13 +1703,13 @@ mod tests {
     fn valid_potr_runtime() -> iroha_config::parameters::actual::SorafsPotrRuntimeBinding {
         iroha_config::parameters::actual::SorafsPotrRuntimeBinding {
             gateway_signer: iroha_config::parameters::actual::SorafsPotrRuntimeSignerBinding {
-                handle: "pkcs11://sorafs/potr/gateway-primary".to_owned(),
+                handle: "software://sorafs/potr/gateway-primary".to_owned(),
                 signer_id: [0x11; 32],
                 revision: 3,
                 policy_digest: [0x22; 32],
             },
             provider_signer: iroha_config::parameters::actual::SorafsPotrRuntimeSignerBinding {
-                handle: "kms://sorafs/potr/provider-primary".to_owned(),
+                handle: "software://sorafs/potr/provider-primary".to_owned(),
                 signer_id: [0x33; 32],
                 revision: 7,
                 policy_digest: [0x44; 32],
@@ -1749,7 +1749,7 @@ mod tests {
 
     fn provider_ingest_wire() -> RuntimeProviderCatalogWireV1 {
         let signer = sorafs_node::ProviderIngestCompletionSignerBindingV1::new(
-            "pkcs11://sorafs/provider-ingest/signer-primary",
+            "software://sorafs/provider-ingest/signer-primary",
             sorafs_node::ProviderIngestCompletionSignerQualificationV1::new(
                 3,
                 iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
@@ -1779,7 +1779,7 @@ mod tests {
             .expect("construct provider-ingest source fixture"),
             IrohaRuntimeProviderBindingV1::try_new_provider_ingest_signer(
                 IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver,
-                "hsm://sorafs/provider-ingest/resolver-primary",
+                "resolver://sorafs/provider-ingest/primary",
                 6,
                 [0xB2; 32],
                 signer.clone(),
@@ -1903,7 +1903,7 @@ mod tests {
         let authority = iroha_data_model::account::AccountId::new(public_key.clone());
         let native = iroha_torii::SorafsNativeTransactionSignerBindingV1::try_new(
             iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://proof-outcome/primary",
+            "software://sorafs/proof-outcome/primary",
             authority,
             public_key,
             iroha_torii::SorafsNativeTransactionSignerQualificationV1::new(9, [0x52; 32]),
@@ -1933,12 +1933,18 @@ mod tests {
             wire_from_bindings(vec![
                 appeal_signer(
                     0x21,
-                    "pkcs11://sorafs/appeal-finance/signer-a",
+                    "software://sorafs/appeal-finance/signer-a",
                     1,
                     1,
                     Some(10),
                 ),
-                appeal_signer(0x21, "pkcs11://sorafs/appeal-finance/signer-b", 2, 10, None),
+                appeal_signer(
+                    0x21,
+                    "software://sorafs/appeal-finance/signer-b",
+                    2,
+                    10,
+                    None,
+                ),
                 appeal_checkpoint(0x22),
             ])
         };
@@ -1988,7 +1994,7 @@ mod tests {
             &mut reused_checkpoint_handle,
             IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint,
         )
-        .handle = "pkcs11://sorafs/appeal-finance/signer-a".to_owned();
+        .handle = "software://sorafs/appeal-finance/signer-a".to_owned();
         assert_invalid_wire(&reused_checkpoint_handle);
 
         let mut reused_checkpoint_key = valid();
@@ -2083,7 +2089,7 @@ mod tests {
         .provider_ingest_signer_binding
         .as_mut()
         .expect("provider-ingest resolver signer metadata")
-        .runtime_handle = "pkcs11://sorafs/provider-ingest/signer-secondary".to_owned();
+        .runtime_handle = "software://sorafs/provider-ingest/signer-secondary".to_owned();
         assert_invalid_wire(&mismatched_signer);
 
         let mut mismatched_bound = provider_ingest_wire();
@@ -2228,7 +2234,7 @@ mod tests {
         let mut appeal = wire_from_bindings(vec![
             appeal_signer(
                 0x31,
-                "pkcs11://sorafs/appeal-finance/signer-primary",
+                "software://sorafs/appeal-finance/signer-primary",
                 1,
                 1,
                 None,
@@ -2343,7 +2349,7 @@ mod tests {
         let native_key = ed25519_key(0x51);
         let native = iroha_torii::SorafsNativeTransactionSignerBindingV1::try_new(
             iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            "hsm://sorafs/proof-outcome/signer-primary",
+            "software://sorafs/proof-outcome/signer-primary",
             iroha_data_model::account::AccountId::new(native_key.clone()),
             native_key,
             iroha_torii::SorafsNativeTransactionSignerQualificationV1::new(3, [0x51; 32]),
@@ -2357,7 +2363,7 @@ mod tests {
         let cloud_key = ed25519_key(0x52);
         dual.soracloud_runtime_signer_binding = Some(
             crate::soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1::try_new(
-                "hsm://soracloud/runtime-primary",
+                "software://sorafs/ai/runtime-primary",
                 iroha_data_model::account::AccountId::new(cloud_key.clone()),
                 cloud_key,
                 crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationV1::new(

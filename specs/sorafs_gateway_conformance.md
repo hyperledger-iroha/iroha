@@ -95,11 +95,10 @@ is deterministic and cross-platform; it does not rely on bespoke tooling.
 2. **Hash for auditability.** Compute `let digest = blake3::hash(&payload_bytes);`
    and store the 32-byte output in both hexadecimal and multibase encodings.
    This digest becomes the `attestation.payload_hash` field.
-3. **Sign with configured key material.** Load the operator's key pair from the
-   harness configuration (e.g., `gateway_attestor.key_path`). Keys must use the
-   same scheme enforced by governance manifests—`Ed25519` today. The harness
-   calls `iroha_crypto::Signature::try_new(key_pair.private_key(), &payload_bytes)`
-   and records both the signature bytes and the signing algorithm identifier.
+3. **Sign through the external software service.** Send the exact canonical
+   `payload_bytes` to the independently administered Ed25519 signer and accept
+   only its raw 64-byte signature plus verified software-backend provenance.
+   Local key-path signing is fixture-only and produces no qualification evidence.
 4. **Wrap in a Norito envelope.** Construct a `SignedGatewayReport` structure:
 
    Example harness snippet:
@@ -139,9 +138,9 @@ is deterministic and cross-platform; it does not rely on bespoke tooling.
    ```
 
    Encode the envelope via `norito::json::to_vec(&envelope)` for archival.
-   The helper `load_key_pair_from_disk` is a thin wrapper around
-   `iroha_crypto::KeyPair::from_private_key` that enforces filesystem ACL checks
-   and supports hardware-backed adapters.
+   This code sample is restricted to isolated fixture generation. Production
+   qualification replaces `load_key_pair_from_disk` with the authenticated
+   external software-signer request/receipt flow and never loads a private key.
 5. **Persist artifacts.** Write three files per run:
    - `sorafs_gateway_report.json` — the unsigned JSON report (canonical formatting).
    - `sorafs_gateway_attestation.to` — Norito-encoded attestation envelope.
@@ -156,7 +155,7 @@ is deterministic and cross-platform; it does not rely on bespoke tooling.
    - Emit success/failure with a non-zero exit code on mismatch.
 
 You can generate the report/attestation bundle locally via `cargo xtask sorafs-gateway-attest`.
-The command accepts `--signing-key <path>` (hex-encoded private key),
+For isolated fixture generation only, the command accepts `--signing-key <path>` (hex-encoded private key),
 `--signer-account <<i105-account-id>>` (domainless encoded AccountId; `@domain` suffix rejected), and optional `--gateway <url>` plus `--out <dir>`.
 Artifacts default to `artifacts/sorafs_gateway_attest/`. Verify a generated or
 operator-supplied envelope with
@@ -164,9 +163,9 @@ operator-supplied envelope with
 recomputes the embedded report BLAKE3 digest and checks the Ed25519 signature
 against the declared signer key.
 
-By keeping the signing hook inside the harness binary, nightly CI runs can
-auto-publish signed artifacts, and operators only need to provide a keypair
-path or hardware-backed signer implementation via the same trait.
+Fixture-only CI may exercise the local hook, but promotion evidence must use
+the independently administered external software signer. A future HSM adapter
+requires fresh HSM-backed deployment evidence and promotion signatures.
 
 ## Test Matrix
 

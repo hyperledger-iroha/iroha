@@ -571,13 +571,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     private func noncanonicalStandardBase64PadBitAlias(_ encoded: String) -> String {
-        XCTAssertTrue(encoded.hasSuffix("=="))
-        let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".utf8)
-        var bytes = Array(encoded.utf8)
-        let index = bytes.count - 3
-        let value = alphabet.firstIndex(of: bytes[index])!
-        bytes[index] = alphabet[value ^ 0x01]
-        return String(decoding: bytes, as: UTF8.self)
+        toriiClientTestNoncanonicalBase64PadBitAlias(encoded)
     }
 
     override func tearDown() {
@@ -586,29 +580,11 @@ final class ToriiClientTests: XCTestCase {
     }
 
     private func bodyData(from request: URLRequest) -> Data? {
-        if let data = request.httpBody {
-            return data
-        }
-        guard let stream = request.httpBodyStream else { return nil }
-        stream.open()
-        defer { stream.close() }
-        var buffer = [UInt8](repeating: 0, count: 1024)
-        var data = Data()
-        while stream.hasBytesAvailable {
-            let read = stream.read(&buffer, maxLength: buffer.count)
-            if read <= 0 { break }
-            data.append(buffer, count: read)
-        }
-        return data.isEmpty ? nil : data
+        toriiClientTestBodyData(from: request)
     }
 
     private func bodyJSON(from request: URLRequest) -> [String: Any] {
-        guard let data = bodyData(from: request),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let dictionary = object as? [String: Any] else {
-            return [:]
-        }
-        return dictionary
+        toriiClientTestBodyJSON(from: request)
     }
 
     private func assertDecodedPath(_ request: URLRequest, contains expected: String, line: UInt = #line) {
@@ -5864,33 +5840,49 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testCreateConnectSessionPostsPayload() async throws {
+        let networkID = TestNetworkIds.canonical
+        let appPublicKey = Data(repeating: 0x31, count: 32)
+        let nonce = Data(repeating: 0x32, count: 16)
+        let sid = try ConnectCrypto.deriveSessionID(
+            networkID: networkID,
+            appPublicKey: appPublicKey,
+            nonce: nonce
+        )
+        let sidLiteral = toriiClientTestBase64URL(sid)
+        let appPublicKeyLiteral = toriiClientTestBase64URL(appPublicKey)
+        let nonceLiteral = toriiClientTestBase64URL(nonce)
+        let connectResponse = toriiClientTestConnectSessionResponse(
+            sid: sidLiteral,
+            networkID: networkID.literal,
+            appPublicKey: appPublicKeyLiteral,
+            nonce: nonceLiteral,
+            node: "node-1"
+        )
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/connect/session")
             XCTAssertEqual(request.httpMethod, "POST")
             let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["sid"] as? String, "abc")
+            XCTAssertEqual(body["sid"] as? String, sidLiteral)
+            XCTAssertEqual(body["network_id"] as? String, networkID.literal)
+            XCTAssertEqual(body["app_pk"] as? String, appPublicKeyLiteral)
+            XCTAssertEqual(body["nonce"] as? String, nonceLiteral)
             XCTAssertEqual(body["node"] as? String, "node-1")
-            let payload: [String: Any] = [
-                "sid": "abc",
-                "wallet_uri": "wallet://demo",
-                "app_uri": "app://demo",
-                "token_app": "token-app",
-                "token_wallet": "token-wallet",
-                "token_management": "token-management",
-                "token_relay": "token-relay",
-                "custom": true
-            ]
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            let data = try JSONSerialization.data(withJSONObject: payload)
+            let data = try JSONSerialization.data(withJSONObject: connectResponse.payload)
             return (response, data)
         }
-        let response = try await makeClient().createConnectSession(sid: " abc ", node: "node-1")
-        XCTAssertEqual(response.sid, "abc")
-        XCTAssertEqual(response.tokenWallet, "token-wallet")
-        XCTAssertEqual(response.tokenManagement, "token-management")
-        XCTAssertEqual(response.tokenRelay, "token-relay")
-        XCTAssertEqual(response.extra["custom"], .bool(true))
+        let response = try await makeClient().createConnectSession(
+            networkID: networkID,
+            appPublicKey: appPublicKey,
+            nonce: nonce,
+            node: "node-1"
+        )
+        XCTAssertEqual(response.sid, sidLiteral)
+        XCTAssertEqual(response.tokenWallet, connectResponse.tokenWallet)
+        XCTAssertEqual(response.tokenManagement, connectResponse.tokenManagement)
+        XCTAssertEqual(response.tokenRelay, connectResponse.tokenRelay)
+        XCTAssertTrue(response.extra.isEmpty)
     }
 
     @available(iOS 15.0, macOS 12.0, *)

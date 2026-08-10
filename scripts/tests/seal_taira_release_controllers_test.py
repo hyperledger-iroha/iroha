@@ -462,6 +462,11 @@ def test_privacy_rollout_dispatch_injects_only_the_sealed_plan(
         )
         return 0
 
+    monkeypatch.setattr(
+        controller,
+        "_require_authenticated_rollout_observation_authority",
+        lambda: None,
+    )
     monkeypatch.setattr(controller, "_dispatch_installed_python", fake_dispatch)
     result = "/authority/privacy-rollout-observation.json"
     assert controller._dispatch(
@@ -1797,6 +1802,11 @@ def test_publication_composite_injects_only_sealed_authority_dependencies(
         calls.append((relative, values, run_as, None))
         return 0
 
+    monkeypatch.setattr(
+        controller,
+        "_require_authenticated_rollout_observation_authority",
+        lambda: None,
+    )
     monkeypatch.setattr(controller, "_dispatch", fake_dispatch)
     monkeypatch.setattr(controller, "_dispatch_installed_python", fake_close)
     monkeypatch.setattr(
@@ -1877,6 +1887,11 @@ def test_publication_composite_cleans_private_scratch_and_partial_final(
         final.mkdir(mode=0o555)
         return 1
 
+    monkeypatch.setattr(
+        controller,
+        "_require_authenticated_rollout_observation_authority",
+        lambda: None,
+    )
     monkeypatch.setattr(controller, "_dispatch", fake_dispatch)
     monkeypatch.setattr(controller, "_dispatch_installed_python", fake_close)
     monkeypatch.setattr(

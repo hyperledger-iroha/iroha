@@ -778,7 +778,12 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_POP_RUNTIME_FRAME_BYTES_V1,
             )?;
-            if sign.digest == [0; 32] {
+            if sign.digest == [0; 32]
+                || sorafs_node::pop_credentials::PopIssuerSigningPurposeV1::try_from_wire_id(
+                    sign.purpose,
+                )
+                .is_none()
+            {
                 return Err(BrokerError::Rejected);
             }
         }
@@ -934,11 +939,11 @@ fn validate_operation_payload(
             validate_source_fetch_request(&fetch, &request.binding, None, session_chain_id)?;
         }
         (slot, OPERATION_SIGN_V1) if slot == signer_slot => {
-            let signing = decode_canonical::<SignRequestWireV1>(
+            let signing = decode_canonical::<PurposeSignRequestWireV1>(
                 &request.payload,
                 MAX_OPERATION_FRAME_BYTES_V1,
             )?;
-            validate_signing_payload_len(signing.payload.len())?;
+            validate_governance_purpose_signing_request(&signing, &request.binding)?;
         }
         (slot, OPERATION_GOVERNANCE_REQUEST_AUTHENTICATE_V1)
             if slot == ipfs_auth_slot || slot == head_auth_slot =>
@@ -1229,15 +1234,11 @@ fn validate_operation_payload(
         (slot, OPERATION_EVIDENCE_VIEWER_RECEIPT_SIGN_V1)
             if slot == evidence_receipt_signer_slot =>
         {
-            let sign = decode_canonical::<SignRequestWireV1>(
+            let sign = decode_canonical::<PurposeSignRequestWireV1>(
                 &request.payload,
                 MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
             )?;
-            if sign.payload.is_empty()
-                || sign.payload.len() > MAX_EVIDENCE_VIEWER_RECEIPT_MESSAGE_BYTES_V1
-            {
-                return Err(BrokerError::Rejected);
-            }
+            validate_evidence_purpose_signing_request(&sign, &request.binding)?;
         }
         (slot, OPERATION_EVIDENCE_VIEWER_ERASE_V1) if slot == evidence_erasure_slot => {
             let erase = decode_canonical::<EvidenceViewerEraseRequestWireV1>(

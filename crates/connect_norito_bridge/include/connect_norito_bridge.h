@@ -28,6 +28,8 @@ extern "C" {
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SIGNATURE -502
 #define CONNECT_NORITO_ERR_CANONICAL_JSON -503
 #define CONNECT_NORITO_ERR_VALIDATION_FEE_POLICY_PROOF -504
+#define CONNECT_NORITO_ERR_CONNECT_IDENTITY -410
+#define CONNECT_NORITO_ERR_CONNECT_APPROVAL -411
 
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST 1
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_CANCEL 2
@@ -1425,12 +1427,70 @@ int32_t connect_norito_decode_control_approve_proof_json(
     const uint8_t* inp, unsigned long inp_len,
     uint8_t** out_ptr, unsigned long* out_len);
 
+// ---------------- Exact Connect identity and approval crypto ----------------
+int32_t connect_norito_connect_derive_session_id(
+    const uint8_t* network_id, unsigned long network_id_len,
+    const uint8_t* app_pk, unsigned long app_pk_len,
+    const uint8_t* nonce, unsigned long nonce_len,
+    uint8_t* out_sid, unsigned long out_sid_len);
+
+int32_t connect_norito_connect_relay_auth_hash(
+    const uint8_t* sid, unsigned long sid_len,
+    const char* relay_token, unsigned long relay_token_len,
+    uint8_t* out_hash, unsigned long out_hash_len);
+
+int32_t connect_norito_connect_approval_preimage(
+    const uint8_t* network_id, unsigned long network_id_len,
+    const uint8_t* sid, unsigned long sid_len,
+    const uint8_t* app_pk, unsigned long app_pk_len,
+    const uint8_t* nonce, unsigned long nonce_len,
+    const uint8_t* wallet_pk, unsigned long wallet_pk_len,
+    const char* account_id, unsigned long account_id_len,
+    const uint8_t* permissions_json, unsigned long permissions_len,
+    const uint8_t* proof_json, unsigned long proof_len,
+    const char* relay_token, unsigned long relay_token_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+
+int32_t connect_norito_connect_verify_approval(
+    const uint8_t* network_id, unsigned long network_id_len,
+    const uint8_t* sid, unsigned long sid_len,
+    const uint8_t* app_pk, unsigned long app_pk_len,
+    const uint8_t* nonce, unsigned long nonce_len,
+    const uint8_t* wallet_pk, unsigned long wallet_pk_len,
+    const char* account_id, unsigned long account_id_len,
+    const uint8_t* permissions_json, unsigned long permissions_len,
+    const uint8_t* proof_json, unsigned long proof_len,
+    const char* relay_token, unsigned long relay_token_len,
+    const char* algorithm, unsigned long algorithm_len,
+    const uint8_t* signature, unsigned long signature_len);
+
+int32_t connect_norito_connect_generate_keypair(uint8_t* out_pk, uint8_t* out_sk);
+int32_t connect_norito_connect_public_from_private(
+    const uint8_t* private_key, uint8_t* out_pk);
+int32_t connect_norito_connect_derive_keys(
+    const uint8_t* private_key,
+    const uint8_t* peer_public_key,
+    const uint8_t* sid,
+    uint8_t* out_app_key,
+    uint8_t* out_wallet_key);
+int32_t connect_norito_connect_encrypt_envelope(
+    const uint8_t* key,
+    const uint8_t* sid,
+    uint8_t dir,
+    const uint8_t* envelope, unsigned long envelope_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+int32_t connect_norito_connect_decrypt_ciphertext(
+    const uint8_t* key,
+    const uint8_t* frame, unsigned long frame_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+
 // ---------------- Extended control encoders ----------------
 int32_t connect_norito_encode_control_open_ext(
     const uint8_t* sid,
     uint8_t dir,
     uint64_t seq,
     const uint8_t* app_pk, unsigned long app_pk_len,
+    const uint8_t* nonce, unsigned long nonce_len,
     const uint8_t* app_meta_json, unsigned long app_meta_len,
     const uint8_t* network_id, unsigned long network_id_len,
     const uint8_t* permissions_json, unsigned long permissions_len,

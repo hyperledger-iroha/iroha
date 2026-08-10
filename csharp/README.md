@@ -70,7 +70,11 @@ This initial slice provides the foundation needed for a usable managed SDK:
   SM/default/policy labels, curve id lists, query aggregate labels, projection
   constants/codecs, checkpoint heights, and checkpoint block hashes before
   callers can serialize or trust manually constructed capability metadata
-- direct runtime ABI/metrics DTO construction rejects non-v1 ABI versions,
+- node capabilities, active runtime ABI, and runtime metrics fail before dispatch
+  unless both canonical request credentials and an immutable local signing context
+  with the deployment's exact `NetworkId` are configured; their empty `GET`
+  requests are signed over the exact method/path/query/body and dispatched once,
+  while `/v1/runtime/abi/hash` remains a public read; direct runtime ABI/metrics DTO construction rejects non-v1 ABI versions,
   missing metrics counters, negative upgrade counters, non-`V1` ABI hash
   policies, and malformed ABI hashes before callers can serialize or trust
   manually constructed runtime metadata
@@ -566,10 +570,10 @@ cd csharp
 dotnet test tests/Hyperledger.Iroha.Sdk.IntegrationTests/Hyperledger.Iroha.Sdk.IntegrationTests.csproj -c Release
 ```
 
-The live smoke currently probes unauthenticated read endpoints:
+The live smoke probes public reads plus these account-authenticated runtime reads:
 
-- `/v1/node/capabilities`
-- `/v1/runtime/abi/active`
+- `/v1/node/capabilities` (canonical account signature required)
+- `/v1/runtime/abi/active` (canonical account signature required)
 - `/v1/accounts`
 - `/v1/explorer/accounts/{account_id}/qr`
 - `/v1/explorer/accounts`, `/v1/explorer/domains`, `/v1/explorer/asset-definitions`, `/v1/explorer/assets`, `/v1/explorer/nfts`, and `/v1/explorer/rwas` with first-item detail reads when present
@@ -586,7 +590,11 @@ Optional live-smoke environment variables:
 - `IROHA_CSHARP_SMOKE_CONTRACT_NAMESPACE` to override the default contract-instance namespace (`universal`)
 - `IROHA_CSHARP_SMOKE_CONTRACT_CODE_HASH` to override the code hash used for `/v1/contracts/code/{code_hash}`, `/v1/contracts/code-bytes/{code_hash}`, and `/v1/contracts/code/{code_hash}/contract-view`
 - `IROHA_CSHARP_SMOKE_SORAFS_CID` and optional `IROHA_CSHARP_SMOKE_SORAFS_PATH` to also probe `/v1/sorafs/cid/{cid}` plus `/sorafs/cid/{cid}/...`
-- `IROHA_CSHARP_CANONICAL_ACCOUNT_ID`, `IROHA_CSHARP_PRIVATE_KEY_SEED_HEX`, and the deployment's exact checksummed `IROHA_CSHARP_NETWORK_ID` to prepare a quoted signed transaction
+
+The live smoke requires runtime-only `IROHA_CSHARP_CANONICAL_ACCOUNT_ID`,
+`IROHA_CSHARP_PRIVATE_KEY_SEED_HEX`, and the deployment's exact checksummed
+`IROHA_CSHARP_NETWORK_ID`. They authenticate node-capability and active-ABI reads
+and also enable the signed VPN quote probe; do not persist these values in source.
 
 ## Fee quotes and sponsor programs
 
@@ -649,11 +657,25 @@ are rejected before signing; contract addresses must use lowercase V1 Bech32m.
 
 ```csharp
 using Hyperledger.Iroha;
+using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Numeric;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
 
-using var client = new IrohaClient(new Uri("https://taira.sora.org"));
+var accountId = Environment.GetEnvironmentVariable("IROHA_CSHARP_CANONICAL_ACCOUNT_ID")!;
+var privateKeySeed = Convert.FromHexString(
+    Environment.GetEnvironmentVariable("IROHA_CSHARP_PRIVATE_KEY_SEED_HEX")!);
+var networkId = NetworkId.Parse(
+    Environment.GetEnvironmentVariable("IROHA_CSHARP_NETWORK_ID")!);
+using var client = new IrohaClient(
+    new Uri("https://taira.sora.org"),
+    toriiOptions: new ToriiClientOptions
+    {
+        LocalSigningContext = new ToriiLocalSigningContext(networkId),
+        CanonicalRequestCredentials = new CanonicalRequestCredentials(
+            accountId,
+            privateKeySeed),
+    });
 try
 {
     var capabilities = await client.Torii.GetNodeCapabilitiesAsync();
@@ -667,27 +689,22 @@ try
     Console.WriteLine($"Faucet puzzle difficulty: {faucetPuzzle.DifficultyBits}");
 
     // Transaction building is available through client.Ledger.
-    // var seedHex = Environment.GetEnvironmentVariable("IROHA_CSHARP_PRIVATE_KEY_SEED_HEX");
-    // if (!string.IsNullOrWhiteSpace(seedHex))
-    // {
     //     var transaction = client.Ledger
     //         .BuildTransaction(
-    //             NetworkId.Parse("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"),
+    //             networkId,
     //             accounts.Items[0].Id,
     //             FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
     //         .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", NumericV1.QuantityValue.ParseCanonical("1"), accounts.Items[0].Id)
     //         .SetCreationTime(DateTimeOffset.UtcNow)
     //         .SetTimeToLiveMilliseconds(5_000)
     //         .SetNonce(1);
-    //     // Configure matching CanonicalRequestCredentials on the client first.
     //     var signed = await client.Ledger.QuoteAndSignAsync(
     //         transaction,
-    //         Convert.FromHexString(seedHex));
+    //         privateKeySeed);
     //
     //     Console.WriteLine($"Signed tx hash: {signed.Transaction.TransactionHashHex}");
     //     // await client.Ledger.SubmitAsync(signed.Transaction);
     //     // var status = await client.Ledger.WaitForAsync(signed.Transaction.TransactionHashHex);
-    // }
 }
 catch (ToriiApiException exception)
 {

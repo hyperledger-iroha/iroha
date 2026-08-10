@@ -4,8 +4,22 @@
 This module binds public action-driver setup requirements to an authenticated
 Taira reset plan and live supervisor launch contracts.  It deliberately does
 not sign setup instructions, contact Torii, restart a validator, register a
-controller case, or issue evidence.  A reset manifest that lacks the future
-source-closed qualification-genesis row fails closed.
+controller case, or issue evidence.  The canonical genesis grants
+``CanEnactGovernance`` only to its fixed genesis authority and forbids privacy
+activation instructions.  The action driver's candidate-derived setup public
+key is neither that authority nor an authenticated authority delegation.
+
+Consequently, even a syntactically exact ``privacy_qualification_setup`` reset
+manifest row is not authority to plan or execute the case.  The public builder
+remains behind a source-owned provisioning barrier until a separately
+authenticated governance-transaction signer/broker is installed.  That future
+authority must bind the exact candidate/source/Cargo/workspace, signed and
+unsigned genesis bytes and digests, native setup/activation transaction bytes,
+four-peer/controller/host identity, and a bounded nonce/time/expiry/replay
+namespace under a separately pinned trust root.  Caller fields, environment
+markers, self-hashes, candidate signing keys, and the action-driver setup key
+cannot satisfy it, and no endpoint or credential may cross the action-driver
+IPC boundary.
 """
 
 from __future__ import annotations
@@ -20,8 +34,10 @@ from typing import Mapping, NoReturn, Sequence
 
 try:
     from . import deploy_taira_v21_reset as deploy
+    from . import taira_privacy_governance_authority as governance_authority
 except ImportError:
     import deploy_taira_v21_reset as deploy
+    import taira_privacy_governance_authority as governance_authority
 
 
 PLAN_SCHEMA = "iroha.taira.verange_qualification_case_plan"
@@ -29,6 +45,15 @@ PLAN_SCHEMA_VERSION = 1
 GENESIS_PLAN_SCHEMA = "iroha.taira.verange_qualification_genesis_plan"
 GENESIS_PLAN_SCHEMA_VERSION = 1
 GENESIS_PLAN_MANIFEST_FIELD = "privacy_qualification_setup"
+VERANGE_SETUP_AUTHORITY_PROVISIONING_BARRIER = (
+    governance_authority.PROVISIONING_BARRIER
+)
+VERANGE_GOVERNANCE_AUTHORITY_ENVELOPE_SCHEMA = (
+    governance_authority.AUTHORITY_ENVELOPE_SCHEMA
+)
+VERANGE_GOVERNANCE_AUTHORITY_REPLAY_NAMESPACE = (
+    governance_authority.REPLAY_NAMESPACE
+)
 PEER_COUNT = 4
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
@@ -43,6 +68,16 @@ class VeRangeQualificationPlanError(RuntimeError):
 
 def _fail(message: str) -> NoReturn:
     raise VeRangeQualificationPlanError(message)
+
+
+def _require_authenticated_verange_governance_authority_v1() -> NoReturn:
+    """Keep case planning closed until an independent authority is provisioned."""
+
+    try:
+        governance_authority._require_provisioned_privacy_governance_authority_v1()
+    except governance_authority.PrivacyGovernanceAuthorityError as exc:
+        raise VeRangeQualificationPlanError(str(exc)) from exc
+    raise AssertionError("provisioning barrier unexpectedly returned")
 
 
 def _sha256(value: object, label: str, *, nonzero: bool = True) -> str:
@@ -410,7 +445,43 @@ def build_verange_qualification_case_plan_v1(
     supervisor_sha256: str,
     restart_generation: str,
 ) -> VeRangeQualificationCasePlanV1:
-    """Build a public immutable plan; absence from genesis remains fatal."""
+    """Reject planning until independent governance authority is provisioned.
+
+    The arguments intentionally remain the future public contract, but none is
+    inspected before the unconditional authority barrier.  In particular, a
+    reset-manifest row or driver-derived setup identity cannot mint authority.
+    """
+
+    _require_authenticated_verange_governance_authority_v1()
+    return _build_untrusted_verange_qualification_case_plan_v1(
+        bundle=bundle,
+        candidate_binding_sha256=candidate_binding_sha256,
+        cargo_lock_sha256=cargo_lock_sha256,
+        workspace_source_manifest_sha256=workspace_source_manifest_sha256,
+        public_artifacts=public_artifacts,
+        supervisors=supervisors,
+        supervisor_sha256=supervisor_sha256,
+        restart_generation=restart_generation,
+    )
+
+
+def _build_untrusted_verange_qualification_case_plan_v1(
+    *,
+    bundle: deploy.BundlePlan,
+    candidate_binding_sha256: str,
+    cargo_lock_sha256: str,
+    workspace_source_manifest_sha256: str,
+    public_artifacts: VeRangePublicAdmissionArtifactsV1,
+    supervisors: Sequence[object],
+    supervisor_sha256: str,
+    restart_generation: str,
+) -> VeRangeQualificationCasePlanV1:
+    """Validate only the untrusted future plan shape for source tests.
+
+    This helper does not authenticate governance authority and must never be a
+    production caller's entrypoint.  Its result is not a runnable case,
+    admission artifact, receipt, or authority statement.
+    """
 
     candidate = _sha256(candidate_binding_sha256, "candidate binding")
     cargo_lock = _sha256(cargo_lock_sha256, "Cargo.lock digest")

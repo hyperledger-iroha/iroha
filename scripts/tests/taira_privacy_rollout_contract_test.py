@@ -407,12 +407,24 @@ def test_publish_lane_requires_owner_private_write_and_privacy_evidence() -> Non
 
 def test_complete_four_wave_observation_is_structurally_valid() -> None:
     result = _valid_result()
-    plan_sha256, rollout_id = contract.validate_result(
+    plan_sha256, rollout_id = contract._validate_unsigned_result_structure(
         result, plan=contract.expected_plan()
     )
     assert plan_sha256 == result["plan_sha256"]
     assert rollout_id == result["rollout_id"]
     assert result["terminal"]["publication_authorized"] is True
+
+
+def test_self_consistent_structure_cannot_claim_observation_authority() -> None:
+    result = _valid_result()
+    contract._validate_unsigned_result_structure(
+        result, plan=contract.expected_plan()
+    )
+    with pytest.raises(
+        contract.RolloutContractError,
+        match=contract.AUTHENTICATED_ROLLOUT_OBSERVATION_AUTHORITY_SCHEMA,
+    ):
+        contract.validate_result(result, plan=contract.expected_plan())
 
 
 @pytest.mark.parametrize(
@@ -540,7 +552,9 @@ def test_hostile_rollout_substitutions_fail_closed(mutate, message: str) -> None
     mutate(result)
     _redigest(result)
     with pytest.raises(contract.RolloutContractError, match=message):
-        contract.validate_result(result, plan=contract.expected_plan())
+        contract._validate_unsigned_result_structure(
+            result, plan=contract.expected_plan()
+        )
 
 
 def test_raised_ceiling_and_retired_alias_plan_substitutions_reject() -> None:
@@ -560,12 +574,16 @@ def test_candidate_tuple_and_rollout_id_are_independently_rederived() -> None:
     result["candidate"]["archive_sha256"] = _digest("substituted-archive")
     _redigest(result)
     with pytest.raises(contract.RolloutContractError, match="candidate binding"):
-        contract.validate_result(result, plan=contract.expected_plan())
+        contract._validate_unsigned_result_structure(
+            result, plan=contract.expected_plan()
+        )
 
     result = _valid_result()
     result["rollout_id"] = _digest("fabricated-id")
     with pytest.raises(contract.RolloutContractError, match="rollout ID"):
-        contract.validate_result(result, plan=contract.expected_plan())
+        contract._validate_unsigned_result_structure(
+            result, plan=contract.expected_plan()
+        )
 
 
 def test_cli_rejects_noncanonical_duplicate_truncated_and_suffixed_json(
@@ -617,7 +635,9 @@ def test_cli_reports_structure_not_semantic_or_publication_authority() -> None:
     assert output["qualification_authority"] is False
 
 
-def test_cli_verifies_a_complete_canonical_observation(tmp_path: Path) -> None:
+def test_cli_refuses_a_self_consistent_but_unauthenticated_observation(
+    tmp_path: Path,
+) -> None:
     result = _valid_result()
     result_path = tmp_path / "rollout-observation.json"
     result_path.write_bytes(contract.canonical_json_bytes(result))
@@ -636,10 +656,12 @@ def test_cli_verifies_a_complete_canonical_observation(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    assert completed.returncode == 0, completed.stderr
-    output = json.loads(completed.stdout)
-    assert output["rollout_id"] == result["rollout_id"]
-    assert output["qualification_authority"] is False
+    assert completed.returncode == 1
+    assert completed.stdout == ""
+    assert (
+        contract.AUTHENTICATED_ROLLOUT_OBSERVATION_AUTHORITY_SCHEMA
+        in completed.stderr
+    )
 
 
 def test_result_schema_has_no_read_only_or_skip_qualification_path() -> None:

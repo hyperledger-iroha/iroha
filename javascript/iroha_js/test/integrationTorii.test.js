@@ -31,6 +31,7 @@ import {
   isNonEmptyString,
   isPlainObject,
 } from "./integrationToriiProverReportAssertions.js";
+import { normalizeIntegrationString, parseBooleanEnv } from "./integrationToriiEnv.js";
 import { buildIntegrationGovernancePlainBallotPayload } from "./toriiClientGovernanceTests.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -133,8 +134,6 @@ const CONTRACT_CALL_OPTIONS = parseJsonEnv(
 const GOVERNANCE_BALLOT_OPTIONS = parseJsonEnv(
   process.env.IROHA_TORII_INTEGRATION_GOV_BALLOT ?? null,
 );
-const CHAIN_ID =
-  process.env.IROHA_TORII_INTEGRATION_CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
 const NETWORK_ID = NetworkId.parse(
   process.env.IROHA_TORII_INTEGRATION_NETWORK_ID ??
     "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
@@ -155,14 +154,6 @@ if (!BASE_URL) {
   throw new Error(
     "IROHA_TORII_INTEGRATION_URL is required when the live Torii integration suite is selected",
   );
-}
-
-function parseBooleanEnv(value) {
-  if (!value) {
-    return false;
-  }
-  const normalized = value.trim().toLowerCase();
-  return normalized !== "0" && normalized !== "false";
 }
 
 const SUCCESS_STATUSES = new Set(["applied"]);
@@ -3264,7 +3255,7 @@ test(
     }
     if (!isPlainObject(CONNECT_PREVIEW_CONFIG)) {
       t.diagnostic(
-        "set IROHA_TORII_INTEGRATION_CONNECT_PREVIEW to a JSON object (e.g. {\"node\":\"connect.devnet.example\"}) to exercise the preview bootstrapper",
+        "set IROHA_TORII_INTEGRATION_CONNECT_PREVIEW to a JSON object (e.g. {\"network_id\":\"hash:<genesis>#<checksum>\",\"node\":\"connect.devnet.example\"}) to exercise the preview bootstrapper",
       );
       return;
     }
@@ -3278,7 +3269,15 @@ test(
       apiToken: API_TOKEN,
     });
     const previewEnv = CONNECT_PREVIEW_CONFIG ?? {};
-    const chainId = normalizeIntegrationString(previewEnv.chainId) ?? CHAIN_ID;
+    assert.equal(
+      Object.hasOwn(previewEnv, "chainId") || Object.hasOwn(previewEnv, "chain_id"),
+      false,
+      "Connect preview config must use exact network_id, not a human-readable chain label",
+    );
+    const previewNetworkIdLiteral = normalizeIntegrationString(previewEnv.network_id);
+    const previewNetworkId = previewNetworkIdLiteral
+      ? NetworkId.parse(previewNetworkIdLiteral)
+      : NETWORK_ID;
     const previewNode = normalizeIntegrationString(previewEnv.node);
     const sessionOptionsRaw = isPlainObject(previewEnv.sessionOptions)
       ? previewEnv.sessionOptions
@@ -3295,7 +3294,7 @@ test(
     let createdManagementToken = null;
     try {
       const result = await bootstrapConnectPreviewSession(client, {
-        chainId,
+        networkId: previewNetworkId,
         node: previewNode ?? null,
         nonce: previewEnv.nonce ?? null,
         sessionOptions,
@@ -4993,14 +4992,6 @@ function delay(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-function normalizeIntegrationString(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length === 0 ? null : trimmed;
 }
 
 function resolveProjectPath(rawPath) {

@@ -2954,18 +2954,11 @@ fn validate_party_witness(
     Ok(())
 }
 
-fn decryption_challenge_seed(
+fn initialize_decryption_challenge_transcript(
     profile: &BgvProfile,
     smudge_bits: usize,
-    relation: &DecryptionPublicRelationV1,
-    ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
-    share: &RnsPolynomial,
-    public_key_commitment: &RnsPolynomial,
-    share_commitment: &RnsPolynomial,
-) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
-    share.validate(profile)?;
-    public_key_commitment.validate(profile)?;
-    share_commitment.validate(profile)?;
+    binding: &DecryptionBindingV1,
+) -> Result<Keccak256, ZkAmsMkheErrorV1> {
     let mut hash = Keccak256::new();
     hash.update(DECRYPTION_CHALLENGE_DOMAIN_V1);
     hash.update(DECRYPTION_PROOF_DOMAIN_V1);
@@ -2980,7 +2973,24 @@ fn decryption_challenge_seed(
             .to_be_bytes(),
     );
     hash.update(&WIDE_RELATION_MASK_SLACK_LOG2_V1.to_be_bytes());
-    relation.binding.update_hash(&mut hash);
+    binding.update_hash(&mut hash);
+    Ok(hash)
+}
+
+fn decryption_challenge_seed(
+    profile: &BgvProfile,
+    smudge_bits: usize,
+    relation: &DecryptionPublicRelationV1,
+    ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
+    share: &RnsPolynomial,
+    public_key_commitment: &RnsPolynomial,
+    share_commitment: &RnsPolynomial,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    share.validate(profile)?;
+    public_key_commitment.validate(profile)?;
+    share_commitment.validate(profile)?;
+    let mut hash =
+        initialize_decryption_challenge_transcript(profile, smudge_bits, &relation.binding)?;
     update_rns_hash(&mut hash, profile, &relation.common_a)?;
     update_rns_hash(&mut hash, profile, &relation.party_b)?;
     update_rns_hash(&mut hash, profile, ciphertext.constant())?;
@@ -4183,7 +4193,8 @@ pub use streaming::{
     ZK_AMS_MKHE_DECRYPTION_STREAMING_RESIDENCY_CERTIFICATE_DIGEST_V1,
     ZkAmsMkheDecryptionProofViewV1, ZkAmsMkheDecryptionStreamingBlockerV1,
     ZkAmsMkheDecryptionStreamingResidencyEvidenceV1, ZkAmsMkheDecryptionStreamingSnapshotV1,
-    ZkAmsMkheStreamingDecryptionStatementV1, ZkAmsMkheStreamingFullRosterDecryptionResultV1,
+    ZkAmsMkheStagedDecryptionShareV1, ZkAmsMkheStreamingDecryptionStatementV1,
+    ZkAmsMkheStreamingFullRosterDecryptionResultV1, prove_zk_ams_mkhe_decryption_share_staged_v1,
     verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1,
     zk_ams_mkhe_decryption_streaming_residency_evidence_v1,
 };

@@ -264,7 +264,7 @@ reputation-work digest, and the predecessor head.
 
 Every lookup names the caller's exact signed checkpoint head. Presence requires
 the canonical record plus a bounded, signed, contiguous successor suffix that
-ends at that head. Absence is a separate HSM signature over the challenge id and
+ends at that head. Absence is a separate external software signature over the challenge id and
 that exact head; an unbound `None` result is never accepted. A transport-backed
 provider must enforce the configured count and framed-byte ceilings from its
 outer envelope before allocating or decoding the suffix; the typed boundary
@@ -283,7 +283,7 @@ a signed receipt that was not installed as the authoritative head rolls the
 local mutation back for exact retry.
 
 This closes the local contract, hard-cut configuration, route wiring, and
-bounded worker seam. It does not supply archive credentials, an HSM private key,
+bounded worker seam. It does not supply archive credentials, software-signing key material,
 an immutable storage backend, or deployment evidence. Those remain operator
 qualification and rollout requirements.
 
@@ -296,7 +296,7 @@ qualification and rollout requirements.
   PoR submission routes and exposes the resulting history through the
   coordinator status/export/report endpoints.
 - Full live auditor verification against external drand/VRF feeds plus genuine
-  qualification of the deployment-owned immutable replay archive and HSM
+  qualification of the deployment-owned immutable replay archive and external software
   signer remain rollout evidence items.
 
 ## Telemetry & Alerts

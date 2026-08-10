@@ -710,14 +710,15 @@ v2_apply_test!(
             .body
             .encode_wire()
             .expect("encode unchanged locked body");
-        let reproposal_manifest = wire::PayloadManifest::derive(
+        let reproposal_manifest = crate::sumeragi::v2_chunks::encode_payload(
             &fixture.context,
             later_round,
             fixture.task.subject(),
-            u64::try_from(canonical_wire.len()).expect("body length"),
-            std::slice::from_ref(&canonical_wire),
+            &canonical_wire,
         )
-        .expect("derive later-round manifest for unchanged locked body");
+        .expect("derive later-round manifest for unchanged locked body")
+        .into_parts()
+        .0;
         let durable = store
             .store(reproposal_manifest, canonical_wire.clone())
             .expect("persist later-round manifest for unchanged locked body");

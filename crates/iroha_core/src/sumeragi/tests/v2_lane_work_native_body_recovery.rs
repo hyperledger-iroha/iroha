@@ -18,7 +18,7 @@ struct NativeBodyRecoveryFixture {
 }
 
 fn native_body_recovery_adapter() -> (V2LaneWorkAdapter, Vec<KeyPair>, LaneId, DataSpaceId) {
-    native_body_recovery_adapter_with_kura(Kura::blank_kura_for_testing_with_blocks_in_memory(
+    native_body_recovery_adapter_with_kura(locked_lane_work_test_kura(
         NonZeroUsize::new(1).expect("retain one carrier body"),
     ))
 }
@@ -104,7 +104,9 @@ struct GroupedNativeCandidateFixture {
 fn grouped_native_candidate_fixture(
     pending_control_validation_bytes: Option<NonZeroUsize>,
 ) -> GroupedNativeCandidateFixture {
-    let mut kura = Kura::blank_kura_for_testing();
+    let mut kura = locked_lane_work_test_kura(
+        iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+    );
     if let Some(aggregate_bytes) = pending_control_validation_bytes {
         Arc::get_mut(&mut kura)
             .expect("fresh grouped Native fixture Kura has one owner")
@@ -792,9 +794,49 @@ fn native_body_recovery_finality(
             manifest.executed_block_wire_hash(),
         )
         .expect("construct exact Native execution commitment");
-    let finality = verified_finality_artifact_for_block_with_execution_commitment(
+    let mut finality = verified_finality_artifact_for_block_with_execution_commitment(
         adapter, keys, carrier, commitment,
     );
+    let local_signer = adapter.context.leader(0);
+    finality
+        .commit_qc
+        .signers
+        .retain(|signer| *signer != local_signer);
+    assert_eq!(
+        u32::try_from(finality.commit_qc.signers.len()).expect("signer count fits u32"),
+        finality.height_context.quorum.min_signers,
+        "the non-local validators form the exact commit quorum"
+    );
+    let first_signer = *finality
+        .commit_qc
+        .signers
+        .first()
+        .expect("non-local finality quorum has one signer");
+    let preimage = finality
+        .commit_qc
+        .signer_preimage(&adapter.context, first_signer)
+        .expect("derive non-local finality signer preimage");
+    let signatures = finality
+        .commit_qc
+        .signers
+        .iter()
+        .map(|signer| {
+            Signature::try_new(
+                keys[usize::try_from(*signer).expect("signer index fits usize")].private_key(),
+                &preimage,
+            )
+            .expect("sign non-local finality vote")
+            .payload()
+            .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    finality.commit_qc.aggregate_signature =
+        iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+            .expect("aggregate non-local finality votes");
+    finality
+        .verify()
+        .expect("cryptographically valid non-local finality quorum");
     (manifest, finality)
 }
 

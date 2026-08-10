@@ -289,7 +289,7 @@ fn configured_catalog_slots_roundtrip_through_the_canonical_inverse() {
         let catalog = IrohaRuntimeProviderBindingsV1::qualified_for_test(
             "catalog-inverse-chain",
             slot,
-            format!("hsm://production/runtime-slot-{}", slot.wire_id()),
+            format!("runtime://production/runtime-slot-{}", slot.wire_id()),
             1,
             TEST_POLICY_DIGEST,
         );
@@ -884,7 +884,7 @@ fn soracloud_broker_admission_rejects_explicit_purpose_mismatch() {
     )
     .expect("project signer binding");
     binding.slot = IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
-    binding.handle = "hsm://soracloud/runtime-broker-primary".to_owned();
+    binding.handle = "software://sorafs/ai/runtime-broker-primary".to_owned();
     binding
         .native_signer_binding
         .as_mut()
@@ -1031,7 +1031,7 @@ fn native_signer_payload_hard_cut_precedes_provider_use() {
     assert_eq!(
         signer.sign_calls.load(Ordering::Relaxed),
         0,
-        "the HSM boundary must not see a foreign-network transaction"
+        "the external signer boundary must not see a foreign-network transaction"
     );
 
     let request = make_operation_request(
@@ -1122,7 +1122,7 @@ fn appeal_finance_signer_rejects_cross_network_before_provider_use() {
     assert_eq!(
         signer.sign_calls.load(Ordering::Relaxed),
         0,
-        "the appeal-finance HSM boundary must not see a foreign-network transaction"
+        "the appeal-finance external signer must not see a foreign-network transaction"
     );
 
     let exact_payload = native_signer_test_payload(exact.authority.clone());
@@ -1307,7 +1307,7 @@ fn moderation_transaction_signer_binding_backend_and_identity_are_exact() {
     );
     for signer in [
         ServerTestModerationTransactionSigner::exact()
-            .with_handle("hsm://moderation/transaction-signer-substituted"),
+            .with_handle("software://sorafs/moderation/substituted"),
         ServerTestModerationTransactionSigner::exact().with_revision(8),
         ServerTestModerationTransactionSigner::exact()
             .with_mode(ServerTestModerationTransactionSignerMode::DriftOnSecondQualification),
@@ -1384,7 +1384,7 @@ fn moderation_transaction_signer_payload_and_result_are_exact() {
     assert_eq!(
         signer.sign_calls.load(Ordering::Relaxed),
         0,
-        "the moderation HSM boundary must not see a foreign-network transaction"
+        "the moderation external signer must not see a foreign-network transaction"
     );
 
     let request = make_operation_request(

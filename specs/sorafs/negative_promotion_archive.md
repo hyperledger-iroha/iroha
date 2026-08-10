@@ -19,11 +19,13 @@ python3 scripts/run_sorafs_production_readiness_negative_archive.py \
 Start from
 `scripts/examples/sorafs_production_readiness_negative_archive.args.example`.
 `--promotion-args-file` names the same reviewed response file used by the
-positive runner. It must provide the topology qualification, externally signed
-resilience qualification, externally signed foundational envelope, exact 17
-ready lane summaries, explicit clock, freshness bound, production deployment
-context, the separately reviewed Ed25519 public keys, release sequence, and
-predecessor digest. It must not request `--dry-run`. The output configured
+positive runner. It must provide the signed topology summary/envelope tuple,
+externally signed resilience qualification, signed L1 lane-evidence inventory
+and its explicit external-software Ed25519 trust tuple, externally signed
+foundational envelope, exact 17 ready lane summaries, explicit clock, freshness
+bound, production deployment context, the separately reviewed Ed25519 public
+keys, release sequence, and predecessor digest. It must not request `--dry-run`.
+The output configured
 inside that positive response file is not used by this runner.
 
 The runner snapshots the bounded top-level `scripts/*.py` tool inventory,
@@ -31,9 +33,10 @@ installs those exact bytes read-only in a private temporary directory, and
 binds the inventory with a domain-separated digest. Direct child invocations
 use that snapshot and the recorded Python executable with `-I -B`; nested
 positive-runner verifier invocations inherit a sanitized environment and use
-the same snapshot checker path. The runner then copies the topology,
-resilience, envelope, and 17 lane summaries into the private directory. These
-are the ordered 20 top-level baseline inputs. It invokes the positive runner
+the same snapshot checker path. The runner then copies the topology summary and
+envelope, resilience summary, signed inventory, foundational envelope, and 17
+lane summaries into the private directory. These are the ordered 22 top-level
+baseline inputs. It invokes the positive runner
 over those copies and requires both aggregate executions to be byte-identical,
 `status=ready`, and 17/17 with every row valid. It creates a separate isolated
 copy for each closed mutation:
@@ -66,9 +69,9 @@ The archive contains exactly six numbered receipt files and
 `negative-promotion-archive.json`. Receipts contain only:
 
 - the fixed mutation ID;
-- the domain-separated digest of the ordered 20-input baseline set: topology
-  qualification, resilience qualification, foundational envelope, and 17 lane
-  summaries;
+- the domain-separated digest of the ordered 22-input baseline set: topology
+  summary and envelope, resilience qualification, signed lane inventory,
+  foundational envelope, and 17 lane summaries;
 - the bundled checker and complete child-toolchain digests;
 - the expected rejection and observed diagnostic class; and
 - SHA-256 hashes of the blocked aggregate, its canonical semantics, stdout,
@@ -85,16 +88,19 @@ The manifest deliberately emits `status=locally-qualified`,
 `attestation_scope=local-execution-receipt`,
 `externally_authenticated=false`, and `promotion_eligible=false`. These files
 are unsigned local execution receipts, not standalone proof. Promotion
-acceptance must fail unless trusted external HSM/cosign/OIDC release provenance
-binds the exact SHA-256 of `negative-promotion-archive.json`, the archive
+acceptance must fail unless trusted
+`signing_provider=authenticated_external_signer` provenance with exact
+`signing_backend=software`, plus cosign/OIDC build provenance, binds the exact
+SHA-256 of `negative-promotion-archive.json`, the archive
 inventory, this negative-archive runner, and the Python runtime environment.
 Hashing the executable alone does not bind its dynamic libraries or operating
 system.
 
 The receipts attest that the fixed rejection paths were exercised against one
 already-ready baseline only within that enclosing externally authenticated
-provenance. They do not create lane evidence, replace the external HSM
-signature, or authorize Taira or Minamoto cutover.
+provenance. They do not create lane evidence, replace the external software
+signature, or authorize Taira or Minamoto cutover. The accepted enclosing
+promotion output remains `signer_qualification=software-key-qualified`.
 
 Collection policy must also require process exit code 0. If publication reports
 failure, quarantine any newly visible destination before retrying; an archive

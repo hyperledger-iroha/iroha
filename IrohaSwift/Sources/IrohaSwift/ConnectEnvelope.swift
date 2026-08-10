@@ -45,7 +45,10 @@ public struct ConnectEnvelope: Equatable, Sendable {
         guard case .ciphertext = frame.kind else {
             throw ConnectEnvelopeError.unsupportedFrameKind
         }
-        guard let encodedFrame = NoritoNativeBridge.shared.encodeConnectFrame(frame) else {
+        guard let encodedFrame = NoritoNativeBridge.shared.encodeConnectFrame(
+            frame,
+            launchNonce: nil
+        ) else {
             throw ConnectEnvelopeError.bridgeUnavailable
         }
         guard let envelopeBytes = NoritoNativeBridge.shared.connectDecryptCiphertext(key: symmetricKey, frame: encodedFrame) else {

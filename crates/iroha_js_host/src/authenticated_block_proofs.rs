@@ -536,21 +536,16 @@ mod tests {
             .proofs_for_entry_hash(&alternate_entry_hash)
             .expect("alternate fixture block proof exists");
 
-        let executed_block_wire_len = u64::try_from(
-            block
-                .canonical_wire()
-                .expect("encode authenticated proof fixture block")
-                .len(),
-        )
-        .expect("fixture block wire length fits u64");
+        let executed_block_wire = block
+            .encode_wire()
+            .expect("encode authenticated proof fixture block wire");
         let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"authenticated proof fixture parent state"),
             Hash::new(b"authenticated proof fixture post state"),
             Hash::new(b"authenticated proof fixture ordinary writes"),
-            executed_block_wire_len,
-            block
-                .executed_block_wire_hash()
-                .expect("fixture block wire hashes"),
+            u64::try_from(executed_block_wire.len())
+                .expect("authenticated proof fixture block wire length fits u64"),
+            Hash::new(&executed_block_wire),
         );
         let (artifact, finality_keys) =
             finalized_artifact_for_block(&block, network_id, execution_commitment, None, 1);
@@ -694,6 +689,18 @@ mod tests {
             0,
             0,
         );
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(keys[0].private_key(), header.hash())
+                .expect("sign successor fixture header"),
+        );
+        let mut block = SignedBlock::presigned(signature, header, Vec::new());
+        block
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("empty successor fixture accepts empty results");
+        let executed_block_wire = block
+            .encode_wire()
+            .expect("encode successor fixture block wire");
         let context = HeightContext {
             network_id: parent_artifact.height_context.network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
@@ -715,24 +722,23 @@ mod tests {
         };
         let subject = BlockSubject {
             parent_block_hash: Some(parent_artifact.block_hash),
-            block_hash: header.hash(),
-            payload_hash: Hash::new(
-                [b"successor payload".as_slice(), &height.to_be_bytes()].concat(),
-            ),
+            block_hash: block.hash(),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("hash successor fixture proposal wire"),
         };
         let round = ConsensusRound {
             context_id: context.id(),
             height,
             view: 0,
         };
-        let executed_block_wire =
-            [b"successor block wire".as_slice(), &height.to_be_bytes()].concat();
         let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([b"successor parent state".as_slice(), &height.to_be_bytes()].concat()),
             Hash::new([b"successor post state".as_slice(), &height.to_be_bytes()].concat()),
             Hash::new([b"successor writes".as_slice(), &height.to_be_bytes()].concat()),
-            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64"),
-            Hash::new(executed_block_wire),
+            u64::try_from(executed_block_wire.len())
+                .expect("successor fixture block wire length fits u64"),
+            Hash::new(&executed_block_wire),
         );
         let commit_qc = signed_commit_qc(&context, subject, execution_commitment, round, keys);
         let artifact = V2FinalityArtifact::new(
@@ -744,7 +750,7 @@ mod tests {
         artifact.verify().expect("successor finality verifies");
         let proof = BridgeFinalityProof {
             version: BRIDGE_FINALITY_PROOF_VERSION_V1,
-            block_header: header,
+            block_header: block.header(),
             finality_artifact: artifact,
         };
         let mut verifier = BridgeFinalityVerifier::with_context(

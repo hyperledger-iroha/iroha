@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.privacy
 
 import java.util.concurrent.CompletableFuture
 import org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClient
+import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.ZkMerklePathRequest
 
 /** Direction bytes and sibling hashes for one zk_assets inclusion path. */
@@ -61,7 +62,8 @@ interface ZkAssetMerklePathProvider {
 
 /** Fetches current confidential-v2 commitment inclusion paths from Torii. */
 class ToriiZkAssetMerklePathProvider(
-    private val client: ConfidentialAssetToriiClient = ConfidentialAssetToriiClient.builder().build(),
+    private val client: ConfidentialAssetToriiClient,
+    private val canonicalAuth: ToriiCanonicalRequestAuth,
 ) : ZkAssetMerklePathProvider {
     override fun getMerklePathForCommitment(asset: String, commitment: ByteArray): CompletableFuture<ZkAssetMerklePath> {
         return getMerklePaths(asset, listOf(commitment)).thenApply { paths -> paths.single() }
@@ -77,7 +79,10 @@ class ToriiZkAssetMerklePathProvider(
             if (copied.isEmpty()) {
                 CompletableFuture.completedFuture(emptyList())
             } else {
-                client.getZkAssetMerklePaths(ZkMerklePathRequest(asset, copied)).thenApply { response ->
+                client.getZkAssetMerklePaths(
+                    ZkMerklePathRequest(asset, copied),
+                    canonicalAuth,
+                ).thenApply { response ->
                     val rootBytes = response.rootBytes()
                     require(response.paths.size == copied.size) {
                         "Torii returned ${response.paths.size} Merkle paths for ${copied.size} commitments"

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import atexit
 import hashlib
 import os
 from pathlib import Path
@@ -11,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import time
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "run_taira_v2_24h_soak.sh"
@@ -21,15 +22,6 @@ HEAD_COMMIT = "1" * 40
 HEAD_TREE = "2" * 40
 CARGO_LOCK_SHA256 = "3" * 64
 SOURCE_MANIFEST = "b" * 64
-_EXTERNAL_ROOTS: list[Path] = []
-
-
-@atexit.register
-def _cleanup_external_roots() -> None:
-    for root in _EXTERNAL_ROOTS:
-        shutil.rmtree(root, ignore_errors=True)
-
-
 PINNED_ENV = {
     "IROHA_TEST_REQUIRE_NETWORK": "1",
     "IROHA_TAIRA_SIM_DURATION_SECS": "86400",
@@ -53,6 +45,18 @@ PINNED_ENV = {
     "RUST_LOG": "info",
     "CARGO_NET_OFFLINE": "true",
 }
+_EXTERNAL_ROOTS: list[Path] = []
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_external_roots() -> None:
+    yield
+    while _EXTERNAL_ROOTS:
+        root = _EXTERNAL_ROOTS.pop()
+        for path in root.rglob("*"):
+            if not path.is_symlink() and path.is_dir():
+                path.chmod(0o700)
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _install_source_bound_fake_localnet_binaries(
@@ -141,9 +145,9 @@ def _stubbed_environment(
         tempfile.mkdtemp(prefix="iroha-taira-v2-soak-test-", dir="/private/tmp")
     )
     _EXTERNAL_ROOTS.append(external_root)
-    cargo_target = external_root / "cargo-target"
+    cargo_target_dir = external_root / "cargo-target"
     artifact_root = external_root / "artifacts"
-    cargo_target.mkdir(mode=0o700)
+    cargo_target_dir.mkdir(mode=0o700)
     artifact_root.mkdir(mode=0o700)
     program_target = (
         artifact_root
@@ -200,6 +204,7 @@ raise SystemExit(module.main(sys.argv[1:]))
 """,
         encoding="utf-8",
     )
+    checker_capture = tmp_path / "evidence-checker-invocations.txt"
     python = bin_dir / "python3"
     python.write_text(
         f"""#!/bin/sh
@@ -214,7 +219,10 @@ if [ "${{1-}}" = "-I" ] \
 fi
 case "$1" in
   *compute_workspace_source_manifest.py) printf '%s\n' '{SOURCE_MANIFEST}' ;;
-  *check_taira_v2_soak_evidence.py) exit {evidence_check_status} ;;
+  *check_taira_v2_soak_evidence.py)
+    printf '%s\n' "$*" >>"$TAIRA_EVIDENCE_CHECK_CAPTURE"
+    exit {evidence_check_status}
+    ;;
   *) exec "$TAIRA_REAL_PYTHON3" "$@" ;;
 esac
 """,
@@ -334,12 +342,13 @@ esac
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["TAIRA_SOAK_CAPTURE"] = str(capture)
+    env["TAIRA_EVIDENCE_CHECK_CAPTURE"] = str(checker_capture)
     env["TAIRA_FAKE_INVENTORY_MODE"] = inventory_mode
     env["TAIRA_FAKE_RUN_MODE"] = run_mode
     env["IROHA_RELEASE_HEAD_COMMIT"] = HEAD_COMMIT
     env["IROHA_RELEASE_HEAD_TREE"] = HEAD_TREE
     env["IROHA_RELEASE_CARGO_LOCK_SHA256"] = CARGO_LOCK_SHA256
-    env["CARGO_TARGET_DIR"] = str(cargo_target)
+    env["CARGO_TARGET_DIR"] = str(cargo_target_dir)
     env["IROHA_RELEASE_ARTIFACT_ROOT"] = str(artifact_root)
     env["IROHA_RELEASE_CANCEL_REQUEST_PATH"] = str(
         external_root / "cancel-request.json"
@@ -395,7 +404,8 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     calls = [line for line in captured.splitlines() if line.startswith("args=")]
     assert len(calls) == 2
     assert all(
-        "test -j1 --locked --offline --release -p integration_tests --test consensus_and_da"
+        "+1.93.1 test -j1 --locked --offline --release -p integration_tests "
+        "--test consensus_and_da"
         in call
         for call in calls
     )
@@ -407,6 +417,7 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
         assert captured_lines.count(f"{name}={value}") == 2
         assert f"{name}=inherited-malicious-override" not in captured_lines
     artifact_root = Path(env["IROHA_RELEASE_ARTIFACT_ROOT"])
+    cargo_target_dir = Path(env["CARGO_TARGET_DIR"])
     source_root = artifact_root / "sumeragi-v2-release" / SOURCE_MANIFEST
     evidence_root = source_root / "evidence" / "taira-v2-24h"
     assert not (evidence_root / ".taira_v2_24h_soak.lock").exists()
@@ -418,7 +429,7 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     )
     program_target = Path(env["IROHA_TEST_TARGET_DIR"])
     assert captured.count(f"IROHA_TEST_TARGET_DIR={program_target}\n") == 2
-    assert captured.count(f"CARGO_TARGET_DIR={env['CARGO_TARGET_DIR']}\n") == 2
+    assert captured.count(f"CARGO_TARGET_DIR={cargo_target_dir}\n") == 2
     evidence_values = {
         line.split("=", 1)[1]
         for line in captured_lines
@@ -450,6 +461,14 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
         == env["IROHA_RELEASE_PREBUILT_MANIFEST_SHA256"]
     )
     assert completion_pointer.read_text(encoding="utf-8").strip() == str(completion)
+    checker_calls = Path(env["TAIRA_EVIDENCE_CHECK_CAPTURE"]).read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert len(checker_calls) == 1
+    checker_arguments = checker_calls[0].split()
+    assert checker_arguments.count("--cargo-target-dir") == 1
+    target_index = checker_arguments.index("--cargo-target-dir")
+    assert checker_arguments[target_index + 1] == str(cargo_target_dir)
     assert (
         captured.count(
             f"TEST_NETWORK_BIN_IROHAD={program_target / 'release' / 'iroha3d'}\n"

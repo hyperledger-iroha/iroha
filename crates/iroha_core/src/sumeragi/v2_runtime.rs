@@ -15051,8 +15051,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             .map_err(|error| error.to_string())
     }
 
-    /// Commit one previously checked terminal authority refinement.
-    #[cfg(test)]
+    /// Commit one source-audited terminal refinement through the atomic batch API.
+    #[allow(dead_code)]
     pub(crate) fn commit_body_pipeline_candidate_terminal(
         &mut self,
         effect: &AdapterEffect,

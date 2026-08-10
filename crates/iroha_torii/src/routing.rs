@@ -155,6 +155,11 @@ use tokio::task;
 // use tokio::task; // not currently used
 use super::*;
 
+#[cfg(feature = "telemetry")]
+mod status_visibility;
+#[cfg(feature = "telemetry")]
+use status_visibility::is_nexus_status_segment;
+
 pub mod debug_match_flag {
     use std::sync::OnceLock;
 
@@ -74410,22 +74415,6 @@ fn json_value_by_segments<'a>(
         };
     }
     Some(value)
-}
-
-#[cfg(feature = "telemetry")]
-fn is_nexus_status_segment(tail: &str) -> bool {
-    let mut segments = tail.split('/').filter(|s| !s.is_empty());
-    matches!(
-        segments.next(),
-        Some(
-            "teu_lane_commit"
-                | "teu_dataspace_backlog"
-                | "dataspace_catalog"
-                | "nexus"
-                | "tx_gossip"
-                | "da_receipt_cursors"
-        )
-    )
 }
 
 // Textual inclusion keeps every routing test at its original module path.

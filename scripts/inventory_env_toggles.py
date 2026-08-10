@@ -49,6 +49,7 @@ SEARCH_ROOTS = (
 # Directories to skip during the walk (keep the list conservative to avoid
 # traversing build artefacts).
 SKIP_DIRS = {
+    ".build",
     ".git",
     "target",
     "target-codex",

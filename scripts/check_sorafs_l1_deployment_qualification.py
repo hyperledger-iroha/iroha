@@ -46,6 +46,7 @@ from sorafs_topology_qualification import (  # noqa: E402
     SUMMARY_SCHEMA,
     canonical_manifest_sha256,
 )
+import taira_constants  # noqa: E402
 
 
 MAX_MANIFEST_BYTES = 256 * 1024
@@ -105,7 +106,15 @@ MANIFEST_FIELDS = frozenset(
         "lane_slots",
     }
 )
-DEPLOYMENT_FIELDS = frozenset({"deployment_id", "environment"})
+DEPLOYMENT_FIELDS = frozenset(
+    {
+        "deployment_id",
+        "environment",
+        "network",
+        "chain_id",
+        "chain_discriminant",
+    }
+)
 VALIDATOR_FIELDS = frozenset(
     {"validator_id", "voting", "da_enabled", "rbc_enabled"}
 )
@@ -259,10 +268,10 @@ def _require_unique(
         errors.append(f"{label} must be unique")
 
 
-def _validate_validators(value: Any, errors: list[str]) -> int:
+def _validate_validators(value: Any, errors: list[str]) -> tuple[int, list[str]]:
     rows = _row_sequence(value, "validators", errors)
     if rows is None:
-        return 0
+        return 0, []
     if len(rows) != EXPECTED_VALIDATOR_COUNT:
         errors.append(
             "validators must contain exactly "
@@ -288,7 +297,11 @@ def _validate_validators(value: Any, errors: list[str]) -> int:
         "validator identities",
         errors,
     )
-    return len(rows)
+    if validator_ids != list(taira_constants.SLUGS):
+        errors.append(
+            "validators must match the canonical Taira validator identities in order"
+        )
+    return len(rows), validator_ids
 
 
 def _validate_storage_providers(value: Any, errors: list[str]) -> int:
@@ -635,6 +648,9 @@ def validate_manifest(
 
     deployment_id: str | None = None
     environment: str | None = None
+    network: str | None = None
+    chain_id: str | None = None
+    chain_discriminant: int | None = None
     if manifest is not None:
         if manifest.get("schema") != MANIFEST_SCHEMA:
             errors.append("deployment qualification schema must match the contract")
@@ -666,8 +682,25 @@ def validate_manifest(
                 errors.append(
                     "deployment.environment must match the operator-reviewed value"
                 )
+            if deployment.get("network") != taira_constants.NETWORK_NAME:
+                errors.append("deployment.network must be exactly `taira`")
+            else:
+                network = taira_constants.NETWORK_NAME
+            if deployment.get("chain_id") != taira_constants.CHAIN_ID:
+                errors.append("deployment.chain_id must match the canonical Taira chain")
+            else:
+                chain_id = taira_constants.CHAIN_ID
+            if (
+                deployment.get("chain_discriminant")
+                != taira_constants.CHAIN_DISCRIMINANT
+            ):
+                errors.append(
+                    "deployment.chain_discriminant must match the canonical Taira discriminator"
+                )
+            else:
+                chain_discriminant = taira_constants.CHAIN_DISCRIMINANT
 
-    validator_count = _validate_validators(
+    validator_count, validator_ids = _validate_validators(
         None if manifest is None else manifest.get("validators"), errors
     )
     provider_count = _validate_storage_providers(
@@ -709,8 +742,12 @@ def validate_manifest(
         "deployment": {
             "deployment_id": deployment_id,
             "environment": environment,
+            "network": network,
+            "chain_id": chain_id,
+            "chain_discriminant": chain_discriminant,
         },
         "validator_count": validator_count,
+        "validator_ids": validator_ids,
         "storage_provider_count": provider_count,
         "gateway_count": gateway_count,
         "governance_dag_instance_count": governance_dag_count,
@@ -737,8 +774,15 @@ def _blocked_summary(errors: list[str]) -> dict[str, Any]:
         "promotion_eligible": False,
         "manifest_sha256": None,
         "canonical_manifest_sha256": None,
-        "deployment": {"deployment_id": None, "environment": None},
+        "deployment": {
+            "deployment_id": None,
+            "environment": None,
+            "network": None,
+            "chain_id": None,
+            "chain_discriminant": None,
+        },
         "validator_count": 0,
+        "validator_ids": [],
         "storage_provider_count": 0,
         "gateway_count": 0,
         "governance_dag_instance_count": 0,

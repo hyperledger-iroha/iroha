@@ -1,3 +1,106 @@
+/// Custody-fenced completion permit for one exact, re-observed bootstrap authority.
+enum AutonomousLifecycleBootstrapCompletionFence<'queue> {
+    ProducerQueue(AutonomousLaneKuraActivationAuthorization<'queue>),
+    DurablePayloadCustody,
+    #[cfg(test)]
+    Test,
+}
+
+/// Exact bootstrap revalidation used only by custody-fenced completion.
+#[must_use = "the bootstrap completion revalidation must be handled"]
+struct AutonomousLifecycleBootstrapCompletionRevalidation {
+    /// Exact bootstrap authority refreshed at its current durable crash boundary.
+    authority: AutonomousLifecycleBootstrapRecoveryAuthority,
+    /// Whether the exact application receipt was observed during this refresh.
+    receipt_terminal: bool,
+}
+
+/// Authorization mode for the low-level autonomous payload writer.
+#[derive(Clone, Copy)]
+enum LaneExecutablePayloadPersistenceMode<'bootstrap> {
+    /// Ordinary writers stop before mutation once an exact receipt is durable.
+    #[cfg(test)]
+    Ordinary,
+    /// A pre-existing signed bootstrap may roll its exact payload forward to
+    /// Live so canonical terminal reconciliation retains a complete lifecycle unit.
+    SignedBootstrap(&'bootstrap AutonomousLifecycleBootstrapRecoveryAuthority),
+}
+
+#[must_use = "the authenticated bootstrap permit must be completed or deliberately dropped"]
+pub(crate) struct AutonomousLifecycleBootstrapCompletionPermit<'queue> {
+    authority: AutonomousLifecycleBootstrapRecoveryAuthority,
+    fence: AutonomousLifecycleBootstrapCompletionFence<'queue>,
+}
+
+/// Exact post-bootstrap cursor observation; a newer process must take over through Crash/Recover.
+#[must_use = "the post-bootstrap lifecycle lease must be consumed or deliberately dropped"]
+pub(crate) struct AutonomousLifecycleBootstrapCompletion {
+    cursor_read: AutonomousLifecycleCursorRead,
+    takeover_required: bool,
+}
+
+/// Result of completing a custody-fenced lifecycle bootstrap.
+#[must_use = "the bootstrap completion outcome must be handled"]
+pub(crate) enum AutonomousLifecycleBootstrapCompletionOutcome {
+    /// The payload and Live cursor crossed their durability boundaries.
+    Completed(AutonomousLifecycleBootstrapCompletion),
+    /// The exact proposal was already durably applied. Its pre-existing signed
+    /// bootstrap was rolled forward to an exact Live lifecycle unit without
+    /// re-entering volatile consensus or releasing Queue ownership.
+    AlreadyTerminal,
+}
+
+impl AutonomousLifecycleBootstrapCompletion {
+    /// Whether the pre-signed historical Live owner must be taken over by this process generation.
+    #[must_use]
+    pub(crate) const fn takeover_required(&self) -> bool {
+        self.takeover_required
+    }
+
+    /// Borrow the exact Live cursor durably read after bootstrap deletion.
+    #[must_use]
+    pub(crate) fn cursor(&self) -> &AutonomousLifecycleCursorV2 {
+        self.cursor_read
+            .cursor()
+            .expect("completed bootstrap always returns its exact Live cursor")
+    }
+
+    /// Consume the completion into the ordinary move-only cursor read and CAS lease.
+    #[must_use]
+    pub(crate) fn into_cursor_read(self) -> AutonomousLifecycleCursorRead {
+        self.cursor_read
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutonomousLaneBlockViewStateReadMode {
+    MainOnly,
+    LatestReadOnly,
+    Recover { pending_canonical_bytes: u64 },
+}
+
+/// Result of a lane auxiliary-artifact persistence attempt serialized with
+/// application-receipt publication and merge-frontier compaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneBlockAuxiliaryPersistenceOutcome {
+    /// The requested auxiliary artifact crossed its durability boundary.
+    Persisted,
+    /// The exact lane proposal is already durably applied, so auxiliary
+    /// payload/input state is terminal and must not be recreated.
+    AlreadyTerminal,
+}
+
+/// Result of appending one authenticated autonomous NewView certificate while
+/// serialized with exact lane-application receipt publication.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LaneBlockNewViewPersistenceOutcome {
+    /// The certificate crossed its durability boundary and advanced this cursor.
+    Persisted(LaneBlockProposalV1),
+    /// The exact immutable origin proposal is already durably applied, so no
+    /// later view evidence may be written for its retained lifecycle attempt.
+    AlreadyTerminal,
+}
+
 #[derive(Clone, Debug)]
 struct AutonomousLaneAttemptInventoryBudget {
     attempts_at_height: usize,
@@ -2579,5 +2682,277 @@ impl Kura {
             }
         }
         Ok(())
+    }
+}
+
+impl Kura {
+    fn validate_autonomous_lifecycle_bootstrap_authority_identity_locked(
+        &self,
+        process_generation: &AutonomousLifecycleProcessGenerationClaim,
+        entry: &LaneConfigEntry,
+        path: &Path,
+        bootstrap: &AutonomousLifecycleBootstrapV1,
+    ) -> Result<()> {
+        let process_record =
+            self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
+        Self::validate_autonomous_lifecycle_bootstrap_process_generation(
+            &process_record,
+            bootstrap,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
+        let descriptor = &bootstrap.body.executable_payload.origin_proposal.descriptor;
+        let (active_incarnation, activation_height) = self.active_lane_incarnation_marker(entry)?;
+        let expected_path = Self::autonomous_lifecycle_bootstrap_path_for_entry(
+            entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        if entry.lane_id != descriptor.lane_id
+            || entry.dataspace_id != descriptor.dataspace_id
+            || active_incarnation != descriptor.lane_incarnation
+            || descriptor.proposal_height <= activation_height
+            || path != expected_path.as_path()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "autonomous lifecycle bootstrap targets a stale route or incarnation",
+            ));
+        }
+        Ok(())
+    }
+
+    fn revalidate_autonomous_lifecycle_bootstrap_for_completion(
+        &self,
+        authority: AutonomousLifecycleBootstrapRecoveryAuthority,
+    ) -> Result<AutonomousLifecycleBootstrapCompletionRevalidation> {
+        if authority.store_root != self.store_root {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap authority belongs to another Kura root",
+            ));
+        }
+        self.validate_autonomous_lifecycle_process_generation_claim(&authority.process_generation)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let proposal = &authority.bootstrap.body.executable_payload.origin_proposal;
+        let already_terminal = self
+            .lane_block_application_receipt_available_under_prune_and_canonical_guards(proposal);
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let descriptor = &proposal.descriptor;
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        let parent = authority.path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "autonomous lifecycle bootstrap authority path has no parent",
+            )
+        })?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let _namespace_budget = self.autonomous_lane_attempt_inventory_counts_locked(
+            &entry,
+            descriptor.lane_block_height,
+        )?;
+        let bytes = self
+            .read_regular_sidecar_bytes(
+                &authority.path,
+                parent,
+                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    authority.path.clone(),
+                    "autonomous lifecycle bootstrap disappeared before completion",
+                )
+            })?;
+        if bytes != authority.expected_bytes || Hash::new(&bytes) != authority.expected_bytes_hash {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap changed after recovery authority was minted",
+            ));
+        }
+        let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&authority.path, &bytes)?;
+        if bootstrap != authority.bootstrap {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path,
+                "autonomous lifecycle bootstrap identity changed during recovery",
+            ));
+        }
+        let authority = self.autonomous_lifecycle_bootstrap_authority_locked(
+            &authority.process_generation,
+            &entry,
+            authority.path,
+            bytes,
+            bootstrap,
+        )?;
+        Ok(AutonomousLifecycleBootstrapCompletionRevalidation {
+            authority,
+            receipt_terminal: already_terminal,
+        })
+    }
+
+    fn publish_autonomous_lifecycle_bootstrap_cursor_stage(
+        &self,
+        authority: &AutonomousLifecycleBootstrapRecoveryAuthority,
+        target: AutonomousLifecycleBootstrapRecoveryStage,
+    ) -> Result<LaneBlockAuxiliaryPersistenceOutcome> {
+        self.durable_mutation_authorized()?;
+        if authority.store_root != self.store_root {
+            return Err(Self::invalid_lane_artifact_error(
+                authority.path.clone(),
+                "autonomous lifecycle bootstrap cursor authority belongs to another Kura root",
+            ));
+        }
+        self.validate_autonomous_lifecycle_process_generation_claim(&authority.process_generation)?;
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let proposal = &authority.bootstrap.body.executable_payload.origin_proposal;
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let descriptor = &proposal.descriptor;
+        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        self.require_active_lane_artifact(&entry, descriptor)?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let current_stage = self.validate_signed_bootstrap_payload_persistence_locked(
+            authority,
+            &entry,
+            &authority.bootstrap.body.executable_payload,
+        )?;
+        let (next, replacing_existing) = match (target, current_stage) {
+            (
+                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
+                AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable,
+            ) => (&authority.bootstrap.body.prepared_activate, false),
+            (
+                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
+                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable
+                | AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+            ) => return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted),
+            (
+                AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
+            ) => (&authority.bootstrap.body.live_activate, true),
+            (
+                AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+                AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
+            ) => return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted),
+            (AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly, _)
+            | (AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable, _)
+            | (AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable, _)
+            | (AutonomousLifecycleBootstrapRecoveryStage::LiveDurable, _) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    authority.path.clone(),
+                    "autonomous lifecycle bootstrap cursor stages are not contiguous",
+                ));
+            }
+        };
+        let cursor_path = Self::autonomous_lifecycle_cursor_path_for_entry(
+            &entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let cursor_parent = cursor_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                cursor_path.clone(),
+                "autonomous lifecycle bootstrap cursor path has no parent",
+            )
+        })?;
+        let current_bytes = self.read_regular_sidecar_bytes(
+            &cursor_path,
+            cursor_parent,
+            AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+        )?;
+        let prepared_bytes = authority
+            .bootstrap
+            .body
+            .prepared_activate
+            .encode_framed()
+            .map_err(Error::NoritoFrame)?;
+        if replacing_existing && current_bytes.as_deref() != Some(prepared_bytes.as_slice())
+            || !replacing_existing && current_bytes.is_some()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                cursor_path,
+                "autonomous lifecycle bootstrap cursor head changed before publication",
+            ));
+        }
+        let next_bytes = next.encode_framed().map_err(Error::NoritoFrame)?;
+        let previous_len = current_bytes
+            .as_ref()
+            .map_or(Ok(0), |bytes| u64::try_from(bytes.len()))?;
+        let next_len = u64::try_from(next_bytes.len())?;
+        let inventory = self.autonomous_lane_attempt_inventory_counts_locked(
+            &entry,
+            descriptor.lane_block_height,
+        )?;
+        Self::validate_autonomous_lifecycle_cursor_cas_budget(
+            inventory.conceptual_files,
+            inventory.conceptual_bytes,
+            previous_len,
+            next_len,
+            replacing_existing,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(cursor_path.clone(), message))?;
+        // The atomic writer materializes the complete successor beside the old
+        // cursor (for replace) or empty stable path (for create). Preflight that
+        // exact transient exposure against both accounting domains before any
+        // mutation; only the enforced domain has a configured capacity bound.
+        let creates_lifecycle_identity = !replacing_existing
+            && inventory.needs_terminal_reservation_for_new_identity((
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+            ));
+        self.validate_configured_autonomous_mutation_disk_peak_locked(
+            pending_canonical_bytes,
+            next_len,
+            creates_lifecycle_identity,
+            false,
+            &cursor_path,
+        )?;
+        self.kura_total_disk_usage_bytes()?
+            .checked_add(next_len)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    cursor_path.clone(),
+                    "autonomous lifecycle bootstrap cursor atomic peak total-disk accounting overflows",
+                )
+            })?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        if replacing_existing {
+            self.write_atomic_synced_replace(&cursor_path, &next_bytes)?;
+        } else if !self.write_atomic_synced_noclobber(&cursor_path, &next_bytes)? {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "autonomous lifecycle bootstrap cursor appeared during publication",
+                ),
+                cursor_path,
+            ));
+        }
+        self.update_disk_usage_delta(previous_len, next_len);
+        self.update_total_disk_usage_delta(previous_len, next_len);
+        accounting_mutation.finish();
+        let readback = self
+            .read_regular_sidecar_bytes(
+                &cursor_path,
+                cursor_parent,
+                AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    cursor_path.clone(),
+                    "autonomous lifecycle bootstrap cursor disappeared after publication",
+                )
+            })?;
+        if Self::decode_autonomous_lifecycle_cursor(&cursor_path, &readback)? != *next {
+            return Err(Self::invalid_lane_artifact_error(
+                cursor_path,
+                "autonomous lifecycle bootstrap cursor readback differs from the signed target",
+            ));
+        }
+        Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted)
     }
 }

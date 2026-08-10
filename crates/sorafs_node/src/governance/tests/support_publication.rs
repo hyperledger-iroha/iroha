@@ -857,6 +857,7 @@ struct TestRuntimeDagSigner {
     drift_during_sign: AtomicBool,
     refuse_with: Option<String>,
     corrupt_signature: bool,
+    last_purpose: Mutex<Option<GovernanceDagSigningPurposeV1>>,
 }
 
 impl fmt::Debug for TestRuntimeDagSigner {
@@ -884,6 +885,7 @@ impl TestRuntimeDagSigner {
             drift_during_sign: AtomicBool::new(false),
             refuse_with: None,
             corrupt_signature: false,
+            last_purpose: Mutex::new(None),
         }
     }
 
@@ -895,6 +897,10 @@ impl TestRuntimeDagSigner {
             .expect("serialize test public key");
         assert_eq!(algorithm, Algorithm::Ed25519);
         bytes.try_into().expect("Ed25519 public key is fixed-width")
+    }
+
+    fn observed_purpose(&self) -> Option<GovernanceDagSigningPurposeV1> {
+        *self.last_purpose.lock().expect("signing purpose lock")
     }
 }
 
@@ -933,7 +939,12 @@ impl GovernanceDagRuntimeSigner for TestRuntimeDagSigner {
             .unwrap_or_else(|| self.public_key_bytes())
     }
 
-    fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
+    fn sign(
+        &self,
+        purpose: GovernanceDagSigningPurposeV1,
+        payload: &[u8],
+    ) -> Result<[u8; 64], String> {
+        *self.last_purpose.lock().expect("signing purpose lock") = Some(purpose);
         if self.drift_during_sign.swap(false, Ordering::SeqCst) {
             self.qualification_revision.fetch_add(1, Ordering::SeqCst);
         }
@@ -1722,6 +1733,51 @@ fn qualification_archive_crash_temp_is_quarantined_before_history_inventory() {
         )
         .expect("archive-temp recovery converges after offline cleanup");
     drop(recovered);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn qualification_recovery_preserves_canonical_archive_for_history_validation() {
+    let temp = tempdir().expect("tempdir");
+    let checkpoint_store = Arc::new(TestRuntimeDagCheckpointStore::default());
+    let publisher = signed_runtime_publisher_with_store(temp.path(), checkpoint_store);
+    let (settlement, encoded) = sample_settlement();
+    publisher
+        .publish_deal_settlement(&settlement, &encoded)
+        .expect("seed signed runtime DAG");
+    let archive_path = runtime_dag_qualification_archive_path(temp.path(), 1, [0xA8; 32]);
+    fs::create_dir_all(archive_path.parent().expect("archive parent"))
+        .expect("create qualification archive directory");
+    fs::write(
+        &archive_path,
+        b"canonical-name-awaiting-authenticated-history",
+    )
+    .expect("seed canonical archive entry");
+    fs::set_permissions(&archive_path, fs::Permissions::from_mode(0o600))
+        .expect("make archive entry private");
+
+    let error = recover_runtime_dag_qualification_compaction(
+        temp.path(),
+        publisher.root_guard(),
+        publisher
+            .runtime_dag_signer
+            .as_ref()
+            .expect("runtime signer"),
+        publisher
+            .runtime_dag_checkpoint_store
+            .as_ref()
+            .expect("runtime checkpoint store"),
+    )
+    .expect_err("canonical archive without authenticated history must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("archives exist without their authenticated history head")
+    );
+    assert_eq!(
+        fs::read(&archive_path).expect("canonical archive entry remains"),
+        b"canonical-name-awaiting-authenticated-history"
+    );
 }
 
 #[test]

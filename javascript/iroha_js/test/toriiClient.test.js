@@ -49,7 +49,6 @@ import { sorafsGatewayFetch } from "../src/sorafs.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "../src/ivmArtifact.js";
 import { blake2b256 } from "../src/blake2b.js";
 import { buildBrowserVerifyingKeyTransactionPayload } from "../src/transactionCodec.js";
-import { generateConnectSid } from "../src/connectSession.js";
 import {
   parseStrictLosslessIntegerJson,
   stringifyStrictLosslessIntegerJson,
@@ -61,6 +60,12 @@ import {
   nativeUnavailableMessage,
 } from "./helpers/native.js";
 import { registerToriiClientGovernanceTests } from "./toriiClientGovernanceTests.js";
+import { registerToriiClientConnectSessionTests } from "./toriiClientConnectSessionTests.js";
+import {
+  createSseResponse,
+  fileExists,
+  withEnv,
+} from "./toriiClientTestHelpers.js";
 
 const SUMERAGI_DIAGNOSTICS_FOCUS_SYMBOL = Symbol.for(
   "iroha.js.test.sumeragiDiagnosticsContract",
@@ -125,38 +130,6 @@ const SAMPLE_ACCOUNT_OWNER = AccountAddress.fromAccount({
 const SEED_11_OWNER = AccountAddress.fromAccount({
   publicKey: Buffer.from(SEED_11_ED25519_PUBLIC_KEY_HEX, "hex"),
 }).toI105(SORA_I105_DISCRIMINANT);
-const SAMPLE_CONNECT_APP_PUBLIC_KEY = Buffer.alloc(32, 0x22);
-const SAMPLE_CONNECT_NONCE = Buffer.alloc(16, 0x33);
-const SAMPLE_CONNECT_SID_BASE64 = generateConnectSid({
-  networkId: VK_SIGNING_NETWORK_ID,
-  appPublicKey: SAMPLE_CONNECT_APP_PUBLIC_KEY,
-  nonce: SAMPLE_CONNECT_NONCE,
-}).sidBase64Url;
-function sampleConnectSessionInput(overrides = {}) {
-  return {
-    sid: SAMPLE_CONNECT_SID_BASE64,
-    networkId: VK_SIGNING_NETWORK_ID,
-    appPublicKey: SAMPLE_CONNECT_APP_PUBLIC_KEY,
-    nonce: SAMPLE_CONNECT_NONCE,
-    ...overrides,
-  };
-}
-
-function sampleConnectSessionResponse(overrides = {}) {
-  return {
-    sid: SAMPLE_CONNECT_SID_BASE64,
-    network_id: VK_SIGNING_NETWORK_ID.toString(),
-    app_pk: SAMPLE_CONNECT_APP_PUBLIC_KEY.toString("base64url"),
-    nonce: SAMPLE_CONNECT_NONCE.toString("base64url"),
-    wallet_uri: "iroha://connect",
-    app_uri: "iroha://connect/app",
-    token_app: "token-app",
-    token_wallet: "token-wallet",
-    token_management: "token-management",
-    token_relay: "token-relay",
-    ...overrides,
-  };
-}
 const toriiFixtures = JSON.parse(
   readFileSync(new URL("./fixtures/torii_responses.json", import.meta.url), "utf8"),
 );
@@ -18894,135 +18867,14 @@ test("getConnectStatus rejects non-integer policy values", async () => {
   );
 });
 
-test("createConnectSession validates sid and posts JSON", async () => {
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: sampleConnectSessionResponse(),
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const resp = await client.createConnectSession(
-    sampleConnectSessionInput({ node: "torii" }),
-  );
-  assert.equal(resp.sid, SAMPLE_CONNECT_SID_BASE64);
-  assert.equal(resp.wallet_uri, "iroha://connect");
-  assert.equal(resp.app_uri, "iroha://connect/app");
-  assert.equal(resp.token_app, "token-app");
-  assert.equal(resp.token_wallet, "token-wallet");
-  assert.equal(resp.token_management, "token-management");
-  assert.equal(resp.token_relay, "token-relay");
-  assert.deepEqual(resp.extra, {});
-  assert.equal(captured.url, `${BASE_URL}/v1/connect/session`);
-  assert.equal(captured.init.headers["Content-Type"], "application/json");
-  assert.deepEqual(JSON.parse(captured.init.body), {
-    sid: SAMPLE_CONNECT_SID_BASE64,
-    network_id: VK_SIGNING_NETWORK_ID.toString(),
-    app_pk: SAMPLE_CONNECT_APP_PUBLIC_KEY.toString("base64url"),
-    nonce: SAMPLE_CONNECT_NONCE.toString("base64url"),
-    node: "torii",
-  });
-});
-
-test("createConnectSession rejects malformed responses", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: sampleConnectSessionResponse({ token_wallet: undefined }),
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.createConnectSession(sampleConnectSessionInput()),
-    /token_wallet/i,
-  );
-});
-
-test("createConnectSession accepts base64url sid", async () => {
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: sampleConnectSessionResponse(),
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const resp = await client.createConnectSession(sampleConnectSessionInput());
-  assert.equal(resp.sid, SAMPLE_CONNECT_SID_BASE64);
-  assert.equal(captured.url, `${BASE_URL}/v1/connect/session`);
-  assert.deepEqual(JSON.parse(captured.init.body), {
-    sid: SAMPLE_CONNECT_SID_BASE64,
-    network_id: VK_SIGNING_NETWORK_ID.toString(),
-    app_pk: SAMPLE_CONNECT_APP_PUBLIC_KEY.toString("base64url"),
-    nonce: SAMPLE_CONNECT_NONCE.toString("base64url"),
-  });
-});
-
-test("createConnectSession rejects invalid sid values", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not be called");
-    },
-  });
-  await assert.rejects(
-    () => client.createConnectSession(sampleConnectSessionInput({ sid: "not a valid sid" })),
-    /32-byte.*(base64url|hex)/i,
-  );
-});
-
-test("createConnectSession rejects a SID derived for another exact network", async () => {
-  const otherNetwork = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
-  const wrongSid = generateConnectSid({
-    networkId: otherNetwork,
-    appPublicKey: SAMPLE_CONNECT_APP_PUBLIC_KEY,
-    nonce: SAMPLE_CONNECT_NONCE,
-  }).sidBase64Url;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not be called");
-    },
-  });
-  await assert.rejects(
-    () => client.createConnectSession(sampleConnectSessionInput({ sid: wrongSid })),
-    /exact networkId, appPublicKey, and nonce/,
-  );
-});
-
-test("deleteConnectSession returns flag based on status", async () => {
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({ status: 204 });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ok = await client.deleteConnectSession({
-    sid: SAMPLE_CONNECT_SID_BASE64,
-    tokenManagement: "token-management",
-  });
-  assert.equal(ok, true);
-  assert.equal(
-    captured.url,
-    `${BASE_URL}/v1/connect/session/${encodeURIComponent(SAMPLE_CONNECT_SID_BASE64)}`,
-  );
-  assert.equal(captured.init.method, "DELETE");
-  assert.equal(captured.init.headers.Authorization, "Bearer token-management");
-});
-
-test("deleteConnectSession returns false for missing session", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 404 }),
-  });
-  const ok = await client.deleteConnectSession({
-    sid: SAMPLE_CONNECT_SID_BASE64,
-    token_management: "token-management",
-  });
-  assert.equal(ok, false);
+registerToriiClientConnectSessionTests({
+  assert,
+  BASE_URL,
+  NetworkId,
+  ToriiClient,
+  VK_SIGNING_NETWORK_ID,
+  createResponse,
+  test,
 });
 
 test("listConnectApps normalizes registry payload", async () => {
@@ -25523,55 +25375,3 @@ test("ToriiClient._normalizeOffset rejects fractional offsets", () => {
     /offset must be a non-negative integer/,
   );
 });
-
-async function fileExists(filePath) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function createSseResponse(chunks) {
-  const body = {
-    async *[Symbol.asyncIterator]() {
-      const encoder = new TextEncoder();
-      for (const chunk of chunks) {
-        yield encoder.encode(chunk);
-      }
-    },
-  };
-  return {
-    status: 200,
-    headers: {
-      get(name) {
-        return name.toLowerCase() === "content-type" ? "text/event-stream" : null;
-      },
-    },
-    body,
-  };
-}
-
-async function withEnv(overrides, fn) {
-  const original = {};
-  for (const [key, value] of Object.entries(overrides)) {
-    original[key] = process.env[key];
-    if (value === null || value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
-    await fn();
-  } finally {
-    for (const [key, value] of Object.entries(original)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}

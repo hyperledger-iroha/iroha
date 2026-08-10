@@ -72,8 +72,8 @@ Logs:
   ```
 
   There is no environment-variable enablement or signing-seed path. The private
-  key remains non-exportable in the HSM/KMS, and its credentials, session, and
-  PIN are supplied only to the runtime-injected signer adapter. They must never
+  key remains encrypted and runtime-only in the external software signer, and
+  its authenticated session is supplied only to the runtime-injected adapter. It must never
   appear in configuration, files, logs, or readiness artefacts.
 - **Startup binding.** An enabled issuer requires all four configured public
   signer fields and an injected signer. Startup probes twice and fails closed
@@ -98,7 +98,7 @@ Logs:
 - **Pinning.** Each provider descriptor pins exactly one key. The client rejects
   malformed/weak Ed25519 keys and verifies the token before making an HTTP
   request. It never falls back to a key embedded in an untrusted response.
-- **Rotation.** Create the replacement key inside the approved HSM/KMS without
+- **Rotation.** Create the replacement key inside the independently administered software signer without
   exporting it. In one controlled rollout, inject the adapter for its new
   non-secret handle, update `signer_handle`, `signer_public_key_hex`,
   `signer_revision`, `signer_policy_digest_hex`, and `key_version`, and restart
@@ -106,7 +106,7 @@ Logs:
   strictly verified probe token before publishing the new public key through
   authenticated inventory. Atomically deploy a matching `gateway-key` and token.
   For overlap, use separately named old/new provider descriptors; remove the old
-  descriptor by its final token expiry, then revoke the old HSM/KMS key. There
+  descriptor by its final token expiry, then revoke the old software-signing key. There
   is no implicit multi-key acceptance window or path-based fallback.
 - **Audit trail.** Record old/new public-key fingerprints, key versions,
   non-secret signer handles, activation and final-expiry times, approver

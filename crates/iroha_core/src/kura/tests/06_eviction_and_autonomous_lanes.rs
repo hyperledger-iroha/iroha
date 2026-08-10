@@ -1997,7 +1997,7 @@ fn autonomous_lane_payload_for_kura(
     dataspace_id: DataSpaceId,
     lane_block_height: u64,
     signer: &KeyPair,
-) -> (Hash, u64, LaneExecutablePayloadV1) {
+) -> (NetworkId, u64, LaneExecutablePayloadV1) {
     let transaction = TransactionBuilder::new(
         test_network_id(b"kura-autonomous-view-checkpoint"),
         (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
@@ -2676,14 +2676,8 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
         .expect("persist autonomous payload");
     let availability =
         durable_lane_payload_availability_for_kura(&payload, &payload.origin_proposal, &signer);
-    kura.persist_lane_payload_availability_certificate(
-        lane_id,
-        1,
-        availability,
-        network_id,
-        epoch,
-    )
-    .expect("persist availability before retirement");
+    kura.persist_lane_payload_availability_certificate(lane_id, 1, availability, network_id, epoch)
+        .expect("persist availability before retirement");
     let (session, signer_pops) =
         committed_lane_block_session_for_kura_proposal(&payload.origin_proposal, &signer);
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);

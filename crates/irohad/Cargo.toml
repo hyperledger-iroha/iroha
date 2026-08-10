@@ -28,6 +28,7 @@ daemon = [
     "iroha_core/node",
     "iroha_torii/node-api",
     "iroha_crypto/consensus",
+    "iroha_crypto/pqc",
     "iroha_data_model/json",
     "ivm/runtime",
     "norito/node-codec",
@@ -90,6 +91,11 @@ name = "taira_bootle_lantern_broker"
 path = "src/bin/taira_bootle_lantern_broker.rs"
 required-features = ["daemon"]
 
+[[bin]]
+name = "sorafs_external_software_signer"
+path = "src/bin/sorafs_external_software_signer.rs"
+required-features = ["daemon"]
+
 [badges]
 is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }
 is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-iroha/iroha" }
@@ -125,7 +131,7 @@ clap = { workspace = true, features = ["derive", "env", "string"] }
 eyre = { workspace = true }
 error-stack = { workspace = true, features = ["eyre"] }
 tracing = { workspace = true }
-tokio = { workspace = true, features = ["macros", "signal"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 supports-color = { workspace = true }
 toml = { workspace = true }
 norito = { workspace = true, default-features = false }

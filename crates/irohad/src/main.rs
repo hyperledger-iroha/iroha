@@ -488,7 +488,7 @@ mod shared_sorafs_provider_cache_tests {
 
             [genesis]
             public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-            expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+            expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
 
             [streaming]
             identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13210,7 +13210,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13239,7 +13239,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13282,7 +13282,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -16560,38 +16560,7 @@ mod tests {
         }
     }
 
-    impl sorafs_node::GovernanceDagRuntimeSigner for GovernanceDagPublisherBindingSigner {
-        fn handle(&self) -> &'static str {
-            GOVERNANCE_DAG_PUBLISHER_HANDLE
-        }
-
-        fn qualification(
-            &self,
-        ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
-            Ok(
-                sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
-                    1,
-                    GOVERNANCE_DAG_PUBLISHER_POLICY_DIGEST,
-                ),
-            )
-        }
-
-        fn publisher_peer_id(&self) -> &[u8] {
-            GOVERNANCE_DAG_PUBLISHER_PEER_ID.as_bytes()
-        }
-
-        fn public_key(&self) -> [u8; 32] {
-            self.public_key_bytes()
-        }
-
-        fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
-            iroha_crypto::Signature::try_new(self.key_pair.private_key(), payload)
-                .map_err(|_| "deterministic Governance DAG signer refused request".to_owned())?
-                .payload()
-                .try_into()
-                .map_err(|_| "deterministic Governance DAG signature width changed".to_owned())
-        }
-    }
+    include!("main_tests/governance_dag_publisher_binding_signer.rs");
 
     #[derive(Debug)]
     struct GovernanceDagCheckpointBindingStore;
@@ -16838,10 +16807,13 @@ mod tests {
     #[test]
     fn governance_dag_publisher_binding_signer_produces_valid_ed25519_signatures() {
         let signer = GovernanceDagPublisherBindingSigner::from_seed(0x50);
-        let payload = b"irohad-governance-dag-publisher-binding";
-        let signature =
-            sorafs_node::GovernanceDagRuntimeSigner::sign(&signer, payload).expect("sign payload");
-        let repeated = sorafs_node::GovernanceDagRuntimeSigner::sign(&signer, payload)
+        let payload =
+            sorafs_node::governance_dag_key_transition_signing_payload_v1(1, 2, [0x50; 32])
+                .expect("governance key-transition payload");
+        let purpose = sorafs_node::GovernanceDagSigningPurposeV1::KeyTransition;
+        let signature = sorafs_node::GovernanceDagRuntimeSigner::sign(&signer, purpose, &payload)
+            .expect("sign payload");
+        let repeated = sorafs_node::GovernanceDagRuntimeSigner::sign(&signer, purpose, &payload)
             .expect("repeat signing");
 
         assert_eq!(signature, repeated);
@@ -16850,7 +16822,7 @@ mod tests {
             GOVERNANCE_DAG_PUBLISHER_HANDLE
         );
         iroha_crypto::Signature::from_bytes(&signature)
-            .verify(signer.key_pair.public_key(), payload)
+            .verify(signer.key_pair.public_key(), &payload)
             .expect("deterministic Governance DAG signature must verify");
     }
 
@@ -17703,7 +17675,7 @@ mod tests {
                 [genesis]
                 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
                 file = "./genesis.signed.nrt"
-                expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+                expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
 
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -17940,7 +17912,7 @@ mod tests {
 
                 [genesis]
                 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-                expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+                expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
 
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -19819,7 +19791,7 @@ mod tests {
                 [genesis]
                 public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
                 file = "./genesis.signed.nrt"
-                expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+                expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
 
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"

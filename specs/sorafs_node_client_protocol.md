@@ -93,7 +93,7 @@ accepted first-release algorithm; the multi-signature enum value remains
 reserved.
 
 For operator tooling, the repository ships `sorafs_provider_advert`. Production
-signing is private-key-free and uses a two-phase external Ed25519/HSM handoff.
+signing is private-key-free and uses a two-phase external software Ed25519 handoff.
 The first phase writes the exact canonical signing payload; after the external
 signer returns a raw 64-byte signature, the second phase verifies the reviewed
 payload, signer key, SHA-256 key fingerprint, and signature before emitting the
@@ -129,7 +129,7 @@ cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_provider_advert --
   --signing-payload-out=provider-advert.signing-payload \
   --json-out=provider-advert.signing-request.json
 
-# Send provider-advert.signing-payload to the governed PKCS#11/HSM signer.
+# Send provider-advert.signing-payload to the governed external software signer.
 # The signer returns exactly 64 raw Ed25519 signature bytes in provider.sig.
 
 cargo run -p sorafs_car --features cli,dev-tools --bin sorafs_provider_advert -- \
@@ -651,7 +651,7 @@ seconds of positive issuance-clock skew. It is rejected at its exact expiry
 second. Nodes return HTTP `404` with
 `{"error": "stream token issuance is not enabled on this node"}` only when
 issuance is disabled in node TOML. Enabled production startup fails closed
-unless two runtime-injected HSM/KMS signer probes report the exact configured
+unless two runtime-injected external software signer probes report the exact configured
 non-secret `signer_handle`, Ed25519 `signer_public_key_hex`, non-zero
 `signer_revision`, and non-zero `signer_policy_digest_hex`. Torii revalidates
 the same identity before and after every signature and discards output on

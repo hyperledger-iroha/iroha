@@ -22,6 +22,10 @@ const fn soracloud_compute_post(id: &'static str, path: &'static str) -> RouteDe
     authenticated_account_post(app_post(id, path), RouteEffect::ExpensiveCompute)
 }
 
+const fn account_compute_sdk_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+    authenticated_account_post(app_sdk_post(id, path), RouteEffect::ExpensiveCompute)
+}
+
 const fn soracloud_openapi_mutation_post(id: &'static str, path: &'static str) -> RouteDescriptor {
     authenticated_account_post(app_post(id, path), RouteEffect::Mutation)
 }

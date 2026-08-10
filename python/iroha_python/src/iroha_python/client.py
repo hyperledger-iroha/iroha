@@ -193,7 +193,11 @@ from ._privacy_backends import (
     _verifier_backend_registry_tag_v1,
 )
 from .address import AccountAddress, AccountAddressError, normalize_i105_discriminant
-from .connect import ConnectSessionInfo
+from .connect import (
+    ConnectSessionInfo,
+    _connect_session_info_from_response,
+    _normalize_connect_session_request,
+)
 from .connect_models import (
     ConnectAdmissionManifest,
     ConnectAdmissionManifestEntry,
@@ -20616,12 +20620,7 @@ class ToriiClient(
     ) -> Optional[Any]:
         """POST `/v1/connect/session` and return the session payload."""
 
-        body = dict(payload)
-        if "chain_id" in body:
-            raise ValueError("chain_id is retired; provide exact network_id")
-        missing = {"sid", "network_id", "app_pk", "nonce"}.difference(body)
-        if missing:
-            raise ValueError(f"Connect session request missing required fields: {sorted(missing)}")
+        body = _normalize_connect_session_request(payload)
         return self.request_json(
             "POST",
             "/v1/connect/session",
@@ -20637,15 +20636,14 @@ class ToriiClient(
     ) -> ConnectSessionInfo:
         """Create a session and parse the response into `ConnectSessionInfo`."""
 
-        response = self.create_connect_session(payload)
-        if not isinstance(response, Mapping):
-            raise ValueError("connect session response is missing or malformed")
+        request_body = _normalize_connect_session_request(payload)
+        response = self.create_connect_session(request_body)
         ttl_ms: Optional[int] = None
         if include_expiry:
             status_snapshot = self.get_connect_status_typed()
             if status_snapshot is not None and status_snapshot.policy is not None:
                 ttl_ms = status_snapshot.policy.session_ttl_ms
-        return ConnectSessionInfo.from_mapping(response, session_ttl_ms=ttl_ms)
+        return _connect_session_info_from_response(response, request_body, ttl_ms)
 
     def send_connect_control(
         self,

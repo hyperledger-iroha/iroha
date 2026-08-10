@@ -36,6 +36,11 @@ from blake3 import blake3
 
 from . import identifier_receipts as _identifier_receipts
 from .attachment_client import authenticated_attachment_request
+from .connect_session import (
+    ensure_connect_session_matches_request as _ensure_connect_session_matches_request,
+    normalize_connect_session_request as _normalize_connect_session_request,
+    parse_connect_session as _parse_connect_session,
+)
 from .client_status_models import (
     SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES,
     SUMERAGI_EVIDENCE_KIND_FILTERS,
@@ -11412,18 +11417,18 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
     def create_connect_session(self, payload: Mapping[str, Any]) -> ConnectSessionInfo:
         """Create a Connect session (`POST /v1/connect/session`)."""
 
-        request = dict(payload)
-        if "chain_id" in request:
-            raise ValueError("chain_id is retired; provide exact network_id")
-        missing = {"sid", "network_id", "app_pk", "nonce"}.difference(request)
-        if missing:
-            raise ValueError(f"Connect session request missing required fields: {sorted(missing)}")
+        request = _normalize_connect_session_request(
+            payload,
+            hash_literal=_offline_hash_literal,
+        )
         body = self._post_json(
             "/v1/connect/session",
             request,
             context="connect session",
         )
-        return self._parse_connect_session(body, context="connect session")
+        session = self._parse_connect_session(body, context="connect session")
+        _ensure_connect_session_matches_request(session, request)
+        return session
 
     def delete_connect_session(self, sid: str, token_management: str) -> bool:
         """Delete a Connect session (`DELETE /v1/connect/session/{sid}`)."""
@@ -16632,47 +16637,10 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
 
     @staticmethod
     def _parse_connect_session(payload: Mapping[str, Any], *, context: str) -> ConnectSessionInfo:
-        record = ToriiClient._ensure_mapping(payload, context)
-        sid = ToriiClient._require_string(record.get("sid"), f"{context}.sid")
-        network_id = ToriiClient._require_string(
-            record.get("network_id"), f"{context}.network_id"
-        )
-        app_pk = ToriiClient._require_string(record.get("app_pk"), f"{context}.app_pk")
-        nonce = ToriiClient._require_string(record.get("nonce"), f"{context}.nonce")
-        wallet_uri = ToriiClient._require_string(record.get("wallet_uri"), f"{context}.wallet_uri")
-        app_uri = ToriiClient._require_string(record.get("app_uri"), f"{context}.app_uri")
-        token_app = ToriiClient._require_string(record.get("token_app"), f"{context}.token_app")
-        token_wallet = ToriiClient._require_string(record.get("token_wallet"), f"{context}.token_wallet")
-        token_management = ToriiClient._require_string(
-            record.get("token_management"),
-            f"{context}.token_management",
-        )
-        token_relay = ToriiClient._require_string(record.get("token_relay"), f"{context}.token_relay")
-        known = {
-            "sid",
-            "network_id",
-            "app_pk",
-            "nonce",
-            "wallet_uri",
-            "app_uri",
-            "token_app",
-            "token_wallet",
-            "token_management",
-            "token_relay",
-        }
-        extra = {key: value for key, value in record.items() if key not in known}
-        return ConnectSessionInfo(
-            sid=sid,
-            network_id=network_id,
-            app_pk=app_pk,
-            nonce=nonce,
-            wallet_uri=wallet_uri,
-            app_uri=app_uri,
-            token_app=token_app,
-            token_wallet=token_wallet,
-            token_management=token_management,
-            token_relay=token_relay,
-            extra=extra,
+        return _parse_connect_session(
+            payload,
+            context=context,
+            hash_literal=_offline_hash_literal,
         )
 
     @staticmethod

@@ -391,7 +391,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 845
+_PRODUCTION_TEST_COUNT = 849
 _G_UNIT_TEST_COUNT = 524
 _G_UNIT_GROUPS = (
     (
@@ -459,11 +459,7 @@ _G_UNIT_GROUPS = (
     ),
 )
 _PRODUCTION_MODULES = (
-    (
-        "production-kura-progress-durability",
-        "kura::tests",
-        14,
-    ),
+    ("production-kura-progress-durability", "kura::tests", 17),
     (
         "production-kura-lane-geometry",
         "kura::lane_geometry::tests",
@@ -480,6 +476,7 @@ _PRODUCTION_MODULES = (
         43,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
+    ("production-state-governance-unlock-audit", "state::tests", 1),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 17),
     (
@@ -700,6 +697,7 @@ def _canonical_production_tests(
                     "offline::",
                     "zk::",
                     "merge_sidecar::",
+                    "state::",
                     "kura::",
                     "nexus::",
                     "peer::",
@@ -1046,7 +1044,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                362,
+                363,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_receipt_test.py "
@@ -1067,9 +1065,8 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                4819,
-                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
-                "-q -p no:cacheprovider "
+                4828,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
                 "pytests/scripts/sumeragi_v2_verus_evidence_test.py "
                 "pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py "
@@ -1089,7 +1086,8 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
                 "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::"
                 "test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal "
                 "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
-                "test_inflight_layout_contract_rejects_membership_only_lane_authorship",
+                "test_inflight_layout_contract_rejects_membership_only_lane_authorship "
+                + _WIRE_RELEASE_INVARIANT_PYTEST_NODES,
             ),
             (
                 "preflight-formal-launcher",
@@ -1101,7 +1099,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-taira-soak",
                 "pytest",
-                42,
+                43,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/taira_v2_soak_test.py::"

@@ -40079,17 +40079,19 @@ fn iso_profile_from_request<'a>(
     headers: &HeaderMap,
     query: &HashMap<String, String>,
 ) -> Result<&'a iroha_core::iso_bridge::profiles::TradfiRailProfile, Error> {
-    let header_profile = headers
-        .get("x-iroha-iso-profile")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let query_profile = query
+    if headers.contains_key("x-iroha-iso-profile") {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "X-Iroha-Iso-Profile is retired; select the profile with the signed `profile` query parameter"
+                    .into(),
+            ),
+        ));
+    }
+    let selected = query
         .get("profile")
         .map(String::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let selected = header_profile.or(query_profile);
     runtime.resolve_profile(selected).ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::NotPermitted(
             format!(
@@ -49995,84 +49997,83 @@ impl Torii {
             &route_catalog::iso20022::PACS008_SUBMIT,
             catalog_post(handler_iso_pacs008)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::PACS009_SUBMIT,
             catalog_post(handler_iso_pacs009)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::PACS002_SUBMIT,
             catalog_post(handler_iso_pacs002_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::PACS004_SUBMIT,
             catalog_post(handler_iso_pacs004_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::CAMT056_SUBMIT,
             catalog_post(handler_iso_camt056_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::SESE023_SUBMIT,
             catalog_post(handler_iso_sese023_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::SESE024_SUBMIT,
             catalog_post(handler_iso_sese024_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::SESE025_SUBMIT,
             catalog_post(handler_iso_sese025_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::COLR012_SUBMIT,
             catalog_post(handler_iso_colr012_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE,
-            catalog_get(handler_iso_status).authenticated_required_api_token(app_state.clone()),
+            catalog_get(handler_iso_status).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::AUDIT_MESSAGES,
-            catalog_get(handler_iso_audit_messages)
-                .authenticated_required_api_token(app_state.clone()),
+            catalog_get(handler_iso_audit_messages).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_PACS002,
-            catalog_get(handler_iso_pacs002).authenticated_required_api_token(app_state.clone()),
+            catalog_get(handler_iso_pacs002).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_PACS004,
-            catalog_get(handler_iso_pacs004).authenticated_required_api_token(app_state.clone()),
+            catalog_get(handler_iso_pacs004).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_CAMT029,
-            catalog_get(handler_iso_camt029).authenticated_required_api_token(app_state.clone()),
+            catalog_get(handler_iso_camt029).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_SESE024,
-            catalog_get(handler_iso_sese024).authenticated_required_api_token(app_state.clone()),
+            catalog_get(handler_iso_sese024).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_SESE025,
-            catalog_get(handler_iso_sese025).authenticated_required_api_token(app_state),
+            catalog_get(handler_iso_sese025).authenticated_operator(app_state),
         );
     }
 
@@ -51466,7 +51467,11 @@ impl Torii {
         );
         builder.route(
             &route_catalog::application_api::APP_API_CID_BY_CID_BY_PATH_POST,
-            catalog_post(app_api::handle_post_app_api_cid_path),
+            catalog_post(app_api::handle_post_app_api_cid_path)
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::application_api::APP_API_ACTIVE_BY_PATH_GET,
@@ -51474,7 +51479,11 @@ impl Torii {
         );
         builder.route(
             &route_catalog::application_api::APP_API_ACTIVE_BY_PATH_POST,
-            catalog_post(app_api::handle_post_app_api_active_path),
+            catalog_post(app_api::handle_post_app_api_active_path)
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::application_api::API_CID_BY_CID_GET,
@@ -51486,7 +51495,11 @@ impl Torii {
         );
         builder.route(
             &route_catalog::application_api::API_CID_BY_CID_BY_PATH_POST,
-            catalog_post(app_api::handle_post_app_api_cid_path),
+            catalog_post(app_api::handle_post_app_api_cid_path)
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_GET,
@@ -54155,7 +54168,7 @@ impl Torii {
             }
             (Some(_), None) => {
                 panic!(
-                    "torii.sorafs.storage.pop_credentials is enabled but runtime-only enrollment/HSM/KMS/authentication dependencies were not injected"
+                    "torii.sorafs.storage.pop_credentials is enabled but runtime-only enrollment/external-software-signer/KMS/authentication dependencies were not injected"
                 )
             }
             (None, Some(_)) => {
@@ -56160,7 +56173,7 @@ mod gateway_runtime_config_tests {
         ) -> Result<sorafs::gateway::AcmeClientIdentityV1, sorafs::gateway::AcmeClientProbeError>
         {
             Ok(sorafs::gateway::AcmeClientIdentityV1 {
-                provider_handle: "hsm://gateway/acme/primary".into(),
+                provider_handle: "runtime://sorafs/gateway-acme/primary".into(),
                 revision: 17,
                 policy_digest: [0x51; 32],
                 test_marked: false,
@@ -56272,7 +56285,7 @@ mod gateway_runtime_config_tests {
     fn acme_provider_binding()
     -> iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
         iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
-            provider_handle: "hsm://gateway/acme/primary".into(),
+            provider_handle: "runtime://sorafs/gateway-acme/primary".into(),
             revision: 17,
             policy_digest: [0x51; 32],
         }
@@ -57917,62 +57930,7 @@ impl OnlinePeersProvider {
 
 // Textual inclusion keeps every `tests` item at its original module path.
 include!("tests/lib_tests.rs");
-#[test]
-fn conn_scheme_detects_norito_rpc() {
-    let request = axum::http::Request::builder()
-        .method(axum::http::Method::POST)
-        .header(
-            axum::http::header::CONTENT_TYPE,
-            crate::utils::NORITO_MIME_TYPE,
-        )
-        .body(())
-        .unwrap();
-    assert!(matches!(
-        ConnScheme::from_request(&request),
-        ConnScheme::NoritoRpc
-    ));
-}
-
-#[test]
-fn conn_scheme_marks_transaction_path_as_norito_rpc() {
-    let request = axum::http::Request::builder()
-        .method(axum::http::Method::POST)
-        .uri(iroha_torii_shared::uri::TRANSACTION)
-        .body(())
-        .unwrap();
-    assert!(matches!(
-        ConnScheme::from_request(&request),
-        ConnScheme::NoritoRpc
-    ));
-}
-
-#[test]
-fn conn_scheme_labels_use_norito_rpc_name() {
-    assert_eq!(ConnScheme::NoritoRpc.label(), "norito_rpc");
-}
-
-#[test]
-fn conn_scheme_defaults_to_http_for_json() {
-    let request = axum::http::Request::builder()
-        .method(axum::http::Method::POST)
-        .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .body(())
-        .unwrap();
-    assert!(matches!(
-        ConnScheme::from_request(&request),
-        ConnScheme::Http
-    ));
-}
-
-#[test]
-fn conn_scheme_flags_websocket_upgrade() {
-    let request = axum::http::Request::builder()
-        .method(axum::http::Method::GET)
-        .header(axum::http::header::UPGRADE, "websocket")
-        .body(())
-        .unwrap();
-    assert!(matches!(ConnScheme::from_request(&request), ConnScheme::Ws));
-}
+include!("tests/lib_conn_scheme.rs");
 
 // Textual inclusion keeps the telemetry test-module namespace unchanged.
 include!("tests/lib_peer_telemetry.rs");

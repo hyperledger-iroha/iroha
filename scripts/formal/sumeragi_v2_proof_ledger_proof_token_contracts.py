@@ -421,7 +421,7 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ): (
         "IndexedNewGstRequiresResponsiveActiveRoster",
         "IndexedPostGstResponsiveActiveRosterSurvivesAction",
-        "IndexedAsync!GstAsyncStepIsMonotone",
+        "IndexedGstAsyncStepIsMonotone",
         "IndexedPostGstResponsiveActiveRosterCoherence",
     ),
     (

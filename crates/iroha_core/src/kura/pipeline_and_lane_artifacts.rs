@@ -3009,80 +3009,6 @@ impl AutonomousLifecycleBootstrapRecoveryAuthority {
     }
 }
 
-/// Custody-fenced completion permit for one exact, re-observed bootstrap authority.
-enum AutonomousLifecycleBootstrapCompletionFence<'queue> {
-    ProducerQueue(AutonomousLaneKuraActivationAuthorization<'queue>),
-    DurablePayloadCustody,
-    #[cfg(test)]
-    Test,
-}
-
-/// Exact bootstrap revalidation used only by custody-fenced completion.
-#[must_use = "the bootstrap completion revalidation must be handled"]
-struct AutonomousLifecycleBootstrapCompletionRevalidation {
-    /// Exact bootstrap authority refreshed at its current durable crash boundary.
-    authority: AutonomousLifecycleBootstrapRecoveryAuthority,
-    /// Whether the exact application receipt was observed during this refresh.
-    receipt_terminal: bool,
-}
-
-/// Authorization mode for the low-level autonomous payload writer.
-#[derive(Clone, Copy)]
-enum LaneExecutablePayloadPersistenceMode<'bootstrap> {
-    /// Ordinary writers stop before mutation once an exact receipt is durable.
-    #[cfg(test)]
-    Ordinary,
-    /// A pre-existing signed bootstrap may roll its exact payload forward to
-    /// Live so canonical terminal reconciliation retains a complete lifecycle unit.
-    SignedBootstrap(&'bootstrap AutonomousLifecycleBootstrapRecoveryAuthority),
-}
-
-#[must_use = "the authenticated bootstrap permit must be completed or deliberately dropped"]
-pub(crate) struct AutonomousLifecycleBootstrapCompletionPermit<'queue> {
-    authority: AutonomousLifecycleBootstrapRecoveryAuthority,
-    fence: AutonomousLifecycleBootstrapCompletionFence<'queue>,
-}
-
-/// Exact post-bootstrap cursor observation; a newer process must take over through Crash/Recover.
-#[must_use = "the post-bootstrap lifecycle lease must be consumed or deliberately dropped"]
-pub(crate) struct AutonomousLifecycleBootstrapCompletion {
-    cursor_read: AutonomousLifecycleCursorRead,
-    takeover_required: bool,
-}
-
-/// Result of completing a custody-fenced lifecycle bootstrap.
-#[must_use = "the bootstrap completion outcome must be handled"]
-pub(crate) enum AutonomousLifecycleBootstrapCompletionOutcome {
-    /// The payload and Live cursor crossed their durability boundaries.
-    Completed(AutonomousLifecycleBootstrapCompletion),
-    /// The exact proposal was already durably applied. Its pre-existing signed
-    /// bootstrap was rolled forward to an exact Live lifecycle unit without
-    /// re-entering volatile consensus or releasing Queue ownership.
-    AlreadyTerminal,
-}
-
-impl AutonomousLifecycleBootstrapCompletion {
-    /// Whether the pre-signed historical Live owner must be taken over by this process generation.
-    #[must_use]
-    pub(crate) const fn takeover_required(&self) -> bool {
-        self.takeover_required
-    }
-
-    /// Borrow the exact Live cursor durably read after bootstrap deletion.
-    #[must_use]
-    pub(crate) fn cursor(&self) -> &AutonomousLifecycleCursorV2 {
-        self.cursor_read
-            .cursor()
-            .expect("completed bootstrap always returns its exact Live cursor")
-    }
-
-    /// Consume the completion into the ordinary move-only cursor read and CAS lease.
-    #[must_use]
-    pub(crate) fn into_cursor_read(self) -> AutonomousLifecycleCursorRead {
-        self.cursor_read
-    }
-}
-
 include!("autonomous_merge_bundle_support.rs");
 
 /// One source-revalidated Pending terminal outcome ready for startup Queue
@@ -3542,13 +3468,6 @@ struct AutonomousLaneBlockDurableRecord {
     view_state_path: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AutonomousLaneBlockViewStateReadMode {
-    MainOnly,
-    LatestReadOnly,
-    Recover { pending_canonical_bytes: u64 },
-}
-
 include!("autonomous_reservation_types.rs");
 include!("autonomous_reservation_inventory.rs");
 include!("autonomous_reservation_classifier.rs");
@@ -3908,28 +3827,6 @@ pub enum LaneBlockPayloadAvailability {
     MissingTransactionResult,
     /// An accepted entrypoint hash differs from the certified descriptor.
     EntrypointHashMismatch,
-}
-
-/// Result of a lane auxiliary-artifact persistence attempt serialized with
-/// application-receipt publication and merge-frontier compaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LaneBlockAuxiliaryPersistenceOutcome {
-    /// The requested auxiliary artifact crossed its durability boundary.
-    Persisted,
-    /// The exact lane proposal is already durably applied, so auxiliary
-    /// payload/input state is terminal and must not be recreated.
-    AlreadyTerminal,
-}
-
-/// Result of appending one authenticated autonomous NewView certificate while
-/// serialized with exact lane-application receipt publication.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LaneBlockNewViewPersistenceOutcome {
-    /// The certificate crossed its durability boundary and advanced this cursor.
-    Persisted(LaneBlockProposalV1),
-    /// The exact immutable origin proposal is already durably applied, so no
-    /// later view evidence may be written for its retained lifecycle attempt.
-    AlreadyTerminal,
 }
 
 /// Read-only startup classification for one ordinary application receipt.

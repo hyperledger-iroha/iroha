@@ -49,7 +49,7 @@ impl std::error::Error for PopRuntimeStartupError {
 /// Build the `PoP` runtime from public config and one deployment-owned registry.
 ///
 /// The Torii constructor validates the exact configured provider handle,
-/// revision, policy digest, resolved HSM identity, both protected recipient
+/// revision, policy digest, resolved external signer identity, both protected recipient
 /// identities, and wallet wrapping-key identity before opening durable service
 /// state. It also guards every resolved provider operation against
 /// qualification drift.
@@ -104,20 +104,20 @@ mod tests {
     use sorafs_node::pop_credentials::{
         PopAuthenticatedPrincipalV1, PopCredentialApiActionV1, PopCredentialApiAuthenticator,
         PopEnrollmentRecipientV1, PopFinalizedRegistryProjectionV1, PopFinalizedRegistryReader,
-        PopIssuanceDraftV1, PopIssuerHsm, PopRecipientOpenErrorV1, PopRegistryOperationV1,
-        PopRegistrySubmitter, PopRequestAuthorityV1, PopWalletKeyWrapper, PopWalletRecipientV1,
-        pop_enrollment_recipient_public_key_digest_v1,
+        PopIssuanceDraftV1, PopIssuerSigner, PopIssuerSigningPurposeV1, PopRecipientOpenErrorV1,
+        PopRegistryOperationV1, PopRegistrySubmitter, PopRequestAuthorityV1, PopWalletKeyWrapper,
+        PopWalletRecipientV1, pop_enrollment_recipient_public_key_digest_v1,
     };
 
     use super::*;
 
     #[derive(Debug)]
-    struct FixedIssuerHsm {
+    struct FixedIssuerSigner {
         key_id: String,
         public_key: [u8; 32],
     }
 
-    impl PopIssuerHsm for FixedIssuerHsm {
+    impl PopIssuerSigner for FixedIssuerSigner {
         fn key_id(&self) -> &str {
             &self.key_id
         }
@@ -126,7 +126,11 @@ mod tests {
             self.public_key
         }
 
-        fn sign_digest(&self, _digest: [u8; 32]) -> Result<[u8; 64], String> {
+        fn sign_digest(
+            &self,
+            _purpose: PopIssuerSigningPurposeV1,
+            _digest: [u8; 32],
+        ) -> Result<[u8; 64], String> {
             Ok([0x91; 64])
         }
     }
@@ -391,7 +395,7 @@ mod tests {
             wallet_state_dir: root.join("wallet"),
             issuer_policy_digest: [0x51; 32],
             issuer_id: "pop-issuer-runtime-primary".to_owned(),
-            issuer_hsm_key_id: "pkcs11:pop/issuer:primary".to_owned(),
+            issuer_signer_handle: "software://sorafs/pop-credentials/primary".to_owned(),
             issuer_public_key: ed25519_public_key(0x41),
             enrollment_recipient_key_id: "kms:pop/enrollment:primary".to_owned(),
             enrollment_recipient_public_key_digest: pop_enrollment_recipient_public_key_digest_v1(
@@ -459,8 +463,8 @@ mod tests {
                     secret: enrollment_recipient.secret().clone(),
                     public_key_digest: config.enrollment_recipient_public_key_digest,
                 }),
-                issuer_hsm: Arc::new(FixedIssuerHsm {
-                    key_id: config.issuer_hsm_key_id.clone(),
+                issuer_signer: Arc::new(FixedIssuerSigner {
+                    key_id: config.issuer_signer_handle.clone(),
                     public_key: config.issuer_public_key,
                 }),
                 authenticator: Arc::new(FixedAuthenticator),
@@ -565,7 +569,7 @@ mod tests {
             .expect("registry must receive the exact public bindings");
         assert_eq!(observed.issuer_policy_digest(), config.issuer_policy_digest);
         assert_eq!(observed.issuer_id(), config.issuer_id);
-        assert_eq!(observed.issuer_hsm_key_id(), config.issuer_hsm_key_id);
+        assert_eq!(observed.issuer_signer_handle(), config.issuer_signer_handle);
         assert_eq!(observed.issuer_public_key(), config.issuer_public_key);
         assert_eq!(
             observed.enrollment_recipient_key_id(),
@@ -731,7 +735,7 @@ mod tests {
         );
         for private_detail in [
             "runtime:pop:providers:primary",
-            "pkcs11:pop/issuer:primary",
+            "software://sorafs/pop-credentials/primary",
             "kms:pop/wallet:primary",
             "credential",
             "secret",

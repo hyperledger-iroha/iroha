@@ -1234,7 +1234,8 @@ mod tests {
         map.insert(
             "GENESIS_EXPECTED_HASH".into(),
             Value::String(
-                "0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
+                "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .to_owned(),
             ),
         );
         let mock_env = mock_env_from_value(value);

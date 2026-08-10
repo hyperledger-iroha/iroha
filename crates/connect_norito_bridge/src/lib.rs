@@ -116,6 +116,13 @@ use zeroize::{Zeroize, Zeroizing};
 
 mod account_onboarding;
 pub use account_onboarding::connect_norito_encode_account_onboarding_plan_body_v1;
+mod connect_approval_ffi;
+use connect_approval_ffi::{
+    connect_norito_connect_approval_preimage, connect_norito_connect_verify_approval,
+    connect_signature_from_algorithm_bytes, connect_wallet_signature_from_algorithm_bytes,
+    parse_algorithm_cstr, parse_connect_wallet_signature_algorithm_label,
+    validate_exact_connect_identity,
+};
 mod confidential_note_ffi;
 
 #[cfg(all(
@@ -270,6 +277,8 @@ const ERR_IDENTIFIER_RECEIPT: c_int = -406;
 const ERR_CONNECT_KEYPAIR: c_int = -407;
 const ERR_ACCOUNT_ONBOARDING_BODY: c_int = -408;
 const ERR_ALIAS_INSTRUCTION: c_int = -409;
+const ERR_CONNECT_IDENTITY: c_int = -410;
+const ERR_CONNECT_APPROVAL: c_int = -411;
 const ERR_DETACHED_TRANSACTION_SCAFFOLD: c_int = -501;
 const ERR_DETACHED_TRANSACTION_SIGNATURE: c_int = -502;
 const ERR_CANONICAL_JSON: c_int = -503;
@@ -3725,48 +3734,6 @@ fn option_to_ffi(value: Option<usize>) -> (u64, u8) {
     }
 }
 
-fn parse_connect_wallet_signature_algorithm_label(alg_str: &str) -> Result<Algorithm, c_int> {
-    let normalized = alg_str.trim();
-    if normalized.is_empty() || !normalized.bytes().all(|byte| (0x20..=0x7e).contains(&byte)) {
-        return Err(-8);
-    }
-    if normalized.eq_ignore_ascii_case("ed25519") {
-        return Ok(Algorithm::Ed25519);
-    }
-    Err(-8)
-}
-
-fn connect_wallet_signature_from_algorithm_bytes(
-    algorithm: Algorithm,
-    signature: &[u8],
-) -> Option<proto::WalletSignatureV1> {
-    connect_signature_from_algorithm_bytes(algorithm, signature)
-        .map(|signature| proto::WalletSignatureV1::new(algorithm, signature))
-}
-
-fn connect_signature_from_algorithm_bytes(
-    algorithm: Algorithm,
-    signature: &[u8],
-) -> Option<Signature> {
-    match algorithm {
-        Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(signature).ok(),
-        Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(signature).ok(),
-        _ => Signature::try_from_bytes(signature).ok(),
-    }
-}
-
-unsafe fn parse_algorithm_cstr(
-    alg_ptr: *const c_char,
-    alg_len: c_ulong,
-) -> Result<Algorithm, c_int> {
-    if alg_ptr.is_null() {
-        return Err(-6);
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(alg_ptr as *const u8, alg_len as usize) };
-    let alg_str = std::str::from_utf8(bytes).map_err(|_| -7)?;
-    parse_connect_wallet_signature_algorithm_label(alg_str)
-}
-
 unsafe fn parse_permissions_bytes(
     permissions_ptr: *const u8,
     permissions_len: c_ulong,
@@ -3782,36 +3749,43 @@ unsafe fn parse_permissions_bytes(
     match val {
         JsonValue::Null => Ok(None),
         JsonValue::Object(map) => {
-            let methods = map
-                .get("methods")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_else(Vec::new);
-            let events = map
-                .get("events")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_else(Vec::new);
-            let resources = map.get("resources").and_then(|v| v.as_array()).map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+            if map
+                .keys()
+                .any(|key| !matches!(key.as_str(), "methods" | "events" | "resources"))
+            {
+                return Err(-4);
+            }
+            let parse_strings = |field: &str| -> Result<Vec<String>, c_int> {
+                let Some(value) = map.get(field) else {
+                    return Ok(Vec::new());
+                };
+                value
+                    .as_array()
+                    .ok_or(-4)?
+                    .iter()
+                    .map(|value| value.as_str().map(str::to_owned).ok_or(-4))
                     .collect()
-            });
+            };
+            let methods = parse_strings("methods")?;
+            let events = parse_strings("events")?;
+            let resources = match map.get("resources") {
+                None | Some(JsonValue::Null) => None,
+                Some(value) => Some(
+                    value
+                        .as_array()
+                        .ok_or(-4)?
+                        .iter()
+                        .map(|value| value.as_str().map(str::to_owned).ok_or(-4))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            };
             Ok(Some(proto::PermissionsV1 {
                 methods,
                 events,
                 resources,
             }))
         }
-        _ => Ok(None),
+        _ => Err(-4),
     }
 }
 
@@ -3830,29 +3804,34 @@ unsafe fn parse_app_meta_bytes(
     match val {
         JsonValue::Null => Ok(None),
         JsonValue::Object(map) => {
+            if map
+                .keys()
+                .any(|key| !matches!(key.as_str(), "name" | "url" | "icon_hash"))
+            {
+                return Err(-4);
+            }
             let name = map
                 .get("name")
                 .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty());
+                .filter(|value| !value.is_empty() && value.trim() == *value);
             let Some(name) = name else {
-                return Ok(None);
+                return Err(-4);
             };
-            let url = map
-                .get("url")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let icon_hash = map
-                .get("icon_hash")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            let optional_string = |field: &str| -> Result<Option<String>, c_int> {
+                match map.get(field) {
+                    None | Some(JsonValue::Null) => Ok(None),
+                    Some(value) => value.as_str().map(str::to_owned).map(Some).ok_or(-4),
+                }
+            };
+            let url = optional_string("url")?;
+            let icon_hash = optional_string("icon_hash")?;
             Ok(Some(proto::AppMeta {
                 name: name.to_string(),
                 url,
                 icon_hash,
             }))
         }
-        _ => Ok(None),
+        _ => Err(-4),
     }
 }
 
@@ -3871,31 +3850,26 @@ unsafe fn parse_proof_bytes(
     match val {
         JsonValue::Null => Ok(None),
         JsonValue::Object(map) => {
-            let domain = map
-                .get("domain")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let uri = map
-                .get("uri")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let statement = map
-                .get("statement")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let issued_at = map
-                .get("issued_at")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let nonce = map
-                .get("nonce")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            if map.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "domain" | "uri" | "statement" | "issued_at" | "nonce"
+                )
+            }) {
+                return Err(-4);
+            }
+            let required_string = |field: &str| -> Result<String, c_int> {
+                map.get(field)
+                    .and_then(JsonValue::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .ok_or(-4)
+            };
+            let domain = required_string("domain")?;
+            let uri = required_string("uri")?;
+            let statement = required_string("statement")?;
+            let issued_at = required_string("issued_at")?;
+            let nonce = required_string("nonce")?;
             Ok(Some(proto::SignInProofV1 {
                 domain,
                 uri,
@@ -3904,7 +3878,7 @@ unsafe fn parse_proof_bytes(
                 nonce,
             }))
         }
-        _ => Ok(None),
+        _ => Err(-4),
     }
 }
 
@@ -4756,6 +4730,8 @@ pub unsafe extern "C" fn connect_norito_encode_control_open_ext(
     seq: u64,
     app_pk_ptr: *const c_uchar,
     app_pk_len: c_ulong,
+    nonce_ptr: *const c_uchar,
+    nonce_len: c_ulong,
     app_meta_ptr: *const c_uchar,
     app_meta_len: c_ulong,
     network_id_ptr: *const c_uchar,
@@ -4768,76 +4744,42 @@ pub unsafe extern "C" fn connect_norito_encode_control_open_ext(
     unsafe {
         if sid_ptr.is_null()
             || app_pk_ptr.is_null()
+            || nonce_ptr.is_null()
             || network_id_ptr.is_null()
             || out_ptr.is_null()
             || out_len.is_null()
+            || (app_meta_len > 0 && app_meta_ptr.is_null())
+            || (perms_len > 0 && perms_ptr.is_null())
         {
             return -1;
         }
-        if app_pk_len != 32 {
+        *out_ptr = ptr::null_mut();
+        *out_len = 0;
+        if app_pk_len != 32
+            || nonce_len != 16
+            || network_id_len != Hash::LENGTH as c_ulong
+            || dir != 0
+            || seq != 1
+        {
             return -2;
         }
-        let sid = std::slice::from_raw_parts(sid_ptr, 32);
-        let mut sid_arr = [0u8; 32];
-        sid_arr.copy_from_slice(sid);
-        let dir = match dir {
-            0 => proto::Dir::AppToWallet,
-            1 => proto::Dir::WalletToApp,
-            _ => return -3,
+        let (network_id, sid_arr, app_pk, _) = match validate_exact_connect_identity(
+            std::slice::from_raw_parts(network_id_ptr, network_id_len as usize),
+            std::slice::from_raw_parts(sid_ptr, 32),
+            std::slice::from_raw_parts(app_pk_ptr, app_pk_len as usize),
+            std::slice::from_raw_parts(nonce_ptr, nonce_len as usize),
+        ) {
+            Ok(identity) => identity,
+            Err(code) => return code,
         };
-        let app_pk = {
-            let pk = std::slice::from_raw_parts(app_pk_ptr, 32);
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(pk);
-            arr
-        };
-        let network_id = match network_id_from_raw_bytes(std::slice::from_raw_parts(
-            network_id_ptr,
-            network_id_len as usize,
-        )) {
-            Ok(network_id) => network_id,
-            Err(_) => return -4,
-        };
+        let dir = proto::Dir::AppToWallet;
         let app_meta = match parse_app_meta_bytes(app_meta_ptr, app_meta_len) {
             Ok(meta) => meta,
             Err(code) => return code,
         };
-        let permissions = if !perms_ptr.is_null() && perms_len > 0 {
-            let j = std::slice::from_raw_parts(perms_ptr, perms_len as usize);
-            if let Ok(val) = norito::json::from_slice::<norito::json::Value>(j) {
-                let methods = val
-                    .get("methods")
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .unwrap_or_else(Vec::new);
-                let events = val
-                    .get("events")
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .unwrap_or_else(Vec::new);
-                let resources = val.get("resources").and_then(|v| v.as_array()).map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                        .collect()
-                });
-                Some(proto::PermissionsV1 {
-                    methods,
-                    events,
-                    resources,
-                })
-            } else {
-                None
-            }
-        } else {
-            None
+        let permissions = match parse_permissions_bytes(perms_ptr, perms_len) {
+            Ok(permissions) => permissions,
+            Err(code) => return code,
         };
         let ctrl = proto::ConnectControlV1::Open {
             app_pk,
@@ -27645,9 +27587,11 @@ mod accel_tests {
     #[test]
     fn connect_open_app_metadata_roundtrip() {
         let _guard = chain_guard();
-        let sid = [0x11u8; 32];
         let app_pk = [0x22u8; 32];
+        let nonce = [0x33u8; 16];
         let network_id = Hash::new(b"connect-open-bridge-genesis");
+        let exact_network = network_id_from_raw_bytes(network_id.as_ref()).expect("network id");
+        let sid = connect_sdk::derive_session_id(&exact_network, &app_pk, &nonce);
         let app_meta = json_object([
             ("name", JsonValue::from("demo")),
             ("url", JsonValue::from("https://example.test")),
@@ -27660,9 +27604,11 @@ mod accel_tests {
             connect_norito_encode_control_open_ext(
                 sid.as_ptr(),
                 0,
-                7,
+                1,
                 app_pk.as_ptr(),
                 app_pk.len() as c_ulong,
+                nonce.as_ptr(),
+                nonce.len() as c_ulong,
                 app_meta_bytes.as_ptr(),
                 app_meta_bytes.len() as c_ulong,
                 network_id.as_ref().as_ptr(),
@@ -27732,6 +27678,8 @@ mod accel_tests {
             }
         }
     }
+
+    include!("connect_approval_ffi_tests.rs");
 
     fn fixture_private_key() -> Vec<u8> {
         let seed = hex::decode("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032")

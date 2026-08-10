@@ -284,7 +284,7 @@ if (( ${#trusted_buildx_version} == 0 || ${#trusted_buildx_version} > 512 )); th
 fi
 
 if [[ -z "$binaries" ]]; then
-  binaries="iroha3d sorafs_governance_dag iroha kagami attachment_sanitizer"
+  binaries="iroha3d sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
 fi
 read -r -a binary_inventory <<< "$binaries"
 if (( ${#binary_inventory[@]} == 0 || ${#binary_inventory[@]} > 32 )); then
@@ -495,6 +495,7 @@ mkdir -m 0755 \
   "$build_context/scripts" \
   "$build_context/dist" \
   "$build_context/configs" \
+  "$build_context/configs/sorafs" \
   "$build_context/configs/soranexus" \
   "$build_context/configs/soranexus/taira"
 python3 "$repo_root/scripts/copy_release_file.py" \
@@ -518,6 +519,14 @@ python3 "$repo_root/scripts/copy_release_tree.py" \
   --source-root "$repo_root/codec/rans/tables" \
   --output-root "$build_context" \
   --destination-prefix "codec/rans/tables" >/dev/null
+python3 "$repo_root/scripts/copy_release_tree.py" \
+  --source-root "$repo_root/configs/sorafs/external_software_signer" \
+  --output-root "$build_context" \
+  --destination-prefix "configs/sorafs/external_software_signer" >/dev/null
+python3 "$repo_root/scripts/copy_release_tree.py" \
+  --source-root "$repo_root/configs/sorafs/runtime_provider_broker" \
+  --output-root "$build_context" \
+  --destination-prefix "configs/sorafs/runtime_provider_broker" >/dev/null
 context_kind="closed-prebuilt"
 context_summary="$(
     python3 - "$repo_root/scripts" "$build_context" <<'CONTEXT_PY'
@@ -805,6 +814,13 @@ manifest = {
     "platform": platform,
     "features": features,
     "binaries": binaries.split(),
+    "external_software_signer": {
+        "backend": "software",
+        "binary": "/usr/local/bin/sorafs_external_software_signer",
+        "broker_alias": "/usr/local/libexec/iroha-runtime-provider-broker-v1",
+        "smoke": "native-build-stage",
+        "windows_supported": False,
+    },
     "source_context": {
         "kind": context_kind,
         **context_summary,

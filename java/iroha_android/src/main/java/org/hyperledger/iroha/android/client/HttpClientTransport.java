@@ -481,19 +481,23 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   /** Fetch the exact canonical committed Exact12 manifest and require native validation. */
-  public CompletableFuture<PrivacyExact12CapabilityManifestV1> getPrivacyCapabilities() {
+  public CompletableFuture<PrivacyExact12CapabilityManifestV1> getPrivacyCapabilities(
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     return fetchExactNoritoBytes(
             buildExactNoritoGetRequest(
                 "/v1/privacy/capabilities",
-                (long) PrivacyExact12CapabilityManifestV1.MAX_ARCHIVE_BYTES),
+                (long) PrivacyExact12CapabilityManifestV1.MAX_ARCHIVE_BYTES,
+                Objects.requireNonNull(canonicalAuth, "canonicalAuth")),
             "privacy capabilities")
         .thenApply(PrivacyNativeBridge::decodeExact12CapabilityManifestV1);
   }
 
   /** Require committed/native tuple agreement before retained privacy construction. */
   public CompletableFuture<PrivacyExact12CapabilityTupleAdmissionV1>
-      requirePrivacyExact12CapabilityAdmission(final PrivacyProtocolIdV1 protocolId) {
-    return getPrivacyCapabilities()
+      requirePrivacyExact12CapabilityAdmission(
+          final PrivacyProtocolIdV1 protocolId,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    return getPrivacyCapabilities(canonicalAuth)
         .thenApply(
             manifest ->
                 PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(
@@ -1799,15 +1803,26 @@ public final class HttpClientTransport implements IrohaClient {
 
   private TransportRequest buildExactNoritoGetRequest(
       final String path, final long maximumResponseBytes) {
+    return buildExactNoritoGetRequest(path, maximumResponseBytes, null);
+  }
+
+  private TransportRequest buildExactNoritoGetRequest(
+      final String path,
+      final long maximumResponseBytes,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     for (final String name : config.defaultHeaders().keySet()) {
       if (name.equalsIgnoreCase("Accept")) {
         throw new IllegalArgumentException(
             "Accept must not be overridden for exact Norito requests");
       }
     }
+    if (canonicalAuth != null) {
+      requireCanonicalHeadersUnset();
+    }
+    final URI target = resolvePath(path);
     final TransportRequest.Builder builder =
         TransportRequest.builder()
-            .setUri(resolvePath(path))
+            .setUri(target)
             .setMethod("GET")
             .addHeader("Accept", APPLICATION_NORITO)
             .setMaximumResponseBytes(Long.valueOf(maximumResponseBytes))
@@ -1815,7 +1830,28 @@ public final class HttpClientTransport implements IrohaClient {
     for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
       builder.addHeader(entry.getKey(), entry.getValue());
     }
+    if (canonicalAuth != null) {
+      final Map<String, String> canonicalHeaders =
+          buildCanonicalHeaders("GET", target, null, canonicalAuth);
+      for (final Map.Entry<String, String> entry : canonicalHeaders.entrySet()) {
+        builder.addHeader(entry.getKey(), entry.getValue());
+      }
+      TransportSecurity.requireHttpRequestAllowed(
+          "HttpClientTransport", config.baseUri(), target, canonicalHeaders, null);
+    }
     return builder.build();
+  }
+
+  private void requireCanonicalHeadersUnset() {
+    for (final String candidate : config.defaultHeaders().keySet()) {
+      if (candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_ACCOUNT)
+          || candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_SIGNATURE)
+          || candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_TIMESTAMP_MS)
+          || candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_NONCE)) {
+        throw new IllegalArgumentException(
+            "canonical request headers must be supplied only through canonicalAuth");
+      }
+    }
   }
 
   private TransportRequest buildJsonPostRequest(

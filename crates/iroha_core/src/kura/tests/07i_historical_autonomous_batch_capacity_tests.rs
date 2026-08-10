@@ -4,7 +4,7 @@ fn historical_capacity_payload_for_kura(
     lane_block_height: u64,
     tag: &str,
     signer: &KeyPair,
-) -> (Hash, u64, LaneExecutablePayloadV1) {
+) -> (NetworkId, u64, LaneExecutablePayloadV1) {
     let (network_id, epoch, source) =
         autonomous_lane_payload_for_kura(lane_id, dataspace_id, lane_block_height, signer);
     let transaction = TransactionBuilder::new(

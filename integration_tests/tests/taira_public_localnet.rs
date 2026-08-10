@@ -3168,12 +3168,12 @@ fn env_f64(key: &str, default: f64, min: f64) -> f64 {
 }
 
 fn localnet_tempdir(label: &str) -> Result<TempDir> {
-    let root = repo_root().join("target").join("taira-localnet");
-    fs::create_dir_all(&root)
-        .wrap_err_with(|| format!("create taira temp root {}", root.display()))?;
-    tempfile::Builder::new()
-        .prefix(label)
-        .tempdir_in(&root)
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .ok_or_else(|| eyre!("CARGO_TARGET_DIR is required for Taira localnet artifacts"))?;
+    ensure!(!target.is_empty(), "CARGO_TARGET_DIR must not be empty");
+    let root = PathBuf::from(target).join("taira-localnet");
+    fs::create_dir_all(&root).wrap_err("create Taira localnet artifact root")?;
+    tempfile::Builder::new().prefix(label).tempdir_in(&root)
         .wrap_err("create taira localnet temp dir")
 }
 

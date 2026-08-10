@@ -7,19 +7,20 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import org.hyperledger.iroha.android.client.ConfidentialAssetToriiClient;
+import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.client.ZkMerklePathRequest;
 import org.hyperledger.iroha.android.client.ZkMerklePathResponse;
 
 /** Fetches current confidential-v2 commitment inclusion paths from Torii. */
 public final class ToriiZkAssetMerklePathProvider implements ZkAssetMerklePathProvider {
   private final ConfidentialAssetToriiClient client;
+  private final ToriiCanonicalRequestAuth canonicalAuth;
 
-  public ToriiZkAssetMerklePathProvider() {
-    this(ConfidentialAssetToriiClient.builder().build());
-  }
-
-  public ToriiZkAssetMerklePathProvider(final ConfidentialAssetToriiClient client) {
+  public ToriiZkAssetMerklePathProvider(
+      final ConfidentialAssetToriiClient client,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     this.client = Objects.requireNonNull(client, "client");
+    this.canonicalAuth = Objects.requireNonNull(canonicalAuth, "canonicalAuth");
   }
 
   @Override
@@ -49,7 +50,7 @@ public final class ToriiZkAssetMerklePathProvider implements ZkAssetMerklePathPr
         return CompletableFuture.completedFuture(Collections.emptyList());
       }
       return client
-          .getZkAssetMerklePaths(new ZkMerklePathRequest(asset, copied))
+          .getZkAssetMerklePaths(new ZkMerklePathRequest(asset, copied), canonicalAuth)
           .thenApply(response -> toPaths(response, copied));
     } catch (final RuntimeException ex) {
       return failedFuture(ex);

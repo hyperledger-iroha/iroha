@@ -70,7 +70,7 @@ EXPECTED_CHECKER_EXIT_CODE = 1
 EXPECTED_AGGREGATE_STATUS = "blocked"
 ARCHIVE_STATUS = "locally-qualified"
 ARCHIVE_ATTESTATION_SCOPE = "local-execution-receipt"
-BASELINE_INPUT_COUNT = 3 + len(DEFAULT_REQUIRED_GATES)
+BASELINE_INPUT_COUNT = 5 + len(DEFAULT_REQUIRED_GATES)
 
 EXPECTED_REJECTION_FIELDS = frozenset(
     {"checker_exit_code", "aggregate_status", "diagnostic_class"}
@@ -858,8 +858,12 @@ def _require_baseline_unchanged(snapshot: BaselineSnapshot) -> None:
 def _input_filename(slot: str) -> str:
     if slot == "topology_qualification":
         return "topology-qualification.json"
+    if slot == "topology_qualification_envelope":
+        return "topology-qualification-envelope.json"
     if slot == "resilience_qualification":
         return "resilience-qualification.json"
+    if slot == "l1_lane_evidence_inventory":
+        return "l1-lane-evidence.inventory"
     if slot == "foundational_prerequisite":
         return "foundational-prerequisite.json"
     if slot not in DEFAULT_REQUIRED_GATES:
@@ -892,10 +896,40 @@ def _promotion_runner_command(
         "baseline-output/aggregate-summary.json",
         "--topology-qualification-summary",
         _input_filename("topology_qualification"),
+        "--topology-qualification-envelope",
+        _input_filename("topology_qualification_envelope"),
+        "--topology-qualification-verification-public-key-hex",
+        args.topology_qualification_verification_public_key_hex,
+        "--topology-qualification-signer-service-id",
+        args.topology_qualification_signer_service_id,
+        "--topology-qualification-signer-administrator-id",
+        args.topology_qualification_signer_administrator_id,
+        "--topology-qualification-signer-key-revision",
+        str(args.topology_qualification_signer_key_revision),
+        "--topology-qualification-signer-policy-revision",
+        str(args.topology_qualification_signer_policy_revision),
+        "--topology-qualification-signer-policy-digest-hex",
+        args.topology_qualification_signer_policy_digest_hex,
+        "--max-topology-qualification-review-age-secs",
+        str(args.max_topology_qualification_review_age_secs),
         "--resilience-qualification-summary",
         _input_filename("resilience_qualification"),
         "--resilience-qualification-signer-public-key-hex",
         args.resilience_qualification_signer_public_key_hex,
+        "--l1-lane-evidence-inventory",
+        _input_filename("l1_lane_evidence_inventory"),
+        "--l1-lane-evidence-inventory-verification-public-key-hex",
+        args.l1_lane_evidence_inventory_verification_public_key_hex,
+        "--l1-lane-evidence-inventory-signer-service-id",
+        args.l1_lane_evidence_inventory_signer_service_id,
+        "--l1-lane-evidence-inventory-signer-administrator-id",
+        args.l1_lane_evidence_inventory_signer_administrator_id,
+        "--l1-lane-evidence-inventory-signer-key-revision",
+        str(args.l1_lane_evidence_inventory_signer_key_revision),
+        "--l1-lane-evidence-inventory-signer-policy-revision",
+        str(args.l1_lane_evidence_inventory_signer_policy_revision),
+        "--l1-lane-evidence-inventory-signer-policy-digest-sha256",
+        args.l1_lane_evidence_inventory_signer_policy_digest_sha256,
         "--foundational-prerequisite-summary",
         _input_filename("foundational_prerequisite"),
         "--require-gate",
@@ -1001,13 +1035,47 @@ def _checker_command(
         str(toolchain_root / BUNDLED_CHECKER.name),
         "--topology-qualification-summary",
         _input_filename("topology_qualification"),
+        "--topology-qualification-envelope",
+        _input_filename("topology_qualification_envelope"),
+        "--topology-qualification-verification-public-key-hex",
+        args.topology_qualification_verification_public_key_hex,
+        "--topology-qualification-signer-service-id",
+        args.topology_qualification_signer_service_id,
+        "--topology-qualification-signer-administrator-id",
+        args.topology_qualification_signer_administrator_id,
+        "--topology-qualification-signer-key-revision",
+        str(args.topology_qualification_signer_key_revision),
+        "--topology-qualification-signer-policy-revision",
+        str(args.topology_qualification_signer_policy_revision),
+        "--topology-qualification-signer-policy-digest-hex",
+        args.topology_qualification_signer_policy_digest_hex,
+        "--max-topology-qualification-review-age-secs",
+        str(args.max_topology_qualification_review_age_secs),
         "--resilience-qualification-summary",
         _input_filename("resilience_qualification"),
         "--resilience-qualification-signer-public-key-hex",
         args.resilience_qualification_signer_public_key_hex,
+        "--l1-lane-evidence-inventory",
+        _input_filename("l1_lane_evidence_inventory"),
+        "--l1-lane-evidence-inventory-verification-public-key-hex",
+        args.l1_lane_evidence_inventory_verification_public_key_hex,
+        "--l1-lane-evidence-inventory-signer-service-id",
+        args.l1_lane_evidence_inventory_signer_service_id,
+        "--l1-lane-evidence-inventory-signer-administrator-id",
+        args.l1_lane_evidence_inventory_signer_administrator_id,
+        "--l1-lane-evidence-inventory-signer-key-revision",
+        str(args.l1_lane_evidence_inventory_signer_key_revision),
+        "--l1-lane-evidence-inventory-signer-policy-revision",
+        str(args.l1_lane_evidence_inventory_signer_policy_revision),
+        "--l1-lane-evidence-inventory-signer-policy-digest-sha256",
+        args.l1_lane_evidence_inventory_signer_policy_digest_sha256,
     ]
     for evidence_file in evidence_files:
         command.extend(["--evidence", evidence_file])
+    for gate in DEFAULT_REQUIRED_GATES:
+        command.extend(
+            ["--l1-lane-summary", f"{gate}={_input_filename(gate)}"]
+        )
     command.extend(
         [
             "--require-gate",
@@ -1345,7 +1413,8 @@ def validate_archive_manifest(
     if manifest.get("baseline_input_count") != BASELINE_INPUT_COUNT:
         errors.append(
             "negative-promotion archive baseline input count must match the "
-            "topology, resilience, foundation, and 17-lane inventory"
+            "topology summary/envelope, resilience, signed inventory, "
+            "foundation, and 17-lane inventory"
         )
     if manifest.get("baseline_input_set_sha256") != baseline_input_set_sha256:
         errors.append("negative-promotion archive must bind the baseline input set")

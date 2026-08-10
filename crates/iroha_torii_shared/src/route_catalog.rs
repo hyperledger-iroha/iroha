@@ -137,6 +137,8 @@ pub enum AdmissionPolicy {
     Public,
     /// A canonical on-ledger account principal is required.
     AuthenticatedAccount,
+    /// A non-ledger protocol principal authenticated by the exact handshake is required.
+    AuthenticatedProtocolPrincipal,
     /// A current validator or roster member is required.
     ValidatorRosterMember,
     /// A node operator principal is required.
@@ -692,6 +694,8 @@ pub enum CatalogValidationErrorKind {
     /// Account admission lacks a canonical account, manifest, signed-body, or
     /// authenticated streaming boundary.
     AuthenticatedAccountRequiresAuthentication,
+    /// Protocol-principal admission lacks the exact protocol handshake.
+    AuthenticatedProtocolPrincipalRequiresHandshake,
     /// Validator/roster admission lacks a peer or operator identity boundary.
     ValidatorAdmissionRequiresAuthentication,
     /// Operator admission lacks an operator-capable credential boundary.
@@ -893,6 +897,15 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
             errors.push(CatalogValidationError {
                 stable_route_id: route_id,
                 kind: CatalogValidationErrorKind::AuthenticatedAccountRequiresAuthentication,
+            });
+        }
+
+        if route.admission == AdmissionPolicy::AuthenticatedProtocolPrincipal
+            && route.authentication != AuthenticationPolicy::ProtocolHandshake
+        {
+            errors.push(CatalogValidationError {
+                stable_route_id: route_id,
+                kind: CatalogValidationErrorKind::AuthenticatedProtocolPrincipalRequiresHandshake,
             });
         }
 
@@ -2129,7 +2142,7 @@ pub mod iso20022 {
             RouteEffect::Mutation,
             AdmissionPolicy::Operator,
         )
-        .with_authentication(AuthenticationPolicy::RequiredApiToken)
+        .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_projections(RouteProjections::ALL)
         .with_cors_options(true)
     }
@@ -2144,7 +2157,7 @@ pub mod iso20022 {
             RouteEffect::ReadOnly,
             AdmissionPolicy::Operator,
         )
-        .with_authentication(AuthenticationPolicy::RequiredApiToken)
+        .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_projections(RouteProjections::ALL)
         .with_implicit_head(true)
         .with_cors_options(true)
@@ -3433,8 +3446,17 @@ pub mod runtime_governance {
     ];
 }
 
+#[path = "route_catalog/sorafs_pop.rs"]
+mod sorafs_pop;
+
 /// `SoraFS` discovery, storage, transparency, reputation, and gateway routes.
 pub mod sorafs {
+    pub use super::sorafs_pop::{
+        POP_APPROVAL, POP_ENROLLMENT, POP_ENROLLMENT_STATUS, POP_ISSUE, POP_REGISTRY_PROJECTION,
+        POP_REGISTRY_RECONCILE, POP_REGISTRY_SUBMIT, POP_REVOCATION, POP_VERIFY,
+        POP_WALLET_ACKNOWLEDGE, POP_WALLET_DELIVERY, POP_WALLET_IMPORT, POP_WALLET_PROVE,
+        POP_WALLET_SYNCHRONIZE,
+    };
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         PathPolicy, RouteDescriptor, RouteEffect, RouteMatch, RouteProjections,
@@ -3922,78 +3944,6 @@ pub mod sorafs {
         documented_post("sorafs.pdp.export", "/v1/sorafs/pdp/export")
             .with_authentication(AuthenticationPolicy::OperatorSignature)
             .with_admission(AdmissionPolicy::Operator);
-    /// Submit one canonical encrypted `PoP` enrollment.
-    pub const POP_ENROLLMENT: RouteDescriptor =
-        documented_post("sorafs.pop.enrollment.submit", "/v1/sorafs/pop/enrollments")
-            .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Read payload-free `PoP` enrollment status.
-    pub const POP_ENROLLMENT_STATUS: RouteDescriptor = documented_post(
-        "sorafs.pop.enrollment.status",
-        "/v1/sorafs/pop/enrollments/status",
-    )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Record one governed dual-control `PoP` approval.
-    pub const POP_APPROVAL: RouteDescriptor =
-        documented_post("sorafs.pop.approval.record", "/v1/sorafs/pop/approvals")
-            .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Trigger runtime-resolved HSM-backed `PoP` issuance.
-    pub const POP_ISSUE: RouteDescriptor =
-        documented_post("sorafs.pop.credential.issue", "/v1/sorafs/pop/issue")
-            .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Enqueue a governed `PoP` revocation successor.
-    pub const POP_REVOCATION: RouteDescriptor = documented_post(
-        "sorafs.pop.revocation.enqueue",
-        "/v1/sorafs/pop/revocations",
-    )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Submit the next durable `PoP` registry outbox entry.
-    pub const POP_REGISTRY_SUBMIT: RouteDescriptor = documented_post(
-        "sorafs.pop.registry.submit",
-        "/v1/sorafs/pop/registry/submit-next",
-    )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Reconcile the next finalized `PoP` registry projection.
-    pub const POP_REGISTRY_RECONCILE: RouteDescriptor = documented_post(
-        "sorafs.pop.registry.reconcile",
-        "/v1/sorafs/pop/registry/reconcile-next",
-    )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Read the current finalized `PoP` registry projection.
-    pub const POP_REGISTRY_PROJECTION: RouteDescriptor = documented_post(
-        "sorafs.pop.registry.projection",
-        "/v1/sorafs/pop/registry/projection",
-    )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Fetch finalized encrypted `PoP` wallet delivery.
-    pub const POP_WALLET_DELIVERY: RouteDescriptor = documented_post(
-        "sorafs.pop.wallet.delivery",
-        "/v1/sorafs/pop/wallet/delivery",
-    )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Import finalized encrypted `PoP` wallet delivery.
-    pub const POP_WALLET_IMPORT: RouteDescriptor =
-        documented_post("sorafs.pop.wallet.import", "/v1/sorafs/pop/wallet/import")
-            .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Acknowledge durable `PoP` wallet delivery.
-    pub const POP_WALLET_ACKNOWLEDGE: RouteDescriptor = documented_post(
-        "sorafs.pop.wallet.acknowledge",
-        "/v1/sorafs/pop/wallet/acknowledge",
-    )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Synchronize a runtime-only `PoP` wallet witness.
-    pub const POP_WALLET_SYNCHRONIZE: RouteDescriptor = documented_post(
-        "sorafs.pop.wallet.synchronize",
-        "/v1/sorafs/pop/wallet/synchronize",
-    )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Generate a `PoP` membership proof from local wallet custody.
-    pub const POP_WALLET_PROVE: RouteDescriptor =
-        documented_post("sorafs.pop.wallet.prove", "/v1/sorafs/pop/wallet/prove")
-            .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Verify a `PoP` membership proof and consume its nullifier.
-    pub const POP_VERIFY: RouteDescriptor =
-        documented_post("sorafs.pop.membership.verify", "/v1/sorafs/pop/verify")
-            .with_authentication(AuthenticationPolicy::ProtocolHandshake);
     /// Read the manifest selected by the request's `SoraFS` site binding.
     pub const SITE_MANIFEST: RouteDescriptor = protocol_get(
         "protocol.sorafs.site_manifest",
@@ -4218,7 +4168,7 @@ pub mod application_api {
     }
 
     const fn app_wildcard_post(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_sdk_post(id, path).with_route_match(RouteMatch::Wildcard)
+        account_compute_sdk_post(id, path).with_route_match(RouteMatch::Wildcard)
     }
 
     const fn push_post(id: &'static str, path: &'static str) -> RouteDescriptor {

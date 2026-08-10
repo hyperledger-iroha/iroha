@@ -1,0 +1,23 @@
+#!/bin/sh
+set -efu
+
+if [ "$#" -ne 1 ]; then
+  echo "exactly one fixed signer role is required" >&2
+  exit 64
+fi
+role="$1"
+case "$role" in
+  proof-outcome|repair|reserve|orderbook|governance-dag|potr-gateway|potr-provider|billing|evidence-viewer|stream-token|pop-credentials) ;;
+  *) echo "unsupported signer role" >&2; exit 64 ;;
+esac
+
+# launchd opens the administrator-created credential FIFO as standard input.
+# Duplicate that already-open descriptor; secret bytes never enter argv,
+# configuration, the environment, or a pathname resolved by this process.
+exec 3<&0
+exec /usr/local/bin/sorafs_external_software_signer serve \
+  --state-directory "/private/var/db/iroha/sorafs-signers/$role" \
+  --binding "/private/etc/sorafs/signers/$role.binding.norito" \
+  --request-socket "/private/var/iroha/sorafs-signers/$role/request.sock" \
+  --administrator-socket "/private/var/iroha/sorafs-signers/$role/administrator.sock" \
+  --wrapping-key-fd 3

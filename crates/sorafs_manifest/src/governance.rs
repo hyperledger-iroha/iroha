@@ -3999,7 +3999,7 @@ pub fn governance_log_node_cid_v1(
     hasher.update(&payload_bytes);
     Ok(hasher.finalize().as_bytes().to_vec())
 }
-
+include!("governance_signing_payload_validation.rs");
 fn verify_governance_signature_bytes(
     publisher_signature: &GovernanceLogSignatureV1,
     payload_bytes: &[u8],

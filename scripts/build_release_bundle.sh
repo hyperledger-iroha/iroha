@@ -196,7 +196,12 @@ EPOCH_PY
 export SOURCE_DATE_EPOCH="$source_date_epoch"
 
 if [[ -z "$prebuilt_bin_dir" ]]; then
-  cargo_command=(cargo build --profile deploy --bins --locked)
+  cargo_command=(cargo build --profile deploy --locked
+    --bin irohad --bin sorafs_governance_dag --bin iroha --bin kagami
+    --bin attachment_sanitizer)
+  if [[ "$os_tag" != "win" ]]; then
+    cargo_command+=(--bin sorafs_external_software_signer)
+  fi
   if [[ -n "$target" ]]; then
     cargo_command+=(--target "$target")
   fi
@@ -228,12 +233,16 @@ governance_dag_bin="sorafs_governance_dag"
 cli_bin="iroha"
 utility_bin="kagami"
 sanitizer_bin="attachment_sanitizer"
+signer_bin="sorafs_external_software_signer"
 if [[ "$os_tag" == "win" ]]; then
   daemon_bin="${daemon_bin}.exe"
   governance_dag_bin="${governance_dag_bin}.exe"
   cli_bin="${cli_bin}.exe"
   utility_bin="${utility_bin}.exe"
   sanitizer_bin="${sanitizer_bin}.exe"
+  signer_support="unsupported-windows"
+else
+  signer_support="software-key-qualified"
 fi
 
 artifacts_dir="$(
@@ -316,35 +325,73 @@ executables=(
   "bin/$utility_bin"
   "bin/$sanitizer_bin"
 )
-python3 "$repo_root/scripts/copy_release_file.py" \
-  --source "$binary_root/$daemon_bin" \
-  --output "$stage_root/bin/$daemon_bin" \
-  --mode 0755 \
-  --require-executable
-python3 "$repo_root/scripts/copy_release_file.py" \
-  --source "$binary_root/$governance_dag_bin" \
-  --output "$stage_root/bin/$governance_dag_bin" \
-  --mode 0755 \
-  --require-executable
-python3 "$repo_root/scripts/copy_release_file.py" \
-  --source "$binary_root/$cli_bin" \
-  --output "$stage_root/bin/$cli_bin" \
-  --mode 0755 \
-  --require-executable
-python3 "$repo_root/scripts/copy_release_file.py" \
-  --source "$binary_root/$utility_bin" \
-  --output "$stage_root/bin/$utility_bin" \
-  --mode 0755 \
-  --require-executable
-python3 "$repo_root/scripts/copy_release_file.py" \
-  --source "$binary_root/$sanitizer_bin" \
-  --output "$stage_root/bin/$sanitizer_bin" \
-  --mode 0755 \
-  --require-executable
-python3 "$repo_root/scripts/copy_release_file.py" \
-  --source "$repo_root/LICENSE" \
-  --output "$stage_root/LICENSE" \
-  --mode 0644
+stage_release_file() {
+  local source="$1" relative="$2" mode="$3" executable="${4:-0}"
+  mkdir -p "$(dirname "$stage_root/$relative")"
+  local command=(python3 "$repo_root/scripts/copy_release_file.py"
+    --source "$source" --output "$stage_root/$relative" --mode "$mode")
+  if [[ "$executable" == "1" ]]; then command+=(--require-executable); fi
+  "${command[@]}"
+}
+stage_release_file "$binary_root/$daemon_bin" "bin/$daemon_bin" 0755 1
+stage_release_file "$binary_root/$governance_dag_bin" "bin/$governance_dag_bin" 0755 1
+stage_release_file "$binary_root/$cli_bin" "bin/$cli_bin" 0755 1
+stage_release_file "$binary_root/$utility_bin" "bin/$utility_bin" 0755 1
+stage_release_file "$binary_root/$sanitizer_bin" "bin/$sanitizer_bin" 0755 1
+stage_release_file "$repo_root/LICENSE" LICENSE 0644
+
+if [[ "$os_tag" == "win" ]]; then
+  fixed_files+=("WINDOWS-UNSUPPORTED-EXTERNAL-SOFTWARE-SIGNER.md")
+  stage_release_file \
+    "$repo_root/configs/sorafs/external_software_signer/WINDOWS-UNSUPPORTED.md" \
+    "WINDOWS-UNSUPPORTED-EXTERNAL-SOFTWARE-SIGNER.md" 0644
+else
+  signer_relative="bin/$signer_bin"
+  broker_relative="libexec/iroha-runtime-provider-broker-v1"
+  fixed_files+=("$signer_relative" "$broker_relative")
+  executables+=("$signer_relative" "$broker_relative")
+  stage_release_file "$binary_root/$signer_bin" "$signer_relative" 0755 1
+  stage_release_file "$binary_root/$signer_bin" "$broker_relative" 0755 1
+  cmp "$stage_root/$signer_relative" "$stage_root/$broker_relative"
+
+  asset_prefix="share/iroha/sorafs"
+  common_assets=(
+    "external_software_signer/README.md"
+    "runtime_provider_broker/README.md"
+  )
+  if [[ "$os_tag" == "linux" ]]; then
+    platform_assets=(
+      "external_software_signer/sorafs-external-software-signer@.service"
+      "external_software_signer/systemd/iroha-runtime-provider-broker-v1.service.d/20-external-software-signers.conf"
+      "runtime_provider_broker/systemd/iroha-runtime-provider-broker-v1.service"
+      "runtime_provider_broker/systemd/sorafs-governance-dag@.service.d/20-runtime-provider-broker-v1.conf"
+      "runtime_provider_broker/systemd/taira-irohad.service.d/20-runtime-provider-broker-v1.conf"
+    )
+  else
+    platform_assets=(
+      "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-proof-outcome.plist"
+      "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-repair.plist"
+      "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-reserve.plist"
+      "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-orderbook.plist"
+      "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-governance-dag.plist"
+      "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-potr-gateway.plist"
+      "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-potr-provider.plist"
+      "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-billing.plist"
+      "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-evidence-viewer.plist"
+      "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-stream-token.plist"
+      "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-pop-credentials.plist"
+      "runtime_provider_broker/launchd/org.hyperledger.iroha.runtime-provider-broker-v1.plist"
+    )
+    launcher="external_software_signer/launchd/sorafs-external-software-signer-launchd-v1"
+    fixed_files+=("$asset_prefix/$launcher")
+    executables+=("$asset_prefix/$launcher")
+    stage_release_file "$repo_root/configs/sorafs/$launcher" "$asset_prefix/$launcher" 0755 1
+  fi
+  for asset in "${common_assets[@]}" "${platform_assets[@]}"; do
+    fixed_files+=("$asset_prefix/$asset")
+    stage_release_file "$repo_root/configs/sorafs/$asset" "$asset_prefix/$asset" 0644
+  done
+fi
 
 tree_inventory='[]'
 case "$config" in
@@ -401,7 +448,8 @@ python3 - \
   "$os_tag" \
   "$arch" \
   "$target" \
-  "$features" <<'PROFILE_PY'
+  "$features" \
+  "$signer_support" <<'PROFILE_PY'
 import json
 import sys
 from pathlib import Path
@@ -420,6 +468,7 @@ from release_artifact_contract import exclusive_write_bytes, format_source_date_
     arch,
     target,
     features,
+    signer_support,
 ) = sys.argv[2:]
 epoch = int(epoch_raw)
 values = (
@@ -433,6 +482,7 @@ values = (
     ("arch", arch),
     ("target", target),
     ("features", features),
+    ("external_software_signer", signer_support),
 )
 rendered = "\n".join(
     f"{key} = {json.dumps(value, ensure_ascii=True)}" for key, value in values
@@ -479,7 +529,8 @@ python3 - \
   "$features" \
   "$archive_path" \
   "$archive_sha" \
-  "$trusted_zstd_sha256" <<'MANIFEST_PY'
+  "$trusted_zstd_sha256" \
+  "$signer_support" <<'MANIFEST_PY'
 import sys
 from pathlib import Path
 
@@ -505,6 +556,7 @@ from release_artifact_contract import (
     archive_path_raw,
     archive_sha,
     zstd_sha,
+    signer_support,
 ) = sys.argv[2:]
 epoch = int(epoch_raw)
 archive_path = Path(archive_path_raw)
@@ -524,6 +576,17 @@ manifest = {
     "arch": arch,
     "target": target,
     "features": features,
+    "external_software_signer": {
+        "backend": "software" if signer_support == "software-key-qualified" else None,
+        "broker_alias": "libexec/iroha-runtime-provider-broker-v1"
+        if signer_support == "software-key-qualified"
+        else None,
+        "binary": "bin/sorafs_external_software_signer"
+        if signer_support == "software-key-qualified"
+        else None,
+        "qualification": signer_support,
+        "windows_supported": False,
+    },
     "compressor": {
         "sha256": zstd_sha,
         "arguments": ["-19", "--long=31", "--threads=1", "--no-progress"],

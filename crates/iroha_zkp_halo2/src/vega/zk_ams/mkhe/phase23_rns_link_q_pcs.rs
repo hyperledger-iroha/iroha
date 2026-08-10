@@ -520,8 +520,9 @@ impl QPcsGeometryV1 {
     }
 
     fn domain_size(self) -> Result<usize, QPcsErrorV1> {
+        let shift = u32::try_from(self.domain_log).map_err(|_| QPcsErrorV1::InvalidGeometry)?;
         1_usize
-            .checked_shl(self.domain_log as u32)
+            .checked_shl(shift)
             .ok_or(QPcsErrorV1::ResourceCeilingExceeded)
     }
 
@@ -1004,14 +1005,16 @@ fn q_pcs_parameter_digest_v1(
             return Err(QPcsErrorV1::InvalidModulus);
         }
     }
-    let ring_degree = u32::try_from(geometry.ring_degree)
-        .map_err(|_| QPcsErrorV1::InvalidGeometry)?;
-    let domain_log = u8::try_from(geometry.domain_log)
-        .map_err(|_| QPcsErrorV1::InvalidGeometry)?;
-    let query_count = u16::try_from(geometry.query_count)
-        .map_err(|_| QPcsErrorV1::InvalidGeometry)?;
-    let opening_repetitions = u32::try_from(OPENING_REPETITIONS_V1)
-        .map_err(|_| QPcsErrorV1::InvalidGeometry)?;
+    let ring_degree =
+        u32::try_from(geometry.ring_degree).map_err(|_| QPcsErrorV1::InvalidGeometry)?;
+    let domain_log = u8::try_from(geometry.domain_log).map_err(|_| QPcsErrorV1::InvalidGeometry)?;
+    let query_count =
+        u16::try_from(geometry.query_count).map_err(|_| QPcsErrorV1::InvalidGeometry)?;
+    let opening_repetitions =
+        u32::try_from(OPENING_REPETITIONS_V1).map_err(|_| QPcsErrorV1::InvalidGeometry)?;
+    let opening_repetitions_u8 =
+        u8::try_from(OPENING_REPETITIONS_V1).map_err(|_| QPcsErrorV1::InvalidGeometry)?;
+    let batch_rows = u8::try_from(BATCH_ROWS_V1).map_err(|_| QPcsErrorV1::InvalidGeometry)?;
     let quotient_shift = u32::try_from(
         geometry
             .ring_degree
@@ -1026,8 +1029,8 @@ fn q_pcs_parameter_digest_v1(
     frame.extend_from_slice(&ring_degree.to_be_bytes());
     frame.push(domain_log);
     frame.extend_from_slice(&query_count.to_be_bytes());
-    frame.push(OPENING_REPETITIONS_V1 as u8);
-    frame.push(BATCH_ROWS_V1 as u8);
+    frame.push(opening_repetitions_u8);
+    frame.push(batch_rows);
     frame.push(RelationPolynomialRoleV1::Product.tag());
     frame.extend_from_slice(&0_u32.to_be_bytes());
     frame.push(RelationPolynomialRoleV1::NegacyclicQuotient.tag());
@@ -1054,18 +1057,25 @@ fn merkle_leaf_hash_v1(
     moduli: &[u64],
     rows_per_limb: usize,
 ) -> Result<[u8; 32], QPcsErrorV1> {
-    if values.len() != moduli.len() * rows_per_limb {
+    let coordinate_count = moduli
+        .len()
+        .checked_mul(rows_per_limb)
+        .ok_or(QPcsErrorV1::ResourceCeilingExceeded)?;
+    if values.len() != coordinate_count {
         return Err(QPcsErrorV1::InvalidMerkleProof);
     }
+    let index = u32::try_from(index).map_err(|_| QPcsErrorV1::InvalidGeometry)?;
+    let length = u32::try_from(length).map_err(|_| QPcsErrorV1::InvalidGeometry)?;
+    let value_count = u16::try_from(values.len()).map_err(|_| QPcsErrorV1::InvalidGeometry)?;
     let mut frame = Vec::with_capacity(MERKLE_LEAF_DOMAIN_V1.len() + 56 + values.len() * 16);
     frame.extend_from_slice(MERKLE_LEAF_DOMAIN_V1);
     frame.push(PCS_VERSION_V1);
     frame.extend_from_slice(&parameter_digest);
     frame.push(kind as u8);
     frame.push(layer);
-    frame.extend_from_slice(&(index as u32).to_be_bytes());
-    frame.extend_from_slice(&(length as u32).to_be_bytes());
-    frame.extend_from_slice(&(values.len() as u16).to_be_bytes());
+    frame.extend_from_slice(&index.to_be_bytes());
+    frame.extend_from_slice(&length.to_be_bytes());
+    frame.extend_from_slice(&value_count.to_be_bytes());
     for (coordinate, value) in values.iter().copied().enumerate() {
         frame.extend_from_slice(&value.encode(moduli[coordinate / rows_per_limb])?);
     }
@@ -1080,7 +1090,8 @@ fn merkle_node_hash_v1(
     parent_index: usize,
     left: [u8; 32],
     right: [u8; 32],
-) -> [u8; 32] {
+) -> Result<[u8; 32], QPcsErrorV1> {
+    let parent_index = u32::try_from(parent_index).map_err(|_| QPcsErrorV1::InvalidGeometry)?;
     let mut frame = Vec::with_capacity(MERKLE_NODE_DOMAIN_V1.len() + 104);
     frame.extend_from_slice(MERKLE_NODE_DOMAIN_V1);
     frame.push(PCS_VERSION_V1);
@@ -1088,10 +1099,10 @@ fn merkle_node_hash_v1(
     frame.push(kind as u8);
     frame.push(layer);
     frame.push(height);
-    frame.extend_from_slice(&(parent_index as u32).to_be_bytes());
+    frame.extend_from_slice(&parent_index.to_be_bytes());
     frame.extend_from_slice(&left);
     frame.extend_from_slice(&right);
-    keccak256(&frame)
+    Ok(keccak256(&frame))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1172,7 +1183,7 @@ impl MerkleTreeV1 {
                     parent,
                     hashes[child_base + 2 * parent],
                     hashes[child_base + 2 * parent + 1],
-                );
+                )?;
             }
             nodes_at_height = parents;
             height = height
@@ -1329,7 +1340,7 @@ fn verify_merkle_multi_proof_v1(
                     node / 2 - (length >> height),
                     left,
                     right,
-                ),
+                )?,
             ));
         }
         parents.sort_unstable_by_key(|entry| entry.0);
@@ -1528,7 +1539,7 @@ fn derive_common_query_positions_v1(
     query_count: usize,
     initial_length: usize,
 ) -> Result<Vec<usize>, QPcsErrorV1> {
-    if query_count == 0 || query_count > initial_length / 2 {
+    if query_count == 0 || query_count > initial_length / 2 || u16::try_from(query_count).is_err() {
         return Err(QPcsErrorV1::InvalidGeometry);
     }
     let bound = initial_length / 2;
@@ -1544,7 +1555,11 @@ fn derive_common_query_positions_v1(
             frame.extend_from_slice(QUERY_DOMAIN_V1);
             frame.push(PCS_VERSION_V1);
             frame.extend_from_slice(&transcript_digest);
-            frame.extend_from_slice(&(ordinal as u16).to_be_bytes());
+            frame.extend_from_slice(
+                &u16::try_from(ordinal)
+                    .map_err(|_| QPcsErrorV1::InvalidGeometry)?
+                    .to_be_bytes(),
+            );
             frame.extend_from_slice(&attempt.to_be_bytes());
             let uniform: [u8; 8] = shake256(&frame, 8)
                 .try_into()
@@ -1909,11 +1924,7 @@ fn commit_cross_limb_q_polynomials_in_memory_v1(
     polynomials: &[CanonicalLimbPolynomialPairV1],
 ) -> Result<CrossLimbQPcsCommitmentV1, QPcsErrorV1> {
     geometry.validate()?;
-    preflight_in_memory_reference_v1(
-        geometry,
-        moduli.len(),
-        InMemoryReferenceOperationV1::Commit,
-    )?;
+    preflight_in_memory_reference_v1(geometry, moduli.len(), InMemoryReferenceOperationV1::Commit)?;
     let parameters: Vec<Fq2ParametersV1> = moduli
         .iter()
         .map(|modulus| Fq2ParametersV1::derive(*modulus, geometry.domain_log))
@@ -1995,11 +2006,11 @@ fn opening_seed_digest_v1(
     for limb in 0..commitment.ordered_moduli.len() {
         let modulus = commitment.ordered_moduli[limb];
         validate_challenge_tuples_v1(modulus, &challenges[limb])?;
-        frame.push(limb as u8);
+        frame.push(u8::try_from(limb).map_err(|_| QPcsErrorV1::InvalidGeometry)?);
         frame.extend_from_slice(&modulus.to_be_bytes());
         for repetition in 0..OPENING_REPETITIONS_V1 {
             let challenge = challenges[limb][repetition];
-            frame.push(repetition as u8);
+            frame.push(u8::try_from(repetition).map_err(|_| QPcsErrorV1::InvalidGeometry)?);
             frame.extend_from_slice(&challenge.r.to_be_bytes());
             frame.extend_from_slice(&challenge.gamma.to_be_bytes());
             frame.extend_from_slice(&challenge.beta.to_be_bytes());
@@ -2604,6 +2615,97 @@ mod tests {
     }
 
     #[test]
+    fn transcript_dimensions_and_modulus_order_have_no_aliases() {
+        let geometry = QPcsGeometryV1 {
+            ring_degree: 65_536,
+            domain_log: 18,
+            query_count: RELEASE_FRI_QUERY_COUNT_V1,
+        };
+        assert!(q_pcs_parameter_digest_v1(geometry, &[RELEASE_MODULI_V1[0]]).is_ok());
+        let aliased_query_geometry = QPcsGeometryV1 {
+            query_count: RELEASE_FRI_QUERY_COUNT_V1 + (1 << 16),
+            ..geometry
+        };
+        assert_eq!(
+            q_pcs_parameter_digest_v1(aliased_query_geometry, &[RELEASE_MODULI_V1[0]],),
+            Err(QPcsErrorV1::InvalidGeometry)
+        );
+        assert_eq!(
+            derive_common_query_positions_v1(
+                [0; 32],
+                RELEASE_FRI_QUERY_COUNT_V1 + (1 << 16),
+                geometry.domain_size().unwrap(),
+            ),
+            Err(QPcsErrorV1::InvalidGeometry)
+        );
+        assert_eq!(
+            q_pcs_parameter_digest_v1(test_geometry(), &[TEST_MODULI[0], TEST_MODULI[0]]),
+            Err(QPcsErrorV1::InvalidModulus)
+        );
+        if usize::BITS > 32 {
+            assert_eq!(
+                QPcsGeometryV1 {
+                    ring_degree: 1_usize.checked_shl(32).expect("64-bit branch"),
+                    domain_log: 34,
+                    query_count: RELEASE_FRI_QUERY_COUNT_V1,
+                }
+                .validate(),
+                Err(QPcsErrorV1::InvalidGeometry)
+            );
+        }
+    }
+
+    #[test]
+    fn cumulative_residency_fails_before_materialization() {
+        let geometry = QPcsGeometryV1 {
+            ring_degree: 65_536,
+            domain_log: 18,
+            query_count: RELEASE_FRI_QUERY_COUNT_V1,
+        };
+        let limb_count = 4;
+        let single_layer_bytes =
+            geometry.domain_size().unwrap() * limb_count * BATCH_ROWS_V1 * FQ2_WIRE_BYTES_V1;
+        assert!(single_layer_bytes < RESIDENT_CAP_BYTES_V1);
+        assert!(
+            in_memory_reference_residency_bytes_v1(
+                geometry,
+                limb_count,
+                InMemoryReferenceOperationV1::Commit,
+            )
+            .unwrap()
+                < RESIDENT_CAP_BYTES_V1
+        );
+        assert!(
+            in_memory_reference_residency_bytes_v1(
+                geometry,
+                limb_count,
+                InMemoryReferenceOperationV1::Open,
+            )
+            .unwrap()
+                >= RESIDENT_CAP_BYTES_V1
+        );
+
+        let commitment = CrossLimbQPcsCommitmentV1 {
+            parameter_digest: [0; 32],
+            ordered_moduli: vec![TEST_MODULI[0]; limb_count],
+            public_root: [0; 32],
+        };
+        let polynomials: Vec<CanonicalLimbPolynomialPairV1> = Vec::new();
+        let challenges: Vec<[QPcsChallengeTupleV1; OPENING_REPETITIONS_V1]> = Vec::new();
+        reset_in_memory_materialization_attempts_v1();
+        assert_eq!(
+            prove_cross_limb_q_pcs_openings_in_memory_v1(
+                geometry,
+                &commitment,
+                &polynomials,
+                &challenges,
+            ),
+            Err(QPcsErrorV1::ExternalStoreRequired)
+        );
+        assert_eq!(in_memory_materialization_attempts_v1(), 0);
+    }
+
+    #[test]
     fn genuine_cross_limb_fri_opening_round_trip_rejects_tampering() {
         let geometry = test_geometry();
         let polynomials = test_polynomials();
@@ -2630,6 +2732,38 @@ mod tests {
         let two_rows = derive_batch_coefficients_v1(opening_seed, &TEST_MODULI).unwrap();
         assert_eq!(BATCH_ROWS_V1, 2);
         assert_ne!(two_rows[0][0], two_rows[0][1]);
+        let field = Fq2ParametersV1::derive(TEST_MODULI[0], geometry.domain_log).unwrap();
+        let first_row = two_rows[0][0];
+        let second_row = two_rows[0][1];
+        let mut cancellation_witness = None;
+        for left in 0..4 {
+            for right in left + 1..4 {
+                // These are coefficients of one out-of-bound degree across
+                // two aligned component polynomials.  They cancel in row zero.
+                let left_error = first_row[right];
+                let right_error = field.sub(Fq2V1::ZERO, first_row[left]);
+                let row_zero = field.add(
+                    field.mul(first_row[left], left_error),
+                    field.mul(first_row[right], right_error),
+                );
+                let row_one = field.add(
+                    field.mul(second_row[left], left_error),
+                    field.mul(second_row[right], right_error),
+                );
+                assert_eq!(row_zero, Fq2V1::ZERO);
+                if row_one != Fq2V1::ZERO {
+                    cancellation_witness = Some((left, right, row_one));
+                    break;
+                }
+            }
+            if cancellation_witness.is_some() {
+                break;
+            }
+        }
+        assert!(
+            cancellation_witness.is_some(),
+            "one FRI row admits a high-degree cancellation that the independent second row must reject"
+        );
 
         let mut changed_value = proof.clone();
         changed_value.evaluations[0][0][0] =
@@ -2637,6 +2771,18 @@ mod tests {
         assert!(
             verify_cross_limb_q_pcs_openings_v1(geometry, &commitment, &challenges, &changed_value)
                 .is_err()
+        );
+
+        let mut plus_q_evaluation = proof.clone();
+        plus_q_evaluation.evaluations[0][0][0] += TEST_MODULI[0];
+        assert_eq!(
+            verify_cross_limb_q_pcs_openings_v1(
+                geometry,
+                &commitment,
+                &challenges,
+                &plus_q_evaluation,
+            ),
+            Err(QPcsErrorV1::NonCanonicalResidue)
         );
 
         let mut changed_authentication = proof.clone();
@@ -2985,6 +3131,9 @@ mod tests {
         assert!(source.contains("const RELEASE_EXTERNAL_SCRATCH_BYTES_V1: usize = 956_301_312;"));
         assert!(source.contains("release_qualified: false"));
         assert!(source.contains("seekable_external_store_implemented: false"));
+        assert!(source.contains("fiat_shamir_relation_adapter_implemented: false"));
+        assert!(source.contains("validate_proof_evaluations_v1"));
+        assert!(source.contains("preflight_in_memory_reference_v1("));
         assert!(parent.contains("#[path = \"phase23_rns_link_q_pcs.rs\"]\nmod q_pcs;"));
         assert!(!parent.contains("pub use q_pcs"));
         assert!(!audit.contains("phase23_rns_link_q_pcs"));

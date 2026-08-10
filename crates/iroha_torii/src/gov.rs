@@ -1119,7 +1119,7 @@ pub async fn handle_gov_citizen_status(
 /// Response with lock/unlock statistics.
 #[derive(Copy, Clone, Debug, JsonSerialize)]
 pub struct UnlockStatsResponse {
-    /// Current height used for evaluation
+    /// Current committed State height.
     pub height_current: u64,
     /// Number of locks that would be expired at current height across all referenda
     pub expired_locks_now: u64,
@@ -1136,11 +1136,11 @@ pub struct UnlockStatsResponse {
 pub async fn handle_gov_unlock_stats(
     state: Arc<iroha_core::state::State>,
 ) -> Result<JsonBody<UnlockStatsResponse>, crate::Error> {
-    let world = state.world_view();
-    let snapshot = *world.governance_unlock_stats();
-    let last_sweep_height = *world.governance_last_unlock_sweep_height();
+    let view = state.query_view();
+    let snapshot = *view.world().governance_unlock_stats();
+    let last_sweep_height = *view.world().governance_last_unlock_sweep_height();
     Ok(JsonBody(UnlockStatsResponse {
-        height_current: snapshot.evaluated_height,
+        height_current: u64::try_from(view.height()).unwrap_or(u64::MAX),
         expired_locks_now: snapshot.expired_locks_now,
         referenda_with_expired: snapshot.referenda_with_expired,
         last_sweep_height,
@@ -2584,7 +2584,6 @@ mod tests {
 
     const ACCOUNT_AUTHORITY: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const ACCOUNT_OWNER_ALT: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
-
     #[test]
     fn unlock_stats_handler_cannot_reintroduce_an_expiry_index_scan() {
         let source = include_str!("gov.rs");
@@ -2597,11 +2596,12 @@ mod tests {
             .expect("unlock stats handler terminator");
         let implementation = &tail[..end];
 
+        assert!(implementation.contains("let view = state.query_view();"));
+        assert!(implementation.contains("view.height()"));
         assert!(implementation.contains("governance_unlock_stats()"));
         assert!(!implementation.contains("governance_lock_expiry_index()"));
         assert!(!implementation.contains(".range("));
     }
-
     #[test]
     fn scalar_governance_handlers_cannot_reintroduce_history_scans() {
         let source = include_str!("gov.rs");

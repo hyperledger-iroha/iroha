@@ -196,7 +196,7 @@ fn reputation_catalog_projects_exact_retention_authority_binding() {
         ),
         (
             IrohaRuntimeProviderSlotV1::ReputationThresholdSigner,
-            "hsm://sorafs/reputation/threshold-primary",
+            "software://sorafs/reputation/threshold-primary",
             12,
             [0x62; 32],
         ),
@@ -796,7 +796,7 @@ fn governance_signer_resolution_rejects_substitution_staleness_and_drift() {
     ));
 
     let mut substituted_handle = GovernanceSigner::exact();
-    substituted_handle.handle = "hsm://governance/producer-signer-secondary";
+    substituted_handle.handle = "software://sorafs/governance-dag/secondary";
     assert!(matches!(
         resolve(substituted_handle),
         Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
@@ -825,7 +825,7 @@ fn governance_signer_resolution_rejects_substitution_staleness_and_drift() {
     ));
 
     let mut handle_drift = GovernanceSigner::exact();
-    handle_drift.later_handle = Some("hsm://governance/producer-signer-secondary");
+    handle_drift.later_handle = Some("software://sorafs/governance-dag/secondary");
     assert!(matches!(
         resolve(handle_drift),
         Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
@@ -1261,7 +1261,7 @@ fn registry_rejects_missing_role_confused_substituted_and_stale_native_signers()
 
     let substituted = iroha_torii::SorafsNativeTransactionSignerBindingV1::try_new(
         iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-        "hsm://registry/proof-outcome/secondary",
+        "software://sorafs/proof-outcome/secondary",
         exact.authority().clone(),
         exact.public_key().clone(),
         exact.qualification(),

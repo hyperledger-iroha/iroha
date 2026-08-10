@@ -33,16 +33,14 @@ use iroha_torii_shared::route_catalog::{
     HttpMethod as CatalogHttpMethod, RouteCatalog, RouteDescriptor, RouteEffect,
 };
 use norito::json::{self, Map, Value};
-use rand::{
-    rand_core::{TryCryptoRng, TryRngCore as _},
-    rngs::OsRng,
-};
 use tower::ServiceExt as _;
 
 use crate::{SharedAppState, limits, openapi};
 
+mod connect_session_tools;
 mod governance_ballot_tools;
 
+use connect_session_tools::build_connect_session_create_body;
 use governance_ballot_tools::{
     governance_selector_v1_schema, iroha_gov_ballots_plain_tool,
     iroha_gov_ballots_zk_v1_ballot_proof_tool, iroha_gov_ballots_zk_v1_tool,
@@ -3058,55 +3056,6 @@ async fn dispatch_connect_session_create(
     .await
 }
 
-fn build_connect_session_create_body(arguments: &Map) -> Result<Value, String> {
-    let mut rng = OsRng;
-    build_connect_session_create_body_with_rng(arguments, &mut rng)
-}
-
-fn build_connect_session_create_body_with_rng<R: TryCryptoRng + ?Sized>(
-    arguments: &Map,
-    rng: &mut R,
-) -> Result<Value, String> {
-    let node = arguments
-        .get("node")
-        .or_else(|| arguments.get("node_url"))
-        .and_then(Value::as_str);
-
-    let mut body = arguments
-        .get("body")
-        .cloned()
-        .unwrap_or_else(|| Value::Object(Map::new()));
-
-    if let Value::Object(payload) = &mut body {
-        if !payload.contains_key("sid") {
-            let sid = arguments
-                .get("sid")
-                .or_else(|| arguments.get("session_id"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .map(Ok)
-                .unwrap_or_else(|| generate_connect_session_sid_b64url_with_rng(rng))?;
-            payload.insert("sid".into(), Value::String(sid));
-        }
-        if !payload.contains_key("node") {
-            if let Some(node) = node {
-                payload.insert("node".into(), Value::String(node.to_owned()));
-            }
-        }
-    }
-
-    Ok(body)
-}
-
-fn generate_connect_session_sid_b64url_with_rng<R: TryCryptoRng + ?Sized>(
-    rng: &mut R,
-) -> Result<String, String> {
-    let mut sid = [0_u8; 32];
-    rng.try_fill_bytes(&mut sid)
-        .map_err(|err| format!("Connect session sid RNG failed: {err}"))?;
-    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sid))
-}
-
 async fn dispatch_connect_session_create_and_ticket(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3134,8 +3083,6 @@ async fn dispatch_connect_session_create_and_ticket(
         let sid = create_body
             .get("sid")
             .and_then(Value::as_str)
-            .or_else(|| arguments.get("sid").and_then(Value::as_str))
-            .or_else(|| arguments.get("session_id").and_then(Value::as_str))
             .ok_or_else(|| "connect session create response is missing `body.sid`".to_owned())?
             .to_owned();
         let token_key = if role == "app" {
@@ -3163,7 +3110,6 @@ async fn dispatch_connect_session_create_and_ticket(
     ticket_arguments.insert("token".into(), Value::String(token.clone()));
     if let Some(node_url) = arguments
         .get("ticket_node_url")
-        .or_else(|| arguments.get("node_url"))
         .or_else(|| arguments.get("node"))
         .and_then(Value::as_str)
         .or(create_node.as_deref())
@@ -9204,27 +9150,27 @@ fn connect_session_create_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "required": ["network_id", "app_pk", "nonce"],
             "properties": {
-                "sid": {
+                "network_id": {
                     "type": "string",
-                    "description": "Convenience shortcut for `body.sid` (base64url session id). When omitted, MCP generates a random 32-byte SID."
+                    "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+                    "description": "Canonical checksummed genesis-derived NetworkId."
                 },
-                "session_id": {
+                "app_pk": {
                     "type": "string",
-                    "description": "Alias for `sid` convenience shortcut."
+                    "pattern": "^[A-Za-z0-9_-]{43}$",
+                    "description": "Canonical unpadded base64url X25519 application public key (32 bytes)."
+                },
+                "nonce": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{22}$",
+                    "description": "Canonical unpadded base64url fresh session nonce (16 bytes)."
                 },
                 "node": {
                     "type": "string",
-                    "description": "Convenience shortcut for `body.node`."
-                },
-                "node_url": {
-                    "type": "string",
-                    "description": "Alias for `node` convenience shortcut."
-                },
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw Connect session request body. If provided, it takes precedence over `sid`/`node` values already present in `body`."
+                    "minLength": 1,
+                    "description": "Optional exact node hint included in both Connect deep links."
                 },
                 "headers": {
                     "type": "object",
@@ -9246,37 +9192,37 @@ fn connect_session_create_and_ticket_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["role"],
+            "required": ["role", "network_id", "app_pk", "nonce"],
             "properties": {
                 "role": {
                     "type": "string",
                     "enum": ["app", "wallet"],
                     "description": "Role used to select `token_app` or `token_wallet` for ticket generation."
                 },
-                "sid": {
+                "network_id": {
                     "type": "string",
-                    "description": "Convenience shortcut for `body.sid` (base64url session id). When omitted, MCP generates a random 32-byte SID."
+                    "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+                    "description": "Canonical checksummed genesis-derived NetworkId."
                 },
-                "session_id": {
+                "app_pk": {
                     "type": "string",
-                    "description": "Alias for `sid` convenience shortcut."
+                    "pattern": "^[A-Za-z0-9_-]{43}$",
+                    "description": "Canonical unpadded base64url X25519 application public key (32 bytes)."
+                },
+                "nonce": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{22}$",
+                    "description": "Canonical unpadded base64url fresh session nonce (16 bytes)."
                 },
                 "node": {
                     "type": "string",
-                    "description": "Convenience shortcut for `body.node`."
-                },
-                "node_url": {
-                    "type": "string",
-                    "description": "Alias for `node`; also used as ticket URL base when `ticket_node_url` is omitted."
+                    "minLength": 1,
+                    "description": "Optional exact node hint included in both Connect deep links and used as the ticket URL base when `ticket_node_url` is omitted."
                 },
                 "ticket_node_url": {
                     "type": "string",
+                    "minLength": 1,
                     "description": "Optional node URL override used only for ticket generation."
-                },
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw Connect session request body. If provided, it takes precedence over `sid`/`node` values already present in `body`."
                 },
                 "headers": {
                     "type": "object",

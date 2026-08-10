@@ -6085,171 +6085,6 @@ public enum ToriiQuerySelectEntry: Codable, Sendable, Equatable, ExpressibleBySt
     }
 }
 
-fileprivate enum ToriiConnectJSON {
-    static func normalizedString(_ value: ToriiJSONValue?) -> String? {
-        guard let value else { return nil }
-        switch value {
-        case .string(let string):
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        case .number(let number):
-            guard number.isFinite else { return nil }
-            if number.rounded(.towardZero) == number {
-                guard let integer = Int(exactly: number) else { return nil }
-                return String(integer)
-            }
-            return String(number)
-        case .bool(let bool):
-            return bool ? "true" : "false"
-        default:
-            return nil
-        }
-    }
-
-    static func optionalString(_ record: [String: ToriiJSONValue],
-                               key: String) -> String? {
-        normalizedString(record[key])
-    }
-
-    static func requireString(_ record: [String: ToriiJSONValue],
-                              key: String,
-                              field: String) throws -> String {
-        if let value = optionalString(record, key: key) {
-            return value
-        }
-        throw ToriiClientError.invalidPayload("\(field) field was missing or empty")
-    }
-
-    static func optionalBool(_ record: [String: ToriiJSONValue],
-                             key: String) -> Bool? {
-        guard let value = record[key] else { return nil }
-        switch value {
-        case .bool(let bool):
-            return bool
-        case .string(let string):
-            let lowercased = string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if lowercased == "true" { return true }
-            if lowercased == "false" { return false }
-        default:
-            break
-        }
-        return nil
-    }
-
-    static func optionalUInt64(_ record: [String: ToriiJSONValue],
-                               key: String) -> UInt64? {
-        guard let value = record[key] else { return nil }
-        return value.normalizedUInt64
-    }
-
-    static func requireUInt64(_ record: [String: ToriiJSONValue],
-                              key: String,
-                              field: String) throws -> UInt64 {
-        if let value = optionalUInt64(record, key: key) {
-            return value
-        }
-        throw ToriiClientError.invalidPayload("\(field) field was missing or invalid")
-    }
-
-    static func requireUInt64(_ record: [String: ToriiJSONValue],
-                              key: String,
-                              field: String,
-                              allowZero: Bool) throws -> UInt64 {
-        let value = try requireUInt64(record, key: key, field: field)
-        if !allowZero && value == 0 {
-            throw ToriiClientError.invalidPayload("\(field) must be greater than zero")
-        }
-        return value
-    }
-
-    static func optionalInt(_ record: [String: ToriiJSONValue],
-                            key: String) -> Int? {
-        guard let value = record[key] else { return nil }
-        guard let parsed = value.normalizedInt64 else { return nil }
-        guard parsed >= Int64(Int.min), parsed <= Int64(Int.max) else {
-            return nil
-        }
-        return Int(parsed)
-    }
-
-    static func objectsArray(_ record: [String: ToriiJSONValue],
-                             key: String,
-                             field: String) throws -> [[String: ToriiJSONValue]] {
-        guard let value = record[key] else { return [] }
-        guard case .array(let array) = value else {
-            throw ToriiClientError.invalidPayload("\(field) must be an array")
-        }
-        return try array.map { value in
-            guard case .object(let object) = value else {
-                throw ToriiClientError.invalidPayload("\(field) entries must be objects")
-            }
-            return object
-        }
-    }
-
-    static func requireObject(_ record: [String: ToriiJSONValue],
-                              key: String,
-                              field: String) throws -> [String: ToriiJSONValue] {
-        guard let value = record[key] else {
-            throw ToriiClientError.invalidPayload("\(field) field was missing or invalid")
-        }
-        if case .object(let object) = value {
-            return object
-        }
-        throw ToriiClientError.invalidPayload("\(field) must be an object")
-    }
-
-    static func optionalObject(_ record: [String: ToriiJSONValue],
-                               key: String) -> [String: ToriiJSONValue]? {
-        guard let value = record[key] else { return nil }
-        if case .object(let object) = value {
-            return object
-        }
-        return nil
-    }
-
-    static func stringArray(_ value: ToriiJSONValue?,
-                            field: String) throws -> [String] {
-        guard let value else { return [] }
-        guard case .array(let values) = value else {
-            throw ToriiClientError.invalidPayload("\(field) must be an array")
-        }
-        var result: [String] = []
-        for item in values {
-            guard case .string(let raw) = item else {
-                throw ToriiClientError.invalidPayload("\(field) entries must be strings")
-            }
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                throw ToriiClientError.invalidPayload("\(field) entries must not be empty")
-            }
-            result.append(trimmed)
-        }
-        return result
-    }
-
-    static func mergeExtra(record: [String: ToriiJSONValue],
-                           knownKeys: Set<String>) -> [String: ToriiJSONValue] {
-        var extra: [String: ToriiJSONValue] = [:]
-        for (key, value) in record where !knownKeys.contains(key) {
-            extra[key] = value
-        }
-        return extra
-    }
-
-    static func encodePayload(_ payload: [String: ToriiJSONValue]) throws -> Data {
-        try ToriiJSONValue.object(payload).encodedData()
-    }
-
-    static func trimmedNonEmpty(_ value: String,
-                                field: String) throws -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw ToriiClientError.invalidPayload("\(field) must be a non-empty string")
-        }
-        return trimmed
-    }
-}
 
 public enum ToriiConnectRole: String, Sendable {
     case app
@@ -6424,8 +6259,8 @@ public struct ToriiConnectSessionResponse: Decodable, Sendable, Equatable {
 
     public init(raw: [String: ToriiJSONValue]) throws {
         self.raw = raw
-        sid = try ToriiConnectJSON.requireString(raw, key: "sid", field: "sid")
-        let networkLiteral = try ToriiConnectJSON.requireString(
+        sid = try ToriiConnectJSON.requireExactString(raw, key: "sid", field: "sid")
+        let networkLiteral = try ToriiConnectJSON.requireExactString(
             raw,
             key: "network_id",
             field: "network_id"
@@ -6436,21 +6271,21 @@ public struct ToriiConnectSessionResponse: Decodable, Sendable, Equatable {
             throw ToriiClientError.invalidPayload("network_id must be an exact canonical NetworkId")
         }
         appPublicKey = try decodeConnectBase64URL(
-            ToriiConnectJSON.requireString(raw, key: "app_pk", field: "app_pk"),
+            ToriiConnectJSON.requireExactString(raw, key: "app_pk", field: "app_pk"),
             byteCount: 32,
             field: "app_pk"
         )
         nonce = try decodeConnectBase64URL(
-            ToriiConnectJSON.requireString(raw, key: "nonce", field: "nonce"),
+            ToriiConnectJSON.requireExactString(raw, key: "nonce", field: "nonce"),
             byteCount: 16,
             field: "nonce"
         )
-        walletURI = try ToriiConnectJSON.requireString(raw, key: "wallet_uri", field: "wallet_uri")
-        appURI = try ToriiConnectJSON.requireString(raw, key: "app_uri", field: "app_uri")
-        tokenApp = try ToriiConnectJSON.requireString(raw, key: "token_app", field: "token_app")
-        tokenWallet = try ToriiConnectJSON.requireString(raw, key: "token_wallet", field: "token_wallet")
-        tokenManagement = try ToriiConnectJSON.requireString(raw, key: "token_management", field: "token_management")
-        tokenRelay = try ToriiConnectJSON.requireString(raw, key: "token_relay", field: "token_relay")
+        walletURI = try ToriiConnectJSON.requireExactString(raw, key: "wallet_uri", field: "wallet_uri")
+        appURI = try ToriiConnectJSON.requireExactString(raw, key: "app_uri", field: "app_uri")
+        tokenApp = try ToriiConnectJSON.requireExactString(raw, key: "token_app", field: "token_app")
+        tokenWallet = try ToriiConnectJSON.requireExactString(raw, key: "token_wallet", field: "token_wallet")
+        tokenManagement = try ToriiConnectJSON.requireExactString(raw, key: "token_management", field: "token_management")
+        tokenRelay = try ToriiConnectJSON.requireExactString(raw, key: "token_relay", field: "token_relay")
         let known: Set<String> = [
             "sid",
             "network_id",
@@ -6472,14 +6307,14 @@ public struct ToriiConnectSessionResponse: Decodable, Sendable, Equatable {
     }
 }
 
-private func connectBase64URL(_ data: Data) -> String {
+func connectBase64URL(_ data: Data) -> String {
     data.base64EncodedString()
         .replacingOccurrences(of: "+", with: "-")
         .replacingOccurrences(of: "/", with: "_")
         .replacingOccurrences(of: "=", with: "")
 }
 
-private func decodeConnectBase64URL(_ value: String,
+func decodeConnectBase64URL(_ value: String,
                                     byteCount: Int,
                                     field: String) throws -> Data {
     let remainder = value.utf8.count % 4
@@ -24473,8 +24308,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         ]
         if let node = node {
             let trimmed = node.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                payload["node"] = .string(trimmed)
+            if !trimmed.isEmpty && trimmed == node {
+                payload["node"] = .string(node)
+            } else if !node.isEmpty {
+                throw ToriiClientError.invalidPayload(
+                    "node must be an exact non-empty string without surrounding whitespace"
+                )
             }
         }
         let request = try makeRequest(path: "/v1/connect/session",
@@ -24485,6 +24324,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                         "Accept": "application/json"
                                       ])
         let data = try await data(for: request)
+        try rejectDuplicateJSONKeys(data, context: "Connect session response")
         let response = try decodeJSON(ToriiConnectSessionResponse.self, from: data)
         guard response.sid == sid,
               response.networkID == networkID,
@@ -24494,7 +24334,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 "Torii substituted the canonical Connect session identity"
             )
         }
-        return response
+        return try validateConnectSessionResponse(response, expectedNode: node)
     }
 
     public func deleteConnectSession(sid: String, tokenManagement: String) async throws -> Bool {

@@ -882,9 +882,10 @@ pub struct ConnectCiphertextV1 {
     pub dir: Dir,
     /// AEAD payload (ciphertext + tag), format defined by the chosen cipher.
     ///
-    /// Note: v0 enforces `Envelope.seq == frame.seq`; nonces are derived from
-    /// the same monotonic sequence (dir‑specific). Implementations must bind the
-    /// outer header (version, sid, dir, seq, kind) via AEAD AAD.
+    /// The current format enforces `Envelope.seq == frame.seq`; nonces are derived
+    /// from the same contiguous sequence (direction-specific). Implementations must
+    /// require this direction to equal the outer frame direction and bind the outer
+    /// header (version, sid, dir, seq, kind) via AEAD AAD.
     pub aead: Vec<u8>,
 }
 
@@ -1018,7 +1019,7 @@ pub enum ServerEventV1 {
 }
 
 /// Session constraints advertised by the application.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
 pub struct Constraints {

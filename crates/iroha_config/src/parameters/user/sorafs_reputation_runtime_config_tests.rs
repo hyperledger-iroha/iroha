@@ -42,7 +42,7 @@ fn valid_config() -> SorafsReputationRuntimeConfig {
         journal_transaction_submitter_handle: Some("queue.reputation.journal".to_owned()),
         journal_transaction_submitter_revision: Some(11),
         journal_transaction_submitter_policy_digest_hex: Some("61".repeat(32)),
-        threshold_signer_handle: Some("hsm.reputation.threshold".to_owned()),
+        threshold_signer_handle: Some("software://sorafs/reputation/primary".to_owned()),
         threshold_signer_revision: Some(12),
         threshold_signer_policy_digest_hex: Some("62".repeat(32)),
         governance_dag_handle: Some("governance.dag.publisher".to_owned()),

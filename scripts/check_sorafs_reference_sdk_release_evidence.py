@@ -77,8 +77,7 @@ from sorafs_response_args import (  # noqa: E402
     positive_int_arg,
 )
 from sorafs_topology_qualification import (  # noqa: E402
-    DEFAULT_MAX_QUALIFICATION_REVIEW_AGE_SECS,
-    add_topology_qualification_argument,
+    add_signed_topology_qualification_arguments,
     lane_summary_deployment_context,
     load_signed_topology_qualification_binding,
 )
@@ -492,8 +491,10 @@ def bind_lane_summary_to_signed_topology(
     envelope_path: Path,
     *,
     verification_public_key_hex: str,
-    signer_identity: str,
+    signer_service_id: str,
+    signer_administrator_id: str,
     signer_key_revision: int,
+    signer_policy_revision: int,
     signer_policy_digest_hex: str,
     now_unix: int,
     max_review_age_secs: int,
@@ -508,8 +509,10 @@ def bind_lane_summary_to_signed_topology(
         trusted_public_key=(
             trusted_public_key if trusted_public_key is not None else b""
         ),
-        trusted_signer_identity=signer_identity,
+        trusted_signer_service_id=signer_service_id,
+        trusted_signer_administrator_id=signer_administrator_id,
         trusted_key_revision=signer_key_revision,
+        trusted_policy_revision=signer_policy_revision,
         trusted_policy_digest_hex=signer_policy_digest_hex,
         now_unix=now_unix,
         max_review_age_secs=max_review_age_secs,
@@ -1184,40 +1187,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = EvidenceArgumentParser(
         description="Validate SoraFS SF-11 reference SDK release evidence artifacts."
     )
-    add_topology_qualification_argument(parser)
-    parser.add_argument(
-        "--topology-qualification-envelope",
-        required=True,
-        type=Path,
-        help="Independently signed companion for the exact topology summary.",
-    )
-    parser.add_argument(
-        "--topology-qualification-verification-public-key-hex",
-        required=True,
-        help="Operator-trusted non-zero raw Ed25519 topology verification public key.",
-    )
-    parser.add_argument(
-        "--topology-qualification-signer-identity",
-        required=True,
-        help="Operator-trusted topology qualification signer identity.",
-    )
-    parser.add_argument(
-        "--topology-qualification-signer-key-revision",
-        required=True,
-        type=positive_int_arg,
-        help="Operator-trusted positive topology signer key revision.",
-    )
-    parser.add_argument(
-        "--topology-qualification-signer-policy-digest-hex",
-        required=True,
-        help="Operator-trusted topology signer policy SHA-256 digest.",
-    )
-    parser.add_argument(
-        "--max-topology-qualification-review-age-secs",
-        type=non_negative_int_arg,
-        default=DEFAULT_MAX_QUALIFICATION_REVIEW_AGE_SECS,
-        help="Maximum accepted age of the independently signed topology review.",
-    )
+    add_signed_topology_qualification_arguments(parser)
     parser.add_argument(
         "--evidence-dir",
         action="append",
@@ -1341,8 +1311,14 @@ def main(argv: list[str] | None = None) -> int:
             verification_public_key_hex=(
                 args.topology_qualification_verification_public_key_hex
             ),
-            signer_identity=args.topology_qualification_signer_identity,
+            signer_service_id=args.topology_qualification_signer_service_id,
+            signer_administrator_id=(
+                args.topology_qualification_signer_administrator_id
+            ),
             signer_key_revision=args.topology_qualification_signer_key_revision,
+            signer_policy_revision=(
+                args.topology_qualification_signer_policy_revision
+            ),
             signer_policy_digest_hex=(
                 args.topology_qualification_signer_policy_digest_hex
             ),

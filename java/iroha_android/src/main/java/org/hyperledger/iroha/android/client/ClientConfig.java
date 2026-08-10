@@ -269,6 +269,7 @@ public final class ClientConfig {
     return ConfidentialAssetToriiClient.builder()
         .executor(executor)
         .baseUri(baseUri)
+        .localSigningContext(requireLocalSigningContext())
         .timeout(requestTimeout)
         .defaultHeaders(defaultHeaders)
         .observers(observers)

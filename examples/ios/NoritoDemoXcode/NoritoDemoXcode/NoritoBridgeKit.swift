@@ -73,22 +73,25 @@ public final class NoritoBridgeKit {
     let d = Data(bytes: p, count: Int(len)); ffi_free(p); return String(data: d, encoding: .utf8) ?? "{}"
   }
 
-  public func encodeControlOpenExt(sid: Data, dir: UInt8, seq: UInt64, appPub: Data, appMetaJson: Data?, chainId: String, permissionsJson: Data?) throws -> Data {
+  public func encodeControlOpenExt(sid: Data, dir: UInt8, seq: UInt64, appPub: Data, nonce: Data, appMetaJson: Data?, networkId: Data, permissionsJson: Data?) throws -> Data {
     guard let sym = dlsym(RTLD_DEFAULT, "connect_norito_encode_control_open_ext") else { throw NoritoError.ffi(-1) }
-    typealias Fn = @convention(c) (UnsafePointer<UInt8>, UInt8, UInt64, UnsafePointer<UInt8>, CUnsignedLong, UnsafePointer<UInt8>?, CUnsignedLong, UnsafePointer<CChar>, UnsafePointer<UInt8>?, CUnsignedLong, UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>, UnsafeMutablePointer<CUnsignedLong>) -> Int32
+    typealias Fn = @convention(c) (UnsafePointer<UInt8>, UInt8, UInt64, UnsafePointer<UInt8>, CUnsignedLong, UnsafePointer<UInt8>, CUnsignedLong, UnsafePointer<UInt8>?, CUnsignedLong, UnsafePointer<UInt8>, CUnsignedLong, UnsafePointer<UInt8>?, CUnsignedLong, UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>, UnsafeMutablePointer<CUnsignedLong>) -> Int32
     let fn = unsafeBitCast(sym, to: Fn.self)
     var outPtr: UnsafeMutablePointer<UInt8>? = nil; var outLen: CUnsignedLong = 0
     let rc = sid.withUnsafeBytes { sp in
       appPub.withUnsafeBytes { ap in
-        (appMetaJson ?? Data()).withUnsafeBytes { mj in
-          (permissionsJson ?? Data()).withUnsafeBytes { pj in
-            chainId.utf8CString.withUnsafeBufferPointer { cb in
+        nonce.withUnsafeBytes { np in
+          networkId.withUnsafeBytes { nb in
+            (appMetaJson ?? Data()).withUnsafeBytes { mj in
+              (permissionsJson ?? Data()).withUnsafeBytes { pj in
               fn(sp.bindMemory(to: UInt8.self).baseAddress!, dir, seq,
                  ap.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(appPub.count),
+                 np.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(nonce.count),
                  appMetaJson == nil ? nil : mj.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(appMetaJson?.count ?? 0),
-                 cb.baseAddress!,
+                 nb.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(networkId.count),
                  permissionsJson == nil ? nil : pj.bindMemory(to: UInt8.self).baseAddress!, CUnsignedLong(permissionsJson?.count ?? 0),
                  &outPtr, &outLen)
+              }
             }
           }
         }

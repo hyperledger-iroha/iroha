@@ -8,6 +8,7 @@ public enum ConnectSessionError: Error, LocalizedError, Sendable {
     case sessionClosed
     case missingDecryptionKeys
     case flowControlExceeded(direction: ConnectDirection)
+    case protocolViolation(String)
     case clientError(ConnectClient.ClientError)
     case envelopeError(ConnectEnvelopeError)
     case unknown(String)
@@ -22,6 +23,8 @@ public enum ConnectSessionError: Error, LocalizedError, Sendable {
             return "Connect session is missing direction keys required to decrypt ciphertext frames."
         case let .flowControlExceeded(direction):
             return "Connect flow control window exhausted for direction \(direction)."
+        case .protocolViolation(let description):
+            return description
         case .clientError(let error):
             return error.errorDescription ?? "Connect client error."
         case .envelopeError(let error):
@@ -47,38 +50,90 @@ public final class ConnectSession: @unchecked Sendable {
 
     private struct MutableState {
         var sequence: UInt64
+        var walletSequence: UInt64
         var sessionState: SessionState
         var directionKeys: ConnectDirectionKeys?
         var flowControl: ConnectFlowController?
+        var open: ConnectOpen?
+        var approvalAccepted: Bool
+    }
+
+    private struct SecurityBinding {
+        let networkID: NetworkId
+        let appPublicKey: Data
+        let nonce: Data
+        let relayToken: String
     }
 
     private let client: ConnectClient
     private let sessionID: Data
+    private let securityBinding: SecurityBinding?
     private let stateQueue = DispatchQueue(label: "org.hyperledger.iroha.connect-session.state")
     private var mutableState: MutableState
     private let diagnostics: ConnectSessionDiagnostics
     private let customEventStreamBuilder: ConnectEventStreamBuilder?
 
-    public init(sessionID: Data,
+    /// Creates a launch-bound Connect session with the exact SID derivation inputs.
+    public init(networkID: NetworkId,
+                appPublicKey: Data,
+                nonce: Data,
+                relayToken: String,
                 client: ConnectClient,
                 directionKeys: ConnectDirectionKeys? = nil,
                 flowControl: ConnectFlowControlWindow? = nil,
                 diagnostics: ConnectSessionDiagnostics? = nil,
-                eventStreamBuilder: ConnectEventStreamBuilder? = nil) {
+                eventStreamBuilder: ConnectEventStreamBuilder? = nil) throws {
+        let sessionID = try ConnectCrypto.deriveSessionID(
+            networkID: networkID,
+            appPublicKey: appPublicKey,
+            nonce: nonce
+        )
+        _ = try ConnectCrypto.relayAuthHash(sessionID: sessionID, relayToken: relayToken)
         self.sessionID = sessionID
         self.client = client
+        self.securityBinding = SecurityBinding(
+            networkID: networkID,
+            appPublicKey: appPublicKey,
+            nonce: nonce,
+            relayToken: relayToken
+        )
         let flowController = flowControl.map { ConnectFlowController(window: $0) }
         self.mutableState = MutableState(sequence: 0,
+                                         walletSequence: 1,
                                          sessionState: .idle,
                                          directionKeys: directionKeys,
-                                         flowControl: flowController)
+                                         flowControl: flowController,
+                                         open: nil,
+                                         approvalAccepted: false)
+        self.diagnostics = diagnostics ?? ConnectSessionDiagnostics(sessionID: sessionID)
+        self.customEventStreamBuilder = eventStreamBuilder
+    }
+
+    /// Internal unbound initializer for codec/envelope unit plumbing only.
+    init(sessionID: Data,
+         client: ConnectClient,
+         directionKeys: ConnectDirectionKeys? = nil,
+         flowControl: ConnectFlowControlWindow? = nil,
+         diagnostics: ConnectSessionDiagnostics? = nil,
+         eventStreamBuilder: ConnectEventStreamBuilder? = nil) {
+        self.sessionID = sessionID
+        self.client = client
+        self.securityBinding = nil
+        let flowController = flowControl.map { ConnectFlowController(window: $0) }
+        self.mutableState = MutableState(sequence: 0,
+                                         walletSequence: 1,
+                                         sessionState: .idle,
+                                         directionKeys: directionKeys,
+                                         flowControl: flowController,
+                                         open: nil,
+                                         approvalAccepted: false)
         self.diagnostics = diagnostics ?? ConnectSessionDiagnostics(sessionID: sessionID)
         self.customEventStreamBuilder = eventStreamBuilder
     }
 
     /// Sends an `Open` control frame towards the wallet.
     public func sendOpen(open: ConnectOpen) async throws {
-        guard let sequence = try reserveOpenSequence() else { return }
+        let sequence = try reserveOpenSequence(open: open)
         do {
             try await sendControl(.open(open), direction: .appToWallet, sequence: sequence)
         } catch {
@@ -127,14 +182,14 @@ public final class ConnectSession: @unchecked Sendable {
         }
     }
 
-    /// Install or update the flow-control window for inbound frames.
+    /// Install or update the SDK-local limiter for inbound frames.
     public func setFlowControlWindow(_ window: ConnectFlowControlWindow) {
         withLockedState { state in
             state.flowControl = ConnectFlowController(window: window)
         }
     }
 
-    /// Grant additional tokens for the given direction (for example when the peer sends a flow-control update).
+    /// Grant local limiter capacity for the given direction; no wire control is emitted.
     public func grantFlowControl(direction: ConnectDirection, tokens: UInt64) {
         let controller = withLockedState { state in
             state.flowControl
@@ -179,6 +234,7 @@ public final class ConnectSession: @unchecked Sendable {
     private func extractControl(from frame: ConnectFrame) throws -> ConnectControl? {
         switch frame.kind {
         case .control(let control):
+            try validateInboundControl(frame: frame, control: control)
             return control
         case .ciphertext:
             return try decryptControl(from: frame)
@@ -200,9 +256,11 @@ public final class ConnectSession: @unchecked Sendable {
         guard let keys else {
             throw ConnectSessionError.missingDecryptionKeys
         }
+        let expectedSequence = try expectedInboundSequence(for: frame)
         let symmetricKey = frame.direction == .appToWallet ? keys.appToWallet : keys.walletToApp
         let envelope = try ConnectEnvelope.decrypt(frame: frame, symmetricKey: symmetricKey)
         try flowController?.consume(direction: frame.direction)
+        try commitInboundSequence(expectedSequence)
         return envelope
     }
 
@@ -213,19 +271,46 @@ public final class ConnectSession: @unchecked Sendable {
                                  direction: direction,
                                  sequence: sequence,
                                  kind: .control(control))
-        try await client.send(frame: frame)
+        if case .open = control {
+            guard let securityBinding else {
+                throw ConnectSessionError.protocolViolation(
+                    "Connect Open requires exact network_id, app_pk, nonce, and relay binding."
+                )
+            }
+            try await client.send(frame: frame, launchNonce: securityBinding.nonce)
+        } else {
+            try await client.send(frame: frame)
+        }
     }
 
-    private func reserveOpenSequence() throws -> UInt64? {
+    private func reserveOpenSequence(open: ConnectOpen) throws -> UInt64 {
+        guard let securityBinding else {
+            throw ConnectSessionError.protocolViolation(
+                "Connect Open requires exact network_id, app_pk, nonce, and relay binding."
+            )
+        }
+        guard open.appPublicKey == securityBinding.appPublicKey else {
+            throw ConnectSessionError.protocolViolation(
+                "Connect Open app_pk does not match the launch session."
+            )
+        }
+        guard open.constraints.networkID == securityBinding.networkID else {
+            throw ConnectSessionError.protocolViolation(
+                "Connect Open network_id does not match the launch session."
+            )
+        }
         try withLockedState { state in
             if state.sessionState == .closed {
                 throw ConnectSessionError.sessionClosed
             }
             guard state.sessionState == .idle else {
-                return nil
+                throw ConnectSessionError.protocolViolation(
+                    "Connect Open may be sent exactly once."
+                )
             }
             state.sequence &+= 1
             state.sessionState = .opened
+            state.open = open
             return state.sequence
         }
     }
@@ -234,7 +319,102 @@ public final class ConnectSession: @unchecked Sendable {
         withLockedState { state in
             if state.sessionState == .opened {
                 state.sessionState = .idle
+                state.open = nil
             }
+        }
+    }
+
+    private func validateInboundControl(frame: ConnectFrame,
+                                        control: ConnectControl) throws {
+        guard let securityBinding else { return }
+        try validateInboundIdentity(frame)
+        if case .serverEvent = control {
+            return
+        }
+        let snapshot = try withLockedState { state -> (UInt64, ConnectOpen, Bool) in
+            guard state.sessionState == .opened, let open = state.open else {
+                throw ConnectSessionError.protocolViolation(
+                    "Connect wallet control arrived before Open."
+                )
+            }
+            guard frame.sequence == state.walletSequence else {
+                throw ConnectSessionError.protocolViolation(
+                    "Unexpected wallet sequence \(frame.sequence); expected \(state.walletSequence)."
+                )
+            }
+            return (state.walletSequence, open, state.approvalAccepted)
+        }
+        if case .approve(let approve) = control {
+            guard !snapshot.2 else {
+                throw ConnectSessionError.protocolViolation(
+                    "Connect approval may be accepted exactly once."
+                )
+            }
+            let relayAuth = try ConnectCrypto.relayAuthHash(
+                sessionID: sessionID,
+                relayToken: securityBinding.relayToken
+            )
+            try ConnectCrypto.verifyApprovalSignature(
+                networkID: securityBinding.networkID,
+                sessionID: sessionID,
+                appPublicKey: securityBinding.appPublicKey,
+                walletPublicKey: approve.walletPublicKey,
+                accountID: approve.accountID,
+                permissions: approve.permissions,
+                proof: approve.proof,
+                relayAuthHash: relayAuth,
+                walletSignature: approve.walletSignature
+            )
+        }
+        try withLockedState { state in
+            guard state.walletSequence == snapshot.0 else {
+                throw ConnectSessionError.protocolViolation("Connect wallet frame was replayed.")
+            }
+            state.walletSequence &+= 1
+            if case .approve = control {
+                guard !state.approvalAccepted else {
+                    throw ConnectSessionError.protocolViolation(
+                        "Connect approval may be accepted exactly once."
+                    )
+                }
+                state.approvalAccepted = true
+            }
+        }
+    }
+
+    private func expectedInboundSequence(for frame: ConnectFrame) throws -> UInt64? {
+        guard securityBinding != nil else { return nil }
+        try validateInboundIdentity(frame)
+        return try withLockedState { state in
+            guard frame.sequence == state.walletSequence else {
+                throw ConnectSessionError.protocolViolation(
+                    "Unexpected wallet sequence \(frame.sequence); expected \(state.walletSequence)."
+                )
+            }
+            return state.walletSequence
+        }
+    }
+
+    private func commitInboundSequence(_ expected: UInt64?) throws {
+        guard let expected else { return }
+        try withLockedState { state in
+            guard state.walletSequence == expected else {
+                throw ConnectSessionError.protocolViolation("Connect wallet frame was replayed.")
+            }
+            state.walletSequence &+= 1
+        }
+    }
+
+    private func validateInboundIdentity(_ frame: ConnectFrame) throws {
+        guard frame.sessionID == sessionID else {
+            throw ConnectSessionError.protocolViolation(
+                "Received a Connect frame for a different session."
+            )
+        }
+        guard frame.direction == .walletToApp else {
+            throw ConnectSessionError.protocolViolation(
+                "Received a Connect frame in the wrong direction."
+            )
         }
     }
 

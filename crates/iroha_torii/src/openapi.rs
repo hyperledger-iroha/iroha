@@ -32,9 +32,16 @@ use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
 
 use crate::utils;
 
+mod connect_openapi;
+mod iso20022;
 mod mcp_openapi;
 mod sorafs_evidence;
 
+use connect_openapi::{connect_paths, insert_connect_schemas};
+use iso20022::{
+    operator_parameters as iso_operator_parameters,
+    profile_selection_parameters as iso_profile_selection_parameters,
+};
 use mcp_openapi::mcp_paths;
 
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
@@ -2224,20 +2231,6 @@ fn bool_query_param(name: &str, description: &str) -> Value {
     Value::Object(param)
 }
 
-fn iso_profile_selection_parameters() -> Vec<Value> {
-    vec![
-        string_header_param(
-            "X-Iroha-Iso-Profile",
-            "Optional ISO bridge rail profile. Overrides the `profile` query parameter.",
-            false,
-        ),
-        string_query_param(
-            "profile",
-            "Optional ISO bridge rail profile used when `X-Iroha-Iso-Profile` is absent.",
-        ),
-    ]
-}
-
 fn path_param(name: &str, description: &str) -> Value {
     let mut param = Map::new();
     param.insert("name".into(), Value::String(name.to_owned()));
@@ -2807,7 +2800,10 @@ fn transaction_paths() -> Map {
             "Fetch ISO 20022 message record.",
             "Return the rich ISO 20022 message record by message id, including profile metadata and status history.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("msg_id", "ISO 20022 message id.")],
+            iso_operator_parameters(vec![string_path_param(
+                "msg_id",
+                "ISO 20022 message id.",
+            )]),
         )),
     );
     paths.insert(
@@ -2817,7 +2813,7 @@ fn transaction_paths() -> Map {
             "Fetch ISO 20022 durable audit index.",
             "Return the deterministic tamper-evident audit manifest for durable ISO 20022 bridge records.",
             "#/components/schemas/JsonValue",
-            vec![],
+            operator_signature_header_parameters(),
         )),
     );
     paths.insert(
@@ -2827,7 +2823,7 @@ fn transaction_paths() -> Map {
             "Fetch ISO 20022 pacs.002 status XML.",
             "Return the current ISO 20022 payment status report for a bridged message.",
             "#/components/schemas/XmlText",
-            vec![string_path_param("msg_id", "ISO 20022 message id.")],
+            iso_operator_parameters(vec![string_path_param("msg_id", "ISO 20022 message id.")]),
         )),
     );
     for (path, message_type, summary, description) in [
@@ -2863,7 +2859,7 @@ fn transaction_paths() -> Map {
                 summary,
                 &format!("{description} The response body is {message_type} XML."),
                 "#/components/schemas/XmlText",
-                vec![string_path_param("msg_id", "ISO 20022 message id.")],
+                iso_operator_parameters(vec![string_path_param("msg_id", "ISO 20022 message id.")]),
             )),
         );
     }
@@ -2929,65 +2925,6 @@ fn stream_paths() -> Map {
             "Connect to the P2P relay WebSocket.",
             "Upgrade to the P2P relay WebSocket.",
             None,
-        )),
-    );
-    paths
-}
-
-fn connect_paths() -> Map {
-    let mut paths = Map::new();
-    paths.insert(
-        "/v1/connect/session".to_owned(),
-        Value::Object(json_post_operation(
-            "Connect",
-            "Open a Connect session.",
-            "Create a Connect session for wallet pairing.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/connect/session/{sid}".to_owned(),
-        Value::Object(json_delete_operation(
-            "Connect",
-            "Close a Connect session.",
-            "Terminate a Connect session by session id. Requires `Authorization: Bearer <token_management>` from session creation.",
-            "#/components/schemas/JsonValue",
-            vec![
-                string_path_param("sid", "Connect session id."),
-                string_header_param(
-                    "Authorization",
-                    "Bearer management token returned by `/v1/connect/session`.",
-                    true,
-                ),
-            ],
-        )),
-    );
-    paths.insert(
-        "/v1/connect/ws".to_owned(),
-        Value::Object(text_get_operation(
-            "Connect",
-            "Connect to the Connect WebSocket.",
-            "Upgrade to the Connect WebSocket stream.",
-            None,
-        )),
-    );
-    paths.insert(
-        "/v1/connect/status".to_owned(),
-        Value::Object(json_get_operation(
-            "Connect",
-            "Fetch Connect status.",
-            "Return redacted aggregate Connect relay status. Add `sid` with `Authorization: Bearer <token_management>` for per-session status.",
-            "#/components/schemas/JsonValue",
-            vec![
-                string_query_param("sid", "Optional Connect session id for token-gated per-session status."),
-                string_header_param(
-                    "Authorization",
-                    "Bearer management token required when `sid` is supplied.",
-                    false,
-                ),
-            ],
         )),
     );
     paths
@@ -29291,6 +29228,7 @@ fn openapi_schemas() -> Map {
     insert_openapi_schemas_part_1(&mut schemas);
     insert_openapi_schemas_part_2(&mut schemas);
     insert_openapi_schemas_part_3(&mut schemas);
+    insert_connect_schemas(&mut schemas);
     schemas
 }
 
@@ -38572,6 +38510,8 @@ mod tests {
     }
 
     include!("openapi/tests/finality_app_contracts.rs");
+
+    include!("openapi/tests/iso20022_auth.rs");
 
     include!("openapi/tests/vpn_da.rs");
 }

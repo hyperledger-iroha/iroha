@@ -1,4 +1,4 @@
---------------- MODULE SumeragiV2Revision4AdversarialSafety ---------------
+---- MODULE SumeragiV2Revision4AdversarialSafety ----
 \* Bounded adversarial safety kernel for Sumeragi revision 4.  This model is
 \* deliberately independent of proposal/lock progress: it lets a Byzantine
 \* validator vote for both candidate bodies, lets honest validators split

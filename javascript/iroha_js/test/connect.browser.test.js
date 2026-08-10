@@ -96,6 +96,10 @@ const APPROVE_DOMAIN = encoder.encode("iroha-connect|approve|v1");
 const RELAY_AUTH_DOMAIN = encoder.encode("iroha-connect|relay-auth|v1");
 const CONNECT_ENVELOPE_TYPE_NAME = "iroha_torii_shared::connect::EnvelopeV1";
 const CANONICAL_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+const REGISTER_TOKEN_APP = "A".repeat(43);
+const REGISTER_TOKEN_WALLET = "B".repeat(43);
+const REGISTER_TOKEN_MANAGEMENT = "C".repeat(43);
+const REGISTER_TOKEN_RELAY = "D".repeat(43);
 
 function u16(value) {
   const out = Buffer.alloc(2);
@@ -166,8 +170,25 @@ function tokenAuthHash(kind, sidBytes, token) {
 }
 
 test("Connect session vector fixture matches browser crypto helpers", () => {
+  const networkId = NetworkId.parse(connectVectors.network_id);
+  assert.equal(Buffer.from(networkId.toBytes()).toString("hex"), connectVectors.network_id_hex);
+  const appPublicKey = Buffer.from(connectVectors.app_pk_hex, "hex");
+  const nonce = Buffer.from(connectVectors.nonce_hex, "hex");
   const sidBytes = Buffer.from(connectVectors.sid_hex, "hex");
-  const preview = { sidBytes };
+  assert.equal(
+    Buffer.from(blake2b(Buffer.concat([
+      Buffer.from("iroha-connect|sid|", "utf8"),
+      Buffer.from(networkId.toBytes()),
+      appPublicKey,
+      nonce,
+    ]), { dkLen: 32 })).toString("hex"),
+    connectVectors.sid_hex,
+  );
+  const preview = {
+    networkId,
+    sidBytes,
+    appKeyPair: { publicKey: appPublicKey },
+  };
   assert.equal(
     relayAuthHash(preview, connectVectors.tokens.relay).toString("hex"),
     connectVectors.relay_auth_hash_hex,
@@ -183,6 +204,22 @@ test("Connect session vector fixture matches browser crypto helpers", () => {
   assert.equal(
     tokenAuthHash("management", sidBytes, connectVectors.tokens.management).toString("hex"),
     connectVectors.token_hashes.management,
+  );
+  const approval = connectVectors.approval;
+  const preimage = approvalPreimage(
+    preview,
+    Buffer.from(approval.wallet_pk_hex, "hex"),
+    approval.account_id,
+    connectVectors.tokens.relay,
+  );
+  assert.equal(preimage.toString("hex"), approval.approve_preimage_hex);
+  assert.equal(
+    ed25519.verify(
+      Buffer.from(approval.signature_hex, "hex"),
+      preimage,
+      Buffer.from(approval.account_public_key_hex, "hex"),
+    ),
+    true,
   );
 });
 
@@ -579,12 +616,12 @@ test("registerConnectSession posts the exact canonical session identity", async 
           network_id: preview.networkId.toString(),
           app_pk: toBase64Url(preview.appKeyPair.publicKey),
           nonce: toBase64Url(preview.nonce),
-          wallet_uri: `${preview.walletUri}&token=wallet-token`,
-          app_uri: `${preview.appUri}&token=app-token`,
-          token_app: "app-token",
-          token_wallet: "wallet-token",
-          token_management: "management-token",
-          token_relay: "relay-token",
+          wallet_uri: `${preview.walletUri}&token=${REGISTER_TOKEN_WALLET}&relay=${REGISTER_TOKEN_RELAY}`,
+          app_uri: `${preview.appUri}&token=${REGISTER_TOKEN_APP}&relay=${REGISTER_TOKEN_RELAY}`,
+          token_app: REGISTER_TOKEN_APP,
+          token_wallet: REGISTER_TOKEN_WALLET,
+          token_management: REGISTER_TOKEN_MANAGEMENT,
+          token_relay: REGISTER_TOKEN_RELAY,
         }),
         {
           status: 200,
@@ -604,7 +641,45 @@ test("registerConnectSession posts the exact canonical session identity", async 
     nonce: toBase64Url(preview.nonce),
     node: "https://taira.sora.org",
   });
-  assert.equal(response.token_app, "app-token");
+  assert.equal(response.token_app, REGISTER_TOKEN_APP);
+});
+
+test("registerConnectSession rejects deep-link substitution and replay-shaped duplicates", async () => {
+  const preview = makePreview();
+  for (const mutate of [
+    (response) => {
+      response.wallet_uri += `&sid=${preview.sidBase64Url}`;
+    },
+    (response) => {
+      const uri = new URL(response.app_uri);
+      uri.searchParams.set("relay", "E".repeat(43));
+      response.app_uri = uri.toString();
+    },
+  ]) {
+    const response = {
+      sid: preview.sidBase64Url,
+      network_id: preview.networkId.toString(),
+      app_pk: toBase64Url(preview.appKeyPair.publicKey),
+      nonce: toBase64Url(preview.nonce),
+      wallet_uri: `${preview.walletUri}&token=${REGISTER_TOKEN_WALLET}&relay=${REGISTER_TOKEN_RELAY}`,
+      app_uri: `${preview.appUri}&token=${REGISTER_TOKEN_APP}&relay=${REGISTER_TOKEN_RELAY}`,
+      token_app: REGISTER_TOKEN_APP,
+      token_wallet: REGISTER_TOKEN_WALLET,
+      token_management: REGISTER_TOKEN_MANAGEMENT,
+      token_relay: REGISTER_TOKEN_RELAY,
+    };
+    mutate(response);
+    await assert.rejects(
+      registerConnectSession("https://taira.sora.org", preview, {
+        node: "https://taira.sora.org",
+        fetchImpl: async () => new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      }),
+      /(substituted|duplicate)/u,
+    );
+  }
 });
 
 test("deleteConnectSession tolerates missing sessions and uses DELETE", async () => {

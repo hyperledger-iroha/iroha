@@ -1262,6 +1262,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
     ) -> Int32
@@ -7904,14 +7905,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    func encodeConnectFrame(_ frame: ConnectFrame) -> Data? {
+    func encodeConnectFrame(_ frame: ConnectFrame, launchNonce: Data?) -> Data? {
         #if canImport(Darwin)
         guard isConnectCodecAvailable else { return nil }
         switch frame.kind {
         case .control(let control):
             switch control {
             case .open(let open):
-                return encodeControlOpenFrame(frame: frame, open: open)
+                guard let launchNonce else { return nil }
+                return encodeControlOpenFrame(frame: frame, open: open, launchNonce: launchNonce)
             case .approve(let approve):
                 return encodeControlApproveFrame(frame: frame, approve: approve)
             case .reject(let reject):
@@ -7972,13 +7974,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     #if canImport(Darwin)
-    private func encodeControlOpenFrame(frame: ConnectFrame, open: ConnectOpen) -> Data? {
+    private func encodeControlOpenFrame(frame: ConnectFrame, open: ConnectOpen, launchNonce: Data) -> Data? {
         guard let encodeControlOpenFn,
               let freeFn,
               frame.sessionID.count == 32,
-              open.appPublicKey.count == 32
+              open.appPublicKey.count == 32,
+              launchNonce.count == 16
         else { return nil }
-
         let permissionsData = ConnectCodec.encodePermissionsJSON(open.permissions)
         let appMetadataData = ConnectCodec.encodeAppMetadataJSON(open.appMetadata)
         var result: Data?
@@ -7986,33 +7988,31 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             guard let sidBase = sidBuffer.bindMemory(to: UInt8.self).baseAddress else { return -1 }
             return open.appPublicKey.withUnsafeBytes { pkBuffer -> Int32 in
                 guard let pkBase = pkBuffer.bindMemory(to: UInt8.self).baseAddress else { return -2 }
-                return withOptionalBytes(appMetadataData) { metaPtr, metaLen in
-                    withOptionalBytes(permissionsData) { permsPtr, permsLen in
-                        open.constraints.networkID.bytes.withUnsafeBytes { networkBuffer in
-                            guard let networkPtr = networkBuffer.bindMemory(to: UInt8.self).baseAddress else { return -3 }
-                            var outPtr: UnsafeMutablePointer<UInt8>? = nil
-                            var outLen: UInt = 0
-                            let dirRaw: UInt8 = frame.direction == .appToWallet ? 0 : 1
-                            let status = encodeControlOpenFn(
-                                sidBase,
-                                dirRaw,
-                                frame.sequence,
-                                pkBase,
-                                UInt(open.appPublicKey.count),
-                                metaPtr,
-                                metaLen,
-                                networkPtr,
-                                UInt(open.constraints.networkID.bytes.count),
-                                permsPtr,
-                                permsLen,
-                                &outPtr,
-                                &outLen
-                            )
-                            if status == 0, let outPtr {
-                                result = Data(bytes: outPtr, count: Int(outLen))
-                                freeFn(outPtr)
+                return launchNonce.withUnsafeBytes { nonceBuffer -> Int32 in
+                    guard let nonceBase = nonceBuffer.bindMemory(to: UInt8.self).baseAddress else { return -3 }
+                    return withOptionalBytes(appMetadataData) { metaPtr, metaLen in
+                        withOptionalBytes(permissionsData) { permsPtr, permsLen in
+                            open.constraints.networkID.bytes.withUnsafeBytes { networkBuffer in
+                                guard let networkPtr = networkBuffer.bindMemory(to: UInt8.self).baseAddress else { return -4 }
+                                var outPtr: UnsafeMutablePointer<UInt8>? = nil
+                                var outLen: UInt = 0
+                                let dirRaw: UInt8 = frame.direction == .appToWallet ? 0 : 1
+                                let status = encodeControlOpenFn(
+                                    sidBase, dirRaw, frame.sequence,
+                                    pkBase, UInt(open.appPublicKey.count),
+                                    nonceBase, UInt(launchNonce.count),
+                                    metaPtr, metaLen,
+                                    networkPtr, UInt(open.constraints.networkID.bytes.count),
+                                    permsPtr, permsLen,
+                                    &outPtr,
+                                    &outLen
+                                )
+                                if status == 0, let outPtr {
+                                    result = Data(bytes: outPtr, count: Int(outLen))
+                                    freeFn(outPtr)
+                                }
+                                return status
                             }
-                            return status
                         }
                     }
                 }

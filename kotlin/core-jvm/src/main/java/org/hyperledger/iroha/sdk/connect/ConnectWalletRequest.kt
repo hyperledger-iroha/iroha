@@ -4,6 +4,7 @@ import java.net.URI
 import java.net.URISyntaxException
 import java.net.URLDecoder
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.crypto.Blake2b
 
@@ -22,10 +23,58 @@ class ConnectWalletRequest private constructor(
     private val _sessionId: ByteArray = sessionId.copyOf()
     private val _appPublicKey: ByteArray = appPublicKey.copyOf()
     private val _nonce: ByteArray = nonce.copyOf()
+    private val openAccepted = AtomicBoolean(false)
 
     fun sessionId(): ByteArray = _sessionId.clone()
     fun appPublicKey(): ByteArray = _appPublicKey.clone()
     fun nonce(): ByteArray = _nonce.clone()
+
+    /** Validates and consumes the one permitted application `Open` frame for this request. */
+    @Throws(ConnectProtocolException::class)
+    fun acceptOpen(rawFrame: ByteArray): OpenControl {
+        val frame = ConnectFrameCodec.decode(rawFrame)
+        if (!frame.sessionId().contentEquals(_sessionId)) {
+            throw ConnectProtocolException("Connect Open sid does not match the launch request")
+        }
+        if (frame.direction != ConnectDirection.APP_TO_WALLET || frame.sequence != 1L) {
+            throw ConnectProtocolException("Connect Open must be app-to-wallet sequence 1")
+        }
+        val open = frame.open
+            ?: throw ConnectProtocolException("Expected a Connect Open control frame")
+        if (!open.appPublicKey().contentEquals(_appPublicKey)) {
+            throw ConnectProtocolException("Connect Open app_pk does not match the launch request")
+        }
+        if (open.networkId != networkId) {
+            throw ConnectProtocolException("Connect Open network_id does not match the launch request")
+        }
+        if (!openAccepted.compareAndSet(false, true)) {
+            throw ConnectProtocolException("Connect Open was already accepted")
+        }
+        return open
+    }
+
+    /** Builds the exact approval preimage after the launch-bound `Open` has been consumed. */
+    @Throws(ConnectProtocolException::class)
+    fun buildApprovePreimage(
+        walletPublicKey: ByteArray,
+        accountId: String,
+        permissionsHash: ByteArray?,
+        proofHash: ByteArray?,
+    ): ByteArray {
+        if (!openAccepted.get()) {
+            throw ConnectProtocolException("Connect Open must be accepted before approval")
+        }
+        return ConnectCrypto.buildApprovePreimage(
+            networkId,
+            _sessionId,
+            _appPublicKey,
+            walletPublicKey,
+            accountId,
+            permissionsHash,
+            proofHash,
+            ConnectCrypto.relayAuthHash(_sessionId, relayToken),
+        )
+    }
 
     /** Stable short fingerprint used by UI/testing to correlate sessions without exposing full tokens. */
     fun sessionFingerprintHex(): String {
@@ -39,27 +88,21 @@ class ConnectWalletRequest private constructor(
 
     companion object {
         private const val SCHEME = "iroha"
-        private const val LAUNCH_SCHEME = "irohaconnect"
         private const val HOST = "connect"
-        private const val LAUNCH_HOST = "wc"
         private const val SID_LENGTH = 32
-        private val SID_DOMAIN = "iroha-connect|sid|".toByteArray(Charsets.UTF_8)
 
         @JvmStatic
         @Throws(ConnectProtocolException::class)
         fun parse(uri: URI, defaultBaseUri: URI): ConnectWalletRequest {
-            val normalizedUri = normalizeConnectUri(uri)
-            val scheme = normalize(normalizedUri.scheme)
-            val host = normalize(normalizedUri.host)
-            if (scheme != SCHEME || host != HOST) {
-                throw ConnectProtocolException(
-                    "Connect deep link must use iroha://connect or irohaconnect://connect",
-                )
+            if (uri.scheme != SCHEME || uri.host != HOST ||
+                !uri.rawPath.isNullOrEmpty() || uri.rawFragment != null || uri.rawUserInfo != null
+            ) {
+                throw ConnectProtocolException("Connect deep link must use canonical iroha://connect")
             }
 
-            val query = parseQuery(normalizedUri.rawQuery)
-            val sid = firstPresent(query, "sid")
-            if (sid.isNullOrBlank()) {
+            val query = parseQuery(uri.rawQuery)
+            val sid = query["sid"]
+            if (sid.isNullOrEmpty()) {
                 throw ConnectProtocolException("Missing required query parameter: sid")
             }
             val sessionId = decodeBase64Url(sid, "sid")
@@ -67,27 +110,26 @@ class ConnectWalletRequest private constructor(
                 throw ConnectProtocolException("Connect sid must decode to 32 bytes")
             }
 
-            val token = firstNonBlank(
-                firstPresent(query, "token_wallet"),
-                firstPresent(query, "tokenWallet"),
-                firstPresent(query, "token"),
-            )
-            if (token.isNullOrBlank()) {
-                throw ConnectProtocolException("Missing required query parameter: token_wallet")
+            for (retired in listOf("chain_id", "token_wallet", "tokenWallet", "token_relay", "tokenRelay")) {
+                if (query.containsKey(retired)) {
+                    throw ConnectProtocolException("Retired Connect query parameter: $retired")
+                }
             }
-            val relayToken = firstNonBlank(
-                firstPresent(query, "relay"),
-                firstPresent(query, "token_relay"),
-                firstPresent(query, "tokenRelay"),
-            )
-            if (relayToken.isNullOrBlank()) {
+            val token = query["token"]
+            if (token.isNullOrBlank() || token.trim() != token) {
+                throw ConnectProtocolException("Missing or invalid required query parameter: token")
+            }
+            val relayToken = query["relay"]
+            if (relayToken.isNullOrBlank() || relayToken.trim() != relayToken) {
                 throw ConnectProtocolException("Missing required query parameter: relay")
             }
-
-            if (query.containsKey("chain_id")) {
-                throw ConnectProtocolException("chain_id is retired; provide exact network_id")
+            if (query["v"] != "1") {
+                throw ConnectProtocolException("Connect v must be exactly 1")
             }
-            val networkIdLiteral = trimToNull(firstPresent(query, "network_id"))
+            if (query["role"] != "wallet") {
+                throw ConnectProtocolException("Connect role must be exactly wallet")
+            }
+            val networkIdLiteral = query["network_id"]
                 ?: throw ConnectProtocolException("Missing required query parameter: network_id")
             val networkId = try {
                 NetworkId.parse(networkIdLiteral)
@@ -95,25 +137,23 @@ class ConnectWalletRequest private constructor(
                 throw ConnectProtocolException("Connect network_id is not canonical", ex)
             }
             val appPublicKey = decodeBase64Url(
-                trimToNull(firstPresent(query, "app_pk"))
+                query["app_pk"]
                     ?: throw ConnectProtocolException("Missing required query parameter: app_pk"),
                 "app_pk",
             )
             val nonce = decodeBase64Url(
-                trimToNull(firstPresent(query, "nonce"))
+                query["nonce"]
                     ?: throw ConnectProtocolException("Missing required query parameter: nonce"),
                 "nonce",
             )
             if (appPublicKey.size != 32 || nonce.size != 16) {
                 throw ConnectProtocolException("Connect app_pk and nonce must decode to 32 and 16 bytes")
             }
-            val expectedSid = Blake2b.digest256(
-                SID_DOMAIN + networkId.bytes() + appPublicKey + nonce,
-            )
+            val expectedSid = ConnectCrypto.deriveSessionId(networkId, appPublicKey, nonce)
             if (!sessionId.contentEquals(expectedSid)) {
                 throw ConnectProtocolException("Connect sid does not match network_id, app_pk, and nonce")
             }
-            val base = resolveBaseUri(trimToNull(firstPresent(query, "node")), defaultBaseUri)
+            val base = resolveBaseUri(query["node"], defaultBaseUri)
             val wsUri = buildWalletWebSocketUri(base, sid)
 
             return ConnectWalletRequest(
@@ -142,56 +182,7 @@ class ConnectWalletRequest private constructor(
         private fun normalize(value: String?): String =
             value?.trim()?.lowercase(Locale.ROOT) ?: ""
 
-        private fun trimToNull(value: String?): String? {
-            val trimmed = value?.trim()
-            return if (trimmed.isNullOrEmpty()) null else trimmed
-        }
-
-        private fun firstPresent(map: Map<String, String>, key: String): String? = map[key]
-
-        private fun firstNonBlank(vararg values: String?): String? {
-            for (value in values) {
-                if (!value.isNullOrBlank()) return value.trim()
-            }
-            return null
-        }
-
         @Throws(ConnectProtocolException::class)
-        private fun normalizeConnectUri(uri: URI): URI {
-            val scheme = normalize(uri.scheme)
-            val host = normalize(uri.host)
-            if (scheme == SCHEME && host == HOST) {
-                return uri
-            }
-            if (scheme == LAUNCH_SCHEME && host == HOST) {
-                return rebuildCanonicalConnectUri(uri)
-            }
-            if (scheme == LAUNCH_SCHEME && host == LAUNCH_HOST) {
-                val query = parseQuery(uri.rawQuery)
-                val embeddedUri = trimToNull(firstPresent(query, "uri"))
-                    ?: throw ConnectProtocolException("Missing required query parameter: uri")
-                try {
-                    return normalizeConnectUri(URI(embeddedUri))
-                } catch (ex: URISyntaxException) {
-                    throw ConnectProtocolException("Embedded connect URI is malformed", ex)
-                }
-            }
-            return uri
-        }
-
-        @Throws(ConnectProtocolException::class)
-        private fun rebuildCanonicalConnectUri(uri: URI): URI = try {
-            URI(
-                SCHEME,
-                uri.rawAuthority,
-                uri.rawPath,
-                uri.rawQuery,
-                uri.rawFragment,
-            )
-        } catch (ex: URISyntaxException) {
-            throw ConnectProtocolException("Connect deep link URI is malformed", ex)
-        }
-
         private fun parseQuery(rawQuery: String?): Map<String, String> {
             val query = LinkedHashMap<String, String>()
             if (rawQuery.isNullOrEmpty()) return query
@@ -200,9 +191,16 @@ class ConnectWalletRequest private constructor(
                 val idx = part.indexOf('=')
                 val rawKey = if (idx >= 0) part.substring(0, idx) else part
                 val rawValue = if (idx >= 0) part.substring(idx + 1) else ""
-                val key = urlDecode(rawKey)
-                if (!query.containsKey(key)) {
-                    query[key] = urlDecode(rawValue)
+                val key: String
+                val value: String
+                try {
+                    key = urlDecode(rawKey)
+                    value = urlDecode(rawValue)
+                } catch (ex: IllegalArgumentException) {
+                    throw ConnectProtocolException("Connect query contains invalid percent encoding", ex)
+                }
+                if (query.put(key, value) != null) {
+                    throw ConnectProtocolException("Duplicate Connect query parameter: $key")
                 }
             }
             return query

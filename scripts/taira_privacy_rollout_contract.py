@@ -126,6 +126,32 @@ HALT_CONDITIONS = (
     "receipt-or-candidate-binding-mismatch",
 )
 
+AUTHENTICATED_ROLLOUT_OBSERVATION_AUTHORITY_SCHEMA = (
+    "iroha.taira.authenticated-rollout-observation-authority.v1"
+)
+AUTHENTICATED_ROLLOUT_OBSERVATION_REPLAY_NAMESPACE = (
+    "iroha.taira.authenticated-rollout-observation-replay.v1"
+)
+AUTHENTICATED_ROLLOUT_OBSERVATION_PROVISIONING_ERROR = (
+    f"{AUTHENTICATED_ROLLOUT_OBSERVATION_AUTHORITY_SCHEMA} is not provisioned: "
+    "publication requires a canonical authority-origin envelope signed under a "
+    "separately pinned trust root inaccessible to the rollout runtime, deploy "
+    "controller, candidate signer, release signer, and publication signer; the "
+    "envelope must bind the exact rollout-plan and observation bytes and digests, "
+    "the admitted candidate, source and DPN commits, Cargo.lock and workspace-source "
+    "digests, candidate OCI digest, qualification receipt, deploy receipt and "
+    "deployed binary/config/capability identities, all four peer and public-Torii "
+    "identities, the supervisor, authority host and installation identities, the "
+    "installed controller digest, and a fresh authenticated run nonce, issued time, "
+    "expiry, and replay identity in "
+    f"{AUTHENTICATED_ROLLOUT_OBSERVATION_REPLAY_NAMESPACE}; the authority must "
+    "independently verify governance, canary, resource, restart, convergence, and "
+    "post-cutover semantics and reject self-hashes, owner/path-only trust, workflow "
+    "IDs, caller markers or environment switches, reused signing keys, stale or "
+    "replayed runs, spliced source/controller/host/table/result fields, and legacy "
+    "unsigned observations"
+)
+
 
 class RolloutContractError(RuntimeError):
     """The plan or observation record violates the closed rollout contract."""
@@ -133,6 +159,19 @@ class RolloutContractError(RuntimeError):
 
 def _fail(message: str) -> NoReturn:
     raise RolloutContractError(message)
+
+
+def require_authenticated_rollout_observation_authority_provisioned() -> NoReturn:
+    """Keep observation validation closed until independent authority exists.
+
+    This deliberately has no argument, environment switch, marker file, signer
+    digest, or caller-provided key escape hatch.  Provisioning requires a new
+    authenticated semantic-verifier and replay-broker path.
+    """
+
+    raise RolloutContractError(
+        AUTHENTICATED_ROLLOUT_OBSERVATION_PROVISIONING_ERROR
+    )
 
 
 def canonical_json_bytes(value: object) -> bytes:
@@ -879,13 +918,13 @@ def _validate_post_cutover(
     return snapshot_height, manifest
 
 
-def validate_result(
+def _validate_unsigned_result_structure(
     result: Mapping[str, object], *, plan: Mapping[str, object]
 ) -> tuple[str, str]:
-    """Validate a complete controller-observed rollout record.
+    """Validate the complete rollout-record structure without claiming origin.
 
     This checks structure and cross-field semantics only.  The caller remains
-    responsible for authenticating the sealed controller and record signature.
+    responsible for authenticating the controller-origin envelope and replay.
     """
 
     plan_sha256 = validate_plan(plan)
@@ -1132,6 +1171,15 @@ def validate_result(
     return plan_sha256, derived_rollout_id
 
 
+def validate_result(
+    result: Mapping[str, object], *, plan: Mapping[str, object]
+) -> tuple[str, str]:
+    """Authoritative entry point, closed before inspecting caller result fields."""
+
+    require_authenticated_rollout_observation_authority_provisioned()
+    return _validate_unsigned_result_structure(result, plan=plan)
+
+
 def _load(path: Path, maximum: int, label: str) -> dict[str, object]:
     return _decode_canonical(_read_stable(path, maximum, label), maximum, label)
 
@@ -1154,6 +1202,11 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        # Refuse observation validation before plan/result path access.  A
+        # canonical self-hash and an owner-private path do not prove runtime
+        # origin or bind the record to the admitted and deployed candidate.
+        if args.command == "verify-result":
+            require_authenticated_rollout_observation_authority_provisioned()
         plan = _load(args.plan, MAX_PLAN_BYTES, "rollout plan")
         if args.command == "verify-plan":
             plan_sha256 = validate_plan(plan)
@@ -1166,7 +1219,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
         else:
             result = _load(args.result, MAX_RESULT_BYTES, "rollout observation")
-            plan_sha256, rollout_id = validate_result(result, plan=plan)
+            plan_sha256, rollout_id = _validate_unsigned_result_structure(
+                result, plan=plan
+            )
             output = {
                 "plan_sha256": plan_sha256,
                 "qualification_authority": False,

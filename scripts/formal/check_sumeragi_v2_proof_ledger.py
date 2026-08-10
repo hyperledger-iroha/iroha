@@ -10641,10 +10641,10 @@ def _async_candidate_producer_continuation_contract_errors(
         ),
         "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates": (
             "{AsyncLeaderWireRuntimeCandidate(record.item): record \\in "
-            "asyncLeaderWireLifecycles, /\\ record.recipient = node "
-            "/\\ record.schedulerOrdinal < targetOrdinal /\\ "
-            "AsyncLeaderWireLifecycleActive(record) /\\ "
-            "record.physicalAdmissionOrdinal < physicalCut}"
+            "{owned \\in asyncLeaderWireLifecycles: /\\ owned.recipient = node "
+            "/\\ owned.schedulerOrdinal < targetOrdinal /\\ "
+            "AsyncLeaderWireLifecycleActive(owned) /\\ "
+            "owned.physicalAdmissionOrdinal < physicalCut}}"
         ),
         "AsyncCandidateProducerContinuationFrozenCandidateOwners": (
             "AsyncCandidateProducerContinuationFrozenCausalCandidates( "
@@ -10659,16 +10659,16 @@ def _async_candidate_producer_continuation_contract_errors(
             "targetOrdinal))"
         ),
         "AsyncCandidateProducerContinuationFrozenCandidateTokens": (
-            '{<<"Candidate", candidate, token>>: candidate \\in '
-            "AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
-            "targetOrdinal), token \\in "
-            "1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}"
+            'UNION {{<<"Candidate", candidate, token>>: token \\in '
+            "1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}: "
+            "candidate \\in AsyncCandidateProducerContinuationFrozenCandidateOwners( "
+            "node, targetOrdinal)}"
         ),
         "AsyncCandidateProducerContinuationFrozenStatusTokens": (
-            '{<<"Continuation", record.identity, token>>: record \\in '
-            "AsyncCandidateProducerContinuationFrozenRecords( node, "
-            "targetOrdinal), token \\in "
-            "1..AsyncCandidateProducerContinuationStatusRank(record.status)}"
+            'UNION {{<<"Continuation", record.identity, token>>: token \\in '
+            "1..AsyncCandidateProducerContinuationStatusRank(record.status)}: "
+            "record \\in AsyncCandidateProducerContinuationFrozenRecords( node, "
+            "targetOrdinal)}"
         ),
         "AsyncCandidateProducerContinuationFrozenPrefixDescentProperty": (
             "specification => \\A node \\in AsyncVotersAt(initialContext), "
@@ -17422,7 +17422,7 @@ def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
         "AsyncFiniteInit": "AsyncFiniteInitAt(ContextRecord(0, <<>>))",
         "AsyncAllVars": (
             "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, "
-            "AsyncProducerVars, asyncFixedCorridorDeadlines>>"
+            "AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>"
         ),
         "AsyncSpec": "AsyncInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
         "AsyncSpecAt": (
@@ -18676,7 +18676,7 @@ def _candidate_producer_lifecycle_coverage_contract_errors(
             ),
         ): (
             "AsyncCandidateProducerContinuationResetPreservesExactReservation",
-            "AsyncCandidateProducerContinuationStatusIsMonotone",
+            "AsyncCandidateProducerContinuationStatusTransitionIsMonotone",
             "AsyncCandidateProducerContinuationLifecycleCoverageInvariant",
             "AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn",
             "AsyncCandidateProducerContinuationLifecycleCoveredIn",
@@ -18942,11 +18942,11 @@ def _nested_filtered_projection_contract_errors(
                       scheduledCandidate.node \in Responsive}}
             """,
             "ExactDecisionTargetNeutralLiveServeIdentitySet": r"""
-              {ExactDecisionTargetNeutralServeOwnerIdentity(node, job):
-                 node \in Responsive,
-                 job \in
-                   {serveJob \in SequenceSet(asyncIoQueues[node]):
-                      serveJob.class = "Serve"}}
+              UNION {{ExactDecisionTargetNeutralServeOwnerIdentity(node, job):
+                   job \in
+                     {serveJob \in SequenceSet(asyncIoQueues[node]):
+                        serveJob.class = "Serve"}}:
+                node \in Responsive}
             """,
             "ExactDecisionTargetNeutralServeEpisodeUniverse": r"""
               ExactDecisionTargetNeutralRetainedServeIdentitySet
@@ -19004,45 +19004,45 @@ def _nested_filtered_projection_contract_errors(
                                target, leaderContext, leader, leaderView)}}
             """,
             "AdequateLeaderFixedProducerSubjectReplacementOwners": r"""
-              {AdequateLeaderFixedSubjectReplacementOwnerIdentity(
-                 target, leaderContext, leader, leaderView,
-                 record.node, record.causalOrigin, record.ordinal,
-                 lifecycle.physicalAdmissionOrdinal):
-                 record
-                   \in {producerRecord \in AsyncCandidateProducerContinuations:
-                          producerRecord.status \in {"Reserved", "Materialized"}},
-                 lifecycle
-                   \in {wireLifecycle \in asyncLeaderWireLifecycles:
-                          /\ wireLifecycle.recipient = record.node
-                          /\ wireLifecycle.causalOrigin = record.causalOrigin
-                          /\ wireLifecycle.schedulerOrdinal = record.ordinal
-                          /\ AdequateLeaderFixedSubjectReplacementOrigin(
-                               record.causalOrigin,
-                               target, leaderContext, leader, leaderView)}}
+              UNION {{AdequateLeaderFixedSubjectReplacementOwnerIdentity(
+                   target, leaderContext, leader, leaderView,
+                   record.node, record.causalOrigin, record.ordinal,
+                   lifecycle.physicalAdmissionOrdinal):
+                   lifecycle
+                     \in {wireLifecycle \in asyncLeaderWireLifecycles:
+                            /\ wireLifecycle.recipient = record.node
+                            /\ wireLifecycle.causalOrigin = record.causalOrigin
+                            /\ wireLifecycle.schedulerOrdinal = record.ordinal
+                            /\ AdequateLeaderFixedSubjectReplacementOrigin(
+                                 record.causalOrigin,
+                                 target, leaderContext, leader, leaderView)}}:
+                record
+                  \in {producerRecord \in AsyncCandidateProducerContinuations:
+                         producerRecord.status \in {"Reserved", "Materialized"}}}
             """,
             "AdequateLeaderFixedDiscoveredPipelineOriginPairs": r"""
-              {<<node, origin>>:
-                 node \in AdequateLeaderFrozenResponsiveRoster(leaderContext),
-                 origin
-                   \in
-                     {pipelineOrigin \in
-                        AsyncCandidateLifecycleOrdinaryOriginsForNodeIn(
-                          asyncControlServiceState, node):
-                        AdequateLeaderFixedOriginIsExactPipelineEpisode(
-                          pipelineOrigin, leaderContext,
-                          leader, leaderView, subject)}}
+              UNION {{<<node, origin>>:
+                   origin
+                     \in
+                       {pipelineOrigin \in
+                          AsyncCandidateLifecycleOrdinaryOriginsForNodeIn(
+                            asyncControlServiceState, node):
+                          AdequateLeaderFixedOriginIsExactPipelineEpisode(
+                            pipelineOrigin, leaderContext,
+                            leader, leaderView, subject)}}:
+                node \in AdequateLeaderFrozenResponsiveRoster(leaderContext)}
             """,
             "AdequateLeaderFixedLivePipelineOriginPairs": r"""
-              {<<node, origin>>:
-                 node \in AdequateLeaderFrozenResponsiveRoster(leaderContext),
-                 origin
-                   \in
-                     {pipelineOrigin \in
-                        AsyncCandidateLifecycleActiveOriginsForNodeIn(
-                          asyncControlServiceState, node):
-                        AdequateLeaderFixedOriginIsExactPipelineEpisode(
-                          pipelineOrigin, leaderContext,
-                          leader, leaderView, subject)}}
+              UNION {{<<node, origin>>:
+                   origin
+                     \in
+                       {pipelineOrigin \in
+                          AsyncCandidateLifecycleActiveOriginsForNodeIn(
+                            asyncControlServiceState, node):
+                          AdequateLeaderFixedOriginIsExactPipelineEpisode(
+                            pipelineOrigin, leaderContext,
+                            leader, leaderView, subject)}}:
+                node \in AdequateLeaderFrozenResponsiveRoster(leaderContext)}
             """,
         },
         "SumeragiV2AdequateLeaderCorridorEntryContinuationProofs.tla": {
@@ -19060,17 +19060,14 @@ def _nested_filtered_projection_contract_errors(
                           TimeoutTcReducerCandidateOwner(
                             stageOwner[2], target, tc, tc.view)
                    [] stageOwner[1] = 4 ->
-                          TimeoutTcIngressOwner(
-                            stageOwner[2], target, tc, tc.view)
+                          TimeoutTcIngressOwner(stageOwner[2], target, tc, tc.view)
                    [] stageOwner[1] = 5 ->
-                          TimeoutTcPacketOwner(
-                            stageOwner[2], target, tc, tc.view)
+                          TimeoutTcPacketOwner(stageOwner[2], target, tc, tc.view)
                    [] stageOwner[1] = 6 ->
                           TimeoutTcRetainedControlOwner(
                             stageOwner[2], target, tc, tc.view)
                    [] stageOwner[1] = 7 ->
-                          TimeoutTcInstallWalOwner(
-                            stageOwner[2], tc, tc.view)}
+                          TimeoutTcInstallWalOwner(stageOwner[2], tc, tc.view)}
             """,
         },
     }
@@ -19145,7 +19142,7 @@ def _lexicographic_rank_shape_contract_errors(formal_dir: Path) -> list[str]:
                 "leaderContext, leader, leaderView, subject), "
                 "<<AdequateLeaderFixedPreCandidateReservedLiveSlotDebt( "
                 "token, leaderContext, leader, leaderView, subject), "
-                "<<entryDebt, AdequateLeaderFixedEntryServiceSlack( "
+                "<<entryDebt, AdequateLeaderFixedEntryServiceSlack("
                 "owner, packet, leader)"
                 + ">>" * 3
             ),
@@ -19378,13 +19375,10 @@ def _non_vacuous_async_quantifier_contract_errors(
         exact_fairness_statements = (
             (
                 "ExactDecisionRequestClockPrefixFairOwnerUsesExistingFairness",
-                "\\A initialContext, snapshot: "
-                "(/\\ snapshot.node \\in AsyncVotersAt(initialContext) "
-                "/\\ ExactDecisionRequestClockPrefixFairOwner(snapshot) "
-                "\\in AsyncCausalEpisodeFairOwnerKinds) "
-                "=> (AsyncSpecAt(initialContext) "
-                "=> WF_AsyncAllVars( "
-                "ExactDecisionRequestClockPrefixFairAction(snapshot)))",
+                "\\A initialContext: \\A node \\in AsyncVotersAt(initialContext): "
+                "\\A fairOwner \\in AsyncCausalEpisodeFairOwnerKinds: "
+                "AsyncSpecAt(initialContext) => WF_AsyncAllVars( "
+                "AsyncCausalEpisodeFairAction(node, fairOwner))",
             ),
             (
                 "ExactDecisionRequestLifecycleConcreteOwnerUsesAsyncFairness",
@@ -19416,16 +19410,14 @@ def _non_vacuous_async_quantifier_contract_errors(
             )
             if extracted is None:
                 errors.append(
-                    f"{exact_decision_path}: missing exact parenthesized "
-                    f"fairness implication theorem {symbol}"
+                    f"{exact_decision_path}: missing exact reviewed fairness implication theorem {symbol}"
                 )
                 continue
             body, line = extracted
             statement = _tla_statement_without_proof(body)
             if statement != exact_statement:
                 errors.append(
-                    f"{exact_decision_path}:{line}: {symbol} must retain its "
-                    "exact parenthesized antecedent/consequent fairness "
+                    f"{exact_decision_path}:{line}: {symbol} must retain the exact reviewed fairness "
                     f"implication; found {statement!r}"
                 )
 
@@ -19988,11 +19980,10 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
         )
         expected_strong_type = (
             "/\\ StrongInductiveInvariant /\\ AsyncSchedulerTypeInvariant "
-            "/\\ AsyncServiceActivationPairInvariant "
-            "/\\ AsyncControlServiceStateTypeInvariant "
-            "/\\ AsyncCandidateLifecycleSchedulerCoverageInvariant "
-            "/\\ AsyncCertifiedResponseClaimIngressOwnershipInvariant "
-            "/\\ AsyncLeaderWireIngressCarrierOwnershipInvariant "
+            "/\\ AsyncServeProducerEpisodeTypeInvariant /\\ AsyncServeProducerEpisodeOwnershipInvariant "
+            "/\\ AsyncServiceActivationPairInvariant /\\ AsyncControlServiceStateTypeInvariant "
+            "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant /\\ AsyncCandidateLifecycleSchedulerCoverageInvariant "
+            "/\\ AsyncCertifiedResponseClaimIngressOwnershipInvariant /\\ AsyncLeaderWireIngressCarrierOwnershipInvariant "
             "/\\ AsyncOrdinaryIngressCarrierOwnershipInvariant "
             "/\\ ReceivedTimeoutVotePoolInvariant "
             "/\\ AsyncRecoveryTypeInvariant /\\ AsyncRestartAuthorityInvariant "
@@ -21448,19 +21439,21 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"currentGeneration + 1 ELSE currentGeneration"
               ),
               "FrozenInstallProposalSuccessor": (
-                r'AsyncCandidateWithIdentityAndOrigin( "Normal", "AssembleBody", '
-                r"command.node, installedContext.height, command.view + 1, "
+                r'AsyncCandidateCausalSuccessorWithIdentityAndOrigin( '
+                r'"Normal", "AssembleBody", command, command.node, '
+                r"installedContext.height, command.view + 1, "
                 r"subject, NoAsyncItem, installedContext, command.view + 1, "
                 r"NextCandidateGeneration(priorGeneration), command.evidence, "
-                r"subject, subject, subject, command.causalOrigin)"
+                r"subject, subject, subject)"
               ),
               "FrozenNormalBeginPrepareCandidate": (
-                r'AsyncCandidateWithIdentityAndOrigin( "Normal", "BeginPrepare", '
-                r"parent.node, blockHeight, parent.view, parent.subject, "
+                r'AsyncCandidateCausalSuccessorWithIdentityAndOrigin( '
+                r'"Normal", "BeginPrepare", parent, parent.node, '
+                r"blockHeight, parent.view, parent.subject, "
                 r"NoAsyncItem, parent.consumerContext, parent.consumerView, "
                 r"parent.consumerGeneration, parent.evidence, "
                 r"parent.bodyIdentity, parent.manifestIdentity, "
-                r"parent.commitmentIdentity, parent.causalOrigin)"
+                r"parent.commitmentIdentity)"
               ),
               "NormalProposalPrepareNoItemCandidate": (
                 r'/\ candidate.item = NoAsyncItem '
@@ -23443,11 +23436,16 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             _require_rust_token_sequence(
                 reducer_path,
                 reducer_items["on_retransmit_elapsed"],
-                "if let Some(locked) = self.durable.locked().cloned() "
-                "&& self.body_state(locked.round(), locked.subject()) "
-                "== BodyState::Missing { "
-                "effects.push(self.ensure_body_fetch(&locked)); "
-                "return StepOutcome::applied(effects); }",
+                "if let Some(locked) = self.durable.locked().cloned() { "
+                "let effect = match self.body_state(locked.round(), locked.subject()) { "
+                "BodyState::Missing => Some(self.ensure_body_fetch(&locked)), "
+                "BodyState::Available => Some(Effect::StoreBody { tag: self.current_tag(), "
+                "round: locked.round(), subject: locked.subject(), }), "
+                "BodyState::Durable => Some(Effect::ValidateBody { tag: self.current_tag(), "
+                "round: locked.round(), subject: locked.subject(), }), "
+                "BodyState::Validated | BodyState::Invalid => None, }; "
+                "if let Some(effect) = effect { effects.push(effect); "
+                "return Ok(StepOutcome::applied(effects)); } }",
                 "retransmit must derive FetchBody from the exact durable lock",
                 errors,
             )
@@ -24306,12 +24304,13 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "PersistDecisionRecoverySuccessor": (
                 "LET request == PersistDecisionRequest(command) "
-                "qc == request.qc IN AsyncCandidateAtConsumerWithOrigin( "
-                '"Completion", PersistDecisionRecoveryKind(command), '
-                "request.node, qc.context.height, "
-                "qc.view, qc.subject, NoAsyncItem, command.consumerView, "
-                "command.consumerGeneration, qc, qc.subject, qc.subject, "
-                "qc.subject, command.causalOrigin)"
+                "qc == request.qc kind == PersistDecisionRecoveryKind(command) "
+                "IN AsyncCandidateCausalSuccessorWithIdentityAndOrigin( "
+                '"Completion", kind, command, request.node, '
+                "qc.context.height, qc.view, qc.subject, NoAsyncItem, context, "
+                "command.consumerView, command.consumerGeneration, qc, "
+                "qc.subject, qc.subject, "
+                "qc.subject)"
             ),
         }
         for symbol, exact_body in exact_persist_decision_operators.items():
@@ -24378,7 +24377,8 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "PersistDecisionBody",
         "PersistDecisionValidationHeld",
         "PersistDecisionRequest",
-        "AsyncCandidateAtConsumerWithOrigin",
+        "AsyncCandidateCausalSuccessorWithIdentityAndOrigin",
+        "AsyncCandidateSuccessorProposalRound",
         "AsyncCandidateWithIdentityAndOrigin",
         "CandidateConsumerCurrent",
         "PersistDecisionRequests",
@@ -48644,9 +48644,6 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "replayed_proposal_sign": (
         "760229a1544f797631e86183706e70f32ac34534c03fd30d2db445f4e37e7db5"
     ),
-    "run_inner": (
-        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
-    ),
     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
         "ffb3b7abab788acdf238fdec096ed6fb55f9843f4df66b42965d9ea3a1bcd2ab"
     ),
@@ -50936,19 +50933,19 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncCandidateLifecycleDurableOwnerTokensForNodeAfter": (
             "{AsyncCandidateLifecycleDurableOwnerToken( \"RestartReplay\", "
             "node, index, FreshRestartCandidateSequence( RestartReplay(node))'"
-            "[index].causalOrigin): /\\ index \\in "
-            "1..Len(FreshRestartCandidateSequence(RestartReplay(node))') "
-            "/\\ FreshRestartCandidateSequence( RestartReplay(node))'"
-            "[index].causalOrigin \\notin "
-            "AsyncScheduledCandidateOriginsForNodeAfter(node)} "
+            "[index].causalOrigin): index \\in {candidateIndex \\in "
+            "1..Len(FreshRestartCandidateSequence(RestartReplay(node))'): "
+            "FreshRestartCandidateSequence( RestartReplay(node))'"
+            "[candidateIndex].causalOrigin \\notin "
+            "AsyncScheduledCandidateOriginsForNodeAfter(node)}} "
             "\\cup {AsyncCandidateLifecycleDurableOwnerToken( "
             "\"HistoricalRetransmit\", node, index, "
             "HistoricalLockedRetransmitSuccessors(node)'[index].causalOrigin): "
-            "/\\ index \\in "
-            "1..Len(HistoricalLockedRetransmitSuccessors(node)') "
-            "/\\ HistoricalLockedRetransmitSuccessors(node)'"
-            "[index].causalOrigin \\notin "
-            "AsyncScheduledCandidateOriginsForNodeAfter(node)}"
+            "index \\in {candidateIndex \\in "
+            "1..Len(HistoricalLockedRetransmitSuccessors(node)'): "
+            "HistoricalLockedRetransmitSuccessors(node)'[ "
+            "candidateIndex].causalOrigin \\notin "
+            "AsyncScheduledCandidateOriginsForNodeAfter(node)}}"
         ),
         "AsyncCandidateLifecycleReviewedSemanticOwnerTokensIn": (
             "AsyncCandidateLifecyclePhysicalOwnerTokensForNodeAfter(node) "
@@ -50962,9 +50959,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "AsyncCandidateLifecycleDurableOwnerTokensForNodeAfter(node)"
         ),
         "AsyncCandidateLifecycleActiveOriginsForNodeIn": (
-            "{record.origin: record \\in "
-            "AsyncCandidateLifecycleRecordsForNodeIn(state, node), "
-            "record.slot \\in AsyncCandidateLifecycleActiveSlots}"
+            "{record.origin: record \\in {candidateRecord \\in "
+            "AsyncCandidateLifecycleRecordsForNodeIn(state, node): "
+            "candidateRecord.slot \\in AsyncCandidateLifecycleActiveSlots}}"
         ),
         "AsyncCandidateLifecycleLiveActiveOriginCarrierIn": (
             "AsyncCandidateLifecycleActiveOriginsForNodeIn(state, node) "
@@ -51599,6 +51596,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "AsyncCandidateServiceMarker": (
             "[identity |-> AsyncCandidateServiceIdentity(candidate), "
+            "causalOrigin |-> candidate.causalOrigin, "
             "node |-> candidate.node, context |-> candidate.consumerContext, "
             "height |-> candidate.height, view |-> candidate.view, "
             "episodeView |-> episodeView, generation |-> episodeGeneration, "
@@ -51613,6 +51611,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "AsyncCandidateServiceTombstone": (
             "[identity |-> AsyncCandidateServiceIdentity(candidate), "
+            "causalOrigin |-> candidate.causalOrigin, "
             "node |-> candidate.node, context |-> candidate.consumerContext, "
             "height |-> candidate.height, view |-> candidate.view, "
             "episodeView |-> episodeView, subject |-> candidate.subject, "
@@ -51679,7 +51678,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "\\E lifecycle \\in state.candidateLifecycleAdmissions: "
             "/\\ lifecycle.node = terminal.node "
             "/\\ lifecycle.origin = "
-            "terminal.identity.payload.causalOrigin "
+            "terminal.causalOrigin "
             "/\\ lifecycle.slot \\in AsyncCandidateLifecycleServicedSlots "
             "/\\ \\A left, right \\in state.candidateServiceMarkers "
             "\\cup state.candidateTerminalTombstones: "
@@ -52869,8 +52868,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "Cardinality(IngressContinuationProtectedSourcesFor(lanes, recipient))"
             ),
             "IngressProtectedSlotCountAfterAdmission": (
-                "IngressProtectedSlotCountFor(IngressLanesAfterAdmission(item), "
-                "item.envelope.recipient)"
+                "IngressProtectedSlotCountAfterAdmissionVia("
+                "item, item.source)"
             ),
             "AsyncIngressCapacityTypeInvariant": (
                 "\\A recipient \\in ValidatorIds: "
@@ -52882,7 +52881,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "<= AsyncIngressCapacity"
             ),
             "IngressUsableCapacityAfterAdmission": (
-                "AsyncIngressCapacity - IngressProtectedSlotCountAfterAdmission(item)"
+                "IngressUsableCapacityAfterAdmissionVia(item, item.source)"
             ),
             "AsyncValidTimeoutVoteWireByteBound": "4 * 1024",
             "AsyncTimeoutVoteByteReserve": "64 * 1024",
@@ -53554,8 +53553,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ \\E lifecycle \\in "
                 "state.candidateLifecycleAdmissions: "
                 "/\\ lifecycle.node = serviced.node "
-                "/\\ lifecycle.origin = "
-                "serviced.identity.payload.causalOrigin "
+                "/\\ lifecycle.origin = serviced.causalOrigin "
                 "/\\ IF lifecycle.origin.phase = \"BeginTimeout\" "
                 "THEN lifecycle.slot = AsyncCandidateLifecycleClockSlot "
                 "ELSE IF lifecycle.retired THEN lifecycle.slot \\in "
@@ -53568,8 +53566,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ ((left.node = right.node /\\ left.ordinal = "
                 "right.ordinal) => left = right) "
                 "/\\ ((left.node = right.node "
-                "/\\ left.identity.payload.causalOrigin = "
-                "right.identity.payload.causalOrigin "
+                "/\\ left.causalOrigin = right.causalOrigin "
                 "/\\ AsyncCandidateServiceStageForKind(left.phase) = "
                 "AsyncCandidateServiceStageForKind(right.phase)) "
                 "=> left = right)"
@@ -53632,7 +53629,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "candidate \\in QueuedCandidates \\cup DeferredCandidates "
                 "\\cup CausalCandidates \\cup TrackedWorkCandidates: "
                 "/\\ serviced.node = candidate.node "
-                "/\\ serviced.identity.payload.causalOrigin = "
+                "/\\ serviced.causalOrigin = "
                 "candidate.causalOrigin /\\ serviced.phase = "
                 "candidate.kind => serviced.identity = "
                 "AsyncCandidateServiceIdentity(candidate)"
@@ -53935,32 +53932,32 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                   candidateRecord.slot \in AsyncCandidateLifecycleActiveSlots}}
         """,
         "AsyncLeaderWireIngressCarrierCoordinates": r"""
-          {<<source, index>>:
-             source \in AsyncIngressSources,
+          UNION {{<<source, index>>:
              index \in
                {laneIndex \in 1..Len(IngressLane(record.recipient, source)):
                   AsyncLeaderWireAdmissionMatchesRecord(
-                    IngressLane(record.recipient, source)[laneIndex], record)}}
+                    IngressLane(record.recipient, source)[laneIndex], record)}}:
+            source \in AsyncIngressSources}
         """,
         "AsyncOrdinaryIngressCarrierCoordinates": r"""
-          {<<source, index>>:
-             source \in AsyncIngressSources,
+          UNION {{<<source, index>>:
              index \in
                {laneIndex \in 1..Len(IngressLane(carrier.node, source)):
                   ExactAsyncCandidateIdentity(
                     DeliveryCandidate(
                       IngressLane(carrier.node, source)[laneIndex]))
-                    = carrier.carrierIdentity}}
+                    = carrier.carrierIdentity}}:
+            source \in AsyncIngressSources}
         """,
         "AsyncLeaderWireIngressCarrierCoordinatesAfter": r"""
-          {<<source, index>>:
-             source \in AsyncIngressSources,
+          UNION {{<<source, index>>:
              index \in
                {laneIndex \in
                   1..Len(asyncIngressLanes'[record.recipient][source]):
                   AsyncLeaderWireAdmissionMatchesRecord(
                     asyncIngressLanes'[record.recipient][source][laneIndex],
-                    record)}}
+                    record)}}:
+            source \in AsyncIngressSources}
         """,
     }
     for symbol, expected_body in async_filtered_projections.items():

@@ -597,6 +597,9 @@ ASYNC_LIVENESS_SHARDS = (
 # the immediately preceding chain shard; every other non-root shard imports
 # its chain predecessor.
 ASYNC_LIVENESS_EXTENDS_OVERRIDES = {
+    "SumeragiV2AsyncDecisionApplicationProofs": (
+        "SumeragiV2AsyncTimeoutOwnershipProofs",
+    ),
     "SumeragiV2AsyncTemporalRankProofs": (
         "SumeragiV2AsyncRecoveryProgressWitnessProofs",
         "SumeragiV2AsyncCausalWorkBudgetProofs",
@@ -1283,103 +1286,103 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "f89449d336dc4b6f3a9e7c78e3b05780e0d59ca7de200cce5669ca1fb9715f74"
     ),
     "scripts/formal/check_sumeragi_v2_replay_trace.sh": (
-        "ccdae44c2fc9d12dfe7a1239988de036a3181aea7f76c522a83ce4809f300118"
+        "3e00fb93a6bd95b2d6c4818c97384160fe40de5aef5b6486e76bb0e241abc01e"
     ),
     "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh": (
-        "186029d410db73878ae7af83c39db20cb0bce0fbafbca701a5dcfe767271f9bc"
+        "47175c5815cb5073b5ef97cc5f23d2609d15f4cf6caae6068633250c648d79ba"
     ),
     "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
-        "dd49c24d04c5a35444a7ff59e47419ada1eb7d61387cf46e761b17a38a96d1b3"
+        "381c2beba6ec3130ad1102de87dd09739022a5c36c1ead3bd6589cf45be0f7f9"
     ),
     "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh": (
-        "a9bad39fa0caa6761cf7fa5aee259cba9e932234a79e4401ccecc380ca072200"
+        "a69da1a117bb8e6f3a73d5c6ce99eb88286b1372b59238e0da2ccf555eeafb0e"
     ),
     "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh": (
-        "28e4512bd6f856175e5dc5c601afa41f95e4a511f0e9d9aeac5127a309c1b610"
+        "1400aee6798b10b0cba2d33663c39a4a36b65e009e5ae070896c0b2dd10b199a"
     ),
     "scripts/formal/run_sumeragi_v2_certificate_ref_recovery_mutation.sh": (
-        "da7d91db8c4b7123cda949b50601b2bf23db1f257bb66d1929860346b61bbffc"
+        "2c88484904aa3fb104ea8d33cc9d7ba53859fb51c50ad2aeb30cd0e35fb506b5"
     ),
     "scripts/formal/run_sumeragi_v2_certified_response_identity_separation_mutation.sh": (
-        "2b8dc5db20be959526ca0a5fe9d57ac0d34afb209cb5d7a9d80aeb6e55740569"
+        "98aabccfa0af05a5090bb344adcd69115e107d5d3ecfcae5b22c62643793d79d"
     ),
     "scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh": (
-        "166fbeb948d2e05015c6deed7c4d45e512bf9f29b8825f5feccb7608c0ef2eae"
+        "97f30ef35ce90e5a67193da0cdbdcc13c3de2f1c2535fd50ecdd081a697313a5"
     ),
     "scripts/formal/run_sumeragi_v2_certified_response_source_lineage_mutation.sh": (
-        "dbaba12f18e9f48a490891625ca6f5556f0b1517b22f8d5fabaa57e7835bb1d7"
+        "3848a6a8caf5b04053e5665c9545439e0f224234da36f0175e643865482d8daa"
     ),
     "scripts/formal/run_sumeragi_v2_commit_import_provenance_mutations.sh": (
-        "4bd77eed89bce194b308769b0267a814628a6596ab298d68bf1d3ca8f198eaaa"
+        "75466cd1d485d26237931a11ad62ba9f277f63fb162d2a49648e22731a2a420e"
     ),
     "scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh": (
-        "252ee943a2392f866d93cd1c62af4e17be63c22dcdfcfb0f73cd6691ac7bd3a4"
+        "aab9015dc476a567d81ce7ddc4f217578825da06a9cfc713f35186386459feeb"
     ),
     "scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh": (
-        "c12af944bccd6587374576ecc0abf6779a468ac0162d59b3c6762ab09aab9017"
+        "98193358163d37c5169aa777ca043021cb7b1261fb34493563dc0307ddcf6a84"
     ),
     "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
-        "52cb68a489a0309fabd6e52d16077a4cc05276088072636c4420cb55fc0b016a"
+        "96e2a255b699b3d60ba4fcd66cd212e7a8958adde9551b3fffc32118e9e31e02"
     ),
     "scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh": (
-        "2ab6aa430893197888a69b4ec56a120556e44e7465893dc5155a3941d236519e"
+        "6c666896aa2d602965cc91ad7e4dcdb5112b3a7c0dadd14dc3f3c54c1bde8258"
     ),
     "scripts/formal/run_sumeragi_v2_indexed_service_activation_mutations.sh": (
-        "88c03a575317b85ec59660d4a8e7164798d0ce11b59c8e8da5809f4d5b8132af"
+        "a167d46e931ebe08e8933c27a1cc2efb26898cd7fd5dbeb2b006924c590d31f6"
     ),
     "scripts/formal/run_sumeragi_v2_inflight_first_release.sh": (
-        "d08247dcd3ce4b55f510723df478de6aca657eb67fa6c8fa3c8d5b9719dc907d"
+        "91ed2f7ef62c446dfcc08836aeacf151f4f75464858be540e418b8d45f11a35d"
     ),
     "scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh": (
-        "7aaac40fa9cb9fd603f8809baba4152d8266ae19adad6a967aa04290e2a2af6b"
+        "1cd0bee3b981d6a0cc814587543b82c02ef6d220ae92a12c2afc55e0faf4032a"
     ),
     "scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh": (
-        "4bf965e65183469fc3434cdf96c486c921aa5f270a192580761ab6a0e7f6d7f8"
+        "945fea6569cfe901286abc6cd3736fb78eb4bf82d73ca9d079d2f21c4f379753"
     ),
     "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh": (
-        "ff397f9c7360900ea85c35a1889309ca082b04ec3fc1c0aeca2c327789157e56"
+        "c3427e8773ca3955fd0a81e3d17787230ca19a4672e42fea69c2ea4ec395a04a"
     ),
     "scripts/formal/run_sumeragi_v2_multilane_mutations.sh": (
-        "c4a3939977809ecb955e22e1a92aa40db4c260eb224fe17b6aa2715ac67b25f2"
+        "2b6cc8af6217c30009a1f8756c0a82eae76a22f88cd9b9a6079a64d92f496c00"
     ),
     "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh": (
-        "fc841bb679feaf1ded305f1ab0e39ba388e49876bcbc1e3cb39436b09be74a78"
+        "1391403cbf0f1b64f78bee9ba6ccf5ee043d157a49e33cbaec7ece949633ae39"
     ),
     "scripts/formal/run_sumeragi_v2_persist_install_validation_mutation.sh": (
-        "73dab6c69caa1ecba6da0aa7f8c0aec30f449aab9c39810c23ed928df0ed2bdb"
+        "1b397e9c0a869e73b2b78b20b8839714c1f257ce7ad06be1587f554d767f04b2"
     ),
     "scripts/formal/run_sumeragi_v2_post_decision_timeout_mutation.sh": (
-        "9e8a9f07e50230929712a84d01abf4a75f134727a254a0fd21b57e19c93a4e8b"
+        "ff5d34f872f1250f98e11945781cc2cc25d17c3870d7fb415d0636dab7a76c1b"
     ),
     PRODUCER_CONTINUATION_PHYSICAL_CUT_MUTATION_RUNNER: (
-        "454a44541d5b4c1a5eaaf5b23e34053c111f76eadab75521683713bf773a56bb"
+        "101133a786105b5e2bfd24e7f41192fd2d16b938ddc43f1b7314381c153b687f"
     ),
     "scripts/formal/run_sumeragi_v2_productive_mutation.sh": (
-        "5cffb84945d844b38e8d5cc492ef1381519111750592c96a412ddcf170dde072"
+        "b0f7ef06fa72f635e36c9e360b7409c8cd3c29576ab826702671e3e4b612e3b3"
     ),
     "scripts/formal/run_sumeragi_v2_progress_mutations.sh": (
-        "a3060703cbf35f08e0a60b35e9d2b3efcb4a72a4e6524d117726e365a3c89551"
+        "62dbd78aa70b0d7e2682dd052e3eaeba782c4061a4a28b4ebb5fc1fc7b2052b9"
     ),
     "scripts/formal/run_sumeragi_v2_replay_locked_body_carrier_mutation.sh": (
-        "6316f98a9bba2c0bc36155f14f720b60148c1d4d6eb866b7600ce80d0bc8aaea"
+        "051fb1a64a311fc881c2770af7d98c669685679f86dda5d66534d2c78771fdc1"
     ),
     "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh": (
-        "b18a14944ca8ece675b70307f3d091112d07b92ca31513612c47cdb152722729"
+        "bd50f7a1923a0f3afa6038cbb1c8f9f3d654b32f596038852735ea35e1e4f74a"
     ),
     "scripts/formal/run_sumeragi_v2_restart_locked_fetch_order_mutation.sh": (
-        "404ddb1393d21d33e83f0c01afb5bacf4e2d761420cbf6905351c043464a0596"
+        "686fefc387ec254d9eca2b2fa0f99860fb97f16a580273fe074ba571b7168dcd"
     ),
     "scripts/formal/run_sumeragi_v2_serve_scheduler_ordinal_mutations.sh": (
-        "26dde32bedb3b54cdfa7ead672fa1498b853a936b6620a7715f9ba9ea77ea8e2"
+        "d392e465b526ffbb4b4aac0857582098a5c260d86db94dab9319f2cb8f35daaa"
     ),
     "scripts/formal/run_sumeragi_v2_service_rank_mutation.sh": (
-        "e20a740c92cc9edb951699f8e3247b61d0c92701fcde39fca60baad493bb4796"
+        "41a0c3d8cfda9400fcdd26e27cabbbeeeae4e06f13fd9bb5819f38af50fe6a9e"
     ),
     "scripts/formal/run_sumeragi_v2_tlc.sh": (
-        "f24023b1d68c85057315fedc7a9347d05777c4cbb989e09c9a3bb253ff85385a"
+        "03bbd7ef8c8c6605bce067b6b469a1c407e08f8ad5534d7b733fc94557633213"
     ),
     "scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh": (
-        "9421b6db11cf3df8b6d5fb38790fd4eab2d5e8398335fbb603afe0837a37ff1e"
+        "c8baa9b718c40c26062b2a54107da0ae46f20ae333304f386be08e5dc40b7645"
     ),
 }
 SHARED_TLC_RESULT_BRANCH_PROFILES = {
@@ -2824,13 +2827,14 @@ def _revision4_adversarial_safety_contract_errors(
             "body \\notin decisions",
             "decisions' = decisions \\cup {body}",
         ),
-        "Next": (
+        "ProtocolNext": (
             "DeliverFullBody(validator, body)",
             "HonestCommitVote(validator, body)",
             "ByzantineCommitVote(validator, body)",
             "FormCommitQC(body)",
             "Decide(body)",
         ),
+        "Next": ("ProtocolNext", "TerminalComplete"),
         "FixedAdversarialGeometry": (
             "Cardinality(Validators) = 4",
             "Cardinality(Honest) = 3",

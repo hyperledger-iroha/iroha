@@ -456,14 +456,18 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
 
 def _rejects_without_handoff(harness: Harness, match: str | None = None) -> None:
     with pytest.raises(publisher.TairaPublicationError, match=match):
-        publisher.publish(harness.request, now_unix=1_800_000_000)
+        publisher._publish_after_authenticated_rollout_observation(
+            harness.request, now_unix=1_800_000_000
+        )
     assert not harness.output.exists()
 
 
 def test_publish_closes_exact_seven_file_handoff_and_fixed_child_surface(
     harness: Harness,
 ) -> None:
-    result = publisher.publish(harness.request, now_unix=1_800_000_000)
+    result = publisher._publish_after_authenticated_rollout_observation(
+        harness.request, now_unix=1_800_000_000
+    )
 
     assert sorted(path.name for path in harness.output.iterdir()) == sorted(
         publisher.TERMINAL_FILES
@@ -878,7 +882,9 @@ def test_partial_signing_failure_never_creates_terminal_handoff(
 
     monkeypatch.setattr(publisher, "sign_release_manifest", fail_sign)
     with pytest.raises(publisher.ReleaseManifestSignatureError, match="HSM"):
-        publisher.publish(harness.request, now_unix=1_800_000_000)
+        publisher._publish_after_authenticated_rollout_observation(
+            harness.request, now_unix=1_800_000_000
+        )
     assert not harness.output.exists()
     assert not list(harness.request.scratch_parent.glob("taira-publish-authority-*"))
 
@@ -895,7 +901,9 @@ def test_post_rename_failure_rolls_back_exact_terminal_inode(
 
     monkeypatch.setattr(publisher.os, "rename", rename_then_fail)
     with pytest.raises(OSError, match="post-rename"):
-        publisher.publish(harness.request, now_unix=1_800_000_000)
+        publisher._publish_after_authenticated_rollout_observation(
+            harness.request, now_unix=1_800_000_000
+        )
     assert not harness.output.exists()
     assert not list(harness.output.parent.glob(f".{harness.output.name}.pending-*"))
     assert not list(harness.request.scratch_parent.glob("taira-publish-authority-*"))
@@ -910,6 +918,8 @@ def test_noncanonical_publication_time_is_rejected_before_side_effects(
     now_unix: int,
 ) -> None:
     with pytest.raises(publisher.TairaPublicationError, match="publication issue time"):
-        publisher.publish(harness.request, now_unix=now_unix)
+        publisher._publish_after_authenticated_rollout_observation(
+            harness.request, now_unix=now_unix
+        )
     assert harness.fake_oras.calls == []
     assert not harness.output.exists()

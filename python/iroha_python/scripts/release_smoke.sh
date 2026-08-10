@@ -133,6 +133,6 @@ TWINE_USERNAME="__token__" TWINE_PASSWORD="pypi-dry-run-token" \
 
 # This harness deliberately performs no signing. Stage reviewed release
 # candidates through scripts/release_manifest_signing.py and the protected
-# external Ed25519/HSM workflow after this smoke test passes.
+# external software Ed25519 workflow after this smoke test passes.
 
 printf '%s\n' "${WHEEL}"

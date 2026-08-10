@@ -42,31 +42,7 @@ pub mod scheduler;
 pub mod store;
 pub mod telemetry;
 mod transparency;
-pub use governance::{
-    FencedTransparencyAuthoritativeHeadReaderV1, GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1,
-    GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_BYTES_V1,
-    GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_VALUE_BYTES_V1,
-    GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADERS_V1, GOVERNANCE_DAG_REQUEST_AUTH_MAX_URL_BYTES_V1,
-    GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,
-    GOVERNANCE_DAG_REQUEST_AUTH_SELECTED_HEADER_NAMES_V1, GOVERNANCE_DAG_REQUEST_AUTH_VERSION_V1,
-    GovernanceDagAuthenticationScope, GovernanceDagCanonicalRequestHeaderV1,
-    GovernanceDagCanonicalRequestV1, GovernanceDagHttpRequestReceiverV1,
-    GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagRequestAuthenticationErrorV1,
-    GovernanceDagRequestAuthenticationPolicyV1, GovernanceDagRequestAuthenticationReplayCacheV1,
-    GovernanceDagRequestAuthenticationReplayStoreV1, GovernanceDagRequestAuthenticator,
-    GovernanceDagRequestIngressBindingV1, GovernanceDagRequestIngressEnforcementV1,
-    GovernanceDagRequestIngressQualificationErrorV1, GovernanceDagRequestIngressQualificationV1,
-    GovernanceDagRequestReplayPostureV1, GovernanceDagRuntimeProviderQualificationV1,
-    GovernanceDagRuntimeSigner, GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
-    GovernanceDagSealedStateSlot, GovernanceDagVerifiedHttpRequestV1,
-    QualifiedFencedTransparencyHeadReaderV1, QualifiedFencedTransparencyPublisherV1,
-    canonicalize_governance_dag_outbound_http_request_v1,
-    governance_dag_request_authentication_headers_v1,
-    governance_dag_request_ingress_endpoint_binding_v1,
-    governance_dag_sealed_state_payload_max_bytes_v1, governance_dag_sealed_state_revision,
-    parse_governance_dag_request_authentication_headers_v1,
-    verify_governance_dag_request_authentication_v1,
-};
+include!("lib/governance_public_exports.rs");
 use governance::{
     FilesystemGovernancePublisher, GovernanceFilesystemRootGuard,
     GovernanceRuntimeDagCheckpointStore, GovernanceRuntimeDagSigner,

@@ -337,37 +337,7 @@ impl GovernanceDagRuntimeProviderQualificationV1 {
     }
 }
 
-/// Runtime-only signing boundary for the local Governance DAG publisher.
-///
-/// Production implementations are expected to delegate to PKCS#11, an HSM, or
-/// a managed signing service. Private key bytes must never be returned to the
-/// caller, persisted below the publisher root, or sourced from
-/// [`iroha_config`](iroha_config).
-pub trait GovernanceDagRuntimeSigner: Send + Sync + fmt::Debug {
-    /// Opaque, non-secret deployment handle for this signer.
-    fn handle(&self) -> &str;
-
-    /// Qualify the active adapter and its public policy revision.
-    ///
-    /// Implementations must fail when the HSM/KMS adapter is unavailable,
-    /// revoked, stale, test-marked, or otherwise not production-ready. Provider
-    /// diagnostics can contain secrets and are therefore always redacted by the
-    /// caller.
-    fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
-
-    /// Governed publisher peer identity bound to this signer.
-    fn publisher_peer_id(&self) -> &[u8];
-
-    /// Raw Ed25519 public key bound to the opaque handle.
-    fn public_key(&self) -> [u8; 32];
-
-    /// Sign one exact canonical Governance DAG payload.
-    ///
-    /// Implementations must not include credentials or provider diagnostics in
-    /// the returned error. This crate nevertheless redacts every provider error
-    /// at the trust boundary.
-    fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String>;
-}
+include!("governance/signing_purpose.rs");
 
 /// Authenticated Governance DAG endpoint class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -3242,7 +3212,7 @@ impl FilesystemGovernancePublisher {
             )
         })?;
         let transition_body_digest = runtime_dag_transition_body_digest(&body)?;
-        let signing_bytes = runtime_dag_key_transition_signing_bytes(
+        let signing_bytes = governance_dag_key_transition_signing_payload_v1(
             outgoing_segment_revision,
             incoming_segment_revision,
             transition_body_digest,
@@ -3254,8 +3224,16 @@ impl FilesystemGovernancePublisher {
                 outgoing_segment_revision,
                 incoming_segment_revision,
                 transition_body_digest,
-                outgoing_signature: runtime_dag_raw_signature(&previous_signer, &signing_bytes)?,
-                incoming_signature: runtime_dag_raw_signature(&next_signer, &signing_bytes)?,
+                outgoing_signature: runtime_dag_raw_signature(
+                    &previous_signer,
+                    GovernanceDagSigningPurposeV1::KeyTransition,
+                    &signing_bytes,
+                )?,
+                incoming_signature: runtime_dag_raw_signature(
+                    &next_signer,
+                    GovernanceDagSigningPurposeV1::KeyTransition,
+                    &signing_bytes,
+                )?,
             },
         };
         validate_runtime_dag_qualification_transition(
@@ -3386,6 +3364,7 @@ impl FilesystemGovernancePublisher {
         let archive = RuntimeDagQualificationArchiveV1 {
             signature: runtime_dag_raw_signature(
                 signer,
+                GovernanceDagSigningPurposeV1::QualificationArchive,
                 &runtime_dag_archive_signing_bytes(&body)?,
             )?,
             body,
@@ -5378,9 +5357,13 @@ impl GovernanceRuntimeDagSigner {
         })
     }
 
-    fn sign(&self, payload: &[u8]) -> Result<GovernanceLogSignatureV1, GovernancePublishError> {
+    fn sign(
+        &self,
+        purpose: GovernanceDagSigningPurposeV1,
+        payload: &[u8],
+    ) -> Result<GovernanceLogSignatureV1, GovernancePublishError> {
         self.assert_qualification()?;
-        let signature_result = self.provider.sign(payload);
+        let signature_result = self.provider.sign(purpose, payload);
         self.assert_qualification()?;
         let signature_bytes = signature_result.map_err(|_| {
             GovernancePublishError::other(
@@ -9207,7 +9190,8 @@ fn append_runtime_signed_dag_payload(
             "encode governance runtime DAG node signing payload: {err}"
         ))
     })?;
-    node.publisher_signature = signer.sign(&node_payload)?;
+    node.publisher_signature =
+        signer.sign(GovernanceDagSigningPurposeV1::LogNode, &node_payload)?;
     node.validate().map_err(|err| {
         GovernancePublishError::other(format!("validate governance runtime DAG node: {err}"))
     })?;
@@ -9243,7 +9227,7 @@ fn append_runtime_signed_dag_payload(
             "encode governance runtime DAG block signing payload: {err}"
         ))
     })?;
-    block.block_signature = signer.sign(&block_payload)?;
+    block.block_signature = signer.sign(GovernanceDagSigningPurposeV1::DagBlock, &block_payload)?;
     block.validate().map_err(|err| {
         GovernancePublishError::other(format!("validate governance runtime DAG block: {err}"))
     })?;
@@ -9266,7 +9250,7 @@ fn append_runtime_signed_dag_payload(
             "encode governance runtime DAG head signing payload: {err}"
         ))
     })?;
-    head.head_signature = signer.sign(&head_payload)?;
+    head.head_signature = signer.sign(GovernanceDagSigningPurposeV1::DagHead, &head_payload)?;
     head.validate().map_err(|err| {
         GovernancePublishError::other(format!("validate governance runtime DAG head: {err}"))
     })?;
@@ -10337,7 +10321,8 @@ fn runtime_dag_transition_body_digest(
     Ok(*hasher.finalize().as_bytes())
 }
 
-fn runtime_dag_key_transition_signing_bytes(
+/// Build the exact predecessor-bound Governance DAG key-transition payload.
+pub fn governance_dag_key_transition_signing_payload_v1(
     outgoing_segment_revision: u64,
     incoming_segment_revision: u64,
     transition_body_digest: [u8; 32],
@@ -10378,10 +10363,11 @@ fn runtime_dag_archive_signing_bytes(
 
 fn runtime_dag_raw_signature(
     signer: &GovernanceRuntimeDagSigner,
+    purpose: GovernanceDagSigningPurposeV1,
     payload: &[u8],
 ) -> Result<[u8; 64], GovernancePublishError> {
     signer
-        .sign(payload)?
+        .sign(purpose, payload)?
         .signature
         .as_slice()
         .try_into()
@@ -10484,7 +10470,7 @@ fn validate_runtime_dag_qualification_transition(
             "governance runtime DAG provider transition is malformed, substituted, or does not bind one exact head",
         ));
     }
-    let payload = runtime_dag_key_transition_signing_bytes(
+    let payload = governance_dag_key_transition_signing_payload_v1(
         key_transition.outgoing_segment_revision,
         key_transition.incoming_segment_revision,
         key_transition.transition_body_digest,
@@ -10685,6 +10671,18 @@ fn isolate_runtime_dag_qualification_archive_temps(
     };
     let temporaries =
         runtime_dag_qualification_archive_temp_inventory(&directory, next_generation)?;
+    if temporaries.is_empty() {
+        match root_guard
+            .rooted_directory()
+            .remove_empty_directory_binding(directory)
+        {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {}
+            Err(error) => return Err(error.into()),
+        }
+        root_guard.revalidate()?;
+        return Ok(());
+    }
     let mut plan = GovernancePublicationArtifactCleanupPlan::default();
     for (name, max_bytes) in temporaries {
         let rollback_rank = plan.authority_files.len();

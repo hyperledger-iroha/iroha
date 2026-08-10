@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.privacy
 
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.security.KeyPairGenerator
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import kotlin.test.Test
@@ -10,11 +11,19 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import org.hyperledger.iroha.sdk.client.ConfidentialAssetToriiClient
 import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.LocalSigningContext
+import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.ZkRootsResponse
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 class ZkAssetMerklePathTest {
+    private val networkId = NetworkId.parse(
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    )
+    private val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+
     @Test
     fun localProviderComputesAndVerifiesCurrentFrontierPath() {
         val commitments = listOf(scalarBytes(1), scalarBytes(2), scalarBytes(3))
@@ -64,8 +73,9 @@ class ZkAssetMerklePathTest {
         val client = ConfidentialAssetToriiClient.builder()
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(LocalSigningContext(networkId))
             .build()
-        val provider = ToriiZkAssetMerklePathProvider(client)
+        val provider = ToriiZkAssetMerklePathProvider(client, canonicalAuth())
 
         val path = provider.getMerklePathForCommitment("usd#bank", commitments[1]).join()
 
@@ -139,8 +149,9 @@ class ZkAssetMerklePathTest {
         val client = ConfidentialAssetToriiClient.builder()
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(LocalSigningContext(networkId))
             .build()
-        val provider = ToriiZkAssetMerklePathProvider(client)
+        val provider = ToriiZkAssetMerklePathProvider(client, canonicalAuth())
 
         val error = assertFailsWith<CompletionException> {
             provider.getMerklePathForCommitment("usd#bank", requested).join()
@@ -165,8 +176,9 @@ class ZkAssetMerklePathTest {
         val client = ConfidentialAssetToriiClient.builder()
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(LocalSigningContext(networkId))
             .build()
-        val provider = ToriiZkAssetMerklePathProvider(client)
+        val provider = ToriiZkAssetMerklePathProvider(client, canonicalAuth())
 
         val error = assertFailsWith<CompletionException> {
             provider.getMerklePathForCommitment("usd#bank", commitments[1]).join()
@@ -206,9 +218,18 @@ class ZkAssetMerklePathTest {
         val client = ConfidentialAssetToriiClient.builder()
             .executor(CapturingExecutor(responseBody))
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(LocalSigningContext(networkId))
             .build()
-        return ToriiZkAssetMerklePathProvider(client)
+        return ToriiZkAssetMerklePathProvider(client, canonicalAuth())
     }
+
+    private fun canonicalAuth(): ToriiCanonicalRequestAuth =
+        ToriiCanonicalRequestAuth(
+            "alice",
+            keyPair.private,
+            1_700_000_000_000L,
+            "zk-provider-1",
+        )
 
     private data class MerklePathResponseEntry(
         val commitment: ByteArray,

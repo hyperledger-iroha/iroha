@@ -78,7 +78,7 @@ fn native_signer_bindings() -> String {
         format!(
             r#"
 [sorafs.storage.native_transaction_signers.{role}]
-handle = "hsm://sorafs/{handle_role}/reputation-primary"
+handle = "software://sorafs/{handle_role}/reputation-primary"
 authority = "{authority}"
 algorithm = "ed25519"
 public_key_hex = "{public_key_hex}"
@@ -119,7 +119,7 @@ journal_checkpoint_provider_policy_digest_hex = "6060606060606060606060606060606
 journal_transaction_submitter_handle = "queue.reputation.journal"
 journal_transaction_submitter_revision = 11
 journal_transaction_submitter_policy_digest_hex = "6161616161616161616161616161616161616161616161616161616161616161"
-threshold_signer_handle = "hsm.reputation.threshold"
+threshold_signer_handle = "software://sorafs/reputation/primary"
 threshold_signer_revision = 12
 threshold_signer_policy_digest_hex = "6262626262626262626262626262626262626262626262626262626262626262"
 governance_dag_handle = "governance.dag.publisher"

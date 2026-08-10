@@ -236,11 +236,20 @@ def test_public_query_signatures_require_nominal_network_id_without_aliases() ->
     assert ast.unparse(query_call.args[2]) == "signing_context.network_id"
 
 
-def test_nexus_preserves_connect_chain_id_but_uses_network_id_for_transactions() -> None:
+def test_nexus_uses_exact_network_id_for_connect_and_transactions() -> None:
     nexus = _tree("nexus_app.py")
     config = _class(nexus, "NexusAppConfig")
-    assert _annotated_fields(config)[:2] == ["network_id", "chain_id"]
-    assert "canonical_genesis_hash" not in _annotated_fields(config)
+    assert _annotated_fields(config)[0] == "network_id"
+    assert RETIRED_DOMAIN_NAMES.isdisjoint(_annotated_fields(config))
+    options = _class(nexus, "NexusConnectOptions")
+    assert "sid" not in _annotated_fields(options)
+    session = _class(nexus, "NexusConnectSession")
+    assert _annotated_fields(session)[:4] == [
+        "sid",
+        "network_id",
+        "app_public_key",
+        "nonce",
+    ]
 
     client = _class(nexus, "NexusAppClient")
     build = _function(client.body, "build_transfer_draft")

@@ -40,7 +40,7 @@ provider_policy_digest_hex = "{policy_digest_hex}"
 #[test]
 fn enabled_acme_reads_one_exact_provider_binding_from_toml() {
     let actual = parse_overlay(&acme_overlay(
-        "hsm://gateway/acme/primary",
+        "runtime://sorafs/gateway-acme/primary",
         17,
         &"51".repeat(32),
     ))
@@ -52,7 +52,10 @@ fn enabled_acme_reads_one_exact_provider_binding_from_toml() {
         .provider
         .expect("enabled ACME provider");
 
-    assert_eq!(provider.provider_handle, "hsm://gateway/acme/primary");
+    assert_eq!(
+        provider.provider_handle,
+        "runtime://sorafs/gateway-acme/primary"
+    );
     assert_eq!(provider.revision, 17);
     assert_eq!(provider.policy_digest, [0x51; 32]);
 }
@@ -65,20 +68,20 @@ fn gateway_provider_toml_rejects_partial_zero_test_marked_and_noncanonical_forms
             r#"
 [sorafs.gateway.acme]
 enabled = true
-provider_handle = "hsm://gateway/acme/primary"
+provider_handle = "runtime://sorafs/gateway-acme/primary"
 "#
             .to_owned(),
             "provider_revision is required when enabled",
         ),
         (
             "zero ACME revision",
-            acme_overlay("hsm://gateway/acme/primary", 0, &"51".repeat(32)),
+            acme_overlay("runtime://sorafs/gateway-acme/primary", 0, &"51".repeat(32)),
             "provider_revision must be nonzero",
         ),
         (
             "test-marked ACME handle",
             acme_overlay(
-                "hsm://gateway/acme/test-provider-secret",
+                "runtime://sorafs/gateway-acme/test-provider-secret",
                 17,
                 &"51".repeat(32),
             ),
@@ -86,7 +89,11 @@ provider_handle = "hsm://gateway/acme/primary"
         ),
         (
             "uppercase ACME digest",
-            acme_overlay("hsm://gateway/acme/primary", 17, &"AB".repeat(32)),
+            acme_overlay(
+                "runtime://sorafs/gateway-acme/primary",
+                17,
+                &"AB".repeat(32),
+            ),
             "must be exactly 64 lowercase hexadecimal characters",
         ),
         (

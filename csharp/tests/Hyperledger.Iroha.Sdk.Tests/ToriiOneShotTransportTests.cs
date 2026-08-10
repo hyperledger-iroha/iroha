@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Queries;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
@@ -153,7 +154,15 @@ public sealed class ToriiOneShotTransportTests
     {
         return new ToriiClient(
             new Uri("https://torii.example"),
-            new HttpClient(handler));
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                LocalSigningContext = new ToriiLocalSigningContext(
+                    NetworkId.Parse(CanonicalNetworkId)),
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    CanonicalAccountId,
+                    CanonicalPrivateKeySeed),
+            });
     }
 
     private static CountingHandler TransactionHandler(

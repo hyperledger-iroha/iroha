@@ -416,8 +416,11 @@ public final class HttpClientTransportTests {
     assert oversizedRejected : "oversized executed-block wire must fail closed";
   }
 
-  private static void privacyCapabilitiesAreTypedAndExact() {
-    final byte[] body = privacyCapabilitySnapshotJson().getBytes(StandardCharsets.UTF_8);
+  private static void privacyCapabilitiesAreTypedAndExact() throws Exception {
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final byte[] body =
+        HttpClientTransportTestFixtures.privacyCapabilitySnapshotJson()
+            .getBytes(StandardCharsets.UTF_8);
     final OneResponseExecutor executor =
         new OneResponseExecutor(
             new TransportResponse(
@@ -430,12 +433,12 @@ public final class HttpClientTransportTests {
     final HttpClientTransport client =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example"))
-                .build());
+            signedClientConfig("https://torii.example"));
     boolean legacySnapshotRejected = false;
     try {
-      client.getPrivacyCapabilities().join();
+      client
+          .getPrivacyCapabilities(canonicalAuth("alice", keyPair, 1_700_000_000_000L, "privacy-1"))
+          .join();
     } catch (final CompletionException expected) {
       legacySnapshotRejected = true;
     }
@@ -466,11 +469,12 @@ public final class HttpClientTransportTests {
       try {
         HttpClientTransport.withExecutor(
                 blockedExecutor,
-                ClientConfig.builder()
-                    .setBaseUri(URI.create("https://torii.example"))
+                signedClientConfig("https://torii.example")
+                    .toBuilder()
                     .putDefaultHeader(defaultAcceptName, "application/x-norito")
                     .build())
-            .getPrivacyCapabilities();
+            .getPrivacyCapabilities(
+                canonicalAuth("alice", keyPair, 1_700_000_000_000L, "privacy-2"));
       } catch (final IllegalArgumentException expected) {
         overrideRejected = true;
       }
@@ -560,7 +564,7 @@ public final class HttpClientTransportTests {
                     "Content-Type", List.of("application/x-norito"),
                     "Content-Length", List.of("0"))));
     for (final TransportResponse hostileResponse : hostileResponses) {
-      assertPrivacyCapabilitiesResponseRejected(hostileResponse);
+      assertPrivacyCapabilitiesResponseRejected(hostileResponse, keyPair);
     }
 
     assertPrivacyCapabilitiesResponseRejected(
@@ -568,52 +572,24 @@ public final class HttpClientTransportTests {
             200,
             new byte[256 * 1024 + 1],
             "",
-            Map.of("Content-Type", List.of("application/x-norito"))));
+            Map.of("Content-Type", List.of("application/x-norito"))),
+        keyPair);
   }
 
   private static void assertPrivacyCapabilitiesResponseRejected(
-      final TransportResponse response) {
+      final TransportResponse response, final KeyPair keyPair) {
     boolean rejected = false;
     try {
       HttpClientTransport.withExecutor(
               new OneResponseExecutor(response),
-              ClientConfig.builder()
-                  .setBaseUri(URI.create("https://torii.example"))
-                  .build())
-          .getPrivacyCapabilities()
+              signedClientConfig("https://torii.example"))
+          .getPrivacyCapabilities(
+              canonicalAuth("alice", keyPair, 1_700_000_000_000L, "privacy-hostile"))
           .join();
     } catch (final CompletionException expected) {
       rejected = true;
     }
     assert rejected : "hostile privacy capability response must fail closed";
-  }
-
-  private static String privacyCapabilitySnapshotJson() {
-    final StringBuilder rows = new StringBuilder();
-    for (final org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1 protocol :
-        org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1.values()) {
-      if (rows.length() != 0) {
-        rows.append(',');
-      }
-      rows.append("{\"protocol_id\":{\"protocol\":\"")
-          .append(protocol.getCanonicalLabel())
-          .append(
-              "\",\"value\":null},\"compiled_profile\":{\"status\":\"unavailable\","
-                  + "\"value\":{\"reason\":\"engine-unavailable\",\"detail\":null}},"
-                  + "\"activation\":null}");
-    }
-    return "{\"version\":1,\"committed_height\":42,\"consensus_policy\":{"
-        + "\"current_limits\":{"
-        + "\"max_actions_per_transaction\":1,\"max_actions_per_block\":2,"
-        + "\"max_proof_bytes_per_action\":9437184,\"max_action_bytes\":9437184,"
-        + "\"max_privacy_bytes_per_transaction\":9437184,"
-        + "\"max_privacy_bytes_per_block\":18874368,"
-        + "\"max_statement_and_encrypted_output_bytes_per_transaction\":262144,"
-        + "\"max_nullifiers_per_action\":8,\"max_commitments_per_action\":8,"
-        + "\"retained_root_count\":2048},\"pending_tightening\":null},"
-        + "\"protocols\":["
-        + rows
-        + "]}";
   }
 
   private static void submitEmitsNetworkContextTelemetry() throws Exception {

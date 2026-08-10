@@ -772,7 +772,7 @@ mod tests {
         let response = super::handle_v1_sumeragi_diagnostics(
             axum::extract::State(Arc::clone(&state)),
             None,
-            None,
+            Some(axum::http::HeaderValue::from_static("application/json")),
             false,
         )
         .await

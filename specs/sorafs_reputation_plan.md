@@ -492,7 +492,7 @@ publication authority.
     `ReputationThresholdSignerClientV1` and
     `ReputationGovernanceDagClientV1` adapters; concrete stream-token
     callback-owner wiring; genuine qualification of the configured PoR replay
-    archive and HSM signer; current DAG head/inclusion proof; integrated Rust
+    archive and external threshold software-signing service; current DAG head/inclusion proof; integrated Rust
     validation; and reviewed four-peer rotation, recovery, retry, and failover
     evidence remain outstanding. No ledger page, credential, signature, or
     acknowledgement may be synthesized as a fallback.

@@ -1153,6 +1153,9 @@ required_production_liveness_tests=(
   kura::tests::certified_lane_block_encoding_enforces_source_envelope
   kura::tests::replace_top_block_replay_metadata_preflight_fails_closed_without_mutation
   kura::tests::lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered
+  kura::tests::autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation
+  kura::tests::unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart
+  kura::tests::merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal
   kura::lane_geometry::tests::first_release_retirement_classifies_recovery_sync_failure_as_retryable
   kura::lane_geometry::tests::first_release_retirement_discards_unpublished_temp_for_every_fixed_pair
   kura::lane_geometry::tests::first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion
@@ -1392,6 +1395,7 @@ required_production_liveness_tests=(
   merge_sidecar::tests::transient_materialization_release_keeps_exact_retry
   merge_sidecar::tests::transient_response_capacity_defers_materialization_on_the_same_delivery
   merge_sidecar::tests::writable_reconnect_during_materialization_keeps_exact_authorized_tenure
+  state::tests::block_leaves_governance_unlock_audit_clean_when_no_locks_are_expired
   sumeragi::v2::tests::deferred_locked_commit_delivery_tracks_generation_after_tc
   sumeragi::v2::tests::prelock_current_commit_is_readmitted_with_priority_neutral_service_identity
   sumeragi::v2::tests::tc_reset_readmits_exact_locked_commit_once_per_generation
@@ -1985,7 +1989,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=845
+readonly expected_production_liveness_test_count=849
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2007,7 +2011,7 @@ production_data_model_ignored_unit_list="$(
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
-# thirty-nine-module pre-network inventory.
+# forty-module pre-network inventory.
 production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
@@ -2084,7 +2088,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 845-test liveness inventory above. The later
+# not belong to the canonical 849-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -3005,6 +3009,7 @@ production_liveness_modules=(
   nexus::lane_relay::tests
   sumeragi::authoritative_runtime_gate_tests
   merge_sidecar::tests
+  state::tests
   sumeragi::v2_core::tests
   sumeragi::v2_core::refinement::tests
   sumeragi::v2_core::wal::byte_lifecycle_tests
@@ -3046,6 +3051,7 @@ production_liveness_leg_ids=(
   production-lane-relay-exact-ownership
   production-authoritative-ingress
   production-merge-sidecar
+  production-state-governance-unlock-audit
   production-v2-core
   production-v2-core-refinement
   production-v2-core-wal
@@ -3622,16 +3628,16 @@ release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-release-receipt:after-natural-completion" || exit $?
 release_receipt_pass_summary="$(
-  grep -Ec '^362 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^363 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 362 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 363 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 362 \
+  preflight-release-receipt pytest 363 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -3691,13 +3697,16 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::test_inflight_composed_contract_rejects_tla_snapshot_nonstutter_mapping
   pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal
   pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_layout_contract_rejects_membership_only_lane_authorship
+  pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_binds_current_semantic_sources
+  pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_ledger_weakening
+  pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_semantic_source_mutation
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
 # Collection is source-bound as 4,730 ledger/checker cases (including the
 # lexically executed case components), 28 pinned-Verus evidence cases,
 # 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 29 Native/passive
-# multilane source-contract cases, and nine cases from seven selected layout
-# selectors.
+# multilane source-contract cases, and eighteen cases from ten selected
+# layout/wire selectors.
 release_gate_boundary "preflight-proof-fidelity:before" || exit $?
 set +e
 PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
@@ -3706,15 +3715,15 @@ proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^4819 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^4828 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 4819 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 4828 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 4819 \
+  preflight-proof-fidelity pytest 4828 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -3747,7 +3756,7 @@ record_corridor_log \
 ((corridor_enabled)) || rm -f -- "$formal_launcher_contract_log"
 
 # Run the complete mocked soak launcher/evidence corpus as one exact file-bound
-# preflight. The 42-pass summary rejects missing, added, skipped, or xfailed
+# preflight. The 43-pass summary rejects missing, added, skipped, or xfailed
 # cases before the release corridor can trust the 24-hour evidence path.
 taira_soak_contract_files=(
   pytests/scripts/taira_v2_soak_test.py::test_launcher_pins_complete_profile_and_runs_exactly_one_test
@@ -3770,15 +3779,15 @@ taira_soak_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-taira-soak:after-natural-completion" || exit $?
 taira_soak_pass_summary="$(
-  grep -Ec '^42 passed in [0-9]+([.][0-9]+)?s$' "$taira_soak_contract_log" || true
+  grep -Ec '^43 passed in [0-9]+([.][0-9]+)?s$' "$taira_soak_contract_log" || true
 )"
 if ((taira_soak_pipeline_status[0] != 0 || taira_soak_pipeline_status[1] != 0)) \
   || [[ "$taira_soak_pass_summary" != 1 ]]; then
-  echo "Taira v2 soak launcher/evidence preflight did not run exactly 42 passing tests (pytest=${taira_soak_pipeline_status[0]}, tee=${taira_soak_pipeline_status[1]})" >&2
+  echo "Taira v2 soak launcher/evidence preflight did not run exactly 43 passing tests (pytest=${taira_soak_pipeline_status[0]}, tee=${taira_soak_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-taira-soak pytest 42 \
+  preflight-taira-soak pytest 43 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${taira_soak_contract_files[*]}" \
   "$taira_soak_contract_log" \
   "${taira_soak_pipeline_status[0]}" "${taira_soak_pipeline_status[1]}"
@@ -3791,9 +3800,10 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 39 production-module + 9 G-UNIT + 10 exact-Cargo + 6 command
-  # + 6 grouped-SDK + 5 diagnostics-SDK + 11 pytest legs = 86.
-  readonly expected_corridor_leg_count=86
+  # 40 production-module + 9 G-UNIT + 2 exact data-model + 5 source-sealed
+  # command + 6 Taira + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped
+  # SDK + 6 diagnostics + 11 pytest legs = 87.
+  readonly expected_corridor_leg_count=87
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1

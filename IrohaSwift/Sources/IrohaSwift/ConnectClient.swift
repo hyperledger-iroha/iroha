@@ -207,6 +207,12 @@ public actor ConnectClient {
         try await send(data: data)
     }
 
+    /// Sends a launch-bound `Open`, requiring the nonce used to derive the frame SID.
+    public func send(frame: ConnectFrame, launchNonce: Data) async throws {
+        let data = try ConnectCodec.encode(frame, launchNonce: launchNonce)
+        try await send(data: data)
+    }
+
     /// Receive the next binary payload, suspending until one is available.
     public func receive() async throws -> Data {
         try Task.checkCancellation()

@@ -19281,7 +19281,7 @@ impl Sorafs {
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct SorafsAppealFinanceSignerBinding {
-    /// Stable opaque PKCS#11/HSM/KMS provider handle.
+    /// Stable opaque authenticated external signer handle.
     pub handle: String,
     /// Exact transaction authority controlled by the runtime signer.
     pub authority: AccountId,
@@ -19299,11 +19299,11 @@ pub struct SorafsAppealFinanceSignerBinding {
     pub revoked_at_block_height: Option<u64>,
 }
 
-/// Independent non-secret identity binding for the checkpoint HSM/KMS provider.
+/// Independent non-secret identity binding for the sealed checkpoint provider.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct SorafsAppealFinanceCheckpointBinding {
-    /// Stable opaque HSM/KMS provider handle.
+    /// Stable opaque sealed checkpoint provider handle.
     pub handle: String,
     /// Canonical lowercase Ed25519 checkpoint verification key payload.
     pub public_key_hex: String,
@@ -19523,10 +19523,10 @@ pub struct SorafsAppealFinanceSettlement {
     /// Complete inline appeal settlement policy. Overrides replace the full policy atomically.
     #[config(default = "SorafsAppealSettlementPolicy::default()")]
     pub settlement: SorafsAppealSettlementPolicy,
-    /// Non-secret identities of runtime-only HSM/KMS signer providers.
+    /// Non-secret identities of runtime-only external signer providers.
     #[config(default)]
     pub submitter_signers: Vec<SorafsAppealFinanceSignerBinding>,
-    /// Independent non-secret checkpoint HSM/KMS identity and policy binding.
+    /// Independent non-secret sealed checkpoint identity and policy binding.
     pub checkpoint_provider: Option<SorafsAppealFinanceCheckpointBinding>,
     /// Interval between worker reconciliation scans for follow-up settlement steps.
     #[config(
@@ -20207,8 +20207,8 @@ pub struct SorafsPopCredentialService {
     pub issuer_policy_digest_hex: Option<String>,
     /// Governed issuer identifier.
     pub issuer_id: Option<String>,
-    /// Non-secret runtime HSM key handle.
-    pub issuer_hsm_key_id: Option<String>,
+    /// Non-secret authenticated external signer handle.
+    pub issuer_signer_handle: Option<String>,
     /// Governed raw Ed25519 issuer public key as lowercase hexadecimal.
     pub issuer_public_key_hex: Option<String>,
     /// Non-secret runtime hybrid recipient-key handle.
@@ -20264,7 +20264,7 @@ impl Default for SorafsPopCredentialService {
             wallet_state_dir: defaults::sorafs::storage::pop_credentials::wallet_state_dir(),
             issuer_policy_digest_hex: None,
             issuer_id: None,
-            issuer_hsm_key_id: None,
+            issuer_signer_handle: None,
             issuer_public_key_hex: None,
             enrollment_recipient_key_id: None,
             enrollment_recipient_public_key_digest_hex: None,
@@ -20343,7 +20343,7 @@ impl SorafsPopCredentialService {
 
         let authority_fields_present = self.issuer_policy_digest_hex.is_some()
             || self.issuer_id.is_some()
-            || self.issuer_hsm_key_id.is_some()
+            || self.issuer_signer_handle.is_some()
             || self.issuer_public_key_hex.is_some()
             || self.enrollment_recipient_key_id.is_some()
             || self.enrollment_recipient_public_key_digest_hex.is_some()
@@ -20409,8 +20409,8 @@ impl SorafsPopCredentialService {
         let mut provider_handles_valid = true;
         for (path, value) in [
             (
-                "sorafs.storage.pop_credentials.issuer_hsm_key_id",
-                self.issuer_hsm_key_id.as_deref(),
+                "sorafs.storage.pop_credentials.issuer_signer_handle",
+                self.issuer_signer_handle.as_deref(),
             ),
             (
                 "sorafs.storage.pop_credentials.enrollment_recipient_key_id",
@@ -20567,7 +20567,7 @@ impl SorafsPopCredentialService {
             wallet_state_dir: self.wallet_state_dir,
             issuer_policy_digest: issuer_policy_digest?,
             issuer_id: self.issuer_id?,
-            issuer_hsm_key_id: self.issuer_hsm_key_id?,
+            issuer_signer_handle: self.issuer_signer_handle?,
             issuer_public_key: issuer_public_key?,
             enrollment_recipient_key_id: self.enrollment_recipient_key_id?,
             enrollment_recipient_public_key_digest: enrollment_recipient_public_key_digest?,
@@ -20606,7 +20606,7 @@ pub struct SorafsModerationOrchestrator {
     /// Exact checkpoint-store public-policy digest as lowercase hexadecimal.
     pub checkpoint_store_policy_digest_hex: Option<String>,
     /// Archive-lifetime-stable Ed25519 checkpoint attestation trust anchor as lowercase hexadecimal.
-    /// HSM-internal rotation must preserve this public identity in V1.
+    /// Provider-internal rotation must preserve this public identity in V1.
     pub checkpoint_store_attestation_public_key_hex: Option<String>,
     /// Canonical governance account used for deadline maintenance.
     pub maintenance_authority: Option<String>,
@@ -22757,13 +22757,13 @@ pub struct SorafsProviderIngestRuntimeConfig {
     pub authenticated_source_fetch_revision: Option<u64>,
     /// Exact lowercase non-zero digest of the authenticated source-pool public policy.
     pub authenticated_source_fetch_policy_digest_hex: Option<String>,
-    /// Identity-pinned completion HSM/KMS signer-resolver handle.
+    /// Identity-pinned governed completion-signer resolver handle.
     pub completion_signer_resolver_handle: Option<String>,
     /// Exact non-zero governed signer-resolver adapter/public-policy revision.
     pub completion_signer_resolver_revision: Option<u64>,
     /// Exact lowercase non-zero digest of the governed signer-resolver public policy.
     pub completion_signer_resolver_policy_digest_hex: Option<String>,
-    /// Stable public HSM/KMS completion-signer or key handle.
+    /// Stable authenticated external completion-signer handle.
     pub completion_signer_handle: Option<String>,
     /// Exact non-zero completion-signer adapter and public-policy revision.
     pub completion_signer_adapter_revision: Option<u64>,
@@ -22812,7 +22812,7 @@ pub struct SorafsProviderIngestRuntimeConfig {
         default = "defaults::sorafs::storage::provider_ingest_runtime::SOURCE_LEASE_RENEW_INTERVAL_MS"
     )]
     pub source_lease_renew_interval_ms: u64,
-    /// Timeout for completion payload construction and HSM/KMS signing.
+    /// Timeout for completion payload construction and external signing.
     #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::SIGNER_TIMEOUT_MS")]
     pub signer_timeout_ms: u64,
     /// Timeout for transaction preflight, submission, and observation.
@@ -23521,7 +23521,7 @@ pub struct SorafsHedgingBillingRuntimeConfig {
     pub journal_verifier_revision: Option<u64>,
     /// Exact journal-verifier public-policy digest as lowercase non-zero hex.
     pub journal_verifier_policy_digest_hex: Option<String>,
-    /// Identity-pinned statement HSM/KMS provider handle.
+    /// Identity-pinned authenticated external statement signer handle.
     pub statement_signer_handle: Option<String>,
     /// Exact non-zero statement-signer provider revision.
     pub statement_signer_revision: Option<u64>,
@@ -24992,7 +24992,7 @@ mod sorafs_moderation_orchestrator_tests {
                 checkpoint_attestation_public_key_hex(),
             ),
             maintenance_authority: Some(maintenance_authority()),
-            transaction_signer_handle: Some("hsm.sorafs.moderation-transaction.primary".to_owned()),
+            transaction_signer_handle: Some("software://sorafs/moderation/primary".to_owned()),
             transaction_signer_revision: Some(11),
             transaction_signer_policy_digest_hex: Some("a1".repeat(32)),
             strict_ingress_handle: Some(
@@ -25055,7 +25055,7 @@ mod sorafs_moderation_orchestrator_tests {
         );
         assert_eq!(
             parsed.transaction_signer_handle,
-            "hsm.sorafs.moderation-transaction.primary"
+            "software://sorafs/moderation/primary"
         );
         assert_eq!(parsed.transaction_signer_revision, 11);
         assert_eq!(parsed.transaction_signer_policy_digest, [0xa1; 32]);
@@ -25299,7 +25299,7 @@ mod sorafs_evidence_viewer_config_tests {
             compaction_archive_revision: Some(16),
             compaction_archive_policy_digest_hex: Some("a7".repeat(32)),
             compaction_archive_public_key_hex: Some(archive_public_key_hex()),
-            receipt_signer_handle: Some("hsm.evidence.receipts.primary".to_owned()),
+            receipt_signer_handle: Some("software://sorafs/evidence-viewer/primary".to_owned()),
             receipt_signer_revision: Some(14),
             receipt_signer_policy_digest_hex: Some("a4".repeat(32)),
             receipt_signer_public_key_hex: Some(receipt_public_key_hex()),
@@ -25530,7 +25530,7 @@ mod sorafs_hedging_billing_runtime_config_tests {
             journal_verifier_handle: Some("consensus.billing.verifier".to_owned()),
             journal_verifier_revision: Some(12),
             journal_verifier_policy_digest_hex: Some("52".repeat(32)),
-            statement_signer_handle: Some("hsm.billing.statement".to_owned()),
+            statement_signer_handle: Some("software://sorafs/billing/primary".to_owned()),
             statement_signer_revision: Some(13),
             statement_signer_policy_digest_hex: Some("53".repeat(32)),
             statement_publisher_handle: Some("publisher.billing.immutable".to_owned()),
@@ -26252,7 +26252,8 @@ pub struct SorafsStorage {
     pub governance_dag_dir: Option<PathBuf>,
     /// Optional publisher peer identifier used for signed Governance DAG blocks.
     pub governance_dag_publisher_peer_id: Option<String>,
-    /// Opaque runtime HSM/KMS signer handle used for signed Governance DAG blocks.
+    /// Opaque authenticated external signer handle for signed Governance DAG
+    /// blocks.
     pub governance_dag_signer_handle: Option<String>,
     /// Exact non-zero public-policy revision required from the runtime signer.
     pub governance_dag_signer_revision: Option<u64>,
@@ -26430,7 +26431,7 @@ fn parse_sorafs_gateway_runtime_provider_binding(
 #[cfg(test)]
 mod sorafs_gateway_runtime_provider_binding_tests {
     use super::*;
-
+    const ACME_HANDLE: &str = "runtime://sorafs/gateway-acme/primary";
     #[test]
     fn exact_production_binding_parses() {
         let mut emitter = Emitter::new();
@@ -26439,14 +26440,14 @@ mod sorafs_gateway_runtime_provider_binding_tests {
             "sorafs.gateway.acme",
             "provider",
             true,
-            Some("hsm://gateway/acme/primary"),
+            Some(ACME_HANDLE),
             Some(9),
             Some(&"a7".repeat(32)),
         )
         .expect("valid production binding");
 
         assert!(emitter.into_result().is_ok());
-        assert_eq!(binding.provider_handle, "hsm://gateway/acme/primary");
+        assert_eq!(binding.provider_handle, ACME_HANDLE);
         assert_eq!(binding.revision, 9);
         assert_eq!(binding.policy_digest, [0xa7; 32]);
     }
@@ -26459,35 +26460,35 @@ mod sorafs_gateway_runtime_provider_binding_tests {
         for (label, handle, revision, digest, expected) in [
             (
                 "partial",
-                Some("hsm://gateway/acme/primary"),
+                Some(ACME_HANDLE),
                 Some(9),
                 None,
                 "provider_policy_digest_hex is required",
             ),
             (
                 "test-marked handle",
-                Some("hsm://gateway/acme/test-client-secret"),
+                Some("runtime://sorafs/gateway-acme/test-client-secret"),
                 Some(9),
                 Some(valid_digest.as_str()),
                 "must be one canonical production provider handle",
             ),
             (
                 "zero revision",
-                Some("hsm://gateway/acme/primary"),
+                Some(ACME_HANDLE),
                 Some(0),
                 Some(valid_digest.as_str()),
                 "provider_revision must be nonzero",
             ),
             (
                 "uppercase digest",
-                Some("hsm://gateway/acme/primary"),
+                Some(ACME_HANDLE),
                 Some(9),
                 Some(uppercase_digest.as_str()),
                 "exactly 64 lowercase hexadecimal characters",
             ),
             (
                 "zero digest",
-                Some("hsm://gateway/acme/primary"),
+                Some(ACME_HANDLE),
                 Some(9),
                 Some(zero_digest.as_str()),
                 "provider_policy_digest_hex must be nonzero",
@@ -27567,7 +27568,7 @@ pub struct SorafsGovernanceDagServiceRootStorage {
     pub governance_dag_dir: Option<PathBuf>,
     /// Publisher peer identifier bound to the signed local producer.
     pub governance_dag_publisher_peer_id: Option<String>,
-    /// Opaque runtime HSM/KMS signer handle bound to the signed local producer.
+    /// Opaque authenticated external signer handle bound to the local producer.
     pub governance_dag_signer_handle: Option<String>,
     /// Exact non-zero public-policy revision required from the producer signer.
     pub governance_dag_signer_revision: Option<u64>,
@@ -27716,6 +27717,7 @@ mod sorafs_governance_dag_service_tests {
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
     const ALTERNATE_PUBLISHER_PUBLIC_KEY_HEX: &str =
         "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c";
+    const GOVERNANCE_SIGNER_HANDLE: &str = "software://sorafs/governance-dag/primary";
 
     #[test]
     fn enabled_service_rejects_missing_endpoints_keys_and_source() {
@@ -27801,14 +27803,14 @@ mod sorafs_governance_dag_service_tests {
 
             let mut root = valid_dedicated_view_root();
             root.sorafs.storage.governance_dag_signer_handle =
-                Some(format!("pkcs11:governance:{marker}:signer"));
+                Some(format!("software://sorafs/governance-dag/{marker}"));
             let diagnostic = format!(
                 "{:?}",
                 root.parse()
                     .expect_err("test-marked producer handle must fail")
             );
             assert!(diagnostic.contains("must be a production runtime handle"));
-            assert!(!diagnostic.contains(&format!("pkcs11:governance:{marker}:signer")));
+            assert!(!diagnostic.contains(&format!("software://sorafs/governance-dag/{marker}")));
         }
     }
 
@@ -27840,7 +27842,7 @@ mod sorafs_governance_dag_service_tests {
                 storage: SorafsGovernanceDagServiceRootStorage {
                     governance_dag_dir: Some(PathBuf::from("/var/lib/iroha/sorafs/governance")),
                     governance_dag_publisher_peer_id: Some("sorafs-governance-primary".to_owned()),
-                    governance_dag_signer_handle: Some("pkcs11:governance/producer".to_owned()),
+                    governance_dag_signer_handle: Some(GOVERNANCE_SIGNER_HANDLE.to_owned()),
                     governance_dag_signer_revision: Some(17),
                     governance_dag_signer_policy_digest_hex: Some("84".repeat(32)),
                     governance_dag_publisher_public_key_hex: Some(
@@ -27860,7 +27862,7 @@ private_key = "this-is-not-a-node-key-and-must-not-be-read"
 [sorafs.storage]
 governance_dag_dir = "/var/lib/iroha/sorafs/governance"
 governance_dag_publisher_peer_id = "sorafs-governance-primary"
-governance_dag_signer_handle = "pkcs11:governance/producer"
+governance_dag_signer_handle = "software://sorafs/governance-dag/primary"
 governance_dag_signer_revision = 17
 governance_dag_signer_policy_digest_hex = "8484848484848484848484848484848484848484848484848484848484848484"
 governance_dag_publisher_public_key_hex = "{VALID_PUBLISHER_PUBLIC_KEY_HEX}"
@@ -28009,10 +28011,8 @@ allow_private_head_endpoint = false
         cases.push(zero_digest);
 
         let mut test_marked_handle = valid_dedicated_view_root();
-        test_marked_handle
-            .sorafs
-            .storage
-            .governance_dag_signer_handle = Some("pkcs11:governance/test/producer".to_owned());
+        let storage = &mut test_marked_handle.sorafs.storage;
+        storage.governance_dag_signer_handle = Some(format!("{GOVERNANCE_SIGNER_HANDLE}-test"));
         cases.push(test_marked_handle);
 
         let mut whitespace_peer = valid_dedicated_view_root();
@@ -28142,7 +28142,7 @@ allow_private_head_endpoint = false
         );
         assert_eq!(
             view.producer_signer_handle.as_deref(),
-            Some("pkcs11:governance/producer")
+            Some(GOVERNANCE_SIGNER_HANDLE)
         );
         assert_eq!(view.producer_signer_revision, Some(17));
         assert_eq!(view.producer_signer_policy_digest, Some([0x84; 32]));
@@ -29523,7 +29523,7 @@ mod sorafs_repair_gc_tests {
         let authority = AccountId::new(key_pair.public_key().clone());
         let config = SorafsAppealFinanceSettlement {
             submitter_signers: vec![SorafsAppealFinanceSignerBinding {
-                handle: "pkcs11:appeal-finance-a".to_owned(),
+                handle: "software://sorafs/appeal-finance/a".to_owned(),
                 authority: authority.clone(),
                 public_key_hex: hex::encode(key_pair.public_key().to_bytes().1),
                 revision: 7,
@@ -29558,7 +29558,7 @@ mod sorafs_repair_gc_tests {
         );
         assert_eq!(
             actual.submitter_signers[0].handle,
-            "pkcs11:appeal-finance-a"
+            "software://sorafs/appeal-finance/a"
         );
         assert_eq!(actual.submitter_signers[0].valid_from_block_height, 7);
         assert_eq!(actual.submitter_signers[0].revision, 7);
@@ -29600,7 +29600,7 @@ mod sorafs_repair_gc_tests {
         ] {
             let config = SorafsAppealFinanceSettlement {
                 submitter_signers: vec![SorafsAppealFinanceSignerBinding {
-                    handle: format!("pkcs11:{marker}:appeal-finance"),
+                    handle: format!("software://sorafs/appeal-finance/{marker}"),
                     authority: authority.clone(),
                     public_key_hex: public_key_hex.clone(),
                     revision: 1,
@@ -29632,7 +29632,7 @@ mod sorafs_repair_gc_tests {
             .expect("derive settlement signer keypair");
         let checkpoint_key = KeyPair::try_from_seed(vec![0xAC; 32], Algorithm::Ed25519)
             .expect("derive checkpoint provider keypair");
-        let signer_handle = "pkcs11:appeal-finance-primary";
+        let signer_handle = "software://sorafs/appeal-finance/primary";
         let mut valid = SorafsAppealFinanceSettlement {
             submitter_signers: vec![SorafsAppealFinanceSignerBinding {
                 handle: signer_handle.to_owned(),
@@ -29865,8 +29865,8 @@ mod sorafs_repair_gc_tests {
             .expect("derive checkpoint provider keypair");
         let config = SorafsAppealFinanceSettlement {
             submitter_signers: vec![
-                binding("pkcs11:appeal-finance-old", 1, Some(10)),
-                binding("pkcs11:appeal-finance-new", 9, None),
+                binding("software://sorafs/appeal-finance/old", 1, Some(10)),
+                binding("software://sorafs/appeal-finance/new", 9, None),
             ],
             checkpoint_provider: Some(SorafsAppealFinanceCheckpointBinding {
                 handle: "kms:appeal-finance-checkpoint".to_owned(),
@@ -29907,7 +29907,7 @@ mod sorafs_repair_gc_tests {
         let valid_without_height: toml::Table = toml::from_str(&format!(
             r#"
 submitter_signers = [{{
-    handle = "pkcs11://appeal-settlement",
+    handle = "software://sorafs/appeal-finance/primary",
     authority = "{authority}",
     public_key_hex = "{public_key_hex}",
     revision = 1,
@@ -29926,7 +29926,7 @@ submitter_signers = [{{
         let nested: toml::Table = toml::from_str(&format!(
             r#"
 submitter_signers = [{{
-    handle = "pkcs11://appeal-settlement",
+    handle = "software://sorafs/appeal-finance/primary",
     authority = "{authority}",
     public_key_hex = "{}",
     revision = 1,
@@ -30011,7 +30011,7 @@ pub struct SorafsPor {
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct SorafsPotrRuntimeBinding {
-    /// Stable opaque gateway HSM/KMS provider handle.
+    /// Stable authenticated external gateway signer handle.
     pub gateway_handle: String,
     /// Canonical lowercase gateway signer administration identity.
     pub gateway_signer_id_hex: String,
@@ -30021,7 +30021,7 @@ pub struct SorafsPotrRuntimeBinding {
     pub gateway_policy_digest_hex: String,
     /// Canonical lowercase Ed25519 gateway verification key.
     pub gateway_public_key_hex: String,
-    /// Stable opaque provider HSM/KMS provider handle.
+    /// Stable authenticated external provider signer handle.
     pub provider_handle: String,
     /// Canonical lowercase provider signer administration identity.
     pub provider_signer_id_hex: String,
@@ -30475,12 +30475,12 @@ fn sorafs_potr_runtime_binding_fixture() -> SorafsPotrRuntimeBinding {
     let gateway_key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
         .expect("derive checked PoTR gateway key");
     SorafsPotrRuntimeBinding {
-        gateway_handle: "pkcs11://hsm/potr-gateway-primary".to_owned(),
+        gateway_handle: "software://sorafs/potr/gateway-primary".to_owned(),
         gateway_signer_id_hex: "11".repeat(32),
         gateway_revision: 3,
         gateway_policy_digest_hex: "22".repeat(32),
         gateway_public_key_hex: hex::encode(gateway_key.public_key().to_bytes().1),
-        provider_handle: "kms://cluster/potr-provider-primary".to_owned(),
+        provider_handle: "software://sorafs/potr/provider-primary".to_owned(),
         provider_signer_id_hex: "33".repeat(32),
         provider_revision: 7,
         provider_policy_digest_hex: "44".repeat(32),
@@ -30597,7 +30597,7 @@ fn sorafs_potr_runtime_binding_is_complete_and_tracks_service_enablement() {
     let partial: toml::Table = toml::from_str(
         r#"
 enabled = true
-potr_runtime = { gateway_handle = "pkcs11://hsm/potr-gateway-primary" }
+potr_runtime = { gateway_handle = "software://sorafs/potr/gateway-primary" }
 "#,
     )
     .expect("parse partial PoTR runtime table");
@@ -30617,7 +30617,7 @@ fn sorafs_potr_runtime_binding_rejects_aliases_and_stale_qualification() {
     };
 
     let mut binding = sorafs_potr_runtime_binding_fixture();
-    binding.gateway_handle = "pkcs11://test/potr-gateway".to_owned();
+    binding.gateway_handle = "software://sorafs/potr/test".to_owned();
     assert_sorafs_por_config_invalid(invalid(binding));
 
     let mut binding = sorafs_potr_runtime_binding_fixture();
@@ -30685,7 +30685,7 @@ pub struct SorafsStreamTokenConfig {
     /// Enable stream-token issuance.
     #[config(default = "defaults::sorafs::storage::tokens::ENABLED")]
     pub enabled: bool,
-    /// Opaque runtime-only HSM/KMS signer handle.
+    /// Opaque runtime-only authenticated external signer handle.
     pub signer_handle: Option<String>,
     /// Canonical lowercase Ed25519 public key bound to the runtime signer.
     pub signer_public_key_hex: Option<String>,
@@ -31898,13 +31898,13 @@ impl SorafsGatewayCompliance {
 #[cfg(test)]
 mod sorafs_gateway_provider_config_tests {
     use super::*;
-
+    const ACME_HANDLE: &str = "runtime://sorafs/gateway-acme/primary";
     #[test]
     fn enabled_acme_parses_one_exact_provider_binding() {
         let mut emitter = Emitter::new();
         let parsed = SorafsGatewayAcme {
             enabled: true,
-            provider_handle: Some("hsm://gateway/acme/primary".to_owned()),
+            provider_handle: Some(ACME_HANDLE.to_owned()),
             provider_revision: Some(11),
             provider_policy_digest_hex: Some("71".repeat(32)),
             ..SorafsGatewayAcme::default()
@@ -31913,7 +31913,7 @@ mod sorafs_gateway_provider_config_tests {
 
         assert!(emitter.into_result().is_ok());
         let provider = parsed.provider.expect("enabled ACME provider binding");
-        assert_eq!(provider.provider_handle, "hsm://gateway/acme/primary");
+        assert_eq!(provider.provider_handle, ACME_HANDLE);
         assert_eq!(provider.revision, 11);
         assert_eq!(provider.policy_digest, [0x71; 32]);
     }
@@ -31923,7 +31923,7 @@ mod sorafs_gateway_provider_config_tests {
         let mut emitter = Emitter::new();
         let parsed = SorafsGatewayAcme {
             enabled: true,
-            provider_handle: Some("hsm://gateway/acme/primary".to_owned()),
+            provider_handle: Some(ACME_HANDLE.to_owned()),
             ..SorafsGatewayAcme::default()
         }
         .parse(&mut emitter);
@@ -31936,7 +31936,7 @@ mod sorafs_gateway_provider_config_tests {
     fn disabled_acme_and_compliance_reject_dormant_provider_bindings() {
         let mut acme_emitter = Emitter::new();
         let parsed = SorafsGatewayAcme {
-            provider_handle: Some("hsm://gateway/acme/primary".to_owned()),
+            provider_handle: Some(ACME_HANDLE.to_owned()),
             provider_revision: Some(1),
             provider_policy_digest_hex: Some("71".repeat(32)),
             ..SorafsGatewayAcme::default()
@@ -33584,7 +33584,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         format!(
             r#"
 [storage.native_transaction_signers.{role}]
-handle = "hsm://sorafs/{handle_role}/{context}-primary"
+handle = "software://sorafs/{handle_role}/{context}-primary"
 authority = "{authority}"
 algorithm = "ed25519"
 public_key_hex = "{public_key_hex}"
@@ -35318,7 +35318,7 @@ terminal_retention_secs = 7200
 enabled = true
 governance_dag_dir = "/var/lib/iroha/sorafs/governance"
 governance_dag_publisher_peer_id = "sorafs-governance-primary"
-governance_dag_signer_handle = "pkcs11:governance:privacy-primary"
+governance_dag_signer_handle = "software://sorafs/governance-dag/privacy-primary"
 governance_dag_signer_revision = 17
 governance_dag_signer_policy_digest_hex = "7171717171717171717171717171717171717171717171717171717171717171"
 governance_dag_publisher_public_key_hex = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
@@ -35385,7 +35385,7 @@ unit = "count"
         );
         assert_eq!(
             storage.governance_dag_signer_handle.as_deref(),
-            Some("pkcs11:governance:privacy-primary")
+            Some("software://sorafs/governance-dag/privacy-primary")
         );
         assert_eq!(storage.governance_dag_signer_revision, Some(17));
         assert_eq!(
@@ -35491,7 +35491,7 @@ enabled = true
 enabled = true
 governance_dag_dir = "/var/lib/iroha/sorafs/governance"
 governance_dag_publisher_peer_id = "sorafs-governance-primary"
-governance_dag_signer_handle = "pkcs11:governance:privacy-primary"
+governance_dag_signer_handle = "software://sorafs/governance-dag/privacy-primary"
 
 [storage.privacy_aggregates]
 enabled = true
@@ -36668,7 +36668,7 @@ publish_delay_seconds = 17
         let mut signer = Table::new();
         signer.insert(
             "handle".into(),
-            Value::String("hsm://soracloud/runtime-primary".into()),
+            Value::String("software://sorafs/ai/runtime-primary".into()),
         );
         signer.insert("authority".into(), Value::String(authority.to_string()));
         signer.insert("algorithm".into(), Value::String("ed25519".into()));
@@ -36757,7 +36757,7 @@ publish_delay_seconds = 17
             .submission
             .signer
             .expect("production signer binding");
-        assert_eq!(signer.handle, "hsm://soracloud/runtime-primary");
+        assert_eq!(signer.handle, "software://sorafs/ai/runtime-primary");
         assert_eq!(signer.algorithm, Algorithm::Ed25519);
         assert_eq!(signer.revision, 7);
         assert_eq!(signer.policy_digest, [0xA7; 32]);

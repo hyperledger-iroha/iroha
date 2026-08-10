@@ -11,7 +11,9 @@ summary: Use the SoraFS CLI in CI and hand release artifacts to governed Ed25519
 SoraFS pipelines benefit from deterministic chunking, manifest construction,
 and proof verification. The `sorafs_cli` command surface keeps those steps
 portable across CI providers. Release authenticity is a separate aggregate
-manifest step backed by governed Ed25519/HSM material.
+manifest step backed by `signing_provider=authenticated_external_signer` with
+exact `signing_backend=software`; verified output is
+`signer_qualification=software-key-qualified`.
 
 ## GitHub Actions
 
@@ -141,10 +143,11 @@ scripts/release_sorafs_cli.sh \
   --trusted-release-manifest-verifier-sha256 "$REVIEWED_VERIFIER_SHA256"
 ```
 
-The external signer may be a PKCS#11/HSM adapter. The wrapper rejects missing
-inputs and verifies the exact raw signature and key with the pinned native
-validator. OIDC/cosign attestations can be added for provenance, but are not a
-substitute for this authentication step.
+The external signer is an authenticated adapter to the isolated software
+signing service. The wrapper rejects missing inputs and verifies the exact raw
+signature and key with the pinned native validator. OIDC/cosign attestations can
+be added for provenance, but are not a substitute for this authentication step.
+A future HSM adapter requires new HSM-backed evidence.
 
 ## Additional resources
 

@@ -86,6 +86,7 @@ def _fixture(
         f"""#!/usr/bin/env bash
 set -euo pipefail
 formal_evidence="${{SUMERAGI_V2_FORMAL_EVIDENCE_DIR:?}}"
+[[ "${{IROHA_RELEASE_SOURCE_MANIFEST_SHA256:-}}" == "{MANIFEST}" ]] || exit 72
 mkdir -p formal/sumeragi_v2 "$formal_evidence"
 case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
   fail) exit 73 ;;
@@ -100,8 +101,10 @@ case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
       >"$formal_evidence/verus.log"
     if [[ "${{FORMAL_SKIP_ARTIFACT:-}}" != multilane_apalache_evidence.tsv ]]; then
       printf '%s\n' \
-        $'schema_version\t1' \
+        $'schema_version\t2' \
         $'backend\tapalache' \
+        $'workspace_source_manifest_sha256\t{MANIFEST}' \
+        $'multilane_source_manifest_sha256\t{'c' * 64}' \
         $'result_count\t3' \
         >"$formal_evidence/multilane_apalache_evidence.tsv"
     fi
@@ -179,7 +182,7 @@ case "${{1:-}}" in
         fi
         output="${{@: -1}}"
         printf '%s\n' \
-          '{{"backend_verification":true,"canonical_encoding":"utf8-json-sort-keys-compact-lf-v1","certificate_type":"production_trace_extraction_theorem","schema_version":2,"theorem":"sumeragi-v2-production-in-flight-first-release-trace-extraction"}}' \
+          '{{"backend_verification":true,"canonical_encoding":"utf8-json-sort-keys-compact-lf-v1","certificate_type":"production_trace_extraction_theorem","multilane_source_manifest_sha256":"{'c' * 64}","schema_version":2,"theorem":"sumeragi-v2-production-in-flight-first-release-trace-extraction","workspace_source_manifest_sha256":"{MANIFEST}"}}' \
           >"$output"
         exit 0
         ;;
@@ -227,7 +230,7 @@ esac
     env["FORMAL_CROSS_TOOL_REQUIRED"] = "1" if cross_tool_required else "0"
     env["FORMAL_EMIT_CROSS_TOOL"] = "1" if emit_cross_tool else "0"
     env["FORMAL_SKIP_ARTIFACT"] = skip_artifact or ""
-    env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = MANIFEST
+    env.pop("IROHA_RELEASE_SOURCE_MANIFEST_SHA256", None)
     env["JAVA_BIN"] = str(tools["java"])
     env["TLAPM_BIN"] = str(tools["tlapm"])
     env["TLA2TOOLS_JAR"] = str(tools["tla2tools.jar"])
@@ -320,6 +323,19 @@ def test_formal_launcher_publishes_authenticated_source_bound_completion(
     assert fields["multilane_apalache_evidence_sha256"] == _sha256(
         invocation / "multilane_apalache_evidence.tsv"
     )
+    apalache_fields = _fields(invocation / "multilane_apalache_evidence.tsv")
+    assert apalache_fields["schema_version"] == "2"
+    assert apalache_fields["workspace_source_manifest_sha256"] == MANIFEST
+    assert apalache_fields["multilane_source_manifest_sha256"] == "c" * 64
+    trace = json.loads(
+        (invocation / "production_trace_extraction_evidence.json").read_text()
+    )
+    assert trace["workspace_source_manifest_sha256"] == apalache_fields[
+        "workspace_source_manifest_sha256"
+    ]
+    assert trace["multilane_source_manifest_sha256"] == apalache_fields[
+        "multilane_source_manifest_sha256"
+    ]
     assert fields["cross_tool_evidence_sha256"] == _sha256(
         invocation / "cross_tool_evidence.json"
     )
@@ -530,40 +546,11 @@ def test_java_resolver_rejects_an_explicit_broken_runtime_without_fallback(
     assert result.stdout == ""
 
 
-def test_java_resolver_skips_a_broken_path_stub_for_repo_local_jdk(
-    tmp_path: Path,
-) -> None:
-    repo = tmp_path / "repo"
-    resolver = repo / "scripts" / "formal" / JAVA_RESOLVER.name
-    resolver.parent.mkdir(parents=True)
-    shutil.copy2(JAVA_RESOLVER, resolver)
-    path_stub = tmp_path / "bin" / "java"
-    local_java = (
-        repo
-        / "target"
-        / "java"
-        / "jdk-21"
-        / "Contents"
-        / "Home"
-        / "bin"
-        / "java"
-    )
-    _write_fake_java(path_stub, working=False)
-    _write_fake_java(local_java, working=True)
-    env = os.environ.copy()
-    env.pop("JAVA_HOME", None)
-    env["PATH"] = f"{path_stub.parent}:{env['PATH']}"
+def test_java_resolver_has_no_repository_local_jdk_fallback() -> None:
+    source = JAVA_RESOLVER.read_text(encoding="utf-8")
 
-    result = subprocess.run(
-        [str(resolver)],
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == str(local_java.resolve())
+    assert "target/java" not in source
+    assert "repo_root" not in source
 
 
 def test_java_resolver_rejects_extra_arguments() -> None:

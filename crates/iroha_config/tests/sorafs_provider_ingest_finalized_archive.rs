@@ -52,7 +52,7 @@ fn native_signer_bindings() -> String {
         format!(
             r#"
 [sorafs.storage.native_transaction_signers.{role}]
-handle = "hsm://sorafs/{handle_role}/provider-ingest-primary"
+handle = "software://sorafs/{handle_role}/provider-ingest-primary"
 authority = "{authority}"
 algorithm = "ed25519"
 public_key_hex = "{public_key_hex}"
@@ -80,10 +80,10 @@ enabled = true
 authenticated_source_fetch_handle = "network.sorafs.authenticated-source.primary"
 authenticated_source_fetch_revision = 5
 authenticated_source_fetch_policy_digest_hex = "{}"
-completion_signer_resolver_handle = "hsm.sorafs.provider-completion.primary"
+completion_signer_resolver_handle = "resolver://sorafs/provider-ingest/primary"
 completion_signer_resolver_revision = 6
 completion_signer_resolver_policy_digest_hex = "{}"
-completion_signer_handle = "pkcs11.sorafs.provider-completion.key-primary"
+completion_signer_handle = "software://sorafs/provider-ingest/signer-primary"
 completion_signer_adapter_revision = 3
 completion_signer_policy_id_hex = "{}"
 completion_signer_policy_revision = 1

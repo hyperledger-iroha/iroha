@@ -914,7 +914,7 @@ mod tests {
             .map(|(index, slot)| {
                 IrohaRuntimeProviderBindingV1::try_new(
                     slot,
-                    format!("hsm://sorafs/runtime-scope-{index}"),
+                    format!("runtime://sorafs/runtime-scope-{index}"),
                     Some(1),
                     Some([u8::try_from(index + 1).expect("small fixture index"); 32]),
                 )

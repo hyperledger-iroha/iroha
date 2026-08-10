@@ -52,8 +52,7 @@ pub(crate) const CLOSE_REASON_HEARTBEAT: &str = "connect_heartbeat_timeout";
 pub(crate) const CLOSE_REASON_ROLE_DIRECTION_MISMATCH: &str = "connect_role_direction_mismatch";
 pub(crate) const CLOSE_REASON_SEQUENCE_VIOLATION: &str = "connect_sequence_violation";
 pub(crate) const CLOSE_REASON_NETWORK_MISMATCH: &str = "connect_network_id_mismatch";
-pub(crate) const CLOSE_REASON_OPEN_IDENTITY_MISMATCH: &str =
-    "connect_open_identity_mismatch";
+pub(crate) const CLOSE_REASON_OPEN_IDENTITY_MISMATCH: &str = "connect_open_identity_mismatch";
 pub(crate) const CLOSE_REASON_OPEN_REPLAY: &str = "connect_open_replayed";
 pub(crate) const CLOSE_REASON_APPROVAL_INVALID: &str = "connect_wallet_approval_invalid";
 pub(crate) const CLOSE_REASON_APPROVAL_REPLAY: &str = "connect_wallet_approval_replayed";
@@ -614,16 +613,6 @@ impl Bus {
         if connect_sdk::derive_session_id(&self.network_id, &app_pk, &nonce) != sid {
             return Err(RegisterSessionError::InvalidIdentity);
         }
-        {
-            let map = self.inner.read().await;
-            if map.contains_key(&sid.to_vec()) {
-                return Err(RegisterSessionError::Exists);
-            }
-            if map.len() >= self.policy.ws_max_sessions {
-                return Err(RegisterSessionError::Capacity);
-            }
-        }
-
         let app_hash = connect_sdk::token_auth_hash(connect_sdk::TokenKind::App, &sid, &token_app);
         let wallet_hash =
             connect_sdk::token_auth_hash(connect_sdk::TokenKind::Wallet, &sid, &token_wallet);
@@ -657,6 +646,12 @@ impl Bus {
         *sess.last_activity.lock().await = Instant::now();
 
         let mut map = self.inner.write().await;
+        if map.contains_key(&sid.to_vec()) {
+            return Err(RegisterSessionError::Exists);
+        }
+        if map.len() >= self.policy.ws_max_sessions {
+            return Err(RegisterSessionError::Capacity);
+        }
         map.insert(sid.to_vec(), sess);
         drop(map);
         self.broadcast_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
@@ -891,6 +886,22 @@ impl Bus {
     }
 
     async fn relay_with_p2p_ttl(&self, frame: proto::ConnectFrameV1, p2p_ttl: u8) {
+        if matches!(
+            &frame.kind,
+            proto::FrameKind::Ciphertext(ciphertext) if ciphertext.dir != frame.dir
+        ) {
+            self.shared
+                .role_direction_mismatch_total
+                .fetch_add(1, Ordering::Relaxed);
+            warn!(
+                sid = ?hex::encode(frame.sid),
+                frame_dir = ?frame.dir,
+                "connect: closing session on substituted ciphertext direction"
+            );
+            self.terminate_session(frame.sid, CLOSE_REASON_ROLE_DIRECTION_MISMATCH)
+                .await;
+            return;
+        }
         let Some(sess) = self.inner.read().await.get(&frame.sid.to_vec()).cloned() else {
             debug!(sid = ?hex::encode(frame.sid), "connect: dropping frame for unknown session");
             return;
@@ -999,6 +1010,15 @@ impl Bus {
                 .await;
             return;
         }
+        if matches!(frame.kind, proto::FrameKind::Ciphertext(_)) && !*sess.approved.lock().await {
+            warn!(
+                sid = ?hex::encode(frame.sid),
+                "connect: rejecting ciphertext before a verified wallet approval"
+            );
+            self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
+                .await;
+            return;
+        }
         // If control frame, capture permissions for diagnostics
         if let proto::FrameKind::Control(ctrl) = &frame.kind {
             match ctrl {
@@ -1056,19 +1076,23 @@ impl Bus {
                     sig_wallet,
                 } => {
                     if frame.dir == proto::Dir::WalletToApp {
-                        if *sess.approved.lock().await {
+                        let mut approved = sess.approved.lock().await;
+                        if *approved {
+                            drop(approved);
                             warn!(sid = ?hex::encode(frame.sid), "connect: rejecting repeated wallet approval");
                             self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_REPLAY)
                                 .await;
                             return;
                         }
                         let Some(open_binding) = sess.open_binding.lock().await.clone() else {
+                            drop(approved);
                             warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval before Open");
                             self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
                                 .await;
                             return;
                         };
                         let Some(relay_auth_hash) = *sess.relay_auth_hash.lock().await else {
+                            drop(approved);
                             warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval without relay binding");
                             self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
                                 .await;
@@ -1077,6 +1101,7 @@ impl Bus {
                         let account = match account_id.parse::<AccountId>() {
                             Ok(account) => account,
                             Err(error) => {
+                                drop(approved);
                                 warn!(sid = ?hex::encode(frame.sid), ?error, "connect: rejecting approval with malformed account id");
                                 self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
                                     .await;
@@ -1084,6 +1109,7 @@ impl Bus {
                             }
                         };
                         let Some(signatory) = account.try_signatory() else {
+                            drop(approved);
                             warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval for a multisig account without a typed intent");
                             self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
                                 .await;
@@ -1101,13 +1127,15 @@ impl Bus {
                             &relay_auth_hash,
                             sig_wallet,
                         ) {
+                            drop(approved);
                             warn!(sid = ?hex::encode(frame.sid), error, "connect: rejecting forged or substituted wallet approval");
                             self.terminate_session(frame.sid, CLOSE_REASON_APPROVAL_INVALID)
                                 .await;
                             return;
                         }
                         (*sess.acc_perms.lock().await).clone_from(permissions);
-                        *sess.approved.lock().await = true;
+                        *approved = true;
+                        drop(approved);
                         if permissions.is_some() {
                             debug!(sid = ?hex::encode(frame.sid), "connect: Approve with permissions provided");
                         }
@@ -1552,9 +1580,11 @@ impl Bus {
 
 #[cfg(test)]
 fn test_network_id() -> NetworkId {
-    NetworkId::from_genesis_hash(HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-        iroha_crypto::Hash::new(b"torii-connect-test-genesis"),
-    ))
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"torii-connect-test-genesis"),
+        ),
+    )
 }
 
 fn diff(req: &Vec<String>, acc: &Vec<String>) -> (Vec<String>, Vec<String>) {
@@ -1793,6 +1823,39 @@ mod tests {
         }
     }
 
+    fn signed_approval_control(
+        key_pair: &KeyPair,
+        constraints: &proto::Constraints,
+        sid: &Sid,
+        app_pk: &[u8; 32],
+        wallet_pk: [u8; 32],
+        relay_token: &str,
+    ) -> proto::ConnectControlV1 {
+        let account_id = AccountId::new(key_pair.public_key().clone()).to_string();
+        let relay_auth = connect_sdk::relay_auth_hash(sid, relay_token);
+        let preimage = connect_sdk::build_approve_preimage(
+            constraints,
+            sid,
+            app_pk,
+            &wallet_pk,
+            &account_id,
+            None,
+            None,
+            &relay_auth,
+        );
+        let sig_wallet = proto::WalletSignatureV1::new(
+            Algorithm::Ed25519,
+            Signature::try_new(key_pair.private_key(), &preimage).expect("approval fixture signs"),
+        );
+        proto::ConnectControlV1::Approve {
+            wallet_pk,
+            account_id,
+            permissions: None,
+            proof: None,
+            sig_wallet,
+        }
+    }
+
     #[tokio::test]
     async fn register_tokens_rejects_duplicate_sid() {
         let bus = Bus::new();
@@ -1821,6 +1884,52 @@ mod tests {
             .await
             .expect_err("duplicate sid should be rejected");
         assert_eq!(err, RegisterSessionError::Exists);
+    }
+
+    #[tokio::test]
+    async fn concurrent_registration_cannot_replace_session_identity() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x31);
+        let first = bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token-a".into(),
+            "wallet-token-a".into(),
+            "management-token-a".into(),
+            "relay-token-a".into(),
+        );
+        let second = bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token-b".into(),
+            "wallet-token-b".into(),
+            "management-token-b".into(),
+            "relay-token-b".into(),
+        );
+
+        let (first, second) = tokio::join!(first, second);
+        assert!(
+            matches!(
+                (&first, &second),
+                (Ok(()), Err(RegisterSessionError::Exists))
+                    | (Err(RegisterSessionError::Exists), Ok(()))
+            ),
+            "exactly one registration must win: first={first:?}, second={second:?}"
+        );
+        assert_eq!(bus.inner.read().await.len(), 1);
+
+        let accepted_a = bus
+            .authorize_management_token(sid, "management-token-a")
+            .await;
+        let accepted_b = bus
+            .authorize_management_token(sid, "management-token-b")
+            .await;
+        assert_ne!(
+            accepted_a, accepted_b,
+            "the losing registration must not replace the winning token binding"
+        );
     }
 
     #[tokio::test]
@@ -2600,6 +2709,50 @@ mod tests {
         assert!(st.role_direction_mismatch_total >= 1);
     }
 
+    #[tokio::test]
+    async fn ciphertext_direction_substitution_terminates_session() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x6A);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register direction-substitution fixture");
+        let mut app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Ciphertext(proto::ConnectCiphertextV1 {
+                dir: proto::Dir::WalletToApp,
+                aead: vec![0xA5; 32],
+            }),
+        })
+        .await;
+
+        for inbox in [&mut app_inbox, &mut wallet_inbox] {
+            let closed = timeout(Duration::from_millis(50), inbox.recv())
+                .await
+                .expect("peer receives direction-substitution close")
+                .expect("close frame");
+            assert!(matches!(
+                closed.kind,
+                proto::FrameKind::Control(proto::ConnectControlV1::Close { ref reason, .. })
+                    if reason == CLOSE_REASON_ROLE_DIRECTION_MISMATCH
+            ));
+        }
+        assert!(!bus.inner.read().await.contains_key(&sid.to_vec()));
+        assert!(bus.status().await.role_direction_mismatch_total >= 1);
+    }
+
     #[test]
     fn expected_direction_matches_role() {
         assert_eq!(
@@ -2992,6 +3145,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ciphertext_before_verified_approval_terminates_session() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x70);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register pre-approval ciphertext fixture");
+        let mut app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Ciphertext(proto::ConnectCiphertextV1 {
+                dir: proto::Dir::AppToWallet,
+                aead: vec![0xA5; 32],
+            }),
+        })
+        .await;
+
+        for inbox in [&mut app_inbox, &mut wallet_inbox] {
+            let closed = timeout(Duration::from_millis(50), inbox.recv())
+                .await
+                .expect("peer receives pre-approval rejection close")
+                .expect("close frame");
+            assert!(matches!(
+                closed.kind,
+                proto::FrameKind::Control(proto::ConnectControlV1::Close { ref reason, .. })
+                    if reason == CLOSE_REASON_APPROVAL_INVALID
+            ));
+        }
+        assert!(!bus.inner.read().await.contains_key(&sid.to_vec()));
+    }
+
+    #[tokio::test]
     async fn drops_plaintext_control_after_approve() {
         let bus = Bus::new();
         let (sid, app_pk, nonce) = test_session_identity(6);
@@ -3025,7 +3221,10 @@ mod tests {
             }),
         };
         bus.relay(open).await;
-        wallet_inbox.recv().await.expect("wallet should receive Open");
+        wallet_inbox
+            .recv()
+            .await
+            .expect("wallet should receive Open");
 
         let key_pair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
             .expect("approval fixture keypair");
@@ -3090,6 +3289,289 @@ mod tests {
         );
         let st = bus.status().await;
         assert!(st.plaintext_control_drops_total >= 1);
+    }
+
+    #[tokio::test]
+    async fn wrong_network_open_is_rejected_before_wallet_delivery() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x71);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register wrong-network fixture session");
+        let mut app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+        let foreign_network = NetworkId::from_genesis_hash(HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(b"torii-connect-test-foreign-genesis"),
+        ));
+
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
+                app_pk,
+                app_meta: None,
+                constraints: proto::Constraints {
+                    network_id: foreign_network,
+                },
+                permissions: None,
+            }),
+        })
+        .await;
+
+        let wallet_closed = timeout(Duration::from_millis(50), wallet_inbox.recv())
+            .await
+            .expect("wallet receives rejection close")
+            .expect("close frame");
+        assert!(matches!(
+            wallet_closed.kind,
+            proto::FrameKind::Control(proto::ConnectControlV1::Close { ref reason, .. })
+                if reason == CLOSE_REASON_NETWORK_MISMATCH
+        ));
+        let closed = timeout(Duration::from_millis(50), app_inbox.recv())
+            .await
+            .expect("app receives rejection close")
+            .expect("close frame");
+        assert!(matches!(
+            closed.kind,
+            proto::FrameKind::Control(proto::ConnectControlV1::Close { ref reason, .. })
+                if reason == CLOSE_REASON_NETWORK_MISMATCH
+        ));
+        assert!(!bus.inner.read().await.contains_key(&sid.to_vec()));
+    }
+
+    #[tokio::test]
+    async fn substituted_wallet_approval_is_rejected_before_app_delivery() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x72);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register substitution fixture session");
+        let mut app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+        let constraints = proto::Constraints {
+            network_id: test_network_id(),
+        };
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
+                app_pk,
+                app_meta: None,
+                constraints: constraints.clone(),
+                permissions: None,
+            }),
+        })
+        .await;
+        wallet_inbox.recv().await.expect("wallet receives Open");
+
+        let key_pair = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519)
+            .expect("approval substitution fixture keypair");
+        let mut approve = signed_approval_control(
+            &key_pair,
+            &constraints,
+            &sid,
+            &app_pk,
+            [0x74; 32],
+            "relay-token",
+        );
+        let proto::ConnectControlV1::Approve { wallet_pk, .. } = &mut approve else {
+            unreachable!("approval helper must return Approve")
+        };
+        *wallet_pk = [0x75; 32];
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::WalletToApp,
+            seq: 1,
+            kind: proto::FrameKind::Control(approve),
+        })
+        .await;
+
+        let closed = timeout(Duration::from_millis(50), app_inbox.recv())
+            .await
+            .expect("app receives invalid-approval close")
+            .expect("close frame");
+        assert!(matches!(
+            closed.kind,
+            proto::FrameKind::Control(proto::ConnectControlV1::Close { ref reason, .. })
+                if reason == CLOSE_REASON_APPROVAL_INVALID
+        ));
+        assert!(!bus.inner.read().await.contains_key(&sid.to_vec()));
+    }
+
+    #[tokio::test]
+    async fn repeated_valid_wallet_approval_terminates_the_session() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x76);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register replay fixture session");
+        let mut app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+        let constraints = proto::Constraints {
+            network_id: test_network_id(),
+        };
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
+                app_pk,
+                app_meta: None,
+                constraints: constraints.clone(),
+                permissions: None,
+            }),
+        })
+        .await;
+        wallet_inbox.recv().await.expect("wallet receives Open");
+
+        let key_pair = KeyPair::try_from_seed(vec![0x77; 32], Algorithm::Ed25519)
+            .expect("approval replay fixture keypair");
+        let approve = signed_approval_control(
+            &key_pair,
+            &constraints,
+            &sid,
+            &app_pk,
+            [0x78; 32],
+            "relay-token",
+        );
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::WalletToApp,
+            seq: 1,
+            kind: proto::FrameKind::Control(approve.clone()),
+        })
+        .await;
+        assert!(matches!(
+            app_inbox
+                .recv()
+                .await
+                .expect("app receives first approval")
+                .kind,
+            proto::FrameKind::Control(proto::ConnectControlV1::Approve { .. })
+        ));
+
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::WalletToApp,
+            seq: 2,
+            kind: proto::FrameKind::Control(approve),
+        })
+        .await;
+        let closed = timeout(Duration::from_millis(50), app_inbox.recv())
+            .await
+            .expect("app receives replay close")
+            .expect("close frame");
+        assert!(matches!(
+            closed.kind,
+            proto::FrameKind::Control(proto::ConnectControlV1::Close { ref reason, .. })
+                if reason == CLOSE_REASON_APPROVAL_REPLAY
+        ));
+        assert!(!bus.inner.read().await.contains_key(&sid.to_vec()));
+    }
+
+    #[tokio::test]
+    async fn concurrent_wallet_approvals_cannot_both_reach_the_app() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x79);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register concurrent approval fixture session");
+        let mut app_inbox = bus.attach(sid, proto::Role::App).await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+        let constraints = proto::Constraints {
+            network_id: test_network_id(),
+        };
+        bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Open {
+                app_pk,
+                app_meta: None,
+                constraints: constraints.clone(),
+                permissions: None,
+            }),
+        })
+        .await;
+        wallet_inbox.recv().await.expect("wallet receives Open");
+
+        let key_pair = KeyPair::try_from_seed(vec![0x7A; 32], Algorithm::Ed25519)
+            .expect("concurrent approval fixture keypair");
+        let approve = signed_approval_control(
+            &key_pair,
+            &constraints,
+            &sid,
+            &app_pk,
+            [0x7B; 32],
+            "relay-token",
+        );
+        let first = bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::WalletToApp,
+            seq: 1,
+            kind: proto::FrameKind::Control(approve.clone()),
+        });
+        let second = bus.relay(proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::WalletToApp,
+            seq: 2,
+            kind: proto::FrameKind::Control(approve),
+        });
+        tokio::join!(first, second);
+
+        let mut approvals = 0;
+        let mut closes = 0;
+        while let Ok(Some(frame)) = timeout(Duration::from_millis(10), app_inbox.recv()).await {
+            match frame.kind {
+                proto::FrameKind::Control(proto::ConnectControlV1::Approve { .. }) => {
+                    approvals += 1;
+                }
+                proto::FrameKind::Control(proto::ConnectControlV1::Close { .. }) => closes += 1,
+                _ => {}
+            }
+        }
+        assert!(
+            approvals <= 1,
+            "approval gate delivered {approvals} replays"
+        );
+        assert!(closes >= 1, "approval race must close the session");
+        assert!(!bus.inner.read().await.contains_key(&sid.to_vec()));
     }
 
     #[tokio::test]

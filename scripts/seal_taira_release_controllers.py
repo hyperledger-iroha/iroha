@@ -93,6 +93,26 @@ DEPLOY_ISSUANCE_BARRIER = (
     "(or one stronger immutable candidate identity); deploy-reset is disabled for "
     "both dry-run and apply before attestation or path inspection"
 )
+AUTHENTICATED_ROLLOUT_OBSERVATION_AUTHORITY_SCHEMA = (
+    "iroha.taira.authenticated-rollout-observation-authority.v1"
+)
+AUTHENTICATED_ROLLOUT_OBSERVATION_REPLAY_NAMESPACE = (
+    "iroha.taira.authenticated-rollout-observation-replay.v1"
+)
+AUTHENTICATED_ROLLOUT_OBSERVATION_ISSUANCE_BARRIER = (
+    "missing preprovisioned "
+    "iroha.taira.authenticated-rollout-observation-authority.v1: rollout "
+    "verification and publication require a canonical authority-origin envelope "
+    "under a separately pinned trust root inaccessible to runtime, deploy, "
+    "candidate, release, and publication signers; it must bind exact plan and "
+    "observation bytes, admitted/deployed candidate and source identity, "
+    "qualification and deploy receipts, four-peer/public-Torii, supervisor, host, "
+    "installation and installed-controller identities, plus a fresh run nonce, "
+    "issued time, expiry, and replay identity in "
+    "iroha.taira.authenticated-rollout-observation-replay.v1; path ownership, "
+    "self-hashes, workflow IDs, caller markers, environment values, signer reuse, "
+    "stale runs, splices, and legacy unsigned observations cannot provision it"
+)
 PYTHON_ENV_SCRUBBER = (
     "import os,runpy,sys;"
     "names=('HOME','LANG','LC_ALL','PATH','TMPDIR');"
@@ -138,6 +158,7 @@ MACOS_FILES = COMMON_FILES + (
     "scripts/taira_constants.py",
     "scripts/taira_peer_supervisor.py",
     "scripts/taira_privacy_action_driver_ipc.py",
+    "scripts/taira_privacy_governance_authority.py",
     "scripts/taira_privacy_protocol_receipt.py",
     "scripts/taira_privacy_sealed_controller.py",
     "scripts/taira_privacy_verange_case_plan.py",
@@ -490,6 +511,12 @@ class ControllerSealError(RuntimeError):
 
 def _fail(message: str) -> NoReturn:
     raise ControllerSealError(message)
+
+
+def _require_authenticated_rollout_observation_authority() -> NoReturn:
+    """Keep observation verification/publication closed before controller I/O."""
+
+    _fail(AUTHENTICATED_ROLLOUT_OBSERVATION_ISSUANCE_BARRIER)
 
 
 def canonical_json_bytes(value: object) -> bytes:
@@ -2604,6 +2631,8 @@ def _dispatch(
     run_as: tuple[int, int] | None = None,
     external_tool_identity: tuple[int, int] | None = None,
 ) -> int:
+    if operation in {"verify-privacy-rollout", "publish-rollout"}:
+        _require_authenticated_rollout_observation_authority()
     if operation == "verify-privacy-rollout":
         return _dispatch_installed_python(
             PYTHON_OPERATIONS[operation],
@@ -2854,8 +2883,9 @@ def _dispatch_boi_composite(
 def _dispatch_publication_composite(
     operation_args: Sequence[str], attestation: dict[str, object]
 ) -> int:
-    """Publish as authority, close seven files, and solely own scratch cleanup."""
+    """Refuse publication until observation authority is provisioned."""
 
+    _require_authenticated_rollout_observation_authority()
     _subcommand, option_values = _operation_option_values(
         "publish-rollout", operation_args
     )
@@ -3073,6 +3103,11 @@ def main(argv: list[str] | None = None) -> int:
             _fail(BOI_QUALIFICATION_ISSUANCE_BARRIER)
         if args.command == "run" and args.operation == "deploy-reset":
             _fail(DEPLOY_ISSUANCE_BARRIER)
+        if args.command == "run" and args.operation in {
+            "verify-privacy-rollout",
+            "publish-rollout",
+        }:
+            _require_authenticated_rollout_observation_authority()
         attestation = _attest(
             expected_launcher_sha256=args.expected_launcher_sha256,
             expected_controller_digest=args.expected_controller_digest,

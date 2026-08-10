@@ -664,9 +664,10 @@ validator `genesis.expected_hash`; deployment automation must consume that
 paired artifact and reject either independently supplied value. The published
 template resolves `/run/iroha/genesis.expected_hash` through
 `genesis.expected_hash_file`; clients mount the same file as `network_id_file`.
-The signer owns its HSM or key-provider access internally; it must never accept
-a private-key path or key bytes through argv, environment, or the rendered
-tree. Source-built Kagami is not a genesis signer in this release path. The
+The signer owns its isolated external software-signing service and encrypted
+runtime-only key access internally; it must never accept a private-key path or
+key bytes through argv, environment, or the rendered tree. Source-built Kagami
+is not a genesis signer in this release path. The
 external signer binds the staged Nexus/AMX and execution-policy context,
 recomputes the consensus fingerprint, atomically replaces only the rendered
 `genesis.json`, and writes `genesis.signed.nrt`. Never copy the genesis signer,
@@ -1030,7 +1031,8 @@ record before accepting the signed candidate.
 `build_taira_rollout_candidate.py` binds that receipt, the exact binary,
 the sealed macOS controller manifest, and signed Linux authority into the final
 secret-free Mac admission archive. The private reset bundle, validator secrets,
-external genesis signer and its internal key/HSM state, validator binary, and
+external genesis software signer and its encrypted runtime-only key state,
+validator binary, and
 supervisor never enter Actions artifact storage or OCI. After the
 candidate authority is assembled, the protected macOS runner passes the local
 private bundle and candidate directly to `scripts/deploy_taira_v21_reset.py`,
@@ -1341,7 +1343,7 @@ TAIRA_VALIDATOR_ARGS=(
 )
 ```
 
-- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
+- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --expected-dpn-validator-release-commit "${EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT}"`
 
 Then gate the SoraFS path on the same public node:
 
@@ -1958,12 +1960,21 @@ From `../iroha2-block-explorer-web`:
      `/v1/sumeragi/status` `height_context.validator_count` and
      `last_commit_qc.validator_count`, or
      `/v1/sumeragi/validator-sets` for validator-set visibility.
-   - create a Connect session through the proxy and ask explicitly for JSON:
-     `curl -sS -X POST "${PUBLIC_TORII_ROOT}/v1/connect/session" -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<32-byte-base64url-sid>"}'`
+   - create a Connect session through the proxy and ask explicitly for JSON;
+     derive `sid` as BLAKE2b-256 over `iroha-connect|sid|`, the raw 32-byte
+     exact `NetworkId`, the raw 32-byte X25519 app key, and the fresh raw
+     16-byte nonce, in that order, then encode all binary fields as canonical
+     unpadded base64url:
+     `curl -sS -X POST "${PUBLIC_TORII_ROOT}/v1/connect/session" -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<derived-32-byte-base64url-sid>","network_id":"<canonical-hash-network-id>","app_pk":"<32-byte-base64url-x25519-app-key>","nonce":"<16-byte-base64url-random-nonce>"}'`
    - verify Connect websocket upgrades on both public hostnames with the
      returned `sid` and app token:
      `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' "${PUBLIC_TORII_ROOT}/v1/connect/ws?sid=<sid>&role=app"`
      `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' 'https://taira-explorer.sora.org/v1/connect/ws?sid=<sid>&role=app'`
+     These curl commands only probe the HTTP upgrade. A functional client must
+     send the one-shot app `Open` at sequence 1 with the same app key and exact
+     `NetworkId`, accept only the wallet's one-shot `Approve` at sequence 1 after
+     verifying its account signature and relay-token binding, and start
+     contiguous encrypted traffic at sequence 2.
    - verify CID-host origin isolation with a known site CID:
      `curl -vkI "https://<cid>.sorafs.taira.sora.org/"`
      `curl -vkI "https://taira.sora.org/sorafs/cid/<cid>/swap/ton/usdt" -H 'accept: text/html'`

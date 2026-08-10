@@ -18,6 +18,13 @@ from sumeragi_exact_json_test_support import (
     StubResponse,
     sumeragi_exact_json_response_cases,
 )
+from client_test_support import (
+    CANONICAL_OWNER,
+    app_api_transaction_draft as _app_api_transaction_draft,
+    authority_fee_payment as _authority_fee_payment,
+    canonical_hash as _canonical_hash,
+    sponsor_fee_payment as _sponsor_fee_payment,
+)
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
@@ -81,7 +88,6 @@ from iroha_torii_client.native_amx import (  # noqa: E402
     compute_native_amx_validator_set_hash,
 )
 
-CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 CANONICAL_LARGE_FRACTION = "18446744073709551616.25"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
@@ -94,25 +100,6 @@ _NATIVE_AMX_VALIDATOR_SET = [
     "ea013099BA3FACE165941434D3238C4D5767059EBFFFB4120A9885A4EB2BAC9CD868F690660D2936B03C0214FBDAD36034D578",
     "ea0130B921EAC90D1A99EC9DA3FF8C8A29EBEE19DD1B659A4C6FC21BC8046EA30DE566668EDCCEAE4CB5932F4F860606A1E0E3",
 ]
-
-
-def _authority_fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:
-    return {
-        "payer": "authority",
-        "value": {"charge_limits": [], "gas_limit": gas_limit},
-    }
-
-
-def _sponsor_fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:
-    return {
-        "payer": "sponsor",
-        "value": {
-            "program_id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
-            "program_revision": 3,
-            "charge_limits": [],
-            "gas_limit": gas_limit,
-        },
-    }
 
 
 def _contract_operation_receipt(
@@ -141,16 +128,6 @@ def _contract_operation_receipt(
         "gas_used": None,
         "fee_payment": fee_payment or _sponsor_fee_payment(gas_limit),
         "payload_digest_hex": "66" * 32,
-    }
-
-
-def _app_api_transaction_draft(payload: bytes = b"\x01\x02\x03") -> Dict[str, Any]:
-    signing_message = bytearray(hashlib.blake2b(payload, digest_size=32).digest())
-    signing_message[-1] |= 1
-    return {
-        "submitted": False,
-        "transaction_payload_b64": base64.b64encode(payload).decode("ascii"),
-        "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
     }
 
 
@@ -188,18 +165,6 @@ def _contract_call_draft(
             contract_address=contract_address,
         ),
     }
-
-
-def _canonical_hash(seed: int) -> str:
-    body_bytes = bytearray([seed & 0xFF] * 32)
-    body_bytes[-1] |= 1
-    body = body_bytes.hex().upper()
-    crc = 0xFFFF
-    for byte in f"hash:{body}".encode("ascii"):
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
-    return f"hash:{body}#{crc:04X}"
 
 
 GOVERNANCE_NETWORK_ID = _canonical_hash(0xA5)
@@ -6591,40 +6556,6 @@ def test_get_connect_status_parses_payload() -> None:
     assert snapshot.p2p_session_terminated_total == 12
     assert snapshot.policy.heartbeat_interval_ms == 5000
     assert session.calls[0]["url"].endswith("/v1/connect/status")
-
-
-def test_create_and_delete_connect_session() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "sid": "abc",
-                "wallet_uri": "iroha://wallet",
-                "app_uri": "iroha://app",
-                "token_app": "app-token",
-                "token_wallet": "wallet-token",
-                "token_management": "management-token",
-                "token_relay": "relay-token",
-                "ttl": 30,
-            }
-        )
-    )
-    session.queue(StubResponse(status_code=204))
-    client = ToriiClient("http://node.test", session=session)
-
-    session_info = client.create_connect_session({"scope": "demo"})
-    deleted = client.delete_connect_session("abc", session_info.token_management)
-
-    assert session_info.sid == "abc"
-    assert session_info.token_relay == "relay-token"
-    assert session_info.extra["ttl"] == 30
-    assert deleted is True
-    post_call = session.calls[0]
-    assert post_call["method"] == "POST"
-    assert post_call["url"].endswith("/v1/connect/session")
-    assert json.loads(post_call["data"]) == {"scope": "demo"}
-    delete_call = session.calls[1]
-    assert delete_call["headers"] == {"Authorization": "Bearer management-token"}
 
 
 def test_connect_app_registry_and_policy_helpers() -> None:

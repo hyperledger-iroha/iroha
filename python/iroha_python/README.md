@@ -895,20 +895,39 @@ print(assets, txs, query_txs)
 ```
 
 ```python
-# Create a Connect session with type-safe response
-from iroha_python import create_torii_client
+# Create an exact-network Connect session with a type-safe response
+import base64
+
+from iroha_python import NetworkId, create_torii_client
+from iroha_python.connect import create_connect_session_preview
 
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
-info = client.create_connect_session_info({"role": "app", "sid": "base64url-sid"})
+preview = create_connect_session_preview(
+    network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
+    node="node.example:443",
+)
+info = client.create_connect_session_info({
+    "sid": preview.sid_base64url,
+    "network_id": preview.network_id.literal,
+    "app_pk": base64.urlsafe_b64encode(preview.app_key_pair.public_key).rstrip(b"=").decode(),
+    "nonce": base64.urlsafe_b64encode(preview.nonce).rstrip(b"=").decode(),
+    "node": preview.node,
+})
 print(info.app_uri)
 print(info.wallet_token)
 ```
 # Connect URI helpers
 from iroha_python.connect import ConnectUri, build_connect_uri, parse_connect_uri
 
-uri = build_connect_uri(ConnectUri(sid="base64url", chain_id="local-testnet", node="node.example:443"))
+uri = build_connect_uri(ConnectUri(
+    sid=preview.sid_base64url,
+    network_id=preview.network_id,
+    app_public_key=preview.app_key_pair.public_key,
+    nonce=preview.nonce,
+    node="node.example:443",
+))
 parsed = parse_connect_uri(uri)
-assert parsed.sid == "base64url"
+assert parsed.sid == preview.sid_base64url
 
 
 ## Sora VPN native lease flow
@@ -1310,8 +1329,10 @@ Run the end-to-end Connect CLI helper to stage a session, inspect policy limits,
 ```bash
 python -m iroha_python.examples.connect_flow \
   --base-url http://127.0.0.1:8080 \
-  --sid demo-session \
-  --chain-id dev-chain \
+  --network-id '<exact-checksummed-network-id>' \
+  --sid '<derived-base64url-sid>' \
+  --app-public-key '<32-byte-x25519-public-key-hex>' \
+  --nonce '<16-byte-nonce-hex>' \
   --auth-token admin-token \
   --app-name "Demo App" \
   --app-url https://demo.example \
@@ -1329,7 +1350,12 @@ Pass `--app-name` (optionally with `--app-url` and `--app-icon-hash`) to embed d
 Run `python -m iroha_python.examples.connect_flow --write-app-metadata-template connect_app_metadata.json` to write the sample metadata file without contacting a node. When you only need runtime telemetry, pass `--status-only` (optionally with `--status-json-output status.json`) to skip session creation entirely.
 
 ```python
-info = client.create_connect_session_info({"role": "app", "sid": "base64url-sid"})
+info = client.create_connect_session_info({
+    "sid": preview.sid_base64url,
+    "network_id": preview.network_id.literal,
+    "app_pk": base64.urlsafe_b64encode(preview.app_key_pair.public_key).rstrip(b"=").decode(),
+    "nonce": base64.urlsafe_b64encode(preview.nonce).rstrip(b"=").decode(),
+})
 print(info.expires_at)
 ```
 
@@ -1373,17 +1399,22 @@ from iroha_python import (
     ConnectControlOpen,
     ConnectDirection,
     ConnectPermissions,
+    NetworkId,
+    create_connect_session_preview,
     encode_connect_frame,
     decode_connect_frame,
 )
 
+preview = create_connect_session_preview(
+    network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
+)
 frame = ConnectFrame(
-    sid=b"\x01" * 32,
+    sid=preview.sid_bytes,
     direction=ConnectDirection.APP_TO_WALLET,
     sequence=1,
     control=ConnectControlOpen(
-        app_public_key=b"\x02" * 32,
-        chain_id="local",
+        app_public_key=preview.app_key_pair.public_key,
+        network_id=preview.network_id,
         permissions=ConnectPermissions(methods=["SIGN_REQUEST_TX"], events=[]),
     ),
 )
@@ -1430,8 +1461,10 @@ app_key, wallet_key = derive_connect_direction_keys(
 assert len(app_key) == len(wallet_key) == 32
 
 preimage = build_connect_approve_preimage(
-    sid=b"\xAA" * 32,
-    app_public_key=b"\xBB" * 32,
+    network_id=preview.network_id,
+    sid=preview.sid_bytes,
+    app_public_key=preview.app_key_pair.public_key,
+    nonce=preview.nonce,
     wallet_public_key=b"\xCC" * 32,
     account_id="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
     permissions=ConnectPermissions(methods=["SIGN_REQUEST_TX"], events=[]),
@@ -1442,12 +1475,18 @@ preimage = build_connect_approve_preimage(
         issued_at="2024-01-01T00:00:00Z",
         nonce="abcd",
     ),
+    relay_token="exact-relay-token-from-session-registration",
 )
 
 # Post a control frame via the Torii client
 from iroha_python import ConnectControlClose, create_torii_client
 
-info = client.create_connect_session_info({"role": "app", "sid": pair.public_key.hex()})
+info = client.create_connect_session_info({
+    "sid": preview.sid_base64url,
+    "network_id": preview.network_id.literal,
+    "app_pk": base64.urlsafe_b64encode(preview.app_key_pair.public_key).rstrip(b"=").decode(),
+    "nonce": base64.urlsafe_b64encode(preview.nonce).rstrip(b"=").decode(),
+})
 print(info.sid, info.app_uri)
 client = create_torii_client("http://localhost:8080", auth_token="admin-token")
 client.send_connect_control_frame(
@@ -2001,7 +2040,7 @@ For details on choosing between binary bundles and container images, consult `sp
 
 For a production release, stage the reviewed package candidates and checksums
 through the protected aggregate release workflow. Authentication happens
-outside this harness with the external Ed25519/PKCS#11-HSM signer and is
+outside this harness with the external software Ed25519 signer and is
 verified with:
 
 ```bash

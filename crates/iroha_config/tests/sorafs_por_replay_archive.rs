@@ -78,7 +78,7 @@ fn native_signer_bindings() -> String {
         format!(
             r#"
 [sorafs.storage.native_transaction_signers.{role}]
-handle = "hsm://sorafs/{handle_role}/por-replay-primary"
+handle = "software://sorafs/{handle_role}/por-replay-primary"
 authority = "{authority}"
 algorithm = "ed25519"
 public_key_hex = "{public_key_hex}"
@@ -122,7 +122,7 @@ journal_checkpoint_provider_policy_digest_hex = "6060606060606060606060606060606
 journal_transaction_submitter_handle = "queue.reputation.por-replay-primary"
 journal_transaction_submitter_revision = 11
 journal_transaction_submitter_policy_digest_hex = "6161616161616161616161616161616161616161616161616161616161616161"
-threshold_signer_handle = "hsm.reputation.por-replay-primary"
+threshold_signer_handle = "software://sorafs/reputation/por-replay-primary"
 threshold_signer_revision = 12
 threshold_signer_policy_digest_hex = "6262626262626262626262626262626262626262626262626262626262626262"
 governance_dag_handle = "governance.dag.por-replay-primary"
@@ -151,7 +151,7 @@ max_successor_proof_bytes = 1048576
 fn enabled_archive_projects_one_exact_non_secret_binding() {
     let public_key_hex = ed25519_public_key_hex(0x83);
     let actual = parse_overlay(&enabled_overlay(
-        "hsm://sorafs/por-replay-archive/primary",
+        "object-lock://sorafs/por-replay-archive/primary",
         17,
         &"81".repeat(32),
         &"82".repeat(32),
@@ -166,7 +166,10 @@ fn enabled_archive_projects_one_exact_non_secret_binding() {
         .por_replay_archive
         .expect("enabled archive");
 
-    assert_eq!(archive.handle, "hsm://sorafs/por-replay-archive/primary");
+    assert_eq!(
+        archive.handle,
+        "object-lock://sorafs/por-replay-archive/primary"
+    );
     assert_eq!(archive.archive_id, [0x81; 32]);
     assert_eq!(archive.revision, 17);
     assert_eq!(archive.policy_digest, [0x82; 32]);
@@ -188,7 +191,7 @@ fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() 
         (
             "test-marked handle",
             enabled_overlay(
-                "hsm://sorafs/por-replay-archive/test-secret",
+                "object-lock://sorafs/por-replay-archive/test-secret",
                 17,
                 &"81".repeat(32),
                 &"82".repeat(32),
@@ -201,7 +204,7 @@ fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() 
         (
             "zero revision",
             enabled_overlay(
-                "hsm://sorafs/por-replay-archive/primary",
+                "object-lock://sorafs/por-replay-archive/primary",
                 0,
                 &"81".repeat(32),
                 &"82".repeat(32),
@@ -214,7 +217,7 @@ fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() 
         (
             "zero archive identity",
             enabled_overlay(
-                "hsm://sorafs/por-replay-archive/primary",
+                "object-lock://sorafs/por-replay-archive/primary",
                 17,
                 &"00".repeat(32),
                 &"82".repeat(32),
@@ -227,7 +230,7 @@ fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() 
         (
             "uppercase policy digest",
             enabled_overlay(
-                "hsm://sorafs/por-replay-archive/primary",
+                "object-lock://sorafs/por-replay-archive/primary",
                 17,
                 &"81".repeat(32),
                 &"AB".repeat(32),
@@ -240,7 +243,7 @@ fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() 
         (
             "weak receipt key",
             enabled_overlay(
-                "hsm://sorafs/por-replay-archive/primary",
+                "object-lock://sorafs/por-replay-archive/primary",
                 17,
                 &"81".repeat(32),
                 &"82".repeat(32),
@@ -253,7 +256,7 @@ fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() 
         (
             "too-fast cadence",
             enabled_overlay(
-                "hsm://sorafs/por-replay-archive/primary",
+                "object-lock://sorafs/por-replay-archive/primary",
                 17,
                 &"81".repeat(32),
                 &"82".repeat(32),
@@ -266,7 +269,7 @@ fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() 
         (
             "unbounded tick",
             enabled_overlay(
-                "hsm://sorafs/por-replay-archive/primary",
+                "object-lock://sorafs/por-replay-archive/primary",
                 17,
                 &"81".repeat(32),
                 &"82".repeat(32),
@@ -294,7 +297,7 @@ fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() 
         (
             "unbounded successor count",
             enabled_overlay(
-                "hsm://sorafs/por-replay-archive/primary",
+                "object-lock://sorafs/por-replay-archive/primary",
                 17,
                 &"81".repeat(32),
                 &"82".repeat(32),
@@ -314,7 +317,7 @@ fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() 
         (
             "unbounded successor bytes",
             enabled_overlay(
-                "hsm://sorafs/por-replay-archive/primary",
+                "object-lock://sorafs/por-replay-archive/primary",
                 17,
                 &"81".repeat(32),
                 &"82".repeat(32),
@@ -347,7 +350,7 @@ fn disabled_archive_rejects_dormant_identity_and_worker_claims() {
         (
             r#"
 [sorafs.storage.por_replay_archive]
-handle = "hsm://sorafs/por-replay-archive/primary"
+handle = "object-lock://sorafs/por-replay-archive/primary"
 "#,
             "identity fields must be absent when disabled",
         ),
@@ -373,7 +376,7 @@ fn enabled_archive_requires_storage_and_committed_reputation_runtime() {
         r#"
 [sorafs.storage.por_replay_archive]
 enabled = true
-handle = "hsm://sorafs/por-replay-archive/primary"
+handle = "object-lock://sorafs/por-replay-archive/primary"
 archive_id_hex = "{}"
 revision = 1
 policy_digest_hex = "{}"

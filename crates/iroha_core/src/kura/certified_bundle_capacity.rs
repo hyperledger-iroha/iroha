@@ -7,7 +7,8 @@ impl Kura {
         self.write_certified_lane_block_artifact_with_authority(artifact, None, None)
     }
 
-    #[cfg(test)]
+    // The inflight source contract audits this authority-bearing publication boundary directly.
+    #[allow(dead_code)]
     fn write_certified_lane_block_artifact_with_authority(
         &self,
         artifact: &CertifiedLaneBlockArtifact,

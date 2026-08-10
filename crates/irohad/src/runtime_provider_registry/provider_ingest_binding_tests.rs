@@ -38,7 +38,7 @@ fn provider_ingest_catalog_projects_independent_source_and_resolver_qualificatio
         .expect("signer-resolver binding");
     assert_eq!(
         resolver.handle(),
-        "hsm://sorafs/provider-ingest/resolver-primary"
+        "resolver://sorafs/provider-ingest/primary"
     );
     assert_eq!(resolver.revision(), Some(6));
     assert_eq!(resolver.policy_digest(), Some([0xB2; 32]));
@@ -53,7 +53,7 @@ fn provider_ingest_catalog_projects_independent_source_and_resolver_qualificatio
         .expect("leaf completion-signer binding");
     assert_eq!(
         signer.handle(),
-        "pkcs11://sorafs/provider-ingest/signer-primary"
+        "software://sorafs/provider-ingest/signer-primary"
     );
     assert_eq!(signer.revision(), Some(3));
     assert_eq!(signer.policy_digest(), Some([0xA2; 32]));

@@ -1332,26 +1332,12 @@ public sealed partial class ToriiClient : IDisposable
         return await ReadStrictUtf8TextContentAsync(response.Content, "Torii metrics response body", cancellationToken);
     }
 
-    public async Task<ToriiRuntimeAbiActive> GetRuntimeAbiActiveAsync(CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiRuntimeAbiActive>("/v1/runtime/abi/active", cancellationToken: cancellationToken);
-        ValidateRuntimeAbiActive(response, "runtime ABI active response");
-        return response;
-    }
-
     public async Task<ToriiRuntimeAbiHash> GetRuntimeAbiHashAsync(CancellationToken cancellationToken = default)
     {
         var response = await GetAsync<ToriiRuntimeAbiHash>(
             "/v1/runtime/abi/hash",
             cancellationToken: cancellationToken);
         ValidateRuntimeAbiHash(response, "runtime ABI hash response");
-        return response;
-    }
-
-    public async Task<ToriiRuntimeMetrics> GetRuntimeMetricsAsync(CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiRuntimeMetrics>("/v1/runtime/metrics", cancellationToken: cancellationToken);
-        ValidateRuntimeMetrics(response, "runtime metrics response");
         return response;
     }
 

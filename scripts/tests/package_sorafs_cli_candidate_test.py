@@ -17,6 +17,7 @@ from scripts import package_sorafs_cli_candidate as candidate
 VERSION = "1.2.3-rc.1"
 LINUX_TARGET = "x86_64-unknown-linux-gnu"
 WINDOWS_TARGET = "x86_64-pc-windows-msvc"
+MACOS_TARGET = "aarch64-apple-darwin"
 
 
 def _write_executable(path: Path, *, succeeds: bool = True) -> None:
@@ -73,6 +74,28 @@ def _write_candidate(root: Path, *, target: str = LINUX_TARGET) -> None:
     )
     (stage / "smoke.advert.json").write_text("{}\n", encoding="utf-8")
     (stage / "smoke.bundle.json").write_text("{}\n", encoding="utf-8")
+    signer_inventory = candidate._signer_inventory(target)
+    if target == WINDOWS_TARGET:
+        (root / candidate.WINDOWS_SIGNER_POLICY).write_text(
+            "Windows external software signer is unsupported.\n", encoding="utf-8"
+        )
+    else:
+        _write_executable(root / candidate.SIGNER_BINARY)
+        alias = root / candidate.BROKER_ALIAS
+        alias.parent.mkdir(parents=True)
+        _write_executable(alias)
+        for relative in sorted(
+            signer_inventory
+            - {
+                candidate.SIGNER_BINARY,
+                candidate.BROKER_ALIAS,
+            }
+        ):
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"checked release asset: {relative}\n", encoding="utf-8")
+            if relative.endswith("sorafs-external-software-signer-launchd-v1"):
+                path.chmod(0o755)
 
 
 def _package(
@@ -100,7 +123,7 @@ def test_candidate_archive_is_reproducible_and_clean_smoked(tmp_path: Path) -> N
     second = _package(input_dir, tmp_path / "second")
 
     assert first["status"] == "verified"
-    assert first["clean_smoke_binary_count"] == 3
+    assert first["clean_smoke_binary_count"] == 5
     assert first["archive_sha256"] == second["archive_sha256"]
     assert first["manifest_sha256"] == second["manifest_sha256"]
 
@@ -142,6 +165,43 @@ def test_candidate_archive_uses_windows_binary_names(tmp_path: Path) -> None:
     assert f"{prefix}/sorafs_cli.exe" in names
     assert f"{prefix}/sorafs_fetch.exe" in names
     assert f"{prefix}/sorafs-validate.exe" in names
+    assert f"{prefix}/{candidate.WINDOWS_SIGNER_POLICY}" in names
+    assert not any("sorafs_external_software_signer" in name for name in names)
+    assert not any("runtime-provider-broker-v1" in name for name in names)
+    assert summary["clean_smoke_binary_count"] == 3
+
+
+def test_candidate_archive_closes_macos_signer_launchd_inventory(
+    tmp_path: Path,
+) -> None:
+    input_dir = tmp_path / "candidate"
+    _write_candidate(input_dir, target=MACOS_TARGET)
+    summary = _package(input_dir, tmp_path / "out", target=MACOS_TARGET)
+    assert summary["clean_smoke_binary_count"] == 5
+    archive = tmp_path / "out" / str(summary["archive"])
+    with tarfile.open(archive, mode="r:gz") as package:
+        names = {member.name for member in package.getmembers()}
+    prefix = f"sorafs-cli-{VERSION}-{MACOS_TARGET}"
+    for relative in candidate._signer_inventory(MACOS_TARGET):
+        assert f"{prefix}/{relative}" in names
+
+
+def test_candidate_packager_rejects_signer_alias_substitution(tmp_path: Path) -> None:
+    input_dir = tmp_path / "candidate"
+    _write_candidate(input_dir)
+    (input_dir / candidate.BROKER_ALIAS).write_text(
+        "#!/bin/sh\nexit 0\n", encoding="utf-8"
+    )
+    with pytest.raises(candidate.CandidateError, match="not byte-identical"):
+        _package(input_dir, tmp_path / "out")
+
+
+def test_windows_candidate_rejects_false_signer_smoke(tmp_path: Path) -> None:
+    input_dir = tmp_path / "candidate"
+    _write_candidate(input_dir, target=WINDOWS_TARGET)
+    _write_executable(input_dir / "sorafs_external_software_signer.exe")
+    with pytest.raises(candidate.CandidateError, match="unexpected release files"):
+        _package(input_dir, tmp_path / "out", target=WINDOWS_TARGET)
 
 
 def test_candidate_archive_accepts_reference_manifest_signature(

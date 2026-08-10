@@ -486,7 +486,7 @@ pub enum BootleLanternIssuanceBrokerBackendErrorV1 {
 
 /// Deployment-owned pure cryptographic boundary for brokered Bootle/Lantern issuance.
 ///
-/// Implementations hold the issuer trapdoor (or its HSM boundary) and opaque
+/// Implementations hold the issuer trapdoor (or its protected runtime boundary) and opaque
 /// authenticator. They must not hold or mutate an issuance replay store. Torii
 /// remains the sole authority for authorization registration, preflight,
 /// claim, completion, and terminal failure.
@@ -540,7 +540,7 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
     ///
     /// Native implementations use core's
     /// `issuer_validate_blind_issuance_request_for_issuer_encoded_v1`; a
-    /// public-only validation is not a sufficient HSM/key-bound readiness
+    /// public-only validation is not sufficient private-key/provider-bound readiness
     /// check for this operation.
     fn validate_request(
         &self,
@@ -1018,6 +1018,20 @@ impl RuntimeProviderBrokerBackendsV1 {
         }
     }
 
+    pub(crate) fn contains_external_software_signer_v1(&self) -> bool {
+        self.governance_dag_signer.is_some()
+            || self.stream_token_signer.is_some()
+            || self.proof_outcome_transaction_signer.is_some()
+            || self.repair_transaction_signer.is_some()
+            || self.reserve_transaction_signer.is_some()
+            || self.orderbook_transaction_signer.is_some()
+            || self.billing_statement_signer.is_some()
+            || self.pop_credential_provider_registry.is_some()
+            || self.potr_gateway_signer.is_some()
+            || self.potr_provider_signer.is_some()
+            || self.evidence_viewer_receipt_signer.is_some()
+    }
+
     /// Attach the deployment-owned native Bootle/Lantern issuer and authenticator.
     #[must_use]
     pub fn with_bootle_lantern_issuance(
@@ -1108,7 +1122,7 @@ impl RuntimeProviderBrokerBackendsV1 {
         self
     }
 
-    /// Attach the deployment-owned Governance DAG HSM/KMS signer.
+    /// Attach the deployment-owned authenticated external Governance DAG signer.
     #[must_use]
     pub fn with_governance_dag_signer(
         mut self,
@@ -1118,7 +1132,7 @@ impl RuntimeProviderBrokerBackendsV1 {
         self
     }
 
-    /// Attach the deployment-owned Governance DAG IPFS request-auth HSM.
+    /// Attach the deployment-owned Governance DAG IPFS request authenticator.
     #[must_use]
     pub fn with_governance_dag_ipfs_authenticator(
         mut self,
@@ -1128,7 +1142,7 @@ impl RuntimeProviderBrokerBackendsV1 {
         self
     }
 
-    /// Attach the independently administered signed-head request-auth HSM.
+    /// Attach the independently administered signed-head request authenticator.
     #[must_use]
     pub fn with_governance_dag_head_authenticator(
         mut self,
@@ -1182,7 +1196,7 @@ impl RuntimeProviderBrokerBackendsV1 {
         self
     }
 
-    /// Attach the appeal-finance HSM signer and sealed monotonic checkpoint store.
+    /// Attach the appeal-finance external signer and sealed monotonic checkpoint store.
     #[must_use]
     pub fn with_appeal_finance_checkpoint(
         mut self,
@@ -1416,7 +1430,7 @@ impl RuntimeProviderBrokerBackendsV1 {
         self
     }
 
-    /// Attach the independently administered billing statement HSM/KMS signer.
+    /// Attach the independently administered external billing statement signer.
     #[must_use]
     pub fn with_billing_statement_signer(
         mut self,

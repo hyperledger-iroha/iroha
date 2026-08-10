@@ -29,6 +29,11 @@ SPEC.loader.exec_module(MODULE)
 
 import check_sorafs_production_readiness as CHECKER  # noqa: E402
 import sccp_release_common as RELEASE_CRYPTO  # noqa: E402
+import sorafs_l1_lane_evidence_inventory as LANE_INVENTORY  # noqa: E402
+from sorafs_l1_lane_inventory_test_support import (  # noqa: E402
+    inventory_cli_args,
+    write_signed_inventory,
+)
 from sorafs_resilience_test_support import (  # noqa: E402
     DEFAULT_SIGNING_SEED as RESILIENCE_SIGNING_SEED,
     public_key_from_seed as resilience_public_key_from_seed,
@@ -39,6 +44,7 @@ from sorafs_resilience_test_support import (  # noqa: E402
 from check_sorafs_production_readiness_test import (  # noqa: E402
     gate_summary as complete_gate_summary,
 )
+from sorafs_rollout_runner_test_support import signed_topology_cli_args  # noqa: E402
 
 
 NOW_UNIX = 1_800_900_000
@@ -49,6 +55,12 @@ DEPLOYMENT_ID = "sorafs-mainnet-2026-07"
 ENVIRONMENT = "production"
 RELEASE_SEQUENCE = 1
 PREDECESSOR_SHA256 = "00" * 32
+SIGNER_SERVICE_ID = "sorafs-promotion-signer-a"
+SIGNER_ADMINISTRATOR_ID = "sorafs-promotion-admin-b"
+SIGNER_KEY_REVISION = 7
+SIGNER_POLICY_REVISION = 11
+SIGNER_POLICY_DIGEST_SHA256 = hashlib.sha256(b"reviewed promotion policy").hexdigest()
+SIGNER_OPERATION_ID = hashlib.sha256(b"promotion operation one").hexdigest()
 RESILIENCE_SIGNER_PUBLIC_KEY = resilience_public_key_from_seed(
     RESILIENCE_SIGNING_SEED
 )
@@ -76,8 +88,11 @@ def topology_qualification_path(
         "deployment": {
             "deployment_id": deployment_id,
             "environment": environment,
+            "network": "taira",
+            "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
+            "chain_discriminant": 369,
         },
-        "validator_count": 4,
+        "validator_count": 4, "validator_ids": ["taira-validator-1", "taira-validator-2", "taira-validator-3", "taira-validator-4"],
         "storage_provider_count": 2,
         "gateway_count": 2,
         "governance_dag_instance_count": 2,
@@ -113,7 +128,30 @@ def topology_binding(
         ).hexdigest(),
         "deployment_id": deployment_id,
         "environment": environment,
+        "network": "taira", "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0", "chain_discriminant": 369, "validator_ids_sha256": "15e4cadecf176094a1791a33ee75ce9315e1d953018affa5df2762fcba52d6f2",
     }
+
+
+def topology_cli_args(
+    tmp_path: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+    now_unix: int = NOW_UNIX,
+) -> list[str]:
+    """Write and return the independently signed topology trust tuple."""
+
+    summary_path = topology_qualification_path(
+        tmp_path,
+        deployment_id=deployment_id,
+        environment=environment,
+    )
+    return signed_topology_cli_args(
+        summary_path,
+        deployment_id=deployment_id,
+        environment=environment,
+        now_unix=now_unix,
+    )
 
 
 def resilience_qualification_path(
@@ -184,6 +222,122 @@ def sign(seed: bytes, message: bytes) -> bytes:
     return encoded_r + scalar_bytes
 
 
+def signer_receipt_args(
+    tmp_path: Path,
+    *,
+    payload_name: str,
+    signature_name: str,
+) -> list[str]:
+    """Create a pinned test verifier plus exact public binding and receipt."""
+
+    verifier = tmp_path / "test-external-software-signer"
+    settings = {
+        "service_id": SIGNER_SERVICE_ID,
+        "administrator_id": SIGNER_ADMINISTRATOR_ID,
+        "key_revision": SIGNER_KEY_REVISION,
+        "policy_revision": SIGNER_POLICY_REVISION,
+        "policy_digest_sha256": SIGNER_POLICY_DIGEST_SHA256,
+    }
+    if not verifier.exists():
+        verifier.write_text(
+            f"""#!/usr/bin/env python3
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+SETTINGS = {settings!r}
+if len(sys.argv) < 2 or sys.argv[1] != "verify-receipt":
+    raise SystemExit(2)
+parser = argparse.ArgumentParser()
+for flag in ("binding", "payload", "signature", "receipt", "expected-operation-id", "validation-out"):
+    parser.add_argument("--" + flag, required=True)
+args = parser.parse_args(sys.argv[2:])
+binding = Path(args.binding).read_bytes()
+payload = Path(args.payload).read_bytes()
+signature = Path(args.signature).read_bytes()
+receipt_raw = Path(args.receipt).read_bytes()
+receipt = json.loads(receipt_raw)
+expected_receipt = dict(
+    schema="test.external_software_signer.signature_receipt.v1",
+    operation_id_hex=args.expected_operation_id,
+    binding_sha256=hashlib.sha256(binding).hexdigest(),
+    payload_sha256=hashlib.sha256(payload).hexdigest(),
+    signature_sha256=hashlib.sha256(signature).hexdigest(),
+)
+if receipt != expected_receipt or receipt_raw != json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("ascii"):
+    raise SystemExit(1)
+validation = dict(
+    schema="sorafs.external_software_signer.signature_receipt_validation.v1",
+    status="valid",
+    operation_id_hex=args.expected_operation_id,
+    payload_digest_blake3_hex="11" * 32,
+    payload_length=len(payload),
+    signature_digest_blake3_hex="22" * 32,
+    binding_digest_blake3_hex="33" * 32,
+    backend="software",
+    service_id=SETTINGS["service_id"],
+    administrator_id=SETTINGS["administrator_id"],
+    role="promotion",
+    domain="sorafs.production-readiness.foundational-prerequisites.v1",
+    signature_algorithm="ed25519",
+    key_revision=SETTINGS["key_revision"],
+    policy_revision=SETTINGS["policy_revision"],
+    policy_digest_sha256=SETTINGS["policy_digest_sha256"],
+    public_key_digest_blake3_hex="44" * 32,
+    commit_sequence=7,
+    commit_audit_head_blake3_hex="55" * 32,
+    audit_sequence=7,
+    audit_head_blake3_hex="55" * 32,
+    replayed=False,
+    revoked=False,
+    payload_signature_valid=True,
+    provenance_attestation_valid=True,
+    response_attestation_valid=True,
+)
+Path(args.validation_out).write_bytes(json.dumps(validation, sort_keys=True, separators=(",", ":")).encode("ascii"))
+""",
+            encoding="utf-8",
+        )
+        verifier.chmod(0o500)
+    binding = tmp_path / "promotion.binding.norito"
+    if not binding.exists():
+        binding.write_bytes(b"test-canonical-norito-promotion-binding-v1")
+    payload = tmp_path / payload_name
+    signature = tmp_path / signature_name
+    receipt = tmp_path / f"{payload_name}.signature-receipt.json"
+    receipt.write_bytes(
+        json.dumps(
+            {
+                "schema": "test.external_software_signer.signature_receipt.v1",
+                "operation_id_hex": SIGNER_OPERATION_ID,
+                "binding_sha256": hashlib.sha256(binding.read_bytes()).hexdigest(),
+                "payload_sha256": hashlib.sha256(
+                    payload.read_bytes() if payload.exists() else b""
+                ).hexdigest(),
+                "signature_sha256": hashlib.sha256(
+                    signature.read_bytes() if signature.exists() else b""
+                ).hexdigest(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+    )
+    return [
+        "--signer-binding",
+        str(binding),
+        "--signer-receipt",
+        str(receipt),
+        "--signer-verifier",
+        str(verifier),
+        "--expected-signer-verifier-sha256",
+        hashlib.sha256(verifier.read_bytes()).hexdigest(),
+        "--expected-signer-operation-id",
+        SIGNER_OPERATION_ID,
+    ]
+
+
 @pytest.fixture
 def signer() -> tuple[bytes, bytes]:
     """Return temporary signing material that is never written to disk."""
@@ -227,10 +381,7 @@ def readiness_summary_paths(
                 deployment_id=deployment_id,
                 environment=environment,
             )
-            summary_path.write_text(
-                json.dumps(payload, sort_keys=True),
-                encoding="utf-8",
-            )
+            summary_path.write_bytes(LANE_INVENTORY.canonical_file_bytes(payload))
         paths[gate_name] = summary_path
     return paths
 
@@ -291,6 +442,11 @@ def prerequisite_specs(
                 encoding="utf-8",
             )
         values.append(f"{prerequisite_id}={package_path}")
+    lane_inventory_args(
+        tmp_path,
+        deployment_id=deployment_id,
+        environment=environment,
+    )
     return values
 
 
@@ -368,6 +524,45 @@ def lane_summary_paths(
     return [(gate_name, paths[gate_name]) for gate_name in CHECKER.DEFAULT_REQUIRED_GATES]
 
 
+def lane_inventory_args(
+    tmp_path: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+    now_unix: int = NOW_UNIX,
+) -> list[str]:
+    """Create and trust one independently signed exact-17 inventory."""
+
+    path = tmp_path / "l1-lane-evidence.inventory"
+    if path.exists():
+        return inventory_cli_args(path)
+    inventory_root = tmp_path
+    inventory_deployment_id = deployment_id
+    inventory_environment = environment
+    if deployment_id != DEPLOYMENT_ID or environment != ENVIRONMENT:
+        inventory_root = tmp_path / "inventory-baseline"
+        inventory_root.mkdir(exist_ok=True)
+        inventory_deployment_id = DEPLOYMENT_ID
+        inventory_environment = ENVIRONMENT
+    write_signed_inventory(
+        path,
+        lane_summary_paths(
+            inventory_root,
+            deployment_id=inventory_deployment_id,
+            environment=inventory_environment,
+        ),
+        topology_binding(
+            inventory_root,
+            deployment_id=inventory_deployment_id,
+            environment=inventory_environment,
+        ),
+        deployment_id=inventory_deployment_id,
+        environment=inventory_environment,
+        now_unix=now_unix,
+    )
+    return inventory_cli_args(path)
+
+
 def prepare_args(
     tmp_path: Path,
     public_key: bytes,
@@ -386,13 +581,17 @@ def prepare_args(
 
     values = [
         "prepare",
-        "--topology-qualification-summary",
-        str(
-            topology_qualification_path(
-                tmp_path,
-                deployment_id=deployment_id,
-                environment=environment,
-            )
+        *topology_cli_args(
+            tmp_path,
+            deployment_id=deployment_id,
+            environment=environment,
+            now_unix=now_unix,
+        ),
+        *lane_inventory_args(
+            tmp_path,
+            deployment_id=deployment_id,
+            environment=environment,
+            now_unix=now_unix,
         ),
         "--resilience-qualification-summary",
         str(
@@ -420,6 +619,16 @@ def prepare_args(
         predecessor_sha256,
         "--trusted-public-key-hex",
         public_key.hex(),
+        "--signer-service-id",
+        SIGNER_SERVICE_ID,
+        "--signer-administrator-id",
+        SIGNER_ADMINISTRATOR_ID,
+        "--signer-key-revision",
+        str(SIGNER_KEY_REVISION),
+        "--signer-policy-revision",
+        str(SIGNER_POLICY_REVISION),
+        "--signer-policy-digest-sha256",
+        SIGNER_POLICY_DIGEST_SHA256,
         "--signing-payload-out",
         str(tmp_path / output_name),
     ]
@@ -466,13 +675,17 @@ def finalize_args(
 
     values = [
         "finalize",
-        "--topology-qualification-summary",
-        str(
-            topology_qualification_path(
-                tmp_path,
-                deployment_id=deployment_id,
-                environment=environment,
-            )
+        *topology_cli_args(
+            tmp_path,
+            deployment_id=deployment_id,
+            environment=environment,
+            now_unix=now_unix,
+        ),
+        *lane_inventory_args(
+            tmp_path,
+            deployment_id=deployment_id,
+            environment=environment,
+            now_unix=now_unix,
         ),
         "--resilience-qualification-summary",
         str(
@@ -490,6 +703,16 @@ def finalize_args(
         str(tmp_path / signature_name),
         "--trusted-public-key-hex",
         public_key.hex(),
+        "--expected-signer-service-id",
+        SIGNER_SERVICE_ID,
+        "--expected-signer-administrator-id",
+        SIGNER_ADMINISTRATOR_ID,
+        "--expected-signer-key-revision",
+        str(SIGNER_KEY_REVISION),
+        "--expected-signer-policy-revision",
+        str(SIGNER_POLICY_REVISION),
+        "--expected-signer-policy-digest-sha256",
+        SIGNER_POLICY_DIGEST_SHA256,
         "--expected-deployment-id",
         deployment_id,
         "--expected-environment",
@@ -505,10 +728,23 @@ def finalize_args(
         "--envelope-out",
         str(tmp_path / output_name),
     ]
+    values.extend(
+        signer_receipt_args(
+            tmp_path,
+            payload_name=payload_name,
+            signature_name=signature_name,
+        )
+    )
     if previous_envelope_name is not None:
         values.extend(
             ["--previous-envelope", str(tmp_path / previous_envelope_name)]
         )
+    for gate_name, path in lane_summary_paths(
+        tmp_path,
+        deployment_id=deployment_id,
+        environment=environment,
+    ):
+        values.extend(["--lane-summary", f"{gate_name}={path}"])
     return values
 
 
@@ -660,7 +896,7 @@ def test_prepare_and_finalize_external_signer_roundtrip(
     tmp_path: Path,
     signer: tuple[bytes, bytes],
 ) -> None:
-    """Emit exact bytes, verify the HSM boundary, and pass the aggregate contract."""
+    """Bind one external software signer and pass the aggregate contract."""
 
     seed, public_key = signer
     signing_payload = prepare_and_sign(tmp_path, seed, public_key)
@@ -672,6 +908,16 @@ def test_prepare_and_finalize_external_signer_roundtrip(
     assert set(unsigned) == MODULE.FOUNDATIONAL_PREREQUISITE_FIELDS
     assert set(unsigned["signature"]) == MODULE.UNSIGNED_SIGNATURE_FIELDS
     assert "signature_hex" not in unsigned["signature"]
+    assert unsigned["signature"] == {
+        "administrator_id": SIGNER_ADMINISTRATOR_ID,
+        "algorithm": "ed25519",
+        "backend": "software",
+        "key_revision": SIGNER_KEY_REVISION,
+        "policy_digest_sha256": SIGNER_POLICY_DIGEST_SHA256,
+        "policy_revision": SIGNER_POLICY_REVISION,
+        "public_key_fingerprint_sha256": hashlib.sha256(public_key).hexdigest(),
+        "service_id": SIGNER_SERVICE_ID,
+    }
     assert [row["id"] for row in unsigned["prerequisites"]] == list(
         MODULE.FOUNDATIONAL_PREREQUISITE_IDS
     )
@@ -755,6 +1001,95 @@ def test_prepare_and_finalize_external_signer_roundtrip(
 
 
 @pytest.mark.parametrize(
+    ("flag", "substitution"),
+    [
+        ("--expected-signer-service-id", "sorafs-promotion-signer-b"),
+        ("--expected-signer-administrator-id", "sorafs-promotion-admin-c"),
+        ("--expected-signer-key-revision", "8"),
+        ("--expected-signer-policy-revision", "12"),
+        ("--expected-signer-policy-digest-sha256", "ab" * 32),
+    ],
+)
+def test_finalize_rejects_software_signer_binding_substitution(
+    tmp_path: Path,
+    signer: tuple[bytes, bytes],
+    capsys,
+    flag: str,
+    substitution: str,
+) -> None:
+    seed, public_key = signer
+    prepare_and_sign(tmp_path, seed, public_key)
+    args = finalize_args(tmp_path, public_key)
+    args[args.index(flag) + 1] = substitution
+    assert MODULE.main(args) == 2
+    assert "software-signer binding must match" in capsys.readouterr().err
+    assert not (tmp_path / "foundational-prerequisites.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("missing_receipt", "--signer-receipt must be an existing regular file"),
+        ("tampered_receipt", "receipt verification failed"),
+        ("substituted_binding", "receipt verification failed"),
+        ("wrong_verifier_digest", "verifier SHA-256 does not match"),
+        ("wrong_operation", "receipt verification failed"),
+        ("revoked", "revoked does not match"),
+        ("wrong_role", "role does not match"),
+        ("sequence_drift", "commit and audit sequences must match"),
+        ("head_drift", "commit and audit heads must match"),
+    ],
+)
+def test_finalize_requires_exact_external_software_signer_receipt(
+    tmp_path: Path,
+    signer: tuple[bytes, bytes],
+    capsys,
+    case: str,
+    expected: str,
+) -> None:
+    """Reject missing, substituted, revoked, or internally stale receipts."""
+
+    seed, public_key = signer
+    prepare_and_sign(tmp_path, seed, public_key)
+    args = finalize_args(tmp_path, public_key)
+    receipt = Path(args[args.index("--signer-receipt") + 1])
+    binding = Path(args[args.index("--signer-binding") + 1])
+    verifier = Path(args[args.index("--signer-verifier") + 1])
+    if case == "missing_receipt":
+        receipt.unlink()
+    elif case == "tampered_receipt":
+        receipt.write_bytes(receipt.read_bytes() + b" ")
+    elif case == "substituted_binding":
+        binding.write_bytes(b"substituted-public-binding")
+    elif case == "wrong_verifier_digest":
+        args[args.index("--expected-signer-verifier-sha256") + 1] = "ab" * 32
+    elif case == "wrong_operation":
+        args[args.index("--expected-signer-operation-id") + 1] = "cd" * 32
+    else:
+        source = verifier.read_text(encoding="utf-8")
+        substitutions = {
+            "revoked": ("revoked=False", "revoked=True"),
+            "wrong_role": ('role="promotion"', 'role="repair"'),
+            "sequence_drift": ("audit_sequence=7", "audit_sequence=8"),
+            "head_drift": (
+                'audit_head_blake3_hex="55" * 32',
+                'audit_head_blake3_hex="66" * 32',
+            ),
+        }
+        before, after = substitutions[case]
+        assert before in source
+        verifier.chmod(0o700)
+        verifier.write_text(source.replace(before, after, 1), encoding="utf-8")
+        verifier.chmod(0o500)
+        args[args.index("--expected-signer-verifier-sha256") + 1] = (
+            hashlib.sha256(verifier.read_bytes()).hexdigest()
+        )
+    assert MODULE.main(args) == 1
+    assert expected in capsys.readouterr().err
+    assert not (tmp_path / "foundational-prerequisites.json").exists()
+
+
+@pytest.mark.parametrize(
     ("case", "expected"),
     [
         ("missing", "failed to load evidence JSON"),
@@ -832,7 +1167,7 @@ def test_prepare_and_finalize_reject_substituted_topology_summary(
     prepare = prepare_args(tmp_path, public_key)
     prepare[prepare.index("--topology-qualification-summary") + 1] = str(substitute)
     assert MODULE.main(prepare) == 2
-    assert "must match the reviewed topology" in capsys.readouterr().err
+    assert "must match the exact qualification binding" in capsys.readouterr().err
 
     prepare_and_sign(tmp_path, seed, public_key)
     finalize = finalize_args(tmp_path, public_key)
@@ -840,7 +1175,7 @@ def test_prepare_and_finalize_reject_substituted_topology_summary(
         substitute
     )
     assert MODULE.main(finalize) == 2
-    assert "must match the reviewed topology" in capsys.readouterr().err
+    assert "must match the exact qualification binding" in capsys.readouterr().err
 
 
 def test_prepare_rejects_missing_and_reordered_lane_summary_inventory(
@@ -1010,13 +1345,13 @@ def test_finalized_envelope_is_accepted_by_direct_aggregate_gate(
     aggregate_out = tmp_path / "aggregate-summary.json"
     assert (
         CHECKER.main(
-                    [
-                        "--topology-qualification-summary",
-                        str(topology_qualification_path(tmp_path)),
+                        [
+                            *topology_cli_args(tmp_path),
+                            *lane_inventory_args(tmp_path),
                         "--resilience-qualification-summary",
                         str(resilience_qualification_path(tmp_path)),
-                        "--resilience-qualification-signer-public-key-hex",
-                        RESILIENCE_SIGNER_PUBLIC_KEY.hex(),
+                            "--resilience-qualification-signer-public-key-hex",
+                            RESILIENCE_SIGNER_PUBLIC_KEY.hex(),
                         "--evidence-dir",
                 str(evidence_dir),
                 "--require-gate",
@@ -1036,8 +1371,16 @@ def test_finalized_envelope_is_accepted_by_direct_aggregate_gate(
                 "--foundational-prerequisite-previous-envelope-sha256",
                 PREDECESSOR_SHA256,
                 "--summary-out",
-                str(aggregate_out),
-            ]
+                            str(aggregate_out),
+                            *(
+                                argument
+                                for gate_name, path in lane_summary_paths(tmp_path)
+                                for argument in (
+                                    "--l1-lane-summary",
+                                    f"{gate_name}={path}",
+                                )
+                            ),
+                        ]
         )
         == 0
     )

@@ -53,6 +53,7 @@ use super::{
         ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1,
         ZkAmsMkheRnsPolynomialWireV1,
     },
+    zk_ams_mkhe_security_certificate_v1,
 };
 use crate::vega::{VegaT256PointV1 as Point, sponge::Keccak256};
 
@@ -1133,6 +1134,90 @@ impl ZkAmsMkhePersistentDecryptionVerificationContextV1 {
         })
     }
 
+    /// Mint the exact move-only party-use set for a compact streaming statement.
+    ///
+    /// The caller supplies no digest or content address. Every axis is
+    /// recomputed from the retained verified CPK authority and the canonical
+    /// roster/ciphertext pair. Each returned capability is consumed by one
+    /// staged prover invocation.
+    pub(super) fn bind_streaming_statement_party_uses_v1(
+        &self,
+        roster: &ZkAmsMkheGovernedRosterWireV1,
+        ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
+        ciphertext_digest: [u8; 32],
+        key_context_digest: [u8; 32],
+    ) -> Result<
+        [ZkAmsMkhePersistentDecryptionPartyUseV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+        ZkAmsMkheErrorV1,
+    > {
+        self.validate_streaming_context_v1()?;
+        let statement_digest = decryption_statement_binding_digest_from_axes_v1(
+            roster,
+            ciphertext,
+            key_context_digest,
+        );
+        if statement_digest == [0; 32] {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        let mut uses = Vec::new();
+        uses.try_reserve_exact(ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+            uses.push(self.mint_party_use_from_compact_axes_v1(
+                roster,
+                ciphertext,
+                ciphertext_digest,
+                key_context_digest,
+                statement_digest,
+                party_index,
+            )?);
+        }
+        uses.try_into()
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidPartySet)
+    }
+
+    /// Consume one compact statement use and reopen its exact state-owned CPK
+    /// witness binding without materializing a native decryption statement.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn consume_streaming_party_use_v1(
+        &self,
+        roster: &ZkAmsMkheGovernedRosterWireV1,
+        ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
+        ciphertext_digest: [u8; 32],
+        key_context_digest: [u8; 32],
+        party_index: usize,
+        party_use: ZkAmsMkhePersistentDecryptionPartyUseV1,
+        party_state: &ZkAmsMkheCollectivePartyStateV1,
+    ) -> Result<PersistentDecryptionProofBindingV1, ZkAmsMkheErrorV1> {
+        self.validate_streaming_context_v1()?;
+        let statement_digest = decryption_statement_binding_digest_from_axes_v1(
+            roster,
+            ciphertext,
+            key_context_digest,
+        );
+        let expected = self.mint_party_use_from_compact_axes_v1(
+            roster,
+            ciphertext,
+            ciphertext_digest,
+            key_context_digest,
+            statement_digest,
+            party_index,
+        )?;
+        if party_use != expected {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        validate_streaming_party_state_axes_v1(self, party_index, party_state)?;
+        let binding = party_state
+            .persistent_secret_binding_for(&self.roster, PersistentWitnessConsumerV1::Decryption)?;
+        if binding.identity_digest() != party_use.secret_identity_digest
+            || binding.commitment_set_digest() != party_use.commitment_set_digest
+            || binding.commitments() != &party_use.commitments
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+        }
+        self.proof_binding_from_use_digest_v1(statement_digest, party_use)
+    }
+
     pub(super) fn validate_streaming_statement_axes_if_present_v1(
         &self,
         roster: &ZkAmsMkheGovernedRosterWireV1,
@@ -1448,6 +1533,37 @@ fn validate_party_state_axes(
         || state.public_share_digest() != share.digest()
         || state.transcript_digest() != statement.collective_public_key().transcript_digest()
         || state.epoch() != roster.epoch()
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    }
+    Ok(())
+}
+
+fn validate_streaming_party_state_axes_v1(
+    context: &ZkAmsMkhePersistentDecryptionVerificationContextV1,
+    party_index: usize,
+    state: &ZkAmsMkheCollectivePartyStateV1,
+) -> Result<(), ZkAmsMkheErrorV1> {
+    context.validate_streaming_context_v1()?;
+    let streaming = context
+        .streaming_authority
+        .as_ref()
+        .ok_or(ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    let participant = context
+        .roster
+        .participants()
+        .get(party_index)
+        .ok_or(ZkAmsMkheErrorV1::InvalidPartySet)?;
+    if usize::from(state.party_index()) != party_index
+        || state.party() != participant.party()
+        || state.profile_digest_internal() != context.roster.profile_digest()
+        || state.security_certificate_digest_internal()
+            != zk_ams_mkhe_security_certificate_v1()?.certificate_digest()
+        || state.roster_digest_internal() != context.roster.roster_digest()
+        || state.key_material_digest_internal() != context.roster.key_material_digest()
+        || state.public_share_digest() != streaming.share_digests[party_index]
+        || state.transcript_digest() != streaming.cpk_transcript_digest
+        || state.epoch() != context.roster.epoch()
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }

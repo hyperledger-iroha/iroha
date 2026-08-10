@@ -32,8 +32,10 @@ summary: Current SF-6 release automation and QA surfaces.
    - Package SDK surfaces that are present in this repository, including
      JavaScript, JVM/Android, Swift, C#, Python, and Rust crate artifacts.
 5. **Signing & Attestation**
-   - Governed PKCS#11/HSM Ed25519 signature over the canonical aggregate
-     release manifest, verified by the SHA256-pinned native validator.
+   - Governed Ed25519 signature over the canonical aggregate release manifest
+     from `signing_provider=authenticated_external_signer` with exact
+     `signing_backend=software`, verified by the SHA256-pinned native validator;
+     successful output is `signer_qualification=software-key-qualified`.
    - OIDC/cosign attestations for build provenance only.
    - SBOM/provenance generation for artifacts that have committed packaging hooks.
 6. **Release Publishing**
@@ -67,7 +69,8 @@ summary: Current SF-6 release automation and QA surfaces.
   exact `sorafs-cli-v<version>` tag or reviewed manual dispatch, it builds the
   canonical manifest for the exact five candidate trees twice and uploads the
   byte-identical unsigned manifest for an operator to sign outside GitHub with
-  the governed Ed25519 HSM. The `sorafs-release-authentication` environment
+  the independently administered external software Ed25519 signer. The
+  `sorafs-release-authentication` environment
   then admits a protected `sorafs-release-auth` runner only after the raw
   signature, raw public key, reviewed key fingerprint, native verifier path,
   and reviewed verifier SHA256 have been provisioned as public verification
@@ -104,7 +107,8 @@ summary: Current SF-6 release automation and QA surfaces.
 - The repository `Jenkinsfile` remains the heavier integration/soak-test path;
   mirror the release-gate command order there when adding SoraFS stages.
 - `scripts/release_sorafs_cli.sh` signs the canonical aggregate release manifest
-  through a reviewed external Ed25519/HSM adapter, then verifies the raw
+  through the reviewed `authenticated_external_signer` adapter with exact
+  `software` backend, then verifies the raw
   signature and governed raw public key through a SHA256-pinned
   `sorafs-validate release-manifest` binary. The signer fingerprint, verifier
   path, and verifier digest are mandatory. The wrapper rejects missing,
@@ -118,8 +122,9 @@ summary: Current SF-6 release automation and QA surfaces.
   deterministic unsigned artifact/checksum producer. Production signing is
   intentionally absent: the final package manifest and checksum sidecars enter
   the canonical aggregate `release_manifest.json`, and only that final
-  evidence-complete inventory is signed by the governed PKCS#11/HSM Ed25519
-  signer through `scripts/release_manifest_signing.py`.
+  evidence-complete inventory is signed by the independently administered
+  external software Ed25519 signer through
+  `scripts/release_manifest_signing.py`.
   Packager options must provide explicit non-option-shaped values. Prebuilt
   binaries and the checked FFI header are rejected when they are symlinks,
   missing, non-regular, non-executable where required, or reached through
@@ -295,7 +300,7 @@ validated ordered `{gate, sha256}` rows into the signed prerequisite row's
 
 This mapping is an exact disjoint cover of the canonical 17 lanes. The builder
 also opens the 17 independent `--lane-summary` inputs and cross-binds them to
-the grouped prerequisite digests before producing the HSM payload. The
+the grouped prerequisite digests before producing the signer payload. The
 aggregate checker independently validates the signed mapping, cross-binds the
 grouped rows to the signed top-level `lane_summaries`, and rehashes the 17
 summary files supplied to the promotion run. The singular
@@ -350,12 +355,13 @@ external-evidence requirement.
   digest, and only then creates GitHub/Sigstore SLSA build
   provenance over the complete candidate set. The offline provenance bundle is
   retained with the candidate and verified together with the binaries. It does
-  not replace the aggregate Ed25519/HSM signature or native verification
-  receipt. Public promotion
+  not replace the aggregate external software Ed25519 signature or native
+  verification receipt. Public promotion
   still requires a clean hosted run and the deployment/package canaries; source
   configuration alone is not release evidence.
 - The five-target CLI archive path is source-complete, but its hosted-run
-  artifacts, PKCS#11/HSM Ed25519 manifest signature and reviewed fingerprint,
+  artifacts, authenticated external software Ed25519 manifest signature and
+  reviewed fingerprint,
   GitHub OIDC/Sigstore attestations, registry publication/withdrawal receipts,
   and deployed provider/gateway smoke records are external evidence. The
   reference SDK release lane remains a separate source gap: it does not yet

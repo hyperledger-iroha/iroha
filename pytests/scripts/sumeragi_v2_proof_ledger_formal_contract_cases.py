@@ -172,6 +172,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path("crates/iroha_core/src/state.rs"): (
         Path("state/vpn_lease_validation.rs"),
         Path("state/zk_asset_state.rs"),
+        Path("state/passive_lane_diagnostic_methods.rs"),
         Path("state/diagnostic_state_generation.rs"),
         Path("state/autonomous_predecessor_application.rs"),
         Path("state/state_commit_lock_order_tests.rs"),
@@ -204,6 +205,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/irohad/src/main.rs"): (
         Path("main/runtime_deps.rs"),
+        Path("main_tests/governance_dag_publisher_binding_signer.rs"),
         Path("main/governance_dag_launcher_tests.rs"),
         Path("main/runtime_budget_and_config_tests.rs"),
         Path("main/startup_tail_tests.rs"),
@@ -408,7 +410,7 @@ pub fn persist_pending_queue_plan_admission_certificate() {
 __KURA_PRODUCTION_INCLUDES__
 
 #[cfg(test)]
-mod tests {}
+pub(crate) mod tests {}
 """.replace("__KURA_PRODUCTION_INCLUDES__", kura_production_includes),
         encoding="utf-8",
     )
@@ -1939,6 +1941,10 @@ def test_kura_production_inventory_rejects_substituted_and_extra_includes(
     repo_root = copy_merge_runtime_config_fixture(tmp_path)
     kura_path = repo_root / "crates/iroha_core/src/kura.rs"
     canonical = kura_path.read_text(encoding="utf-8")
+    _path, _source, _components, errors = module._kura_production_source_inventory(
+        repo_root
+    )
+    assert errors == []
     expected = 'include!("kura/startup_finality_support.rs");'
     substituted = 'include!("kura/substituted_finality_support.rs");'
     assert canonical.count(expected) == 1
@@ -1955,7 +1961,7 @@ def test_kura_production_inventory_rejects_substituted_and_extra_includes(
         "direct production include inventory must equal" in error for error in errors
     ), errors
 
-    marker = "#[cfg(test)]\nmod tests {}"
+    marker = "#[cfg(test)]\npub(crate) mod tests {}"
     assert canonical.count(marker) == 1
     extra_include = 'include!("kura/extra_production_support.rs");\n\n'
     kura_path.write_text(
@@ -1972,6 +1978,15 @@ def test_kura_production_inventory_rejects_substituted_and_extra_includes(
     assert any(
         "direct production include inventory must equal" in error for error in errors
     ), errors
+
+    kura_path.write_text(
+        canonical.replace(marker, "#[cfg(test)]\nmod tests {}", 1),
+        encoding="utf-8",
+    )
+    _path, _source, _components, errors = module._kura_production_source_inventory(
+        repo_root
+    )
+    assert any("terminal cfg(test) module boundary" in error for error in errors), errors
 
 
 @pytest.mark.parametrize("component_relative", KURA_PRODUCTION_COMPONENT_FILES)

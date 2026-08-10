@@ -259,6 +259,7 @@ TORII_OPENAPI_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
 TORII_ROUTE_CATALOG_RS = (
     REPO_ROOT / "crates" / "iroha_torii_shared" / "src" / "route_catalog.rs"
 )
+TORII_SORAFS_POP_ROUTE_CATALOG_RS = TORII_ROUTE_CATALOG_RS.with_name("route_catalog") / "sorafs_pop.rs"
 IROHAD_SORAFS_HEDGING_BILLING_RUNTIME_RS = (
     REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_hedging_billing_runtime.rs"
 )
@@ -8214,8 +8215,8 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
 
     assert 'echo "[sorafs-release] release helper adversarial tests"' in release_gate
     assert "python3 -m pytest -q \\" in release_gate
-    assert "scripts/tests/release_sorafs_cli_test.py" in release_gate
-    assert "scripts/tests/package_sorafs_cli_candidate_test.py" in release_gate
+    assert "scripts/tests/release_sorafs_cli_test.py" in release_gate and "scripts/tests/package_sorafs_cli_candidate_test.py" in release_gate
+    assert "scripts/tests/build_sorafs_foundational_prerequisite_test.py" in release_gate
     assert (
         "scripts/tests/generate_sorafs_cli_release_manifest_test.py" in release_gate
     )
@@ -14917,14 +14918,14 @@ def test_pop_credentials_docs_match_stock_broker_and_open_deployment_backend() -
     normalized = re.sub(r"\s+", " ", source)
     required_open = (
         "SFM-4b1 now has canonical PoP credential payloads, a production cryptographic membership-proof backend, a consensus-owned issuer/registry foundation, a durable issuer/wallet service, and the canonical authenticated Torii V1 API, plus the standard-`irohad` runtime-broker injection path and public broker server launcher.",
-        "`crates/sorafs_node/src/pop_credentials.rs` now owns encrypted enrollment, dual-control approval, HSM-backed issuance, durable registry outbox/dead-letter and finalized reconciliation, encrypted wallet custody, witness synchronization, local proof generation, and exactly-once nullifier consumption.",
+        "`crates/sorafs_node/src/pop_credentials.rs` now owns encrypted enrollment, dual-control approval, external-software-signer-backed issuance, durable registry outbox/dead-letter and finalized reconciliation, encrypted wallet custody, witness synchronization, local proof generation, and exactly-once nullifier consumption.",
         "`crates/iroha_torii/src/sorafs/pop_api.rs` exposes the exact 14-route V1 family for enrollment, approval, issuance, revocation, registry, wallet, proof generation, and verification.",
         "The remaining release blocker is `V1-BLOCK-POP-RUNTIME-01`, but it is no longer a missing standard-daemon injection or shared sidecar transport.",
         "Stock `irohad` projects the exact public PoP binding into its fixed local broker client, and `RuntimeProviderBrokerDeploymentV1` is the public sidecar launcher.",
         "The missing deployment package must implement `RuntimeProviderBrokerBackendRegistryV1`, attach a genuine PoP registry to `RuntimeProviderBrokerBackendsV1`, and resolve:",
-        "This checker is a rollout gate; it does not replace the deployment-owned broker executable, genuine HSM/KMS and authentication backends, or deployed verifier evidence.",
+        "This checker is a rollout gate; it does not replace the deployment-owned broker executable, genuine external software signer/KMS and authentication backends, or deployed verifier evidence.",
         "Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API, durable encrypted workflow, and broker authentication operation are shipped; operator UI, WebAuthn enrollment ceremony, and a genuine deployment-owned authenticator backend remain open.",
-        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, HSM interface, strict policy binding, issuance/revocation APIs, retry-safe outbox, and standard-daemon broker wiring are shipped; a genuine HSM/KMS backend and deployment evidence remain open.",
+        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, external software-signer interface, strict policy binding, issuance/revocation APIs, retry-safe outbox, and standard-daemon broker wiring are shipped; a genuine independently administered software-signing backend and deployment evidence remain open.",
         "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, durable reconciliation, and broker transaction/read operations are shipped; a deployment-owned committed-state backend and multi-peer evidence remain open.",
         "Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, local proof APIs, and broker wallet operations are shipped; a genuine deployment-owned KMS/witness backend and operator client remain open.",
         "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, SDK/bridge reference gate, and standard broker adapter are shipped; a genuine runtime backend and reviewed deployment evidence remain open.",
@@ -15549,7 +15550,7 @@ def pop_credentials_production_surface_errors(
     for descriptor, route, _, _ in SHIPPED_POP_CREDENTIALS_ROUTES:
         descriptor_matches = re.findall(
             rf"pub const {re.escape(descriptor)}: RouteDescriptor\s*=\s*"
-            rf"(.*?)(?=\n\s*(?:pub const|const fn))",
+            rf"(.*?)(?=\n\s*(?:pub const|const fn)|\Z)",
             route_catalog,
             re.S,
         )
@@ -15559,13 +15560,12 @@ def pop_credentials_production_surface_errors(
         descriptor_source = descriptor_matches[0]
         if descriptor_source.count(f'"{route}"') != 1:
             errors.append(f"{descriptor} must bind exactly {route}")
-        if (
-            descriptor_source.count(
-                ".with_authentication(AuthenticationPolicy::ProtocolHandshake)"
-            )
-            != 1
-        ):
-            errors.append(f"{descriptor} must require ProtocolHandshake")
+    for marker in (
+        ".with_authentication(AuthenticationPolicy::ProtocolHandshake)",
+        "AdmissionPolicy::AuthenticatedProtocolPrincipal,",
+    ):
+        if route_catalog.count(marker) != 1:
+            errors.append(f"PoP route helper must contain exactly one {marker}")
 
     mounted = re.findall(
         r"pop_post!\(\s*([A-Z0-9_]+),\s*"
@@ -15636,7 +15636,7 @@ def pop_credentials_production_surface_errors(
         (
             torii,
             "torii.sorafs.storage.pop_credentials is enabled but runtime-only "
-            "enrollment/HSM/KMS/authentication dependencies were not injected",
+            "enrollment/external-software-signer/KMS/authentication dependencies were not injected",
         ),
         (
             torii,
@@ -15659,7 +15659,7 @@ def pop_credentials_production_surface_errors(
 
 
 def test_pop_credentials_production_surface_matcher_has_negative_controls() -> None:
-    route_catalog = read(TORII_ROUTE_CATALOG_RS)
+    route_catalog = read(TORII_SORAFS_POP_ROUTE_CATALOG_RS)
     torii = read(TORII_LIB_RS)
     openapi = read(TORII_OPENAPI_RS)
     pop_api = read(TORII_SORAFS_POP_API_RS)
@@ -15749,7 +15749,7 @@ def test_pop_credentials_production_surface_matcher_has_negative_controls() -> N
     assert validate(
         mounted=torii.replace(
             "torii.sorafs.storage.pop_credentials is enabled but runtime-only "
-            "enrollment/HSM/KMS/authentication dependencies were not injected",
+            "enrollment/external-software-signer/KMS/authentication dependencies were not injected",
             "runtime missing",
             1,
         )
@@ -15759,7 +15759,7 @@ def test_pop_credentials_production_surface_matcher_has_negative_controls() -> N
 def test_pop_credentials_production_service_exposes_exact_canonical_v1_surface() -> None:
     assert (
         pop_credentials_production_surface_errors(
-            read(TORII_ROUTE_CATALOG_RS),
+            read(TORII_SORAFS_POP_ROUTE_CATALOG_RS),
             read(TORII_LIB_RS),
             read(TORII_OPENAPI_RS),
             read(TORII_SORAFS_POP_API_RS),
@@ -16682,7 +16682,7 @@ def test_moderation_panel_parent_services_stay_open_in_docs() -> None:
         "The evidence viewer's signed receipt checkpoint and exact predecessor-bound projection are its sole audit authority",
         "The durable orchestrator now runs payload-free panel notifications through the same supervised maintenance owner.",
         "`panel_notification_handle`, `panel_notification_revision`, and `panel_notification_policy_digest_hex`",
-        "Construct and inject the reference deployment's real messaging, settlement/publication, HSM/KMS/WebAuthn, and authenticated downstream providers through the shipped qualified boundaries.",
+        "Construct and inject the reference deployment's real messaging, settlement/publication, external software signer/KMS/WebAuthn, and authenticated downstream providers through the shipped qualified boundaries.",
         "Deploy the existing appeal/panel transaction outbox, finalized-chain orchestrator, retry/reconciliation worker, supervised panel-notification pass, and challenge/no-show maintenance with the remaining juror portal and scheduled settlement provider integrations",
         "Connect panel outcomes to gateway compliance caches, transparency publication, settlement reconciliation, and reputation scoring.",
         "Connect committed native moderation events to the durable Governance DAG and public IPFS/IPNS decision trail.",
@@ -17590,7 +17590,7 @@ def test_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work() -
         "Governance DAG provider qualification now binds both the configured publisher peer identity and exact Ed25519 public key, so a same-key different-peer adapter fails before the reputation checkpoint opens.",
         "Daemon startup applies the runtime's complete exact-request bootstrap-view validator—anchor identity and chain/height, authority-policy activation time, canonical continuation, non-zero bounded request limit, and exact finalized cursor—before opening the reputation checkpoint.",
         "The same archive is threaded through Sumeragi and durably captures each fresh height after Kura finality and the WSV checkpoint but before `StateBlock::commit`; a capture failure requires committed recovery.",
-        "Open under `V1-BLOCK-REPUTATION-RUNTIME-01`: `ReputationThresholdSignerClientV1` and `ReputationGovernanceDagClientV1` adapters; concrete stream-token callback-owner wiring; genuine qualification of the configured PoR replay archive and HSM signer; current DAG head/inclusion proof; integrated Rust validation; and reviewed four-peer rotation, recovery, retry, and failover evidence remain outstanding. No ledger page, credential, signature, or acknowledgement may be synthesized as a fallback.",
+        "Open under `V1-BLOCK-REPUTATION-RUNTIME-01`: `ReputationThresholdSignerClientV1` and `ReputationGovernanceDagClientV1` adapters; concrete stream-token callback-owner wiring; genuine qualification of the configured PoR replay archive and external threshold software-signing service; current DAG head/inclusion proof; integrated Rust validation; and reviewed four-peer rotation, recovery, retry, and failover evidence remain outstanding. No ledger page, credential, signature, or acknowledgement may be synthesized as a fallback.",
         "Production rollout:",
         "L1 remains open until the exact four-validator deployment supplies genuine immutable finalized-query, external threshold-signing, authenticated Governance DAG publication/readback/head-inclusion, PoR/token callback, restart/failover, live transport, and rollout evidence, including authenticated CLI collection or equivalent direct artifacts.",
         "Supply external threshold signer and authenticated Governance DAG publication/readback/head-inclusion adapters to the already-supervised runtime.",
@@ -18303,7 +18303,7 @@ def test_cli_sdk_distribution_and_live_governance_stay_open_in_docs() -> None:
     required_plan_open = (
         "Use `scripts/release_sorafs_cli.sh`, `ci/check_sorafs_cli_release.sh`, `scripts/sorafs_gateway_self_cert.sh`, and `cargo xtask sorafs-gateway-attest` for release and self-certification evidence.",
         "Release signing and native manifest verification are wrapped by `scripts/release_sorafs_cli.sh`; gateway self-cert evidence is wrapped by `scripts/sorafs_gateway_self_cert.sh`.",
-        "Runtime secrets such as HSM credentials, private keys, and gateway bearer tokens must be supplied at execution time and not committed.",
+        "Runtime secrets such as external-signer credentials, private keys, and gateway bearer tokens must be supplied at execution time and not committed.",
         "Remaining release work is signed distribution evidence and live deployment capture, not missing local command surfaces.",
         "Package registries such as Homebrew, npm, crates.io, and Go modules should be populated only from signed release cuts using the existing release scripts and fixture smoke checks.",
     )
@@ -19126,7 +19126,7 @@ def test_potr_live_rollout_and_provider_key_work_stays_open_in_docs() -> None:
         "Production reputation scoring must consume finalized proof-outcome events",
     )
     required_open = (
-        "Remaining SF-14 work includes production forwarding/reconciliation across that boundary, genuine live multi-provider rollout evidence, deployment-owned HSM/KMS adapters for the shipped role-separated runtime signer interfaces, operator provisioning of the governed gateway/provider key roster and reputation-weight policy, focused/workspace Rust validation, and four-peer independent rotation/recovery/replay evidence.",
+        "Remaining SF-14 work includes production forwarding/reconciliation across that boundary, genuine live multi-provider rollout evidence, independently administered external software signers for the shipped role-separated runtime signer interfaces, operator provisioning of the governed gateway/provider key roster and reputation-weight policy, focused/workspace Rust validation, and four-peer independent rotation/recovery/replay evidence.",
         "`PotrRuntimeSignerRolesV1` requires distinct gateway and provider runtime objects and stable non-zero administrative identities",
         "Those injected values are not self-authorizing: enabled startup also requires the independent `[sorafs.por.potr_runtime]` configuration and compares every public handle, identity, revision, digest, gateway key, and finalized-anchor field exactly.",
         "The provider signer revision/digest must equal the baseline admission sequence/digest.",
@@ -21653,7 +21653,7 @@ def test_orderbook_docs_distinguish_shipped_native_ledger_from_remaining_service
         "No local book, provider-id label, or mirror-divergence gauge exists.",
         "finality reconciliation",
         "Live Prometheus scrape freshness, alert installation/routing, and reviewed production evidence remain deployment obligations.",
-        "Remaining: validate and deploy the supervised worker with a runtime PKCS#11/HSM signer",
+        "Remaining: validate and deploy the supervised worker with a runtime external software signer",
         "deletion of the mirror-local book/config/checkpoint/outbox",
     )
     missing = [phrase for phrase in required_current if phrase not in normalized]
@@ -22382,13 +22382,13 @@ def test_hedging_runtime_docs_distinguish_shipped_core_from_external_deployment(
     )
     required_external = (
         "This is not yet a complete production hedging and billing stack",
-        "There is still no price-feed collector, concrete production finalized-query/journal-verifier adapter, externally administered HSM/KMS signer, immutable publication service, acknowledgement authority, sealed epoch-witness store",
+        "There is still no price-feed collector, concrete production finalized-query/journal-verifier adapter, independently administered external software signer, immutable publication service, acknowledgement authority, sealed epoch-witness store",
         "Price feed collectors | Fetch primary/secondary/tertiary feeds and normalize them into signed price payloads. | Not shipped for SoraFS hedging.",
         "These source boundaries do not supply live market feeds or concrete production implementations of the finalized query, journal verifier, signer, publisher, acknowledgement authority, sealed witness store, or governed venue adapter.",
-        "Those independently administered providers, HSM/KMS custody, and deployment evidence remain external release inputs.",
+        "Those independently administered providers, software-key custody, and deployment evidence remain external release inputs.",
         "Automated hedge execution must remain off until governance approves venues",
         "Production scrapes, alert routing, and response evidence remain open.",
-        "Remaining: run focused Rust verification; deploy the live feed collector and genuine finalized-query, journal-verifier, HSM/KMS signer, immutable publisher",
+        "Remaining: run focused Rust verification; deploy the live feed collector and genuine finalized-query, journal-verifier, external software signer, immutable publisher",
     )
     stale_unshipped_core_claims = (
         "daemon, exposure tracking, collector automation, and hedge execution are not shipped",

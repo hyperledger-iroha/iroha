@@ -33,8 +33,22 @@ public sealed class ToriiIntegrationSmokeTests
 
         var baseUrl = Environment.GetEnvironmentVariable("IROHA_CSHARP_TORII_BASE_URL")
             ?? "https://taira.sora.org";
+        var canonicalCredentials = RequireCanonicalRequestCredentials();
+        var networkId = Environment.GetEnvironmentVariable("IROHA_CSHARP_NETWORK_ID");
+        if (string.IsNullOrWhiteSpace(networkId))
+        {
+            throw new InvalidOperationException(
+                "IROHA_CSHARP_NETWORK_ID is required for authenticated runtime reads.");
+        }
 
-        using var client = new ToriiClient(new Uri(baseUrl, UriKind.Absolute));
+        using var client = new ToriiClient(
+            new Uri(baseUrl, UriKind.Absolute),
+            options: new ToriiClientOptions
+            {
+                LocalSigningContext = new ToriiLocalSigningContext(
+                    NetworkId.Parse(networkId)),
+                CanonicalRequestCredentials = canonicalCredentials,
+            });
 
         var capabilities = await client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(1, capabilities.AbiVersion);
@@ -200,31 +214,14 @@ public sealed class ToriiIntegrationSmokeTests
             Assert.NotEmpty(content.Bytes);
         }
 
-        var canonicalCredentials = TryGetCanonicalRequestCredentials();
-        if (canonicalCredentials is not null)
+        var meteringPublicKeyHex = Convert.ToHexString(
+            Ed25519Signer.GetPublicKey(canonicalCredentials.PrivateKeySeed)).ToLowerInvariant();
+        var quote = await client.CreateVpnQuoteAsync(new ToriiVpnQuoteCreateRequest
         {
-            var networkId = Environment.GetEnvironmentVariable("IROHA_CSHARP_NETWORK_ID");
-            Assert.False(
-                string.IsNullOrWhiteSpace(networkId),
-                "IROHA_CSHARP_NETWORK_ID is required with canonical request credentials.");
-            using var signedClient = new ToriiClient(
-                new Uri(baseUrl, UriKind.Absolute),
-                options: new ToriiClientOptions
-                {
-                    LocalSigningContext = new ToriiLocalSigningContext(
-                        NetworkId.Parse(networkId!.Trim())),
-                    CanonicalRequestCredentials = canonicalCredentials,
-                });
-
-            var meteringPublicKeyHex = Convert.ToHexString(
-                Ed25519Signer.GetPublicKey(canonicalCredentials.PrivateKeySeed)).ToLowerInvariant();
-            var quote = await signedClient.CreateVpnQuoteAsync(new ToriiVpnQuoteCreateRequest
-            {
-                MeteringPublicKeyHex = meteringPublicKeyHex,
-            }, cancellationToken: TestContext.Current.CancellationToken);
-            Assert.False(string.IsNullOrWhiteSpace(quote.QuoteId));
-            Assert.Equal("OpenVpnLeaseEscrow", quote.OpenLeaseInstruction.WireId);
-        }
+            MeteringPublicKeyHex = meteringPublicKeyHex,
+        }, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False(string.IsNullOrWhiteSpace(quote.QuoteId));
+        Assert.Equal("OpenVpnLeaseEscrow", quote.OpenLeaseInstruction.WireId);
     }
 
     private static bool ShouldRunLiveTests()
@@ -253,15 +250,17 @@ public sealed class ToriiIntegrationSmokeTests
         }
     }
 
-    private static CanonicalRequestCredentials? TryGetCanonicalRequestCredentials()
+    private static CanonicalRequestCredentials RequireCanonicalRequestCredentials()
     {
         var accountId = Environment.GetEnvironmentVariable("IROHA_CSHARP_CANONICAL_ACCOUNT_ID");
         var seedHex = Environment.GetEnvironmentVariable("IROHA_CSHARP_PRIVATE_KEY_SEED_HEX");
         if (string.IsNullOrWhiteSpace(accountId) || string.IsNullOrWhiteSpace(seedHex))
         {
-            return null;
+            throw new InvalidOperationException(
+                "IROHA_CSHARP_CANONICAL_ACCOUNT_ID and IROHA_CSHARP_PRIVATE_KEY_SEED_HEX "
+                + "are required for authenticated runtime reads.");
         }
 
-        return new CanonicalRequestCredentials(accountId.Trim(), Convert.FromHexString(seedHex.Trim()));
+        return new CanonicalRequestCredentials(accountId, Convert.FromHexString(seedHex));
     }
 }

@@ -203,7 +203,7 @@ def test_provider_ingest_docs_separate_pool_closure_from_external_blockers() -> 
         "governance-advert/stream-grant/pinned-HTTPS child transports",
         "own configured production",
         "completion-signer",
-        "governance-aware HSM/KMS signer backend",
+        "governance-aware external software signer backend",
         "provider-indexed immutable archive",
         "deployment-owned sealed-CAS backend",
         "retention-authority protocol",

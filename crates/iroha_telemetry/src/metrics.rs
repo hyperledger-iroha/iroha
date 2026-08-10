@@ -8075,7 +8075,7 @@ pub struct Metrics {
     pub sorafs_hedging_billing_finalized_lag_blocks: GenericGauge<AtomicU64>,
     /// First finalized billing journal sequence not yet projected.
     pub sorafs_hedging_billing_next_event_sequence: GenericGauge<AtomicU64>,
-    /// Statements waiting for HSM/KMS signing.
+    /// Statements waiting for external software signing.
     pub sorafs_hedging_billing_ready_for_signing: GenericGauge<AtomicU64>,
     /// Signed statements waiting for immutable publication.
     pub sorafs_hedging_billing_ready_for_publication: GenericGauge<AtomicU64>,
@@ -13131,7 +13131,7 @@ impl Default for Metrics {
         .expect("Infallible");
         let sorafs_hedging_billing_ready_for_signing = GenericGauge::new(
             "sorafs_hedging_billing_ready_for_signing",
-            "SoraFS billing statements waiting for HSM/KMS signing",
+            "SoraFS billing statements waiting for external software signing",
         )
         .expect("Infallible");
         let sorafs_hedging_billing_ready_for_publication = GenericGauge::new(

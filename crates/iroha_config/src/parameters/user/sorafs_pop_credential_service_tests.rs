@@ -14,7 +14,7 @@ fn valid_config() -> SorafsPopCredentialService {
         wallet_state_dir: PathBuf::from("/var/lib/iroha/sorafs/pop/wallet"),
         issuer_policy_digest_hex: Some("41".repeat(32)),
         issuer_id: Some("pop-issuer-sora-foundation".to_owned()),
-        issuer_hsm_key_id: Some("pkcs11:object=pop-issuer-v1".to_owned()),
+        issuer_signer_handle: Some("software://sorafs/pop-credentials/primary".to_owned()),
         issuer_public_key_hex: Some(ed25519_public_hex(0x11)),
         enrollment_recipient_key_id: Some("kms://pop/enrollment/primary".to_owned()),
         enrollment_recipient_public_key_digest_hex: Some("61".repeat(32)),
@@ -175,9 +175,9 @@ fn enabled_pop_policy_rejects_missing_or_stale_provider_qualification() {
 
 #[test]
 fn enabled_pop_policy_rejects_test_marked_provider_handles() {
-    let test_hsm = {
+    let test_signer = {
         let mut config = valid_config();
-        config.issuer_hsm_key_id = Some("pkcs11:pop:test".to_owned());
+        config.issuer_signer_handle = Some("software://sorafs/pop-credentials/test".to_owned());
         config
     };
     let test_enrollment_recipient = {
@@ -203,7 +203,7 @@ fn enabled_pop_policy_rejects_test_marked_provider_handles() {
     };
 
     for config in [
-        test_hsm,
+        test_signer,
         test_enrollment_recipient,
         test_wallet_recipient,
         test_wallet_wrapper,

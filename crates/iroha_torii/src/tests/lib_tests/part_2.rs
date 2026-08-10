@@ -1,3 +1,27 @@
+fn assert_onboarding_readiness_blocked(
+    app: &SharedAppState,
+    signer: &AccountOnboardingSigner,
+    message: &str,
+) {
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), signer);
+    assert_ne!(
+        report.status,
+        iroha_data_model::alias_setup::AliasSetupStatusV1::Ready,
+        "{message}: readiness unexpectedly succeeded: {report:?}"
+    );
+    assert!(!report.diagnostics.is_empty(), "{message}");
+}
+
+fn assert_onboarding_readiness_ready(app: &SharedAppState, signer: &AccountOnboardingSigner) {
+    let report = validate_account_onboarding_readiness(app.state.as_ref(), signer);
+    assert_eq!(
+        report.status,
+        iroha_data_model::alias_setup::AliasSetupStatusV1::Ready,
+        "{report:?}"
+    );
+    assert!(report.diagnostics.is_empty());
+}
+
 #[test]
 fn onboarding_readiness_is_pending_while_joining_state_is_empty() {
     let key_pair =

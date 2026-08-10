@@ -150,13 +150,13 @@ reconciliation canaries require reviewed `--line-item` labels in the
 before locally generated evidence exercises the same policy-bound promotion
 path. The builder is an evidence
 packaging aid; it does not replace live feed acquisition, deployment-owned
-finalized-query and journal-verifier adapters, the HSM/KMS signer, immutable
+finalized-query and journal-verifier adapters, the external software signer, immutable
 publisher, acknowledgement authority, sealed witness store, deployment of the
 authenticated runtime API, or native bridge release process.
 
 This is not yet a complete production hedging and billing stack. There is still no
 price-feed collector, concrete production finalized-query/journal-verifier
-adapter, externally administered HSM/KMS signer, immutable publication service,
+adapter, independently administered external software signer, immutable publication service,
 acknowledgement authority, sealed epoch-witness store, released native bridge
 artifacts, deployed instance of the shipped API, or captured staged rollout
 evidence that passes the SFM-5 gate. The supervised projector/delivery worker,
@@ -223,7 +223,7 @@ The durable projector deterministically derives open accruals, per-account
 governed statements, aggregate XOR exposure, and never-automatic hedge intents;
 it retains exact finalized cursors, replay receipts, delivery state, dead
 letters, acknowledgements, and sealed epoch-transition witnesses. The
-supervised worker signs through a runtime-only HSM/KMS interface, publishes
+supervised worker signs through a runtime-only external software-signer interface, publishes
 through an identity-pinned immutable sink, reconciles ambiguous publications
 and authoritative acknowledgements, and emits payload-free readiness, cursor,
 delivery, dead-letter, and hedge-intent metrics. `iroha_config` contains only
@@ -239,7 +239,7 @@ execution.
 These source boundaries do not supply live market feeds or concrete production
 implementations of the finalized query, journal verifier, signer, publisher,
 acknowledgement authority, sealed witness store, or governed venue adapter.
-Those independently administered providers, HSM/KMS custody, and deployment
+Those independently administered providers, software-key custody, and deployment
 evidence remain external release inputs.
 
 ## Goals & Scope
@@ -254,7 +254,7 @@ evidence remain external release inputs.
 | Hedging engine | Aggregate price feeds, derive the reference XOR/USD rate, track exposure, and optionally execute hedges. | Local pure reference-price helpers and the supervised finalized-ledger projector ship deterministic exposure totals and bounded hedge intents. There is no competing embedded feed ledger. Live collector automation and a production venue adapter remain external. Automatic execution is absent; only an explicitly authorized, idempotent helper may call an adapter that reports automatic execution disabled. |
 | Price feed collectors | Fetch primary/secondary/tertiary feeds and normalize them into signed price payloads. | Not shipped for SoraFS hedging. |
 | Billing aggregator | Consume settlement, rent, egress, fee, and penalty events and produce account accruals. | The local service consumes typed finalized storage, orderbook-settlement, reserve/rent, egress, orchestrator-fee, incentive, penalty, and governance-adjustment events; it durably projects accruals and deterministic fixed-period governed statements. The production finalized-query and journal-verifier implementations remain external. |
-| Statement publisher | Store, sign, publish, notify, and track acknowledgements for statements. | The local delivery state machine persists signing claims, signed statements, ambiguous publication state, immutable receipts, acknowledgements, retry limits, and dead letters. Private-key-free runtime interfaces and opaque identity bindings are shipped; the actual HSM/KMS, immutable publisher, and acknowledgement service are deployment-owned. |
+| Statement publisher | Store, sign, publish, notify, and track acknowledgements for statements. | The local delivery state machine persists signing claims, signed statements, ambiguous publication state, immutable receipts, acknowledgements, retry limits, and dead letters. Private-key-free runtime interfaces and opaque identity bindings are shipped; the external software signer, immutable publisher, and acknowledgement service are deployment-owned. |
 | Alerting service | Monitor feed divergence, escrow runway, exposure limits, and statement failures. | Checked-in Grafana/Prometheus alert fixtures and payload-free runtime metrics cover feed/reference state plus worker readiness, dependency health, finalized progress, signing/publication/acknowledgement backlogs, dead letters, and hedge intents. Production scrapes, alert routing, and response evidence remain open. |
 
 ## Target Price Feeds And Decisions
@@ -524,7 +524,7 @@ Required before rollout:
   replacing existing paths. Focused client/CLI request, validation, filesystem,
   and exact-byte tests are green.
 - Remaining: run focused Rust verification; deploy the live feed collector and
-  genuine finalized-query, journal-verifier, HSM/KMS signer, immutable
+  genuine finalized-query, journal-verifier, external software signer, immutable
   publisher, acknowledgement-authority, sealed-witness, and any manually
   governed venue adapters; deploy and exercise the shipped authenticated API
   and CLI; validate production scrapes and alert routing; release native bridge

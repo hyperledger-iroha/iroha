@@ -15,7 +15,7 @@
 //! unknown future role identifiers fail closed.
 //!
 //! Hedging/billing slots 35–40 expose only finalized query and verification,
-//! HSM statement signing, immutable publication/readback, authoritative
+//! External statement signing, immutable publication/readback, authoritative
 //! acknowledgement reconciliation, and sealed monotonic epoch witnesses.
 //! Every call is bounded and identity-qualified before and after external
 //! work. Automatic hedge execution is intentionally absent from the V1 broker
@@ -146,9 +146,8 @@ mod protocol {
     // streaming-plan protocol rather than raising this wire limit.
     const MAX_PROVIDER_INGEST_SOURCE_PLAN_PAYLOAD_BYTES_V1: usize =
         MAX_BROKER_UNARY_PAYLOAD_BYTES_V1;
-    // Keep the HSM transport exactly aligned with the canonical Governance
-    // node/block/head encoder. A valid schema payload must never be rejected
-    // only because signing crossed this process boundary.
+    // Keep external-signer transport aligned with the canonical Governance encoders.
+    // Valid schema payloads must not fail only because signing crossed processes.
     const MAX_SIGNING_PAYLOAD_BYTES_V1: usize =
         sorafs_manifest::GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1;
     const MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1: usize =
@@ -1419,6 +1418,8 @@ mod protocol {
                 return Err(BrokerError::BindingMismatch);
             }
         } else if pop_registry {
+            use iroha_config::parameters::is_production_runtime_handle;
+
             let exact = binding
                 .pop_credential_runtime_binding
                 .as_ref()
@@ -1429,16 +1430,10 @@ mod protocol {
                     > sorafs_manifest::pop_credentials::POP_IDENTITY_TEXT_MAX_BYTES_V1
                 || exact.issuer_id.trim() != exact.issuer_id
                 || exact.issuer_id.chars().any(char::is_control)
-                || !iroha_config::parameters::is_production_runtime_handle(&exact.issuer_hsm_key_id)
-                || !iroha_config::parameters::is_production_runtime_handle(
-                    &exact.enrollment_recipient_key_id,
-                )
-                || !iroha_config::parameters::is_production_runtime_handle(
-                    &exact.wallet_recipient_key_id,
-                )
-                || !iroha_config::parameters::is_production_runtime_handle(
-                    &exact.wallet_wrapping_key_id,
-                )
+                || !is_production_runtime_handle(&exact.issuer_signer_handle)
+                || !is_production_runtime_handle(&exact.enrollment_recipient_key_id)
+                || !is_production_runtime_handle(&exact.wallet_recipient_key_id)
+                || !is_production_runtime_handle(&exact.wallet_wrapping_key_id)
                 || exact.enrollment_recipient_public_key_digest == [0; 32]
                 || exact.wallet_recipient_public_key_digest == [0; 32]
                 || exact.issuer_public_key == [0; 32]
@@ -3659,46 +3654,6 @@ mod protocol {
     }
 
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct SignRequestWireV1 {
-        payload: Vec<u8>,
-    }
-
-    impl fmt::Debug for SignRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("SignRequestWireV1")
-                .field("payload_len", &self.payload.len())
-                .finish_non_exhaustive()
-        }
-    }
-
-    impl Drop for SignRequestWireV1 {
-        fn drop(&mut self) {
-            self.payload.fill(0);
-            let _ = std::hint::black_box(&self.payload);
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct SignResultWireV1 {
-        signature: [u8; 64],
-    }
-
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct VariableSignatureResultWireV1 {
-        signature: Vec<u8>,
-    }
-
-    impl fmt::Debug for VariableSignatureResultWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("VariableSignatureResultWireV1")
-                .field("signature_len", &self.signature.len())
-                .finish_non_exhaustive()
-        }
-    }
-
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct PotrSignRequestWireV1 {
         payload: Vec<u8>,
         expected_public_key: Vec<u8>,
@@ -3926,14 +3881,6 @@ mod protocol {
             self.body.fill(0);
             let _ = std::hint::black_box(&self.body);
         }
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PopIssuerSignRequestWireV1 {
-        digest: [u8; 32],
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PopIssuerSignResultWireV1 {
-        signature: [u8; 64],
     }
     #[derive(PartialEq, Eq, Decode, Encode)]
     struct PopAuthenticateRequestWireV1 {
@@ -8173,7 +8120,7 @@ mod protocol {
         iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderBindingsV1::try_new(
             exact.issuer_policy_digest,
             exact.issuer_id.clone(),
-            exact.issuer_hsm_key_id.clone(),
+            exact.issuer_signer_handle.clone(),
             exact.issuer_public_key,
             exact.enrollment_recipient_key_id.clone(),
             exact.enrollment_recipient_public_key_digest,
@@ -11048,6 +10995,9 @@ mod protocol {
                         }
                     }
                 }
+                OPERATION_SIGN_V1 => {
+                    validate_governance_sign_operation_result(request, result)?;
+                }
                 OPERATION_STREAM_TOKEN_SIGN_V1 => {
                     let signed = decode_canonical::<SignResultWireV1>(
                         result,
@@ -11264,6 +11214,14 @@ mod protocol {
                         .pop_credential_runtime_binding
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
+                    if sign.digest == [0; 32]
+                        || sorafs_node::pop_credentials::PopIssuerSigningPurposeV1::try_from_wire_id(
+                            sign.purpose,
+                        )
+                        .is_none()
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
                     verify_evidence_viewer_ed25519_signature(
                         exact.issuer_public_key,
                         signed.signature,
@@ -11582,10 +11540,12 @@ mod protocol {
                         result,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     )?;
-                    let sign = decode_canonical::<SignRequestWireV1>(
+                    let sign = decode_canonical::<PurposeSignRequestWireV1>(
                         &request.payload,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     )?;
+                    validate_evidence_purpose_signing_request(&sign, &request.binding)
+                        .map_err(|_| BrokerError::Protocol)?;
                     let public_key = request
                         .binding
                         .evidence_viewer_receipt_signer_public_key
@@ -16999,8 +16959,8 @@ mod protocol {
                         }
                     }
                     })?;
-                    if providers.issuer_hsm.key_id() != exact.issuer_hsm_key_id
-                        || providers.issuer_hsm.public_key() != exact.issuer_public_key
+                    if providers.issuer_signer.key_id() != exact.issuer_signer_handle
+                        || providers.issuer_signer.public_key() != exact.issuer_public_key
                         || providers.enrollment_recipient.key_id()
                             != exact.enrollment_recipient_key_id
                         || providers.enrollment_recipient.public_key_digest()
@@ -17011,7 +16971,7 @@ mod protocol {
                         || providers.wallet_key_wrapper.active_key_id()
                             != exact.wallet_wrapping_key_id
                         || !iroha_config::parameters::is_production_runtime_handle(
-                            providers.issuer_hsm.key_id(),
+                            providers.issuer_signer.key_id(),
                         )
                         || !iroha_config::parameters::is_production_runtime_handle(
                             providers.enrollment_recipient.key_id(),
@@ -17026,8 +16986,8 @@ mod protocol {
                         return Err(BrokerError::Ambiguous);
                     }
                     let outcome = PopRuntimeOpenResultWireV1 {
-                        issuer_hsm_key_id: providers.issuer_hsm.key_id().to_owned(),
-                        issuer_public_key: providers.issuer_hsm.public_key(),
+                        issuer_signer_handle: providers.issuer_signer.key_id().to_owned(),
+                        issuer_public_key: providers.issuer_signer.public_key(),
                         enrollment_recipient_key_id: providers
                             .enrollment_recipient
                             .key_id()
@@ -17137,19 +17097,28 @@ mod protocol {
                         .providers
                         .as_ref()
                         .ok_or(BrokerError::Rejected)?;
-                    if providers.issuer_hsm.key_id() != exact.issuer_hsm_key_id
-                        || providers.issuer_hsm.public_key() != exact.issuer_public_key
+                    if providers.issuer_signer.key_id() != exact.issuer_signer_handle
+                        || providers.issuer_signer.public_key() != exact.issuer_public_key
                     {
                         return Err(BrokerError::StaleOrRevoked);
                     }
-                    let signature_result = providers.issuer_hsm.sign_digest(wire.digest);
+                    let purpose =
+                        sorafs_node::pop_credentials::PopIssuerSigningPurposeV1::try_from_wire_id(
+                            wire.purpose,
+                        )
+                        .ok_or(BrokerError::Rejected)?;
+                    if wire.digest == [0; 32] {
+                        return Err(BrokerError::Rejected);
+                    }
+                    let signature_result =
+                        providers.issuer_signer.sign_digest(purpose, wire.digest);
                     qualify_server_binding(
                         state,
                         &request.binding,
                         request.provider_metadata_digest,
                     )?;
-                    if providers.issuer_hsm.key_id() != exact.issuer_hsm_key_id
-                        || providers.issuer_hsm.public_key() != exact.issuer_public_key
+                    if providers.issuer_signer.key_id() != exact.issuer_signer_handle
+                        || providers.issuer_signer.public_key() != exact.issuer_public_key
                     {
                         return Err(BrokerError::StaleOrRevoked);
                     }
@@ -17898,17 +17867,19 @@ mod protocol {
                         .map_err(|_| BrokerError::Ambiguous)
                 }
                 (slot, OPERATION_SIGN_V1) if slot == governance_signer_slot => {
-                    let sign = decode_canonical::<SignRequestWireV1>(
+                    let sign = decode_canonical::<PurposeSignRequestWireV1>(
                         &request.payload,
                         MAX_OPERATION_FRAME_BYTES_V1,
                     )?;
+                    let purpose =
+                        validate_governance_purpose_signing_request(&sign, &request.binding)?;
                     let signer = state
                         .backends
                         .governance_dag_signer
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
                     let signature = signer
-                        .sign(&sign.payload)
+                        .sign(purpose, &sign.payload)
                         .map_err(|_| BrokerError::Rejected)?;
                     if signature == [0; 64] {
                         return Err(BrokerError::Rejected);
@@ -18803,16 +18774,18 @@ mod protocol {
                 (slot, OPERATION_EVIDENCE_VIEWER_RECEIPT_SIGN_V1)
                     if slot == evidence_receipt_signer_slot =>
                 {
-                    let sign = decode_canonical::<SignRequestWireV1>(
+                    let sign = decode_canonical::<PurposeSignRequestWireV1>(
                         &request.payload,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     )?;
+                    let purpose =
+                        validate_evidence_purpose_signing_request(&sign, &request.binding)?;
                     let signer = state
                         .backends
                         .evidence_viewer_receipt_signer
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
-                    let signature = signer.sign(&sign.payload).map_err(|error| match error {
+                    let signature = signer.sign(purpose, &sign.payload).map_err(|error| match error {
                         sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1::Rejected => {
                             BrokerError::Rejected
                         }
@@ -22971,9 +22944,9 @@ mod protocol {
                             key_id: exact.enrollment_recipient_key_id.clone(),
                             public_key_digest: exact.enrollment_recipient_public_key_digest,
                         }),
-                        issuer_hsm: Arc::new(PopBrokerIssuerHsm {
+                        issuer_signer: Arc::new(PopBrokerIssuerSigner {
                             provider: self.provider.clone(),
-                            key_id: exact.issuer_hsm_key_id.clone(),
+                            key_id: exact.issuer_signer_handle.clone(),
                             public_key: exact.issuer_public_key,
                         }),
                         authenticator: Arc::new(PopBrokerAuthenticator {
@@ -23011,23 +22984,23 @@ mod protocol {
         include!("runtime_provider_broker/pop_recipient_client.rs");
 
         #[derive(Clone)]
-        struct PopBrokerIssuerHsm {
+        struct PopBrokerIssuerSigner {
             provider: PopBrokerProvider,
             key_id: String,
             public_key: [u8; 32],
         }
 
-        impl fmt::Debug for PopBrokerIssuerHsm {
+        impl fmt::Debug for PopBrokerIssuerSigner {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
-                    .debug_struct("PopBrokerIssuerHsm")
+                    .debug_struct("PopBrokerIssuerSigner")
                     .field("key_id", &self.key_id)
                     .field("private_signer", &"[REDACTED]")
                     .finish_non_exhaustive()
             }
         }
 
-        impl sorafs_node::pop_credentials::PopIssuerHsm for PopBrokerIssuerHsm {
+        impl sorafs_node::pop_credentials::PopIssuerSigner for PopBrokerIssuerSigner {
             fn key_id(&self) -> &str {
                 &self.key_id
             }
@@ -23036,12 +23009,19 @@ mod protocol {
                 self.public_key
             }
 
-            fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], String> {
+            fn sign_digest(
+                &self,
+                purpose: sorafs_node::pop_credentials::PopIssuerSigningPurposeV1,
+                digest: [u8; 32],
+            ) -> Result<[u8; 64], String> {
                 if digest == [0; 32] {
                     return Err("PoP runtime provider unavailable".to_owned());
                 }
                 let payload = encode_canonical(
-                    &PopIssuerSignRequestWireV1 { digest },
+                    &PopIssuerSignRequestWireV1 {
+                        purpose: purpose.wire_id(),
+                        digest,
+                    },
                     MAX_POP_RUNTIME_FRAME_BYTES_V1,
                 )
                 .map_err(|error| self.provider.redacted_string_error(error))?;
@@ -25910,16 +25890,19 @@ mod protocol {
                 self.public_key
             }
 
-            fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
-                validate_signing_payload_len(payload.len())
+            fn sign(
+                &self,
+                purpose: sorafs_node::GovernanceDagSigningPurposeV1,
+                payload: &[u8],
+            ) -> Result<[u8; 64], String> {
+                let request = PurposeSignRequestWireV1 {
+                    purpose: purpose.wire_id(),
+                    payload: payload.to_vec(),
+                };
+                validate_governance_purpose_signing_request(&request, &self.binding)
                     .map_err(|_| ERROR_REJECTED.to_owned())?;
-                let payload = encode_canonical(
-                    &SignRequestWireV1 {
-                        payload: payload.to_vec(),
-                    },
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )
-                .map_err(redacted_provider_error)?;
+                let payload = encode_canonical(&request, MAX_OPERATION_FRAME_BYTES_V1)
+                    .map_err(redacted_provider_error)?;
                 let result = self
                     .session
                     .call(
@@ -26667,16 +26650,21 @@ mod protocol {
 
             fn sign(
                 &self,
+                purpose: sorafs_node::evidence_viewer::EvidenceViewerSigningPurposeV1,
                 message: &[u8],
             ) -> Result<[u8; 64], sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1>
             {
+                let sign = PurposeSignRequestWireV1 {
+                    purpose: purpose.wire_id(),
+                    payload: message.to_vec(),
+                };
+                validate_evidence_purpose_signing_request(&sign, &self.provider.binding)
+                    .map_err(evidence_viewer_external_error)?;
                 let result = self
                     .provider
                     .call_sensitive(
                         OPERATION_EVIDENCE_VIEWER_RECEIPT_SIGN_V1,
-                        &SignRequestWireV1 {
-                            payload: message.to_vec(),
-                        },
+                        &sign,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                         false,
                     )
@@ -31766,18 +31754,16 @@ mod protocol {
                 0xC8, 0xFD, 0x7C, 0x39, 0x17, 0xB6, 0xCA, 0x61, 0xA8, 0xC2, 0x83, 0x3A, 0x19, 0xE0,
                 0x00, 0xAA, 0xC2, 0xE4,
             ];
-            const SERVER_TEST_SIGNER_HANDLE: &str =
-                "hsm://governance/runtime-broker-server-primary";
-            const SERVER_TEST_IPFS_AUTH_HANDLE: &str =
-                "hsm://governance/runtime-broker-ipfs-auth-primary";
+            const SERVER_TEST_SIGNER_HANDLE: &str = "software://sorafs/governance-dag/primary";
+            const SERVER_TEST_IPFS_AUTH_HANDLE: &str = "auth://sorafs/governance-dag/ipfs-primary";
             const SERVER_TEST_CHECKPOINT_HANDLE: &str =
                 "sealed://governance/runtime-broker-checkpoint-primary";
             const SERVER_TEST_MODERATION_HANDLE: &str =
                 "kms://moderation/quarantine-wrapper-primary";
             const SERVER_TEST_MODERATION_TRANSACTION_SIGNER_HANDLE: &str =
-                "hsm://moderation/transaction-signer-primary";
+                "software://sorafs/moderation/primary";
             const SERVER_TEST_APPEAL_FINANCE_SIGNER_HANDLE: &str =
-                "hsm://sorafs/appeal-finance/transaction-signer-primary";
+                "software://sorafs/appeal-finance/primary";
             const SERVER_TEST_MODERATION_SETTLEMENT_HANDLE: &str =
                 "queue://moderation/settlement-handoff-primary";
             const SERVER_TEST_MODERATION_PUBLICATION_HANDLE: &str =
@@ -31795,7 +31781,7 @@ mod protocol {
             const SERVER_TEST_ACME_HANDLE: &str = "network://sorafs/gateway/acme-primary";
             const SERVER_TEST_COMPLIANCE_HANDLE: &str =
                 "network://sorafs/gateway/compliance-primary";
-            const SERVER_TEST_POR_ARCHIVE_HANDLE: &str = "hsm://sorafs/por-replay-archive/primary";
+            const SERVER_TEST_POR_ARCHIVE_HANDLE: &str = "object-lock://sorafs/por/primary";
             const SERVER_TEST_PRIVACY_PRF_HANDLE: &str =
                 "threshold-prf://sorafs/transparency/primary";
             const SERVER_TEST_PRIVACY_RELEASE_ANCHOR_HANDLE: &str =
@@ -31807,7 +31793,7 @@ mod protocol {
             const SERVER_TEST_REPUTATION_JOURNAL_HANDLE: &str =
                 "queue://sorafs/reputation/journal-primary";
             const SERVER_TEST_REPUTATION_THRESHOLD_HANDLE: &str =
-                "hsm://sorafs/reputation/threshold-primary";
+                "software://sorafs/reputation/primary";
             const SERVER_TEST_REPUTATION_GOVERNANCE_HANDLE: &str =
                 "dag://sorafs/reputation/publication-primary";
             const SERVER_TEST_REPUTATION_CHECKPOINT_HANDLE: &str =
@@ -31816,8 +31802,7 @@ mod protocol {
                 "ledger://sorafs/billing/finalized-query-primary";
             const SERVER_TEST_BILLING_VERIFIER_HANDLE: &str =
                 "ledger://sorafs/billing/journal-verifier-primary";
-            const SERVER_TEST_BILLING_SIGNER_HANDLE: &str =
-                "hsm://sorafs/billing/statement-signer-primary";
+            const SERVER_TEST_BILLING_SIGNER_HANDLE: &str = "software://sorafs/billing/primary";
             const SERVER_TEST_BILLING_PUBLISHER_HANDLE: &str =
                 "immutable://sorafs/billing/statement-publisher-primary";
             const SERVER_TEST_BILLING_ACKNOWLEDGEMENT_HANDLE: &str =
@@ -31827,7 +31812,7 @@ mod protocol {
             const SERVER_TEST_EVIDENCE_TRANSPARENCY_PUBLISHER_HANDLE: &str =
                 "transparency://sorafs/evidence-viewer/publisher-primary";
             const SERVER_TEST_BOOTLE_LANTERN_HANDLE: &str =
-                "hsm://privacy/bootle-lantern/issuer-primary";
+                "runtime://sorafs/privacy/bootle-lantern-primary";
 
             fn test_network_id(byte: u8) -> NetworkId {
                 NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
@@ -32430,13 +32415,7 @@ mod protocol {
             fn compact_server_sequence_exceeds_live_peak_but_fits_cumulative_cap() {
                 let state = prepare_server_state(&server_test_catalog(), server_test_backends())
                     .expect("prepare governance signer server state");
-                let payload = encode_canonical(
-                    &SignRequestWireV1 {
-                        payload: vec![0xA5; 16 * 1024],
-                    },
-                    MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
-                )
-                .expect("encode compact signing payload");
+                let payload = valid_governance_sign_request_payload();
                 let request = make_operation_request(
                     TEST_SESSION_ID,
                     1,
@@ -32583,13 +32562,7 @@ mod protocol {
             fn operation_policies_decode_actual_request_and_response_frames() {
                 let binding = signer_binding();
                 let metadata_digest = observation(&binding).metadata_digest;
-                let payload = encode_canonical(
-                    &SignRequestWireV1 {
-                        payload: vec![0xA5; 16 * 1024],
-                    },
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )
-                .expect("encode sign request");
+                let payload = valid_governance_sign_request_payload();
                 let request = make_operation_request(
                     TEST_SESSION_ID,
                     1,
@@ -33490,7 +33463,11 @@ mod protocol {
                     TEST_SIGNER_KEY
                 }
 
-                fn sign(&self, _payload: &[u8]) -> Result<[u8; 64], String> {
+                fn sign(
+                    &self,
+                    _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
+                    _payload: &[u8],
+                ) -> Result<[u8; 64], String> {
                     Ok([0xA5; 64])
                 }
             }
@@ -33809,16 +33786,16 @@ mod protocol {
             ) -> &'static str {
                 match role {
                     iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome => {
-                        "hsm://sorafs/proof-outcome/broker-primary"
+                        "software://sorafs/proof-outcome/broker-primary"
                     }
                     iroha_torii::SorafsNativeTransactionSignerRoleV1::Repair => {
-                        "hsm://sorafs/repair/broker-primary"
+                        "software://sorafs/repair/broker-primary"
                     }
                     iroha_torii::SorafsNativeTransactionSignerRoleV1::Reserve => {
-                        "hsm://sorafs/reserve/broker-primary"
+                        "software://sorafs/reserve/broker-primary"
                     }
                     iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook => {
-                        "hsm://sorafs/orderbook/broker-primary"
+                        "software://sorafs/orderbook/broker-primary"
                     }
                 }
             }
@@ -35428,7 +35405,7 @@ mod protocol {
                                 checkpoint_store_revision: 9,
                                 checkpoint_store_policy_digest: [0x83; 32],
                                 signer_handle:
-                                    "hsm://sorafs/evidence-viewer/receipts-primary".to_owned(),
+                                    "software://sorafs/evidence-viewer/primary".to_owned(),
                                 signer_public_key: TEST_SIGNER_KEY,
                                 signature: [0x84; 64],
                             },
@@ -36499,7 +36476,7 @@ mod protocol {
 
                 fn substituted() -> Self {
                     Self {
-                        handle: "hsm://sorafs/reputation/threshold-substitute",
+                        handle: "software://sorafs/reputation/substitute",
                         ..Self::exact()
                     }
                 }
@@ -37028,7 +37005,7 @@ mod protocol {
             fn signer_binding() -> ProviderBindingWireV1 {
                 ProviderBindingWireV1 {
                     slot: IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id(),
-                    handle: "hsm://governance/producer-primary".to_owned(),
+                    handle: "software://sorafs/governance-dag/primary".to_owned(),
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
                     bootle_lantern_issuance_bindings: None,
@@ -37071,7 +37048,7 @@ mod protocol {
             fn stream_token_signer_binding() -> ProviderBindingWireV1 {
                 let mut binding = plain_runtime_binding(
                     IrohaRuntimeProviderSlotV1::StreamTokenSigner,
-                    "pkcs11:prod/sorafs/stream-token/primary",
+                    "software://sorafs/stream-token/primary",
                 );
                 binding.stream_token_signer_public_key = Some(TEST_SIGNER_KEY);
                 binding
@@ -37420,7 +37397,8 @@ mod protocol {
                         binding.policy_digest = Some([0x72; 32]);
                     },
                     |binding: &mut ProviderBindingWireV1| {
-                        binding.handle = "hsm://privacy/bootle-lantern/substituted".to_owned();
+                        binding.handle =
+                            "runtime://sorafs/privacy/bootle-lantern-substituted".to_owned();
                     },
                     |binding: &mut ProviderBindingWireV1| {
                         binding
@@ -37491,7 +37469,7 @@ mod protocol {
                 binding.pop_credential_runtime_binding = Some(PopCredentialRuntimeBindingWireV1 {
                     issuer_policy_digest: [0x81; 32],
                     issuer_id: "pop-issuer-production-primary".to_owned(),
-                    issuer_hsm_key_id: "pkcs11:pop/issuer:primary".to_owned(),
+                    issuer_signer_handle: "software://sorafs/pop-credentials/primary".to_owned(),
                     issuer_public_key: server_test_request_auth_public_key(),
                     enrollment_recipient_key_id: "kms:pop/enrollment:primary".to_owned(),
                     enrollment_recipient_public_key_digest: [0x82; 32],
@@ -37917,7 +37895,7 @@ mod protocol {
             fn evidence_viewer_binding(slot: IrohaRuntimeProviderSlotV1) -> ProviderBindingWireV1 {
                 let mut binding = ProviderBindingWireV1 {
                     slot: slot.wire_id(),
-                    handle: format!("hsm://sorafs/evidence-viewer/slot-{}", slot.wire_id()),
+                    handle: format!("runtime://sorafs/evidence-viewer/slot-{}", slot.wire_id()),
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
                     bootle_lantern_issuance_bindings: None,
@@ -37966,6 +37944,7 @@ mod protocol {
                         binding.evidence_viewer_grant_ttl_ms = Some(300_000);
                     }
                     IrohaRuntimeProviderSlotV1::EvidenceViewerReceiptSigner => {
+                        binding.handle = "software://sorafs/evidence-viewer/primary".to_owned();
                         binding.evidence_viewer_receipt_signer_public_key = Some(TEST_SIGNER_KEY);
                     }
                     IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore => {
@@ -39483,7 +39462,7 @@ mod protocol {
 
                 let binding = stream_token_signer_binding();
                 let exact = Arc::new(SignerProbe {
-                    handle: "pkcs11:prod/sorafs/stream-token/primary",
+                    handle: "software://sorafs/stream-token/primary",
                     drift: false,
                     calls: AtomicU64::new(0),
                 });
@@ -39495,12 +39474,12 @@ mod protocol {
 
                 for provider in [
                     SignerProbe {
-                        handle: "pkcs11:prod/sorafs/stream-token/primary",
+                        handle: "software://sorafs/stream-token/primary",
                         drift: true,
                         calls: AtomicU64::new(0),
                     },
                     SignerProbe {
-                        handle: "pkcs11:test/sorafs/stream-token",
+                        handle: "software://sorafs/stream-token/test",
                         drift: false,
                         calls: AtomicU64::new(0),
                     },
@@ -43577,7 +43556,7 @@ mod protocol {
                 assert_eq!(
                     checkpoint.attest_calls.load(Ordering::Acquire),
                     0,
-                    "source substitution must be rejected before the checkpoint HSM signs"
+                    "source substitution must be rejected before checkpoint attestation signing"
                 );
 
                 let attest = operation_for_slot(

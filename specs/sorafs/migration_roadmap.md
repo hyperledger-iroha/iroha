@@ -104,7 +104,7 @@ eligible.
   appeal-finance lanes selected by the aggregate checker;
 - exactly-four-validator DA/RBC consensus/finality evidence where a network
   exercise is required;
-- signed approvals, key/HSM provenance, dashboards, alert tests, load/chaos
+- signed approvals, external software-key provenance, dashboards, alert tests, load/chaos
   results, and public package canaries where required by the lane contract.
 
 The evidence archive is operational data and must not contain runtime signing

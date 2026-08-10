@@ -8370,13 +8370,6 @@ mod offline_client_tests {
         nonce: u64,
     }
 
-    fn asset_definition_id(name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").expect("asset domain id"),
-            name.parse().expect("asset definition name"),
-        )
-    }
-
     fn header<'a>(snapshot: &'a RequestSnapshot, name: &str) -> Option<&'a str> {
         snapshot
             .headers

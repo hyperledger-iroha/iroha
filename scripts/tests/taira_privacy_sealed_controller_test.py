@@ -13,6 +13,7 @@ import pytest
 
 from scripts import deploy_taira_v21_reset as deploy
 from scripts import taira_privacy_sealed_controller as controller
+from scripts import taira_privacy_verange_case_plan as verange_case_plan
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1187,7 +1188,9 @@ def test_verange_case_plan_binds_reset_peers_genesis_source_and_supervisors(
     _bundle, _artifact_value, _supervisors, arguments = (
         _qualification_case_plan_fixture(tmp_path)
     )
-    plan = controller.build_verange_qualification_case_plan_v1(**arguments)
+    plan = verange_case_plan._build_untrusted_verange_qualification_case_plan_v1(
+        **arguments
+    )
     assert tuple(peer.direct_torii_root for peer in plan.peers) == tuple(
         f"http://127.0.0.1:{8080 + number}" for number in range(1, 5)
     )
@@ -1202,7 +1205,7 @@ def test_verange_case_plan_binds_reset_peers_genesis_source_and_supervisors(
     assert event["plan_binding_sha256"] == plan.plan_binding_sha256
     assert dict(controller.CONTROLLER_CASE_RUNNERS) == {}
     with pytest.raises(TypeError):
-        controller.build_verange_qualification_case_plan_v1(  # type: ignore[call-arg]
+        verange_case_plan._build_untrusted_verange_qualification_case_plan_v1(  # type: ignore[call-arg]
             **arguments, peer_roots=("http://attacker.invalid",)
         )
 
@@ -1219,7 +1222,9 @@ def test_verange_case_plan_rejects_source_genesis_peer_and_supervisor_substituti
         hostile = dict(arguments)
         hostile[field] = value
         with pytest.raises(controller.VeRangeQualificationPlanError):
-            controller.build_verange_qualification_case_plan_v1(**hostile)
+            verange_case_plan._build_untrusted_verange_qualification_case_plan_v1(
+                **hostile
+            )
 
     missing_genesis_plan = replace(
         bundle,
@@ -1232,7 +1237,7 @@ def test_verange_case_plan_rejects_source_genesis_peer_and_supervisor_substituti
     with pytest.raises(
         controller.VeRangeQualificationPlanError, match="does not admit"
     ):
-        controller.build_verange_qualification_case_plan_v1(
+        verange_case_plan._build_untrusted_verange_qualification_case_plan_v1(
             **{**arguments, "bundle": missing_genesis_plan}
         )
 
@@ -1242,12 +1247,12 @@ def test_verange_case_plan_rejects_source_genesis_peer_and_supervisor_substituti
         bundle.peers[0].slug: "cc" * 32,
     }
     with pytest.raises(controller.VeRangeQualificationPlanError, match="config identity"):
-        controller.build_verange_qualification_case_plan_v1(
+        verange_case_plan._build_untrusted_verange_qualification_case_plan_v1(
             **{**arguments, "bundle": replace(bundle, manifest=substituted_configs)}
         )
 
     with pytest.raises(controller.VeRangeQualificationPlanError, match="supervisor identity"):
-        controller.build_verange_qualification_case_plan_v1(
+        verange_case_plan._build_untrusted_verange_qualification_case_plan_v1(
             **{**arguments, "supervisors": supervisors[::-1]}
         )
 
@@ -1255,7 +1260,7 @@ def test_verange_case_plan_rejects_source_genesis_peer_and_supervisor_substituti
         artifact.setup_requirements, candidate_binding_sha256="dd" * 32
     )
     with pytest.raises(controller.VeRangeQualificationPlanError, match="internally"):
-        controller.build_verange_qualification_case_plan_v1(
+        verange_case_plan._build_untrusted_verange_qualification_case_plan_v1(
             **{
                 **arguments,
                 "public_artifacts": replace(

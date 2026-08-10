@@ -1302,23 +1302,31 @@ fn ws_ticket_accepts_session_id_alias() {
 }
 
 #[test]
-fn build_connect_session_create_body_generates_sid_when_missing() {
+fn build_connect_session_create_body_derives_exact_network_sid() {
     let args = norito::json!({
+        "network_id": "hash:4141414141414141414141414141414141414141414141414141414141414141#7023",
+        "app_pk": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "nonce": "AgICAgICAgICAgICAgICAg",
         "node": "https://node.example"
     });
     let body =
         build_connect_session_create_body(args.as_object().expect("object")).expect("create body");
     let payload = body.as_object().expect("object");
-    let sid = payload
-        .get("sid")
-        .and_then(Value::as_str)
-        .expect("generated sid");
     assert_eq!(
-        base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(sid)
-            .expect("base64url sid")
-            .len(),
-        32
+        payload.get("sid").and_then(Value::as_str),
+        Some("NYWJG9y5e88ugmF2QZQP7dTCwL6UbSG2A8YNvPpX9LI")
+    );
+    assert_eq!(
+        payload.get("network_id").and_then(Value::as_str),
+        args.get("network_id").and_then(Value::as_str)
+    );
+    assert_eq!(
+        payload.get("app_pk").and_then(Value::as_str),
+        args.get("app_pk").and_then(Value::as_str)
+    );
+    assert_eq!(
+        payload.get("nonce").and_then(Value::as_str),
+        args.get("nonce").and_then(Value::as_str)
     );
     assert_eq!(
         payload.get("node").and_then(Value::as_str),
@@ -1327,50 +1335,101 @@ fn build_connect_session_create_body_generates_sid_when_missing() {
 }
 
 #[test]
-fn build_connect_session_create_body_reports_sid_rng_failure() {
-    let args = norito::json!({
-        "node": "https://node.example"
-    });
-    let err = build_connect_session_create_body_with_rng(
-        args.as_object().expect("object"),
-        &mut FailingMcpRng,
-    )
-    .expect_err("Connect SID RNG failure");
-    assert!(err.contains("Connect session sid RNG failed"));
-    assert!(err.contains("failing MCP RNG"));
+fn build_connect_session_create_body_rejects_retired_identity_inputs() {
+    for retired in [
+        "sid",
+        "session_id",
+        "body",
+        "chain_id",
+        "chainId",
+        "node_url",
+    ] {
+        let mut args = norito::json!({
+            "network_id": "hash:4141414141414141414141414141414141414141414141414141414141414141#7023",
+            "app_pk": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+            "nonce": "AgICAgICAgICAgICAgICAg"
+        });
+        args.as_object_mut()
+            .expect("object")
+            .insert(retired.into(), Value::String("retired".into()));
+        let err = build_connect_session_create_body(args.as_object().expect("object"))
+            .expect_err("retired Connect create input must reject");
+        assert!(
+            err.contains("hard cut"),
+            "unexpected `{retired}` error: {err}"
+        );
+    }
 }
 
 #[test]
-fn build_connect_session_create_body_preserves_sid_in_body() {
-    let args = norito::json!({
-        "sid": "ignored-shortcut",
-        "body": {
-            "sid": "body-sid",
-            "node": "https://in-body.example"
+fn build_connect_session_create_body_rejects_missing_or_noncanonical_identity() {
+    let valid = || {
+        norito::json!({
+            "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+            "app_pk": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+            "nonce": "AgICAgICAgICAgICAgICAg"
+        })
+    };
+    for missing in ["network_id", "app_pk", "nonce"] {
+        let mut args = valid();
+        args.as_object_mut().expect("object").remove(missing);
+        assert!(
+            build_connect_session_create_body(args.as_object().expect("object")).is_err(),
+            "missing {missing} must reject"
+        );
+    }
+
+    let mutations = [
+        (
+            "network_id",
+            "hash:32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149#a2f0",
+        ),
+        ("app_pk", "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="),
+        ("app_pk", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        ("nonce", "AgICAgICAgICAgICAgICAg="),
+        ("nonce", "AAAAAAAAAAAAAAAAAAAAAA"),
+    ];
+    for (field, replacement) in mutations {
+        let mut args = valid();
+        args.as_object_mut()
+            .expect("object")
+            .insert(field.into(), Value::String(replacement.into()));
+        assert!(
+            build_connect_session_create_body(args.as_object().expect("object")).is_err(),
+            "noncanonical {field} must reject"
+        );
+    }
+}
+
+#[test]
+fn connect_session_create_tool_schema_has_only_hard_cut_identity() {
+    for tool in [
+        connect_session_create_tool(),
+        connect_session_create_and_ticket_tool(),
+    ] {
+        let schema = tool.input_schema.as_object().expect("schema object");
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("required fields");
+        for field in ["network_id", "app_pk", "nonce"] {
+            assert!(required.iter().any(|value| value.as_str() == Some(field)));
         }
-    });
-    let body =
-        build_connect_session_create_body(args.as_object().expect("object")).expect("create body");
-    let payload = body.as_object().expect("object");
-    assert_eq!(payload.get("sid").and_then(Value::as_str), Some("body-sid"));
-    assert_eq!(
-        payload.get("node").and_then(Value::as_str),
-        Some("https://in-body.example")
-    );
-}
-
-#[test]
-fn build_connect_session_create_body_accepts_session_id_shortcut() {
-    let args = norito::json!({
-        "session_id": "shortcut-sid"
-    });
-    let body =
-        build_connect_session_create_body(args.as_object().expect("object")).expect("create body");
-    let payload = body.as_object().expect("object");
-    assert_eq!(
-        payload.get("sid").and_then(Value::as_str),
-        Some("shortcut-sid")
-    );
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("schema properties");
+        for retired in [
+            "sid",
+            "session_id",
+            "body",
+            "chain_id",
+            "chainId",
+            "node_url",
+        ] {
+            assert!(!properties.contains_key(retired));
+        }
+    }
 }
 
 #[test]

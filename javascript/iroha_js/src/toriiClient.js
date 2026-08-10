@@ -53,6 +53,12 @@ import {
   ValidationError,
 } from "./validationError.js";
 import {
+  assertNonBlankString,
+  normalizeStatusSet,
+  normalizeTransactionStatusScope,
+  readHeaderValue,
+} from "./toriiClientPrimitives.js";
+import {
   NODE_CAPABILITIES_JSON_MAX_BYTES,
   ToriiDataModelMismatchError,
   ensureNodeDataModelCompatibility,
@@ -79,7 +85,7 @@ import {
 } from "./canonicalRequest.js";
 import { blake2b256 } from "./blake2b.js";
 import { NetworkId, networkIdBytes } from "./networkId.js";
-import { generateConnectSid } from "./connectSession.js";
+import { generateConnectSid, validateConnectSessionResponseIdentity } from "./connectSession.js";
 import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
 import {
   createToriiGovernanceNormalizers,
@@ -1333,66 +1339,6 @@ export function decodePdpCommitmentHeader(headers) {
     const message = err && typeof err.message === "string" ? err.message : String(err);
     throw new Error(`Failed to decode Sora-PDP-Commitment header: ${message}`);
   }
-}
-
-function assertNonBlankString(value, context) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must be a non-empty string`,
-      context,
-    );
-  }
-  return value.trim();
-}
-
-function normalizeStatusSet(input, defaultStatuses) {
-  if (!input) {
-    return new Set(defaultStatuses.map((status) => String(status)));
-  }
-  const result = new Set();
-  for (const value of input) {
-    result.add(String(value));
-  }
-  return result;
-}
-
-function normalizeTransactionStatusScope(value, context) {
-  if (value === undefined) {
-    return "global";
-  }
-  if (value === "local" || value === "global") {
-    return value;
-  }
-  throw createValidationError(
-    ValidationErrorCode.INVALID_OBJECT,
-    `${context} must be one of: local, global`,
-    context,
-  );
-}
-
-function readHeaderValue(headers, name) {
-  if (!headers) {
-    return null;
-  }
-  if (typeof headers.get === "function") {
-    return headers.get(name) ?? headers.get(name.toLowerCase());
-  }
-  const lower = name.toLowerCase();
-  if (headers instanceof Map) {
-    return headers.get(name) ?? headers.get(lower);
-  }
-  if (typeof headers === "object") {
-    const direct = headers[name];
-    if (typeof direct === "string") {
-      return direct;
-    }
-    const lowerValue = headers[lower];
-    if (typeof lowerValue === "string") {
-      return lowerValue;
-    }
-  }
-  return null;
 }
 
 function strictDecodeBase64(value) {
@@ -8769,14 +8715,13 @@ export class ToriiClient {
       throw new Error("connect session response missing JSON body");
     }
     const session = normalizeConnectSessionResponse(body, "connect session response");
-    if (
-      session.sid !== payload.sid
-      || session.network_id.toString() !== payload.network_id
-      || session.app_pk !== payload.app_pk
-      || session.nonce !== payload.nonce
-    ) {
-      throw new Error("Torii substituted the canonical Connect session identity");
-    }
+    validateConnectSessionResponseIdentity(session, {
+      sid: payload.sid,
+      networkId: payload.network_id,
+      appPk: payload.app_pk,
+      nonce: payload.nonce,
+      node: payload.node,
+    });
     return session;
   }
 

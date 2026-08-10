@@ -402,6 +402,11 @@ def test_public_entry_point_cannot_relax_root_controller_identity(
 ) -> None:
     source_parent, handoff_root, _payloads = _fixture(tmp_path)
     monkeypatch.setattr(closer.os, "geteuid", lambda: 1)
+    monkeypatch.setattr(
+        closer,
+        "_require_authenticated_rollout_observation_authority",
+        lambda: None,
+    )
 
     with pytest.raises(closer.PublicationHandoffError, match="root controller"):
         closer.close_handoff(

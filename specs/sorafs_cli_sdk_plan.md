@@ -40,12 +40,13 @@ Important flag patterns:
 ## Authentication & CI
 
 - Aggregate release manifests are authenticated through
-  `scripts/release_sorafs_cli.sh`, a reviewed external Ed25519/HSM signer, a
-  governed raw public key and fingerprint, and a SHA256-pinned
-  `sorafs-validate release-manifest` binary.
+  `scripts/release_sorafs_cli.sh`, the `authenticated_external_signer` provider
+  with exact `software` backend, a governed raw Ed25519 public key and
+  fingerprint, and a SHA256-pinned `sorafs-validate release-manifest` binary.
+  Successful output is `software-key-qualified`.
 - Reusable CI examples live in `fixtures/documentation/sorafs_ci.md`; release checks are scripted by `ci/check_sorafs_cli_release.sh`.
 - Release signing and native manifest verification are wrapped by `scripts/release_sorafs_cli.sh`; gateway self-cert evidence is wrapped by `scripts/sorafs_gateway_self_cert.sh`.
-- Runtime secrets such as HSM credentials, private keys, and gateway bearer tokens must be supplied at execution time and not committed.
+- Runtime secrets such as external-signer credentials, private keys, and gateway bearer tokens must be supplied at execution time and not committed.
 
 ## Observability Hooks
 

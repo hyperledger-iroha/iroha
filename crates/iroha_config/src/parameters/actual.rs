@@ -9834,7 +9834,7 @@ pub struct SorafsPotrRuntimeBinding {
 /// Public identity and qualification of one PoTR runtime signer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsPotrRuntimeSignerBinding {
-    /// Stable opaque HSM/KMS provider handle.
+    /// Stable opaque authenticated external signer handle.
     pub handle: String,
     /// Stable signer administration identity.
     pub signer_id: [u8; 32],
@@ -9932,9 +9932,9 @@ pub struct SorafsAppealFinanceSettlement {
     pub pricing: SorafsAppealPricingPolicy,
     /// Governed inline appeal settlement policy.
     pub settlement: SorafsAppealSettlementPolicy,
-    /// Non-secret bindings for runtime-only HSM/KMS signer providers.
+    /// Non-secret bindings for runtime-only external signer providers.
     pub submitter_signers: Vec<SorafsAppealFinanceSignerBinding>,
-    /// Independent non-secret binding for the checkpoint HSM/KMS provider.
+    /// Independent non-secret binding for the sealed checkpoint provider.
     pub checkpoint_provider: Option<SorafsAppealFinanceCheckpointBinding>,
     /// Interval between worker reconciliation scans for follow-up settlement steps.
     pub worker_scan_interval: Duration,
@@ -10271,7 +10271,7 @@ impl SorafsAppealSettlementRule {
 /// configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsAppealFinanceSignerBinding {
-    /// Stable opaque PKCS#11/HSM/KMS provider handle.
+    /// Stable opaque authenticated external signer handle.
     pub handle: String,
     /// Exact transaction authority controlled by this signer.
     pub authority: AccountId,
@@ -10287,10 +10287,10 @@ pub struct SorafsAppealFinanceSignerBinding {
     pub revoked_at_block_height: Option<u64>,
 }
 
-/// Public identity and policy of the independent checkpoint HSM/KMS provider.
+/// Public identity and policy of the independent sealed checkpoint provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsAppealFinanceCheckpointBinding {
-    /// Stable opaque HSM/KMS provider handle.
+    /// Stable opaque sealed checkpoint provider handle.
     pub handle: String,
     /// Exact Ed25519 checkpoint verification key.
     pub public_key: PublicKey,
@@ -10406,7 +10406,7 @@ pub struct SorafsStorage {
     /// Finalized-ledger billing projection, statement delivery, and
     /// hedge-intent generation policy.
     ///
-    /// Ledger queries, proof verification, HSM signing, immutable publication,
+    /// Ledger queries, proof verification, external signing, immutable publication,
     /// acknowledgement authority, and sealed epoch storage remain
     /// runtime-injected.
     pub hedging_billing_runtime: Option<SorafsHedgingBillingRuntime>,
@@ -10446,7 +10446,7 @@ pub struct SorafsStorage {
     pub governance_dag_dir: Option<PathBuf>,
     /// Optional publisher peer identifier used for signed Governance DAG blocks.
     pub governance_dag_publisher_peer_id: Option<String>,
-    /// Opaque runtime HSM/KMS signer handle used for signed Governance DAG blocks.
+    /// Opaque authenticated external signer handle for Governance DAG blocks.
     pub governance_dag_signer_handle: Option<String>,
     /// Exact non-zero public-policy revision required from the runtime signer.
     pub governance_dag_signer_revision: Option<u64>,
@@ -10562,7 +10562,7 @@ pub struct SorafsGovernanceDagServiceView {
     pub source_dir: Option<PathBuf>,
     /// Publisher peer identifier bound to the signed local producer.
     pub producer_publisher_peer_id: Option<String>,
-    /// Opaque runtime HSM/KMS signer handle bound to the signed local producer.
+    /// Opaque authenticated external signer handle bound to the local producer.
     pub producer_signer_handle: Option<String>,
     /// Exact non-zero public-policy revision required from the producer signer.
     pub producer_signer_revision: Option<u64>,
@@ -10719,7 +10719,7 @@ pub struct SorafsModerationOrchestrator {
     /// Exact checkpoint-store public-policy digest.
     pub checkpoint_store_policy_digest: [u8; 32],
     /// Archive-lifetime-stable Ed25519 trust anchor for sealed checkpoint statements.
-    /// HSM-internal rotation must preserve this public identity in V1.
+    /// Provider-internal rotation must preserve this public identity in V1.
     pub checkpoint_store_attestation_public_key: [u8; 32],
     /// Governance authority used only for deterministic deadline maintenance.
     pub maintenance_authority: AccountId,
@@ -10899,7 +10899,7 @@ pub struct SorafsHedgingBillingRuntime {
     pub journal_verifier_revision: u64,
     /// Exact non-zero digest of the journal-verifier provider's public policy.
     pub journal_verifier_policy_digest: [u8; 32],
-    /// Identity-pinned statement HSM/KMS provider handle.
+    /// Identity-pinned authenticated external statement signer handle.
     pub statement_signer_handle: String,
     /// Exact non-zero statement-signer provider revision.
     pub statement_signer_revision: u64,
@@ -11063,13 +11063,13 @@ pub struct SorafsProviderIngestRuntime {
     pub authenticated_source_fetch_revision: u64,
     /// Exact non-zero digest of the authenticated source-pool public policy.
     pub authenticated_source_fetch_policy_digest: [u8; 32],
-    /// Identity-pinned completion HSM/KMS signer-resolver handle.
+    /// Identity-pinned governed completion-signer resolver handle.
     pub completion_signer_resolver_handle: String,
     /// Exact non-zero governed signer-resolver adapter/public-policy revision.
     pub completion_signer_resolver_revision: u64,
     /// Exact non-zero digest of the governed signer-resolver public policy.
     pub completion_signer_resolver_policy_digest: [u8; 32],
-    /// Stable public HSM/KMS completion-signer or key handle.
+    /// Stable authenticated external completion-signer handle.
     pub completion_signer_handle: String,
     /// Exact non-zero completion-signer adapter and public-policy revision.
     pub completion_signer_adapter_revision: u64,
@@ -11099,7 +11099,7 @@ pub struct SorafsProviderIngestRuntime {
     pub source_operation_timeout_ms: u64,
     /// Durable source-lease renewal cadence.
     pub source_lease_renew_interval_ms: u64,
-    /// Timeout for completion payload construction and HSM/KMS signing.
+    /// Timeout for completion payload construction and external signing.
     pub signer_timeout_ms: u64,
     /// Timeout for transaction preflight, submission, and observation.
     pub ingress_timeout_ms: u64,
@@ -11577,7 +11577,7 @@ pub struct SorafsMeteringSmoothing {
 pub struct SorafsTokenConfig {
     /// Enable stream-token issuance.
     pub enabled: bool,
-    /// Opaque runtime-only HSM/KMS signer handle.
+    /// Opaque runtime-only authenticated external signer handle.
     pub signer_handle: Option<String>,
     /// Exact Ed25519 public key bound to the runtime signer.
     pub signer_public_key: Option<[u8; 32]>,

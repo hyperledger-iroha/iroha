@@ -68,16 +68,12 @@ fn dedicated_onboarding_authentication_is_exactly_scoped() {
 
 #[test]
 fn required_api_token_authentication_is_exactly_scoped() {
-    let required_routes = iso20022::ROUTES
-        .iter()
-        .copied()
-        .chain([
-            sorafs::STORAGE_TOKEN,
-            application_api::WEBHOOKS_GET,
-            application_api::WEBHOOKS_POST,
-            application_api::WEBHOOKS_BY_ID_DELETE,
-        ])
-        .collect::<Vec<_>>();
+    let required_routes = [
+        sorafs::STORAGE_TOKEN,
+        application_api::WEBHOOKS_GET,
+        application_api::WEBHOOKS_POST,
+        application_api::WEBHOOKS_BY_ID_DELETE,
+    ];
     for route in &required_routes {
         assert_eq!(
             route.authentication(),
@@ -94,6 +90,17 @@ fn required_api_token_authentication_is_exactly_scoped() {
         required_routes.len(),
         "no unrelated route may inherit the unconditional API-token policy"
     );
+}
+
+#[test]
+fn iso20022_routes_require_fresh_operator_signatures() {
+    for route in iso20022::ROUTES {
+        assert_eq!(route.admission(), AdmissionPolicy::Operator);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::OperatorSignature
+        );
+    }
 }
 
 #[test]

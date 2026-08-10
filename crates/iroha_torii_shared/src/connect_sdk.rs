@@ -14,18 +14,14 @@ use norito::codec::Encode;
 use sha2::{Digest, Sha256};
 
 use crate::connect::{
-    ConnectCiphertextV1, ConnectFrameV1, ConnectPayloadV1, ConnectRelayEnvelopeV1, Constraints, Dir,
-    EnvelopeV1, FrameKind, PermissionsV1, Role, SignInProofV1, WalletSignatureV1,
+    ConnectCiphertextV1, ConnectFrameV1, ConnectPayloadV1, ConnectRelayEnvelopeV1, Constraints,
+    Dir, EnvelopeV1, FrameKind, PermissionsV1, Role, SignInProofV1, WalletSignatureV1,
     decode_connect_envelope_framed, encode_connect_envelope_framed,
 };
 
 /// Derive the canonical Connect session identifier for one exact deployment.
 #[must_use]
-pub fn derive_session_id(
-    network_id: &NetworkId,
-    app_pk: &[u8; 32],
-    nonce: &[u8; 16],
-) -> [u8; 32] {
+pub fn derive_session_id(network_id: &NetworkId, app_pk: &[u8; 32], nonce: &[u8; 16]) -> [u8; 32] {
     let mut out = [0u8; 32];
     let mut b2 = Blake2bVar::new(32).expect("32-byte BLAKE2b output is valid");
     b2.update(b"iroha-connect|sid|");
@@ -290,9 +286,9 @@ pub fn seal_envelope(
 ///
 /// # Errors
 ///
-/// Returns an error when the frame is not ciphertext, decryption fails,
-/// decoding fails, or when the decrypted envelope sequence does not match
-/// the frame sequence.
+/// Returns an error when the frame is not ciphertext, the redundant directions
+/// disagree, decryption or decoding fails, or the decrypted envelope sequence
+/// does not match the frame sequence.
 pub fn open_envelope_current(
     key: &[u8; 32],
     frame: &ConnectFrameV1,
@@ -300,7 +296,10 @@ pub fn open_envelope_current(
     let FrameKind::Ciphertext(ct) = &frame.kind else {
         return Err("not ciphertext");
     };
-    let aad = aad_current(&frame.sid, ct.dir, frame.seq);
+    if ct.dir != frame.dir {
+        return Err("dir_mismatch");
+    }
+    let aad = aad_current(&frame.sid, frame.dir, frame.seq);
     let nonce = nonce_from_seq(frame.seq);
     let encryptor =
         SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key).map_err(|_| "decrypt")?;
@@ -318,9 +317,9 @@ pub fn open_envelope_current(
 ///
 /// # Errors
 ///
-/// Returns an error when the frame is not ciphertext, decryption fails,
-/// decoding fails, or when the decrypted envelope sequence does not match
-/// the frame sequence.
+/// Returns an error when the frame is not ciphertext, the redundant directions
+/// disagree, decryption or decoding fails, or the decrypted envelope sequence
+/// does not match the frame sequence.
 pub fn open_envelope(key: &[u8; 32], frame: &ConnectFrameV1) -> Result<EnvelopeV1, &'static str> {
     open_envelope_current(key, frame)
 }
@@ -515,6 +514,24 @@ mod tests {
             open_envelope_current(&key, &tampered).err(),
             Some("decrypt")
         );
+
+        // Both redundant direction fields must agree, and the outer direction
+        // is part of the authenticated header.
+        let mut tampered_outer_dir = frame.clone();
+        tampered_outer_dir.dir = Dir::WalletToApp;
+        assert_eq!(
+            open_envelope_current(&key, &tampered_outer_dir).err(),
+            Some("dir_mismatch")
+        );
+        let mut tampered_ciphertext_dir = frame;
+        let FrameKind::Ciphertext(ciphertext) = &mut tampered_ciphertext_dir.kind else {
+            unreachable!("sealed envelope is ciphertext");
+        };
+        ciphertext.dir = Dir::WalletToApp;
+        assert_eq!(
+            open_envelope_current(&key, &tampered_ciphertext_dir).err(),
+            Some("dir_mismatch")
+        );
     }
 
     #[test]
@@ -586,12 +603,44 @@ mod tests {
             "../../../fixtures/connect/session_vectors.json"
         ))
         .expect("connect session vectors parse");
+        let network_id: NetworkId = fixture
+            .get("network_id")
+            .and_then(norito::json::Value::as_str)
+            .expect("network_id")
+            .parse()
+            .expect("canonical fixture NetworkId");
+        assert_eq!(
+            hex::encode(network_id.as_bytes()),
+            fixture
+                .get("network_id_hex")
+                .and_then(norito::json::Value::as_str)
+                .expect("network_id_hex")
+        );
+        let app_pk: [u8; 32] = hex::decode(
+            fixture
+                .get("app_pk_hex")
+                .and_then(norito::json::Value::as_str)
+                .expect("app_pk_hex"),
+        )
+        .expect("app key hex")
+        .try_into()
+        .expect("app key length");
+        let nonce: [u8; 16] = hex::decode(
+            fixture
+                .get("nonce_hex")
+                .and_then(norito::json::Value::as_str)
+                .expect("nonce_hex"),
+        )
+        .expect("nonce hex")
+        .try_into()
+        .expect("nonce length");
         let sid_hex = fixture
             .get("sid_hex")
             .and_then(norito::json::Value::as_str)
             .expect("sid_hex");
         let sid_vec = hex::decode(sid_hex).expect("sid hex");
         let sid: [u8; 32] = sid_vec.try_into().expect("sid length");
+        assert_eq!(derive_session_id(&network_id, &app_pk, &nonce), sid);
         let tokens = fixture
             .get("tokens")
             .and_then(norito::json::Value::as_object)
@@ -656,6 +705,116 @@ mod approve_preimage_tests {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             label,
         )))
+    }
+
+    #[test]
+    fn canonical_approval_fixture_verifies_end_to_end() {
+        let fixture: norito::json::Value = norito::json::from_str(include_str!(
+            "../../../fixtures/connect/session_vectors.json"
+        ))
+        .expect("connect session vectors parse");
+        let approval = fixture
+            .get("approval")
+            .and_then(norito::json::Value::as_object)
+            .expect("approval fixture");
+        let decode = |object: &norito::json::Map, field: &str| {
+            hex::decode(
+                object
+                    .get(field)
+                    .and_then(norito::json::Value::as_str)
+                    .unwrap_or_else(|| panic!("missing {field}")),
+            )
+            .unwrap_or_else(|_| panic!("invalid {field}"))
+        };
+        let network_id: NetworkId = fixture
+            .get("network_id")
+            .and_then(norito::json::Value::as_str)
+            .expect("network_id")
+            .parse()
+            .expect("canonical fixture NetworkId");
+        let constraints = Constraints { network_id };
+        assert_eq!(
+            hex::encode(hash_constraints_current(&constraints)),
+            approval
+                .get("constraints_hash_hex")
+                .and_then(norito::json::Value::as_str)
+                .expect("constraints_hash_hex")
+        );
+        let sid: [u8; 32] = decode(fixture.as_object().expect("fixture object"), "sid_hex")
+            .try_into()
+            .expect("sid length");
+        let app_pk: [u8; 32] = decode(fixture.as_object().expect("fixture object"), "app_pk_hex")
+            .try_into()
+            .expect("app key length");
+        let wallet_pk: [u8; 32] = decode(approval, "wallet_pk_hex")
+            .try_into()
+            .expect("wallet key length");
+        let relay_auth: [u8; 32] = decode(
+            fixture.as_object().expect("fixture object"),
+            "relay_auth_hash_hex",
+        )
+        .try_into()
+        .expect("relay auth length");
+        let account_id = approval
+            .get("account_id")
+            .and_then(norito::json::Value::as_str)
+            .expect("account_id");
+        let preimage = build_approve_preimage(
+            &constraints,
+            &sid,
+            &app_pk,
+            &wallet_pk,
+            account_id,
+            None,
+            None,
+            &relay_auth,
+        );
+        assert_eq!(
+            hex::encode(&preimage),
+            approval
+                .get("approve_preimage_hex")
+                .and_then(norito::json::Value::as_str)
+                .expect("approve_preimage_hex")
+        );
+
+        let key_pair = KeyPair::try_from_seed(
+            decode(approval, "account_private_key_seed_hex"),
+            Algorithm::Ed25519,
+        )
+        .expect("fixture approval keypair");
+        assert_eq!(
+            hex::encode(key_pair.public_key().payload()),
+            approval
+                .get("account_public_key_hex")
+                .and_then(norito::json::Value::as_str)
+                .expect("account_public_key_hex")
+        );
+        assert_eq!(
+            AccountId::new(key_pair.public_key().clone()).to_string(),
+            account_id
+        );
+        let signature = Signature::try_new(key_pair.private_key(), &preimage)
+            .expect("fixture approval signature");
+        assert_eq!(
+            hex::encode(signature.payload()),
+            approval
+                .get("signature_hex")
+                .and_then(norito::json::Value::as_str)
+                .expect("signature_hex")
+        );
+        verify_wallet_approval_signature(
+            key_pair.public_key(),
+            &constraints,
+            &sid,
+            &app_pk,
+            &wallet_pk,
+            account_id,
+            None,
+            None,
+            &relay_auth,
+            &WalletSignatureV1::new(Algorithm::Ed25519, signature),
+        )
+        .expect("canonical fixture approval verifies");
     }
 
     #[test]
@@ -745,7 +904,10 @@ mod approve_preimage_tests {
             Err("connect_wallet_signature_invalid")
         );
         assert!(img.windows(24).any(|w| w == b"iroha-connect|approve|v1"));
-        assert!(img.windows(32).any(|w| w == constraints.network_id.as_bytes()));
+        assert!(
+            img.windows(32)
+                .any(|w| w == constraints.network_id.as_bytes())
+        );
         assert!(img.windows(32).any(|w| w == sid));
         assert!(img.windows(32).any(|w| w == app));
         assert!(img.windows(32).any(|w| w == wal));

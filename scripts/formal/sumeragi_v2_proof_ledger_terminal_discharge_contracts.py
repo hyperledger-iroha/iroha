@@ -449,7 +449,7 @@ _READINESS_TLA_SOURCE_SHA256 = {
 
 _READINESS_TOOL_SOURCE_SHA256 = {
     "ci/check_sumeragi_formal.sh": (
-        "42ccb814bf79222dec698afa497871e4a8a9d7b4fe7e8a6b0395ce94245a09f3"
+        "2418c232995d04a0574abc4e386c1b214b677f8ffc5aaabcbba17ffa5b7f6714"
     ),
     "scripts/formal/check_sumeragi_v2_begin_timeout_ready_contract.py": (
         "70676b4b572c1b6cbd420ffbcc3f638a151fa3cb60d094d52c27556e6cfee4da"
@@ -532,8 +532,8 @@ def _readiness_kernel_source_fidelity_errors(
     if ci_path.is_file() and not ci_path.is_symlink():
         ci_lines = ci_path.read_text(encoding="utf-8").splitlines()
         required_invocations = (
-            "bash scripts/formal/run_sumeragi_v2_begin_timeout_ready_mutation.sh",
-            "bash scripts/formal/run_sumeragi_v2_command_execution_ready_mutation.sh",
+            "run_formal_script scripts/formal/run_sumeragi_v2_begin_timeout_ready_mutation.sh",
+            "run_formal_script scripts/formal/run_sumeragi_v2_command_execution_ready_mutation.sh",
         )
         positions: list[int] = []
         for invocation in required_invocations:

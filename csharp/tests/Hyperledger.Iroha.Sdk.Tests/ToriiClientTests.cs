@@ -780,7 +780,7 @@ public sealed partial class ToriiClientTests
             Content = new StringContent(responseBody),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
         var capabilities = await client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, capabilities.AbiVersion);
@@ -923,7 +923,7 @@ public sealed partial class ToriiClientTests
         using var handler = new RecordingHandler(_ => JsonResponse(NodeCapabilitiesResponseJsonWithSm(
             "sm3-256",
             new JsonArray("ed25519", "sm2"))));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var capabilities = await client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken);
 
@@ -1375,7 +1375,7 @@ public sealed partial class ToriiClientTests
         string expectedMessage)
     {
         using var handler = new RecordingHandler(_ => JsonResponse(json));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() => client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken));
 
@@ -18257,7 +18257,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var active = await client.GetRuntimeAbiActiveAsync(cancellationToken: TestContext.Current.CancellationToken);
         var hash = await client.GetRuntimeAbiHashAsync(cancellationToken: TestContext.Current.CancellationToken);
@@ -18484,7 +18484,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string expectedMessage)
     {
         using var handler = new RecordingHandler(_ => JsonResponse(json));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(async () =>
         {
@@ -18670,7 +18670,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent("""{ "error": "invalid account id literal" }"""),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var exception = await Assert.ThrowsAsync<ToriiApiException>(() => client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken));
 
@@ -18688,7 +18688,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ReasonPhrase = "upstream failed",
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateRuntimeAuthenticatedClient(handler);
 
         var exception = await Assert.ThrowsAsync<ToriiApiException>(() => client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken));
 

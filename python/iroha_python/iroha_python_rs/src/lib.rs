@@ -6086,43 +6086,6 @@ fn build_confidential_unshield_proof_v3_with_paths_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "build_connect_approve_preimage")]
-/// Build the canonical approval preimage for wallet signatures.
-fn build_connect_approve_preimage_py(
-    py: Python<'_>,
-    network_id: &PyNetworkId,
-    sid: &[u8],
-    app_public_key: &[u8],
-    wallet_public_key: &[u8],
-    account_id: &str,
-    permissions: Option<&Bound<'_, PyAny>>,
-    proof: Option<&Bound<'_, PyAny>>,
-    relay_auth: &[u8],
-) -> PyResult<Py<PyBytes>> {
-    let sid_arr = fixed_array::<32>(sid, "sid")?;
-    let app_pk = fixed_array::<32>(app_public_key, "app_public_key")?;
-    let wallet_pk = fixed_array::<32>(wallet_public_key, "wallet_public_key")?;
-    let relay_auth = fixed_array::<32>(relay_auth, "relay_auth")?;
-
-    let permissions_parsed = parse_permissions(permissions.cloned(), "permissions")?;
-    let proof_parsed = parse_sign_in_proof(proof.cloned())?;
-
-    let preimage = connect_sdk::build_approve_preimage(
-        &Constraints {
-            network_id: *network_id.as_inner(),
-        },
-        &sid_arr,
-        &app_pk,
-        &wallet_pk,
-        account_id,
-        permissions_parsed.as_ref(),
-        proof_parsed.as_ref(),
-        &relay_auth,
-    );
-    Ok(Py::from(PyBytes::new(py, &preimage)))
-}
-
-#[pyfunction]
 #[pyo3(name = "seal_connect_payload")]
 fn seal_connect_payload_py(
     py: Python<'_>,
@@ -15531,7 +15494,6 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(encode_connect_frame_py, module)?)?;
     module.add_function(wrap_pyfunction!(decode_connect_frame_py, module)?)?;
     connect_key_bindings::register(module)?;
-    module.add_function(wrap_pyfunction!(build_connect_approve_preimage_py, module)?)?;
     module.add_function(wrap_pyfunction!(seal_connect_payload_py, module)?)?;
     module.add_function(wrap_pyfunction!(open_connect_payload_py, module)?)?;
     module.add_function(wrap_pyfunction!(sorafs_alias_policy_defaults_py, module)?)?;

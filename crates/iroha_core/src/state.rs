@@ -12145,13 +12145,13 @@ enum MergeExecutionCommitSurface<'carrier> {
     },
 }
 
-/// Move-only proof that the exact finalized carrier metadata was derived for
-/// an authorized autonomous execution without adding another WSV effect.
+/// Move-only proof of exact finalized carrier metadata and post-finality WSV.
 #[derive(Debug)]
 struct CanonicalCarrierCommitMetadataAuthorization {
     entry_hash: HashOf<MergeLedgerEntry>,
     carrier_height: u64,
     carrier_hash: HashOf<BlockHeader>,
+    post_finality_write_set_root: Hash,
     previous_commit_topology: Vec<PeerId>,
     next_commit_topology: Vec<PeerId>,
     autoscale_sample: AutoscaleSampleRecord,
@@ -30798,7 +30798,6 @@ impl State {
                         }
                     }
                 }
-                // Map rid (hex) back to proposal id if possible and update proposal status
                 let prop_id_opt = if let Ok(bytes) = hex::decode(rid.trim_start_matches("0x"))
                     && bytes.len() == 32
                 {
@@ -30823,12 +30822,10 @@ impl State {
                     {
                         continue;
                     }
-                    // Threshold checks: turnout and approval ratio
                     let turnout = approve.saturating_add(reject).saturating_add(abstain);
                     let threshold_numerator = sb.gov.approval_threshold_q_num;
                     let threshold_denominator = sb.gov.approval_threshold_q_den.max(1);
                     let decision_approve = if turnout >= sb.gov.min_turnout {
-                        // approve/turnout >= num/den, with abstentions contributing to turnout.
                         let lhs = approve.saturating_mul(u128::from(threshold_denominator));
                         let rhs = turnout.saturating_mul(u128::from(threshold_numerator));
                         lhs >= rhs
@@ -30894,7 +30891,6 @@ impl State {
         }
         {
             let mut stx = sb.transaction();
-            // Sweep expired locks through the same typed movement choke point as transaction ISIs.
             let mut expired_by_referendum = BTreeMap::<String, Vec<AccountId>>::new();
             for (_expiry_height, bucket) in stx.world.governance_lock_expiry_index.range(..now_h) {
                 for (referendum_id, owner) in bucket {
@@ -30904,7 +30900,8 @@ impl State {
                         .push(owner.clone());
                 }
             }
-            let mut sweep_failed = false;
+            // Publish audit cells only when a due expiry entry made a sweep observable.
+            let (sweep_attempted, mut sweep_failed) = (!expired_by_referendum.is_empty(), false);
             for (rid, expired_owners) in expired_by_referendum {
                 let mut validation_fee_proposal_key_mismatch = false;
                 let validation_fee_custody = (rid.len() == 64
@@ -30929,7 +30926,6 @@ impl State {
                     })
                 });
                 if let Some(mut locks) = stx.world.governance_locks.get(&rid).cloned() {
-                    // Collect owners to remove
                     let mut to_remove: Vec<iroha_data_model::account::AccountId> = Vec::new();
                     for owner in expired_owners {
                         let Some(rec) = locks.locks.get(&owner).cloned() else {
@@ -31050,26 +31046,30 @@ impl State {
                     sweep_failed = true;
                 }
             }
-            if !sweep_failed {
-                *stx.world.governance_last_unlock_sweep_height.get_mut() = now_h;
+            if sweep_attempted {
+                if !sweep_failed {
+                    *stx.world.governance_last_unlock_sweep_height.get_mut() = now_h;
+                }
+                let mut retained_expired_locks = 0_u64;
+                let mut referenda_with_retained_expired = BTreeSet::<String>::new();
+                for (_expiry_height, bucket) in
+                    stx.world.governance_lock_expiry_index.range(..now_h)
+                {
+                    retained_expired_locks = retained_expired_locks
+                        .saturating_add(u64::try_from(bucket.len()).unwrap_or(u64::MAX));
+                    referenda_with_retained_expired.extend(
+                        bucket
+                            .iter()
+                            .map(|(referendum_id, _)| referendum_id.clone()),
+                    );
+                }
+                *stx.world.governance_unlock_stats.get_mut() = GovernanceUnlockStatsSnapshot {
+                    evaluated_height: now_h,
+                    expired_locks_now: retained_expired_locks,
+                    referenda_with_expired: u64::try_from(referenda_with_retained_expired.len())
+                        .unwrap_or(u64::MAX),
+                };
             }
-            let mut retained_expired_locks = 0_u64;
-            let mut referenda_with_retained_expired = BTreeSet::<String>::new();
-            for (_expiry_height, bucket) in stx.world.governance_lock_expiry_index.range(..now_h) {
-                retained_expired_locks = retained_expired_locks
-                    .saturating_add(u64::try_from(bucket.len()).unwrap_or(u64::MAX));
-                referenda_with_retained_expired.extend(
-                    bucket
-                        .iter()
-                        .map(|(referendum_id, _)| referendum_id.clone()),
-                );
-            }
-            *stx.world.governance_unlock_stats.get_mut() = GovernanceUnlockStatsSnapshot {
-                evaluated_height: now_h,
-                expired_locks_now: retained_expired_locks,
-                referenda_with_expired: u64::try_from(referenda_with_retained_expired.len())
-                    .unwrap_or(u64::MAX),
-            };
             stx.apply();
         }
         {
@@ -52464,12 +52464,10 @@ impl<'state> StateBlock<'state> {
         self.staged_merge_entry = Some(entry.clone());
         Ok(())
     }
-
     /// Return the resolved merge entry retained for carrier persistence.
     pub(crate) fn staged_merge_entry(&self) -> Option<&MergeLedgerEntry> {
         self.staged_merge_entry.as_ref()
     }
-
     fn canonical_wsv_merge_commit_authorization_matches(
         authorization: &CanonicalWsvMergeCommitAuthorization,
         entry: &MergeLedgerEntry,
@@ -53479,7 +53477,7 @@ impl<'state> StateBlock<'state> {
                     block_header_hash,
                     current_base_height,
                     current_base_hash,
-                    current_write_set_root,
+                    authorization.write_set_root,
                 ) {
                     error!(
                         block_height,
@@ -53512,6 +53510,7 @@ impl<'state> StateBlock<'state> {
                 if carrier_authorization.entry_hash != entry.canonical_hash()
                     || carrier_authorization.carrier_height != block_height
                     || carrier_authorization.carrier_hash != block_header_hash
+                    || carrier_authorization.post_finality_write_set_root != current_write_set_root
                     || carrier_authorization.previous_commit_topology != previous_commit_topology
                     || staged_previous_topology != previous_commit_topology
                     || carrier_authorization.next_commit_topology != staged_next_topology
@@ -54141,7 +54140,7 @@ impl<'state> StateBlock<'state> {
                 "finalized autonomous carrier retained events after publication".to_owned(),
             ));
         }
-        let current_write_set_root =
+        let post_finality_write_set_root =
             Self::merge_execution_write_set_root_from_overlay_with_external_events(
                 &self.world,
                 &self.direct_committed_transactions,
@@ -54155,11 +54154,10 @@ impl<'state> StateBlock<'state> {
             carrier_hash,
             current_base_height,
             current_base_hash,
-            current_write_set_root,
+            authorization.write_set_root,
         ) {
             return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "finalized carrier introduced an effect outside the authorized WSV write set"
-                    .to_owned(),
+                "finalized carrier economic authorization is stale or mismatched".to_owned(),
             ));
         }
         if self.pending_autoscale_lifecycle.is_some()
@@ -54228,6 +54226,7 @@ impl<'state> StateBlock<'state> {
                 entry_hash: entry.canonical_hash(),
                 carrier_height,
                 carrier_hash,
+                post_finality_write_set_root,
                 previous_commit_topology,
                 next_commit_topology: self.commit_topology.iter().cloned().collect(),
                 autoscale_sample,

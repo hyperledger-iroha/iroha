@@ -1,19 +1,19 @@
 # Merge this fragment into a deployment that already supplies the pinned
 # [sorafs.por.drand] trust and transport fields documented by the PoR plan.
-# Every value below is public. HSM/KMS credentials and private keys belong only
-# in the runtime provider implementation selected by these opaque handles.
+# Every value below is public. Private keys belong only in the independently
+# administered external software signer selected by these opaque handles.
 
 [sorafs.por]
 enabled = true
 
 [sorafs.por.potr_runtime]
-gateway_handle = "pkcs11:token=sorafs-prod-a;object=potr-gateway"
+gateway_handle = "software://sorafs/potr-gateway/primary"
 gateway_signer_id_hex = "1111111111111111111111111111111111111111111111111111111111111111"
 gateway_revision = 3
 gateway_policy_digest_hex = "2222222222222222222222222222222222222222222222222222222222222222"
 gateway_public_key_hex = "e2fe2a39b7326642827d6d82d497622cd6c297fe78270eaa436b01f086b6f3cb"
 
-provider_handle = "kms:region-a:key/potr-provider"
+provider_handle = "software://sorafs/potr-provider/primary"
 provider_signer_id_hex = "3333333333333333333333333333333333333333333333333333333333333333"
 provider_revision = 7
 provider_policy_digest_hex = "4444444444444444444444444444444444444444444444444444444444444444"

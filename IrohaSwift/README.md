@@ -1741,32 +1741,44 @@ The SDK ships `ConnectClient` and `ConnectSession` helpers for WebSocket
 session management, typed frame exchange, and encrypted envelope handling.
 Frame encoding/decoding flows through `ConnectCodec`, which requires the Norito
 bridge (throws `ConnectCodecError.bridgeUnavailable` when the XCFramework is
-absent). Use `ConnectCrypto` to generate Connect X25519 key pairs and derive
-directional session keys from the bridge:
+absent). The launch identity is always the exact tuple `(NetworkId, app_pk,
+nonce16)`; the SDK derives and verifies the SID instead of accepting a caller-
+supplied identifier:
 
 ```swift
-let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sid)&role=app")!
-// token = token_app or token_wallet from /v1/connect/session
-var connectRequest = URLRequest(url: connectURL)
-connectRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-let connect = ConnectClient(request: connectRequest)
-
 Task {
-    await connect.start()
     do {
+        let torii = ToriiClient(baseURL: URL(string: "https://node.example")!)
+        let networkID = try NetworkId(literal: canonicalNetworkID)
         let keyPair = try ConnectCrypto.generateKeyPair()
+        let nonce = try secureRandomBytes(count: 16)
+        let created = try await torii.createConnectSession(
+            networkID: networkID,
+            appPublicKey: keyPair.publicKey,
+            nonce: nonce
+        )
+        let request = try ConnectClient.makeWebSocketRequest(
+            baseURL: torii.baseURL,
+            sid: created.sid,
+            role: .app,
+            token: created.tokenApp
+        )
+        let connect = ConnectClient(request: request)
+        let session = try ConnectSession(
+            networkID: networkID,
+            appPublicKey: keyPair.publicKey,
+            nonce: nonce,
+            relayToken: created.tokenRelay,
+            client: connect
+        )
+        connect.start()
         let open = ConnectOpen(appPublicKey: keyPair.publicKey,
                                appMetadata: ConnectAppMetadata(name: "Demo dApp", iconURL: nil, description: nil),
-                               constraints: ConnectConstraints(chainID: "00000000-0000-0000-0000-000000000000"),
-                               permissions: ConnectPermissions(methods: ["sign"]))
-        let frame = ConnectFrame(sessionID: Data(),
-                                 direction: .appToWallet,
-                                 sequence: 0,
-                                 kind: .control(.open(open)))
-        try await connect.send(frame: frame) // NoritoBridge handles frame encoding when linked.
-        while true {
-            let received = try await connect.receiveFrame()
-            print("frame seq:", received.sequence)
+                               constraints: ConnectConstraints(networkID: networkID),
+                               permissions: ConnectPermissions(methods: ["SIGN_REQUEST_TX"]))
+        try await session.sendOpen(open: open) // one-shot app→wallet sequence 1
+        for try await event in session.eventStream() {
+            print("connect event:", event)
         }
     } catch {
         print("connect setup failed: \(error)")
@@ -1778,8 +1790,12 @@ Task {
 
 ```swift
 let torii = ToriiClient(baseURL: URL(string: "https://torii.example")!)
-let session = try await torii.createConnectSession(sid: "demo-session")
-// Keep tokenManagement server-side for cleanup/status; wallet/app launch URIs carry tokenRelay.
+let session = try await torii.createConnectSession(
+    networkID: networkID,
+    appPublicKey: appPublicKey,
+    nonce: nonce
+)
+// Keep tokenManagement server-side; the canonical wallet URI carries token and relay.
 let apps = try await torii.listConnectApps()
 let manifest = try await torii.getConnectAdmissionManifest()
 let wsRequest = try ConnectClient.makeWebSocketRequest(baseURL: torii.baseURL,
@@ -1791,8 +1807,10 @@ let connect = ConnectClient(request: wsRequest)
 
 Wallet approval code can derive the relay binding with
 `ConnectCrypto.relayAuthHash(sessionID:relayToken:)` before signing the approval
-preimage. Keep `session.tokenManagement` server-side for deletion and
-per-session status calls.
+preimage. Verify approvals with `ConnectCrypto.verifyApprovalSignature`; it binds
+the exact network constraints, SID, app/wallet keys, canonical single-key Ed25519
+I105 account, accepted permissions/proof, and relay authorization. Keep
+`session.tokenManagement` server-side for deletion and per-session status calls.
 
 Encryption/decryption of ciphertext envelopes is handled by the bridge-backed helpers:
 derive keys via `ConnectCrypto`, call `session.setDirectionKeys(_:)`, and `ConnectSession`
@@ -1999,8 +2017,8 @@ A SwiftUI wallet example (`examples/ios/NoritoDemoXcode`) showcases token balanc
 Torii WebSocket subscriptions, and IRH transfers. The Xcode project, Swift sources, and
 configuration templates are checked into the repository. Launch the demo by
 supplying the Norito bridge XCFramework and populating the `.env` file (keys
-such as `TORII_NODE_URL`, `CONNECT_SESSION_ID`, `CONNECT_TOKEN_APP`,
-`CONNECT_TOKEN_WALLET`, and `CONNECT_CHAIN_ID` are read on startup). Validation
+such as `TORII_NODE_URL`, `CONNECT_TOKEN_APP`,
+`CONNECT_TOKEN_WALLET`, `CONNECT_TOKEN_RELAY`, and `CONNECT_NETWORK_ID` are read on startup). Validation
 hooks for local and CI use live in `scripts/ci/verify_norito_demo.sh`.
 
 For contributor setup and Torii mock ledger instructions, refer to

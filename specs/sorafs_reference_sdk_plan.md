@@ -43,7 +43,8 @@ critical/high vulnerability, OIDC identity, and cosign provenance checks for
 every target. Signed-manifest evidence must declare the governed Ed25519
 release signature algorithm (`ed25519`) and exact
 `authenticated_external_signer` provider plus `software` signing backend
-contract. The payload-free canary builder
+contract. A valid signed-manifest result is `software-key-qualified` and never
+HSM-qualified. The payload-free canary builder
 rejects unsupported `--signature-algorithm` values, legacy signer labels, and
 missing or non-software backends and provider revisions before writing evidence
 JSON. The

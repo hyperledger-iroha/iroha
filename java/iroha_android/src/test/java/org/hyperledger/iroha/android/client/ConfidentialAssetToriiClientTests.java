@@ -2,15 +2,29 @@ package org.hyperledger.iroha.android.client;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.Signature;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.client.transport.RequestReplayPolicy;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 public final class ConfidentialAssetToriiClientTests {
+  private static final NetworkId NETWORK_ID =
+      NetworkId.parse(
+          "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+  private static final NetworkId OTHER_NETWORK_ID =
+      NetworkId.parse(
+          "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22");
+  private static final KeyPair KEY_PAIR = generateKeyPair();
+
   private ConfidentialAssetToriiClientTests() {}
 
   public static void main(final String[] args) {
@@ -22,6 +36,7 @@ public final class ConfidentialAssetToriiClientTests {
     rootsAndMerklePathsRejectOverflowDuplicateKeysAndInconsistentShape();
     merklePathParserRejectsDuplicateKeysBeforeLastValueWins();
     nonSuccessResponsesSurfaceConfidentialAssetToriiException();
+    canonicalAuthConfigurationFailsClosedBeforeDispatch();
     System.out.println("[IrohaAndroid] ConfidentialAssetToriiClientTests passed.");
   }
 
@@ -44,10 +59,13 @@ public final class ConfidentialAssetToriiClientTests {
         ConfidentialAssetToriiClient.builder()
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(new LocalSigningContext(NETWORK_ID))
             .timeout(Duration.ofSeconds(5))
             .build();
 
-    final ZkRootsResponse response = client.getZkAssetRoots(new ZkRootsRequest("usd#bank", 7)).join();
+    final ZkRootsResponse response =
+        client.getZkAssetRoots(new ZkRootsRequest("usd#bank", 7), canonicalAuth("zk-roots-1"))
+            .join();
 
     assert "POST".equals(executor.lastRequest.method()) : "roots must use POST";
     assert "/v1/zk/roots".equals(executor.lastRequest.uri().getPath()) : "roots path mismatch";
@@ -57,6 +75,11 @@ public final class ConfidentialAssetToriiClientTests {
         : "content-type header mismatch";
     assert "{\"asset_id\":\"usd#bank\",\"max\":7}".equals(executor.lastBody)
         : "request body mismatch: " + executor.lastBody;
+    assert executor.lastRequest.replayPolicy() == RequestReplayPolicy.ONE_SHOT
+        : "signed roots request must be one-shot";
+    assert executor.requestCount == 1 : "signed roots request must dispatch exactly once";
+    assertCanonicalSignature(executor.lastRequest, NETWORK_ID, "zk-roots-1", true);
+    assertCanonicalSignature(executor.lastRequest, OTHER_NETWORK_ID, "zk-roots-1", false);
     assert root.equals(response.latest()) : "latest mismatch";
     assert response.roots().equals(List.of(root)) : "roots mismatch";
     assert response.evaluatedBlockHeight() == 7 : "height mismatch";
@@ -105,11 +128,16 @@ public final class ConfidentialAssetToriiClientTests {
         ConfidentialAssetToriiClient.builder()
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(new LocalSigningContext(NETWORK_ID))
             .timeout(Duration.ofSeconds(5))
             .build();
 
     final ZkMerklePathResponse response =
-        client.getZkAssetMerklePaths(new ZkMerklePathRequest("usd#bank", List.of(filled((byte) 2)))).join();
+        client
+            .getZkAssetMerklePaths(
+                new ZkMerklePathRequest("usd#bank", List.of(filled((byte) 2))),
+                canonicalAuth("zk-paths-1"))
+            .join();
 
     assert "POST".equals(executor.lastRequest.method()) : "merkle path must use POST";
     assert "/v1/zk/merkle-path".equals(executor.lastRequest.uri().getPath())
@@ -302,9 +330,12 @@ public final class ConfidentialAssetToriiClientTests {
         ConfidentialAssetToriiClient.builder()
             .executor(new StubExecutor(503, "{\"error\":\"not ready\"}", "Unavailable", Map.of()))
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(new LocalSigningContext(NETWORK_ID))
             .build();
     try {
-      client.getZkAssetRoots(new ZkRootsRequest("usd#bank")).join();
+      client
+          .getZkAssetRoots(new ZkRootsRequest("usd#bank"), canonicalAuth("zk-failure-1"))
+          .join();
       throw new AssertionError("expected roots request failure");
     } catch (final CompletionException ex) {
       assert ex.getCause() instanceof ConfidentialAssetToriiException
@@ -313,6 +344,82 @@ public final class ConfidentialAssetToriiClientTests {
           (ConfidentialAssetToriiException) ex.getCause();
       assert Integer.valueOf(503).equals(error.getStatusCode()) : "status code mismatch";
       assert error.getMessage().contains("/v1/zk/roots") : "path missing from message";
+    }
+  }
+
+  private static void canonicalAuthConfigurationFailsClosedBeforeDispatch() {
+    final StubExecutor executor = new StubExecutor(200, "{}");
+    expectIllegalState(
+        () ->
+            ConfidentialAssetToriiClient.builder()
+                .executor(executor)
+                .baseUri(URI.create("https://example.com"))
+                .build());
+    assert executor.requestCount == 0 : "missing network context must not dispatch";
+
+    final ConfidentialAssetToriiClient client =
+        ConfidentialAssetToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .localSigningContext(new LocalSigningContext(NETWORK_ID))
+            .addHeader("x-IROHA-signature", "forged")
+            .build();
+    expectIllegalArgument(
+        () ->
+            client.getZkAssetRoots(
+                new ZkRootsRequest("usd#bank"), canonicalAuth("zk-header-1")));
+    assert executor.requestCount == 0 : "ambiguous canonical headers must not dispatch";
+  }
+
+  private static ToriiCanonicalRequestAuth canonicalAuth(final String nonce) {
+    return new ToriiCanonicalRequestAuth(
+        "alice",
+        message -> sign(message),
+        Long.valueOf(1_700_000_000_000L),
+        nonce);
+  }
+
+  private static KeyPair generateKeyPair() {
+    try {
+      return KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to create signing key fixture", ex);
+    }
+  }
+
+  private static byte[] sign(final byte[] message) {
+    try {
+      final Signature signer = Signature.getInstance("Ed25519");
+      signer.initSign(KEY_PAIR.getPrivate());
+      signer.update(message);
+      return signer.sign();
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to sign request fixture", ex);
+    }
+  }
+
+  private static void assertCanonicalSignature(
+      final TransportRequest request,
+      final NetworkId expectedNetworkId,
+      final String nonce,
+      final boolean expected) {
+    try {
+      final byte[] signature =
+          Base64.getDecoder()
+              .decode(firstHeader(request, CanonicalRequestSigner.HEADER_SIGNATURE));
+      final Signature verifier = Signature.getInstance("Ed25519");
+      verifier.initVerify(KEY_PAIR.getPublic());
+      verifier.update(
+          CanonicalRequestSigner.canonicalRequestSignatureMessage(
+              expectedNetworkId,
+              request.method(),
+              request.uri(),
+              request.body(),
+              1_700_000_000_000L,
+              nonce));
+      assert verifier.verify(signature) == expected : "canonical request signature mismatch";
+    } catch (final Exception ex) {
+      throw new AssertionError("failed to verify canonical request signature", ex);
     }
   }
 
@@ -417,6 +524,7 @@ public final class ConfidentialAssetToriiClientTests {
     private final Map<String, List<String>> headers;
     private TransportRequest lastRequest;
     private String lastBody = "";
+    private int requestCount;
 
     private StubExecutor(final int status, final String body) {
       this(status, body, "", Map.of());
@@ -435,6 +543,7 @@ public final class ConfidentialAssetToriiClientTests {
 
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      requestCount++;
       this.lastRequest = request;
       this.lastBody = new String(request.body(), StandardCharsets.UTF_8);
       return CompletableFuture.completedFuture(new TransportResponse(status, body, message, headers));

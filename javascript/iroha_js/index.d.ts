@@ -4,6 +4,8 @@ import type { BrowserFeePayment } from "./transaction-codec.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
 import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./src/blockProofTypes.js";
 import type { ToriiBrowserExplorerAccountsOptions, ToriiBrowserExplorerAssetDefinition, ToriiBrowserExplorerAssetDefinitionsOptions, ToriiBrowserExplorerAssetsOptions, ToriiBrowserExplorerCursorPage, ToriiBrowserExplorerDomainsOptions, ToriiBrowserExplorerOwnedDomainOptions } from "./src/toriiBrowserExplorerTypes.js";
+import { NetworkId } from "./src/networkId.js";
+export { NetworkId };
 export * from "./kotodama-compiler.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
@@ -18,20 +20,6 @@ export type JsonValue =
   | string
   | JsonValue[]
   | { [key: string]: JsonValue };
-
-/** Exact immutable genesis-header hash used as an ordinary transaction domain.
- * Runtime construction is restricted to the canonical factories below. */
-export class NetworkId {
-  private constructor();
-  static readonly BYTE_LENGTH: 32;
-  static parse(literal: string): NetworkId;
-  static fromBytes(value: ArrayBuffer | ArrayBufferView): NetworkId;
-  readonly literal: string;
-  toBytes(): Uint8Array;
-  equals(other: unknown): other is NetworkId;
-  toString(): string;
-  toJSON(): string;
-}
 
 export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 22;
 export const KAGEMUSHA_MANIFEST_VERSION: 4;

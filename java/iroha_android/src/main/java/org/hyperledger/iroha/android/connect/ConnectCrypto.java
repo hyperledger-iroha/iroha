@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.Optional;
 import org.bouncycastle.crypto.InvalidCipherTextException;
 import org.bouncycastle.crypto.agreement.X25519Agreement;
 import org.bouncycastle.crypto.digests.Blake2bDigest;
@@ -13,11 +14,16 @@ import org.bouncycastle.crypto.digests.SHA256Digest;
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
 import org.bouncycastle.crypto.modes.ChaCha20Poly1305;
 import org.bouncycastle.crypto.params.AEADParameters;
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.params.HKDFParameters;
 import org.bouncycastle.crypto.params.KeyParameter;
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
+import org.bouncycastle.crypto.signers.Ed25519Signer;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
+import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /** Cryptographic helpers for the wallet-role Connect session. */
 public final class ConnectCrypto {
@@ -29,6 +35,8 @@ public final class ConnectCrypto {
       "iroha:x25519:hkdf:v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] X25519_HKDF_INFO =
       "iroha:x25519:session-key".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] SESSION_ID_DOMAIN =
+      "iroha-connect|sid|".getBytes(StandardCharsets.UTF_8);
   private static final byte[] RELAY_AUTH_DOMAIN =
       "iroha-connect|relay-auth|v1".getBytes(StandardCharsets.UTF_8);
 
@@ -85,6 +93,24 @@ public final class ConnectCrypto {
     privateKey.encode(privateBytes, 0);
     publicKey.encode(publicBytes, 0);
     return new KeyPair(publicBytes, privateBytes);
+  }
+
+  /** Derives the canonical session identifier bound to one exact deployment and launch nonce. */
+  public static byte[] deriveSessionId(
+      final NetworkId networkId, final byte[] appPublicKey, final byte[] nonce)
+      throws ConnectProtocolException {
+    if (networkId == null) {
+      throw new ConnectProtocolException("networkId must not be null");
+    }
+    requireLength(appPublicKey, KEY_LENGTH, "appPublicKey");
+    requireLength(nonce, 16, "nonce");
+    if (isAllZero(appPublicKey)) {
+      throw new ConnectProtocolException("appPublicKey must not be all-zero");
+    }
+    if (isAllZero(nonce)) {
+      throw new ConnectProtocolException("nonce must not be all-zero");
+    }
+    return blake2b32(SESSION_ID_DOMAIN, networkId.bytes(), appPublicKey, nonce);
   }
 
   public static DirectionKeys deriveDirectionKeys(
@@ -160,18 +186,7 @@ public final class ConnectCrypto {
   }
 
   public static byte[] buildApprovePreimage(
-      final byte[] sessionId,
-      final byte[] appPublicKey,
-      final byte[] walletPublicKey,
-      final String accountId,
-      final byte[] permissionsHash,
-      final byte[] proofHash)
-      throws ConnectProtocolException {
-    return buildApprovePreimage(
-        sessionId, appPublicKey, walletPublicKey, accountId, permissionsHash, proofHash, null);
-  }
-
-  public static byte[] buildApprovePreimage(
+      final NetworkId networkId,
       final byte[] sessionId,
       final byte[] appPublicKey,
       final byte[] walletPublicKey,
@@ -180,9 +195,15 @@ public final class ConnectCrypto {
       final byte[] proofHash,
       final byte[] relayAuthHash)
       throws ConnectProtocolException {
+    if (networkId == null) {
+      throw new ConnectProtocolException("networkId must not be null");
+    }
     requireLength(sessionId, KEY_LENGTH, "sessionId");
     requireLength(appPublicKey, KEY_LENGTH, "appPublicKey");
     requireLength(walletPublicKey, KEY_LENGTH, "walletPublicKey");
+    if (permissionsHash != null) requireLength(permissionsHash, KEY_LENGTH, "permissionsHash");
+    if (proofHash != null) requireLength(proofHash, KEY_LENGTH, "proofHash");
+    requireLength(relayAuthHash, KEY_LENGTH, "relayAuthHash");
     final String normalizedAccountId;
     try {
       normalizedAccountId =
@@ -192,26 +213,76 @@ public final class ConnectCrypto {
     }
 
     final byte[] domain = "iroha-connect|approve|v1".getBytes(StandardCharsets.UTF_8);
+    final byte[] networkIdBytes = networkId.bytes();
+    final byte[] constraintsHash = blake2b32(encodeConstraints(networkId));
     final byte[] accountBytes = normalizedAccountId.getBytes(StandardCharsets.UTF_8);
     int size = taggedSize("domain", domain)
+        + taggedSize("network_id", networkIdBytes)
+        + taggedSize("constraints", constraintsHash)
         + taggedSize("sid", sessionId)
         + taggedSize("app_pk", appPublicKey)
         + taggedSize("wallet_pk", walletPublicKey)
         + taggedSize("account_id", accountBytes);
     if (permissionsHash != null) size += taggedSize("permissions", permissionsHash);
     if (proofHash != null) size += taggedSize("proof", proofHash);
-    if (relayAuthHash != null) size += taggedSize("relay_auth", relayAuthHash);
+    size += taggedSize("relay_auth", relayAuthHash);
     final ByteBuffer buffer = ByteBuffer.allocate(size);
     buffer.order(java.nio.ByteOrder.LITTLE_ENDIAN);
     putTagged(buffer, "domain", domain);
+    putTagged(buffer, "network_id", networkIdBytes);
+    putTagged(buffer, "constraints", constraintsHash);
     putTagged(buffer, "sid", sessionId);
     putTagged(buffer, "app_pk", appPublicKey);
     putTagged(buffer, "wallet_pk", walletPublicKey);
     putTagged(buffer, "account_id", accountBytes);
     if (permissionsHash != null) putTagged(buffer, "permissions", permissionsHash);
     if (proofHash != null) putTagged(buffer, "proof", proofHash);
-    if (relayAuthHash != null) putTagged(buffer, "relay_auth", relayAuthHash);
+    putTagged(buffer, "relay_auth", relayAuthHash);
     return buffer.array();
+  }
+
+  /** Verifies an Ed25519 approval against the exact single-key account and session bindings. */
+  public static boolean verifyApprovalSignature(
+      final NetworkId networkId,
+      final byte[] sessionId,
+      final byte[] appPublicKey,
+      final byte[] walletPublicKey,
+      final String accountId,
+      final byte[] permissionsHash,
+      final byte[] proofHash,
+      final byte[] relayAuthHash,
+      final String algorithm,
+      final byte[] signature) {
+    if (!"ed25519".equals(algorithm) || signature == null || signature.length != 64) {
+      return false;
+    }
+    try {
+      final String canonicalAccount =
+          AccountIdLiteral.requireCanonicalI105Address(accountId, "accountId");
+      final Optional<AccountAddress.SingleKeyPayload> signatory =
+          AccountAddress.fromI105(canonicalAccount, null).singleKeyPayloadIgnoringCurveSupport();
+      if (!signatory.isPresent()
+          || signatory.get().curveId() != 0x01
+          || !Ed25519PublicKeyAdmission.isValid(signatory.get().publicKey())) {
+        return false;
+      }
+      final byte[] preimage =
+          buildApprovePreimage(
+              networkId,
+              sessionId,
+              appPublicKey,
+              walletPublicKey,
+              canonicalAccount,
+              permissionsHash,
+              proofHash,
+              relayAuthHash);
+      final Ed25519Signer verifier = new Ed25519Signer();
+      verifier.init(false, new Ed25519PublicKeyParameters(signatory.get().publicKey(), 0));
+      verifier.update(preimage, 0, preimage.length);
+      return verifier.verifySignature(signature);
+    } catch (final Exception ignored) {
+      return false;
+    }
   }
 
   private static int taggedSize(final String tag, final byte[] value) {
@@ -307,6 +378,14 @@ public final class ConnectCrypto {
     final byte[] out = new byte[KEY_LENGTH];
     digest.doFinal(out, 0);
     return out;
+  }
+
+  private static byte[] encodeConstraints(final NetworkId networkId) {
+    return ByteBuffer.allocate(Long.BYTES + NetworkId.BYTE_LENGTH)
+        .order(ByteOrder.LITTLE_ENDIAN)
+        .putLong(NetworkId.BYTE_LENGTH)
+        .put(networkId.bytes())
+        .array();
   }
 
   private static boolean isAllZero(final byte[] value) {

@@ -51,7 +51,6 @@ class NexusAppConfig:
 class NexusConnectOptions:
     """Options used to create a Connect app session."""
 
-    sid: Optional[str] = None
     node: Optional[str] = None
 
 
@@ -60,6 +59,9 @@ class NexusConnectSession:
     """Registered Connect session and wallet launch metadata."""
 
     sid: str
+    network_id: NetworkId
+    app_public_key: bytes
+    nonce: bytes
     wallet_launch_uri: str
     app_launch_uri: Optional[str] = None
     token_app: Optional[str] = None
@@ -69,6 +71,43 @@ class NexusConnectSession:
     approved_account: Optional[str] = None
     signing_public_key: Optional[bytes] = None
     app_session: Any = None
+
+    def __post_init__(self) -> None:
+        network_id = _require_network_id(
+            self.network_id, "NexusConnectSession.network_id"
+        )
+        app_public_key = _bytes(
+            self.app_public_key, "NexusConnectSession.app_public_key"
+        )
+        nonce = _bytes(self.nonce, "NexusConnectSession.nonce")
+        if len(app_public_key) != 32 or not any(app_public_key):
+            raise ValueError("NexusConnectSession.app_public_key must be 32 nonzero bytes")
+        if len(nonce) != 16 or not any(nonce):
+            raise ValueError("NexusConnectSession.nonce must be 16 nonzero bytes")
+        if not isinstance(self.sid, str) or not self.sid or self.sid != self.sid.strip():
+            raise ValueError("NexusConnectSession.sid must be a non-empty exact string")
+        from .connect import generate_connect_sid, parse_connect_uri
+
+        expected = generate_connect_sid(
+            network_id=network_id,
+            app_public_key=app_public_key,
+            nonce=nonce,
+        )
+        if self.sid != expected.sid_base64url:
+            raise ValueError(
+                "NexusConnectSession.sid does not match network_id, app_public_key, and nonce"
+            )
+        wallet_uri = parse_connect_uri(self.wallet_launch_uri)
+        if (
+            wallet_uri.sid != self.sid
+            or wallet_uri.network_id != network_id
+            or wallet_uri.app_public_key != app_public_key
+            or wallet_uri.nonce != nonce
+        ):
+            raise ValueError("NexusConnectSession wallet URI substituted session identity")
+        object.__setattr__(self, "network_id", network_id)
+        object.__setattr__(self, "app_public_key", app_public_key)
+        object.__setattr__(self, "nonce", nonce)
 
 
 @dataclass(frozen=True)
@@ -169,6 +208,7 @@ class _DefaultConnectState:
     connect_session: Any = None
     approved_account: Optional[str] = None
     signing_public_key: Optional[bytes] = None
+    approval_started: bool = False
 
 
 def _bytes(value: BytesLike, field: str) -> bytes:
@@ -259,10 +299,7 @@ def _normalize_algorithm(algorithm: Any) -> str:
             "unsupported_signature_algorithm",
             f"unsupported signature algorithm {algorithm}",
         )
-    if algorithm not in {
-        "ed25519",
-        "0",
-    }:
+    if algorithm != "ed25519":
         raise NexusAppError(
             "unsupported_signature_algorithm",
             f"unsupported signature algorithm {algorithm}",
@@ -437,6 +474,9 @@ class DefaultNexusConnectTransport:
         state = _DefaultConnectState(preview=bootstrap.preview, torii_client=torii_client)
         return NexusConnectSession(
             sid=bootstrap.preview.sid_base64url,
+            network_id=bootstrap.preview.network_id,
+            app_public_key=bootstrap.preview.app_key_pair.public_key,
+            nonce=bootstrap.preview.nonce,
             wallet_launch_uri=bootstrap.preview.wallet_uri,
             app_launch_uri=bootstrap.preview.app_uri,
             token_app=bootstrap.tokens.app,
@@ -460,9 +500,34 @@ class DefaultNexusConnectTransport:
             ConnectPermissions,
             ConnectSession,
             ConnectSessionKeys,
-            build_connect_approve_preimage,
+            generate_connect_sid,
+            verify_connect_approval_signature,
         )
-        from .crypto import verify_ed25519
+
+        if state.approval_started or state.connect_session is not None:
+            raise NexusAppError(
+                "connect_approval_replayed",
+                "Connect approval can be requested only once for a session",
+            )
+        if config.network_id != state.preview.network_id:
+            raise NexusAppError(
+                "connect_identity_substituted",
+                "Connect Open network_id differs from the registered exact session",
+            )
+        expected_sid = generate_connect_sid(
+            network_id=state.preview.network_id,
+            app_public_key=state.preview.app_key_pair.public_key,
+            nonce=state.preview.nonce,
+        )
+        if (
+            session.sid != state.preview.sid_base64url
+            or expected_sid.sid_bytes != state.preview.sid_bytes
+        ):
+            raise NexusAppError(
+                "connect_identity_substituted",
+                "Connect session identity was substituted before Open",
+            )
+        state.approval_started = True
 
         ws = self._websocket(session, state)
         permissions = ConnectPermissions(methods=["SIGN_REQUEST_TX"], events=[])
@@ -482,8 +547,6 @@ class DefaultNexusConnectTransport:
 
         while True:
             frame = ConnectFrame.from_bytes(self._recv_bytes(ws))
-            if not isinstance(frame.control, ConnectControlApprove):
-                continue
             if (
                 frame.sid != state.preview.sid_bytes
                 or frame.direction != ConnectDirection.WALLET_TO_APP
@@ -493,6 +556,11 @@ class DefaultNexusConnectTransport:
                     "connect_approval_replayed",
                     "Connect approval must be the first wallet frame for this exact session",
                 )
+            if not isinstance(frame.control, ConnectControlApprove):
+                raise NexusAppError(
+                    "connect_approval_invalid",
+                    "The first wallet frame must be exactly one approval",
+                )
             approval = frame.control
             try:
                 _normalize_algorithm(approval.algorithm)
@@ -501,25 +569,43 @@ class DefaultNexusConnectTransport:
                     "unsupported_signature_algorithm",
                     f"unsupported Connect approval signature algorithm {approval.algorithm}",
                 ) from exc
-            signing_public_key = config.signing_public_key or _account_ed25519_public_key(
-                approval.account_id
-            )
+            account_public_key = _account_ed25519_public_key(approval.account_id)
+            if config.signing_public_key is not None:
+                configured_public_key = _validate_ed25519_public_key(
+                    config.signing_public_key,
+                    "config.signing_public_key",
+                )
+                if configured_public_key != account_public_key:
+                    raise NexusAppError(
+                        "connect_approval_account_key_mismatch",
+                        "configured signing key does not control the approved account",
+                    )
+            signing_public_key = account_public_key
             if not session.token_relay:
                 raise NexusAppError(
                     "connect_approval_invalid",
                     "Connect approval requires the session relay binding",
                 )
-            preimage = build_connect_approve_preimage(
-                network_id=config.network_id,
-                sid=state.preview.sid_bytes,
-                app_public_key=state.preview.app_key_pair.public_key,
-                wallet_public_key=approval.wallet_public_key,
-                account_id=approval.account_id,
-                permissions=approval.permissions,
-                proof=approval.proof,
-                relay_token=session.token_relay,
-            )
-            if not verify_ed25519(signing_public_key, preimage, approval.signature):
+            try:
+                verified = verify_connect_approval_signature(
+                    network_id=config.network_id,
+                    sid=state.preview.sid_bytes,
+                    app_public_key=state.preview.app_key_pair.public_key,
+                    nonce=state.preview.nonce,
+                    wallet_public_key=approval.wallet_public_key,
+                    account_id=approval.account_id,
+                    permissions=approval.permissions,
+                    proof=approval.proof,
+                    relay_token=session.token_relay,
+                    algorithm=approval.algorithm,
+                    signature=approval.signature,
+                )
+            except Exception as exc:
+                raise NexusAppError(
+                    "connect_approval_invalid",
+                    "Connect approval verification inputs are invalid",
+                ) from exc
+            if not verified:
                 raise NexusAppError(
                     "connect_approval_invalid",
                     "Connect approval signature verification failed",
@@ -641,19 +727,37 @@ class NexusAppClient:
 
         if self.connect_transport is None:
             raise NexusAppError("connect_transport_unavailable", "Connect transport is required")
-        return self.connect_transport.start_connect(options or NexusConnectOptions(), self.config)
+        session = self.connect_transport.start_connect(
+            options or NexusConnectOptions(), self.config
+        )
+        if not isinstance(session, NexusConnectSession):
+            raise NexusAppError(
+                "connect_identity_substituted",
+                "Connect transport returned an invalid session",
+            )
+        if session.network_id != self.config.network_id:
+            raise NexusAppError(
+                "connect_identity_substituted",
+                "Connect transport substituted the configured exact NetworkId",
+            )
+        return session
 
     def await_approval(self, session: NexusConnectSession) -> NexusApprovedAccount:
         """Wait for wallet approval and return the approved account plus updated session."""
 
         if self.connect_transport is None:
             raise NexusAppError("connect_transport_unavailable", "Connect transport is required")
+        if not isinstance(session, NexusConnectSession) or session.network_id != self.config.network_id:
+            raise NexusAppError(
+                "connect_identity_substituted",
+                "Connect approval session does not match the configured exact NetworkId",
+            )
         approved = self.connect_transport.await_approval(session, self.config)
-        account = str(approved.get("account_id", approved.get("accountId", ""))).strip()
-        if not account:
+        account = approved.get("account_id")
+        if not isinstance(account, str) or not account or account != account.strip():
             raise NexusAppError("approval_missing_account", "wallet approval did not include an account")
-        signing_public_key = approved.get("signing_public_key", approved.get("signingPublicKey"))
-        signing_public_key_bytes = (
+        signing_public_key = approved.get("signing_public_key")
+        supplied_signing_public_key = (
             _validate_ed25519_public_key(signing_public_key, "signing_public_key")
             if signing_public_key is not None
             else (
@@ -662,6 +766,13 @@ class NexusAppClient:
                 else _account_ed25519_public_key(account)
             )
         )
+        account_public_key = _account_ed25519_public_key(account)
+        if supplied_signing_public_key != account_public_key:
+            raise NexusAppError(
+                "connect_approval_account_key_mismatch",
+                "wallet approval signing key does not control the approved account",
+            )
+        signing_public_key_bytes = account_public_key
         updated = replace(
             session,
             approved_account=account,

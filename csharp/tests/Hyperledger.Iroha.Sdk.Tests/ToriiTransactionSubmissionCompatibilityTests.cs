@@ -1,4 +1,5 @@
 using System.Net;
+using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
 
@@ -56,9 +57,7 @@ public sealed class ToriiTransactionSubmissionCompatibilityTests
             };
         });
 
-        using var client = new ToriiClient(
-            new Uri("https://torii.example"),
-            new HttpClient(handler));
+        using var client = CreateAuthenticatedClient(handler);
         await client.SubmitTransactionAsync(
             transaction,
             cancellationToken: TestContext.Current.CancellationToken);
@@ -86,9 +85,7 @@ public sealed class ToriiTransactionSubmissionCompatibilityTests
             throw new InvalidOperationException(
                 "transaction posted after data-model mismatch");
         });
-        using var client = new ToriiClient(
-            new Uri("https://torii.example"),
-            new HttpClient(handler));
+        using var client = CreateAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<ToriiDataModelMismatchException>(() =>
             client.SubmitTransactionAsync(
@@ -118,9 +115,7 @@ public sealed class ToriiTransactionSubmissionCompatibilityTests
             throw new InvalidOperationException(
                 "transaction posted after schema mismatch");
         });
-        using var client = new ToriiClient(
-            new Uri("https://torii.example"),
-            new HttpClient(handler));
+        using var client = CreateAuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<ToriiTransactionSchemaMismatchException>(() =>
             client.SubmitTransactionAsync(
@@ -159,9 +154,7 @@ public sealed class ToriiTransactionSubmissionCompatibilityTests
                 Content = new ByteArrayContent(Array.Empty<byte>()),
             };
         });
-        using var client = new ToriiClient(
-            new Uri("https://torii.example"),
-            new HttpClient(handler));
+        using var client = CreateAuthenticatedClient(handler);
         var transaction = ValidSignedTransactionEnvelope();
 
         await client.SubmitTransactionAsync(
@@ -192,6 +185,19 @@ public sealed class ToriiTransactionSubmissionCompatibilityTests
             .SetNonce(17)
             .BuildSigned(CanonicalPrivateKeySeed);
     }
+
+    private static ToriiClient CreateAuthenticatedClient(HttpMessageHandler handler) =>
+        new(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                LocalSigningContext = new ToriiLocalSigningContext(
+                    NetworkId.Parse(CanonicalNetworkId)),
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    CanonicalAccountId,
+                    CanonicalPrivateKeySeed),
+            });
 
     private static HttpResponseMessage JsonResponse(string json)
     {

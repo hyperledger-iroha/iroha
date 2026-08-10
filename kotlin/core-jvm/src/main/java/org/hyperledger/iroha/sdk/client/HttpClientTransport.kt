@@ -246,11 +246,14 @@ class HttpClientTransport(
         getLedgerExecutedBlockWire(BigInteger.valueOf(height))
 
     /** Fetch the exact canonical committed Exact12 manifest and require native validation. */
-    fun getPrivacyCapabilities(): CompletableFuture<PrivacyExact12CapabilityManifestV1> =
+    fun getPrivacyCapabilities(
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<PrivacyExact12CapabilityManifestV1> =
         fetchExactNoritoBytes(
             buildExactNoritoGetRequest(
                 "/v1/privacy/capabilities",
                 PrivacyExact12CapabilityManifestV1.MAX_ARCHIVE_BYTES.toLong(),
+                canonicalAuth,
             ),
             "privacy capabilities",
         ).thenApply(PrivacyNativeBridge::decodeExact12CapabilityManifestV1)
@@ -263,8 +266,9 @@ class HttpClientTransport(
      */
     fun requirePrivacyExact12CapabilityAdmission(
         protocolId: PrivacyProtocolIdV1,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<PrivacyExact12CapabilityTupleAdmissionV1> =
-        getPrivacyCapabilities().thenApply { manifest ->
+        getPrivacyCapabilities(canonicalAuth).thenApply { manifest ->
             PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(
                 manifest,
                 protocolId,
@@ -1112,18 +1116,38 @@ class HttpClientTransport(
     private fun buildExactNoritoGetRequest(
         path: String,
         maximumResponseBytes: Long,
+        canonicalAuth: ToriiCanonicalRequestAuth? = null,
     ): TransportRequest {
         require(config.defaultHeaders().keys.none { it.equals("Accept", ignoreCase = true) }) {
             "Accept must not be overridden for exact Norito requests"
         }
+        if (canonicalAuth != null) requireCanonicalHeadersUnset()
+        val target = resolvePath(path)
         val builder = TransportRequest.builder()
-            .setUri(resolvePath(path))
+            .setUri(target)
             .setMethod("GET")
             .addHeader("Accept", APPLICATION_NORITO)
             .setMaximumResponseBytes(maximumResponseBytes)
             .setTimeout(config.requestTimeout())
         for ((key, value) in config.defaultHeaders()) builder.addHeader(key, value)
+        if (canonicalAuth != null) {
+            val canonicalHeaders = buildCanonicalHeaders("GET", target, null, canonicalAuth)
+            for ((key, value) in canonicalHeaders) builder.addHeader(key, value)
+            TransportSecurity.requireHttpRequestAllowed(
+                "HttpClientTransport",
+                config.baseUri(),
+                target,
+                canonicalHeaders,
+                null,
+            )
+        }
         return builder.build()
+    }
+
+    private fun requireCanonicalHeadersUnset() {
+        require(config.defaultHeaders().keys.none { candidate ->
+            CANONICAL_AUTH_HEADERS.any { it.equals(candidate, ignoreCase = true) }
+        }) { "canonical request headers must be supplied only through canonicalAuth" }
     }
 
     private fun buildBridgeJsonPostRequest(path: String, body: ByteArray): TransportRequest {
@@ -1509,6 +1533,12 @@ class HttpClientTransport(
         private const val SCCP_JSON_RESPONSE_MAX_BYTES = 64L * 1024L * 1024L
         private const val EXECUTED_BLOCK_WIRE_MAX_BYTES = 32L * 1024L * 1024L
         private const val APPLICATION_NORITO = "application/x-norito"
+        private val CANONICAL_AUTH_HEADERS = setOf(
+            CanonicalRequestSigner.HEADER_ACCOUNT,
+            CanonicalRequestSigner.HEADER_SIGNATURE,
+            CanonicalRequestSigner.HEADER_TIMESTAMP_MS,
+            CanonicalRequestSigner.HEADER_NONCE,
+        )
 
         @JvmStatic fun createDefault(config: ClientConfig): HttpClientTransport = HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config)
         @JvmStatic fun withExecutor(executor: HttpTransportExecutor, config: ClientConfig): HttpClientTransport = HttpClientTransport(executor, config)

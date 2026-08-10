@@ -209,7 +209,7 @@ checkpoint, health, and Prometheus surface, with readiness withdrawn whenever
 the supervised service loses its authenticated authority.
 
 SF-12 deployment qualification still requires the supervised broker and
-genuine HSM, sealed-store, exclusive authenticated Kubo/head receivers with one
+genuine external software signer, sealed store, exclusive authenticated Kubo/head receivers with one
 shared sealed atomic replay namespace, package integration, any scale-motivated
 mirror backend, and captured multi-instance rollout evidence.
 
@@ -520,7 +520,7 @@ Implemented foundations include:
 
 Still outstanding:
 - Package and supervise `sorafs_governance_dag` in the supported deployment
-  bundles, implement and provision the deployment-owned HSM signer,
+  bundles, implement and provision the independently administered external software signer,
   rotation-aware Kubo/head authenticators, and sealed monotonic checkpoint-store
   adapters that derive their qualification revision/digest from the external
   control plane and reject revoked/stale policy internally. Their live
@@ -1054,7 +1054,7 @@ publisher rather than synthesized from the pre-publication filesystem hooks.
   sealed transition/archive generations, and bounded signed archive compaction
   with durable archive/checkpoint readback before prune and restart-safe staged
   replay. This is provider-qualification retention; it does not claim a
-  deployed HSM/sealed-store backend or DAG block-prefix compaction.
+  deployed software-signer/sealed-store backend or DAG block-prefix compaction.
 - Remaining: implement the deployment-owned provider adapters, package and
   supervise two service instances, decide whether production scale requires the
   optional RocksDB/IPLD mirror, add any operator convenience commands required

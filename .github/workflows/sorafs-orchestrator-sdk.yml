@@ -4,19 +4,23 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - ".cargo/**"
       - ".github/workflows/sorafs-orchestrator-sdk.yml"
       - ".github/workflows/mobile_sdk_artifacts.yml"
       - ".github/workflows/pr_csharp.yml"
       - "ci/sdk_sorafs_orchestrator.sh"
       - "ci/check_kagemusha_jvm_native_bridge.sh"
       - "ci/check_sorafs_python_native_sdk.sh"
+      - "codec/**"
       - "scripts/deploy_localnet.sh"
+      - "scripts/tests/deploy_localnet_test.py"
       - "gradle/mobile-sdk-external-android-build.settings.gradle.kts"
       - "scripts/build_norito_xcframework.sh"
       - "scripts/exec_with_file_lock.py"
       - "scripts/check_mobile_sdk_artifact_pin_commit.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/norito_bridge_source_seal.py"
+      - "scripts/package_mobile_sdk_artifacts.sh"
       - "scripts/run_mobile_hermetic_command.py"
       - "crates/connect_norito_bridge/**"
       - "crates/iroha_js_host/**"
@@ -62,7 +66,9 @@ on:
       - "scripts/tests/check_sorafs_release_automation_test.py"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain"
       - "rust-toolchain.toml"
+      - "vendor/**"
   schedule:
     - cron: "41 3 * * *"
   workflow_dispatch:
@@ -182,6 +188,12 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        shell: bash
+        run: |
+          mobile_python="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          [[ "$("$mobile_python" -I -S -B -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
         with:
           distribution: temurin
@@ -203,7 +215,14 @@ jobs:
             echo "sdkmanager not found at $sdkmanager" >&2
             exit 1
           fi
-          yes | "$sdkmanager" --licenses >/dev/null || true
+          set +e
+          yes | "$sdkmanager" --licenses >/dev/null
+          sdkmanager_status="${PIPESTATUS[1]}"
+          set -e
+          if [[ "$sdkmanager_status" -ne 0 ]]; then
+            echo "sdkmanager license acceptance failed with status $sdkmanager_status" >&2
+            exit "$sdkmanager_status"
+          fi
           "$sdkmanager" "$ANDROID_PLATFORM_PACKAGE" "$ANDROID_BUILD_TOOLS_PACKAGE"
           echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
       - name: Fetch the locked Rust dependency graph
