@@ -828,7 +828,7 @@ def _kura_production_source_inventory(
     test_module_markers = tuple(
         re.finditer(
             r"(?m)^#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*\n"
-            r"mod\s+tests\s*\{",
+            r"pub\s*\(\s*crate\s*\)\s+mod\s+tests\s*\{",
             masked_source,
         )
     )
@@ -1804,23 +1804,23 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
         "e63115adfa82478faa975238d72973dbe84791f45fb8c968732d62974d2c44f4"
     ),
     "validate_locked_commit_progress_witness": (
-        "6a3d419be24f3266f2a38b71cfb79c5431d127925dd133416723c5890da200e0"
+        "fe6f766850236b7f363fb828e4acaa810eb676876e800dcb3fcd9b88711084ae"
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 845
-_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 85
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 849
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 86
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "7682213e3d64750910cf8e72c72556641cc04d5a34d931f1b2e0135f290c9599"
+    "15f837d911644b557c5a36064a1cff9c512f0cf2b120f5cc6fb21e7cfa530d83"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "72328cdb488b6e059e5a774fee2b1daf03d752f0b561fa5dce8a09b8bec742e9"
+    "23d3c21dd3cb6d656e3f24a4751776289b6915f3ff59f65eb1a8d070f2ef4d70"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "3c48c972b94ed16b8bf51a847148b9c5c2c90d1bd4459ca0ac8a9be71c87fed0"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 = (
-    "14a20c6ef475d022ab95b754d94fc491cb9b8dde9ed5ac89ebd1366ba8359d07"
+    "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
@@ -1898,7 +1898,7 @@ _LATE_LANE_RECOVERY_TEST_SHA256 = (
     "b0457ed9453abd1999e7246c3cd2d96aa1dc6e4763466a5f7c76635699997344"
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
-    ("production-kura-progress-durability", "kura::tests", 14),
+    ("production-kura-progress-durability", "kura::tests", 17),
     ("production-kura-lane-geometry", "kura::lane_geometry::tests", 8),
     ("production-lane-relay-exact-ownership", "nexus::lane_relay::tests", 4),
     (
@@ -1907,6 +1907,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         43,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
+    ("production-state-governance-unlock-audit", "state::tests", 1),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 17),
     (
@@ -2011,6 +2012,9 @@ _PRODUCTION_LIVENESS_RELEASE_MODULES = tuple(
 )
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "kura::tests::lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered",
+    "kura::tests::autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation",
+    "kura::tests::unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart",
+    "kura::tests::merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal",
     "sumeragi::v2_lifecycle_recovery::tests::generation_takeover_runs_crash_recover_and_rehydrate_then_stutters",
     "sumeragi::v2_lifecycle_recovery::tests::every_lifecycle_recovery_cursor_cas_boundary_survives_restart",
     "sumeragi::v2_lifecycle_recovery::tests::prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side",
@@ -2078,6 +2082,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "merge_sidecar::tests::late_old_exact_item_receipt_completes_reconnected_attempt_once",
     "merge_sidecar::tests::later_delivery_during_materialization_keeps_exact_authorized_route",
     "merge_sidecar::tests::writable_reconnect_during_materialization_keeps_exact_authorized_tenure",
+    "state::tests::block_leaves_governance_unlock_audit_clean_when_no_locks_are_expired",
     "merge_sidecar::tests::equal_sequence_with_different_semantic_identity_is_rejected_before_materialization",
     "merge_sidecar::tests::transient_materialization_release_keeps_exact_retry",
     "merge_sidecar::tests::transient_response_capacity_defers_materialization_on_the_same_delivery",
@@ -3693,13 +3698,13 @@ _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_OPERATOR_SHA256 = {
             "551f97e97f2ecb6ba67053464f480e2fe1cd6d59290a2b1fed261182e2fd1aab"
         ),
         "AsyncControlServiceStateTypeInvariant": (
-            "db13faef3cc8f08ecbbfebb6227bb4847fcbdf0262a0de66f841b66fe78e0577"
+            "c23f80802359d9f5ed4d7a5e3c148f37da646e4783ec7557a950515aa28ab989"
         ),
         "AsyncControlServiceSlotTransition": (
-            "31d5e5b7a2ecfacc11da4ac09c3c2f54858e7f256096283de3e3f541cd50bfd8"
+            "d7398b0e68c3abd377c5cc36554b47c172e6bb22980c83e324fbccf58d3470e6"
         ),
         "AsyncTransportInit": (
-            "979da4a2d4de28cb42373c1824d5952431d10a78793800a8194e03228ac8eb06"
+            "f2590d8d4066646f438a372fb1051995ea9839487aa882fc841bb0cd3ea88974"
         ),
         "AsyncCompletionReserveInvariant": (
             "b7756857d8b495cb29494dc89dd3ee626f5999418ec3e37c01dc1ee1216a58c1"
@@ -3710,10 +3715,10 @@ _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_OPERATOR_SHA256 = {
     },
     "SumeragiV2AsyncTemporalRankProofs.tla": {
         "CertifiedResponseClaimDirectPacemakerWorkTokens": (
-            "25b7e46a7d3e7a5d43d7eeff22e5bcb62b818c65f777a5181eacdcb88668fd0f"
+            "4d91f823b39ba6a742f3ff33bcce7c7c1aa770d6b1756b8319232c726a6a3410"
         ),
         "CertifiedResponseClaimCausalPacemakerWorkTokens": (
-            "1dffc9f727616ff82bca3caf18a6619a304c91c762fa7eb857945dc77ea201e7"
+            "c86cef0ce88f5a7dfd586fc2c21788e8bc3e913350b5a625c42e4b448a980bff"
         ),
         "CertifiedResponseClaimPacemakerWorkDebt": (
             "c2215cbc829f79413da4eda26729f6c024d2af7f304ec2ea5754eb14acb39b2b"
@@ -3753,7 +3758,7 @@ _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_THEOREM_SHA256 = {
             "b7352d2bf625ed6732277874a52e357bd4188a37d475da900799cdbe231e34d8"
         ),
         "SerializedCertifiedPacemakerPreservesSchedulerType": (
-            "5dc5c0e9994a08bbaa623cea84e8f9f5f04a6f8a114962672095bb0ed784e45d"
+            "72ab5903561b098a378ef39a395f0b0d42a989aec2ff5a7874c056aac43351f0"
         ),
         "RunNodeWorkConcreteActionCaseSplit": (
             "35bd614265c192fb0d22201c20fde0ec55ffc461c449c932c94dfe8088875792"

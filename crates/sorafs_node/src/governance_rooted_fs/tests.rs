@@ -2257,6 +2257,28 @@ mod tests {
     }
 
     #[test]
+    fn rooted_empty_directory_removal_preserves_a_child_created_at_the_destructive_gap() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let retained = temp.path().join("orphan");
+        fs::create_dir(&retained).expect("seed empty orphan directory");
+        let binding = root
+            .open_directory(OsStr::new("orphan"))
+            .expect("retain empty orphan directory");
+
+        let error = root
+            .remove_empty_directory_binding_with(binding, || {
+                fs::write(retained.join("racing-child"), b"preserve me")
+            })
+            .expect_err("a child created after the emptiness check must block removal");
+        assert_eq!(error.kind(), io::ErrorKind::DirectoryNotEmpty);
+        assert_eq!(
+            fs::read(retained.join("racing-child")).expect("racing child remains"),
+            b"preserve me"
+        );
+    }
+
+    #[test]
     fn rooted_exact_file_removal_preserves_a_name_substitution() {
         let temp = tempdir().expect("tempdir");
         let root = test_root(temp.path());

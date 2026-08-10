@@ -27,6 +27,291 @@ REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
     "0aa6f7a8d02884a297ce55b0503e39eaeff430ca901b9658411c7d3b608d2cc4"
 )
+WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
+    (
+        "scripts/check_no_legacy_codec.sh",
+        (
+            "retired_native_amx_v1_pattern=",
+            "retired_lane_handoff_pattern=",
+            "No retired Native AMX V1 consensus codecs found.",
+            "No retired lane executable payload handoff codecs found.",
+        ),
+    ),
+    (
+        "fixtures/sumeragi_v2/wire_v2.tsv",
+        (
+            "# kind\tname\thex\texpectation",
+            "message\tquorum_certificate_merge_carrier\t",
+            "negative_message\texecution_commitment_merge_carrier_wrong_version\t",
+            "negative_message\texecution_commitment_missing_merge_carrier_field\t",
+        ),
+    ),
+    (
+        "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
+        (
+            'const WIRE_FIXTURE_BASENAME: &str = "wire_v2.tsv";',
+            'name: "quorum_certificate_merge_carrier",',
+            '"execution_commitment_merge_carrier_wrong_version",',
+            '"execution_commitment_missing_merge_carrier_field",',
+            "&options.output_dir.join(WIRE_FIXTURE_BASENAME),",
+        ),
+    ),
+    (
+        "crates/iroha_data_model/tests/sumeragi_v2_cross_sdk_fixtures.rs",
+        (
+            'const FIXTURES: &str = include_str!("../../../fixtures/sumeragi_v2/wire_v2.tsv");',
+            "fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings()",
+            "fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation()",
+            '"quorum_certificate_merge_carrier",',
+            '"execution_commitment_merge_carrier_wrong_version",',
+            '"execution_commitment_missing_merge_carrier_field",',
+        ),
+    ),
+    (
+        "scripts/run_sumeragi_v2_release_gates.sh",
+        (
+            "sumeragi_v2_cross_sdk_fixtures::shared_sdk_accept_fixtures_are_exact_current_rust_encodings",
+            "sumeragi_v2_cross_sdk_fixtures::shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation",
+            "cross-sdk-rust cargo-exact 2",
+        ),
+    ),
+    (
+        "ci/check_sumeragi_v2_multilane_release_inventory.sh",
+        (
+            "source-sealed-legacy-codec-guard command 0",
+            "bash scripts/check_no_legacy_codec.sh",
+            "native-amx-rust-fixture-check command 0",
+            "sumeragi_v2_wire_fixtures -- --check",
+        ),
+    ),
+)
+WIRE_RELEASE_INVARIANT_SOURCE_PATHS = tuple(
+    path for path, _tokens in WIRE_RELEASE_INVARIANT_SOURCE_CHECKS
+)
+
+
+def _validate_wire_release_invariant_source_checks(
+    mutation_id: str, source_checks: object, errors: list[str]
+) -> None:
+    """Require the exact reviewed wire-release source paths and tokens."""
+
+    if mutation_id != "ML-MUT-WIRE-01":
+        return
+    actual = (
+        tuple(
+            (
+                check.get("path"),
+                tuple(check.get("required_tokens", ()))
+                if isinstance(check.get("required_tokens"), list)
+                else (),
+            )
+            for check in source_checks
+            if isinstance(check, dict)
+        )
+        if isinstance(source_checks, list)
+        else ()
+    )
+    if actual != WIRE_RELEASE_INVARIANT_SOURCE_CHECKS:
+        errors.append(
+            f"{mutation_id}: semantic source checks differ from the "
+            "exact reviewed contract"
+        )
+
+
+NATIVE_PREPUBLICATION_REVIEWED_BINDINGS = (
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "preflight_native_amx_participant_application_route_under_publication_guard",
+        (
+            "receipt.manifest_artifact_hash != HashOf::new(manifest)",
+            "!incoming.matches_manifest(manifest)",
+            "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE",
+            "inventory_native_amx_evidence_files_locked(&namespace, true)",
+            "preflight_native_amx_incoming_artifacts_locked",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "validate_native_amx_prepublication_transition_locked",
+            "NativeAmxParticipantApplicationRoutePreflight { incoming, current }",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "preflight_native_amx_incoming_artifacts_locked",
+        (
+            "validate_native_amx_retained_history_continuity",
+            "native_amx_participant_application_pair_framed_bytes",
+            "let mut additional_bytes = 0_u64;",
+            "read_native_amx_evidence_file_bytes_locked",
+            "!= expected_bytes.as_slice()",
+            "conflicts with the incoming same-height plan before publication",
+            "temporary conflicts with the incoming plan before publication",
+            "!inventory.stable(*kind).contains_key(&participant_height)",
+            "inventory.temporary(*kind).is_none()",
+            "additional_bytes = additional_bytes",
+            "native_amx_participant_evidence_startup_bytes",
+            "native_amx_evidence_total_payload_bytes(inventory)",
+            "bytes.checked_add(additional_bytes)",
+            "single bounded transient publication window",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "validate_native_amx_prepublication_transition_locked",
+        (
+            "if current == incoming {",
+            "let durable_manifest = self",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "let durable_receipt = self",
+            "read_native_amx_participant_application_receipt_from_paths_locked",
+            ".is_some_and(|durable| durable != manifest)",
+            ".is_some_and(|durable| durable != receipt)",
+            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
+            "Native AMX exact retry does not match authenticated durable evidence",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "persist_native_amx_participant_application_repair_targets_under_publication_guard",
+        (
+            "preflight_native_amx_participant_application_repair_targets_under_publication_guard",
+            "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+            "read_back_native_amx_repair_target_manifests_under_publication_guard",
+            "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
+            "write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard",
+            "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
+            "cleanup_native_amx_participant_application_evidence_under_publication_guard",
+        ),
+    ),
+)
+NATIVE_PREPUBLICATION_REVIEWED_ORDERED_SOURCE_CHECKS = (
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "preflight_native_amx_participant_application_route_under_publication_guard",
+        (
+            "inventory_native_amx_evidence_files_locked(&namespace, true)",
+            "preflight_native_amx_incoming_artifacts_locked",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "validate_native_amx_prepublication_transition_locked",
+            "NativeAmxParticipantApplicationRoutePreflight { incoming, current }",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "preflight_native_amx_incoming_artifacts_locked",
+        (
+            "validate_native_amx_retained_history_continuity",
+            "native_amx_participant_application_pair_framed_bytes",
+            "let mut additional_bytes = 0_u64;",
+            "!inventory.stable(*kind).contains_key(&participant_height)",
+            "inventory.temporary(*kind).is_none()",
+            "additional_bytes = additional_bytes",
+            "native_amx_participant_evidence_startup_bytes",
+            "native_amx_evidence_total_payload_bytes(inventory)",
+            "bytes.checked_add(additional_bytes)",
+            "single bounded transient publication window",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "validate_native_amx_prepublication_transition_locked",
+        (
+            "if current == incoming {",
+            "let manifest_path =",
+            "let receipt_path =",
+            "let durable_manifest = self",
+            "let durable_receipt = self",
+            ".is_some_and(|durable| durable != manifest)",
+            ".is_some_and(|durable| durable != receipt)",
+            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
+            "Native AMX exact retry does not match authenticated durable evidence",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura.rs",
+        "fn",
+        "persist_native_amx_participant_application_repair_targets_under_publication_guard",
+        (
+            "preflight_native_amx_participant_application_repair_targets_under_publication_guard",
+            "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+            "read_back_native_amx_repair_target_manifests_under_publication_guard",
+            "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
+            "write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard",
+            "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
+            "cleanup_native_amx_participant_application_evidence_under_publication_guard",
+        ),
+    ),
+)
+
+
+def _validate_native_prepublication_reviewed_kura_checks(
+    binding_items: dict[tuple[str, str, str], str], errors: list[str]
+) -> None:
+    """Validate semantic relations inside the reviewed Kura bindings."""
+
+    incoming_artifact_preflight = binding_items.get(
+        (
+            "crates/iroha_core/src/kura.rs",
+            "fn",
+            "preflight_native_amx_incoming_artifacts_locked",
+        )
+    )
+    if incoming_artifact_preflight is not None:
+        compact_incoming_preflight = " ".join(incoming_artifact_preflight.split())
+        expected_missing_member_reservation = (
+            "if !inventory.stable(*kind).contains_key(&participant_height) "
+            "&& inventory.temporary(*kind).is_none() { additional_bytes = "
+            "additional_bytes"
+        )
+        if expected_missing_member_reservation not in compact_incoming_preflight:
+            errors.append(
+                "Native incoming-artifact preflight must reserve bytes exactly "
+                "when both the stable and temporary member are absent"
+            )
+
+    exact_retry_transition = binding_items.get(
+        (
+            "crates/iroha_core/src/kura.rs",
+            "fn",
+            "validate_native_amx_prepublication_transition_locked",
+        )
+    )
+    if exact_retry_transition is None:
+        return
+    branch_start = exact_retry_transition.find("if current == incoming {")
+    branch_end = exact_retry_transition.find("return Ok(());", branch_start)
+    if branch_start < 0 or branch_end < 0:
+        errors.append(
+            "Native exact-retry prepublication transition must expose its "
+            "bounded repair branch"
+        )
+        return
+    exact_retry_branch = exact_retry_transition[branch_start:branch_end]
+    compact_exact_retry_branch = " ".join(exact_retry_branch.split())
+    expected_present_member_relation = (
+        "if durable_manifest .as_ref() "
+        ".is_some_and(|durable| durable != manifest) || "
+        "durable_receipt .as_ref() "
+        ".is_some_and(|durable| durable != receipt) || !self "
+        ".native_amx_participant_application_manifest_matches_available_"
+        "finality_under_prune_and_canonical_guards( manifest, ) {"
+    )
+    if expected_present_member_relation not in compact_exact_retry_branch:
+        errors.append(
+            "Native exact-retry prepublication must reject either present "
+            "stable-member mismatch and independently reauthenticate the "
+            "incoming manifest finality"
+        )
+    if ".ok_or_else" in exact_retry_branch:
+        errors.append(
+            "Native exact-retry prepublication must permit either stable "
+            "member to be absent for bounded reconstruction"
+        )
 
 
 def _regular_file(path: Path, label: str, errors: list[str]) -> bool:

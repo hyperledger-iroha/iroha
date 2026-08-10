@@ -10,7 +10,7 @@ v2_apply_test!(
         };
         use iroha_data_model::{
             block::consensus::{NativeAmxPhase, SumeragiAutonomousLaneExecutionStage},
-            isi::Register,
+            isi::SetKeyValue,
         };
 
         let fixture = ApplyFixture::new_with_native_lane_lifecycle();
@@ -70,15 +70,28 @@ v2_apply_test!(
                 .expect("valid grouped Native participant domain")
             })
             .collect::<Vec<_>>();
-        let participant_domains_are_committed = || {
+        let participant_metadata_key: iroha_data_model::name::Name =
+            "historical-application".parse().expect("valid metadata key");
+        let participant_metadata_is_committed = || {
             let view = fixture.state.view();
             participant_domains
                 .iter()
-                .all(|domain| view.world.domain(domain).is_ok())
+                .enumerate()
+                .all(|(index, domain)| {
+                    let expected = iroha_primitives::json::Json::new(
+                        u32::try_from(index).expect("participant index fits u32"),
+                    );
+                    view.world
+                        .domain(domain)
+                        .ok()
+                        .and_then(|domain| domain.metadata.get(&participant_metadata_key))
+                        == Some(&expected)
+                })
         };
         assert_eq!(autonomous_balance(), None);
-        assert!(!participant_domains_are_committed());
+        assert!(!participant_metadata_is_committed());
         let reservation_domains = participant_domains.clone();
+        let reservation_metadata_key = participant_metadata_key.clone();
         let reservation_asset = autonomous_asset_id.clone();
         let (payload, expected_fifo) =
             reserve_canonical_successor_autonomous_batch_with_instructions(
@@ -92,9 +105,13 @@ v2_apply_test!(
                             1_u32,
                             reservation_asset.clone(),
                         )),
-                        InstructionBox::from(Register::domain(Domain::new(
+                        InstructionBox::from(SetKeyValue::domain(
                             reservation_domains[index].clone(),
-                        ))),
+                            reservation_metadata_key.clone(),
+                            iroha_primitives::json::Json::new(
+                                u32::try_from(index).expect("participant index fits u32"),
+                            ),
+                        )),
                     ]
                 },
                 true,
@@ -415,8 +432,8 @@ v2_apply_test!(
         let local_peer = PeerId::new(local_key.public_key().clone());
         let mut lane_work = crate::sumeragi::v2_lane_work::V2LaneWorkAdapter::new(
             active_context.context().clone(),
-            local_peer,
-            local_key,
+            local_peer.clone(),
+            local_key.clone(),
             true,
             Arc::clone(&fixture.state),
             Arc::clone(&fixture.kura),
@@ -424,6 +441,25 @@ v2_apply_test!(
             None,
         )
         .expect("hydrate the historical autonomous recovery in live lane work");
+        let lifecycle_generation = fixture
+            .kura
+            .claim_autonomous_lifecycle_process_generation(
+                install.payload.chain_id_hash,
+                &local_peer,
+            )
+            .expect("reuse historical autonomous lifecycle process generation");
+        assert_eq!(
+            install_live_lifecycle_cursor_for_apply_test(
+                fixture.kura.as_ref(),
+                &lifecycle_generation,
+                &install.payload,
+                install.historical_context_id,
+                &local_peer,
+                &local_key,
+            ),
+            reservation_group,
+            "historical lifecycle cursor must bind the exact recovery reservation group",
+        );
 
         let availability_body = crate::lane_consensus::lane_payload_availability_body(
             &install.payload,
@@ -559,10 +595,49 @@ v2_apply_test!(
         );
         assert_eq!(certified_row.source_bundle_hash, Some(source.bundle_hash));
         assert!(fixture.state.has_pending_merge_execution_sources());
+        let nexus = fixture.state.nexus_snapshot();
+        let state_view = fixture.state.view();
+        for (((entrypoint, reservation), routing_plan), native_amx_receipt) in source
+            .input
+            .entrypoints
+            .iter()
+            .zip(&source.input.reservation_keys)
+            .zip(&source.input.routing_plans)
+            .zip(&source.input.native_amx_receipts)
+        {
+            let receipt = native_amx_receipt
+                .as_ref()
+                .expect("historical Native source retains every receipt");
+            let mut source_id = [0_u8; Hash::LENGTH];
+            source_id.copy_from_slice(reservation.signed_transaction_hash.as_ref());
+            let expected_v2_context =
+                crate::block::expected_native_amx_v2_context_from_receipt(
+                    receipt,
+                    install.payload.epoch,
+                )
+                .expect("derive historical Native receipt context");
+            crate::block::validate_native_amx_receipt_against_plan(
+                receipt,
+                &source.bundle.executable_payload().origin_proposal,
+                entrypoint.hash(),
+                routing_plan,
+                source_id,
+                install.payload.chain_id_hash,
+                &nexus.dataspace_catalog,
+                &state_view,
+                Some(expected_v2_context),
+            )
+            .expect("historical Native receipt validates against live authority");
+        }
+        drop(state_view);
 
         let application_header = lane_work
             .merge_carrier_context_header(0)
             .expect("derive the exact canonical merge application header");
+        fixture
+            .state
+            .build_merge_execution_batch(1, application_header.clone())
+            .expect("pre-execute the exact contiguous certified autonomous source");
         let candidate = fixture
             .state
             .build_merge_execution_candidate(application_header.clone())
@@ -598,7 +673,8 @@ v2_apply_test!(
         assert_eq!(execution.entrypoints, install.payload.entrypoints);
         assert!(
             execution.results.iter().all(|result| result.is_ok()),
-            "every autonomous mint must pre-execute successfully"
+            "every autonomous Native transaction must pre-execute successfully: {:#?}",
+            execution.results
         );
         assert_eq!(
             execution.proposal.descriptor.lane_id,
@@ -761,14 +837,15 @@ v2_apply_test!(
             height: 3,
             view: 0,
         };
-        let manifest = wire::PayloadManifest::derive(
+        let manifest = crate::sumeragi::v2_chunks::encode_payload(
             active_context.context(),
             round,
             subject,
-            u64::try_from(canonical_wire.len()).expect("merge carrier length fits u64"),
-            std::slice::from_ref(&canonical_wire),
+            &canonical_wire,
         )
-        .expect("derive exact autonomous merge carrier manifest");
+        .expect("derive exact autonomous merge carrier manifest")
+        .into_parts()
+        .0;
         let execution_commitment = service
             .validate_candidate(active_context.context(), &carrier)
             .expect("deterministically re-execute the certified autonomous batch");
@@ -863,7 +940,7 @@ v2_apply_test!(
         );
         assert_eq!(fixture.state.merge_ledger.snapshot(), pre_live_merge_ledger);
         assert_eq!(autonomous_balance(), None);
-        assert!(!participant_domains_are_committed());
+        assert!(!participant_metadata_is_committed());
         assert!(
             expected_fifo
                 .iter()
@@ -881,7 +958,12 @@ v2_apply_test!(
             .get_block(NonZeroUsize::new(3).expect("non-zero Native carrier height"))
             .expect("read result-bearing Native merge carrier after live crash");
         assert!(durable_carrier.has_results());
-        assert_eq!(durable_carrier.results().len(), 2);
+        assert_eq!(
+            durable_carrier.results().len(),
+            0,
+            "compact merge carrier must not duplicate certified autonomous results"
+        );
+        assert_eq!(batch.entrypoint_count, 2);
         assert_eq!(durable_carrier.hash(), carrier.hash());
         let height_three_finality = fixture
             .kura
@@ -925,7 +1007,15 @@ v2_apply_test!(
             )
             .expect("derive exact staged Native application manifest");
         assert_eq!(native_amx_manifest.count(), 1);
-        assert_eq!(native_amx_manifest.entries()[0].leaf.members.len(), 2);
+        let native_entry = &native_amx_manifest.entries()[0];
+        assert_eq!(native_entry.participant_proposal.descriptor.proposal_height, 2);
+        assert_eq!(native_entry.leaf.application_block_height, 3);
+        assert!(native_entry
+            .participant_settlement
+            .receipts
+            .iter()
+            .all(|receipt| receipt.timestamp_ms == 2));
+        assert_eq!(native_entry.leaf.members.len(), 2);
         let native_amx_frontiers =
             State::native_amx_participant_frontier_markers_and_merge_entry(
                 durable_carrier.as_ref(),
@@ -977,7 +1067,7 @@ v2_apply_test!(
             Some(iroha_primitives::numeric::Quantity::from(2_u32)),
             "two additive autonomous effects must enter canonical WSV exactly once"
         );
-        assert!(participant_domains_are_committed());
+        assert!(participant_metadata_is_committed());
         assert!(queue.live_lane_reservations().is_empty());
         assert!(queue.lane_reservation_commit_barriers().is_empty());
         assert!(queue.lane_reservation_release_barriers().is_empty());
@@ -1097,7 +1187,7 @@ v2_apply_test!(
             crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
         let pre_startup_merge_ledger = fixture.state.merge_ledger.snapshot();
         let pre_startup_balance = autonomous_balance();
-        assert!(participant_domains_are_committed());
+        assert!(participant_metadata_is_committed());
 
         drop(service);
         drop(queue);
@@ -1254,7 +1344,7 @@ v2_apply_test!(
         );
         assert_eq!(fixture.state.merge_ledger.snapshot(), pre_startup_merge_ledger);
         assert_eq!(autonomous_balance(), pre_startup_balance);
-        assert!(participant_domains_are_committed());
+        assert!(participant_metadata_is_committed());
         assert!(
             expected_fifo
                 .iter()

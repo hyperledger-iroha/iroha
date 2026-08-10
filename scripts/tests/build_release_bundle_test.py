@@ -31,11 +31,17 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, str]:
         "iroha",
         "kagami",
         "attachment_sanitizer",
+        "sorafs_external_software_signer",
     ):
         _write_executable(
             binaries / name,
             f"#!/bin/sh\nprintf '%s\\n' {name}\n",
         )
+        if name != "sorafs_external_software_signer":
+            _write_executable(
+                binaries / f"{name}.exe",
+                f"#!/bin/sh\nprintf '%s\\n' {name}.exe\n",
+            )
     config = tmp_path / "config"
     config.mkdir()
     (config / "config.toml").write_text("chain = \"test\"\n", encoding="utf-8")
@@ -58,6 +64,7 @@ def _run(
     *,
     env: dict[str, str] | None = None,
     omit_options: set[str] | None = None,
+    target: str = "x86_64-unknown-linux-gnu",
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["PATH"] = f"{zstd.parent}{os.pathsep}{environment['PATH']}"
@@ -71,7 +78,7 @@ def _run(
     option_pairs = [
         ("--profile", "iroha2"),
         ("--config", str(config)),
-        ("--target", "x86_64-unknown-linux-gnu"),
+        ("--target", target),
         ("--source-commit", commit),
         ("--source-date-epoch", environment["SOURCE_DATE_EPOCH"]),
         ("--prebuilt-bin-dir", str(binaries)),
@@ -117,12 +124,14 @@ def test_bundle_requires_reviewed_release_identity_before_outputs(
     assert not output.exists()
 
 
-def _outputs(root: Path) -> dict[str, Path]:
-    stem = f"iroha2-{VERSION}-linux-x86_64.tar.zst"
+def _outputs(
+    root: Path, *, os_tag: str = "linux", arch: str = "x86_64"
+) -> dict[str, Path]:
+    stem = f"iroha2-{VERSION}-{os_tag}-{arch}.tar.zst"
     return {
         "archive": root / stem,
         "checksum": root / f"{stem}.sha256",
-        "manifest": root / f"iroha2-{VERSION}-linux-x86_64-manifest.json",
+        "manifest": root / f"iroha2-{VERSION}-{os_tag}-{arch}-manifest.json",
     }
 
 
@@ -157,6 +166,7 @@ def test_bundle_replay_is_byte_identical_and_metadata_normalized(
                 "iroha",
                 "kagami",
                 "attachment_sanitizer",
+                "sorafs_external_software_signer",
             )
         }
         actual_binaries = {
@@ -165,6 +175,19 @@ def test_bundle_replay_is_byte_identical_and_metadata_normalized(
             if member.name.startswith(f"{bundle_root}/bin/")
         }
         assert actual_binaries == expected_binaries
+        signer = archive.extractfile(
+            f"{bundle_root}/bin/sorafs_external_software_signer"
+        )
+        alias = archive.extractfile(
+            f"{bundle_root}/libexec/iroha-runtime-provider-broker-v1"
+        )
+        assert signer is not None and alias is not None
+        assert signer.read() == alias.read()
+        names = {member.name for member in members}
+        assert (
+            f"{bundle_root}/share/iroha/sorafs/external_software_signer/"
+            "sorafs-external-software-signer@.service"
+        ) in names
     manifest = json.loads(outputs["manifest"].read_text(encoding="utf-8"))
     assert manifest["commit"] and len(manifest["commit"]) == 40
     assert manifest["source_date_epoch"] == EPOCH
@@ -172,6 +195,72 @@ def test_bundle_replay_is_byte_identical_and_metadata_normalized(
     assert manifest["target"] == "x86_64-unknown-linux-gnu"
     assert manifest["compressor"]["sha256"] == digest
     assert manifest["artifacts"][0]["file"] == outputs["archive"].name
+    assert manifest["external_software_signer"] == {
+        "backend": "software",
+        "binary": "bin/sorafs_external_software_signer",
+        "broker_alias": "libexec/iroha-runtime-provider-broker-v1",
+        "qualification": "software-key-qualified",
+        "windows_supported": False,
+    }
+
+
+def test_bundle_macos_closes_launchd_inventory(tmp_path: Path) -> None:
+    binaries, config, zstd, digest = _fixture(tmp_path)
+    output = tmp_path / "out"
+    result = _run(
+        output,
+        binaries,
+        config,
+        zstd,
+        digest,
+        target="aarch64-apple-darwin",
+    )
+    assert result.returncode == 0, result.stderr
+    archive_path = _outputs(output, os_tag="mac", arch="aarch64")["archive"]
+    with tarfile.open(archive_path, "r:") as archive:
+        names = {member.name for member in archive.getmembers()}
+    root = f"iroha2-{VERSION}-mac-aarch64"
+    for role in (
+        "proof-outcome",
+        "repair",
+        "reserve",
+        "orderbook",
+        "governance-dag",
+        "potr-gateway",
+        "potr-provider",
+        "billing",
+        "evidence-viewer",
+        "stream-token",
+        "pop-credentials",
+    ):
+        assert (
+            f"{root}/share/iroha/sorafs/external_software_signer/launchd/"
+            f"org.hyperledger.iroha.sorafs-signer-{role}.plist"
+        ) in names
+
+
+def test_bundle_windows_excludes_signer_and_never_smokes_it(tmp_path: Path) -> None:
+    binaries, config, zstd, digest = _fixture(tmp_path)
+    output = tmp_path / "out"
+    result = _run(
+        output,
+        binaries,
+        config,
+        zstd,
+        digest,
+        target="x86_64-pc-windows-msvc",
+    )
+    assert result.returncode == 0, result.stderr
+    outputs = _outputs(output, os_tag="win")
+    with tarfile.open(outputs["archive"], "r:") as archive:
+        names = {member.name for member in archive.getmembers()}
+    root = f"iroha2-{VERSION}-win-x86_64"
+    assert f"{root}/WINDOWS-UNSUPPORTED-EXTERNAL-SOFTWARE-SIGNER.md" in names
+    assert not any("sorafs_external_software_signer" in name for name in names)
+    assert not any("runtime-provider-broker-v1" in name for name in names)
+    manifest = json.loads(outputs["manifest"].read_text(encoding="utf-8"))
+    assert manifest["external_software_signer"]["qualification"] == "unsupported-windows"
+    assert manifest["external_software_signer"]["binary"] is None
 
 
 def test_bundle_refuses_stale_output_without_replacement(tmp_path: Path) -> None:

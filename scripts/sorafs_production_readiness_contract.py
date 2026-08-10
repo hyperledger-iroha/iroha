@@ -236,6 +236,12 @@ RESILIENCE_QUALIFICATION_AUTHENTICATION_FIELDS = frozenset(
     {
         "kind",
         "algorithm",
+        "backend",
+        "service_id",
+        "administrator_id",
+        "key_revision",
+        "policy_revision",
+        "policy_digest_sha256",
         "public_key_fingerprint_sha256",
         "signature_hex",
     }
@@ -250,6 +256,12 @@ RESILIENCE_QUALIFICATION_BINDING_FIELDS = frozenset(
         "receipt_sha256",
         "canonical_receipt_sha256",
         "receipt_generated_at_unix",
+        "signer_backend",
+        "signer_service_id",
+        "signer_administrator_id",
+        "signer_key_revision",
+        "signer_policy_revision",
+        "signer_policy_digest_sha256",
         "signer_public_key_fingerprint_sha256",
     }
 )
@@ -315,6 +327,7 @@ FOUNDATIONAL_PREREQUISITE_FIELDS = frozenset(
         "generated_at_unix",
         "release_sequence",
         "previous_envelope_sha256",
+        "l1_lane_evidence_inventory_sha256",
         "topology_qualification",
         "resilience_qualification",
         "prerequisites",
@@ -339,7 +352,17 @@ AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS = frozenset(
     {"id", "readiness_summary_sha256"}
 )
 FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS = frozenset(
-    {"algorithm", "public_key_fingerprint_sha256", "signature_hex"}
+    {
+        "algorithm",
+        "backend",
+        "service_id",
+        "administrator_id",
+        "key_revision",
+        "policy_revision",
+        "policy_digest_sha256",
+        "public_key_fingerprint_sha256",
+        "signature_hex",
+    }
 )
 AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
     {
@@ -355,6 +378,13 @@ AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
         "environment",
         "release_sequence",
         "previous_envelope_sha256",
+        "l1_lane_evidence_inventory_sha256",
+        "signer_backend",
+        "signer_service_id",
+        "signer_administrator_id",
+        "signer_key_revision",
+        "signer_policy_revision",
+        "signer_policy_digest_sha256",
         "signer_public_key_fingerprint_sha256",
         "topology_qualification",
         "resilience_qualification",
@@ -365,6 +395,12 @@ AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
         "sha256",
         "errors",
     }
+)
+AGGREGATE_L1_LANE_EVIDENCE_INVENTORY_SCHEMA = (
+    "sorafs.production_readiness.aggregate_l1_lane_evidence_inventory.v1"
+)
+AGGREGATE_L1_LANE_EVIDENCE_INVENTORY_FIELDS = frozenset(
+    {"schema", "present", "valid", "binding", "errors"}
 )
 AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
     {"schema", "present", "valid", "errors"}
@@ -1259,6 +1295,7 @@ AGGREGATE_SUMMARY_FIELDS = frozenset(
     {
         "schema",
         "status",
+        "signer_qualification",
         "required_gates",
         "thresholds",
         "summary_file_count",
@@ -1266,6 +1303,7 @@ AGGREGATE_SUMMARY_FIELDS = frozenset(
         "deployment",
         "topology_qualification",
         "resilience_qualification",
+        "l1_lane_evidence_inventory",
         "foundational_prerequisites",
         "required",
         "errors",
@@ -1418,6 +1456,8 @@ __all__ = (
     "AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS",
     "FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS",
     "AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS",
+    "AGGREGATE_L1_LANE_EVIDENCE_INVENTORY_SCHEMA",
+    "AGGREGATE_L1_LANE_EVIDENCE_INVENTORY_FIELDS",
     "AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS",
     "POP_CREDENTIALS_ROOT_BOUND_FINGERPRINT_FIELDS",
     "POP_CREDENTIALS_REVOCATION_BOUND_FINGERPRINT_FIELDS",

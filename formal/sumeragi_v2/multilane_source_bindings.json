@@ -492,10 +492,50 @@
           ]
         },
         {
+          "path": "fixtures/sumeragi_v2/wire_v2.tsv",
+          "required_tokens": [
+            "# kind\tname\thex\texpectation",
+            "message\tquorum_certificate_merge_carrier\t",
+            "negative_message\texecution_commitment_merge_carrier_wrong_version\t",
+            "negative_message\texecution_commitment_missing_merge_carrier_field\t"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
+          "required_tokens": [
+            "const WIRE_FIXTURE_BASENAME: &str = \"wire_v2.tsv\";",
+            "name: \"quorum_certificate_merge_carrier\",",
+            "\"execution_commitment_merge_carrier_wrong_version\",",
+            "\"execution_commitment_missing_merge_carrier_field\",",
+            "&options.output_dir.join(WIRE_FIXTURE_BASENAME),"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/tests/sumeragi_v2_cross_sdk_fixtures.rs",
+          "required_tokens": [
+            "const FIXTURES: &str = include_str!(\"../../../fixtures/sumeragi_v2/wire_v2.tsv\");",
+            "fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings()",
+            "fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation()",
+            "\"quorum_certificate_merge_carrier\",",
+            "\"execution_commitment_merge_carrier_wrong_version\",",
+            "\"execution_commitment_missing_merge_carrier_field\","
+          ]
+        },
+        {
+          "path": "scripts/run_sumeragi_v2_release_gates.sh",
+          "required_tokens": [
+            "sumeragi_v2_cross_sdk_fixtures::shared_sdk_accept_fixtures_are_exact_current_rust_encodings",
+            "sumeragi_v2_cross_sdk_fixtures::shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation",
+            "cross-sdk-rust cargo-exact 2"
+          ]
+        },
+        {
           "path": "ci/check_sumeragi_v2_multilane_release_inventory.sh",
           "required_tokens": [
             "source-sealed-legacy-codec-guard command 0",
-            "bash scripts/check_no_legacy_codec.sh"
+            "bash scripts/check_no_legacy_codec.sh",
+            "native-amx-rust-fixture-check command 0",
+            "sumeragi_v2_wire_fixtures -- --check"
           ]
         }
       ]
@@ -1583,18 +1623,29 @@
       {
         "path": "crates/iroha_core/src/kura.rs",
         "kind": "method",
+        "symbol": "Kura::consume_autonomous_lifecycle_bootstrap_completion_fence",
+        "required_tokens": [
+          "match fence {",
+          "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization)",
+          "drop(authorization);",
+          "AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody => {}"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
         "symbol": "Kura::complete_autonomous_lifecycle_bootstrap",
         "required_tokens": [
           "AutonomousLifecycleBootstrapCompletionPermit { authority, fence }",
-          "refresh_autonomous_lifecycle_bootstrap_authority",
+          "revalidate_autonomous_lifecycle_bootstrap_for_completion",
           "persist_lane_executable_payload_impl",
           "AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly",
           "AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable",
           "AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
           "delete_completed_autonomous_lifecycle_bootstrap",
           "read_autonomous_lifecycle_cursor",
-          "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue",
-          "drop(authorization)"
+          "lane_block_application_receipt_available",
+          "consume_autonomous_lifecycle_bootstrap_completion_fence"
         ]
       },
       {
@@ -3447,19 +3498,29 @@
       {
         "path": "crates/iroha_core/src/kura.rs",
         "kind": "method",
+        "symbol": "Kura::consume_autonomous_lifecycle_bootstrap_completion_fence",
+        "tokens": [
+          "match fence {",
+          "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization)",
+          "drop(authorization);",
+          "AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody => {}"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
         "symbol": "Kura::complete_autonomous_lifecycle_bootstrap",
         "tokens": [
           "let AutonomousLifecycleBootstrapCompletionPermit { authority, fence } = permit;",
-          "self.refresh_autonomous_lifecycle_bootstrap_authority(authority)?;",
+          "self.revalidate_autonomous_lifecycle_bootstrap_for_completion(authority)?;",
           "self.persist_lane_executable_payload_impl(",
           "AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly",
           "AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable",
           "AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
           "self.delete_completed_autonomous_lifecycle_bootstrap(&authority)?;",
           "self.read_autonomous_lifecycle_cursor(",
-          "match fence {",
-          "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization)",
-          "drop(authorization);"
+          "self.lane_block_application_receipt_available(&payload.origin_proposal)",
+          "Self::consume_autonomous_lifecycle_bootstrap_completion_fence(fence);"
         ]
       },
       {
@@ -4544,12 +4605,21 @@
       {
         "path": "pytests/scripts/sumeragi_v2_release_receipt_test.py",
         "required_tokens": [
-          "canonical.replace(\"result_count\\t6\", \"result_count\\t5\", 1)",
+          "\"schema_version\\t2\",",
+          "f\"workspace_source_manifest_sha256\\t{sealed_manifest}\",",
+          "f\"multilane_source_manifest_sha256\\t{multilane_manifest}\",",
           "\"result\\tkura-replica-retention\\t\"",
           "\"kura_replica_retention_fixed.cfg\\t8\\tNoError\\t\"",
           "\"inflight_first_release_fixed.cfg\\t18\\tNoError\\t\"",
+          "f\"workspace_source_manifest_sha256\\t{workspace_manifest}\\n\",",
+          "f\"multilane_source_manifest_sha256\\t{multilane_manifest}\\n\",",
+          "(workspace_manifest, multilane_manifest, \"header is not the exact pinned profile\")",
+          "(multilane_manifest, workspace_manifest, \"header is not the exact pinned profile\")",
+          "(\"result_count\\t6\", \"result_count\\t5\", \"header is not the exact pinned profile\")",
+          "module._validate_multilane_apalache_evidence(",
           "\"result\\tinflight-first-release-refinement\\t\"",
-          "\"is not exact source-bound NoError evidence\""
+          "\"multilane_source_manifest_sha256\": substituted_manifest",
+          "fields[\"multilane_apalache_evidence_sha256\"] = sha256(apalache)"
         ]
       },
       {
@@ -6022,7 +6092,7 @@
             "return ordinary_native_amx_application_sources(block);",
             "!bundle.external.is_empty()",
             "block.external_entrypoints_cloned().next().is_some()",
-            "merge_application_header_from_carrier(block.header())",
+            "merge_application_header_from_carrier(&block.header())",
             "merge_execution_batch_commitments_match(batch)",
             "execution.native_amx_receipts.len() != execution.entrypoints.len()",
             "Hash::from(canonical_entrypoint_hash) != *expected_entrypoint_hash",
@@ -7118,6 +7188,72 @@
           "symbol": "NativeAmxParticipantApplicationPublicationMode::permits_retention_cleanup",
           "required_tokens": [
             "matches!(self, Self::PostWsvRepair)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "preflight_native_amx_participant_application_route_under_publication_guard",
+          "required_tokens": [
+            "receipt.manifest_artifact_hash != HashOf::new(manifest)",
+            "!incoming.matches_manifest(manifest)",
+            "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE",
+            "inventory_native_amx_evidence_files_locked(&namespace, true)",
+            "preflight_native_amx_incoming_artifacts_locked",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "validate_native_amx_prepublication_transition_locked",
+            "NativeAmxParticipantApplicationRoutePreflight { incoming, current }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "preflight_native_amx_incoming_artifacts_locked",
+          "required_tokens": [
+            "validate_native_amx_retained_history_continuity",
+            "native_amx_participant_application_pair_framed_bytes",
+            "let mut additional_bytes = 0_u64;",
+            "read_native_amx_evidence_file_bytes_locked",
+            "!= expected_bytes.as_slice()",
+            "conflicts with the incoming same-height plan before publication",
+            "temporary conflicts with the incoming plan before publication",
+            "!inventory.stable(*kind).contains_key(&participant_height)",
+            "inventory.temporary(*kind).is_none()",
+            "additional_bytes = additional_bytes",
+            "native_amx_participant_evidence_startup_bytes",
+            "native_amx_evidence_total_payload_bytes(inventory)",
+            "bytes.checked_add(additional_bytes)",
+            "single bounded transient publication window"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "validate_native_amx_prepublication_transition_locked",
+          "required_tokens": [
+            "if current == incoming {",
+            "let durable_manifest = self",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "let durable_receipt = self",
+            "read_native_amx_participant_application_receipt_from_paths_locked",
+            ".is_some_and(|durable| durable != manifest)",
+            ".is_some_and(|durable| durable != receipt)",
+            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
+            "Native AMX exact retry does not match authenticated durable evidence"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "persist_native_amx_participant_application_repair_targets_under_publication_guard",
+          "required_tokens": [
+            "preflight_native_amx_participant_application_repair_targets_under_publication_guard",
+            "write_native_amx_participant_application_manifest_artifact_with_retention_policy_under_publication_guard",
+            "read_back_native_amx_repair_target_manifests_under_publication_guard",
+            "write_native_amx_participant_application_receipt_artifact_only_with_retention_policy_under_publication_guard",
+            "write_native_amx_participant_receipt_latest_index_for_prepublication_under_publication_guard",
+            "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
+            "cleanup_native_amx_participant_application_evidence_under_publication_guard"
           ]
         },
         {
@@ -9582,6 +9718,20 @@
         },
         {
           "path": "crates/iroha_core/src/state.rs",
+          "kind": "struct",
+          "symbol": "CanonicalCarrierCommitMetadataAuthorization",
+          "required_tokens": [
+            "entry_hash: HashOf<MergeLedgerEntry>",
+            "carrier_height: u64",
+            "carrier_hash: HashOf<BlockHeader>",
+            "post_finality_write_set_root: Hash",
+            "previous_commit_topology: Vec<PeerId>",
+            "next_commit_topology: Vec<PeerId>",
+            "autoscale_sample: AutoscaleSampleRecord"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
           "symbol": "merge_execution_external_event_bytes",
           "required_tokens": [
@@ -9682,7 +9832,10 @@
             "finalized autonomous carrier retained events after publication",
             "merge_execution_write_set_root_from_overlay_with_external_events",
             "authorization.external_event_bytes.as_deref()",
+            "authorization.write_set_root",
+            "finalized carrier economic authorization is stale or mismatched",
             "CanonicalCarrierCommitMetadataAuthorization",
+            "post_finality_write_set_root,",
             "previous_commit_topology",
             "autoscale_sample"
           ]
@@ -9710,6 +9863,8 @@
             "canonical_carrier_commit_metadata_authorization.take()",
             "merge_execution_write_set_root_from_overlay_with_external_events",
             "authorization.external_event_bytes.as_deref()",
+            "authorization.write_set_root",
+            "carrier_authorization.post_finality_write_set_root != current_write_set_root",
             "certified merge entry has no exact durable carrier before state commit",
             "transactions.validate_commit()"
           ]

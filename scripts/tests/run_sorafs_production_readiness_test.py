@@ -17,11 +17,15 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 import check_sorafs_production_readiness as CHECKER  # noqa: E402
+import sorafs_l1_lane_evidence_inventory as LANE_INVENTORY  # noqa: E402
+import sorafs_l1_lane_inventory_test_support as INVENTORY_SUPPORT  # noqa: E402
+import sorafs_topology_qualification as TOPOLOGY  # noqa: E402
 from sorafs_resilience_test_support import (  # noqa: E402
     DEFAULT_SIGNING_SEED as RESILIENCE_SIGNING_SEED,
     public_key_from_seed as resilience_public_key_from_seed,
     write_resilience_summary,
 )
+from sorafs_rollout_runner_test_support import signed_topology_cli_args  # noqa: E402
 
 CHECKER_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_production_readiness.py"
 FOUNDATIONAL_SIGNER_PUBLIC_KEY_HEX = "12" * 32
@@ -34,6 +38,58 @@ RESILIENCE_SIGNER_PUBLIC_KEY = resilience_public_key_from_seed(
 
 def write_json(path: Path) -> Path:
     path.write_text('{"schema":"placeholder"}\n', encoding="utf-8")
+    return path
+
+
+def write_lane_inventory(path: Path) -> Path:
+    """Write a schema-closed signed-inventory placeholder for runner planning."""
+
+    signer = LANE_INVENTORY.trusted_signer_binding(
+        INVENTORY_SUPPORT.PUBLIC_KEY.hex(),
+        service_id=INVENTORY_SUPPORT.SERVICE_ID,
+        administrator_id=INVENTORY_SUPPORT.ADMINISTRATOR_ID,
+        key_revision=INVENTORY_SUPPORT.KEY_REVISION,
+        policy_revision=INVENTORY_SUPPORT.POLICY_REVISION,
+        policy_digest_sha256=INVENTORY_SUPPORT.POLICY_DIGEST_SHA256,
+    )
+    signer["signature_hex"] = "12" * 64
+    payload = {
+        "schema": LANE_INVENTORY.INVENTORY_SCHEMA,
+        "status": "ready",
+        "signer_qualification": "software-key-qualified",
+        "generated_at_unix": 1_800_800_000,
+        "max_summary_age_secs": LANE_INVENTORY.MAX_SUMMARY_AGE_SECS,
+        "summary_file_count": 17,
+        "recognized_summary_count": 17,
+        "deployment": {
+            "deployment_id": "sorafs-mainnet-2026-06",
+            "environment": "production",
+            "network": LANE_INVENTORY.TAIRA_NETWORK,
+            "chain_id": LANE_INVENTORY.TAIRA_CHAIN_ID,
+            "chain_discriminant": LANE_INVENTORY.TAIRA_CHAIN_DISCRIMINANT,
+        },
+        "anchors": {
+            "topology_qualification_summary_sha256": "21" * 32,
+            "topology_manifest_sha256": "22" * 32,
+            "topology_canonical_manifest_sha256": "23" * 32,
+            "validator_ids_sha256": "24" * 32,
+            "oldest_evidence_generated_at_unix": 1_800_799_900,
+            "newest_evidence_generated_at_unix": 1_800_799_990,
+        },
+        "summaries": [
+            {
+                "lane": lane,
+                "schema": schema,
+                "summary_sha256": hashlib.sha256(lane.encode()).hexdigest(),
+                "recognized_artifact_count": 1,
+                "oldest_generated_at_unix": 1_800_799_900,
+                "newest_generated_at_unix": 1_800_799_990,
+            }
+            for lane, schema in LANE_INVENTORY.LANES
+        ],
+        "signer": signer,
+    }
+    path.write_bytes(LANE_INVENTORY.canonical_file_bytes(payload))
     return path
 
 
@@ -53,8 +109,11 @@ def write_topology_qualification(path: Path) -> Path:
         "deployment": {
             "deployment_id": "sorafs-mainnet-2026-06",
             "environment": "production",
+            "network": "taira",
+            "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
+            "chain_discriminant": 369,
         },
-        "validator_count": 4,
+        "validator_count": 4, "validator_ids": ["taira-validator-1", "taira-validator-2", "taira-validator-3", "taira-validator-4"],
         "storage_provider_count": 2,
         "gateway_count": 2,
         "governance_dag_instance_count": 2,
@@ -69,11 +128,33 @@ def write_topology_qualification(path: Path) -> Path:
     return path
 
 
+def topology_args(tmp_path: Path) -> list[str]:
+    """Return one complete independently signed topology trust tuple."""
+
+    path = write_topology_qualification(tmp_path / "l1-topology-qualification.json")
+    inventory_path = write_lane_inventory(tmp_path / "l1-lane-evidence.inventory")
+    return [
+        *signed_topology_cli_args(
+            path,
+            deployment_id="sorafs-mainnet-2026-06",
+            environment="production",
+            now_unix=1_800_800_000,
+        ),
+        *INVENTORY_SUPPORT.inventory_cli_args(inventory_path),
+    ]
+
+
 def complete_args(tmp_path: Path) -> list[str]:
     topology_path = write_topology_qualification(
         tmp_path / "l1-topology-qualification.json"
     )
-    topology_binding, topology_errors = MODULE.load_topology_qualification_binding(
+    topology_args = signed_topology_cli_args(
+        topology_path,
+        deployment_id="sorafs-mainnet-2026-06",
+        environment="production",
+        now_unix=1_800_800_000,
+    )
+    topology_binding, topology_errors = TOPOLOGY.load_topology_qualification_binding(
         topology_path,
         expected_deployment_id="sorafs-mainnet-2026-06",
         expected_environment="production",
@@ -90,17 +171,18 @@ def complete_args(tmp_path: Path) -> list[str]:
         captured_at_unix=1_800_799_940,
     )
     assert public_key == RESILIENCE_SIGNER_PUBLIC_KEY
+    inventory_path = write_lane_inventory(tmp_path / "l1-lane-evidence.inventory")
     args = [
         "--out-dir",
         str(tmp_path / "out"),
         "--verifier",
         str(CHECKER_PATH),
-        "--topology-qualification-summary",
-        str(topology_path),
+        *topology_args,
         "--resilience-qualification-summary",
         str(resilience_path),
         "--resilience-qualification-signer-public-key-hex",
         RESILIENCE_SIGNER_PUBLIC_KEY.hex(),
+        *INVENTORY_SUPPORT.inventory_cli_args(inventory_path),
         "--deployment-id",
         "sorafs-mainnet-2026-06",
         "--environment",
@@ -139,6 +221,9 @@ def test_dry_run_prints_complete_aggregate_plan(tmp_path: Path, capsys) -> None:
     ] == hashlib.sha256(topology_path.read_bytes()).hexdigest()
     assert payload["resilience_qualification"] == MODULE.resilience_qualification_plan(
         MODULE.parse_args(complete_args(tmp_path))
+    )
+    assert payload["l1_lane_evidence_inventory"] == (
+        MODULE.l1_lane_evidence_inventory_plan(MODULE.parse_args(complete_args(tmp_path)))
     )
     assert set(payload["summary_contract"]) == set(MODULE.DEFAULT_REQUIRED_GATES)
     assert payload["foundational_prerequisite"] == {
@@ -317,7 +402,10 @@ def test_now_unix_is_required_for_freshness_validation(
     tmp_path: Path,
     capsys,
 ) -> None:
-    exit_code = MODULE.main(["--out-dir", str(tmp_path / "out")])
+    values = complete_args(tmp_path)
+    flag_index = values.index("--now-unix")
+    del values[flag_index : flag_index + 2]
+    exit_code = MODULE.main(values)
 
     captured = capsys.readouterr()
     assert exit_code == 2
@@ -330,10 +418,7 @@ def test_topology_qualification_is_non_optional(tmp_path: Path) -> None:
     values = complete_args(tmp_path)
     flag_index = values.index("--topology-qualification-summary")
     del values[flag_index : flag_index + 2]
-    args = MODULE.parse_args(values)
-    assert "--topology-qualification-summary is required" in MODULE.validate_inputs(
-        args
-    )
+    assert MODULE.main(values) == 2
 
 
 def test_substituted_verifier_is_rejected_before_execution(
@@ -389,11 +474,10 @@ def test_duplicate_required_gate_fails_before_validation(
     capsys,
 ) -> None:
     assert (
-        MODULE.main(
-            [
-                "--out-dir",
-                str(tmp_path / "out"),
-                "--require-gate",
+            MODULE.main(
+                [
+                    *complete_args(tmp_path),
+                    "--require-gate",
                 "gateway_load",
                 "--require-gate",
                 "gateway_load",
@@ -415,11 +499,10 @@ def test_unknown_required_gate_fails_before_validation(
     unknown_gate = "private-key-placeholder"
 
     assert (
-        MODULE.main(
-            [
-                "--out-dir",
-                str(tmp_path / "out"),
-                "--require-gate",
+            MODULE.main(
+                [
+                    *complete_args(tmp_path),
+                    "--require-gate",
                 unknown_gate,
             ]
         )
@@ -439,11 +522,10 @@ def test_malformed_required_gate_fails_before_validation(
     malformed_gate = "gateway_load,"
 
     assert (
-        MODULE.main(
-            [
-                "--out-dir",
-                str(tmp_path / "out"),
-                "--require-gate",
+            MODULE.main(
+                [
+                    *complete_args(tmp_path),
+                    "--require-gate",
                 malformed_gate,
             ]
         )
@@ -651,7 +733,7 @@ def test_plan_json_thresholds_shape_is_validated(tmp_path: Path) -> None:
         in diagnostics
     )
     assert (
-        "production readiness runner plan thresholds must contain only max_summary_artifact_age_secs and now_unix"
+        "production readiness runner plan thresholds must contain only max_summary_artifact_age_secs, max_topology_qualification_review_age_secs, and now_unix"
         in diagnostics
     )
     assert (
@@ -737,13 +819,19 @@ def test_plan_json_required_gates_shape_is_validated(tmp_path: Path) -> None:
 def test_plan_json_external_summaries_shape_is_validated(tmp_path: Path) -> None:
     gateway_summary = write_json(tmp_path / "gateway-load.json")
     reputation_summary = write_json(tmp_path / "reputation.json")
+    topology_path = write_topology_qualification(
+        tmp_path / "l1-topology-qualification.json"
+    )
     args = MODULE.parse_args(
         [
-            "--topology-qualification-summary",
-            str(
-                write_topology_qualification(
-                    tmp_path / "l1-topology-qualification.json"
-                )
+            *signed_topology_cli_args(
+                topology_path,
+                deployment_id="sorafs-mainnet-2026-06",
+                environment="production",
+                now_unix=1_800_800_000,
+            ),
+            *INVENTORY_SUPPORT.inventory_cli_args(
+                write_lane_inventory(tmp_path / "l1-lane-evidence.inventory")
             ),
             "--out-dir",
             str(tmp_path / "out"),
@@ -826,6 +914,7 @@ def test_plan_json_summary_contract_shape_is_validated(tmp_path: Path) -> None:
     gateway_summary = write_json(tmp_path / "gateway-load.json")
     args = MODULE.parse_args(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(tmp_path / "out"),
             "--verifier",
@@ -1146,6 +1235,7 @@ def test_execution_rejects_unrenderable_plan_before_running(
 def test_missing_required_summary_fails(tmp_path: Path, capsys) -> None:
     exit_code = MODULE.main(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(tmp_path / "out"),
             "--verifier",
@@ -1168,6 +1258,7 @@ def test_unrequired_summary_flag_fails(tmp_path: Path, capsys) -> None:
 
     exit_code = MODULE.main(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(tmp_path / "out"),
             "--verifier",
@@ -1194,6 +1285,7 @@ def test_duplicate_required_summary_flag_fails(tmp_path: Path, capsys) -> None:
 
     exit_code = MODULE.main(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(tmp_path / "out"),
             "--verifier",
@@ -1274,13 +1366,19 @@ def test_narrowed_required_gate_plan_is_rejected(
 ) -> None:
     gateway_summary = write_json(tmp_path / "gateway-load.json")
     foundational_summary = write_json(tmp_path / "foundational-prerequisites.json")
+    topology_path = write_topology_qualification(
+        tmp_path / "l1-topology-qualification.json"
+    )
     exit_code = MODULE.main(
             [
-                "--topology-qualification-summary",
-                str(
-                    write_topology_qualification(
-                        tmp_path / "l1-topology-qualification.json"
-                    )
+                *signed_topology_cli_args(
+                    topology_path,
+                    deployment_id="sorafs-mainnet-2026-06",
+                    environment="production",
+                    now_unix=1_800_800_000,
+                ),
+                *INVENTORY_SUPPORT.inventory_cli_args(
+                    write_lane_inventory(tmp_path / "l1-lane-evidence.inventory")
                 ),
                 "--out-dir",
             str(tmp_path / "out"),
@@ -1341,6 +1439,7 @@ def test_partial_deployment_context_fails(tmp_path: Path, capsys) -> None:
     gateway_summary = write_json(tmp_path / "gateway-load.json")
     exit_code = MODULE.main(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(tmp_path / "out"),
             "--verifier",
@@ -1606,6 +1705,7 @@ def test_summary_input_path_components_must_be_plan_safe(
 
     exit_code = MODULE.main(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(tmp_path / "out"),
             "--verifier",
@@ -1641,6 +1741,7 @@ def test_encoded_summary_input_path_components_must_be_plan_safe(
 
     exit_code = MODULE.main(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(tmp_path / "out"),
             "--verifier",
@@ -1677,6 +1778,7 @@ def test_plan_rendered_output_path_components_must_be_plan_safe(
 
     exit_code = MODULE.main(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(tmp_path / "private_key_output"),
             "--verifier",
@@ -1708,6 +1810,7 @@ def test_plan_rendered_summary_output_path_components_must_be_plan_safe(
 
     exit_code = MODULE.main(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(tmp_path / "out"),
             "--summary-out",
@@ -1743,6 +1846,7 @@ def test_plan_rendered_verifier_path_components_must_be_plan_safe(
 
     exit_code = MODULE.main(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(tmp_path / "out"),
             "--verifier",
@@ -1775,6 +1879,7 @@ def test_encoded_plan_rendered_output_path_components_must_be_plan_safe(
 
     exit_code = MODULE.main(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(encoded_output),
             "--verifier",
@@ -1807,6 +1912,7 @@ def test_encoded_plan_rendered_summary_output_path_components_must_be_plan_safe(
 
     exit_code = MODULE.main(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(tmp_path / "out"),
             "--summary-out",
@@ -1842,6 +1948,7 @@ def test_encoded_plan_rendered_verifier_path_components_must_be_plan_safe(
 
     exit_code = MODULE.main(
         [
+            *topology_args(tmp_path),
             "--out-dir",
             str(tmp_path / "out"),
             "--verifier",
@@ -1883,17 +1990,11 @@ def test_summary_input_path_safety_accepts_digest_labels(tmp_path: Path) -> None
 
 
 def replay_input_snapshot() -> MODULE.InputDigestSnapshot:
-    """Return topology/resilience/foundation plus the 17-lane snapshot."""
+    """Return signed topology, resilience, foundation, and 17-lane inputs."""
 
-    slots = (
-        "topology_qualification",
-        "resilience_qualification",
-        "foundational_prerequisite",
-        *MODULE.DEFAULT_REQUIRED_GATES,
-    )
     return tuple(
         (slot, hashlib.sha256(slot.encode("utf-8")).hexdigest())
-        for slot in slots
+        for slot in MODULE.REPLAY_INPUT_SLOTS
     )
 
 
@@ -1910,6 +2011,12 @@ def promotion_payload() -> dict:
             "present": True,
             "valid": True,
             "binding": {"schema": "trusted-test-binding"},
+            "errors": [],
+        },
+        "l1_lane_evidence_inventory": {
+            "present": True,
+            "valid": True,
+            "binding": {"schema": "trusted-test-inventory-binding"},
             "errors": [],
         },
         "required": {
@@ -1979,7 +2086,7 @@ def test_replay_manifest_is_schema_closed_digest_only() -> None:
 
     assert MODULE.validate_replay_manifest(manifest, snapshot, replay) == []
     assert set(manifest) == MODULE.REPLAY_MANIFEST_FIELDS
-    assert len(manifest["input_sha256"]) == len(MODULE.REPLAY_INPUT_SLOTS) == 20
+    assert len(manifest["input_sha256"]) == len(MODULE.REPLAY_INPUT_SLOTS) == 22
     assert all(
         set(row) == MODULE.REPLAY_INPUT_DIGEST_FIELDS
         for row in manifest["input_sha256"]

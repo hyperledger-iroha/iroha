@@ -8,8 +8,6 @@ if (($# > 1)); then
   exit 2
 fi
 
-readonly repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-
 canonical_path() {
   python3 -c \
     'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
@@ -44,7 +42,6 @@ if [[ -n "${JAVA_HOME:-}" ]]; then
 fi
 candidates+=(
   java
-  "${repo_root}/target/java/jdk-21/Contents/Home/bin/java"
 )
 
 if [[ -x /usr/libexec/java_home ]]; then

@@ -29,8 +29,10 @@ MAX_REVIEW_AGE_SECS = 3_600
 REVIEWED_AT_UNIX = NOW_UNIX - 60
 DEPLOYMENT_ID = "sorafs-mainnet-2026-07"
 ENVIRONMENT = "production"
-SIGNER_IDENTITY = "sorafs-topology-qualification-software-primary"
+SIGNER_SERVICE_ID = "sorafs-topology-signer-a"
+SIGNER_ADMINISTRATOR_ID = "sorafs-topology-admin-b"
 SIGNER_KEY_REVISION = 7
+SIGNER_POLICY_REVISION = 11
 SIGNER_POLICY_DIGEST = hashlib.sha256(
     b"sorafs-topology-qualification-policy-v1"
 ).hexdigest()
@@ -70,8 +72,11 @@ def qualification_summary() -> dict[str, Any]:
         "deployment": {
             "deployment_id": DEPLOYMENT_ID,
             "environment": ENVIRONMENT,
+            "network": TOPOLOGY.taira_constants.NETWORK_NAME,
+            "chain_id": TOPOLOGY.taira_constants.CHAIN_ID,
+            "chain_discriminant": TOPOLOGY.taira_constants.CHAIN_DISCRIMINANT,
         },
-        "validator_count": 4,
+        "validator_count": 4, "validator_ids": ["taira-validator-1", "taira-validator-2", "taira-validator-3", "taira-validator-4"],
         "storage_provider_count": 2,
         "gateway_count": 2,
         "governance_dag_instance_count": 2,
@@ -124,18 +129,25 @@ def signed_fixture(
     envelope: dict[str, Any] = {
         "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
         **binding,
-        "signer_identity": SIGNER_IDENTITY,
+        "signer_authentication_kind": "external-ed25519",
         "signer_backend": "software",
+        "signer_service_id": SIGNER_SERVICE_ID,
+        "signer_administrator_id": SIGNER_ADMINISTRATOR_ID,
         "signer_key_revision": SIGNER_KEY_REVISION,
-        "signer_key_fingerprint_hex": hashlib.sha256(PUBLIC_KEY).hexdigest(),
-        "signer_policy_digest_hex": SIGNER_POLICY_DIGEST,
+        "signer_policy_revision": SIGNER_POLICY_REVISION,
+        "signer_public_key_fingerprint_sha256": hashlib.sha256(PUBLIC_KEY).hexdigest(),
+        "signer_policy_digest_sha256": SIGNER_POLICY_DIGEST,
         "reviewed_at_unix": reviewed_at_unix,
         "signature_algorithm": "ed25519",
         "signature_hex": "00" * 64,
     }
     sign_envelope(envelope)
     write_json(envelope_path, envelope)
-    return summary_path, envelope_path, binding, envelope
+    authenticated_binding = {
+        field: envelope[field]
+        for field in TOPOLOGY.AUTHENTICATED_TOPOLOGY_BINDING_FIELDS
+    }
+    return summary_path, envelope_path, authenticated_binding, envelope
 
 
 def verify(
@@ -147,8 +159,10 @@ def verify(
 
     arguments: dict[str, Any] = {
         "trusted_public_key": PUBLIC_KEY,
-        "trusted_signer_identity": SIGNER_IDENTITY,
+        "trusted_signer_service_id": SIGNER_SERVICE_ID,
+        "trusted_signer_administrator_id": SIGNER_ADMINISTRATOR_ID,
         "trusted_key_revision": SIGNER_KEY_REVISION,
+        "trusted_policy_revision": SIGNER_POLICY_REVISION,
         "trusted_policy_digest_hex": SIGNER_POLICY_DIGEST,
         "now_unix": NOW_UNIX,
         "max_review_age_secs": MAX_REVIEW_AGE_SECS,
@@ -176,18 +190,22 @@ def test_signed_envelope_authenticates_exact_unsigned_binding(tmp_path: Path) ->
     authenticated, errors = verify(summary_path, envelope_path)
 
     assert unsigned_errors == []
-    assert unsigned == expected
+    assert unsigned == {field: expected[field] for field in TOPOLOGY.TOPOLOGY_BINDING_FIELDS}
     assert errors == []
     assert authenticated == expected
+    assert authenticated["validator_ids_sha256"] == (
+        TOPOLOGY.CANONICAL_TAIRA_VALIDATOR_IDS_SHA256
+    )
     signing_bytes = TOPOLOGY.topology_qualification_envelope_signing_bytes(envelope)
     assert signing_bytes.startswith(TOPOLOGY.TOPOLOGY_QUALIFICATION_SIGNATURE_DOMAIN)
     assert b'"signer_backend":"software"' in signing_bytes
+    assert b'"signer_administrator_id":"sorafs-topology-admin-b"' in signing_bytes
     assert b'"signature_algorithm":"ed25519"' in signing_bytes
     assert b"signature_hex" not in signing_bytes
 
 
 @pytest.mark.parametrize(
-    "missing_field", ["signature_hex", "signer_identity", "signer_backend"]
+    "missing_field", ["signature_hex", "signer_service_id", "signer_backend"]
 )
 def test_unsigned_or_incomplete_envelope_fails_closed(
     tmp_path: Path,
@@ -221,7 +239,7 @@ def test_exact_summary_bytes_are_bound(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("backend", ["hsm", "pkcs11", "hardware"])
+@pytest.mark.parametrize("backend", ["local", "hsm", "pkcs11", "hardware"])
 def test_non_software_signer_backend_is_rejected(
     tmp_path: Path,
     backend: str,
@@ -236,11 +254,72 @@ def test_non_software_signer_backend_is_rejected(
     authenticated, errors = verify(summary_path, envelope_path)
 
     assert authenticated is None
+    assert any("signer backend must be `software`" in error for error in errors)
+    assert not any("signature must authenticate" in error for error in errors)
+
+
+def test_same_signer_service_and_administrator_is_rejected(tmp_path: Path) -> None:
+    summary_path, envelope_path, _binding, envelope = signed_fixture(tmp_path)
+    envelope["signer_administrator_id"] = envelope["signer_service_id"]
+    sign_envelope(envelope)
+    write_json(envelope_path, envelope)
+
+    authenticated, errors = verify(summary_path, envelope_path)
+
+    assert authenticated is None
+    assert any("service_id and administrator_id must differ" in error for error in errors)
+
+
+def test_topology_key_must_not_overlap_an_independent_signer(tmp_path: Path) -> None:
+    summary_path, envelope_path, _binding, _envelope = signed_fixture(tmp_path)
+
+    authenticated, errors = verify(
+        summary_path,
+        envelope_path,
+        independent_public_keys={"resilience signer key": PUBLIC_KEY},
+    )
+
+    assert authenticated is None
+    assert "trusted topology public key must differ from resilience signer key" in errors
+
+
+def test_topology_administrator_must_not_overlap_an_independent_signer(
+    tmp_path: Path,
+) -> None:
+    summary_path, envelope_path, _binding, _envelope = signed_fixture(tmp_path)
+
+    authenticated, errors = verify(
+        summary_path,
+        envelope_path,
+        independent_administrator_ids={
+            "resilience signer administrator": SIGNER_ADMINISTRATOR_ID
+        },
+    )
+
+    assert authenticated is None
     assert (
-        "signed topology qualification envelope signer_backend must be `software`"
+        "trusted topology administrator must differ from resilience signer administrator"
         in errors
     )
-    assert not any("signature must authenticate" in error for error in errors)
+
+
+def test_topology_domain_comparator_rejects_admin_and_key_overlap(
+    tmp_path: Path,
+) -> None:
+    _summary, _envelope, binding, _payload = signed_fixture(tmp_path)
+    peer = {
+        "signer_administrator_id": binding["signer_administrator_id"],
+        "signer_public_key_fingerprint_sha256": binding[
+            "signer_public_key_fingerprint_sha256"
+        ],
+    }
+
+    errors = TOPOLOGY.validate_independent_topology_signer_domains(
+        binding, ("resilience signer", peer)
+    )
+
+    assert "topology signer administrator must differ from resilience signer" in errors
+    assert "topology signer public key must differ from resilience signer" in errors
 
 
 @pytest.mark.parametrize(
@@ -253,12 +332,16 @@ def test_non_software_signer_backend_is_rejected(
         ),
         ("deployment_id", "other-production-deployment"),
         ("environment", "prod"),
+        ("network", "minamoto"),
+        ("chain_id", "00000000-0000-0000-0000-000000000000"),
+        ("chain_discriminant", 0),
+        ("validator_ids_sha256", hashlib.sha256(b"other-roster").hexdigest()),
     ],
 )
 def test_authenticated_envelope_cannot_bind_another_topology(
     tmp_path: Path,
     field: str,
-    replacement: str,
+    replacement: Any,
 ) -> None:
     """A valid signature over the wrong topology tuple remains unacceptable."""
 
@@ -277,16 +360,54 @@ def test_authenticated_envelope_cannot_bind_another_topology(
     assert not any("signature must authenticate" in error for error in errors)
 
 
+def test_minamoto_summary_is_rejected_before_signature_review(tmp_path: Path) -> None:
+    """A mainnet label cannot enter the Taira qualification binding."""
+
+    payload = qualification_summary()
+    payload["deployment"]["network"] = "minamoto"
+    summary_path = tmp_path / "minamoto-topology-summary.json"
+    write_json(summary_path, payload)
+
+    binding, errors = TOPOLOGY.load_topology_qualification_binding(summary_path)
+
+    assert binding is None
+    assert any("Minamoto evidence is not accepted" in error for error in errors)
+
+
+def test_noncanonical_validator_roster_is_rejected_before_signature_review(
+    tmp_path: Path,
+) -> None:
+    """The summary cannot replace or reorder the exact four Taira validators."""
+
+    payload = qualification_summary()
+    payload["validator_ids"] = list(reversed(payload["validator_ids"]))
+    summary_path = tmp_path / "wrong-validator-roster.json"
+    write_json(summary_path, payload)
+
+    binding, errors = TOPOLOGY.load_topology_qualification_binding(summary_path)
+
+    assert binding is None
+    assert any("canonical ordered Taira validator identities" in error for error in errors)
+
+
 @pytest.mark.parametrize(
     ("override", "error_fragment"),
     [
         (
-            {"trusted_signer_identity": "another-topology-signer"},
-            "signer_identity must match the trusted signer",
+            {"trusted_signer_service_id": "another-topology-signer"},
+            "signer_service_id must match the trusted external software signer",
+        ),
+        (
+            {"trusted_signer_administrator_id": "another-topology-admin"},
+            "signer_administrator_id must match the trusted external software signer",
         ),
         (
             {"trusted_key_revision": SIGNER_KEY_REVISION + 1},
-            "signer_key_revision must match the trusted revision",
+            "signer_key_revision must match the trusted external software signer",
+        ),
+        (
+            {"trusted_policy_revision": SIGNER_POLICY_REVISION + 1},
+            "signer_policy_revision must match the trusted external software signer",
         ),
         (
             {
@@ -294,7 +415,7 @@ def test_authenticated_envelope_cannot_bind_another_topology(
                     b"another-topology-policy"
                 ).hexdigest()
             },
-            "signer_policy_digest_hex must match the trusted signer policy",
+            "signer_policy_digest_sha256 must match the trusted external software signer",
         ),
         (
             {
@@ -302,7 +423,7 @@ def test_authenticated_envelope_cannot_bind_another_topology(
                     hashlib.sha256(b"another-topology-key").digest()
                 )
             },
-            "signer_key_fingerprint_hex must match the trusted public key",
+            "signer public-key fingerprint must match the trusted public key",
         ),
     ],
 )

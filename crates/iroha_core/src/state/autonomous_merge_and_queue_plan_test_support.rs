@@ -289,6 +289,30 @@ fn seed_pending_queue_plan_binding_state_for_test(
         .expect("fixture pending QueuePlan binding");
 }
 
+fn commit_block_metadata_with_genesis_checkpoint_to_state(
+    state: &State,
+    block: &SignedBlock,
+) {
+    commit_block_metadata_to_state(state, block);
+    let revision = MusubiResolverIndexRevisionV1::default();
+    assert_eq!(state.world.view().musubi_resolver_index_revision(), revision.get());
+    let checkpoint = MusubiRegistrySnapshotV1 {
+        finalized_height: block.header().height().get(),
+        finalized_block_hash: *block.hash().as_ref(),
+        index_revision: revision.get(),
+    };
+    checkpoint.validate().expect("valid genesis resolver checkpoint");
+    let mut world = state.world.block();
+    assert!(
+        world
+            .musubi_resolver_index_checkpoints
+            .insert(revision, checkpoint)
+            .is_none(),
+        "genesis resolver checkpoint must be absent before fixture bootstrap",
+    );
+    world.commit();
+}
+
 fn queue_plan_pending_obligation_for_test(
     state: &State,
     certificate: &[u8],
@@ -625,7 +649,7 @@ fn autonomous_merge_commit_authorization_fixture(
         &state,
         &parent,
         &carrier,
-        &commit_keypairs,
+        &validator_keypairs,
     );
     (state, entry, carrier, expired_axt_replay_key)
 }

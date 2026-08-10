@@ -762,13 +762,17 @@ mod tests {
                 ],
             )
             .expect("fixture entrypoints and results align");
-        let executed_block_wire_hash = block
-            .executed_block_wire_hash()
+        let executed_block_wire = block
+            .encode_wire()
             .expect("fixture executed block wire encodes");
-        let execution_commitment = ExecutionCommitment::without_topups(
+        let executed_block_wire_len =
+            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
+        let executed_block_wire_hash = Hash::new(&executed_block_wire);
+        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"trusted proof parent state"),
             Hash::new(b"trusted proof post state"),
             Hash::new(b"trusted proof ordinary writes"),
+            executed_block_wire_len,
             executed_block_wire_hash,
         );
         execution_commitment
@@ -909,12 +913,16 @@ mod tests {
     #[test]
     fn trusted_anchor_rejects_cryptographically_finalized_wrong_executed_wire() {
         let (block, _, external_hash, _) = authenticated_block_with_scheduled_entry();
-        let wrong_execution_commitment = ExecutionCommitment::without_topups(
-            Hash::new(b"wrong-wire parent state"),
-            Hash::new(b"wrong-wire post state"),
-            Hash::new(b"wrong-wire ordinary writes"),
-            Hash::new(b"different finalized executed block wire"),
-        );
+        let wrong_executed_block_wire = b"different finalized executed block wire";
+        let wrong_execution_commitment =
+            ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"wrong-wire parent state"),
+                Hash::new(b"wrong-wire post state"),
+                Hash::new(b"wrong-wire ordinary writes"),
+                u64::try_from(wrong_executed_block_wire.len())
+                    .expect("wrong fixture wire length fits u64"),
+                Hash::new(wrong_executed_block_wire),
+            );
         let artifact = finalized_artifact_for_block(&block, wrong_execution_commitment);
 
         assert_eq!(
@@ -979,13 +987,16 @@ mod tests {
             .map(TransactionResult::hash)
             .collect();
         block.payload.header.result_merkle_root = result_state.result_merkle.root();
-        let execution_commitment = ExecutionCommitment::without_topups(
+        let executed_block_wire = block
+            .encode_wire()
+            .expect("misaligned fixture wire still encodes");
+        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"misaligned proof parent state"),
             Hash::new(b"misaligned proof post state"),
             Hash::new(b"misaligned proof ordinary writes"),
-            block
-                .executed_block_wire_hash()
-                .expect("misaligned fixture wire still encodes"),
+            u64::try_from(executed_block_wire.len())
+                .expect("misaligned fixture wire length fits u64"),
+            Hash::new(&executed_block_wire),
         );
         let artifact = finalized_artifact_for_block(&block, execution_commitment);
 

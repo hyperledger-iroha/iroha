@@ -15071,7 +15071,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             .map_err(|error| error.to_string())
     }
 
-    /// Commit one previously checked terminal authority refinement.
+    /// Commit one source-audited terminal refinement through the atomic batch API.
+    #[allow(dead_code)]
     pub(crate) fn commit_body_pipeline_candidate_terminal(
         &mut self,
         effect: &AdapterEffect,
@@ -15080,11 +15081,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.commit_body_pipeline_candidate_terminals(&[(effect, ownership)])
     }
 
-    /// Return whether the runtime already owns the terminal completion for an
-    /// exact Store/Validate candidate, committing an authority upgrade only
-    /// after producing the incumbent-owner plan. Executor production uses the
-    /// explicit plan/commit pair so its total positional refinement gate sits
-    /// between these two operations.
+    /// Return whether the runtime owns this exact terminal, upgrading authority only
+    /// after producing the incumbent-owner plan used by the explicit executor gate.
+    /// The executor gate remains between planning and commit.
+    #[cfg(test)]
     pub(crate) fn body_pipeline_candidate_has_terminal(
         &mut self,
         effect: &AdapterEffect,

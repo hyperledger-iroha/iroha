@@ -18,7 +18,7 @@ fails if any outcome is not `Ok`.
 
 A successful local replay verifies only the committed fixture and validator
 surfaces. It is not evidence of clean ABI-21 builds for all five native release
-targets, skip-free SDK parity, published packages, external-HSM signing, a
+targets, skip-free SDK parity, published packages, external software signing, a
 qualified provider deployment, or L1/L2 promotion.
 
 Covered scenarios:

@@ -71,7 +71,7 @@ identity.
 
 Remaining production blockers under
 `V1-BLOCK-MODERATION-VIEWER-RUNTIME-01` are deployment construction of the real
-messaging, settlement/publication, HSM/KMS/WebAuthn, linearizable sealed-CAS
+messaging, settlement/publication, external software signer/KMS/WebAuthn, linearizable sealed-CAS
 checkpoint-store, immutable archive, and signed receipt-to-transparency
 providers; a monotonic public-head adapter; and cross-replica semantic
 operation/checkpoint fencing. The evidence viewer core and standard launcher
@@ -222,7 +222,7 @@ case activation are submitted as typed ISIs; no direct-open ISI exists.
 ## Remaining Production Gates
 
 - Construct and inject the reference deployment's real messaging,
-  settlement/publication, HSM/KMS/WebAuthn, and authenticated downstream
+  settlement/publication, external software signer/KMS/WebAuthn, and authenticated downstream
   providers through the shipped qualified boundaries. Add the signed
   receipt-to-transparency producer, cross-replica semantic operation-ID
   fencing, and predecessor-bound checkpoint CAS/single-writer ownership. Run

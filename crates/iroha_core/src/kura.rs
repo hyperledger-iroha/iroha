@@ -9341,10 +9341,6 @@ impl Kura {
         ))
     }
 
-    fn reconcile_merge_carriers_from_durable_blocks(&self) -> Result<()> {
-        self.reconcile_merge_carriers_from_durable_blocks_with_authority(None, false)
-    }
-
     fn reconcile_merge_carriers_during_snapshot_finalization(
         &self,
         authority: &SnapshotFinalizationMutationAuthority<'_>,
@@ -15652,15 +15648,13 @@ impl Kura {
 
     /// Read verified finality and the immutable local merge-reference witness.
     ///
-    /// The witness is extracted while the canonical body is present and is
-    /// retained only as bounded serving authority. A recipient independently
-    /// verifies the exact compact reference and merge QC against its canonical
-    /// block, so this API cannot create consensus authority.
+    /// The witness is bounded serving authority; recipients independently verify
+    /// its compact reference and merge QC, so this API cannot create authority.
     ///
     /// # Errors
     ///
-    /// Returns an error if finality, the retained canonical association, or
-    /// the immutable retained record is invalid.
+    /// Returns an error if finality, its association, or retained record is invalid.
+    #[cfg(test)]
     pub(crate) fn v2_finality_artifact_with_merge_reference(
         &self,
         height: u64,
@@ -23578,7 +23572,7 @@ impl Kura {
             .map_err(|_| "invalid Native AMX participant proposal")?;
         let descriptor = &artifact.participant_proposal.descriptor;
         if artifact.participant_proposal.payload_block_hint.is_some()
-            || descriptor.proposal_height != artifact.application_block_height
+            || descriptor.proposal_height > artifact.application_block_height
             || artifact.application_block_height == 0
             || artifact
                 .executed_block_wire_hash
@@ -23620,7 +23614,7 @@ impl Kura {
                     || !receipt.xor_due.is_zero()
                     || !receipt.xor_after_haircut.is_zero()
                     || !receipt.xor_variance.is_zero()
-                    || receipt.timestamp_ms != artifact.application_block_height
+                    || receipt.timestamp_ms != descriptor.proposal_height
             })
         {
             return Err(
@@ -25753,6 +25747,7 @@ impl Kura {
         self.latest_certified_lane_block_frontier_inner(lane_id, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn latest_certified_lane_block_frontier_with_authority(
         &self,
         lane_id: LaneId,
@@ -26236,6 +26231,7 @@ impl Kura {
     /// bounded independently of the sidecar index length so malformed sparse or
     /// foreign history cannot turn proposal/startup recovery into an unbounded
     /// walk; failing to find an artifact within the budget fails closed.
+    #[cfg(test)]
     pub(crate) fn latest_certified_lane_block_artifacts_matching<F>(
         &self,
         lane_id: LaneId,
@@ -28392,42 +28388,6 @@ impl Kura {
         }
     }
 
-    fn validate_autonomous_lifecycle_bootstrap_authority_identity_locked(
-        &self,
-        process_generation: &AutonomousLifecycleProcessGenerationClaim,
-        entry: &LaneConfigEntry,
-        path: &Path,
-        bootstrap: &AutonomousLifecycleBootstrapV1,
-    ) -> Result<()> {
-        let process_record =
-            self.validate_autonomous_lifecycle_process_generation_claim(process_generation)?;
-        Self::validate_autonomous_lifecycle_bootstrap_process_generation(
-            &process_record,
-            bootstrap,
-        )
-        .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
-        let descriptor = &bootstrap.body.executable_payload.origin_proposal.descriptor;
-        let (active_incarnation, activation_height) = self.active_lane_incarnation_marker(entry)?;
-        let expected_path = Self::autonomous_lifecycle_bootstrap_path_for_entry(
-            entry,
-            &self.store_root,
-            descriptor.lane_block_height,
-            descriptor.proposal_height,
-        );
-        if entry.lane_id != descriptor.lane_id
-            || entry.dataspace_id != descriptor.dataspace_id
-            || active_incarnation != descriptor.lane_incarnation
-            || descriptor.proposal_height <= activation_height
-            || path != expected_path.as_path()
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                path.to_path_buf(),
-                "autonomous lifecycle bootstrap targets a stale route or incarnation",
-            ));
-        }
-        Ok(())
-    }
-
     fn autonomous_lifecycle_bootstrap_authority_locked(
         &self,
         process_generation: &AutonomousLifecycleProcessGenerationClaim,
@@ -28519,75 +28479,6 @@ impl Kura {
             bytes,
             bootstrap,
         )
-    }
-
-    fn revalidate_autonomous_lifecycle_bootstrap_for_completion(
-        &self,
-        authority: AutonomousLifecycleBootstrapRecoveryAuthority,
-    ) -> Result<AutonomousLifecycleBootstrapCompletionRevalidation> {
-        if authority.store_root != self.store_root {
-            return Err(Self::invalid_lane_artifact_error(
-                authority.path,
-                "autonomous lifecycle bootstrap authority belongs to another Kura root",
-            ));
-        }
-        self.validate_autonomous_lifecycle_process_generation_claim(&authority.process_generation)?;
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let proposal = &authority.bootstrap.body.executable_payload.origin_proposal;
-        let already_terminal = self
-            .lane_block_application_receipt_available_under_prune_and_canonical_guards(proposal);
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let descriptor = &proposal.descriptor;
-        let entry = self.lane_storage_entry(descriptor.lane_id)?;
-        let parent = authority.path.parent().ok_or_else(|| {
-            Self::invalid_lane_artifact_error(
-                authority.path.clone(),
-                "autonomous lifecycle bootstrap authority path has no parent",
-            )
-        })?;
-        let _sidecar_guard = self.sidecar_lock.lock();
-        let _namespace_budget = self.autonomous_lane_attempt_inventory_counts_locked(
-            &entry,
-            descriptor.lane_block_height,
-        )?;
-        let bytes = self
-            .read_regular_sidecar_bytes(
-                &authority.path,
-                parent,
-                AUTONOMOUS_LIFECYCLE_BOOTSTRAP_MAX_BYTES,
-            )?
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    authority.path.clone(),
-                    "autonomous lifecycle bootstrap disappeared before completion",
-                )
-            })?;
-        if bytes != authority.expected_bytes || Hash::new(&bytes) != authority.expected_bytes_hash {
-            return Err(Self::invalid_lane_artifact_error(
-                authority.path,
-                "autonomous lifecycle bootstrap changed after recovery authority was minted",
-            ));
-        }
-        let bootstrap = Self::decode_autonomous_lifecycle_bootstrap(&authority.path, &bytes)?;
-        if bootstrap != authority.bootstrap {
-            return Err(Self::invalid_lane_artifact_error(
-                authority.path,
-                "autonomous lifecycle bootstrap identity changed during recovery",
-            ));
-        }
-        let authority = self.autonomous_lifecycle_bootstrap_authority_locked(
-            &authority.process_generation,
-            &entry,
-            authority.path,
-            bytes,
-            bootstrap,
-        )?;
-        Ok(AutonomousLifecycleBootstrapCompletionRevalidation {
-            authority,
-            receipt_terminal: already_terminal,
-        })
     }
 
     /// Return every signed bootstrap for one active route in deterministic attempt order.
@@ -29261,171 +29152,6 @@ impl Kura {
             authority,
             fence: AutonomousLifecycleBootstrapCompletionFence::Test,
         })
-    }
-
-    fn publish_autonomous_lifecycle_bootstrap_cursor_stage(
-        &self,
-        authority: &AutonomousLifecycleBootstrapRecoveryAuthority,
-        target: AutonomousLifecycleBootstrapRecoveryStage,
-    ) -> Result<LaneBlockAuxiliaryPersistenceOutcome> {
-        self.durable_mutation_authorized()?;
-        if authority.store_root != self.store_root {
-            return Err(Self::invalid_lane_artifact_error(
-                authority.path.clone(),
-                "autonomous lifecycle bootstrap cursor authority belongs to another Kura root",
-            ));
-        }
-        self.validate_autonomous_lifecycle_process_generation_claim(&authority.process_generation)?;
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let proposal = &authority.bootstrap.body.executable_payload.origin_proposal;
-        let pending_canonical_bytes =
-            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let descriptor = &proposal.descriptor;
-        let entry = self.lane_storage_entry(descriptor.lane_id)?;
-        self.require_active_lane_artifact(&entry, descriptor)?;
-        let _sidecar_guard = self.sidecar_lock.lock();
-        let current_stage = self.validate_signed_bootstrap_payload_persistence_locked(
-            authority,
-            &entry,
-            &authority.bootstrap.body.executable_payload,
-        )?;
-        let (next, replacing_existing) = match (target, current_stage) {
-            (
-                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
-                AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable,
-            ) => (&authority.bootstrap.body.prepared_activate, false),
-            (
-                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
-                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable
-                | AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
-            ) => return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted),
-            (
-                AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
-                AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable,
-            ) => (&authority.bootstrap.body.live_activate, true),
-            (
-                AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
-                AutonomousLifecycleBootstrapRecoveryStage::LiveDurable,
-            ) => return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted),
-            (AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly, _)
-            | (AutonomousLifecycleBootstrapRecoveryStage::PayloadDurable, _)
-            | (AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable, _)
-            | (AutonomousLifecycleBootstrapRecoveryStage::LiveDurable, _) => {
-                return Err(Self::invalid_lane_artifact_error(
-                    authority.path.clone(),
-                    "autonomous lifecycle bootstrap cursor stages are not contiguous",
-                ));
-            }
-        };
-        let cursor_path = Self::autonomous_lifecycle_cursor_path_for_entry(
-            &entry,
-            &self.store_root,
-            descriptor.lane_block_height,
-            descriptor.proposal_height,
-        );
-        let cursor_parent = cursor_path.parent().ok_or_else(|| {
-            Self::invalid_lane_artifact_error(
-                cursor_path.clone(),
-                "autonomous lifecycle bootstrap cursor path has no parent",
-            )
-        })?;
-        let current_bytes = self.read_regular_sidecar_bytes(
-            &cursor_path,
-            cursor_parent,
-            AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
-        )?;
-        let prepared_bytes = authority
-            .bootstrap
-            .body
-            .prepared_activate
-            .encode_framed()
-            .map_err(Error::NoritoFrame)?;
-        if replacing_existing && current_bytes.as_deref() != Some(prepared_bytes.as_slice())
-            || !replacing_existing && current_bytes.is_some()
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                cursor_path,
-                "autonomous lifecycle bootstrap cursor head changed before publication",
-            ));
-        }
-        let next_bytes = next.encode_framed().map_err(Error::NoritoFrame)?;
-        let previous_len = current_bytes
-            .as_ref()
-            .map_or(Ok(0), |bytes| u64::try_from(bytes.len()))?;
-        let next_len = u64::try_from(next_bytes.len())?;
-        let inventory = self.autonomous_lane_attempt_inventory_counts_locked(
-            &entry,
-            descriptor.lane_block_height,
-        )?;
-        Self::validate_autonomous_lifecycle_cursor_cas_budget(
-            inventory.conceptual_files,
-            inventory.conceptual_bytes,
-            previous_len,
-            next_len,
-            replacing_existing,
-        )
-        .map_err(|message| Self::invalid_lane_artifact_error(cursor_path.clone(), message))?;
-        // The atomic writer materializes the complete successor beside the old
-        // cursor (for replace) or empty stable path (for create). Preflight that
-        // exact transient exposure against both accounting domains before any
-        // mutation; only the enforced domain has a configured capacity bound.
-        let creates_lifecycle_identity = !replacing_existing
-            && inventory.needs_terminal_reservation_for_new_identity((
-                descriptor.lane_block_height,
-                descriptor.proposal_height,
-            ));
-        self.validate_configured_autonomous_mutation_disk_peak_locked(
-            pending_canonical_bytes,
-            next_len,
-            creates_lifecycle_identity,
-            false,
-            &cursor_path,
-        )?;
-        self.kura_total_disk_usage_bytes()?
-            .checked_add(next_len)
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    cursor_path.clone(),
-                    "autonomous lifecycle bootstrap cursor atomic peak total-disk accounting overflows",
-                )
-            })?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        if replacing_existing {
-            self.write_atomic_synced_replace(&cursor_path, &next_bytes)?;
-        } else if !self.write_atomic_synced_noclobber(&cursor_path, &next_bytes)? {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::AlreadyExists,
-                    "autonomous lifecycle bootstrap cursor appeared during publication",
-                ),
-                cursor_path,
-            ));
-        }
-        self.update_disk_usage_delta(previous_len, next_len);
-        self.update_total_disk_usage_delta(previous_len, next_len);
-        accounting_mutation.finish();
-        let readback = self
-            .read_regular_sidecar_bytes(
-                &cursor_path,
-                cursor_parent,
-                AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES,
-            )?
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    cursor_path.clone(),
-                    "autonomous lifecycle bootstrap cursor disappeared after publication",
-                )
-            })?;
-        if Self::decode_autonomous_lifecycle_cursor(&cursor_path, &readback)? != *next {
-            return Err(Self::invalid_lane_artifact_error(
-                cursor_path,
-                "autonomous lifecycle bootstrap cursor readback differs from the signed target",
-            ));
-        }
-        Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted)
     }
 
     fn delete_completed_autonomous_lifecycle_bootstrap(
@@ -33095,46 +32821,6 @@ impl Kura {
     kura_autonomous_reservation_classifier_methods!();
     kura_historical_autonomous_recovery_methods!();
 
-    fn validate_lane_new_view_certificate_for_artifact(
-        artifact: &AutonomousLaneBlockArtifact,
-        durable_certificate: &DurableLaneBlockNewViewCertificateV1,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-        slot_path: &Path,
-    ) -> Result<(LaneBlockProposalV1, LaneBlockProposalV1)> {
-        let current = Self::validate_autonomous_lane_block_artifact(
-            artifact,
-            expected_chain_id_hash,
-            expected_epoch,
-        )
-        .map_err(|message| Self::invalid_lane_artifact_error(slot_path.to_path_buf(), message))?;
-        let target = crate::lane_consensus::retarget_lane_block_proposal_view(
-            &current,
-            durable_certificate.certificate.body.target_view,
-        )
-        .map_err(|err| {
-            Self::invalid_lane_artifact_error(
-                slot_path.to_path_buf(),
-                format!("invalid autonomous lane NewView target: {err}"),
-            )
-        })?;
-        crate::lane_consensus::validate_lane_block_new_view_transition(
-            &current,
-            &target,
-            &artifact.executable_payload,
-            durable_certificate,
-            expected_chain_id_hash,
-            expected_epoch,
-        )
-        .map_err(|err| {
-            Self::invalid_lane_artifact_error(
-                slot_path.to_path_buf(),
-                format!("invalid autonomous lane NewView certificate: {err}"),
-            )
-        })?;
-        Ok((current, target))
-    }
-
     /// Append one fully authenticated, contiguous NewView certificate to a
     /// durable lane-owned payload, unless its immutable origin is already
     /// durably applied.
@@ -34542,40 +34228,6 @@ impl Kura {
         Ok(None)
     }
 
-    fn read_autonomous_lane_block_record_read_only_latest_locked(
-        &self,
-        entry: &LaneConfigEntry,
-        lane_id: LaneId,
-        lane_block_height: u64,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
-        if let Some(pointer) =
-            self.read_autonomous_lane_block_latest_attempt_locked(entry, lane_block_height)?
-        {
-            if pointer.lane_id != lane_id {
-                return Err(Self::invalid_lane_artifact_error(
-                    Self::autonomous_lane_block_latest_attempt_path_for_entry(
-                        entry,
-                        &self.store_root,
-                        lane_block_height,
-                    ),
-                    "autonomous lane latest attempt belongs to a different lane",
-                ));
-            }
-            return self
-                .read_autonomous_lane_block_attempt_artifact_with_view_state_mode_locked(
-                    entry,
-                    &pointer,
-                    expected_chain_id_hash,
-                    expected_epoch,
-                    AutonomousLaneBlockViewStateReadMode::LatestReadOnly,
-                )
-                .map(Some);
-        }
-        Ok(None)
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn read_autonomous_lane_block_attempt_record_locked(
         &self,
@@ -34785,6 +34437,7 @@ impl Kura {
         Some(artifact)
     }
 
+    #[cfg(test)]
     pub(crate) fn lane_block_execution_input_available(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -35157,6 +34810,7 @@ impl Kura {
         Some(artifact)
     }
 
+    #[cfg(test)]
     pub(crate) fn lane_block_execution_preflight_has_rejections(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -35183,6 +34837,7 @@ impl Kura {
     /// Height-one proposals have no predecessor and are accepted only when their
     /// descriptor encodes the canonical empty predecessor. All later proposals
     /// fail closed on missing, malformed, stale, or cross-route receipts.
+    #[cfg(test)]
     pub(crate) fn lane_block_predecessor_application_receipt_available(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -35245,6 +34900,7 @@ impl Kura {
             }
     }
 
+    #[cfg(test)]
     pub(crate) fn read_preflighted_lane_block_execution_input_for_application(
         &self,
         proposal: &LaneBlockProposalV1,
@@ -36059,37 +35715,37 @@ impl Kura {
                     &self.store_root,
                     incoming.lane_block_height,
                 );
+                // The latest pointer authenticates the incoming route identity,
+                // but either stable member may be absent after an interrupted or
+                // explicitly reconstructed startup image. The carrier plan has
+                // already revalidated finality, its manifest proof, and the exact
+                // receipt pair. Retain any matching durable member and reserve the
+                // missing bytes in the all-item preflight; publication restores the
+                // pair before returning. A present conflicting member still fails
+                // closed and can never be overwritten by the repair path.
                 let durable_manifest = self
                     .read_native_amx_participant_application_manifest_from_paths_locked(
                         entry,
                         incoming.lane_block_height,
                         &manifest_path,
                         namespace,
-                    )
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            manifest_path,
-                            "Native AMX exact retry is missing its durable manifest",
-                        )
-                    })?;
+                    );
                 let durable_receipt = self
                     .read_native_amx_participant_application_receipt_from_paths_locked(
                         entry,
                         incoming.lane_block_height,
                         &receipt_path,
                         namespace,
-                    )
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            receipt_path,
-                            "Native AMX exact retry is missing its durable receipt",
-                        )
-                    })?;
-                if durable_manifest != *manifest
-                    || durable_receipt != *receipt
+                    );
+                if durable_manifest
+                    .as_ref()
+                    .is_some_and(|durable| durable != manifest)
+                    || durable_receipt
+                        .as_ref()
+                        .is_some_and(|durable| durable != receipt)
                     || !self
                         .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
-                            &durable_manifest,
+                            manifest,
                         )
                 {
                     return Err(Self::invalid_lane_artifact_error(
@@ -38882,62 +38538,6 @@ impl Kura {
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
 
-    /// Read one exact durability-attested receipt while the caller holds
-    /// `prune_lock`. This path never repairs progress-sidecar artifacts.
-    fn read_exact_lane_block_application_receipt_under_prune_guard(
-        &self,
-        proposal: &LaneBlockProposalV1,
-    ) -> Option<LaneBlockApplicationReceiptArtifact> {
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        self.read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(proposal)
-    }
-
-    /// Read one exact durability-attested receipt while the caller holds
-    /// `prune_lock` and `canonical_chain_lock`, in that order. This path never
-    /// repairs progress-sidecar artifacts or reacquires either outer lock.
-    fn read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(
-        &self,
-        proposal: &LaneBlockProposalV1,
-    ) -> Option<LaneBlockApplicationReceiptArtifact> {
-        let descriptor = &proposal.descriptor;
-        let artifact = self.read_active_lane_block_application_receipt_structural(
-            descriptor.lane_id,
-            descriptor.lane_block_height,
-            false,
-        )?;
-        if artifact.proposal != *proposal
-            || !self
-                .lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
-                    &artifact,
-                    false,
-                )
-        {
-            return None;
-        }
-        let confirmed = self.read_active_lane_block_application_receipt_structural(
-            descriptor.lane_id,
-            descriptor.lane_block_height,
-            false,
-        )?;
-        (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
-    }
-
-    fn lane_block_application_receipt_available_under_prune_guard(
-        &self,
-        proposal: &LaneBlockProposalV1,
-    ) -> bool {
-        self.read_exact_lane_block_application_receipt_under_prune_guard(proposal)
-            .is_some()
-    }
-
-    fn lane_block_application_receipt_available_under_prune_and_canonical_guards(
-        &self,
-        proposal: &LaneBlockProposalV1,
-    ) -> bool {
-        self.read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(proposal)
-            .is_some()
-    }
-
     fn read_active_lane_block_application_receipt_structural(
         &self,
         lane_id: LaneId,
@@ -39311,87 +38911,6 @@ impl Kura {
             && preflight.entrypoint_indices == receipt.entrypoint_indices
             && preflight.entrypoint_hashes == receipt.entrypoint_hashes
             && preflight.result_hashes != receipt.result_hashes
-    }
-
-    fn lane_block_application_receipt_matches_available_evidence(
-        &self,
-        artifact: &LaneBlockApplicationReceiptArtifact,
-        repair_missing_sidecars: bool,
-    ) -> bool {
-        match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(
-                    artifact,
-                    repair_missing_sidecars,
-                )
-            }
-            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
-                .lane_block_application_receipt_matches_direct_preflight(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
-            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                if repair_missing_sidecars {
-                    self.lane_block_application_receipt_matches_merge_log(artifact)
-                } else {
-                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(
-                        artifact,
-                    )
-                }
-            }
-        }
-    }
-
-    fn lane_block_application_receipt_matches_available_evidence_under_prune_guard(
-        &self,
-        artifact: &LaneBlockApplicationReceiptArtifact,
-        repair_missing_sidecars: bool,
-    ) -> bool {
-        match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(
-                    artifact,
-                    repair_missing_sidecars,
-                )
-            }
-            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
-                .lane_block_application_receipt_matches_direct_preflight(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
-            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
-                if repair_missing_sidecars {
-                    self.lane_block_application_receipt_matches_merge_log_under_prune_guard(
-                        artifact,
-                    )
-                } else {
-                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair_under_prune_guard(
-                        artifact,
-                    )
-                }
-            }
-        }
-    }
-
-    fn lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
-        &self,
-        artifact: &LaneBlockApplicationReceiptArtifact,
-        repair_missing_sidecars: bool,
-    ) -> bool {
-        match artifact.format {
-            LaneBlockApplicationReceiptArtifactFormat::Current => {
-                self.lane_block_application_receipt_matches_canonical_results(artifact)
-            }
-            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
-                .lane_block_application_receipt_matches_direct_preflight(
-                    artifact,
-                    repair_missing_sidecars,
-                ),
-            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => self
-                .lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
-                    artifact,
-                ),
-        }
     }
 
     fn lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(

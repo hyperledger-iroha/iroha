@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Any
@@ -132,11 +133,11 @@ LIVENESS_REQUIRED_FIELDS = frozenset(
         "ignore_counts",
     }
 )
-EXPECTED_BINARY_SUBDIRECTORIES = {
-    "daemon": Path("programs/release"),
-    "kagami": Path("programs/release"),
-    "test": Path("test-suite/release"),
+EXPECTED_PROGRAM_BINARY_NAMES = {
+    "daemon": "irohad",
+    "kagami": "kagami",
 }
+INVOCATION_DIRECTORY_RE = re.compile(r"invocation\.[A-Za-z0-9]+")
 
 
 class EvidenceError(RuntimeError):
@@ -362,6 +363,7 @@ def validate_evidence(
     *,
     source_manifest_sha256: str,
     build_root: Path,
+    cargo_target_dir: Path,
     repo_root: Path,
 ) -> None:
     """Validate one decoded Taira release summary."""
@@ -411,6 +413,20 @@ def validate_evidence(
 
     build_root = build_root.resolve(strict=True)
     _require(build_root.is_dir(), "source-bound build root is not a directory")
+    programs_root = (build_root / "programs").resolve(strict=True)
+    _require(programs_root.is_dir(), "source-bound programs root is not a directory")
+    _require_under(programs_root, build_root, "programs root", "the source-bound build root")
+    cargo_target_dir = cargo_target_dir.resolve(strict=True)
+    _require(cargo_target_dir.is_dir(), "Cargo target root is not a directory")
+    test_release_root = (cargo_target_dir / "release").resolve(strict=True)
+    _require(test_release_root.is_dir(), "Cargo release-profile root is not a directory")
+    _require_under(
+        test_release_root,
+        cargo_target_dir,
+        "Cargo release-profile root",
+        "the authenticated Cargo target root",
+    )
+    program_release_root: Path | None = None
     for prefix in ("daemon", "kagami", "test"):
         path_value = summary.get(f"{prefix}_binary_path")
         _require(isinstance(path_value, str), f"missing {prefix} binary path")
@@ -418,16 +434,40 @@ def validate_evidence(
         _require(raw_path.is_absolute(), f"{prefix} binary path is not absolute")
         path = raw_path.resolve(strict=True)
         _require(path.is_file(), f"{prefix} binary path is not a file")
-        _require_under(path, build_root, f"{prefix} binary", "the source-bound build root")
-        release_root = (build_root / EXPECTED_BINARY_SUBDIRECTORIES[prefix]).resolve(
-            strict=True
-        )
-        _require_under(
-            path,
-            release_root,
-            f"{prefix} binary",
-            "the pinned release-profile directory",
-        )
+        if prefix in EXPECTED_PROGRAM_BINARY_NAMES:
+            _require_under(
+                path, programs_root, f"{prefix} binary", "the source-bound programs root"
+            )
+            relative = path.relative_to(programs_root)
+            _require(
+                len(relative.parts) == 3
+                and INVOCATION_DIRECTORY_RE.fullmatch(relative.parts[0]) is not None
+                and relative.parts[1:] == (
+                    "release",
+                    EXPECTED_PROGRAM_BINARY_NAMES[prefix],
+                ),
+                f"{prefix} binary is not in a pinned invocation release directory",
+            )
+            if program_release_root is None:
+                program_release_root = path.parent
+            else:
+                _require(
+                    path.parent == program_release_root,
+                    "daemon and kagami binaries do not share one source-bound invocation",
+                )
+        else:
+            _require_under(
+                path,
+                test_release_root,
+                "test binary",
+                "the Cargo release-profile directory",
+            )
+            relative = path.relative_to(test_release_root)
+            _require(
+                len(relative.parts) == 1
+                or (len(relative.parts) == 2 and relative.parts[0] == "deps"),
+                "test binary is not a direct release or release/deps artifact",
+            )
         recorded = _require_digest(
             summary.get(f"{prefix}_binary_blake2b_256"),
             f"{prefix} binary digest",
@@ -440,12 +480,18 @@ def validate_evidence(
     _require(raw_artifact_root.is_absolute(), "localnet artifact path is not absolute")
     artifact_root = raw_artifact_root.resolve(strict=True)
     _require(artifact_root.is_dir(), "localnet artifact path is not a directory")
-    artifact_parent = (repo_root / "target" / "taira-localnet").resolve(strict=True)
+    artifact_parent = (cargo_target_dir / "taira-localnet").resolve(strict=True)
+    _require_under(
+        artifact_parent,
+        cargo_target_dir,
+        "Taira artifact root",
+        "the authenticated Cargo target root",
+    )
     _require_under(
         artifact_root,
         artifact_parent,
         "localnet artifact path",
-        "the workspace Taira artifact root",
+        "the authenticated Cargo target Taira artifact root",
     )
     recorded_config = _require_digest(
         summary.get("generated_config_blake2b_256"), "generated config digest"
@@ -592,6 +638,7 @@ def main() -> int:
     parser.add_argument("evidence", type=Path)
     parser.add_argument("--source-manifest", required=True)
     parser.add_argument("--build-root", type=Path, required=True)
+    parser.add_argument("--cargo-target-dir", type=Path, required=True)
     parser.add_argument(
         "--repo-root", type=Path, default=Path(__file__).resolve().parents[1]
     )
@@ -604,6 +651,7 @@ def main() -> int:
             summary,
             source_manifest_sha256=args.source_manifest,
             build_root=args.build_root,
+            cargo_target_dir=args.cargo_target_dir,
             repo_root=args.repo_root,
         )
     except (EvidenceError, OSError, ValueError, subprocess.SubprocessError) as error:

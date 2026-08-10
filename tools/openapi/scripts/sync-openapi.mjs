@@ -493,7 +493,7 @@ async function prepareManifestTemplate(
     const signature = manifest?.artifact?.signature;
     if (requireSigned && !hasSignature(signature)) {
       throw new Error(
-        `manifest ${manifestPath} is missing signature fields; emit \`--unsigned-manifest --signing-payload <path>\`, sign that exact V2 payload with the release HSM, then attach it with \`--signature-envelope <path>\` before publishing.`,
+        `manifest ${manifestPath} is missing signature fields; emit \`--unsigned-manifest --signing-payload <path>\`, sign that exact V2 payload with the external software signer, then attach it with \`--signature-envelope <path>\` before publishing.`,
       );
     }
     if (signature != null) {

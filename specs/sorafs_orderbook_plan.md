@@ -44,7 +44,7 @@ The pre-cutover `sorafs_node` mirror, checkpoint, policy/config surface,
 mutation/event API, settlement publication outbox, and test-only Torii
 authority are deleted. The supervised worker derives bounded match,
 maintenance, and settlement operations from one finalized view, persists them
-before runtime/HSM signing, forwards them through strict durable ingress, and
+before external software signing, forwards them through strict durable ingress, and
 reconciles exact or semantic application, rejection, absence, retry, and
 conflict against committed state. Its bounded observability projection consumes
 the typed finalized event journal, validates complete cursor pages, scans
@@ -108,7 +108,7 @@ until they are implemented and verified.
 | Component | Responsibility | Current workspace status |
 |-----------|----------------|--------------------------|
 | On-chain orderbook contract | Store bids/asks, match orders, record fills, and enforce escrow requirements. | Shipped locally: governance-chained policy with exact matcher/settlement identities, canonical signed admission/cancellation, price-time matching against an expected revision, atomic buyer-custody partitioning, channel creation, expiry/refund, replay-safe receipt settlement, typed finalized queries, and committed events. Four-peer promotion evidence remains external. |
-| Off-chain matching engine | Reconcile finalized state and submit bounded matching/maintenance transactions. | The supervised HSM-capable durable worker derives one native operation from a finalized view per scan, persists it before signing, and reconciles exact/semantic finality with bounded retries and conflict dead letters. Storage keeps durable drain active when generation is disabled. If storage and generation are both disabled, the task is paused without mutating retained state and resumes under the same exactly-once rules on a later startup where either is re-enabled. Deployment and four-peer evidence remain external. |
+| Off-chain matching engine | Reconcile finalized state and submit bounded matching/maintenance transactions. | The supervised external-software-signer-backed durable worker derives one native operation from a finalized view per scan, persists it before signing, and reconciles exact/semantic finality with bounded retries and conflict dead letters. Storage keeps durable drain active when generation is disabled. If storage and generation are both disabled, the task is paused without mutating retained state and resumes under the same exactly-once rules on a later startup where either is re-enabled. Deployment and four-peer evidence remain external. |
 | Escrow and streaming-settlement service | Manage escrow channels and debit buyers per delivered chunk range. | Native matching creates funded channel locks, native maintenance refunds expiry, and native receipt admission atomically credits provider/treasury. The same durable worker forwards retained provider-signed receipts and reconciles settlement finality; live governance publication evidence remains open. |
 | Pricing oracle feeder | Supply XOR/USD price, tier multipliers, and fee schedules. | Generic oracle/pricing foundations exist, but no SoraFS orderbook feeder is wired. |
 | API gateway | Expose order placement, cancellation, depth, trades, settlement receipt submission, and event streams. | Torii POST routes validate and forward already-signed native transactions. GET/SSE/WebSocket routes return bounded finalized typed projections with cursor consistency and stale-anchor rejection. Client release smoke and live multi-peer stream evidence remain open. |
@@ -324,7 +324,7 @@ Implemented authoritative Torii routes:
 Still-open API/service work:
 
 - Complete clean-consumer SDK smoke, authenticated deployment tests, runtime
-  PKCS#11/HSM signer injection, and live multi-peer stream/restart evidence.
+  external software-signer injection, and live multi-peer stream/restart evidence.
 
 ## Observability
 The deleted mirror no longer emits orderbook metrics. The supervised native
@@ -553,7 +553,7 @@ submitting live orderbook artifacts. Use the payload-free SFM-2 orderbook
 canary builder for reviewed promotion evidence after those deployment facts
 exist; route-bearing API gateway canaries require explicit
 `--route-body-blake3-hex` evidence. The builder does not replace the missing
-runtime HSM/KMS, SDK release smoke, live scrape/alert routing, multi-peer
+runtime external software signer, SDK release smoke, live scrape/alert routing, multi-peer
 deployment, or reconciliation evidence.
 
 ## Rollout Status
@@ -574,7 +574,7 @@ deployment, or reconciliation evidence.
   `valid_policy_digests` and rejects governance approval artifacts whose
   `policy_digest_hex` is not anchored to one of those valid policies.
 - Remaining: validate and deploy the supervised worker with a runtime
-  PKCS#11/HSM signer; complete SDK release/live smoke, live scrape and alert
+  external software signer; complete SDK release/live smoke, live scrape and alert
   routing, four-peer retry/restart/recovery tests,
   and genuine staged/live evidence that passes the SFM-2 gate.
 

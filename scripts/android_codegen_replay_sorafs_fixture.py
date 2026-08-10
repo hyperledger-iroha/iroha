@@ -371,10 +371,21 @@ def require_policy_cargo_proxy(value: Path) -> str:
     """Require the source-bound shared-policy proxy, with no caller override."""
 
     candidate = Path(value)
+    identity_errors: list[str] = []
+    expected = resolve_path_identity(
+        DEFAULT_CARGO_PROXY,
+        identity_errors,
+        label="Android codegen Cargo policy proxy",
+    )
+    resolved = resolve_path_identity(
+        candidate,
+        identity_errors,
+        label="Android codegen Cargo executable",
+    )
+    if expected is None or resolved is None:
+        raise ValueError("Android codegen Cargo policy proxy is unavailable")
     try:
-        expected = DEFAULT_CARGO_PROXY.resolve(strict=True)
         metadata = candidate.lstat()
-        resolved = candidate.resolve(strict=True)
     except OSError as error:
         raise ValueError("Android codegen Cargo policy proxy is unavailable") from error
     if (

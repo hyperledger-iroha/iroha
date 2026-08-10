@@ -3,9 +3,9 @@
 
 The receipt is a qualification attachment bound to the existing
 four-validator topology; it is deliberately neither an eighteenth readiness
-lane nor a tenth foundational prerequisite ID. Local receipts remain
-non-promotable. Only a receipt authenticated by an operator-trusted Ed25519
-public key may become evidence-qualified for promotion review.
+lane nor a tenth foundational prerequisite ID. Qualification requires an
+operator-trusted external software Ed25519 signer with independently named
+service and administrator identities.
 """
 
 from __future__ import annotations
@@ -54,10 +54,12 @@ from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
 )
+import sorafs_software_signer_evidence as software_signer_evidence  # noqa: E402
 from sorafs_topology_qualification import (  # noqa: E402
     load_topology_qualification_binding,
     validate_topology_binding_object,
 )
+import taira_constants  # noqa: E402
 
 
 RECEIPT_SCHEMA = "sorafs.l1.resilience_qualification.v1"
@@ -103,7 +105,15 @@ RECEIPT_FIELDS = frozenset(
         "authentication",
     }
 )
-DEPLOYMENT_FIELDS = frozenset({"deployment_id", "environment"})
+DEPLOYMENT_FIELDS = frozenset(
+    {
+        "deployment_id",
+        "environment",
+        "network",
+        "chain_id",
+        "chain_discriminant",
+    }
+)
 ARTIFACT_ROW_FIELDS = frozenset(
     {"requirement", "artifact_path", "artifact_sha256", "captured_at_unix"}
 )
@@ -125,6 +135,12 @@ AUTHENTICATION_FIELDS = frozenset(
     {
         "kind",
         "algorithm",
+        "backend",
+        "service_id",
+        "administrator_id",
+        "key_revision",
+        "policy_revision",
+        "policy_digest_sha256",
         "public_key_fingerprint_sha256",
         "signature_hex",
     }
@@ -289,6 +305,19 @@ def _deployment_context(
         errors.append(f"{label}.deployment_id must match the reviewed deployment")
     if environment != expected_environment:
         errors.append(f"{label}.environment must match the reviewed deployment")
+    if deployment.get("network") != taira_constants.NETWORK_NAME:
+        errors.append(
+            f"{label}.network must be exactly `taira`; Minamoto evidence is not accepted"
+        )
+    if deployment.get("chain_id") != taira_constants.CHAIN_ID:
+        errors.append(f"{label}.chain_id must match the canonical Taira chain")
+    if (
+        deployment.get("chain_discriminant")
+        != taira_constants.CHAIN_DISCRIMINANT
+    ):
+        errors.append(
+            f"{label}.chain_discriminant must match the canonical Taira discriminator"
+        )
     if deployment_id != expected_deployment_id or environment != expected_environment:
         return None
     return {
@@ -369,7 +398,7 @@ def _validate_authentication(
     trusted_public_key: bytes | None,
     errors: list[str],
 ) -> bool:
-    """Validate local mode or an operator-trusted external Ed25519 signature."""
+    """Validate an operator-trusted external software Ed25519 signature."""
 
     authentication = _closed_object(
         receipt.get("authentication"),
@@ -379,28 +408,13 @@ def _validate_authentication(
     )
     if authentication is None:
         return False
-    kind = authentication.get("kind")
-    if kind == "local":
-        if authentication.get("algorithm") is not None:
-            errors.append("local authentication.algorithm must be null")
-        if authentication.get("public_key_fingerprint_sha256") is not None:
-            errors.append(
-                "local authentication.public_key_fingerprint_sha256 must be null"
-            )
-        if authentication.get("signature_hex") is not None:
-            errors.append("local authentication.signature_hex must be null")
-        if trusted_public_key is not None:
-            errors.append(
-                "--trusted-public-key-hex must only be supplied for external-ed25519 authentication"
-            )
-        return False
-    if kind != "external-ed25519":
-        errors.append(
-            "authentication.kind must be `local` or `external-ed25519`"
-        )
-        return False
+    if authentication.get("kind") != "external-ed25519":
+        errors.append("authentication.kind must be `external-ed25519`")
     if authentication.get("algorithm") != "ed25519":
         errors.append("external authentication.algorithm must be `ed25519`")
+    signer_provenance = software_signer_evidence.validate_foundational_software_signer(
+        dict(authentication), errors
+    )
     fingerprint = _canonical_nonzero_sha256(
         authentication.get("public_key_fingerprint_sha256"),
         "authentication.public_key_fingerprint_sha256",
@@ -421,7 +435,11 @@ def _validate_authentication(
         errors.append(
             "authentication public key fingerprint must match the operator-trusted key"
         )
-    if signature is None or fingerprint != expected_fingerprint:
+    if (
+        signature is None
+        or fingerprint != expected_fingerprint
+        or any(value is None for value in signer_provenance.values())
+    ):
         return False
     if not verify_ed25519(
         trusted_public_key,
@@ -477,6 +495,10 @@ def _validate_peer_state_digests(
             state_digests.append(state_digest)
     if len(validator_ids) == 4 and len(set(validator_ids)) != 4:
         errors.append("peer_state_digests validator identities must be unique")
+    if validator_ids != list(taira_constants.SLUGS):
+        errors.append(
+            "peer_state_digests must match the canonical Taira validator identities in order"
+        )
     if len(state_digests) == 4 and len(set(state_digests)) != 1:
         errors.append(
             "peer_state_digests must prove identical post-recovery finalized state"
@@ -777,8 +799,6 @@ def validate_receipt(
         "status": (
             "evidence-qualified"
             if qualified and externally_authenticated
-            else "configuration-qualified"
-            if qualified
             else "blocked"
         ),
         "qualification_scope": "holistic-deployment-resilience",
@@ -882,9 +902,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--trusted-public-key-hex",
+        required=True,
         help=(
-            "Operator-trusted raw Ed25519 public key; required only for an "
-            "external-ed25519 receipt."
+            "Operator-trusted raw Ed25519 public key for the required "
+            "external software signer."
         ),
     )
     parser.add_argument("--summary-out", type=Path)
@@ -994,15 +1015,9 @@ def main(argv: list[str] | None = None) -> int:
             errors,
         )
         return 1
-    if summary["externally_authenticated"]:
-        emit_checker_notice(
-            "SoraFS L1 resilience receipt is externally authenticated and evidence-qualified."
-        )
-    else:
-        emit_checker_notice(
-            "SoraFS L1 resilience receipt is configuration-qualified only; "
-            "it is non-promotable and recognizes no live evidence."
-        )
+    emit_checker_notice(
+        "SoraFS L1 resilience receipt is externally authenticated and evidence-qualified."
+    )
     return 0
 
 

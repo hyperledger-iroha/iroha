@@ -755,7 +755,7 @@ mod tests {
         IrohaRuntimeProviderBindingsV1::qualified_for_test(
             "sora.production",
             IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider,
-            "hsm://sorafs/privacy/prf/primary",
+            "threshold-prf://sorafs/privacy/primary",
             7,
             [0x51; 32],
         )
@@ -1001,7 +1001,7 @@ mod tests {
         let debug = format!("{executable:?}");
         assert!(debug.contains("binding_count: 1"));
         assert!(!debug.contains("providers.norito"));
-        assert!(!debug.contains("hsm://sorafs/privacy/prf/primary"));
+        assert!(!debug.contains("threshold-prf://sorafs/privacy/primary"));
 
         let lifecycle = executable.lifecycle();
         lifecycle.request_shutdown();
@@ -1111,7 +1111,7 @@ mod tests {
         let debug = format!("{deployment:?}");
         assert!(debug.contains("sora.production"));
         assert!(debug.contains("binding_count: 1"));
-        assert!(!debug.contains("hsm://sorafs/privacy/prf/primary"));
+        assert!(!debug.contains("threshold-prf://sorafs/privacy/primary"));
         assert!(!debug.contains("RuntimeProviderBrokerBackendsV1"));
     }
 

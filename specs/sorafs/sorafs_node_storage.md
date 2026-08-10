@@ -110,7 +110,7 @@ journal_checkpoint_provider_policy_digest_hex = "<sealed-cas-public-policy-diges
 journal_transaction_submitter_handle = "queue.reputation.journal"
 journal_transaction_submitter_revision = 1
 journal_transaction_submitter_policy_digest_hex = "<chain-and-handle-bound-lowercase-32-byte-hex>"
-threshold_signer_handle = "hsm.reputation.threshold"
+threshold_signer_handle = "software://sorafs/reputation/threshold-primary"
 threshold_signer_revision = 1
 threshold_signer_policy_digest_hex = "<trust-policy-digest-lowercase-32-byte-hex>"
 governance_dag_handle = "governance.dag.publisher"
@@ -127,7 +127,7 @@ enabled = false
 poll_interval_ms = 1_000
 max_records_per_tick = 64
 # Enabling also requires the following public binding fields:
-# handle = "hsm://sorafs/por-replay-archive/primary"
+# handle = "object-lock://sorafs/por-replay-archive/primary"
 # archive_id_hex = "8181818181818181818181818181818181818181818181818181818181818181"
 # revision = 1
 # policy_digest_hex = "8282828282828282828282828282828282828282828282828282828282828282"
@@ -205,7 +205,7 @@ adverts:
   acknowledged records. Challenge and verdict replay automatically use the
   same qualified archive. Credentials and the Ed25519 private key have no
   config or log representation. This is the interface and launcher wiring, not
-  a shipped deployment backend or external HSM/archive qualification record.
+  a shipped deployment backend or external software-signer/archive qualification record.
 - `hedging_billing_runtime`: opt-in finalized-ledger billing projector,
   statement-delivery reconciler, and deterministic hedge-intent generator.
   Enabling it requires storage, absolute private state and canonical public
@@ -213,7 +213,7 @@ adverts:
   absolute `hedging_feed_trust_policy_path`, bounded poll/work settings, and
   a production opaque handle, non-zero revision, and exact lowercase non-zero
   public-policy digest for each of the finalized query, consensus verifier,
-  statement HSM/KMS signer, immutable publisher, acknowledgement authority,
+  external software statement signer, immutable publisher, acknowledgement authority,
   and sealed epoch-witness store. The fields use the common
   `<provider>_{handle,revision,policy_digest_hex}` naming pattern. The standard
   launcher supplies none of these adapters; an embedding must inject all six
@@ -313,7 +313,7 @@ derives this signer from validator key material or adapts its node key at this
 boundary. For a configured binding, the launcher resolves the
 governed signer through its authenticated runtime-provider broker and qualifies
 the live public binding before startup. Embeddings may instead inject a
-PKCS#11/HSM implementation of `SoraFsProofOutcomeTransactionSigner` through
+  authenticated external software implementation of `SoraFsProofOutcomeTransactionSigner` through
 `IrohaRuntimeDeps`; neither path gives the signer transaction-queue access.
 - `adverts`: structure used by the provider advert generator to fill
   `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
@@ -496,7 +496,7 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   supervised child so the daemon cannot silently continue with a compromised
   ingest boundary.
 - Completion signing has separate public deployment bindings for the governed
-  signer resolver and leaf HSM/KMS signer. Configuration gives the resolver its
+  signer resolver and leaf external software signer. Configuration gives the resolver its
   own handle, non-zero revision, and non-zero public-policy digest, then binds
   the signer by its exact handle, non-zero adapter revision, complete chain
   signer-policy tuple, explicit `ed25519` or `ml-dsa` algorithm, and matching
@@ -514,7 +514,7 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   executables, extra instructions, proof attachments, even-empty multisig
   sidecars, invalid signatures, and any context substitution. This closes the
   source contract only; it does not supply the deployment-owned transport,
-  HSM/KMS signer, or sealed-CAS backend.
+  external software signer, or sealed-CAS backend.
 - The production completion outbox treats the injected external sealed
   checkpoint store as authoritative. Configuration binds that provider by the
   exact stable `checkpoint_store_handle`, non-zero
@@ -562,7 +562,7 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   resolver/signer qualification contract, and the local indexed archive and
   retention-authority protocol only: concrete
   governance-advert/stream-grant/pinned-HTTPS child transports, a concrete
-  governance-aware HSM/KMS signer backend with atomic rotation/revocation
+  governance-aware external software signer backend with atomic rotation/revocation
   enforcement, and the deployment-owned sealed-CAS backend remain open.
 - Manual completion tooling must supply that complete context through
   `sorafs_tx_stdin_builder complete-order`; the retired three-field completion

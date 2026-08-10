@@ -189,7 +189,7 @@ mod tests {
     impl AcmeClient for SelfSignedAcmeClient {
         fn qualification(&self) -> Result<AcmeClientIdentityV1, AcmeClientProbeError> {
             Ok(AcmeClientIdentityV1 {
-                provider_handle: "kms://gateway/acme/primary".to_owned(),
+                provider_handle: "runtime://sorafs/gateway-acme/primary".to_owned(),
                 revision: 1,
                 policy_digest: [0x51; 32],
                 test_marked: false,
@@ -217,8 +217,12 @@ mod tests {
     }
 
     fn sample_binding() -> GatewayProviderBindingV1 {
-        GatewayProviderBindingV1::try_new("kms://gateway/acme/primary".to_owned(), 1, [0x51; 32])
-            .expect("valid test ACME provider binding")
+        GatewayProviderBindingV1::try_new(
+            "runtime://sorafs/gateway-acme/primary".to_owned(),
+            1,
+            [0x51; 32],
+        )
+        .expect("valid test ACME provider binding")
     }
 
     fn sample_config() -> AcmeConfig {

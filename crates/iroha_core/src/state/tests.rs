@@ -53599,7 +53599,7 @@ fn state_snapshot_restore_rebuilds_governance_and_bounded_vpn_indexes() {
 }
 
 #[test]
-fn block_records_governance_unlock_stats_when_no_locks_are_expired() {
+fn block_leaves_governance_unlock_audit_clean_when_no_locks_are_expired() {
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -53607,18 +53607,18 @@ fn block_records_governance_unlock_stats_when_no_locks_are_expired() {
     );
     let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let block = state.block(header);
-
     assert_eq!(
         *block.world.governance_unlock_stats,
-        GovernanceUnlockStatsSnapshot {
-            evaluated_height: 10,
-            expired_locks_now: 0,
-            referenda_with_expired: 0,
-        }
+        GovernanceUnlockStatsSnapshot::default(),
+        "no due lock means no governance sweep was attempted"
     );
     assert_eq!(
-        *block.world.governance_last_unlock_sweep_height, 10,
-        "an empty but successful sweep must advance its completion marker"
+        *block.world.governance_last_unlock_sweep_height, 0,
+        "no due lock must not advance the sweep marker"
+    );
+    assert!(
+        block.world.merge_execution_write_set_bytes().is_empty(),
+        "empty governance bookkeeping must not block autonomous merge pre-execution"
     );
 }
 
@@ -53658,7 +53658,7 @@ fn block_sweeps_expired_governance_locks_and_records_height() {
 
     let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
     let block = state.block(header);
-
+    assert!(!block.world.merge_execution_write_set_bytes().is_empty());
     let recorded_height = *block.world.governance_last_unlock_sweep_height;
     assert_eq!(
         recorded_height, 10,
@@ -56760,7 +56760,7 @@ fn configured_single_lane_merge_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, S
     let parent = empty_global_block_after(None);
     kura.store_block(Arc::new(parent.clone()))
         .expect("store merge fixture carrier parent");
-    commit_block_metadata_to_state(&state, &parent);
+    commit_block_metadata_with_genesis_checkpoint_to_state(&state, &parent);
     (state, validator_keypairs, commit_keypairs, parent)
 }
 

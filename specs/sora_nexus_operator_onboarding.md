@@ -113,7 +113,8 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
    - Hashes of the binaries/images you verified.
 3. Coordinate the final peer admission (gossip seeds and lane assignment) with `@nexus-core`. Do not join the network until you receive approval; Sora Nexus enforces deterministic lane occupancy and requires an updated admissions manifest.
 4. After the node is live, update your runbooks with any overrides you introduced and note the release tag so the next iteration can start from this baseline.
-5. Attach the external PKCS#11/HSM signing-ceremony record, OIDC/cosign
+5. Attach the `authenticated_external_signer` ceremony record for the exact
+   `software` backend, the `software-key-qualified` receipt, OIDC/cosign
    provenance verification, vulnerability-scan result, registry/publication
    receipt, and rollback/yank rehearsal. These hosted records remain open until
    Release Engineering supplies them; local verification cannot synthesize

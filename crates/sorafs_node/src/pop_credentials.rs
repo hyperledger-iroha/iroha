@@ -255,8 +255,8 @@ pub struct PopCredentialServicePolicyV1 {
     pub issuer_policy_digest: [u8; 32],
     /// Exact governed issuer identifier.
     pub issuer_id: String,
-    /// Non-secret HSM key handle expected at runtime.
-    pub issuer_hsm_key_id: String,
+    /// Non-secret external signer handle expected at runtime.
+    pub issuer_signer_handle: String,
     /// Exact governed Ed25519 issuer public key.
     pub issuer_public_key: [u8; 32],
     /// Non-secret recipient key handle for encrypted enrollment.
@@ -285,7 +285,7 @@ impl PopCredentialServicePolicyV1 {
         }
         nonzero_digest("issuer_policy_digest", self.issuer_policy_digest)?;
         bounded_clean_text("issuer_id", &self.issuer_id, 256)?;
-        bounded_production_runtime_handle("issuer_hsm_key_id", &self.issuer_hsm_key_id)?;
+        bounded_production_runtime_handle("issuer_signer_handle", &self.issuer_signer_handle)?;
         bounded_production_runtime_handle(
             "enrollment_recipient_key_id",
             &self.enrollment_recipient_key_id,
@@ -610,17 +610,52 @@ impl PopApprovalV1 {
     }
 }
 
-/// Runtime-only HSM/PKCS#11 signing interface.
+/// Exact PoP digest class presented to the runtime signer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PopIssuerSigningPurposeV1 {
+    /// Issued credential signature digest.
+    Credential = 1,
+    /// Commitment-root publisher signature digest.
+    CommitmentRoot = 2,
+    /// Revocation-list publisher signature digest.
+    RevocationList = 3,
+}
+
+impl PopIssuerSigningPurposeV1 {
+    /// Immutable V1 wire identifier.
+    #[must_use]
+    pub const fn wire_id(self) -> u8 {
+        self as u8
+    }
+
+    /// Decode one immutable V1 wire identifier without aliases.
+    #[must_use]
+    pub const fn try_from_wire_id(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::Credential),
+            2 => Some(Self::CommitmentRoot),
+            3 => Some(Self::RevocationList),
+            _ => None,
+        }
+    }
+}
+
+/// Runtime-only authenticated external signing interface.
 ///
 /// Implementations must not expose or persist private key bytes. The service
 /// checks both the key handle and public key against finalized policy.
-pub trait PopIssuerHsm: Send + Sync + fmt::Debug {
+pub trait PopIssuerSigner: Send + Sync + fmt::Debug {
     /// Return the non-secret runtime key handle.
     fn key_id(&self) -> &str;
     /// Return the raw Ed25519 public key.
     fn public_key(&self) -> [u8; 32];
     /// Sign one canonical 32-byte protocol digest.
-    fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], String>;
+    fn sign_digest(
+        &self,
+        purpose: PopIssuerSigningPurposeV1,
+        digest: [u8; 32],
+    ) -> Result<[u8; 64], String>;
 }
 
 /// Payload-free failure returned by a runtime-owned recipient capability.
@@ -1145,11 +1180,11 @@ pub enum PopCredentialApiActionV1 {
     ReadEnrollmentStatus,
     /// Record a governed dual-control decision.
     ApproveEnrollment,
-    /// Invoke issuer/HSM issuance.
+    /// Invoke external-signer issuance.
     IssueCredential,
     /// Trigger server-resolved issuance by public request identifier.
     TriggerCredentialIssuance,
-    /// HSM-sign and enqueue a governed revocation successor.
+    /// Externally sign and enqueue a governed revocation successor.
     EnqueueRevocation,
     /// Submit the next durable registry outbox operation.
     SubmitRegistryOutbox,
@@ -1345,7 +1380,7 @@ impl PopCredentialApiV1 {
         service.record_approval(approval, now_epoch)
     }
 
-    /// Authenticate and invoke HSM-backed issuance.
+    /// Authenticate and invoke external-signer-backed issuance.
     pub fn issue<R: TryCryptoRng>(
         &self,
         service: &mut PopCredentialService,
@@ -1367,7 +1402,7 @@ impl PopCredentialApiV1 {
     }
 
     /// Authenticate a request-id-only trigger, require the runtime-resolved
-    /// private draft to match it, and invoke HSM-backed issuance.
+    /// private draft to match it, and invoke external-signer-backed issuance.
     ///
     /// This is the HTTP-safe issuance pattern: the private draft is obtained
     /// from a runtime-only provider and never accepted from or returned to the
@@ -1395,7 +1430,7 @@ impl PopCredentialApiV1 {
         service.issue(draft, now_epoch, rng)
     }
 
-    /// Authenticate, HSM-sign, and durably enqueue a revocation successor.
+    /// Authenticate, externally sign, and durably enqueue a revocation successor.
     pub fn enqueue_revocation(
         &self,
         service: &mut PopCredentialService,
@@ -1799,7 +1834,7 @@ pub enum PopEnrollmentStateV1 {
     Approved,
     /// A governed approver rejected the enrollment.
     Rejected,
-    /// HSM issuance completed and registry submission is pending.
+    /// External signing completed and registry submission is pending.
     PendingRegistry,
     /// Registry commitment finalized; delivery is claimable.
     DeliveryReady,
@@ -2050,7 +2085,7 @@ pub struct PopCredentialService {
     policy: PopCredentialServicePolicyV1,
     checkpoint_path: PathBuf,
     enrollment_recipient: Arc<dyn PopEnrollmentRecipientV1>,
-    hsm: Arc<dyn PopIssuerHsm>,
+    signer: Arc<dyn PopIssuerSigner>,
     state: PopIssuerCheckpointV1,
     checkpoint_writer: PopCheckpointWriter,
     mutations_disabled: bool,
@@ -2073,7 +2108,7 @@ impl PopCredentialService {
         data_dir: impl AsRef<Path>,
         policy: PopCredentialServicePolicyV1,
         enrollment_recipient: Arc<dyn PopEnrollmentRecipientV1>,
-        hsm: Arc<dyn PopIssuerHsm>,
+        signer: Arc<dyn PopIssuerSigner>,
     ) -> Result<Self, PopCredentialServiceError> {
         policy.validate()?;
         bounded_production_runtime_handle(
@@ -2085,9 +2120,10 @@ impl PopCredentialService {
         {
             return Err(PopCredentialServiceError::RuntimeProviderRegistryMismatch);
         }
-        if hsm.key_id() != policy.issuer_hsm_key_id || hsm.public_key() != policy.issuer_public_key
+        if signer.key_id() != policy.issuer_signer_handle
+            || signer.public_key() != policy.issuer_public_key
         {
-            return Err(PopCredentialServiceError::HsmPolicyMismatch);
+            return Err(PopCredentialServiceError::SignerPolicyMismatch);
         }
         let checkpoint_path = data_dir.as_ref().join(POP_ISSUER_CHECKPOINT_FILE_V1);
         let state = match read_local_checkpoint_bounded(
@@ -2114,7 +2150,7 @@ impl PopCredentialService {
             policy,
             checkpoint_path,
             enrollment_recipient,
-            hsm,
+            signer,
             state,
             checkpoint_writer: production_checkpoint_write,
             mutations_disabled: false,
@@ -2338,7 +2374,7 @@ impl PopCredentialService {
         Ok(self.status_for_record(record, now_epoch))
     }
 
-    /// HSM-sign an approved issuance and atomically enqueue its payload-free
+    /// Externally sign an approved issuance and atomically enqueue its payload-free
     /// registry operation together with encrypted wallet delivery.
     pub fn issue<R: TryCryptoRng>(
         &mut self,
@@ -2376,11 +2412,11 @@ impl PopCredentialService {
         drop(enrollment_bytes);
         let wallet_public_key = enrollment.validate()?;
         validate_issuance_draft(&draft, &enrollment, &self.policy, now_epoch)?;
-        let bundle = PrivateBundleGuard::new(sign_bundle_with_hsm(
+        let bundle = PrivateBundleGuard::new(sign_bundle_with_signer(
             draft.credential.clone(),
             draft.commitment_root.clone(),
             draft.revocation_list.clone(),
-            self.hsm.as_ref(),
+            self.signer.as_ref(),
         )?);
         let signed_bundle = bundle.as_ref()?;
         let mut canonical_credential = encode_canonical(&signed_bundle.credential)?;
@@ -2474,7 +2510,7 @@ impl PopCredentialService {
         Ok(operation_digest)
     }
 
-    /// HSM-sign and enqueue a strict successor revocation snapshot.
+    /// Externally sign and enqueue a strict successor revocation snapshot.
     pub fn enqueue_revocation(
         &mut self,
         revocations: PopRevocationListV1,
@@ -2503,7 +2539,7 @@ impl PopCredentialService {
         {
             return Err(PopCredentialServiceError::RootRollback);
         }
-        let signed = sign_revocation_with_hsm(revocations, self.hsm.as_ref())?;
+        let signed = sign_revocation_with_signer(revocations, self.signer.as_ref())?;
         let operation =
             PopRegistryOperationV1::new(PopRegistryOperationKindV1::PublishRevocationList {
                 canonical_revocation_list: encode_canonical(&signed)?,
@@ -2965,13 +3001,13 @@ fn empty_pop_signature(public_key: [u8; 32]) -> PopSignatureV1 {
     }
 }
 
-fn sign_bundle_with_hsm(
+fn sign_bundle_with_signer(
     credential: PopCredentialV1,
     root: PopCommitmentRootV1,
     revocations: PopRevocationListV1,
-    hsm: &dyn PopIssuerHsm,
+    signer: &dyn PopIssuerSigner,
 ) -> Result<PopIssuedCredentialBundleV1, PopCredentialServiceError> {
-    let public_key = hsm.public_key();
+    let public_key = signer.public_key();
     let mut bundle = PrivateBundleGuard::new(PopIssuedCredentialBundleV1 {
         version: sorafs_manifest::POP_ISSUED_CREDENTIAL_BUNDLE_VERSION_V1,
         credential,
@@ -2983,16 +3019,18 @@ fn sign_bundle_with_hsm(
         .map_err(|_| PopCredentialServiceError::InvalidIssuance)?;
     bundle.as_mut()?.credential.issuer_signature = pop_signature(
         public_key,
-        hsm.sign_digest(credential_digest)
-            .map_err(|_| PopCredentialServiceError::HsmUnavailable)?,
+        signer
+            .sign_digest(PopIssuerSigningPurposeV1::Credential, credential_digest)
+            .map_err(|_| PopCredentialServiceError::SignerUnavailable)?,
     );
     bundle.as_mut()?.commitment_root.publisher_signature = empty_pop_signature(public_key);
     let root_digest = pop_commitment_root_signature_digest_v1(&bundle.as_ref()?.commitment_root)
         .map_err(|_| PopCredentialServiceError::InvalidIssuance)?;
     bundle.as_mut()?.commitment_root.publisher_signature = pop_signature(
         public_key,
-        hsm.sign_digest(root_digest)
-            .map_err(|_| PopCredentialServiceError::HsmUnavailable)?,
+        signer
+            .sign_digest(PopIssuerSigningPurposeV1::CommitmentRoot, root_digest)
+            .map_err(|_| PopCredentialServiceError::SignerUnavailable)?,
     );
     bundle.as_mut()?.revocation_list.publisher_signature = empty_pop_signature(public_key);
     let revocation_digest =
@@ -3000,8 +3038,9 @@ fn sign_bundle_with_hsm(
             .map_err(|_| PopCredentialServiceError::InvalidIssuance)?;
     bundle.as_mut()?.revocation_list.publisher_signature = pop_signature(
         public_key,
-        hsm.sign_digest(revocation_digest)
-            .map_err(|_| PopCredentialServiceError::HsmUnavailable)?,
+        signer
+            .sign_digest(PopIssuerSigningPurposeV1::RevocationList, revocation_digest)
+            .map_err(|_| PopCredentialServiceError::SignerUnavailable)?,
     );
     bundle
         .as_ref()?
@@ -3010,18 +3049,19 @@ fn sign_bundle_with_hsm(
     bundle.into_inner()
 }
 
-fn sign_revocation_with_hsm(
+fn sign_revocation_with_signer(
     mut revocations: PopRevocationListV1,
-    hsm: &dyn PopIssuerHsm,
+    signer: &dyn PopIssuerSigner,
 ) -> Result<PopRevocationListV1, PopCredentialServiceError> {
-    let public_key = hsm.public_key();
+    let public_key = signer.public_key();
     revocations.publisher_signature = empty_pop_signature(public_key);
     let digest = pop_revocation_list_signature_digest_v1(&revocations)
         .map_err(|_| PopCredentialServiceError::InvalidIssuance)?;
     revocations.publisher_signature = pop_signature(
         public_key,
-        hsm.sign_digest(digest)
-            .map_err(|_| PopCredentialServiceError::HsmUnavailable)?,
+        signer
+            .sign_digest(PopIssuerSigningPurposeV1::RevocationList, digest)
+            .map_err(|_| PopCredentialServiceError::SignerUnavailable)?,
     );
     verify_pop_revocation_list_signature_v1(&revocations)
         .map_err(|_| PopCredentialServiceError::InvalidIssuance)?;
@@ -3732,12 +3772,12 @@ pub enum PopCredentialServiceError {
     /// Service state does not permit the transition.
     #[error("invalid PoP service state transition")]
     InvalidState,
-    /// Runtime HSM key does not match finalized policy.
-    #[error("PoP runtime HSM does not match finalized issuer policy")]
-    HsmPolicyMismatch,
-    /// Runtime HSM failed without exposing provider details.
-    #[error("PoP runtime HSM unavailable")]
-    HsmUnavailable,
+    /// Runtime signer does not match finalized policy.
+    #[error("PoP runtime signer does not match finalized issuer policy")]
+    SignerPolicyMismatch,
+    /// Runtime signer failed without exposing provider details.
+    #[error("PoP runtime signer unavailable")]
+    SignerUnavailable,
     /// A runtime-only draft, witness, wallet, or clock provider is unavailable.
     #[error("PoP runtime provider unavailable")]
     RuntimeProviderUnavailable,
@@ -3897,12 +3937,12 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct TestHsm {
+    struct TestSigner {
         key_id: String,
         keypair: KeyPair,
     }
 
-    impl PopIssuerHsm for TestHsm {
+    impl PopIssuerSigner for TestSigner {
         fn key_id(&self) -> &str {
             &self.key_id
         }
@@ -3916,7 +3956,11 @@ mod tests {
             bytes.try_into().expect("ed25519")
         }
 
-        fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], String> {
+        fn sign_digest(
+            &self,
+            _purpose: PopIssuerSigningPurposeV1,
+            digest: [u8; 32],
+        ) -> Result<[u8; 64], String> {
             Signature::try_new(self.keypair.private_key(), &digest)
                 .map_err(|error| error.to_string())?
                 .payload()
@@ -4032,8 +4076,6 @@ mod tests {
     fn enrollment_recipient_public_key_digest_binds_both_hybrid_components() {
         let mut first_rng = ChaCha20Rng::from_seed([0x31; 32]);
         let first = HybridKeyPair::generate(&mut first_rng).expect("first hybrid key");
-        let mut replay_rng = ChaCha20Rng::from_seed([0x31; 32]);
-        let replay = HybridKeyPair::generate(&mut replay_rng).expect("replayed hybrid key");
         let mut second_rng = ChaCha20Rng::from_seed([0x32; 32]);
         let second = HybridKeyPair::generate(&mut second_rng).expect("second hybrid key");
 
@@ -4042,10 +4084,6 @@ mod tests {
         assert_eq!(
             first_digest,
             pop_enrollment_recipient_public_key_digest_v1(first.secret().public())
-        );
-        assert_eq!(
-            first_digest,
-            pop_enrollment_recipient_public_key_digest_v1(replay.public())
         );
         assert_ne!(
             first_digest,
@@ -4078,13 +4116,13 @@ mod tests {
         bytes.try_into().expect("ed25519")
     }
 
-    fn policy(hsm: &TestHsm, approvers: &[KeyPair]) -> PopCredentialServicePolicyV1 {
+    fn policy(signer: &TestSigner, approvers: &[KeyPair]) -> PopCredentialServicePolicyV1 {
         PopCredentialServicePolicyV1 {
             version: POP_CREDENTIAL_SERVICE_POLICY_VERSION_V1,
             issuer_policy_digest: [0x41; 32],
             issuer_id: "pop-issuer-sora-foundation".to_owned(),
-            issuer_hsm_key_id: hsm.key_id.clone(),
-            issuer_public_key: hsm.public_key(),
+            issuer_signer_handle: signer.key_id.clone(),
+            issuer_public_key: signer.public_key(),
             enrollment_recipient_key_id: "kms://pop/enrollment/primary".to_owned(),
             approval_quorum: 2,
             approval_signers: approvers
@@ -4150,7 +4188,7 @@ mod tests {
     #[test]
     fn production_runtime_handles_use_canonical_grammar() {
         for handle in [
-            "hsm://sorafs/pop/issuer-primary",
+            "software://sorafs/pop-credentials/primary",
             "kms://sorafs/pop/wallet-primary",
         ] {
             assert_eq!(
@@ -4159,16 +4197,16 @@ mod tests {
             );
         }
         for handle in [
-            "hsm://sorafs/pop/issuer-test",
+            "software://sorafs/pop-credentials/test",
             "kms://pop/mock/wallet",
             "kms://pop/placeholder/enrollment",
             "kms://pop/private key",
             "kms://pop/ключ",
-            "hsm://sorafs/pop/operator@issuer",
-            "hsm://sorafs/pop/issuer?token",
-            "hsm://sorafs/pop/issuer#fragment",
-            "hsm://sorafs/pop/%69ssuer",
-            "hsm://sorafs/pop/issuer\\primary",
+            "software://sorafs/pop-credentials/operator@issuer",
+            "software://sorafs/pop-credentials/primary?token",
+            "software://sorafs/pop-credentials/primary#fragment",
+            "software://sorafs/pop-credentials/%70rimary",
+            "software://sorafs/pop-credentials/primary\\substituted",
         ] {
             assert!(matches!(
                 bounded_production_runtime_handle("runtime_handle", handle),
@@ -4269,12 +4307,12 @@ mod tests {
         PopEncryptedEnrollmentV1,
     ) {
         let temp = TempDir::new().expect("temp");
-        let hsm = Arc::new(TestHsm {
-            key_id: "hsm://sorafs/pop/issuer-primary".to_owned(),
+        let signer = Arc::new(TestSigner {
+            key_id: "software://sorafs/pop-credentials/primary".to_owned(),
             keypair: ed25519(1),
         });
         let approvers = vec![ed25519(2), ed25519(3), ed25519(4)];
-        let policy = policy(&hsm, &approvers);
+        let policy = policy(&signer, &approvers);
         let mut rng = ChaCha20Rng::from_seed([0x21; 32]);
         let issuer_encryption = HybridKeyPair::generate(&mut rng).expect("issuer encryption");
         let wallet = HybridKeyPair::generate(&mut rng).expect("wallet encryption");
@@ -4289,7 +4327,7 @@ mod tests {
             canonical_temp_root(&temp),
             policy.clone(),
             test_recipient(&policy.enrollment_recipient_key_id, &issuer_encryption),
-            hsm,
+            signer,
         )
         .expect("service");
         (temp, service, policy, wallet, approvers, enrollment)
@@ -4458,12 +4496,12 @@ mod tests {
 
     #[test]
     fn approval_policy_rejects_duplicate_keys_under_distinct_ids() {
-        let hsm = TestHsm {
-            key_id: "hsm://sorafs/pop/issuer-primary".to_owned(),
+        let signer = TestSigner {
+            key_id: "software://sorafs/pop-credentials/primary".to_owned(),
             keypair: ed25519(1),
         };
         let approvers = vec![ed25519(2), ed25519(3)];
-        let mut policy = policy(&hsm, &approvers);
+        let mut policy = policy(&signer, &approvers);
         policy.approval_signers[1].public_key = policy.approval_signers[0].public_key;
         assert_eq!(
             policy.validate(),
@@ -4489,13 +4527,15 @@ mod tests {
     #[test]
     fn retry_exhaustion_is_durable_and_payload_free() {
         let (_temp, mut service, policy, _wallet, _approvers, _enrollment) = service_fixture();
-        let hsm = TestHsm {
-            key_id: policy.issuer_hsm_key_id.clone(),
+        let signer = TestSigner {
+            key_id: policy.issuer_signer_handle.clone(),
             keypair: ed25519(1),
         };
-        let revocations =
-            sign_revocation_with_hsm(unsigned_revocations(hsm.public_key(), scalar(101), 1), &hsm)
-                .expect("signed revocations");
+        let revocations = sign_revocation_with_signer(
+            unsigned_revocations(signer.public_key(), scalar(101), 1),
+            &signer,
+        )
+        .expect("signed revocations");
         let operation =
             PopRegistryOperationV1::new(PopRegistryOperationKindV1::PublishRevocationList {
                 canonical_revocation_list: encode_canonical(&revocations).unwrap(),
@@ -4543,7 +4583,7 @@ mod tests {
     fn nullifier_replay_cache_is_atomic_and_survives_restart() {
         let (temp, mut service, policy, _wallet, _approvers, _enrollment) = service_fixture();
         let enrollment_recipient = Arc::clone(&service.enrollment_recipient);
-        let hsm = Arc::clone(&service.hsm);
+        let signer = Arc::clone(&service.signer);
         let nullifier = scalar(77);
         service
             .consume_verified_nullifier(nullifier)
@@ -4558,7 +4598,7 @@ mod tests {
             canonical_temp_root(&temp),
             policy,
             enrollment_recipient,
-            hsm,
+            signer,
         )
         .unwrap();
         assert_eq!(
@@ -4574,7 +4614,7 @@ mod tests {
             .submit_enrollment(&encode_canonical(&enrollment).unwrap(), 20)
             .unwrap();
         let enrollment_recipient = Arc::clone(&service.enrollment_recipient);
-        let hsm = Arc::clone(&service.hsm);
+        let signer = Arc::clone(&service.signer);
         let checkpoint_path = service.checkpoint_path.clone();
         let mut poisoned = service.state.clone();
         let record = poisoned.enrollments.first_mut().unwrap();
@@ -4596,7 +4636,7 @@ mod tests {
                 canonical_temp_root(&temp),
                 policy,
                 enrollment_recipient,
-                hsm,
+                signer,
             )
             .expect_err("semantic poison"),
             PopCredentialServiceError::PoisonedCheckpoint
@@ -4611,8 +4651,8 @@ mod tests {
         fs::write(&checkpoint, b"not norito").expect("poison");
         let mut rng = ChaCha20Rng::from_seed([0x22; 32]);
         let issuer_encryption = HybridKeyPair::generate(&mut rng).expect("key");
-        let hsm = Arc::new(TestHsm {
-            key_id: policy.issuer_hsm_key_id.clone(),
+        let signer = Arc::new(TestSigner {
+            key_id: policy.issuer_signer_handle.clone(),
             keypair: ed25519(1),
         });
         assert_eq!(
@@ -4620,7 +4660,7 @@ mod tests {
                 canonical_temp_root(&temp),
                 policy.clone(),
                 test_recipient(&policy.enrollment_recipient_key_id, &issuer_encryption),
-                hsm.clone(),
+                signer.clone(),
             )
             .expect_err("poisoned"),
             PopCredentialServiceError::PoisonedCheckpoint
@@ -4637,7 +4677,7 @@ mod tests {
                 canonical_temp_root(&temp),
                 policy.clone(),
                 test_recipient(&policy.enrollment_recipient_key_id, &issuer_encryption),
-                hsm,
+                signer,
             )
             .expect_err("symlink"),
             PopCredentialServiceError::CheckpointIo
@@ -4688,16 +4728,16 @@ mod tests {
     }
 
     fn projection(
-        hsm: &TestHsm,
+        signer: &TestSigner,
         height: u64,
         previous_block_hash: Option<[u8; 32]>,
         root_version: u64,
         previous_root: Option<[u8; 32]>,
         policy_digest: [u8; 32],
     ) -> PopFinalizedRegistryProjectionV1 {
-        let root = unsigned_root(hsm.public_key(), root_version, previous_root);
-        let revocations = unsigned_revocations(hsm.public_key(), root.root_digest, root_version);
-        let bundle = sign_bundle_with_hsm(
+        let root = unsigned_root(signer.public_key(), root_version, previous_root);
+        let revocations = unsigned_revocations(signer.public_key(), root.root_digest, root_version);
+        let bundle = sign_bundle_with_signer(
             PopCredentialV1 {
                 version: sorafs_manifest::POP_CREDENTIAL_VERSION_V1,
                 credential_id: scalar(1),
@@ -4712,11 +4752,11 @@ mod tests {
                 commitment_root: root.root_digest,
                 commitment_tree_version: root.tree_version,
                 revocation_list_version: revocations.list_version,
-                issuer_signature: empty_signature(hsm.public_key()),
+                issuer_signature: empty_signature(signer.public_key()),
             },
             root,
             revocations,
-            hsm,
+            signer,
         )
         .expect("sign");
         PopFinalizedRegistryProjectionV1 {
@@ -4737,12 +4777,12 @@ mod tests {
 
     #[test]
     fn finalized_sync_rejects_cursor_root_rollback_and_wrong_policy() {
-        let hsm = TestHsm {
-            key_id: "hsm://sorafs/pop/issuer-primary".to_owned(),
+        let signer = TestSigner {
+            key_id: "software://sorafs/pop-credentials/primary".to_owned(),
             keypair: ed25519(1),
         };
-        let policy = policy(&hsm, &[ed25519(2), ed25519(3)]);
-        let first = projection(&hsm, 1, None, 2, None, policy.issuer_policy_digest);
+        let policy = policy(&signer, &[ed25519(2), ed25519(3)]);
+        let first = projection(&signer, 1, None, 2, None, policy.issuer_policy_digest);
         validate_projection(None, &first, &policy).expect("first");
 
         let mut wrong_policy = first.clone();
@@ -4753,7 +4793,7 @@ mod tests {
         );
 
         let rollback = projection(
-            &hsm,
+            &signer,
             2,
             Some(first.cursor.block_hash),
             1,
@@ -4766,7 +4806,7 @@ mod tests {
         );
 
         let fork = projection(
-            &hsm,
+            &signer,
             2,
             Some([0xFF; 32]),
             3,

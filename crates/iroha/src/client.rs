@@ -8245,13 +8245,6 @@ mod offline_client_tests {
         nonce: u64,
     }
 
-    fn asset_definition_id(name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").expect("asset domain id"),
-            name.parse().expect("asset definition name"),
-        )
-    }
-
     fn header<'a>(snapshot: &'a RequestSnapshot, name: &str) -> Option<&'a str> {
         snapshot
             .headers
@@ -28574,7 +28567,6 @@ mod tests {
 
     #[test]
     fn prepared_transaction_payload_allows_foreign_chain_for_server_rejection_tests() {
-        let client = client_with_base_url(base_url());
         let (authority, keypair) = gen_account_in("foreign-chain-authority");
         let tx = TransactionBuilder::new(
             ChainId::from("foreign-chain"),

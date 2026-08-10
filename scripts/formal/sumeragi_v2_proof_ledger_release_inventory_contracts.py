@@ -673,8 +673,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 427:
-        errors.append("internal release-regression seal must contain exactly 427 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 431:
+        errors.append("internal release-regression seal must contain exactly 431 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1197,7 +1197,7 @@ def _production_liveness_release_inventory_errors(
     if modules != list(_PRODUCTION_LIVENESS_RELEASE_MODULES):
         errors.append(
             f"{release_path}: production liveness modules must equal the reviewed "
-            f"ordered thirty-nine-module inventory; found {modules}"
+            f"ordered forty-module inventory; found {modules}"
         )
     inventory_rows = ["module\ttest"]
     inventory_has_exact_modules = True
@@ -1229,7 +1229,7 @@ def _production_liveness_release_inventory_errors(
     if leg_ids != expected_leg_ids or len(set(leg_ids)) != len(leg_ids):
         errors.append(
             f"{release_path}: production module leg IDs must equal the reviewed "
-            f"thirty-nine-entry inventory; found {leg_ids}"
+            f"forty-entry inventory; found {leg_ids}"
         )
     for _, module, expected_count in _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS:
         observed_count = sum(
@@ -1363,17 +1363,17 @@ def _production_liveness_release_inventory_errors(
     source_sealed_commands = (
         (
             "source-sealed-workspace-build",
-            "cargo +1.93.1 -j1 build --locked --offline --workspace",
+            "cargo +1.93.1 build -j1 --locked --offline --workspace",
             "run_cargo build --locked --offline --workspace",
         ),
         (
             "source-sealed-workspace-tests",
-            "cargo +1.93.1 -j1 test --locked --offline --workspace",
+            "cargo +1.93.1 test -j1 --locked --offline --workspace",
             "run_cargo test --locked --offline --workspace",
         ),
         (
             "source-sealed-workspace-clippy",
-            "cargo +1.93.1 -j1 clippy --locked --offline --workspace "
+            "cargo +1.93.1 clippy -j1 --locked --offline --workspace "
             "--all-targets -- -D warnings",
             "run_cargo clippy --locked --offline --workspace --all-targets "
             "-- -D warnings",
@@ -1560,6 +1560,11 @@ def _production_liveness_release_inventory_errors(
                     f"{receipt_path}: production data-model receipt routing must "
                     "equal the exact shell data-model module inventory"
                 )
+            if receipt_source.splitlines().count('                    "state::",') != 1:
+                errors.append(
+                    f"{receipt_path}: canonical receipt inventory parser must admit "
+                    "the exact state module namespace"
+                )
             expected_receipt_components = (
                 "write_sumeragi_v2_release_receipt_formal_artifacts.py",
                 "write_sumeragi_v2_release_receipt_corridor_log.py",
@@ -1661,22 +1666,22 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current inventory to 845 tests across 39 modules.\n"
+            "current inventory to 849 tests across 40 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 845-test,\n39-module inventory. The complete source-sealed\n"
+            "current 849-test,\n40-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current source-bound inventory to 845 exact tests "
-            "across\n39 modules and "
+            "current source-bound inventory to 849 exact tests "
+            "across\n40 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",

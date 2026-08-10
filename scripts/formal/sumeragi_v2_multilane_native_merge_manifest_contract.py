@@ -41,7 +41,7 @@ NATIVE_MERGE_SOURCE_BINDINGS = (
             "return ordinary_native_amx_application_sources(block);",
             "!bundle.external.is_empty()",
             "block.external_entrypoints_cloned().next().is_some()",
-            "merge_application_header_from_carrier(block.header())",
+            "merge_application_header_from_carrier(&block.header())",
             "merge_execution_batch_commitments_match(batch)",
             "execution.native_amx_receipts.len() != execution.entrypoints.len()",
             "Hash::from(canonical_entrypoint_hash) != *expected_entrypoint_hash",
@@ -335,7 +335,7 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "if let Some(planned) = planned_merge_entry { let record = "
         "Self::carrier_record_for_block_entry(block, planned)?; "
         "Self::validate_merge_carrier_finality_projection( record, planned, "
-        "block.header(), finality, )?;",
+        "&block.header(), finality, )?;",
     ),
     (
         "crates/iroha_core/src/kura/lane_artifact_budget.rs",
@@ -429,7 +429,13 @@ NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS = (
             "durable_carrier.as_ref(),\n                Some(&entry),",
             "live_prepublication.authenticates_state_frontiers",
             "remove_latest_native_amx_participant_manifest_for_testing",
+            '"remove only the exact latest Native manifest"',
             "remove_merge_carrier_record_for_testing",
+            "read_structural_native_amx_participant_application_receipt(",
+            '"manifest loss must retain the exact structural Native receipt"',
+            "read_native_amx_participant_application_receipt(",
+            ".is_none()",
+            '"the authoritative reader must reject a receipt without its manifest"',
             "preflight_native_amx_participant_application_evidence_repair(",
             "std::slice::from_ref(&native_marker),\n                None,",
             '"startup Native repair requires a committed or planned association"',

@@ -2063,7 +2063,11 @@ async fn appeal_finance_publication_routes_are_read_only() {
             self.public_key_bytes()
         }
 
-        fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
+        fn sign(
+            &self,
+            _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
+            payload: &[u8],
+        ) -> Result<[u8; 64], String> {
             Signature::try_new(self.key_pair.private_key(), payload)
                 .map_err(|_| "retired-route Governance DAG signing failed".to_owned())?
                 .payload()

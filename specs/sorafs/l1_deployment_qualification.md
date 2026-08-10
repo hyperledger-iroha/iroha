@@ -37,7 +37,9 @@ command-line deployment context before collecting any lane summary.
 The input uses schema `sorafs.l1.deployment_qualification.v1`. It is a
 schema-closed, payload-free plan containing:
 
-- exactly four unique voting validators, each with DA and RBC enabled;
+- the exact Taira network name, chain ID, numeric chain discriminator, and
+  ordered `taira-validator-1` through `taira-validator-4` voting identities,
+  each with DA and RBC enabled; Minamoto or any other network is rejected;
 - between 2 and 64 unique SoraFS storage providers operated by at least two
   distinct operator identities;
 - exactly two gateways with distinct region and administrator identities;
@@ -54,7 +56,9 @@ schema-closed, payload-free plan containing:
   `check_sorafs_production_readiness.py`, with every slot bound to the same
   deployment ID and production environment.
 
-The schema is closed at every level. Validator rows contain `validator_id`,
+The schema is closed at every level. `deployment` contains `deployment_id`,
+`environment`, `network`, `chain_id`, and `chain_discriminant`; the final
+three fields must equal the canonical public Taira constants. Validator rows contain `validator_id`,
 `voting`, `da_enabled`, and `rbc_enabled`. Storage-provider rows contain
 `provider_id` and `operator_id`. Gateway rows contain `gateway_id`, `region`,
 and `administrator_id`. Governance DAG rows contain `instance_id`,
@@ -96,13 +100,17 @@ reviewed deployment context. Missing, substituted, or mismatched qualification
 input blocks the lane.
 
 The independently signed topology companion is also schema-closed. Its
-`signer_backend` is exactly `software`, its `signature_algorithm` remains
-exactly `ed25519`, and the signature covers both values together with the
-existing signer identity, positive key revision, public-key fingerprint, and
-policy digest. A missing backend, the retired `hsm` backend, or any other
-backend fails qualification even when its detached signature is otherwise
-valid.
+`signer_authentication_kind` is exactly `external-ed25519`, `signer_backend` is
+exactly `software`, and `signature_algorithm` is exactly `ed25519`. The
+signature covers the distinct service and administrator identities, positive
+key and policy revisions, non-zero policy digest, public-key fingerprint, and
+the exact topology binding. Local or non-software backends, same-identity
+administration, and key reuse with a resilience, lane, or promotion signer fail
+qualification even when a detached signature is otherwise valid. A later HSM
+migration requires new deployment evidence and must not relabel this release.
 
+The binding also carries the exact Taira network, chain ID, discriminator, and
+SHA-256 of the canonical ordered four-validator identity array.
 The same binding is signed inside the foundational prerequisite envelope,
 beside the ordered 17 lane-summary digests. The aggregate checker and runner
 also require the exact qualification summary and demand equality across the

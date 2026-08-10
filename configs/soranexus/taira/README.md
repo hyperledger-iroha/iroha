@@ -656,9 +656,10 @@ topology transaction is rebuilt from the public roster and PoPs, plus
 independently built, reviewed executable outside the checkout and run that
 command. The fixed protocol passes only `--unsigned-genesis`, `--peer-config`,
 `--bound-manifest-out`, `--signed-genesis-out`, and `--expected-hash-out`.
-The signer owns its HSM or key-provider access internally; it must never accept
-a private-key path or key bytes through argv, environment, or the rendered
-tree. Source-built Kagami is not a genesis signer in this release path. The
+The signer owns its isolated external software-signing service and encrypted
+runtime-only key access internally; it must never accept a private-key path or
+key bytes through argv, environment, or the rendered tree. Source-built Kagami
+is not a genesis signer in this release path. The
 external signer binds the staged Nexus/AMX and execution-policy context,
 recomputes the consensus fingerprint, atomically replaces only the rendered
 `genesis.json`, and writes `genesis.signed.nrt`. Never copy the genesis signer,
@@ -1012,7 +1013,8 @@ after all four restart proofs pass and the original reset inputs are unchanged.
 `build_taira_rollout_candidate.py` binds that receipt, the exact binary,
 the sealed macOS controller manifest, and signed Linux authority into the final
 secret-free Mac admission archive. The private reset bundle, validator secrets,
-external genesis signer and its internal key/HSM state, validator binary, and
+external genesis software signer and its encrypted runtime-only key state,
+validator binary, and
 supervisor never enter Actions artifact storage or OCI. After the
 candidate authority is assembled, the protected macOS runner passes the local
 private bundle and candidate directly to `scripts/deploy_taira_v21_reset.py`,
@@ -1322,7 +1324,7 @@ TAIRA_VALIDATOR_ARGS=(
 )
 ```
 
-- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
+- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --expected-dpn-validator-release-commit "${EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT}"`
 
 Then gate the SoraFS path on the same public node:
 

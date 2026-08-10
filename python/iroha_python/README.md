@@ -1911,7 +1911,7 @@ For details on choosing between binary bundles and container images, consult `sp
 
 For a production release, stage the reviewed package candidates and checksums
 through the protected aggregate release workflow. Authentication happens
-outside this harness with the external Ed25519/PKCS#11-HSM signer and is
+outside this harness with the external software Ed25519 signer and is
 verified with:
 
 ```bash

@@ -5,7 +5,7 @@ The sealed source reset contributes only its exact public roster, owner-private
 validator/shared secrets, and static codec/config sidecars.  The authenticated
 Linux release contributes the reviewed privacy plan, peer-1 config template,
 genesis template, and broker public export.  An independently provisioned,
-digest-pinned external/HSM signer binds and signs that genesis.  The controller
+digest-pinned external software signer binds and signs that genesis. The controller
 never reads, snapshots, or passes persistent genesis private-key material.
 """
 

@@ -126,7 +126,7 @@ dependencies, and enabled startup also requires authoritative signed
 transparency-head reconciliation through the qualified publisher. There is no
 file key, environment secret, `KeyPair`, or in-process production fallback.
 The local checkpoint cache is not an authority fallback. The standard launcher
-intentionally does not construct a real external CAS, WebAuthn, grant, HSM
+intentionally does not construct a real external CAS, WebAuthn, grant, external software
 signer, KMS, immutable object-lock, or durable transparency-publisher
 implementation; deployment owners must construct and inject those runtime
 dependencies. The complete non-secret shape is shown in
@@ -160,7 +160,7 @@ The injected boundaries are:
 - finalized moderation authorization reader;
 - WebAuthn challenge and assertion verifier;
 - rotating-grant issuer, verifier, and revoker;
-- PKCS#11/HSM Ed25519 receipt signer;
+- independently administered external software Ed25519 receipt signer;
 - KMS or cryptographic-erasure service;
 - linearizable signed checkpoint-store CAS authority;
 - immutable object-lock archive returning an Ed25519-authenticated exact
@@ -339,12 +339,12 @@ events to `/v1/evidence/log/{session_id_hex}`.
   through `RuntimeProviderBrokerExecutableV1`. The shared shell supplies the
   catalog-only CLI, secure bounded loader, readiness/lifecycle bridge, signal
   shutdown, and redacted failures, but no checked-in registry supplies a
-  credential loader, HSM/KMS/sealed-store implementation, or vendor backend.
+  credential loader, software-signer/KMS/sealed-store implementation, or vendor backend.
   Its bounded canonical client/server protocol covers all seven viewer slots
   (22–26, 47, and 53), including exact public qualification metadata,
   replay-safe operation identities, ambiguity typing, signed readback, and
   authoritative CAS/archive/transparency-head verification.
-- Construct and inject deployment-owned WebAuthn, rotating-grant, PKCS#11/HSM
+- Construct and inject deployment-owned WebAuthn, rotating-grant, external software
   receipt-signer, KMS/erasure, linearizable sealed-CAS checkpoint-store, and
   immutable object-lock/archive implementations that satisfy the shipped
   qualification and exact-readback contracts; collect external readiness,

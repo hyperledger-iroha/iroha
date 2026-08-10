@@ -1,4 +1,4 @@
-------------- MODULE SumeragiV2Revision4CertifiedFenceReservation -------------
+---- MODULE SumeragiV2Revision4CertifiedFenceReservation ----
 \* Bounded authoritative revision-4 scheduler kernel for the certificate which
 \* retires an exact retained Serve or leader-wire fence. The model explores
 \* certificate-last and certificate-first arrival orders, two ordinary

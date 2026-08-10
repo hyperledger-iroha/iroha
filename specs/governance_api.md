@@ -424,7 +424,7 @@ Governed Contract Lookup
 Unlock Sweep (Operator/Audit)
 - GET `/v1/gov/unlocks/stats`
   - Response: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
-  - Notes: `last_sweep_height` reflects the most recent block height where expired locks were swept and persisted. `expired_locks_now` is computed by scanning lock records with `expiry_height <= height_current`.
+  - Notes: `height_current` is the committed ledger height captured atomically with the persisted audit cells; `last_sweep_height` is the most recent successful non-empty due-lock sweep, while the bounded count fields are the persisted result of the most recent attempted due-lock sweep (or zero before any attempt), and this endpoint never scans lock history.
 - POST `/v1/gov/ballots/zk-v1`
   - Request (v1-style DTO):
     {

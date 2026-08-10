@@ -15143,7 +15143,7 @@ def test_successor_production_source_mapping_mutations_fail_closed(
     error_fragment: str,
 ) -> None:
     module = load_checker()
-    required_sources = (
+    for source_name in (
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "crates/iroha_core/src/sumeragi/status.rs",
         "crates/iroha_core/src/sumeragi/v2.rs",
@@ -15152,11 +15152,11 @@ def test_successor_production_source_mapping_mutations_fail_closed(
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
         "crates/iroha_core/src/sumeragi/v2_recovery.rs",
         "scripts/run_sumeragi_v2_release_gates.sh",
-    )
-    for source_name in required_sources:
+    ):
         destination = tmp_path / source_name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / source_name, destination)
+    copy_reviewed_rust_include_components(tmp_path)
 
     assert module._successor_production_source_fidelity_errors(tmp_path) == []
 

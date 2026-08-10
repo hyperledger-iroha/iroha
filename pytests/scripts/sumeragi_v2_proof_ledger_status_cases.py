@@ -45,6 +45,322 @@ def test_checker_components_cannot_shadow_reviewed_definitions() -> None:
     }
     assert duplicates == {}
 
+
+def test_exact_decision_lifecycle_property_contracts_are_current() -> None:
+    """The release checker pins the typed and stutter-closed lifecycle surface."""
+
+    module = load_checker()
+    module_name = "SumeragiV2ExactDecisionStageServiceClosureProofs"
+    source = (module.FORMAL_DIR / f"{module_name}.tla").read_text(
+        encoding="utf-8"
+    )
+    symbols = (
+        "ExactDecisionRequestLifecycleRankCellClosureProperty",
+        "ExactDecisionRequestLifecycleFiniteProducerEpisodeClosureProperty",
+        "ExactDecisionRequestLifecycleConcreteActionOriginProperty",
+        "ExactDecisionRequestLifecycleRankDescentProperty",
+    )
+    for symbol in symbols:
+        extracted = module._top_level_operator_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        assert extracted is not None, symbol
+        observed = " ".join(extracted[0].split())
+        expected = module.EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES[
+            (module_name, symbol)
+        ]
+        assert observed == expected, symbol
+
+
+def test_exact_decision_lifecycle_contracts_reject_semantic_weakening() -> None:
+    """Collapsed domains and non-stutter-closed step predicates fail closed."""
+
+    module = load_checker()
+    module_name = "SumeragiV2ExactDecisionStageServiceClosureProofs"
+    source = (module.FORMAL_DIR / f"{module_name}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutations = (
+        (
+            "ExactDecisionRequestLifecycleRankCellClosureProperty",
+            "\\A node, qc, archive, request:\n         \\A rank \\in",
+            "\\A node, qc, archive, request,\n         rank \\in",
+        ),
+        (
+            "ExactDecisionRequestLifecycleFiniteProducerEpisodeClosureProperty",
+            "\\A node, qc, archive, request:\n         \\A rank \\in",
+            "\\A node, qc, archive, request,\n         rank \\in",
+        ),
+        (
+            "ExactDecisionRequestLifecycleConcreteActionOriginProperty",
+            "=> [][(\\A node",
+            "=> [](\\A node",
+        ),
+        (
+            "ExactDecisionRequestLifecycleRankDescentProperty",
+            "=> [][(\\A node",
+            "=> [](\\A node",
+        ),
+    )
+    ledger = module.load_ledger()
+    for symbol, old, new in mutations:
+        mutated = mutate_tla_operator(source, symbol, old, new)
+        assert mutated != source, symbol
+        errors = module._proof_obligation_architecture_errors(
+            ledger["obligations"],
+            {module_name: mutated},
+        )
+        assert any(
+            f"{symbol} must equal only" in error for error in errors
+        ), errors
+
+
+def test_historical_certificate_lineage_quantifiers_are_current() -> None:
+    """Unbounded certificates precede the responsive-node domain explicitly."""
+
+    module = load_checker()
+    module_name = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    source = (module.FORMAL_DIR / f"{module_name}.tla").read_text(
+        encoding="utf-8"
+    )
+    symbols = (
+        "IndexedHistoricalCertificateReceivedQcLineageInvariantAt",
+        "IndexedHistoricalCertificateDecisionWalLineageInvariantAt",
+    )
+    for symbol in symbols:
+        extracted = module._top_level_operator_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        assert extracted is not None, symbol
+        expected = module.EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES[
+            (module_name, symbol)
+        ]
+        assert " ".join(extracted[0].split()) == expected, symbol
+
+
+def test_historical_certificate_lineage_rejects_mixed_binder_regression() -> None:
+    """The reviewed TLAPS-normal binder form remains exact for both sources."""
+
+    module = load_checker()
+    module_name = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    source = (module.FORMAL_DIR / f"{module_name}.tla").read_text(
+        encoding="utf-8"
+    )
+    symbols = (
+        "IndexedHistoricalCertificateReceivedQcLineageInvariantAt",
+        "IndexedHistoricalCertificateDecisionWalLineageInvariantAt",
+    )
+    ledger = module.load_ledger()
+    for symbol in symbols:
+        mutated = mutate_tla_operator(
+            source,
+            symbol,
+            "\\A qc:\n    \\A node \\in Responsive:",
+            "\\A node \\in Responsive, qc:",
+        )
+        assert mutated != source, symbol
+        errors = module._proof_obligation_architecture_errors(
+            ledger["obligations"],
+            {module_name: mutated},
+        )
+        assert any(
+            f"{symbol} must equal only" in error for error in errors
+        ), errors
+
+
+def test_post_retransmit_cut_continuation_quantifier_is_pinned() -> None:
+    """The dependent record carrier keeps its explicit nested node binder."""
+
+    module = load_checker()
+    module_name = "SumeragiV2AsyncNetwork"
+    symbol = (
+        "AsyncCandidateProducerContinuationPostRetransmitCutCannotOwnRunnerTurn"
+    )
+    source = (module.FORMAL_DIR / f"{module_name}.tla").read_text(
+        encoding="utf-8"
+    )
+    extracted = module._top_level_theorem_body(
+        source,
+        symbol,
+        preserve_string_contents=True,
+    )
+    assert extracted is not None
+    expected = module.EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS[
+        (module_name, symbol)
+    ]
+    assert module._tla_statement_without_proof(extracted[0]) == expected
+
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "\\A node \\in ValidatorIds:\n    \\A record \\in",
+        "\\A node \\in ValidatorIds,\n     record \\in",
+    )
+    assert mutated != source
+    errors = module._proof_obligation_architecture_errors(
+        module.load_ledger()["obligations"],
+        {module_name: mutated},
+    )
+    assert any(f"{symbol} must state only" in error for error in errors), errors
+
+
+def test_reviewed_token_origin_quantifier_is_pinned() -> None:
+    """The token carrier remains nested under its explicit validator domain."""
+
+    module = load_checker()
+    module_name = "SumeragiV2AsyncNetwork"
+    symbol = "AsyncCandidateLifecycleReviewedTokenOwnsOneOrigin"
+    source = (module.FORMAL_DIR / f"{module_name}.tla").read_text(
+        encoding="utf-8"
+    )
+    extracted = module._top_level_theorem_body(
+        source,
+        symbol,
+        preserve_string_contents=True,
+    )
+    assert extracted is not None
+    expected = module.EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS[
+        (module_name, symbol)
+    ]
+    assert module._tla_statement_without_proof(extracted[0]) == expected
+
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "\\A state, left, right:\n"
+        "    \\A node \\in ValidatorIds:\n"
+        "      \\A token \\in",
+        "\\A state, left, right:\n"
+        "    \\A node \\in ValidatorIds,\n"
+        "       token \\in",
+    )
+    assert mutated != source
+    errors = module._proof_obligation_architecture_errors(
+        module.load_ledger()["obligations"],
+        {module_name: mutated},
+    )
+    assert any(f"{symbol} must state only" in error for error in errors), errors
+
+
+def test_retransmit_lifecycle_timeout_transfer_endpoint_is_pinned() -> None:
+    """Timeout-origin transfer is an exact retransmit lifecycle endpoint."""
+
+    module = load_checker()
+    module_name = "SumeragiV2AsyncNetwork"
+    source = (module.FORMAL_DIR / f"{module_name}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutations = (
+        (
+            "AsyncRetransmitLifecycleOwnerAndPhysicalCutPersistUntilEndpoint",
+            "    /\\ ~AsyncTimeoutLifecycleTransfersThisStep(node)\n",
+        ),
+        (
+            "AsyncRetransmitLifecycleOwnerAndPhysicalCutClearAtEndpoint",
+            "            \\/ AsyncTimeoutLifecycleTransfersThisStep(node)\n",
+        ),
+    )
+    ledger = module.load_ledger()
+    for symbol, required_endpoint in mutations:
+        extracted = module._top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        assert extracted is not None, symbol
+        expected = module.EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS[
+            (module_name, symbol)
+        ]
+        assert module._tla_statement_without_proof(extracted[0]) == expected, symbol
+
+        mutated = mutate_tla_theorem(source, symbol, required_endpoint, "")
+        assert mutated != source, symbol
+        errors = module._proof_obligation_architecture_errors(
+            ledger["obligations"],
+            {module_name: mutated},
+        )
+        assert any(f"{symbol} must state only" in error for error in errors), errors
+
+
+def test_timeout_physical_control_retransmission_typed_item_binder_is_pinned() -> None:
+    """The redundant item carrier remains explicit at the packet handoff."""
+
+    module = load_checker()
+    module_name = "SumeragiV2TimeoutViewProgressProofs"
+    symbol = "TimeoutPhysicalControlRetransmissionCreatesExactPacket"
+    source = (module.FORMAL_DIR / f"{module_name}.tla").read_text(
+        encoding="utf-8"
+    )
+    extracted = module._top_level_theorem_body(
+        source, symbol, preserve_string_contents=True
+    )
+    assert extracted is not None
+    expected = module.EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS[
+        (module_name, symbol)
+    ]
+    assert module._tla_statement_without_proof(extracted[0]) == expected
+
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "\\A node \\in ValidatorIds, item \\in AsyncNetworkItems:",
+        "\\A node \\in ValidatorIds, item:",
+    )
+    assert mutated != source
+    errors = module._proof_obligation_architecture_errors(
+        module.load_ledger()["obligations"], {module_name: mutated}
+    )
+    assert any(f"{symbol} must state only" in error for error in errors), errors
+
+
+def test_leader_wire_recovery_cut_uses_shared_physical_highwater(
+    tmp_path: Path,
+) -> None:
+    """The recovery cut preserves the shared physical ingress high-water."""
+
+    module = load_checker()
+    repo_root = tmp_path / "repo"
+    relatives = (
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "formal/sumeragi_v2/SumeragiV2AsyncNetwork.tla",
+    )
+    for relative in relatives:
+        destination = repo_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(module.ROOT_DIR / relative, destination)
+
+    marker = "leader-wire recovery-cut high-water theorem"
+    errors = module._persistent_recovery_cut_source_fidelity_errors(repo_root)
+    assert not any(marker in error for error in errors), errors
+
+    path = repo_root / relatives[-1]
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            "LeaderWireRecoveryCutRetainsOrdinalHighwaters",
+            "AsyncNextIngressPhysicalOrdinal(node)' =",
+            "AsyncNextLeaderWireIngressOrdinal(node)' =",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._persistent_recovery_cut_source_fidelity_errors(repo_root)
+    assert any(
+        marker in error
+        and "AsyncNextIngressPhysicalOrdinal(node)' =" in error
+        for error in errors
+    ), errors
+
+
 def test_indexed_chain_spec_cannot_manufacture_generation_budget(
     tmp_path: Path,
 ) -> None:

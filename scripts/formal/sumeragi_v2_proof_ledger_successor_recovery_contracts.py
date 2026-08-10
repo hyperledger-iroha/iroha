@@ -366,22 +366,30 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "activation.bind(successor_authority)?",
             ),
         )
+        historical_ingress = region(
+            runner_path,
+            runner_source,
+            "drain_v2_ingress",
+            "fn drain_v2_ingress(",
+            "\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\nenum OuterIngressTurn",
+        )
         require_tokens(
             runner_path,
             "historical ingress routing",
-            region(
-                runner_path,
-                runner_source,
-                "drain_v2_ingress",
-                "fn drain_v2_ingress(",
-                "\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\nenum OuterIngressTurn",
-            ),
+            historical_ingress,
             (
-                "block_sync_server.serve_historical_body( kura, request, &sender, local_key, )",
+                "block_sync_server.serve_historical_body( kura, request, &sender, local_key )",
                 "executor.accept_certified_body_response_with_ingress_ownership( response, &sender, &ingress_ownership, services, )",
                 "block_sync.authenticate_response(response, &sender)",
                 "block_sync.enqueue_and_complete(discovered, |message| { executor.enqueue_discovered_commit_certificate(message, ingress_ownership) })",
             ),
+        )
+        require_token_count(
+            runner_path,
+            "historical ingress routing omits production refinement tokens when either reviewed route changes",
+            historical_ingress,
+            "block_sync_server.serve_historical_body(kura, request, &sender, local_key)",
+            2,
         )
 
     status_path, status_source = load(
@@ -1122,9 +1130,22 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             ),
         )
 
-    release_path, release_source = load(
-        "scripts/run_sumeragi_v2_release_gates.sh"
-    )
+    release_path = repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    if not release_path.is_file() or release_path.is_symlink():
+        errors.append(
+            f"{release_path}: production successor release inventory must be a "
+            "regular source file"
+        )
+        release_source = ""
+    else:
+        try:
+            release_source = release_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(
+                f"{release_path}: cannot read production successor release "
+                f"inventory: {error}"
+            )
+            release_source = ""
     if release_source:
         for test in (
             "sumeragi::v2_block_sync::tests::discovery_outputs_only_normal_commit_qc_ingress_and_waits_for_enqueue",
@@ -3824,7 +3845,7 @@ assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, fa
         for token in (
             "RetireLeaderWireLifecycleSlot(slot)",
             "AsyncLeaderWireLifecycleRecoveryCutObsolete(record)",
-            "AsyncNextLeaderWireIngressOrdinal(node)' =",
+            "AsyncNextIngressPhysicalOrdinal(node)' =",
             "AsyncNextCandidateLifecycleOrdinal(node)' =",
         ):
             if token not in body:

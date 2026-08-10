@@ -93,7 +93,7 @@ mod tests {
 
     use super::*;
 
-    const HANDLE: &str = "pkcs11:prod/sorafs/stream-token/eu-1";
+    const HANDLE: &str = "software://sorafs/stream-token/eu-1";
     const REVISION: u64 = 7;
     const POLICY_DIGEST: [u8; 32] = [0x42; 32];
 
@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(
             qualify_dependency(
                 &bindings(),
-                &dependencies("pkcs11:test/stream-token", public_key(), vec![]),
+                &dependencies("software://sorafs/stream-token/test", public_key(), vec![]),
             ),
             Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected)
         );

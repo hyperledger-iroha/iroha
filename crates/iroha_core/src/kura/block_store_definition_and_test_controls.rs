@@ -141,6 +141,7 @@ impl Kura {
     /// Remove only the reverse carrier record while retaining its committed full entry.
     ///
     /// This models the finalized block-first crash seam repaired at startup.
+    #[cfg(test)]
     pub(crate) fn remove_merge_carrier_record_for_testing(
         &self,
         block: &SignedBlock,

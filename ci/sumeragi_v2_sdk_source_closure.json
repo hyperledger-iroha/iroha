@@ -80,6 +80,7 @@
       "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
       "ci/run_sumeragi_v2_sdk_diagnostics.sh",
       "fixtures/sumeragi_v2/native_amx_v2_grouped.json",
+      "fixtures/sumeragi_v2/wire_v2.tsv",
       "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/SumeragiHttpTransportTests.java",
       "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiDiagnosticsModelsTests.java",
       "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/SumeragiDiagnosticsParsingTests.java",

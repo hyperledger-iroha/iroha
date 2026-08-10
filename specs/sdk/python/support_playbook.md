@@ -73,11 +73,13 @@ Before distributing artefacts outside engineering:
    release job must retain the exact wheel/source-distribution candidates. The
    harness performs no signing and emits no release manifest.
 4. **Authentication and provenance:** Bind the reviewed package checksums into
-   the canonical aggregate release manifest, authenticate it with the external
-   Ed25519/PKCS#11-HSM signer, and pass
+  the canonical aggregate release manifest, authenticate it with the external
+   Ed25519 `authenticated_external_signer` provider with exact `software`
+   backend, and pass
    `scripts/release_manifest_signing.py verify` with the governed fingerprint
    and pinned native verifier. Attach OIDC/cosign provenance only after that
-   boundary; it cannot replace manifest authentication.
+   boundary; it cannot replace manifest authentication. Accepted output is
+   `software-key-qualified`.
 5. **Docs & status:** Update `status.md` with the release summary, fixture age,
    and support window; refresh the README and coordinate public quickstart
    changes in `iroha-docs`.

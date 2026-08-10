@@ -2023,8 +2023,30 @@ impl RootedDirectory {
     }
 
     /// Remove one direct empty child directory by its exact retained identity.
-    #[cfg(any(windows, test))]
     pub(super) fn remove_empty_directory_binding(&self, child: Self) -> io::Result<()> {
+        self.remove_empty_directory_binding_with_hook(child, || Ok(()))
+    }
+
+    #[cfg(test)]
+    pub(super) fn remove_empty_directory_binding_with<BeforeRemove>(
+        &self,
+        child: Self,
+        before_remove: BeforeRemove,
+    ) -> io::Result<()>
+    where
+        BeforeRemove: FnOnce() -> io::Result<()>,
+    {
+        self.remove_empty_directory_binding_with_hook(child, before_remove)
+    }
+
+    fn remove_empty_directory_binding_with_hook<BeforeRemove>(
+        &self,
+        child: Self,
+        before_remove: BeforeRemove,
+    ) -> io::Result<()>
+    where
+        BeforeRemove: FnOnce() -> io::Result<()>,
+    {
         let binding = child.binding.as_ref().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -2047,13 +2069,17 @@ impl RootedDirectory {
             ));
         }
         if !child.child_names_bounded(1)?.is_empty() {
-            return Err(io::Error::other(format!(
-                "governance directory `{}` is not empty",
-                child.display_path.display()
-            )));
+            return Err(io::Error::new(
+                io::ErrorKind::DirectoryNotEmpty,
+                format!(
+                    "governance directory `{}` is not empty",
+                    child.display_path.display()
+                ),
+            ));
         }
         let name = binding.name.clone();
         let identity = child.identity;
+        before_remove()?;
         platform::remove_open_directory(&self.handle, &child.handle, &name, Some(identity))?;
         drop(child);
         match self.open_directory(&name) {

@@ -161,13 +161,13 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "impl": "Kura",
             "symbol": "complete_autonomous_lifecycle_bootstrap",
             "required_tokens": (
-                "refresh_autonomous_lifecycle_bootstrap_authority",
+                "revalidate_autonomous_lifecycle_bootstrap_for_completion",
                 "persist_lane_executable_payload_impl",
                 "AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable",
                 "AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
                 "delete_completed_autonomous_lifecycle_bootstrap",
                 "read_autonomous_lifecycle_cursor",
-                "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue",
+                "consume_autonomous_lifecycle_bootstrap_completion_fence",
             ),
             "ordered_tokens": (
                 "persist_lane_executable_payload_impl",
@@ -175,6 +175,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "if authority.stage != AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
                 "delete_completed_autonomous_lifecycle_bootstrap",
                 "let cursor_read = self.read_autonomous_lifecycle_cursor",
+                "Self::consume_autonomous_lifecycle_bootstrap_completion_fence(fence)",
             ),
         },
     },
@@ -1202,7 +1203,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
     },
     {
         "id": "execution_input_persistence",
-        "path": "crates/iroha_core/src/kura.rs",
+        "path": "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
         "impl": "Kura",
         "symbol": "write_lane_block_execution_input_artifact",
         "model_actions": ("PersistExecutionInput",),
@@ -1214,7 +1215,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "AutonomousLaneExecutionInputPersistenceAuthorization",
             "consume_for_persistence",
             "autonomous_input",
-            "append_indexed_sidecar",
+            "append_indexed_progress_sidecar",
         ),
         "authorization_source": {
             "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
@@ -2135,15 +2136,6 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
     {
         "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
         "impl": "AutonomousLifecycleBootstrapRecoveryAuthority",
-        "symbol": "prepared_cursor",
-        "required_tokens": (
-            "AutonomousLifecycleCursorV2",
-            "self.bootstrap.body.prepared_activate",
-        ),
-    },
-    {
-        "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
-        "impl": "AutonomousLifecycleBootstrapRecoveryAuthority",
         "symbol": "live_cursor",
         "required_tokens": (
             "AutonomousLifecycleCursorV2",
@@ -2168,13 +2160,13 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         "impl": "Kura",
         "symbol": "authenticate_autonomous_lifecycle_bootstrap_recovery",
         "required_tokens": (
-            "refresh_autonomous_lifecycle_bootstrap_authority",
+            "revalidate_autonomous_lifecycle_bootstrap_for_completion",
             "authorization.facts",
             "validate_autonomous_lifecycle_bootstrap_producer_queue_authentication_facts",
             "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue",
         ),
         "ordered_tokens": (
-            "refresh_autonomous_lifecycle_bootstrap_authority(authority)",
+            "revalidate_autonomous_lifecycle_bootstrap_for_completion(authority)",
             "authorization.facts()",
             "validate_autonomous_lifecycle_bootstrap_producer_queue_authentication_facts(",
             "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization)",
@@ -2185,12 +2177,12 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         "impl": "Kura",
         "symbol": "authenticate_autonomous_lifecycle_bootstrap_recovery_from_durable_custody",
         "required_tokens": (
-            "refresh_autonomous_lifecycle_bootstrap_authority",
+            "revalidate_autonomous_lifecycle_bootstrap_for_completion",
             "AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue",
             "AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody",
         ),
         "ordered_tokens": (
-            "refresh_autonomous_lifecycle_bootstrap_authority(authority)",
+            "revalidate_autonomous_lifecycle_bootstrap_for_completion(authority)",
             "AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue",
             "AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody",
         ),
@@ -2198,15 +2190,32 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
     {
         "path": "crates/iroha_core/src/kura.rs",
         "impl": "Kura",
+        "symbol": "consume_autonomous_lifecycle_bootstrap_completion_fence",
+        "required_tokens": (
+            "match fence {",
+            "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization)",
+            "drop(authorization);",
+            "AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody => {}",
+        ),
+        "ordered_tokens": (
+            "match fence {",
+            "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue(authorization)",
+            "drop(authorization);",
+            "AutonomousLifecycleBootstrapCompletionFence::DurablePayloadCustody => {}",
+        ),
+    },
+    {
+        "path": "crates/iroha_core/src/kura.rs",
+        "impl": "Kura",
         "symbol": "complete_autonomous_lifecycle_bootstrap",
         "required_tokens": (
-            "refresh_autonomous_lifecycle_bootstrap_authority",
+            "revalidate_autonomous_lifecycle_bootstrap_for_completion",
             "persist_lane_executable_payload_impl",
             "AutonomousLifecycleBootstrapRecoveryStage::PreparedDurable",
             "AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
             "delete_completed_autonomous_lifecycle_bootstrap",
             "read_autonomous_lifecycle_cursor",
-            "AutonomousLifecycleBootstrapCompletionFence::ProducerQueue",
+            "consume_autonomous_lifecycle_bootstrap_completion_fence",
         ),
         "ordered_tokens": (
             "persist_lane_executable_payload_impl",
@@ -2214,6 +2223,7 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
             "if authority.stage != AutonomousLifecycleBootstrapRecoveryStage::LiveDurable",
             "delete_completed_autonomous_lifecycle_bootstrap",
             "let cursor_read = self.read_autonomous_lifecycle_cursor",
+            "Self::consume_autonomous_lifecycle_bootstrap_completion_fence(fence)",
         ),
     },
     {

@@ -13014,7 +13014,7 @@
                 "version": 1
               },
               "native_amx_application_manifest_count": 1,
-              "native_amx_application_manifest_root": "hash:76F2F7D509F5B1FE130309915CE82DD6E4F227A549C11B6682AE3F6069DF5645#D492",
+              "native_amx_application_manifest_root": "hash:6304549F50B8C30896361C1BB2F9051D97052B36353496D14577EE33E7E87A99#CA33",
               "native_amx_application_manifest_version": 1,
               "ordinary_writes_root": "hash:1A5A5B04F6090629E915CCC7D9778B613D628129E507972005CDB065C4C09DF3#F0C7",
               "parent_state_root": "hash:006C20B42142D194F1C1D6FBC8F183684B2724F3A2261457D16328E7BF585B3B#44D4",
@@ -13056,7 +13056,7 @@
                 "leaf_hash": "hash:76F2F7D509F5B1FE130309915CE82DD6E4F227A549C11B6682AE3F6069DF5645#D492",
                 "leaf_index": 0,
                 "manifest_leaf_count": 1,
-                "manifest_root": "hash:76F2F7D509F5B1FE130309915CE82DD6E4F227A549C11B6682AE3F6069DF5645#D492",
+                "manifest_root": "hash:6304549F50B8C30896361C1BB2F9051D97052B36353496D14577EE33E7E87A99#CA33",
                 "proof": {
                   "audit_path": [],
                   "leaf_index": 0
@@ -20156,7 +20156,7 @@
                 "version": 1
               },
               "native_amx_application_manifest_count": 1,
-              "native_amx_application_manifest_root": "hash:E979E7E96459BB218FD141D0FE0EA03109649A96EA9742D19B7BFB52F6BBB95F#9758",
+              "native_amx_application_manifest_root": "hash:591E2D15CEF5E2932E7F723F7F4549B149C4AAE67AD1D66A814468D6C966C94F#46F7",
               "native_amx_application_manifest_version": 1,
               "ordinary_writes_root": "hash:1A5A5B04F6090629E915CCC7D9778B613D628129E507972005CDB065C4C09DF3#F0C7",
               "parent_state_root": "hash:006C20B42142D194F1C1D6FBC8F183684B2724F3A2261457D16328E7BF585B3B#44D4",
@@ -20198,7 +20198,7 @@
                 "leaf_hash": "hash:E979E7E96459BB218FD141D0FE0EA03109649A96EA9742D19B7BFB52F6BBB95F#9758",
                 "leaf_index": 0,
                 "manifest_leaf_count": 1,
-                "manifest_root": "hash:E979E7E96459BB218FD141D0FE0EA03109649A96EA9742D19B7BFB52F6BBB95F#9758",
+                "manifest_root": "hash:591E2D15CEF5E2932E7F723F7F4549B149C4AAE67AD1D66A814468D6C966C94F#46F7",
                 "proof": {
                   "audit_path": [],
                   "leaf_index": 0

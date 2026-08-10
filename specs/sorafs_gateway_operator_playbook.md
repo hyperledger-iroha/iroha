@@ -43,7 +43,7 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
    `sorafs.storage.native_transaction_signers`, and inject all four matching
    live providers. Storage startup requires them even when the corresponding
    new-work generation flags are disabled.
-3. Inject the runtime HSM/KMS signer adapter for the configured non-secret
+3. Inject the authenticated external software-signer adapter for the configured non-secret
    handle. The Ed25519 private key must remain non-exportable; its credentials,
    session, and PIN are runtime-only and must never be committed or written to
    TOML, signing-key files, logs, or readiness artefacts. The TOML `enabled`
@@ -108,7 +108,7 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
 - Update fixtures when governance publishes new dataset.
 - Review observability dashboards weekly, ensure alert routing functioning.
 - Reconcile the configured signer handle, public-key fingerprint, and
-  `key_version` with the approved HSM/KMS inventory after every deployment.
+  `key_version` with the approved external software-signer inventory after every deployment.
 
 ## 6. Automation & Incident Playbooks
 
@@ -155,8 +155,8 @@ Recommended automation pattern:
 
 ### 6.2 Signing-key rotation
 
-1. Create the replacement Ed25519 key inside the approved HSM/KMS without
-   exporting it, and assign a new non-secret signer handle.
+1. Create the replacement Ed25519 key inside the independently administered
+   software signer, keep it encrypted and runtime-only, and assign a new non-secret signer handle.
 2. In one controlled rollout, inject the replacement adapter and update
    `signer_handle`, `signer_public_key_hex`, `signer_revision`,
    `signer_policy_digest_hex`, and `key_version`.
@@ -166,7 +166,7 @@ Recommended automation pattern:
 4. Deploy a matching `gateway-key` and token atomically. If an overlap is
    necessary, use separately named old/new descriptors; there is no implicit
    multi-key acceptance or file/env fallback.
-5. Remove the old descriptor by its final token expiry, revoke the old HSM/KMS
+5. Remove the old descriptor by its final token expiry, revoke the old software-signing
    key, and retain only payload-free evidence: non-secret handles, public-key
    fingerprints, versions, approval, activation/expiry times, and negative
    old-key/cross-key/wrong-handle probes.

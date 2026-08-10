@@ -230,6 +230,7 @@ python3 scripts/check_taira_v2_soak_evidence.py \
   "$partial_evidence_path" \
   --source-manifest "$source_manifest_sha256" \
   --build-root "$source_bound_root" \
+  --cargo-target-dir "$CARGO_TARGET_DIR" \
   --repo-root "$REPO_ROOT"
 
 final_source_manifest_sha256="$(

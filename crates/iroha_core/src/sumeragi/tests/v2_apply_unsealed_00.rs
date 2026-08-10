@@ -151,6 +151,7 @@ struct ApplyFixture {
     custody_account: AccountId,
     treasury_account: AccountId,
     include_projection_policies: bool,
+    include_native_lane: bool,
 }
 
 fn fixture_orderbook_policy(authority: &AccountId) -> OrderbookAdmissionPolicyV1 {
@@ -204,6 +205,7 @@ fn fixture_world(
     custody_account: &AccountId,
     treasury_account: &AccountId,
     include_projection_policies: bool,
+    include_native_lane: bool,
 ) -> World {
     let reserve_asset_definition = fixture_reserve_asset_definition();
     let reserve_domain_id =
@@ -216,8 +218,18 @@ fn fixture_world(
         Some(reserve_domain_id),
     )
     .build(transaction_authority);
+    let mut fixture_domains = vec![reserve_domain];
+    if include_native_lane {
+        fixture_domains.extend((0..2).map(|index| {
+            Domain::new(
+                DomainId::try_new(format!("nativeparticipant{index}"), "independent-dataspace")
+                    .expect("valid grouped Native participant domain"),
+            )
+            .build(transaction_authority)
+        }));
+    }
     let mut world = World::with_assets(
-        [reserve_domain],
+        fixture_domains,
         [
             Account::new(transaction_authority.clone()).build(transaction_authority),
             Account::new(custody_account.clone()).build(custody_account),
@@ -408,14 +420,7 @@ impl ApplyFixture {
             roster,
             nexus_amx_context_hash: Hash::new(b"apply crash fixture Nexus/AMX"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-            da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 2 * 1024 * 1024,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 2 * 1024 * 1024,
-                max_chunk_count: 2,
-            },
+            da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
             leader_seed: [0x63; 32],
         };
         context.validate().expect("valid fixture context");
@@ -435,6 +440,7 @@ impl ApplyFixture {
             &custody_account,
             &treasury_account,
             include_projection_policies,
+            include_native_lane,
         );
         let mut state = State::new_with_chain_for_testing(
             world,
@@ -618,14 +624,15 @@ impl ApplyFixture {
             block_hash: body.hash(),
             payload_hash: Hash::new(&canonical_wire),
         };
-        let manifest = wire::PayloadManifest::derive(
+        let manifest = crate::sumeragi::v2_chunks::encode_payload(
             &context,
             round,
             subject,
-            u64::try_from(canonical_wire.len()).expect("body length"),
-            std::slice::from_ref(&canonical_wire),
+            &canonical_wire,
         )
-        .expect("fixture manifest");
+        .expect("fixture manifest")
+        .into_parts()
+        .0;
         let execution_commitment = service
             .validate_candidate(&context, &body)
             .expect("derive exact fixture execution commitment");
@@ -704,6 +711,7 @@ impl ApplyFixture {
             custody_account,
             treasury_account,
             include_projection_policies,
+            include_native_lane,
         }
     }
 
@@ -728,6 +736,7 @@ impl ApplyFixture {
             &self.custody_account,
             &self.treasury_account,
             self.include_projection_policies,
+            self.include_native_lane,
         );
         let state = Arc::new(State::new_with_chain_for_testing(
             world,
@@ -1117,14 +1126,15 @@ fn build_successor_apply_fixture_with_autonomous_payloads(
         block_hash: body.hash(),
         payload_hash: Hash::new(&canonical_wire),
     };
-    let manifest = wire::PayloadManifest::derive(
+    let manifest = crate::sumeragi::v2_chunks::encode_payload(
         &context,
         round,
         subject,
-        u64::try_from(canonical_wire.len()).expect("successor body length"),
-        std::slice::from_ref(&canonical_wire),
+        &canonical_wire,
     )
-    .expect("derive successor payload manifest");
+    .expect("derive successor payload manifest")
+    .into_parts()
+    .0;
     let execution_commitment = fixture
         .service
         .validate_candidate(&context, &body)

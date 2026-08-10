@@ -1,5 +1,19 @@
 // Runtime-provider operation, endpoint, ambiguity, and billing regressions.
 
+fn valid_governance_sign_request_payload() -> Vec<u8> {
+    encode_canonical(
+        &PurposeSignRequestWireV1 {
+            purpose: sorafs_node::GovernanceDagSigningPurposeV1::KeyTransition.wire_id(),
+            payload: sorafs_node::governance_dag_key_transition_signing_payload_v1(
+                1, 2, [0x41; 32],
+            )
+            .expect("governance key-transition signing payload"),
+        },
+        MAX_OPERATION_FRAME_BYTES_V1,
+    )
+    .expect("encode governance sign request")
+}
+
 #[test]
 fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
     let webauthn = evidence_viewer_binding(IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn);
@@ -69,7 +83,7 @@ fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
         checkpoint_store_handle: checkpoint.handle.clone(),
         checkpoint_store_revision: checkpoint.revision.expect("revision"),
         checkpoint_store_policy_digest: checkpoint.policy_digest.expect("policy digest"),
-        signer_handle: "hsm://sorafs/evidence-viewer/receipt-primary".to_owned(),
+        signer_handle: "software://sorafs/evidence-viewer/primary".to_owned(),
         signer_public_key: TEST_SIGNER_KEY,
         signature: [0x23; 64],
         revision: [0x24; 32],
@@ -199,8 +213,14 @@ fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
             receipt,
             OPERATION_EVIDENCE_VIEWER_RECEIPT_SIGN_V1,
             encode_canonical(
-                &SignRequestWireV1 {
-                    payload: vec![0x41],
+                &PurposeSignRequestWireV1 {
+                    purpose: sorafs_node::evidence_viewer::EvidenceViewerSigningPurposeV1::Receipt
+                        .wire_id(),
+                    payload: [
+                        b"sorafs.evidence-viewer.receipt-signature.v1".as_slice(),
+                        &[0x41; 32],
+                    ]
+                    .concat(),
                 },
                 MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
             )
@@ -320,7 +340,7 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
     );
 
     let exact_signer = ProviderIngestSignerBindingWireV1 {
-        runtime_handle: "pkcs11://sorafs/provider-ingest/signer-primary".to_owned(),
+        runtime_handle: "software://sorafs/provider-ingest/signer-primary".to_owned(),
         adapter_revision: 3,
         signer_policy_id: [0xA1; 32],
         signer_policy_revision: 1,
@@ -331,7 +351,7 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
     };
     let resolver = ProviderBindingWireV1 {
         slot: IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver.wire_id(),
-        handle: "hsm://sorafs/provider-ingest/resolver-primary".to_owned(),
+        handle: "resolver://sorafs/provider-ingest/primary".to_owned(),
         revision: Some(6),
         policy_digest: Some([0xB2; 32]),
         bootle_lantern_issuance_bindings: None,
@@ -1015,13 +1035,7 @@ fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() 
 
     let binding = signer_binding();
     let metadata_digest = observation(&binding).metadata_digest;
-    let payload = encode_canonical(
-        &SignRequestWireV1 {
-            payload: vec![1, 2, 3],
-        },
-        MAX_OPERATION_FRAME_BYTES_V1,
-    )
-    .expect("encode operation payload");
+    let payload = valid_governance_sign_request_payload();
     let request = make_operation_request(
         TEST_SESSION_ID,
         9,
@@ -1204,6 +1218,10 @@ fn endpoint_policy_rejects_outage_mode_owner_symlink_and_path_substitution() {
 #[test]
 fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
     let (_directory, _path, policy, listener) = bind_fake_broker();
+    let governance_payload =
+        sorafs_node::governance_dag_key_transition_signing_payload_v1(1, 2, [0x47; 32])
+            .expect("governance key-transition payload");
+    let expected_governance_payload = governance_payload.clone();
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept fake broker client");
         let handshake = read_handshake(&mut stream);
@@ -1228,10 +1246,16 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
         let sign = read_operation(&mut stream);
         assert_eq!(sign.request_id, 2);
         assert_eq!(sign.operation, OPERATION_SIGN_V1);
-        let decoded =
-            decode_canonical::<SignRequestWireV1>(&sign.payload, MAX_OPERATION_FRAME_BYTES_V1)
-                .expect("decode sign request");
-        assert_eq!(decoded.payload, b"canonical-governance-payload");
+        let decoded = decode_canonical::<PurposeSignRequestWireV1>(
+            &sign.payload,
+            MAX_OPERATION_FRAME_BYTES_V1,
+        )
+        .expect("decode purpose-separated sign request");
+        assert_eq!(
+            decoded.purpose,
+            sorafs_node::GovernanceDagSigningPurposeV1::KeyTransition.wire_id()
+        );
+        assert_eq!(decoded.payload, expected_governance_payload);
         let signature = encode_canonical(
             &SignResultWireV1 {
                 signature: [0x55; 64],
@@ -1284,8 +1308,12 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
         sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(7, TEST_POLICY_DIGEST)
     );
     assert_eq!(
-        sorafs_node::GovernanceDagRuntimeSigner::sign(&signer, b"canonical-governance-payload")
-            .expect("sign through broker"),
+        sorafs_node::GovernanceDagRuntimeSigner::sign(
+            &signer,
+            sorafs_node::GovernanceDagSigningPurposeV1::KeyTransition,
+            &governance_payload,
+        )
+        .expect("sign through broker"),
         [0x55; 64]
     );
     sorafs_node::GovernanceDagRuntimeSigner::qualification(&signer).expect("requalify signer");

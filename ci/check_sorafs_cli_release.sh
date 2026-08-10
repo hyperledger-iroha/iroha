@@ -14,7 +14,8 @@ cargo fmt --all -- --check
 
 echo "[sorafs-release] shell syntax checks"
 bash -n scripts/release_sorafs_cli.sh scripts/package_sorafs_validate_release.sh \
-  scripts/build_release_bundle.sh scripts/build_release_image.sh \
+  scripts/build_line.sh scripts/build_release_bundle.sh scripts/build_release_image.sh \
+  configs/sorafs/external_software_signer/launchd/sorafs-external-software-signer-launchd-v1 \
   python/iroha_python/scripts/release_smoke.sh \
   scripts/tests/release_manifest_signing_test.sh \
   ci/check_sorafs_reference_ffi_header.sh
@@ -30,6 +31,11 @@ python3 -m pytest -q \
   scripts/tests/check_sorafs_release_version_map_test.py \
   scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py \
   scripts/tests/build_sorafs_reference_sdk_release_canary_test.py \
+  scripts/tests/build_sorafs_foundational_prerequisite_test.py \
+  scripts/tests/check_sorafs_production_readiness_test.py \
+  scripts/tests/run_sorafs_production_readiness_test.py \
+  scripts/tests/run_sorafs_production_readiness_negative_archive_test.py \
+  scripts/tests/sorafs_l1_lane_evidence_inventory_test.py \
   scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py \
   scripts/tests/release_profile_validation_test.py \
   scripts/tests/release_manifest_signing_test.py \
@@ -38,11 +44,17 @@ python3 -m pytest -q \
   scripts/tests/publish_plan_test.py \
   scripts/tests/release_sorafs_cli_test.py \
   scripts/tests/package_sorafs_cli_candidate_test.py \
+  scripts/tests/build_release_bundle_test.py \
+  scripts/tests/build_release_image_test.py \
   scripts/tests/package_sorafs_validate_release_test.py \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_validate_release_packager_rejects_symlink_stage_entries \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_cli_release_gate_runs_helper_adversarial_tests
 scripts/tests/release_manifest_signing_test.sh
+
+echo "[sorafs-release] external software signer protocol and CLI tests"
+cargo test --locked -p irohad --lib external_software_signer
+cargo test --locked -p irohad --bin sorafs_external_software_signer
 
 echo "[sorafs-release] clippy sorafs_orchestrator (sorafs_cli)"
 cargo clippy --locked -p sorafs_orchestrator --all-targets -- -D warnings

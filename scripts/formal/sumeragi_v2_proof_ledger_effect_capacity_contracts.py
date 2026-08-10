@@ -591,6 +591,20 @@ self.finality_completion = Some(FinalityCompletion {
         effects_path,
         consume_effects,
         """
+let ownership = match self.runtime.take_effect_ownership(&effects) {
+    Ok(ownership) => ownership,
+    Err(error) => {
+        return Err(self.close(EffectExecutorError::Runtime(error), services));
+    }
+};
+""",
+        "executor must close fail-stop output while preserving the typed Runtime ownership error",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        consume_effects,
+        """
 let frontier = self
     .runtime
     .reconciliation_frontier()

@@ -118,28 +118,28 @@ fn complete_role_fixtures() -> [BindingFixture; 4] {
         binding_fixture(
             0x31,
             Algorithm::Ed25519,
-            "hsm://sorafs/proof-outcome/primary",
+            "software://sorafs/proof-outcome/primary",
             11,
             0xa1,
         ),
         binding_fixture(
             0x32,
             Algorithm::MlDsa,
-            "hsm://sorafs/repair/primary",
+            "software://sorafs/repair/primary",
             12,
             0xa2,
         ),
         binding_fixture(
             0x33,
             Algorithm::Ed25519,
-            "hsm://sorafs/reserve/primary",
+            "software://sorafs/reserve/primary",
             13,
             0xa3,
         ),
         binding_fixture(
             0x34,
             Algorithm::MlDsa,
-            "hsm://sorafs/orderbook/primary",
+            "software://sorafs/orderbook/primary",
             14,
             0xa4,
         ),
@@ -296,22 +296,22 @@ fn production_handles_reject_empty_whitespace_and_every_test_marker() {
     let valid = binding_fixture(
         0x42,
         Algorithm::Ed25519,
-        "hsm://sorafs/proof-outcome/production",
+        "software://sorafs/proof-outcome/production",
         22,
         0xb2,
     );
     for handle in [
         String::new(),
-        "hsm://sorafs/proof outcome/production".to_owned(),
-        "hsm://sorafs/é/production".to_owned(),
-        format!("hsm://sorafs/{}", "a".repeat(257)),
-        "hsm://sorafs/test/production".to_owned(),
-        "hsm://sorafs/mock/production".to_owned(),
-        "hsm://sorafs/dev/production".to_owned(),
-        "hsm://sorafs/fake/production".to_owned(),
-        "hsm://sorafs/dummy/production".to_owned(),
-        "hsm://sorafs/null/production".to_owned(),
-        "hsm://sorafs/placeholder/production".to_owned(),
+        "software://sorafs/proof outcome/production".to_owned(),
+        "software://sorafs/é/production".to_owned(),
+        format!("software://sorafs/{}", "a".repeat(257)),
+        "software://sorafs/test/production".to_owned(),
+        "software://sorafs/mock/production".to_owned(),
+        "software://sorafs/dev/production".to_owned(),
+        "software://sorafs/fake/production".to_owned(),
+        "software://sorafs/dummy/production".to_owned(),
+        "software://sorafs/null/production".to_owned(),
+        "software://sorafs/placeholder/production".to_owned(),
     ] {
         let mut binding = valid.clone();
         binding.handle.clone_from(&handle);
@@ -336,7 +336,7 @@ fn algorithm_and_public_key_are_exact_and_canonical() {
     let valid = binding_fixture(
         0x43,
         Algorithm::Ed25519,
-        "hsm://sorafs/proof-outcome/canonical",
+        "software://sorafs/proof-outcome/canonical",
         23,
         0xb3,
     );
@@ -357,7 +357,7 @@ fn algorithm_and_public_key_are_exact_and_canonical() {
     let ml_dsa = binding_fixture(
         0x44,
         Algorithm::MlDsa,
-        "hsm://sorafs/proof-outcome/ml-dsa",
+        "software://sorafs/proof-outcome/ml-dsa",
         24,
         0xb4,
     );
@@ -387,14 +387,21 @@ fn authority_must_be_canonical_i105_derived_from_the_public_key() {
     let valid = binding_fixture(
         0x45,
         Algorithm::Ed25519,
-        "hsm://sorafs/proof-outcome/authority",
+        "software://sorafs/proof-outcome/authority",
         25,
         0xb5,
     );
     for authority in [
         "alice@wonderland".to_owned(),
         format!(" {} ", valid.authority),
-        binding_fixture(0x46, Algorithm::Ed25519, "hsm://unused", 1, 0x11).authority,
+        binding_fixture(
+            0x46,
+            Algorithm::Ed25519,
+            "software://sorafs/proof-outcome/unused",
+            1,
+            0x11,
+        )
+        .authority,
     ] {
         let mut binding = valid.clone();
         binding.authority = authority;
@@ -415,7 +422,7 @@ fn qualification_revision_and_digest_are_nonzero_and_canonical() {
     let valid = binding_fixture(
         0x47,
         Algorithm::Ed25519,
-        "hsm://sorafs/proof-outcome/qualification",
+        "software://sorafs/proof-outcome/qualification",
         27,
         0xb7,
     );

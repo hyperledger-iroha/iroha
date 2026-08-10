@@ -80,7 +80,7 @@ fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
             b"native-amx-payload-hint-unknown-field",
         )),
     };
-    let mut hint_json = norito::json::to_value(hint).expect("serialize payload hint");
+    let mut hint_json = norito::json::to_value(&hint).expect("serialize payload hint");
     hint_json
         .as_object_mut()
         .expect("payload hint is an object")

@@ -106,6 +106,7 @@ struct KuraPruneSidecarRewriteProjectionV2 {
 }
 
 impl KuraPruneSidecarRewriteProjectionV2 {
+    #[cfg(test)]
     const fn none() -> Self {
         Self {
             pipeline: KuraPruneSidecarPairProjectionV2 {

@@ -47,6 +47,15 @@ def _install_sdk_source_closure_fixture(
     production = repository_root / production_relative
     production.parent.mkdir(parents=True)
     production.write_text("STATUS_HEIGHT = 1\n", encoding="utf-8")
+    native_fixture_relative = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
+    wire_fixture_relative = "fixtures/sumeragi_v2/wire_v2.tsv"
+    native_fixture = repository_root / native_fixture_relative
+    native_fixture.parent.mkdir(parents=True, exist_ok=True)
+    native_fixture.write_text('{"fixture_version":1}\n', encoding="utf-8")
+    (repository_root / wire_fixture_relative).write_text(
+        "# kind\tname\thex\texpectation\n",
+        encoding="utf-8",
+    )
 
     manifest_document = {
         "closure_roots": [
@@ -60,7 +69,11 @@ def _install_sdk_source_closure_fixture(
         "format": "iroha-sumeragi-v2-sdk-production-source-closure",
         "groups": {
             "closure-resolver": [resolver_relative, manifest_relative],
-            "diagnostics-suite": [diagnostics_harness],
+            "diagnostics-suite": [
+                diagnostics_harness,
+                native_fixture_relative,
+                wire_fixture_relative,
+            ],
             "native-suite": [native_harness],
             "production": [production_relative],
         },
@@ -196,6 +209,19 @@ def test_receipt_sdk_source_closure_binds_resolver_and_fails_on_drift(
     _install_sdk_source_closure_fixture(repository_root, vars(module))
     suite = module._NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE
     original = module._sdk_suite_source_manifest(repository_root, suite)
+    diagnostics_suite = module._SUMERAGI_SDK_DIAGNOSTICS_SOURCE_CLOSURE_SUITE
+    diagnostics_original = module._sdk_suite_source_manifest(
+        repository_root,
+        diagnostics_suite,
+    )
+
+    wire_fixture = repository_root / "fixtures/sumeragi_v2/wire_v2.tsv"
+    wire_fixture.write_bytes(wire_fixture.read_bytes() + b"# tracked TSV drift\n")
+    assert module._sdk_suite_source_manifest(repository_root, suite) == original
+    assert (
+        module._sdk_suite_source_manifest(repository_root, diagnostics_suite)
+        != diagnostics_original
+    )
 
     resolver = repository_root / module._SDK_SOURCE_CLOSURE_RESOLVER
     resolver.write_text(

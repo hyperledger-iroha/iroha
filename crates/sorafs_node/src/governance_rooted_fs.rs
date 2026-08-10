@@ -736,9 +736,7 @@ mod platform {
         path::Path,
     };
 
-    #[cfg(test)]
-    use super::FileIdentity;
-    use super::{RootedDirectory, file_identity};
+    use super::{FileIdentity, RootedDirectory, file_identity};
 
     #[cfg(target_os = "linux")]
     const O_CREATE: c_int = 0x40;
@@ -762,9 +760,9 @@ mod platform {
     const O_DIRECTORY: c_int = 0x10_0000;
     const O_READ_ONLY: c_int = 0;
     const O_READ_WRITE: c_int = 2;
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     const AT_REMOVE_DIRECTORY: c_int = 0x200;
-    #[cfg(all(test, target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     const AT_REMOVE_DIRECTORY: c_int = 0x80;
     #[cfg(target_os = "linux")]
     const RENAME_NOREPLACE: c_uint = 1;
@@ -778,7 +776,6 @@ mod platform {
     unsafe extern "C" {
         fn openat(directory: c_int, path: *const c_char, flags: c_int, ...) -> c_int;
         fn mkdirat(directory: c_int, path: *const c_char, mode: c_uint) -> c_int;
-        #[cfg(test)]
         fn unlinkat(directory: c_int, path: *const c_char, flags: c_int) -> c_int;
     }
 
@@ -1291,7 +1288,6 @@ mod platform {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn remove_open_directory(
         parent: &File,
         directory: &File,

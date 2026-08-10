@@ -176,6 +176,68 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
         for error in errors
     ), errors
 
+    support.shutil.copy2(
+        support.ROOT_DIR
+        / "crates/iroha_core/src/sumeragi/tests/"
+        "v2_apply_unsealed_01c_historical_recovery.rs",
+        path,
+    )
+    kura_path = tmp_path / "crates/iroha_core/src/kura.rs"
+    transition_anchor = (
+        "fn validate_native_amx_prepublication_transition_locked("
+    )
+    support.replace_once_after(
+        kura_path,
+        transition_anchor,
+        "                    );\n"
+        "                let durable_receipt = self",
+        "                    )\n"
+        "                    .ok_or_else(|| todo!())?;\n"
+        "                let durable_receipt = self",
+    )
+    errors = support.validate_native_prepublication_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "must permit either stable member to be absent" in error
+        for error in errors
+    ), errors
+
+    support.shutil.copy2(
+        support.ROOT_DIR / "crates/iroha_core/src/kura.rs", kura_path
+    )
+    support.replace_once_after(
+        kura_path,
+        transition_anchor,
+        "                    || durable_receipt",
+        "                    && durable_receipt",
+    )
+    errors = support.validate_native_prepublication_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "must reject either present stable-member mismatch" in error
+        for error in errors
+    ), errors
+
+    support.shutil.copy2(
+        support.ROOT_DIR / "crates/iroha_core/src/kura.rs", kura_path
+    )
+    support.replace_once_after(
+        kura_path,
+        "fn preflight_native_amx_incoming_artifacts_locked(",
+        "                && inventory.temporary(*kind).is_none()",
+        "                || inventory.temporary(*kind).is_none()",
+    )
+    errors = support.validate_native_prepublication_fixture(
+        tmp_path, module, models
+    )
+    assert any(
+        "must reserve bytes exactly when both the stable and temporary member "
+        "are absent" in error
+        for error in errors
+    ), errors
+
 
 @pytest.mark.parametrize(
     ("relative", "anchor", "old", "new", "symbol"),

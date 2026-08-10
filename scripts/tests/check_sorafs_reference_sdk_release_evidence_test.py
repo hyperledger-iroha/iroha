@@ -57,8 +57,10 @@ PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX = (
 PROVENANCE_VERIFICATION_KEY_FINGERPRINT_HEX = hashlib.sha256(
     bytes.fromhex(PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX)
 ).hexdigest()
-TOPOLOGY_SIGNER_IDENTITY = "sorafs-sf11-topology-qualification-software"
+TOPOLOGY_SIGNER_SERVICE_ID = "sorafs-sf11-topology-signer-a"
+TOPOLOGY_SIGNER_ADMINISTRATOR_ID = "sorafs-sf11-topology-admin-b"
 TOPOLOGY_SIGNER_KEY_REVISION = 7
+TOPOLOGY_SIGNER_POLICY_REVISION = 9
 TOPOLOGY_SIGNER_POLICY_DIGEST_HEX = hashlib.sha256(
     b"sorafs-sf11-topology-signer-policy-v1"
 ).hexdigest()
@@ -446,8 +448,11 @@ def write_topology_qualification(
         "deployment": {
             "deployment_id": deployment_id,
             "environment": environment,
+            "network": "taira",
+            "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
+            "chain_discriminant": 369,
         },
-        "validator_count": 4,
+        "validator_count": 4, "validator_ids": ["taira-validator-1", "taira-validator-2", "taira-validator-3", "taira-validator-4"],
         "storage_provider_count": 2,
         "gateway_count": 2,
         "governance_dag_instance_count": 2,
@@ -469,13 +474,16 @@ def write_topology_qualification(
     envelope = {
         "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
         **binding,
-        "signer_identity": TOPOLOGY_SIGNER_IDENTITY,
+        "signer_authentication_kind": "external-ed25519",
         "signer_backend": "software",
+        "signer_service_id": TOPOLOGY_SIGNER_SERVICE_ID,
+        "signer_administrator_id": TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
         "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,
-        "signer_key_fingerprint_hex": hashlib.sha256(
+        "signer_policy_revision": TOPOLOGY_SIGNER_POLICY_REVISION,
+        "signer_public_key_fingerprint_sha256": hashlib.sha256(
             TOPOLOGY_VERIFICATION_PUBLIC_KEY
         ).hexdigest(),
-        "signer_policy_digest_hex": TOPOLOGY_SIGNER_POLICY_DIGEST_HEX,
+        "signer_policy_digest_sha256": TOPOLOGY_SIGNER_POLICY_DIGEST_HEX,
         "reviewed_at_unix": reviewed_at_unix,
         "signature_algorithm": "ed25519",
         "signature_hex": "00" * 64,
@@ -512,12 +520,20 @@ def topology_cli_args(
             TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX,
         ),
         (
-            "--topology-qualification-signer-identity",
-            TOPOLOGY_SIGNER_IDENTITY,
+            "--topology-qualification-signer-service-id",
+            TOPOLOGY_SIGNER_SERVICE_ID,
+        ),
+        (
+            "--topology-qualification-signer-administrator-id",
+            TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
         ),
         (
             "--topology-qualification-signer-key-revision",
             str(TOPOLOGY_SIGNER_KEY_REVISION),
+        ),
+        (
+            "--topology-qualification-signer-policy-revision",
+            str(TOPOLOGY_SIGNER_POLICY_REVISION),
         ),
         (
             "--topology-qualification-signer-policy-digest-hex",
@@ -699,8 +715,10 @@ def test_release_lane_rejects_mismatched_topology_context(tmp_path: Path) -> Non
     [
         "--topology-qualification-envelope",
         "--topology-qualification-verification-public-key-hex",
-        "--topology-qualification-signer-identity",
+        "--topology-qualification-signer-service-id",
+        "--topology-qualification-signer-administrator-id",
         "--topology-qualification-signer-key-revision",
+        "--topology-qualification-signer-policy-revision",
         "--topology-qualification-signer-policy-digest-hex",
     ],
 )
@@ -873,22 +891,32 @@ def test_release_lane_rejects_stale_signed_topology_review(tmp_path: Path) -> No
             public_key_from_seed(
                 hashlib.sha256(b"substituted-sf11-topology-key").digest()
             ).hex(),
-            "signer_key_fingerprint_hex must match the trusted public key",
+            "signer public-key fingerprint must match the trusted public key",
         ),
         (
-            "--topology-qualification-signer-identity",
-            "substituted-sf11-topology-signer",
-            "signer_identity must match the trusted signer",
+            "--topology-qualification-signer-service-id",
+            "substituted-sf11-topology-service",
+            "signer_service_id must match the trusted external software signer",
+        ),
+        (
+            "--topology-qualification-signer-administrator-id",
+            "substituted-sf11-topology-admin",
+            "signer_administrator_id must match the trusted external software signer",
         ),
         (
             "--topology-qualification-signer-key-revision",
             str(TOPOLOGY_SIGNER_KEY_REVISION + 1),
-            "signer_key_revision must match the trusted revision",
+            "signer_key_revision must match the trusted external software signer",
+        ),
+        (
+            "--topology-qualification-signer-policy-revision",
+            str(TOPOLOGY_SIGNER_POLICY_REVISION + 1),
+            "signer_policy_revision must match the trusted external software signer",
         ),
         (
             "--topology-qualification-signer-policy-digest-hex",
             hashlib.sha256(b"substituted-sf11-topology-policy").hexdigest(),
-            "signer_policy_digest_hex must match the trusted signer policy",
+            "signer_policy_digest_sha256 must match the trusted external software signer",
         ),
     ],
 )
@@ -1096,10 +1124,14 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
             f"{topology_envelope_path(topology)}\n"
             "--topology-qualification-verification-public-key-hex "
             f"{TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX}\n"
-            "--topology-qualification-signer-identity "
-            f"{TOPOLOGY_SIGNER_IDENTITY}\n"
+            "--topology-qualification-signer-service-id "
+            f"{TOPOLOGY_SIGNER_SERVICE_ID}\n"
+            "--topology-qualification-signer-administrator-id "
+            f"{TOPOLOGY_SIGNER_ADMINISTRATOR_ID}\n"
             "--topology-qualification-signer-key-revision "
             f"{TOPOLOGY_SIGNER_KEY_REVISION}\n"
+            "--topology-qualification-signer-policy-revision "
+            f"{TOPOLOGY_SIGNER_POLICY_REVISION}\n"
             "--topology-qualification-signer-policy-digest-hex "
             f"{TOPOLOGY_SIGNER_POLICY_DIGEST_HEX}\n"
             "--max-topology-qualification-review-age-secs "

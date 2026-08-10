@@ -1242,7 +1242,7 @@ pub mod sorafs {
         /// authority bundle and its reviewed digest are configured.
         pub const MODERATION_SCREENING_ENABLED: bool = false;
         /// Proof-of-personhood credential services require explicit governed
-        /// policy plus runtime-injected HSM/KMS/authentication dependencies.
+        /// policy plus runtime-injected signer/KMS/authentication dependencies.
         pub mod pop_credentials {
             use std::path::PathBuf;
 
@@ -1470,7 +1470,7 @@ pub mod sorafs {
             pub const SOURCE_OPERATION_TIMEOUT_MS: u64 = 5 * 60_000;
             /// Durable source-lease renewal cadence.
             pub const SOURCE_LEASE_RENEW_INTERVAL_MS: u64 = 15_000;
-            /// Timeout for completion payload construction and HSM/KMS signing.
+            /// Timeout for completion payload construction and external signing.
             pub const SIGNER_TIMEOUT_MS: u64 = 30_000;
             /// Timeout for transaction preflight, submission, and observation.
             pub const INGRESS_TIMEOUT_MS: u64 = 30_000;

@@ -61,7 +61,7 @@ pub enum IrohaRuntimeProviderSlotV1 {
     FencedPrivacyPublisher = 5,
     /// Authenticated authoritative-head reader paired with the fused writer.
     FencedPrivacyHeadReader = 6,
-    /// HSM/KMS signer used by the embedded Governance DAG publisher.
+    /// Authenticated external signer used by the embedded Governance DAG publisher.
     GovernanceDagSigner = 7,
     /// Authenticator used for Governance DAG Kubo/IPFS requests.
     GovernanceDagIpfsAuthenticator = 8,
@@ -69,7 +69,7 @@ pub enum IrohaRuntimeProviderSlotV1 {
     GovernanceDagHeadAuthenticator = 9,
     /// Sealed monotonic Governance DAG service and local-producer state store.
     GovernanceDagCheckpointStore = 10,
-    /// HSM/KMS signer used for `SoraFS` stream-token issuance.
+    /// Authenticated external signer used for `SoraFS` stream-token issuance.
     StreamTokenSigner = 11,
     /// One appeal-finance transaction signer.
     AppealFinanceTransactionSigner = 12,
@@ -121,7 +121,7 @@ pub enum IrohaRuntimeProviderSlotV1 {
     BillingFinalizedQuery = 35,
     /// Billing consensus journal verifier.
     BillingJournalVerifier = 36,
-    /// Billing statement HSM/KMS signer.
+    /// Authenticated external billing statement signer.
     BillingStatementSigner = 37,
     /// Billing immutable statement publisher.
     BillingStatementPublisher = 38,
@@ -662,7 +662,7 @@ impl IrohaRuntimeProviderBindingV1 {
             && !pop.issuer_id.chars().any(char::is_control);
         if pop.issuer_policy_digest == [0; 32]
             || !canonical_issuer_id
-            || !is_production_runtime_handle(&pop.issuer_hsm_key_id)
+            || !is_production_runtime_handle(&pop.issuer_signer_handle)
             || !is_production_runtime_handle(&pop.enrollment_recipient_key_id)
             || !is_production_runtime_handle(&pop.wallet_recipient_key_id)
             || !is_production_runtime_handle(&pop.wallet_wrapping_key_id)
@@ -682,7 +682,7 @@ impl IrohaRuntimeProviderBindingV1 {
         projected.pop_credential_runtime_binding = Some(PopCredentialRuntimeBindingV1 {
             issuer_policy_digest: pop.issuer_policy_digest,
             issuer_id: pop.issuer_id.clone(),
-            issuer_hsm_key_id: pop.issuer_hsm_key_id.clone(),
+            issuer_signer_handle: pop.issuer_signer_handle.clone(),
             issuer_public_key: pop.issuer_public_key,
             enrollment_recipient_key_id: pop.enrollment_recipient_key_id.clone(),
             enrollment_recipient_public_key_digest: pop.enrollment_recipient_public_key_digest,
@@ -1993,6 +1993,8 @@ impl IrohaRuntimeProviderBindingsV1 {
     }
 }
 
+include!("runtime_provider_registry/software_signer_partition.rs");
+
 /// Payload-free failure returned by the deployment registry or launcher.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -2403,7 +2405,7 @@ fn qualify_governance_dag_signer_dependency(
     OsRng
         .try_fill_bytes(&mut nonce)
         .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::Unavailable)?;
-    let challenge = governance_dag_signer_startup_challenge_v1(
+    let challenge_digest = governance_dag_signer_startup_challenge_v1(
         nonce,
         bindings.chain_id(),
         expected.handle(),
@@ -2412,7 +2414,13 @@ fn qualify_governance_dag_signer_dependency(
         expected_publisher_peer_id,
         expected_public_key,
     )?;
-    let signature_result = signer.sign(&challenge);
+    let challenge =
+        sorafs_node::governance_dag_key_transition_signing_payload_v1(1, 2, challenge_digest)
+            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+    let signature_result = signer.sign(
+        sorafs_node::GovernanceDagSigningPurposeV1::KeyTransition,
+        &challenge,
+    );
     let second = observe()?;
     if second != first {
         return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
@@ -3446,7 +3454,7 @@ mod tests {
     const GOVERNANCE_IPFS_ENDPOINT: &str = "https://governance-ingress.invalid/ipfs/";
     const GOVERNANCE_HEAD_ENDPOINT: &str = "https://governance-ingress.invalid/head";
     const GOVERNANCE_CHECKPOINT_HANDLE: &str = "kms://governance/checkpoint-primary";
-    const GOVERNANCE_SIGNER_HANDLE: &str = "hsm://governance/producer-signer-primary";
+    const GOVERNANCE_SIGNER_HANDLE: &str = "software://sorafs/governance-dag/primary";
     const GOVERNANCE_PUBLISHER_PEER_ID: &str = "12D3KooWGovernanceProducerPrimary";
     const GOVERNANCE_QUALIFICATION: sorafs_node::GovernanceDagRuntimeProviderQualificationV1 =
         sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(7, [0x71; 32]);
@@ -3597,7 +3605,7 @@ mod tests {
         binding: sorafs_node::PorFinalizedReplayArchiveBindingV1,
     ) -> iroha_config::parameters::actual::SorafsPorReplayArchive {
         iroha_config::parameters::actual::SorafsPorReplayArchive {
-            handle: "hsm://sorafs/por-replay-archive/primary".to_owned(),
+            handle: "object-lock://sorafs/por-replay-archive/primary".to_owned(),
             archive_id: binding.archive_id,
             revision: binding.revision,
             policy_digest: binding.policy_digest,
@@ -3634,7 +3642,7 @@ mod tests {
     impl PorReplayArchive {
         fn exact(binding: sorafs_node::PorFinalizedReplayArchiveBindingV1) -> Self {
             Self {
-                handle: "hsm://sorafs/por-replay-archive/primary",
+                handle: "object-lock://sorafs/por-replay-archive/primary",
                 first_binding: binding,
                 later_binding: None,
                 binding_calls: AtomicUsize::new(0),
@@ -3760,7 +3768,7 @@ mod tests {
         let key_pair =
             KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519).expect("test key");
         let configured = iroha_config::parameters::actual::SoracloudRuntimeMutationSignerBinding {
-            handle: "hsm://soracloud/runtime-primary".to_owned(),
+            handle: "software://sorafs/ai/runtime-primary".to_owned(),
             authority: iroha_data_model::account::AccountId::new(key_pair.public_key().clone()),
             algorithm: Algorithm::Ed25519,
             public_key: key_pair.public_key().clone(),
@@ -3787,7 +3795,7 @@ mod tests {
         assert!(!exact.qualification().test_only());
 
         let mut test_marked = configured;
-        test_marked.handle = "hsm://soracloud/test".to_owned();
+        test_marked.handle = "software://sorafs/ai/test".to_owned();
         assert_eq!(
             IrohaRuntimeProviderBindingV1::try_new_soracloud_runtime_signer(&test_marked),
             Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
@@ -3951,7 +3959,7 @@ mod tests {
             wallet_state_dir: std::path::PathBuf::from("/runtime/pop/wallet"),
             issuer_policy_digest: [0x92; 32],
             issuer_id: "pop-issuer-production-primary".to_owned(),
-            issuer_hsm_key_id: "pkcs11:pop/issuer:primary".to_owned(),
+            issuer_signer_handle: "software://sorafs/pop-credentials/primary".to_owned(),
             issuer_public_key,
             enrollment_recipient_key_id: "kms:pop/enrollment:primary".to_owned(),
             enrollment_recipient_public_key_digest: [0x94; 32],
@@ -3994,7 +4002,7 @@ mod tests {
             .expect("exact PoP public metadata");
         assert_eq!(exact.issuer_policy_digest, [0x92; 32]);
         assert_eq!(exact.issuer_id, "pop-issuer-production-primary");
-        assert_eq!(exact.issuer_hsm_key_id, "pkcs11:pop/issuer:primary");
+        assert_eq!(exact.issuer_signer_handle, config.issuer_signer_handle);
         assert_eq!(exact.issuer_public_key, config.issuer_public_key);
         assert_eq!(
             exact.enrollment_recipient_key_id,
@@ -4021,7 +4029,7 @@ mod tests {
             },
             {
                 let mut value = config.clone();
-                value.issuer_hsm_key_id = "pkcs11:pop/test".to_owned();
+                value.issuer_signer_handle = "software://sorafs/pop-credentials/test".into();
                 value
             },
             {
@@ -4092,7 +4100,7 @@ mod tests {
         );
         assert_eq!(
             projected.handle(),
-            "hsm://sorafs/por-replay-archive/primary"
+            "object-lock://sorafs/por-replay-archive/primary"
         );
         assert_eq!(projected.revision(), Some(binding.revision));
         assert_eq!(projected.policy_digest(), Some(binding.policy_digest));
@@ -4191,7 +4199,7 @@ mod tests {
         ));
 
         let mut test_marked = PorReplayArchive::exact(binding);
-        test_marked.handle = "hsm://sorafs/por-replay-archive/test-provider";
+        test_marked.handle = "object-lock://sorafs/por-replay-archive/test-provider";
         assert!(matches!(
             resolve_por_archive(&requested, test_marked),
             Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected)
@@ -4445,66 +4453,7 @@ mod tests {
         }
     }
 
-    impl sorafs_node::GovernanceDagRuntimeSigner for GovernanceSigner {
-        fn handle(&self) -> &str {
-            let call = self.handle_calls.fetch_add(1, Ordering::Relaxed);
-            if call == 0 {
-                self.handle
-            } else {
-                self.later_handle.unwrap_or(self.handle)
-            }
-        }
-
-        fn qualification(
-            &self,
-        ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
-            let call = self.qualification_calls.fetch_add(1, Ordering::Relaxed);
-            Ok(if call == 0 {
-                self.first_qualification
-            } else {
-                self.later_qualification.unwrap_or(self.first_qualification)
-            })
-        }
-
-        fn publisher_peer_id(&self) -> &[u8] {
-            let call = self.publisher_peer_id_calls.fetch_add(1, Ordering::Relaxed);
-            if call == 0 {
-                &self.publisher_peer_id
-            } else {
-                self.later_publisher_peer_id
-                    .as_deref()
-                    .unwrap_or(&self.publisher_peer_id)
-            }
-        }
-
-        fn public_key(&self) -> [u8; 32] {
-            let first = self
-                .key_pair
-                .public_key()
-                .to_bytes()
-                .1
-                .try_into()
-                .expect("Ed25519 public key has 32 bytes");
-            let call = self.public_key_calls.fetch_add(1, Ordering::Relaxed);
-            if call == 0 {
-                first
-            } else {
-                self.later_public_key.unwrap_or(first)
-            }
-        }
-
-        fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
-            if self.sign_error {
-                return Err("redacted Governance DAG signing failure".to_owned());
-            }
-            let key_pair = self.signing_key_pair.as_ref().unwrap_or(&self.key_pair);
-            iroha_crypto::Signature::try_new(key_pair.private_key(), payload)
-                .map_err(|_| "redacted Governance DAG signing failure".to_owned())?
-                .payload()
-                .try_into()
-                .map_err(|_| "redacted Governance DAG signature width failure".to_owned())
-        }
-    }
+    include!("runtime_provider_registry/governance_signer_test_impl.rs");
 
     fn governance_auth_keypair(handle: &str) -> KeyPair {
         let seed = if handle == GOVERNANCE_IPFS_HANDLE {
@@ -5220,7 +5169,7 @@ mod tests {
     define_explicit_test_signer!(
         ProofOutcomeTestSigner,
         ProofOutcome,
-        "hsm://registry/proof-outcome/primary",
+        "software://sorafs/proof-outcome/primary",
         0x31,
         SoraFsProofOutcomeTransactionSigner,
         SoraFsProofOutcomeSigningError
@@ -5228,7 +5177,7 @@ mod tests {
     define_explicit_test_signer!(
         RepairTestSigner,
         Repair,
-        "hsm://registry/repair/primary",
+        "software://sorafs/repair/primary",
         0x32,
         SoraFsRepairTransactionSigner,
         SoraFsRepairTransactionSigningError
@@ -5236,7 +5185,7 @@ mod tests {
     define_explicit_test_signer!(
         ReserveTestSigner,
         Reserve,
-        "hsm://registry/reserve/primary",
+        "software://sorafs/reserve/primary",
         0x33,
         SoraFsReserveTransactionSigner,
         SoraFsReserveTransactionSigningError
@@ -5244,7 +5193,7 @@ mod tests {
     define_explicit_test_signer!(
         OrderbookTestSigner,
         Orderbook,
-        "hsm://registry/orderbook/primary",
+        "software://sorafs/orderbook/primary",
         0x34,
         SoraFsOrderbookTransactionSigner,
         SoraFsOrderbookTransactionSigningError
@@ -5365,7 +5314,7 @@ mod tests {
             .expect("Ed25519 public key width");
         let tokens = &mut config.torii.sorafs_storage.stream_tokens;
         tokens.enabled = true;
-        tokens.signer_handle = Some("pkcs11://sorafs/stream-token/signer-primary".to_owned());
+        tokens.signer_handle = Some("software://sorafs/stream-token/primary".to_owned());
         tokens.signer_public_key = Some(signer_public_key);
         tokens.signer_revision = Some(3);
         tokens.signer_policy_digest = Some([0x82; 32]);
@@ -5447,7 +5396,7 @@ mod tests {
         let appeal = &mut config.torii.sorafs_appeal_finance_settlement;
         appeal.submitter_signers = vec![
             SorafsAppealFinanceSignerBinding {
-                handle: "pkcs11://sorafs/appeal-finance/signer-a".to_owned(),
+                handle: "software://sorafs/appeal-finance/signer-a".to_owned(),
                 authority: iroha_data_model::account::AccountId::new(active.public_key().clone()),
                 public_key: active.public_key().clone(),
                 revision: 7,
@@ -5456,7 +5405,7 @@ mod tests {
                 revoked_at_block_height: Some(10),
             },
             SorafsAppealFinanceSignerBinding {
-                handle: "pkcs11://sorafs/appeal-finance/signer-b".to_owned(),
+                handle: "software://sorafs/appeal-finance/signer-b".to_owned(),
                 authority: iroha_data_model::account::AccountId::new(rotated.public_key().clone()),
                 public_key: rotated.public_key().clone(),
                 revision: 8,
@@ -5486,13 +5435,13 @@ mod tests {
         config.torii.sorafs_por.potr_runtime =
             Some(iroha_config::parameters::actual::SorafsPotrRuntimeBinding {
                 gateway_signer: iroha_config::parameters::actual::SorafsPotrRuntimeSignerBinding {
-                    handle: "pkcs11://sorafs/potr/gateway-primary".to_owned(),
+                    handle: "software://sorafs/potr/gateway-primary".to_owned(),
                     signer_id: [0x11; 32],
                     revision: 3,
                     policy_digest: [0x22; 32],
                 },
                 provider_signer: iroha_config::parameters::actual::SorafsPotrRuntimeSignerBinding {
-                    handle: "kms://sorafs/potr/provider-primary".to_owned(),
+                    handle: "software://sorafs/potr/provider-primary".to_owned(),
                     signer_id: [0x33; 32],
                     revision: 7,
                     policy_digest: [0x44; 32],
@@ -5533,7 +5482,7 @@ mod tests {
                 maintenance_authority: iroha_data_model::account::AccountId::new(
                     maintenance_key.public_key().clone(),
                 ),
-                transaction_signer_handle: "hsm://sorafs/moderation/signer-primary".to_owned(),
+                transaction_signer_handle: "software://sorafs/moderation/primary".to_owned(),
                 transaction_signer_revision: 8,
                 transaction_signer_policy_digest: [0xC8; 32],
                 strict_ingress_handle: iroha_torii::sorafs::moderation_runtime::
@@ -5748,11 +5697,11 @@ mod tests {
                     "network://sorafs/provider-ingest/source-primary".to_owned(),
                 authenticated_source_fetch_revision: 5,
                 authenticated_source_fetch_policy_digest: [0xB1; 32],
-                completion_signer_resolver_handle: "hsm://sorafs/provider-ingest/resolver-primary"
+                completion_signer_resolver_handle: "resolver://sorafs/provider-ingest/primary"
                     .to_owned(),
                 completion_signer_resolver_revision: 6,
                 completion_signer_resolver_policy_digest: [0xB2; 32],
-                completion_signer_handle: "pkcs11://sorafs/provider-ingest/signer-primary"
+                completion_signer_handle: "software://sorafs/provider-ingest/signer-primary"
                     .to_owned(),
                 completion_signer_adapter_revision: 3,
                 completion_signer_policy: sorafs_node::ProviderIngestCompletionSignerPolicyV1 {
@@ -5838,7 +5787,7 @@ mod tests {
                     "queue://sorafs/reputation/journal-primary".to_owned(),
                 journal_transaction_submitter_revision: 11,
                 journal_transaction_submitter_policy_digest: [0x61; 32],
-                threshold_signer_handle: "hsm://sorafs/reputation/threshold-primary".to_owned(),
+                threshold_signer_handle: "software://sorafs/reputation/primary".to_owned(),
                 threshold_signer_revision: 12,
                 threshold_signer_policy_digest: [0x62; 32],
                 governance_dag_handle: "dag://sorafs/reputation/publisher-primary".to_owned(),
@@ -5902,7 +5851,7 @@ mod tests {
                 compaction_archive_public_key: evidence_archive_public_key(),
                 compaction_interval: Duration::from_secs(60),
                 compaction_max_records: 256,
-                receipt_signer_handle: "hsm://sorafs/evidence-viewer/receipts-primary".to_owned(),
+                receipt_signer_handle: "software://sorafs/evidence-viewer/primary".to_owned(),
                 receipt_signer_revision: 14,
                 receipt_signer_policy_digest: [0xA4; 32],
                 receipt_signer_public_key: evidence_archive_public_key(),
@@ -5972,7 +5921,7 @@ mod tests {
             .expect("Soracloud runtime signer key");
         native_archive_cloud.soracloud_runtime.submission.signer = Some(
             iroha_config::parameters::actual::SoracloudRuntimeMutationSignerBinding {
-                handle: "hsm://soracloud/runtime-primary".to_owned(),
+                handle: "software://sorafs/ai/runtime-primary".to_owned(),
                 authority: iroha_data_model::account::AccountId::new(
                     cloud_signer.public_key().clone(),
                 ),

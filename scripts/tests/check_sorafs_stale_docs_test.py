@@ -86,13 +86,13 @@ def test_fixture_readmes_do_not_claim_native_or_provider_qualification() -> None
     assert "exercise chunk scheduling end-to-end" not in provider
     assert (
         "These fixtures do not provide or qualify authenticated multi-provider "
-        "transport, a governance-aware HSM/KMS completion signer, a sealed-CAS "
+        "transport, a governance-aware external software completion signer, a sealed-CAS "
         "retention backend, or four-validator deployment evidence."
         in provider
     )
     assert (
         "It is not evidence of clean ABI-21 builds for all five native release "
-        "targets, skip-free SDK parity, published packages, external-HSM signing, "
+        "targets, skip-free SDK parity, published packages, external software signing, "
         "a qualified provider deployment, or L1/L2 promotion."
         in cookbook
     )

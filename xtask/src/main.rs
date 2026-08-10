@@ -10575,7 +10575,7 @@ fn verify_openapi_manifest(
         }
         None => {
             return Err(
-                "manifest missing signature; emit a deterministic --signing-payload, sign it with the release HSM, and provide --signature-envelope <path>"
+                "manifest missing signature; emit a deterministic --signing-payload, sign it with the external software signer, and provide --signature-envelope <path>"
                     .into(),
             );
         }
@@ -15083,7 +15083,7 @@ fn print_usage() {
         "  cargo xtask openapi [--output <path>|--output-root <dir>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
     );
     eprintln!(
-        "    Generate the Torii OpenAPI spec from a live Torii router. --output-root binds torii.json and manifest.json to one staging-safe canonical directory. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the HSM, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
+        "    Generate the Torii OpenAPI spec from a live Torii router. --output-root binds torii.json and manifest.json to one staging-safe canonical directory. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the external software signer, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
     );
     eprintln!(
         "  cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]"

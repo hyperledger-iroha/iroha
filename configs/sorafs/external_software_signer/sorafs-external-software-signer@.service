@@ -1,0 +1,47 @@
+[Unit]
+Description=SoraFS external software signer (%i)
+After=local-fs.target
+ConditionPathIsReadWrite=/var/lib/sorafs-signers/%i
+
+[Service]
+Type=simple
+User=sorafs-signer-%i
+Group=sorafs-signer-%i
+RuntimeDirectory=sorafs-signers/%i
+RuntimeDirectoryMode=0711
+StateDirectory=sorafs-signers/%i
+StateDirectoryMode=0700
+LoadCredentialEncrypted=wrapping-key
+ExecStart=/usr/bin/sorafs_external_software_signer serve --state-directory /var/lib/sorafs-signers/%i --binding /etc/sorafs/signers/%i.binding.norito --request-socket /run/sorafs-signers/%i/request.sock --administrator-socket /run/sorafs-signers/%i/administrator.sock --systemd-credential wrapping-key
+Restart=on-failure
+RestartSec=2s
+UMask=0077
+LimitCORE=0
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths=/etc/sorafs/signers
+ReadWritePaths=/var/lib/sorafs-signers/%i /run/sorafs-signers/%i
+
+[Install]
+WantedBy=multi-user.target

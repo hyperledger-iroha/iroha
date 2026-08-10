@@ -18,13 +18,15 @@ mod kagemusha_v4_topup_provenance_tests {
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
         let ordinary_writes_root = Hash::new([seed, 3]);
         let topup_anchor_root = Hash::new([seed, 4]);
-        ExecutionCommitment::new(
+        let executed_block_wire = [seed, 5];
+        ExecutionCommitment::new_without_merge_carrier(
             Hash::new([seed, 1]),
             ExecutionCommitment::topup_post_state_root(1, ordinary_writes_root, topup_anchor_root),
             ordinary_writes_root,
             Some(topup_anchor_root),
             1,
-            Hash::new([seed, 5]),
+            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64"),
+            Hash::new(executed_block_wire),
         )
         .expect("test execution commitment")
     }

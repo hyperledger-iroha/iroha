@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import plistlib
 import subprocess
 from pathlib import Path
 
@@ -16,6 +17,101 @@ except ModuleNotFoundError:
 ROOT = Path(__file__).resolve().parents[2]
 TAIRA_DIR = ROOT / "configs" / "soranexus" / "taira"
 AUTHORITY_FINALIZER = ROOT / "scripts" / "finalize_taira_rollout_authority.py"
+
+
+def test_taira_packages_exact_native_software_signers_and_separates_promotion() -> None:
+    builder = (TAIRA_DIR / "build_taira_rollout_bundle.sh").read_text(
+        encoding="utf-8"
+    )
+    workflow = (
+        ROOT / ".github" / "workflows" / "publish_taira_validator.yml"
+    ).read_text(encoding="utf-8")
+    signer_root = ROOT / "configs" / "sorafs" / "external_software_signer"
+    docs = (signer_root / "README.md").read_text(encoding="utf-8")
+
+    for source in (builder, workflow):
+        assert "sorafs_external_software_signer" in source
+        assert "libexec/iroha-runtime-provider-broker-v1" in source
+        assert 'cmp "$stage/bin/sorafs_external_software_signer"' in source or (
+            'cmp "${bundle_dir}/bin/${SOFTWARE_SIGNER_BIN}"' in source
+        )
+        assert "sorafs_external_software_signer\" --help" in source or (
+            '${SOFTWARE_SIGNER_BIN}" --help' in source
+        )
+    assert '"backend": "software"' in builder
+    assert '"promotion_requires_separate_l2_host": True' in builder
+    assert "Promotion uses the same supported binary and receipt protocol" in docs
+    assert "separately administered L2 promotion host" in docs
+
+    launchd = signer_root / "launchd"
+    native_roles = {"proof-outcome", "repair", "reserve", "orderbook"}
+    typed_roles = {
+        "governance-dag",
+        "potr-gateway",
+        "potr-provider",
+        "billing",
+        "evidence-viewer",
+        "stream-token",
+        "pop-credentials",
+    }
+    plists = sorted(launchd.glob("org.hyperledger.iroha.sorafs-signer-*.plist"))
+    discovered_roles = {
+        path.stem.removeprefix("org.hyperledger.iroha.sorafs-signer-")
+        for path in plists
+    }
+    assert discovered_roles == native_roles | typed_roles
+    launcher = (launchd / "sorafs-external-software-signer-launchd-v1").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "proof-outcome|repair|reserve|orderbook|governance-dag|potr-gateway|"
+        "potr-provider|billing|evidence-viewer|stream-token|pop-credentials"
+        in launcher
+    )
+    assert "promotion" not in launcher
+    assert "exec 3<&0" in launcher
+    assert "--wrapping-key-fd 3" in launcher
+    for path in plists:
+        role = path.stem.removeprefix("org.hyperledger.iroha.sorafs-signer-")
+        value = plistlib.loads(path.read_bytes())
+        assert value["ProgramArguments"] == [
+            "/usr/local/libexec/sorafs-external-software-signer-launchd-v1",
+            role,
+        ]
+        assert value["StandardInPath"] == (
+            f"/private/var/run/iroha-signer-credentials/{role}.wrapping-key"
+        )
+        assert value["SoftResourceLimits"]["Core"] == 0
+        assert value["HardResourceLimits"]["Core"] == 0
+        assert value["UserName"] == value["GroupName"] == f"sorafs-signer-{role}"
+
+    assert all(f'                    "{role}",' in builder for role in native_roles)
+    assert all(f'                    "{role}",' not in builder for role in typed_roles)
+    assert "none of the seven typed roles is auto-launched on a validator" in docs
+    assert "ExternalSoftwareSignerPopRegistryV1" in docs
+
+
+def test_signer_release_policy_excludes_windows_without_false_smoke() -> None:
+    policy = (
+        ROOT
+        / "configs/sorafs/external_software_signer/WINDOWS-UNSUPPORTED.md"
+    ).read_text(encoding="utf-8")
+    release_bundle = (ROOT / "scripts/build_release_bundle.sh").read_text(
+        encoding="utf-8"
+    )
+    cli_workflow = (
+        ROOT / ".github/workflows/sorafs-cli-release.yml"
+    ).read_text(encoding="utf-8")
+    candidate = (ROOT / "scripts/package_sorafs_cli_candidate.py").read_text(
+        encoding="utf-8"
+    )
+    assert "unsupported on Windows" in policy
+    assert 'signer_support="unsupported-windows"' in release_bundle
+    assert 'if [[ "$os_tag" != "win" ]]' in release_bundle
+    assert 'if [[ "$target" == *-windows-* ]]' in cli_workflow
+    assert "WINDOWS-UNSUPPORTED-EXTERNAL-SOFTWARE-SIGNER.md" in cli_workflow
+    assert 'if not target.endswith("windows-msvc")' in candidate
+    assert '"clean_smoke_binary_count": 3' in candidate
 
 
 def test_taira_release_freezes_fail_closed_network_time_policy() -> None:

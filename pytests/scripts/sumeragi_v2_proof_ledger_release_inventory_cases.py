@@ -38,7 +38,7 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 845 tests",
+            "must contain exactly 849 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -70,12 +70,13 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
                 "sumeragi::v2_runtime::tests::stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal",
                 "sumeragi::v2_runtime::tests::restored_serve_high_watermark_precedes_startup_runtime_owner",
                 "sumeragi::v2_runtime::tests::full_runtime_churn_cannot_cross_an_exact_serve_ordinal",
+                "state::tests::block_leaves_governance_unlock_audit_clean_when_no_locks_are_expired",
             )
         ),
         (
-            "readonly expected_production_liveness_test_count=845",
+            "readonly expected_production_liveness_test_count=849",
             "readonly expected_production_liveness_test_count=842",
-            "production liveness source count must be sealed as 845",
+            "production liveness source count must be sealed as 849",
         ),
         (
             "readonly expected_typed_rollover_formal_mutation_count=45",
@@ -758,28 +759,28 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     (
         (
             Path("formal/sumeragi_v2/README.md"),
-            "current inventory to 845 tests across 39 modules.\n"
+            "current inventory to 849 tests across 40 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
-            "corridor contains 85 legs.",
-            "current inventory to 845 tests across 39 modules.\n"
+            "corridor contains 86 legs.",
+            "current inventory to 849 tests across 40 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 84 legs.",
         ),
         (
             Path("formal/sumeragi_v2/PROOF.md"),
-            "current 845-test,\n39-module inventory. The complete source-sealed\n"
+            "current 849-test,\n40-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
-            "contains 85 legs",
-            "current 845-test,\n39-module inventory. The complete source-sealed\n"
+            "contains 86 legs",
+            "current 849-test,\n40-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 84 legs",
         ),
         (
             Path("specs/sumeragi_v2_liveness.md"),
-            "current source-bound inventory to 845 exact tests across\n"
-            "39 modules and 85 pre-network legs.",
-            "current source-bound inventory to 845 exact tests across\n"
-            "39 modules and 84 pre-network legs.",
+            "current source-bound inventory to 849 exact tests across\n"
+            "40 modules and 86 pre-network legs.",
+            "current source-bound inventory to 849 exact tests across\n"
+            "40 modules and 85 pre-network legs.",
         ),
     ),
 )
@@ -831,9 +832,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 845",
+            "_PRODUCTION_TEST_COUNT = 849",
             "_PRODUCTION_TEST_COUNT = 842",
-            "production test count must equal the exact shell inventory count 845",
+            "production test count must equal the exact shell inventory count 849",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -903,7 +904,7 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
             "  readonly expected_corridor_leg_count=85",
             "  readonly expected_corridor_leg_count=84",
-            "sealed at 85 legs",
+            "sealed at 86 legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),

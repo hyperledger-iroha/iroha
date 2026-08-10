@@ -170,6 +170,7 @@ MATERIAL_CLOSURE_PATHS_BY_WORKFLOW = {
         "IrohaSwift/Package.swift",
         "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/NativeBridgeLoaderTests.swift",
+        "ci/check_kagemusha_jvm_native_bridge.sh",
         "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.json",
         (
             "fixtures/sorafs_manifest/reference_sdk/"
@@ -177,6 +178,10 @@ MATERIAL_CLOSURE_PATHS_BY_WORKFLOW = {
         ),
         "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
         "integration_tests/tests/native_escrow.rs",
+        "scripts/deploy_localnet.sh",
+        "scripts/norito_bridge_source_seal.py",
+        "scripts/package_mobile_sdk_artifacts.sh",
+        "scripts/run_mobile_hermetic_command.py",
     },
     "sorafs-fixtures-nightly.yml": {
         "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.json",
@@ -656,8 +661,14 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert "bash ci/sdk_sorafs_orchestrator.sh" in parity
     assert "  mobile-parity:" in parity
     assert "  csharp-parity:" in parity
+    assert parity.count("name: Bind the canonical mobile Python") == 2
+    assert parity.count(
+        'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"'
+    ) == 2
     assert 'NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"' in parity
     assert 'NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"' in parity
+    assert 'sdkmanager_status="${PIPESTATUS[1]}"' in parity
+    assert 'exit "$sdkmanager_status"' in parity
     assert "bash ci/check_kagemusha_jvm_native_bridge.sh" in parity
     assert (
         'cargo build --locked --release -p connect_norito_bridge --target "$target"'
@@ -671,12 +682,20 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
         in parity
     )
     assert "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build" in parity
+    assert "continue-on-error:" not in parity
+    assert "|| true" not in parity
     for trigger in (
+        '".cargo/**"',
+        '"codec/**"',
         '"kotlin/**"',
         '"java/iroha_android/**"',
         '"java/norito_java/**"',
         '"csharp/**"',
         '"gradle/mobile-sdk-external-android-build.settings.gradle.kts"',
+        '"scripts/package_mobile_sdk_artifacts.sh"',
+        '"scripts/tests/deploy_localnet_test.py"',
+        '"rust-toolchain"',
+        '"vendor/**"',
     ):
         assert trigger in parity
 

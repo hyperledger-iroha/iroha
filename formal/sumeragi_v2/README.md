@@ -494,7 +494,8 @@ height-context state are not migrated in place.
   predicates additionally cover atomic route publication, quorum-bound drain
   certificates, exact-incarnation retirement, V4 Native source claims,
   contiguous active routes, exact grouped application, authenticated
-  manifests, startup repair/latest-index exactness, durable reservation
+  manifests, pointer-preserving partial-member startup repair/latest-index
+  exactness, durable reservation
   ownership, route/incarnation-first merge prefixes, canonical re-execution,
   restart ownership partitioning, single-signer authenticated canonical-body
   recovery, unified read-only ordinary/Native startup evidence planning,
@@ -647,8 +648,11 @@ height-context state are not migrated in place.
   | Kura replica retention | `kura_replica_retention_fixed.cfg` | 8 |
   | in-flight carrier (layout-only) | `inflight_first_release_fixed.cfg` | 18 |
 
-  Fourteen runner-contract negative controls reject tool-version or checksum
-  drift, source-binding bypass, reduced autoscale or QueuePlan bounds, mutation
+  Twenty-one runner-contract negative controls reject tool-version or checksum
+  drift, source-binding bypass, unauthenticated workspace-manifest authority,
+  invalid workspace-digest grammar, omission or substitution of either
+  source-manifest evidence field, a self-comparing drift check, reduced
+  autoscale or QueuePlan bounds, mutation
   substitution, removal of a Native invariant, a reduced Kura bound or Kura
   mutation substitution, a reduced in-flight bound or in-flight mutation
   substitution, a weakened success marker, and a length override. The default
@@ -674,9 +678,14 @@ height-context state are not migrated in place.
   writes current logs under
   `target/formal/sumeragi_v2/multilane_apalache/` and atomically publishes
   `target/formal/sumeragi_v2/multilane_apalache_evidence.tsv`. The evidence
-  source-seals every model, configuration, formal runner/checker, binding
-  ledger, and bound production source before and after checking, then records
-  each model/config/log hash, bound length, and exact `NoError` result. A
+  schema version 2 records the authenticated full-workspace
+  `workspace_source_manifest_sha256` separately from the dynamically computed
+  `multilane_source_manifest_sha256` of every model, configuration, formal
+  runner/checker, binding ledger, and bound production source. It rechecks the
+  latter manifest after checking, then records each model/config/log hash,
+  bound length, and exact `NoError` result. The receipt binds the workspace
+  field to the sealed release identity and the multilane field to the replayed
+  production trace-extraction certificate. A
   failed or source-drifting run removes or withholds the completion evidence.
   These finite checks constrain five source-bound production-refinement
   declarations consumed transitively by the top-level refinement debts and one
@@ -1336,8 +1345,8 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 845 named tests
-across 39 Rust modules. The preceding 298-name inventory was produced from the
+Before network startup, the executable wrapper inventories 849 named tests
+across 40 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
 historical/current applied-height rollover; 2 bind peer-writer flush and
@@ -1442,9 +1451,9 @@ restart selector with its two distinct raw/coalesced crash boundaries and
 restoring two implemented certified-ingress regressions adds three real rows,
 bringing the inventory to the 829-test checkpoint. Autonomous-lifecycle
 terminal-outcome and startup-recovery coverage plus final source reconciliation
-bring the current inventory to 845 tests across 39 modules.
+bring the current inventory to 849 tests across 40 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 85 legs. The
+corridor contains 86 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
 The first-release sidecar keeps wire protocol version 1 and uses positive
 `NonZeroU64` responder generation, requester epoch, and per-stream semantic
@@ -1517,7 +1526,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`08987916d9ea4fad6bc48cbd483f702766c69b057ff4cc2a099a586f8561eeff`.
+`15f837d911644b557c5a36064a1cff9c512f0cf2b120f5cc6fb21e7cfa530d83`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1554,7 +1563,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The five integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 85 legs, including the autonomous
+the complete pre-network corridor now spans 86 legs, including the autonomous
 lifecycle-recovery module and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
@@ -1562,7 +1571,7 @@ command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those thirty-eight modules or eighty-five legs. The
+geometry tests as part of those forty modules or eighty-six legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1692,8 +1701,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 85 pre-network legs and the exact
-845-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 86 pre-network legs and the exact
+849-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and
@@ -1712,8 +1721,8 @@ environment overrides and an isolated configuration-free `CARGO_HOME`, and
 their exact paths, versions, and hashes are retained in the corridor receipt.
 Java resolution rejects a non-working launcher such as the macOS
 `/usr/bin/java` stub, honors an explicit `JAVA_BIN` only when it executes, and
-otherwise selects a canonical working JDK from `JAVA_HOME`, `PATH`, the
-repository-local JDK, or stable package-manager links. The selected binary's
+otherwise selects a canonical working JDK from `JAVA_HOME`, `PATH`, the macOS
+JDK locator, or stable external package-manager links. The selected binary's
 canonical path and SHA-256 remain receipt-bound.
 
 Run the full gate from the repository root:

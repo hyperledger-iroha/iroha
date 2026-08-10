@@ -146,12 +146,11 @@ fn merge_native_amx_application_sources(
     };
     if !bundle.external.is_empty() || block.external_entrypoints_cloned().next().is_some() {
         return Err(
-            "Native AMX merge application carrier duplicates certified external content"
-                .to_owned(),
+            "Native AMX merge application carrier duplicates certified external content".to_owned(),
         );
     }
     if batch.application_block_header
-        != crate::merge::merge_application_header_from_carrier(block.header())
+        != crate::merge::merge_application_header_from_carrier(&block.header())
     {
         return Err(
             "Native AMX merge application batch belongs to another carrier context".to_owned(),

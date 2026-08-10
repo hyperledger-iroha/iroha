@@ -4582,9 +4582,9 @@ fn qc_signers(qc: &LaneBlockQcV1) -> Vec<PeerId> {
     signers
 }
 
+#[cfg(test)]
 fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
-    session
-        .proposal
+    session.proposal
         .as_ref()
         .map(|proposal| proposal.descriptor.proposal_height)
         .or_else(|| {

@@ -19,11 +19,13 @@ fn valid_config() -> SorafsProviderIngestRuntimeConfig {
         authenticated_source_fetch_revision: Some(5),
         authenticated_source_fetch_policy_digest_hex: Some("b1".repeat(32)),
         completion_signer_resolver_handle: Some(
-            "hsm://sorafs/provider-ingest/resolver-primary".to_owned(),
+            "resolver://sorafs/provider-ingest/primary".to_owned(),
         ),
         completion_signer_resolver_revision: Some(6),
         completion_signer_resolver_policy_digest_hex: Some("b2".repeat(32)),
-        completion_signer_handle: Some("hsm://sorafs/provider-ingest/key-primary".to_owned()),
+        completion_signer_handle: Some(
+            "software://sorafs/provider-ingest/signer-primary".to_owned(),
+        ),
         completion_signer_adapter_revision: Some(3),
         completion_signer_policy_id_hex: Some("a1".repeat(32)),
         completion_signer_policy_revision: Some(1),
@@ -231,7 +233,7 @@ fn enabled_policy_rejects_credential_or_uri_parameter_handles() {
         "https://host/source?token=secret",
         "https://host/source#fragment",
         "https://host/%73ource",
-        "hsm://sorafs/provider-ingest/dummy",
+        "resolver://sorafs/provider-ingest/dummy",
     ] {
         let mut config = valid_config();
         config.authenticated_source_fetch_handle = Some(rejected.to_owned());
@@ -249,7 +251,7 @@ fn enabled_policy_rejects_credential_or_uri_parameter_handles() {
 #[test]
 fn enabled_policy_rejects_stale_or_noncanonical_completion_signer_binding() {
     let mut config = valid_config();
-    config.completion_signer_handle = Some("pkcs11.sorafs.test".to_owned());
+    config.completion_signer_handle = Some("software://sorafs/provider-ingest/test".to_owned());
     config.completion_signer_adapter_revision = Some(0);
     config.completion_signer_policy_id_hex = Some("00".repeat(32));
     config.completion_signer_policy_revision = Some(2);

@@ -76,9 +76,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(test)]
-use std::path::Path;
-
 use super::v2_core::{
     CanonicalIdentityProjection, CheckedProductionTransition, EFFECTIVE_LOCK_TRACE_OWNER,
     EFFECTIVE_LOCK_TRACE_RETIRE, EffectiveLockTraceProjection, EquivocationKind, EventTag,
@@ -3369,41 +3366,6 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
 }
 
 impl V2EffectExecutor<SerializedV2Runtime> {
-    /// Open the exact-body store under an explicit signature-authority policy
-    /// and take ownership of the serialized runtime.
-    #[cfg(test)]
-    pub(crate) fn open(
-        runtime: SerializedV2Runtime,
-        body_store_root: impl AsRef<Path>,
-        context: wire::HeightContext,
-        requester: PeerId,
-        local_validator: Option<wire::ValidatorIndex>,
-        signature_policy: BlockSignaturePolicy,
-        output_guard: Arc<ConsensusOutputGuard>,
-        config: EffectQueueConfig,
-    ) -> Result<(Self, V2BodyStore), EffectExecutorError> {
-        let inner_output_guard = Arc::clone(&output_guard);
-        let construction = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-            EffectExecutorError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
-            )
-        })?;
-        let body_store =
-            V2BodyStore::open_with_policy(body_store_root, context.clone(), signature_policy)
-                .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
-        let opened = Self::open_with_body_store(
-            runtime,
-            body_store,
-            context,
-            requester,
-            local_validator,
-            inner_output_guard,
-            config,
-        )?;
-        construction.complete();
-        Ok(opened)
-    }
-
     /// Take ownership of an exact-body store opened during sealed preflight.
     ///
     /// Production uses this entry point after independently inspecting the

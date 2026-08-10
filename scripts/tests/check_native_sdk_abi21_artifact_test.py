@@ -77,6 +77,7 @@ NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
         "scripts/tests/mobile_sdk_python312_contract.sh",
     },
     "sorafs-orchestrator-sdk.yml": {
+        ".cargo/**",
         ".github/workflows/sorafs-orchestrator-sdk.yml",
         ".github/workflows/mobile_sdk_artifacts.yml",
         ".github/workflows/pr_csharp.yml",
@@ -84,6 +85,7 @@ NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
         "ci/check_kagemusha_jvm_native_bridge.sh",
         "ci/check_sorafs_python_native_sdk.sh",
         "ci/sdk_sorafs_orchestrator.sh",
+        "codec/**",
         "crates/iroha_cli/**",
         "crates/iroha_config/**",
         "crates/iroha_core/**",
@@ -106,9 +108,13 @@ NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS = {
         "scripts/deploy_localnet.sh",
         "scripts/exec_with_file_lock.py",
         "scripts/norito_bridge_source_seal.py",
+        "scripts/package_mobile_sdk_artifacts.sh",
         "scripts/run_mobile_hermetic_command.py",
+        "scripts/tests/deploy_localnet_test.py",
         "scripts/tests/check_sorafs_release_automation_test.py",
         "scripts/tests/check_sorafs_python_native_sdk_evidence_contract.sh",
+        "rust-toolchain",
+        "vendor/**",
     },
 }
 

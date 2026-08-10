@@ -53146,7 +53146,7 @@ impl Torii {
             }
             (Some(_), None) => {
                 panic!(
-                    "torii.sorafs.storage.pop_credentials is enabled but runtime-only enrollment/HSM/KMS/authentication dependencies were not injected"
+                    "torii.sorafs.storage.pop_credentials is enabled but runtime-only enrollment/external-software-signer/KMS/authentication dependencies were not injected"
                 )
             }
             (None, Some(_)) => {
@@ -55147,7 +55147,7 @@ mod gateway_runtime_config_tests {
         ) -> Result<sorafs::gateway::AcmeClientIdentityV1, sorafs::gateway::AcmeClientProbeError>
         {
             Ok(sorafs::gateway::AcmeClientIdentityV1 {
-                provider_handle: "hsm://gateway/acme/primary".into(),
+                provider_handle: "runtime://sorafs/gateway-acme/primary".into(),
                 revision: 17,
                 policy_digest: [0x51; 32],
                 test_marked: false,
@@ -55259,7 +55259,7 @@ mod gateway_runtime_config_tests {
     fn acme_provider_binding()
     -> iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
         iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
-            provider_handle: "hsm://gateway/acme/primary".into(),
+            provider_handle: "runtime://sorafs/gateway-acme/primary".into(),
             revision: 17,
             policy_digest: [0x51; 32],
         }

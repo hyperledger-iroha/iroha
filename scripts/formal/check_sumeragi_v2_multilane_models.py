@@ -35,6 +35,7 @@ from sumeragi_v2_multilane_autonomous_terminal_contract import (
     validate_autonomous_terminal_recovery_contract,
 )
 import sumeragi_v2_multilane_native_merge_manifest_contract as native_merge_manifest, sumeragi_v2_multilane_passive_recovery_contract as passive_recovery_contract
+import sumeragi_v2_multilane_reviewed_rust_source as reviewed_source
 from sumeragi_v2_multilane_cli import build_parser, report_validation
 from sumeragi_v2_multilane_reviewed_rust_source import (
     REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE,
@@ -920,10 +921,7 @@ EXPECTED_RELEASE_INVARIANT_SOURCE_PATHS = {
         "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
         "ci/check_sumeragi_v2_multilane_release_inventory.sh",
     ),
-    "ML-MUT-WIRE-01": (
-        "scripts/check_no_legacy_codec.sh",
-        "ci/check_sumeragi_v2_multilane_release_inventory.sh",
-    ),
+    "ML-MUT-WIRE-01": reviewed_source.WIRE_RELEASE_INVARIANT_SOURCE_PATHS,
 }
 CLOSURE_MUTATION_ID_RE = re.compile(r"`(ML-MUT-[A-Z]+-[0-9]{2})`")
 FORBIDDEN_PRODUCTION_TOKENS = {
@@ -1388,7 +1386,7 @@ NATIVE_PREPUBLICATION_BINDINGS = (
             "transactions.commit()",
         ),
     ),
-)
+) + reviewed_source.NATIVE_PREPUBLICATION_REVIEWED_BINDINGS
 NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
@@ -1493,7 +1491,7 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
             "NativeAmxLatestIndexTempReconciliation::Promoted",
         ),
     ),
-)
+) + reviewed_source.NATIVE_PREPUBLICATION_REVIEWED_ORDERED_SOURCE_CHECKS
 NATIVE_LATEST_TEMP_RECONCILIATION_FORBIDDEN_TOKENS = (
     "discard_native_amx_latest_index_temp_locked",
     "remove_bound_progress_temp_if_present",
@@ -2381,6 +2379,7 @@ def _validate_closure_mutation_ledger(
             errors.append(
                 f"{mutation_id}: source checks differ from the exact reviewed paths"
             )
+        reviewed_source._validate_wire_release_invariant_source_checks(mutation_id, source_checks, errors)
         seen_paths: set[str] = set()
         for check in source_checks:
             if not isinstance(check, dict) or set(check) != {
@@ -2665,30 +2664,30 @@ def _validate_mutation_runner(
 
 def _apalache_runner_source_errors(source: str) -> list[str]:
     """Validate the exact pinned multilane Apalache runner contract."""
-
     errors: list[str] = []
     required_once = (
-        f'readonly APALACHE_VERSION="{APALACHE_VERSION}"',
-        f'readonly APALACHE_LAUNCHER_SHA256="{APALACHE_LAUNCHER_SHA256}"',
+        f'readonly APALACHE_VERSION="{APALACHE_VERSION}"', f'readonly APALACHE_LAUNCHER_SHA256="{APALACHE_LAUNCHER_SHA256}"',
         f'readonly APALACHE_JAR_SHA256="{APALACHE_JAR_SHA256}"',
         'readonly CONTRACT_CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_models.py"',
         'readonly RUNNER_CONTRACT_TEST="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_apalache_runner_contract.py"',
         'readonly EVIDENCE_PATH="${EVIDENCE_DIR}/multilane_apalache_evidence.tsv"',
+        'workspace_source_manifest_sha256="${IROHA_RELEASE_SOURCE_MANIFEST_SHA256:-}"',
+        'readonly workspace_source_manifest_sha256',
+        'if [[ ! "$workspace_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then',
         'readonly KURA_RETENTION_MODULE="SumeragiV2KuraReplicaRetention"',
         '\npython3 -I -S "$CONTRACT_CHECKER"\n',
         'python3 -I -S "$RUNNER_CONTRACT_TEST"',
-        'tool_version="$("$RESOLVED_APALACHE_BIN" version)"',
-        'run_typecheck "$KURA_RETENTION_MODULE"',
-        '[[ "$tool_version" != "$APALACHE_VERSION" ]]',
-        '"$RESOLVED_APALACHE_BIN" --out-dir="$out" typecheck "${module}.tla"',
-        '"$RESOLVED_APALACHE_BIN" --out-dir="$out" check',
-        "--algo=incremental",
-        '--config="$config"',
-        '--length="$length"',
-        "--no-deadlock",
+        'tool_version="$("$RESOLVED_APALACHE_BIN" version)"', 'run_typecheck "$KURA_RETENTION_MODULE"',
+        '[[ "$tool_version" != "$APALACHE_VERSION" ]]', '"$RESOLVED_APALACHE_BIN" --out-dir="$out" typecheck "${module}.tla"',
+        '"$RESOLVED_APALACHE_BIN" --out-dir="$out" check', "--algo=incremental",
+        '--config="$config"', '--length="$length"', "--no-deadlock",
         'grep -Fc "The outcome is: NoError"',
         'grep -Fc "Checker reports no error up to computation length ${length}"',
         'echo "multilane formal or production sources changed during the Apalache run"',
+        'if [[ "$final_multilane_source_manifest_sha256" != "$multilane_source_manifest_sha256" ]]; then',
+        "printf 'schema_version\\t2\\n'",
+        "printf 'workspace_source_manifest_sha256\\t%s\\n' \"$workspace_source_manifest_sha256\"",
+        "printf 'multilane_source_manifest_sha256\\t%s\\n' \"$multilane_source_manifest_sha256\"",
         "printf 'result_count\\t6\\n'",
         "printf 'result\\tkura-replica-retention\\t%s\\t%s\\t8\\tNoError\\t%s\\t%s\\t%s\\n'",
         'mv -- "$evidence_tmp" "$EVIDENCE_PATH"',
@@ -2716,7 +2715,6 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
             "multilane Apalache runner must require the exact EXITCODE: OK "
             f"marker in typecheck and bounded-check paths, found {exit_marker_count}"
         )
-
     expected_calls = (
         """run_positive \\
   autoscale-lifecycle \\
@@ -2994,6 +2992,7 @@ def _validate_apalache_gate(root: Path, errors: list[str]) -> None:
             "| in-flight carrier (layout-only) | `inflight_first_release_fixed.cfg` | 18 |",
             "not independent ledger rows, TLAPS evidence",
             "cross-tool proof evidence",
+            "schema version 2", "`workspace_source_manifest_sha256`", "`multilane_source_manifest_sha256`",
             "changes no proof-ledger status",
         ):
             if token not in readme_source:
@@ -3922,6 +3921,7 @@ def _validate_native_prepublication_contract(
                     f"is missing source-bound token {token!r}"
                 )
 
+    reviewed_source._validate_native_prepublication_reviewed_kura_checks(binding_items, errors)
     native_merge_manifest.validate_native_merge_manifest_relations(root, binding_items, errors, _rust_binding_item)
     for relative, kind, symbol, tokens in (
         NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS

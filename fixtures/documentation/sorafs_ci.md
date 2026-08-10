@@ -59,11 +59,12 @@ scripts/release_sorafs_cli.sh \
   --trusted-release-manifest-verifier-sha256 "$REVIEWED_VERIFIER_SHA256"
 ```
 
-The signer adapter should use the governed PKCS#11/HSM key and write exactly 64
-raw signature bytes. Archive the aggregate manifest, raw signature, raw public
-key, reviewed signer fingerprint, pinned validator SHA256, and native
-verification receipt. OIDC/cosign may attest provenance in a separate job; that
-bundle does not replace release authenticity.
+The signer adapter must use the independently administered external software
+Ed25519 service and write exactly 64 raw signature bytes. Archive the aggregate
+manifest, raw signature, raw public key, reviewed signer fingerprint, software
+backend provenance, pinned validator SHA256, and native verification receipt.
+OIDC/cosign may attest provenance in a separate job; that bundle does not
+replace release authenticity.
 
 Deterministic content fixtures live in
 `fixtures/sorafs_manifest/ci_sample`. Compare CAR, chunk-plan, manifest, and proof

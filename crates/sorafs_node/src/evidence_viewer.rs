@@ -536,14 +536,7 @@ pub trait EvidenceViewerGrantBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     fn revoke(&self, token_digest: [u8; 32]) -> Result<(), EvidenceViewerExternalErrorV1>;
 }
 
-/// Runtime-only Ed25519 receipt signer.
-pub trait EvidenceViewerReceiptSignerV1: EvidenceViewerRuntimeProviderV1 {
-    /// Exact Ed25519 public key.
-    fn public_key(&self) -> [u8; 32];
-
-    /// Sign one exact canonical receipt message.
-    fn sign(&self, message: &[u8]) -> Result<[u8; 64], EvidenceViewerExternalErrorV1>;
-}
+include!("evidence_viewer/receipt_signing.rs");
 
 /// Runtime-only erasure/KMS boundary.
 pub trait EvidenceViewerErasureBoundaryV1: EvidenceViewerRuntimeProviderV1 {
@@ -935,68 +928,6 @@ impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerErasureBoundaryV1> {
         self.invoke(|provider| {
             provider.erase(operation_id, quarantine_id, object_id, evidence_digest)
         })
-    }
-}
-
-struct QualifiedEvidenceViewerReceiptSignerV1 {
-    inner: QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerReceiptSignerV1>,
-    public_key: [u8; 32],
-}
-
-impl QualifiedEvidenceViewerReceiptSignerV1 {
-    fn try_new(
-        expected_handle: &str,
-        expected_qualification: EvidenceViewerRuntimeProviderQualificationV1,
-        expected_public_key: [u8; 32],
-        provider: Arc<dyn EvidenceViewerReceiptSignerV1>,
-    ) -> Result<Self, EvidenceViewerRuntimeProviderQualificationErrorV1> {
-        let inner = QualifiedEvidenceViewerProviderV1::try_new(
-            expected_handle,
-            expected_qualification,
-            provider,
-        )?;
-        let public_key = Self::read_qualified_public_key(&inner)?;
-        if public_key != expected_public_key {
-            return Err(EvidenceViewerRuntimeProviderQualificationErrorV1::SignerPublicKeyChanged);
-        }
-        Ok(Self {
-            inner,
-            public_key: expected_public_key,
-        })
-    }
-
-    fn read_qualified_public_key(
-        inner: &QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerReceiptSignerV1>,
-    ) -> Result<[u8; 32], EvidenceViewerRuntimeProviderQualificationErrorV1> {
-        inner.revalidate()?;
-        let public_key = inner.provider.public_key();
-        inner.revalidate()?;
-        Ok(public_key)
-    }
-
-    fn sign(&self, message: &[u8]) -> Result<[u8; 64], EvidenceViewerExternalErrorV1> {
-        let public_key_before = Self::read_qualified_public_key(&self.inner)
-            .map_err(|_| EvidenceViewerExternalErrorV1::Unavailable)?;
-        if public_key_before != self.public_key {
-            return Err(EvidenceViewerExternalErrorV1::Unavailable);
-        }
-        let result = self.inner.provider.sign(message);
-        let public_key_after = Self::read_qualified_public_key(&self.inner)
-            .map_err(|_| EvidenceViewerExternalErrorV1::Unavailable)?;
-        if public_key_after != self.public_key {
-            return Err(EvidenceViewerExternalErrorV1::Unavailable);
-        }
-        result
-    }
-}
-
-impl fmt::Debug for QualifiedEvidenceViewerReceiptSignerV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("QualifiedEvidenceViewerReceiptSignerV1")
-            .field("inner", &self.inner)
-            .field("public_key", &self.public_key)
-            .finish()
     }
 }
 
@@ -3944,7 +3875,10 @@ impl EvidenceViewerServiceV1 {
         head.signature = self
             .deps
             .receipt_signer
-            .sign(&compaction_archive_signature_message(&head)?)
+            .sign(
+                EvidenceViewerSigningPurposeV1::CompactionArchive,
+                &compaction_archive_signature_message(&head)?,
+            )
             .map_err(map_external_error)?;
         head.head_digest = compaction_archive_head_digest(&head)?;
         verify_compaction_archive_head_core(
@@ -4505,7 +4439,10 @@ impl EvidenceViewerServiceV1 {
         let signature = self
             .deps
             .receipt_signer
-            .sign(&receipt_signature_message(receipt_digest))
+            .sign(
+                EvidenceViewerSigningPurposeV1::Receipt,
+                &receipt_signature_message(receipt_digest),
+            )
             .map_err(map_external_error)?;
         let receipt = EvidenceViewerSignedReceiptV1 {
             body,
@@ -4595,7 +4532,10 @@ impl EvidenceViewerServiceV1 {
         let signature = self
             .deps
             .receipt_signer
-            .sign(&checkpoint_store_record_signature_message(&record))
+            .sign(
+                EvidenceViewerSigningPurposeV1::CheckpointStoreRecord,
+                &checkpoint_store_record_signature_message(&record),
+            )
             .map_err(map_external_error)?;
         record.signature = signature;
         record.revision = checkpoint_store_record_revision(&record);
@@ -4710,7 +4650,10 @@ impl EvidenceViewerServiceV1 {
         let signature = self
             .deps
             .receipt_signer
-            .sign(&checkpoint_anchor_signature_message(&checkpoint_anchor))
+            .sign(
+                EvidenceViewerSigningPurposeV1::CheckpointAnchor,
+                &checkpoint_anchor_signature_message(&checkpoint_anchor),
+            )
             .map_err(map_external_error)?;
         checkpoint_anchor.signature = signature;
         checkpoint_anchor
@@ -7391,7 +7334,11 @@ mod tests {
             self.signing_key.verifying_key().to_bytes()
         }
 
-        fn sign(&self, message: &[u8]) -> Result<[u8; 64], EvidenceViewerExternalErrorV1> {
+        fn sign(
+            &self,
+            _purpose: EvidenceViewerSigningPurposeV1,
+            message: &[u8],
+        ) -> Result<[u8; 64], EvidenceViewerExternalErrorV1> {
             let _operation = self.qualification.operation_guard();
             self.sign_calls.fetch_add(1, Ordering::SeqCst);
             let mut signature = self.signing_key.sign(message).to_bytes();
@@ -8139,6 +8086,32 @@ mod tests {
                 idempotency_key,
                 now_unix_ms,
             })
+        }
+
+        fn successor_checkpoint_bytes(
+            &self,
+            predecessor: &EvidenceViewerCheckpointStoreRecordV1,
+        ) -> Vec<u8> {
+            let mut envelope =
+                decode_local_checkpoint_canonical::<EvidenceViewerCheckpointEnvelopeV1>(
+                    &predecessor.checkpoint_bytes,
+                    self.config.checkpoint_max_bytes,
+                    checkpoint_sequence_limit(&self.config),
+                )
+                .expect("decode predecessor checkpoint envelope");
+            let anchor = &mut envelope.checkpoint_anchor;
+            anchor.checkpoint_generation = predecessor
+                .generation
+                .checked_add(1)
+                .expect("successor checkpoint generation");
+            anchor.predecessor_checkpoint_revision = Some(predecessor.revision);
+            anchor.predecessor_checkpoint_digest = Some(predecessor.checkpoint_digest);
+            anchor.signature = self
+                .signer
+                .signing_key
+                .sign(&checkpoint_anchor_signature_message(anchor))
+                .to_bytes();
+            norito::to_bytes(&envelope).expect("encode successor checkpoint envelope")
         }
     }
 
@@ -9775,10 +9748,11 @@ mod tests {
             .checkpoint_store
             .current()
             .expect("race predecessor");
+        let successor_checkpoint_bytes = fixture.successor_checkpoint_bytes(&predecessor);
         let competing = replica
             .sign_checkpoint_store_record(
                 predecessor.checkpoint_digest,
-                predecessor.checkpoint_bytes.clone(),
+                successor_checkpoint_bytes,
                 Some(&predecessor),
             )
             .expect("sign competing valid successor");
@@ -9848,14 +9822,32 @@ mod tests {
             .checkpoint_store
             .current()
             .expect("race predecessor");
+        let successor_checkpoint_bytes = fixture.successor_checkpoint_bytes(&predecessor);
         let mut jumped = service
             .sign_checkpoint_store_record(
                 predecessor.checkpoint_digest,
-                predecessor.checkpoint_bytes.clone(),
+                successor_checkpoint_bytes,
                 Some(&predecessor),
             )
             .expect("sign candidate successor");
         jumped.generation = jumped.generation.saturating_add(1);
+        let mut jumped_envelope =
+            decode_local_checkpoint_canonical::<EvidenceViewerCheckpointEnvelopeV1>(
+                &jumped.checkpoint_bytes,
+                fixture.config.checkpoint_max_bytes,
+                checkpoint_sequence_limit(&fixture.config),
+            )
+            .expect("decode jumped checkpoint envelope");
+        jumped_envelope.checkpoint_anchor.checkpoint_generation = jumped.generation;
+        jumped_envelope.checkpoint_anchor.signature = fixture
+            .signer
+            .signing_key
+            .sign(&checkpoint_anchor_signature_message(
+                &jumped_envelope.checkpoint_anchor,
+            ))
+            .to_bytes();
+        jumped.checkpoint_bytes =
+            norito::to_bytes(&jumped_envelope).expect("encode jumped checkpoint envelope");
         jumped.signature = fixture
             .signer
             .signing_key
@@ -10582,7 +10574,7 @@ mod tests {
             .create_session(
                 &service,
                 challenge.challenge.expose(),
-                b"retention-floor-compaction-assertion",
+                b"valid-webauthn-assertion-retention-floor-compaction",
                 [0x69; 32],
                 BASE_UNIX_MS + 1,
             )
@@ -10667,7 +10659,7 @@ mod tests {
             .create_session(
                 &service,
                 challenge.challenge.expose(),
-                b"erasure-before-compaction-assertion",
+                b"valid-webauthn-assertion-erasure-before-compaction",
                 [0x6D; 32],
                 BASE_UNIX_MS + 1,
             )

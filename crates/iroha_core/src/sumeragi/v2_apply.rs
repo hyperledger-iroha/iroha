@@ -341,6 +341,7 @@ pub(crate) enum V2ReservationLifecycleError {
         transaction_hash: HashOf<SignedTransaction>,
     },
     /// A merge entry names a transaction that State did not commit.
+    #[cfg(test)]
     #[error("merge reservation transaction {transaction_hash} is absent from committed State")]
     UncommittedMergeTransaction {
         /// Transaction missing from committed membership.
