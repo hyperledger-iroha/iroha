@@ -21,7 +21,7 @@ Swift, Android, and JavaScript SDKs.
 │  dApp SDK  │←────→│  Connect WS │←────→│ Wallet SDK │
 └────────────┘      └─────────────┘      └────────────┘
       │                    │                    │
-      │ 1. open (app→wallet) frame (metadata, permissions, chain_id)
+      │ 1. open (app→wallet) frame (app key, metadata, permissions, NetworkId)
       │────────────────────────────────────────>│
       │                    │                    │
       │                    │ 2. route frame     │
@@ -44,7 +44,8 @@ Swift, Android, and JavaScript SDKs.
 
 All SDKs MUST use the canonical Norito schema defined in `connect_norito_bridge`:
 
-- `EnvelopeV1` (open / approve / sign / control)
+- `ConnectControlV1` (open / approve / reject / close / heartbeat)
+- `EnvelopeV1` (encrypted post-key payloads)
 - `ConnectFrameV1` (ciphertext frames w/ AEAD payload)
 - Control codes:
   - `open_ext` (metadata, permissions)
@@ -72,7 +73,8 @@ Swift uses the Norito bridge and fails closed when the XCFramework is missing:
 
 ## Transport Contract
 
-- Primary transport: WebSocket (`/v1/connect/ws?sid=<session_id>`).
+- Primary transport: WebSocket (`/v1/connect/ws?sid=<session_id>&role=<app|wallet>`),
+  authenticated with the role's one-shot token.
 - Torii relay transport is in-node only: `CONNECT_RELAY_STRATEGY="broadcast"` uses Iroha peer-to-peer
   node transport, while `"local_only"` disables cross-node forwarding. Compatibility aliases `"local-only"`
   and `"local"` normalize to `"local_only"`. Unsupported values are coerced to `"local_only"`; there is
@@ -98,8 +100,12 @@ Swift uses the Norito bridge and fails closed when the XCFramework is missing:
 
 ### Session identifiers & salts
 
-- `sid` is a 32-byte identifier derived from `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.
-  DApps compute it before calling `/v1/connect/session`; wallets echo it in `approve` frames so both sides can key journals and telemetry consistently.
+- `sid` is exactly
+  `BLAKE2b-256("iroha-connect|sid|" || network_id_raw_32 || app_ephemeral_pk || nonce16)`.
+  `network_id_raw_32` is the exact genesis-derived `NetworkId` payload, never
+  a display label or legacy chain identifier. DApps send all four committed
+  fields to `/v1/connect/session`; Torii rejects noncanonical encodings,
+  cross-network SIDs, duplicate registration, and response substitution.
 - The same salt feeds every key-derivation step so SDKs never rely on entropy harvested from the host platform.
 
 ### Ephemeral key handling
@@ -120,10 +126,20 @@ Swift uses the Norito bridge and fails closed when the XCFramework is missing:
   Associated data equals `("connect:v1", sid, dir, seq_le, kind=ciphertext)` so tampering on headers is detected.
 - Nonces are derived from the 64-bit sequence counter (`nonce[0..4]=0`, `nonce[4..12]=seq_le`). Shared helper tests ensure BigInt/UInt conversions behave identically across SDKs.
 
-### Rotation & recovery handshake
+### Approval authentication
 
-- Rotation remains optional but the protocol is defined: dApps emit a `Control::RotateKeys` frame when sequence counters approach the wrap guard, wallets respond with the new public key plus a signed acknowledgement, and both sides immediately derive new directional keys without closing the session.
-- Wallet-side key loss triggers the same handshake followed by a `resume` control so dApps know to flush cached ciphertext that targeted the retired key.
+- Torii persists the first valid Open's exact application key, `NetworkId`
+  constraint, and requested permissions. A second Open terminates the session.
+- Approve carries a canonical account identifier and a detached account-key
+  signature. The preimage binds the exact NetworkId and encoded constraints,
+  SID, application and wallet X25519 keys, account identifier, accepted
+  permissions, optional sign-in proof, and the session relay-auth hash.
+- Torii verifies this account signature before delivering Approve. Wrong-network
+  Open frames, signed-field substitution, approval-before-Open, and a second
+  approval terminate the session. There is no legacy chain-label or unsigned
+  approval path.
+- Connect V1 has no key-rotation or resume control. Endpoints close the session
+  before sequence exhaustion or after key loss and establish a fresh SID.
 
 The maintained Swift, Kotlin, and JavaScript SDK facades implement the same
 Connect V1 directional-key and AEAD contract. Public integration walkthroughs
@@ -137,7 +153,9 @@ live in the sibling `iroha-docs` repository at
   - `methods` — verbs (`sign_transaction`, `sign_raw`, `submit_proof`, …).
   - `events` — subscriptions the dApp is allowed to attach to.
   - `resources` — optional account/asset filters so wallets can scope access.
-  - `constraints` — chain ID, TTL, or custom policy knobs that the wallet enforces before signing.
+  - Open `constraints` — the exact genesis-derived `NetworkId` enforced by the
+    wallet and Torii before approval. Connect V1 has no label, TTL, or custom
+    constraint compatibility fields.
 - Compliance metadata rides alongside permissions:
   - Optional `attachments[]` contain Norito attachment references (KYC bundles, regulator receipts).
   - `compliance_manifest_id` ties the request to a previously approved manifest so operators can audit provenance.
@@ -173,10 +191,13 @@ live in the sibling `iroha-docs` repository at
 
 ## Sequence Numbers & Flow Control
 
-- Each direction keeps a dedicated 64-bit `sequence` counter that starts at zero when the session opens. The shared helper types clamp increments and trigger a `ConnectError.sequenceOverflow` + key-rotation handshake well before the counter would wrap.
+- Each direction keeps a dedicated 64-bit `sequence` counter whose first frame
+  is `1`. Torii requires contiguous increments; gaps, wraparound, or a frame in
+  the wrong role direction terminate the session.
 - Nonces and associated data reference the sequence number, so duplicates can be rejected without parsing payloads. SDKs must store `{sid, dir, seq, payload_hash}` in their journals to make deduplication deterministic across reconnects.
-- Wallets advertise back-pressure via a logical window (`FlowControl` control frames). DApps dequeue only when a window token is available; wallets emit new tokens after processing ciphertext to keep pipelines bounded.
-- Resume negotiation is explicit: both sides emit `Control::Resume { seq_app_max, seq_wallet_max, queue_depths }` after reconnecting so observers can verify how much data was re-sent and whether journals contain gaps.
+- Connect V1 defines no `FlowControl` or `Resume` compatibility control. SDK
+  queues remain locally bounded and reconnect only to the still-live session;
+  otherwise they create a fresh exact-network SID.
 - Conflicts (e.g., two payloads with the same `(sid, dir, seq)` but different hashes) escalate to `ConnectError.Internal` and force a new `sid` to avoid silent divergence.
 
 ## Threat model and data retention alignment
@@ -227,7 +248,7 @@ representation survives across the mobile/JS stacks.
   fsyncing the appended record.
 - A `ConnectQueueState` struct in memory mirrors the file metadata (depth,
   bytes used, oldest/newest seq). It feeds the telemetry exporters and the
-  `FlowControl` helper.
+  SDK-local queue limiter. This is not a Connect wire control.
 - Journals cap at 32 frames / 1 MiB by default; hitting the cap evicts the
   oldest entries (`reason=overflow`). `ConnectFeatureConfig.max_queue_len`
   overrides these defaults per deployment.
@@ -244,30 +265,24 @@ representation survives across the mobile/JS stacks.
 - SDKs expose `ConnectQueueObserver` so wallets/dApps can inspect queue depth,
   drains, and GC outcomes; this hook feeds status UIs without parsing logs.
 
-### Replay & resume semantics
+### Replay and reconnect semantics
 
-1. When reconnecting, SDKs emit `Control::Resume` with `{seq_app_max,
-   seq_wallet_max, queued_app, queued_wallet, journal_hash}`. The hash is the
-   Blake3 digest of the append-only journal so mismatched peers can detect drift.
-2. The receiving peer compares the resume payload with its state, requests
-   retransmission when gaps exist, and acknowledges replayed frames via
-   `Control::ResumeAck`.
-3. Replayed frames always respect insertion order (`sequence` then write-time).
-   Wallet SDKs MUST apply back-pressure by issuing `FlowControl` tokens (also
-   journaled) so dApps cannot flood the queue while offline.
-4. Journals store ciphertext verbatim, so replay simply pumps the recorded bytes
-   back through the transport and decoder. No per-SDK re-encoding is allowed.
+Connect V1 has no Resume, ResumeAck, FlowControl, or key-rotation wire control.
+A live session may reconnect with the same role token only while Torii still
+owns that exact session and its sequence state. Clients must continue with the
+next contiguous sequence; they must never retransmit an accepted frame. A
+duplicate, gap, wraparound, or role/direction substitution terminates the
+session. If either peer cannot prove its next sequence locally, it discards any
+queued ciphertext and creates a fresh app key, nonce, SID, and session.
 
 ### Reconnection flow
 
-1. Transport re-establishes WebSocket and negotiates new ping interval.
-2. dApp replays queued frames in order, respecting back-pressure from wallet
-   (`ConnectSession.nextControlFrame()` yields `FlowControl` tokens).
-3. Wallet decrypts buffered results, verifies sequence monotonicity, and
-   replays pending approvals/results.
-4. Both sides emit a `resume` control summarising `seq_app_max`, `seq_wallet_max`,
-   and queue depths for telemetry.
-5. Duplicate frames (matching `sequence` + `payload_hash`) are acknowledged and dropped; conflicts raise `ConnectError.Internal` and trigger a forced session restart.
+1. Transport re-establishes the authenticated role WebSocket.
+2. The client resumes only locally queued frames whose sequence begins at the
+   next unconsumed value and remains contiguous.
+3. Approve and Open are one-shot controls and are never replayed.
+4. Any uncertainty, duplicate, gap, or server close discards the queue and
+   starts a fresh exact-network session.
 
 ### Failure modes
 
@@ -288,7 +303,7 @@ common across Swift (`ConnectSessionDiagnostics`), Android
 | State | Trigger | Automatic response | Manual override | Telemetry flag |
 |-------|---------|--------------------|-----------------|----------------|
 | `Healthy` | Queue usage < `disk_watermark_warn` (default 60 %) and `ttl_ok` | None | N/A | `connect.queue_state=\"healthy\"` |
-| `Throttled` | Usage ≥ `disk_watermark_warn` or retries > 5/min | Pause new sign requests, emit flow-control tokens at half rate | Apps may call `clearOfflineQueue(.app|.wallet)`; SDK re-hydrates state from peer once online | `connect.queue_state=\"throttled\"`, `connect.queue_watermark` gauge |
+| `Throttled` | Usage ≥ `disk_watermark_warn` or retries > 5/min | Pause new sign requests locally | Apps may call `clearOfflineQueue(.app|.wallet)`; clearing requires a fresh session | `connect.queue_state=\"throttled\"`, `connect.queue_watermark` gauge |
 | `Quarantined` | Usage ≥ `disk_watermark_drop` (default 85 %), corruption detected twice, or `offline_timeout_ms` exceeded | Stop buffering, raise `ConnectError.QueueQuarantined`, require operator acknowledgement | `ConnectSessionDiagnostics.forceReset()` deletes journals after exporting bundle | `connect.queue_state=\"quarantined\"`, `connect.queue_quarantine_total` counter |
 
 - Thresholds live in `ConnectFeatureConfig` (`disk_watermark_warn`,
@@ -303,11 +318,10 @@ common across Swift (`ConnectSessionDiagnostics`), Android
     that UI code can upload to Torii support tools.
 - When an app toggles `deferred_queue_enabled=false`, SDKs immediately drain and
   purge both journals, mark the state as `Disabled`, and emit a terminal
-  telemetry event. The user-facing preference is mirrored in the Norito
-  approval frame so peers know whether they can resume buffered frames.
+  telemetry event. This preference is local and is not added to Open or Approve.
 - Operators run `connect queue inspect --sid <sid>` (CLI wrapper around the SDK
   diagnostics) during chaos tests; this command prints the state transitions,
-  watermark history, and resume evidence so governance reviews do not depend on
+  watermark history, and reconnect/termination evidence so governance reviews do not depend on
   platform-specific tooling.
 
 ### Evidence bundle workflow
@@ -334,9 +348,8 @@ telemetry so the SDK team can reproduce and patch the exporter.
   - `connect.queue_dropped_total{reason}` (counter) for `overflow|ttl|repair`.
   - `connect.offline_flush_total{direction}` (counter) increments when queues
     drain without transport; failures increment `connect.offline_flush_failed`.
-  - `connect.replay_success_total`/`connect.replay_error_total`.
-  - `connect.resume_latency_ms` histogram (time between reconnect and steady
-    state) plus `connect.resume_attempts_total`.
+  - `connect.replay_error_total` for rejected duplicates or gaps.
+  - `connect.reconnect_attempts_total` and `connect.session_restart_total`.
   - `connect.session_duration_ms` histogram (per completed session).
   - `connect.error` structured events with `code`, `fatal`, `telemetry_profile`.
 - Exporters MUST attach `{platform, sdk_version, feature_hash}` labels so
@@ -375,23 +388,21 @@ telemetry so the SDK team can reproduce and patch the exporter.
 
 | Frame / Control | Owner | Sequence domain | Journal persisted? | Telemetry labels | Notes |
 |-----------------|-------|-----------------|--------------------|------------------|-------|
-| `Control::Open` | dApp | `seq_app` | ✅ (`app_to_wallet`) | `event=open` | Carries metadata + permission bitmap; wallets replay the latest open before prompts. |
-| `Control::Approve` | Wallet | `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` | Includes account, proofs, signatures. Metadata version increments recorded here. |
+| `Control::Open` | dApp | `seq_app` | ✅ (`app_to_wallet`) | `event=open` | One-shot; carries the exact app key, NetworkId constraint, metadata, and permissions. |
+| `Control::Approve` | Wallet | `seq_wallet` | ✅ (`wallet_to_app`) | `event=approve` | One-shot; account signature binds the full approval transcript and relay authentication. |
 | `Control::Reject` | Wallet | `seq_wallet` | ✅ | `event=reject`, `reason` | Optional localized message; dApp drops pending sign requests. |
-| `Control::Close` (init) | dApp | `seq_app` | ✅ | `event=close`, `initiator=app` | Wallet acknowledges with its own `Close`. |
-| `Control::Close` (ack) | Wallet | `seq_wallet` | ✅ | `event=close`, `initiator=wallet` | Confirms teardown; GC removes journals once both sides persist the frame. |
-| `SignRequest` | dApp | `seq_app` | ✅ | `event=sign_request`, `payload_hash` | Payload hash recorded for replay conflict detection. |
-| `SignResult` | Wallet | `seq_wallet` | ✅ | `event=sign_result`, `status=ok|err` | Includes BLAKE3 hash of signed bytes; failures raise `ConnectError.Signing`. |
-| `Control::Error` | Wallet (most) / dApp (transport) | matching owner domain | ✅ | `event=error`, `code` | Fatal errors force session restart; telemetry marks `fatal=true`. |
-| `Control::RotateKeys` | Wallet | `seq_wallet` | ✅ | `event=rotate_keys`, `reason` | Announces new direction keys; dApp replies with `RotateKeysAck` (journaled on app side). |
-| `Control::Resume` / `ResumeAck` | Both | local domain only | ✅ | `event=resume`, `direction=app|wallet` | Summarises queue depth + seq state; hashed journal digest aids diagnosis. |
+| `Control::Close` | Either | sender direction | ✅ | `event=close`, `initiator` | Terminal; no acknowledgement or resume handshake is implied. |
+| `Control::Ping` / `Pong` | Either | sender direction | No | `event=heartbeat` | Liveness nonce only; does not weaken contiguous sequence checks. |
+| `Control::ServerEvent` | Torii | server sequence | No | `event=server_event` | Uses an independent server sequence and cannot advance either peer sequence. |
+| `SignRequestRaw` / `SignRequestTx` | dApp | `seq_app` | ✅ | `event=sign_request`, `payload_hash` | Encrypted payload; exact outer and inner sequence values must match. |
+| `SignResultOk` / `SignResultErr` | Wallet | `seq_wallet` | ✅ | `event=sign_result`, `status=ok|err` | Encrypted result bound to the wallet direction. |
+| Encrypted `Control::Close` / `Reject` | Either | sender direction | ✅ | `event=close|reject` | Post-approval lifecycle control inside AEAD. |
 
-- Directional cipher keys remain symmetric per role (`app→wallet`, `wallet→app`).
-  Wallet rotation proposals are advertised via `Control::RotateKeys`, and dApps
-  acknowledge by emitting `Control::RotateKeysAck`; both frames must hit disk
-  before keys swap to avoid replay gaps.
-- Metadata attachment (icons, localized names, compliance proofs) is signed by
-  the wallet and cached by the dApp; updates require a fresh approval frame with
-  incremented `metadata_version`.
+- Directional cipher keys remain distinct per role (`app→wallet`,
+  `wallet→app`) for the lifetime of the session. Key loss or exhaustion requires
+  a fresh session.
+- Metadata attachment is cached by the dApp only after the signed approval is
+  accepted. Changing the approval transcript requires a fresh session; a second
+  approval on the same SID is a replay violation.
 - Ownership matrix above is referenced from SDK docs so CLI/web/automation
   clients follow the same contract and instrumentation defaults.

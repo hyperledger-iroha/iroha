@@ -26,7 +26,9 @@ pub enum ModerationCheckpointStoreExternalErrorV1 {
 pub struct ModerationCheckpointStoreRecordV1 {
     /// Record schema version.
     pub version: u16,
-    /// Chain-bound service namespace.
+    /// Exact genesis-derived network owning this checkpoint lineage.
+    pub network_id: iroha_data_model::NetworkId,
+    /// Network-bound service namespace.
     pub namespace_digest: [u8; 32],
     /// Monotonic checkpoint generation.
     pub checkpoint_generation: u64,
@@ -51,7 +53,7 @@ pub struct ModerationCheckpointStoreRecordV1 {
 impl ModerationCheckpointStoreRecordV1 {
     /// Verify the canonical envelope fields visible at a runtime-provider boundary.
     ///
-    /// Chain namespace and exact predecessor ancestry require orchestrator
+    /// Network namespace and exact predecessor ancestry require orchestrator
     /// context and are checked separately when the record is opened or
     /// committed.
     #[must_use]
@@ -196,13 +198,9 @@ impl QualifiedModerationCheckpointStoreV1 {
             .store
             .load_latest()?
             .ok_or(ModerationCheckpointStoreExternalErrorV1::Rejected)?;
-        let expected_chain_id = statement
-            .chain_id
-            .parse::<iroha_data_model::ChainId>()
-            .map_err(|_| ModerationCheckpointStoreExternalErrorV1::Rejected)?;
         if validate_moderation_panel_notification_source_attestation_for_broker_v1(
             statement,
-            &expected_chain_id,
+            &statement.network_id,
             &self.handle,
             self.qualification,
             self.attestation_public_key,
@@ -239,7 +237,7 @@ impl fmt::Debug for QualifiedModerationCheckpointStoreV1 {
 
 pub(super) fn open_authoritative_checkpoint(
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     store: &QualifiedModerationCheckpointStoreV1,
 ) -> Result<
     (
@@ -254,13 +252,13 @@ pub(super) fn open_authoritative_checkpoint(
         .load_latest()
         .map_err(map_checkpoint_store_read_error)?;
     let (state, record) = match observed {
-        Some(record) => decode_validated_record(config, chain_id, &record, None)?,
+        Some(record) => decode_validated_record(config, network_id, &record, None)?,
         None => {
             if local_cache.is_some() {
                 return Err(ModerationOrchestratorError::CheckpointStoreEquivocation);
             }
-            let state = ModerationOrchestratorCheckpointV1::new(chain_id);
-            let record = build_record(config, chain_id, &state, None)?;
+            let state = ModerationOrchestratorCheckpointV1::new(network_id);
+            let record = build_record(config, network_id, &state, None)?;
             match store.compare_and_swap_latest(None, &record) {
                 Ok(()) => (state, record),
                 Err(ModerationCheckpointStoreExternalErrorV1::Unavailable) => {
@@ -272,13 +270,13 @@ pub(super) fn open_authoritative_checkpoint(
                         .load_latest()
                         .map_err(map_checkpoint_store_read_error)?
                         .ok_or(ModerationOrchestratorError::CheckpointStoreAmbiguous)?;
-                    decode_validated_record(config, chain_id, &authoritative, None)?
+                    decode_validated_record(config, network_id, &authoritative, None)?
                 }
             }
         }
     };
     if let Some(bytes) = local_cache {
-        let cache = decode_checkpoint(config, chain_id, &bytes)?;
+        let cache = decode_checkpoint(config, network_id, &bytes)?;
         if cache.generation > state.generation
             || (cache.generation == state.generation && bytes != record.checkpoint_bytes)
         {
@@ -291,7 +289,7 @@ pub(super) fn open_authoritative_checkpoint(
 
 pub(super) fn persist_authoritative_checkpoint(
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     store: &QualifiedModerationCheckpointStoreV1,
     previous: &mut ModerationCheckpointStoreRecordV1,
     state: &mut ModerationOrchestratorCheckpointV1,
@@ -301,8 +299,8 @@ pub(super) fn persist_authoritative_checkpoint(
         .checked_add(1)
         .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
     refresh_panel_notification_outbox_digest(state);
-    validate_checkpoint(state, config, chain_id)?;
-    let next = build_record(config, chain_id, state, Some(previous))?;
+    validate_checkpoint(state, config, network_id)?;
+    let next = build_record(config, network_id, state, Some(previous))?;
     let expected_revision = Some(previous.revision);
     match store.compare_and_swap_latest(expected_revision, &next) {
         Ok(()) => {}
@@ -315,7 +313,7 @@ pub(super) fn persist_authoritative_checkpoint(
                 .load_latest()
                 .map_err(map_checkpoint_store_read_error)?
                 .ok_or(ModerationOrchestratorError::CheckpointStoreAmbiguous)?;
-            validate_record(config, chain_id, &authoritative, None)?;
+            validate_record(config, network_id, &authoritative, None)?;
             if authoritative != next {
                 return Err(ModerationOrchestratorError::CheckpointStoreFenced);
             }
@@ -328,7 +326,7 @@ pub(super) fn persist_authoritative_checkpoint(
 
 fn build_record(
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     state: &ModerationOrchestratorCheckpointV1,
     previous: Option<&ModerationCheckpointStoreRecordV1>,
 ) -> Result<ModerationCheckpointStoreRecordV1, ModerationOrchestratorError> {
@@ -343,7 +341,8 @@ fn build_record(
     }
     let mut record = ModerationCheckpointStoreRecordV1 {
         version: MODERATION_CHECKPOINT_STORE_RECORD_VERSION_V1,
-        namespace_digest: checkpoint_namespace(chain_id),
+        network_id: *network_id,
+        namespace_digest: checkpoint_namespace(network_id),
         checkpoint_generation: state.generation,
         predecessor_revision: previous.map(|record| record.revision),
         predecessor_checkpoint_digest: previous.map(|record| record.checkpoint_digest),
@@ -360,13 +359,13 @@ fn build_record(
         revision: [0; 32],
     };
     record.revision = record_revision(&record);
-    validate_record(config, chain_id, &record, previous)?;
+    validate_record(config, network_id, &record, previous)?;
     Ok(record)
 }
 
 fn decode_validated_record(
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     record: &ModerationCheckpointStoreRecordV1,
     previous: Option<&ModerationCheckpointStoreRecordV1>,
 ) -> Result<
@@ -376,8 +375,8 @@ fn decode_validated_record(
     ),
     ModerationOrchestratorError,
 > {
-    validate_record(config, chain_id, record, previous)?;
-    let state = decode_checkpoint(config, chain_id, &record.checkpoint_bytes)?;
+    validate_record(config, network_id, record, previous)?;
+    let state = decode_checkpoint(config, network_id, &record.checkpoint_bytes)?;
     if state.generation != record.checkpoint_generation {
         return Err(ModerationOrchestratorError::CheckpointCorrupt(
             "sealed record generation does not match checkpoint".to_owned(),
@@ -388,7 +387,7 @@ fn decode_validated_record(
 
 fn validate_record(
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     record: &ModerationCheckpointStoreRecordV1,
     previous: Option<&ModerationCheckpointStoreRecordV1>,
 ) -> Result<(), ModerationOrchestratorError> {
@@ -414,7 +413,8 @@ fn validate_record(
         &config.checkpoint_store_handle,
         config.expected_checkpoint_store_qualification,
         config.checkpoint_max_bytes,
-    ) || record.namespace_digest != checkpoint_namespace(chain_id)
+    ) || record.network_id != *network_id
+        || record.namespace_digest != checkpoint_namespace(network_id)
         || !lineage_valid
     {
         return Err(ModerationOrchestratorError::CheckpointStoreEquivocation);
@@ -424,7 +424,7 @@ fn validate_record(
 
 fn decode_checkpoint(
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     bytes: &[u8],
 ) -> Result<ModerationOrchestratorCheckpointV1, ModerationOrchestratorError> {
     let limits = checkpoint_decode_limits(config.checkpoint_max_bytes)?;
@@ -443,7 +443,7 @@ fn decode_checkpoint(
             "checkpoint is not canonical Norito".to_owned(),
         ));
     }
-    validate_checkpoint(&checkpoint, config, chain_id)?;
+    validate_checkpoint(&checkpoint, config, network_id)?;
     Ok(checkpoint)
 }
 
@@ -466,10 +466,10 @@ fn persist_local_cache(
     Ok(())
 }
 
-pub(super) fn checkpoint_namespace(chain_id: &iroha_data_model::ChainId) -> [u8; 32] {
+pub(super) fn checkpoint_namespace(network_id: &iroha_data_model::NetworkId) -> [u8; 32] {
     domain_hash(
         MODERATION_CHECKPOINT_NAMESPACE_DOMAIN_V1,
-        &[chain_id.as_str().as_bytes()],
+        &[network_id.as_bytes()],
     )
 }
 
@@ -480,6 +480,7 @@ pub(super) fn record_revision(record: &ModerationCheckpointStoreRecordV1) -> [u8
         MODERATION_CHECKPOINT_RECORD_REVISION_DOMAIN_V1,
         &[
             &record.version.to_be_bytes(),
+            record.network_id.as_bytes(),
             &record.namespace_digest,
             &record.checkpoint_generation.to_be_bytes(),
             &predecessor_revision,

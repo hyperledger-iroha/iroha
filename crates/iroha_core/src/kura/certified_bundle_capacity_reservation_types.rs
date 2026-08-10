@@ -10,7 +10,7 @@ struct CertifiedBundleCapacityIdentity {
     lane_block_view: u64,
     lane_block_descriptor_hash: Hash,
     proposal_hash: Hash,
-    autonomous_chain_id_hash: Hash,
+    autonomous_network_id: iroha_data_model::NetworkId,
     autonomous_epoch: u64,
 }
 
@@ -55,16 +55,18 @@ impl CertifiedBundleCapacityReservation {
         if self.outstanding_components.is_empty() {
             return Some(0);
         }
-        let stable = self.outstanding_components.iter().try_fold(
-            0_u64,
-            |total, component| total.checked_add(*self.plan.component_bytes.get(component)?),
-        )?;
-        let transient = self
+        let stable = self
             .outstanding_components
             .iter()
-            .try_fold(0_u64, |maximum, component| {
-                Some(maximum.max(*self.plan.component_transient_bytes.get(component)?))
+            .try_fold(0_u64, |total, component| {
+                total.checked_add(*self.plan.component_bytes.get(component)?)
             })?;
+        let transient =
+            self.outstanding_components
+                .iter()
+                .try_fold(0_u64, |maximum, component| {
+                    Some(maximum.max(*self.plan.component_transient_bytes.get(component)?))
+                })?;
         stable.checked_add(transient)
     }
 }

@@ -8,6 +8,7 @@ import {
   type NexusTransactionCodec,
   type NexusWaitFinalizeOptions,
 } from "@iroha/iroha-js/nexus-app";
+import { NetworkId } from "@iroha/iroha-js";
 import {
   browserTransactionCodec,
   buildBrowserExecutableBatchPayload,
@@ -21,9 +22,12 @@ import {
 
 const codec: NexusTransactionCodec = browserTransactionCodec;
 new NexusAppClient({ transactionCodec: browserTransactionCodec });
+const networkId = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 
 const input: BrowserTransferInput = {
-  chainId: "compile-time-chain",
+  networkId,
   authority: "sora-test-authority",
   sourceAssetHoldingId: "asset#sora-test-authority",
   quantity: "1",
@@ -33,8 +37,23 @@ const input: BrowserTransferInput = {
 };
 
 const stronglyTypedPayload: Uint8Array = buildBrowserTransferPayload(input);
-const batchInput: BrowserExecutableBatchInput = {
+const retiredChain: BrowserTransferInput = {
+  ...input,
+  // @ts-expect-error chain is not an ordinary-transaction domain.
+  chain: "compile-time-chain",
+};
+const retiredChainId: BrowserTransferInput = {
+  ...input,
+  // @ts-expect-error chainId is not an ordinary-transaction domain.
   chainId: "compile-time-chain",
+};
+const retiredSnakeChain: BrowserTransferInput = {
+  ...input,
+  // @ts-expect-error chain_id is not an ordinary-transaction domain.
+  chain_id: "compile-time-chain",
+};
+const batchInput: BrowserExecutableBatchInput = {
+  networkId,
   authority: "sora-test-authority",
   entries: [
     { kind: "instruction", instruction: { Log: { level: "INFO", message: "before" } } },
@@ -86,6 +105,9 @@ const invalidNoWaitOptions: NexusFinalizeOptions = {
 };
 
 void stronglyTypedPayload;
+void retiredChain;
+void retiredChainId;
+void retiredSnakeChain;
 void stronglyTypedBatchPayload;
 void codecPayload;
 void validated;

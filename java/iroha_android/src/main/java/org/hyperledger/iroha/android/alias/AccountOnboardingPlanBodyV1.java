@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /** Canonical body signed by a stateless sponsored-onboarding receipt. */
 public final class AccountOnboardingPlanBodyV1 extends AliasJsonValue {
@@ -15,7 +16,7 @@ public final class AccountOnboardingPlanBodyV1 extends AliasJsonValue {
   private final int version;
   private final AccountOnboardingPlanRequestV1 request;
   private final String authority;
-  private final String chainId;
+  private final NetworkId networkId;
   private final AliasSetupModels.AliasPlanAnchorV1 anchor;
   private final AliasSetupModels.AliasPlanResourceV1 resource;
   private final AliasSetupModels.AliasLeaseAcquisitionV1 acquisition;
@@ -29,7 +30,7 @@ public final class AccountOnboardingPlanBodyV1 extends AliasJsonValue {
       final int version,
       final AccountOnboardingPlanRequestV1 request,
       final String authority,
-      final String chainId,
+      final NetworkId networkId,
       final AliasSetupModels.AliasPlanAnchorV1 anchor,
       final AliasSetupModels.AliasPlanResourceV1 resource,
       final AliasSetupModels.AliasLeaseAcquisitionV1 acquisition,
@@ -50,7 +51,7 @@ public final class AccountOnboardingPlanBodyV1 extends AliasJsonValue {
     this.version = version;
     this.request = request;
     this.authority = AccountIdLiteral.requireCanonicalI105Address(authority, "authority");
-    this.chainId = AliasNameSupport.requireToken(chainId, "chainId");
+    this.networkId = java.util.Objects.requireNonNull(networkId, "networkId");
     this.anchor = anchor;
     this.resource = resource;
     this.acquisition = acquisition;
@@ -63,7 +64,7 @@ public final class AccountOnboardingPlanBodyV1 extends AliasJsonValue {
   public int version() { return version; }
   public AccountOnboardingPlanRequestV1 request() { return request; }
   public String authority() { return authority; }
-  public String chainId() { return chainId; }
+  public NetworkId networkId() { return networkId; }
   public AliasSetupModels.AliasPlanAnchorV1 anchor() { return anchor; }
   public AliasSetupModels.AliasPlanResourceV1 resource() { return resource; }
   public AliasSetupModels.AliasLeaseAcquisitionV1 acquisition() { return acquisition; }
@@ -80,7 +81,7 @@ public final class AccountOnboardingPlanBodyV1 extends AliasJsonValue {
     map.put("version", version);
     map.put("request", request.toJsonMap());
     map.put("authority", authority);
-    map.put("chain_id", chainId);
+    map.put("network_id", networkId.literal());
     map.put("anchor", anchor.toJsonMap());
     map.put("resource", resource.toJsonMap());
     map.put("acquisition", acquisition.toJsonMap());

@@ -867,6 +867,101 @@ fn node_handle_storage_ingest_and_fetch_range() {
 }
 
 #[test]
+fn admitted_payload_lease_reads_exact_bytes_without_paths() {
+    let (cfg, _dir) = storage_config_with_temp_dir();
+    let handle = NodeHandle::new(cfg);
+    let payload = b"opaque lifecycle-leased provider payload";
+    let plan = CarBuildPlan::single_file(payload).expect("plan");
+    let manifest = manifest_builder_for_plan(payload, &plan)
+        .pin_policy(PinPolicy::default())
+        .build()
+        .expect("manifest");
+    let mut payload_reader = payload.as_slice();
+    let manifest_id = handle
+        .ingest_manifest(&manifest, &plan, &mut payload_reader)
+        .expect("ingest admitted payload");
+    let manifest_digest = *handle
+        .manifest_metadata(&manifest_id)
+        .expect("admitted manifest metadata")
+        .manifest_digest();
+
+    let readback = handle
+        .with_admitted_payload_read_lease(&manifest_digest, |lease| {
+            assert_eq!(lease.manifest_digest(), &manifest_digest);
+            assert_eq!(lease.content_length(), payload.len() as u64);
+            assert_eq!(lease.payload_digest(), blake3::hash(payload).as_bytes());
+            let mut reader = lease.open_reader().expect("open admitted payload reader");
+            let mut bytes = Vec::new();
+            reader
+                .read_to_end(&mut bytes)
+                .expect("read exact admitted payload");
+            bytes
+        })
+        .expect("acquire admitted payload lease");
+
+    assert_eq!(readback, payload);
+}
+
+#[test]
+fn admitted_payload_lease_opens_repeated_fresh_readers_at_zero() {
+    let (cfg, _dir) = storage_config_with_temp_dir();
+    let handle = NodeHandle::new(cfg);
+    let payload = b"every verifier pass starts from the first payload byte";
+    let plan = CarBuildPlan::single_file(payload).expect("plan");
+    let manifest = manifest_builder_for_plan(payload, &plan)
+        .pin_policy(PinPolicy::default())
+        .build()
+        .expect("manifest");
+    let mut payload_reader = payload.as_slice();
+    let manifest_id = handle
+        .ingest_manifest(&manifest, &plan, &mut payload_reader)
+        .expect("ingest admitted payload");
+    let manifest_digest = *handle
+        .manifest_metadata(&manifest_id)
+        .expect("admitted manifest metadata")
+        .manifest_digest();
+
+    handle
+        .with_admitted_payload_read_lease(&manifest_digest, |lease| {
+            let mut first = lease.open_reader().expect("open first fresh reader");
+            let mut prefix = [0_u8; 5];
+            first.read_exact(&mut prefix).expect("read first prefix");
+            assert_eq!(&prefix, &payload[..prefix.len()]);
+
+            let mut second = lease.open_reader().expect("open second fresh reader");
+            let mut second_bytes = Vec::new();
+            second
+                .read_to_end(&mut second_bytes)
+                .expect("read second fresh pass");
+            assert_eq!(second_bytes, payload);
+
+            let mut third = lease.open_reader().expect("open third fresh reader");
+            let mut third_bytes = Vec::new();
+            third
+                .read_to_end(&mut third_bytes)
+                .expect("read third fresh pass");
+            assert_eq!(third_bytes, payload);
+            assert!(matches!(
+                lease.open_reader(),
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied
+            ));
+        })
+        .expect("acquire admitted payload lease");
+}
+
+#[test]
+fn admitted_payload_lease_rejects_missing_manifest_digest() {
+    let (cfg, _dir) = storage_config_with_temp_dir();
+    let handle = NodeHandle::new(cfg);
+    let missing_digest = [0xA5; 32];
+
+    assert!(matches!(
+        handle.with_admitted_payload_read_lease(&missing_digest, |_| ()),
+        Err(AdmittedPayloadReadLeaseErrorV1::NotAdmitted)
+    ));
+}
+
+#[test]
 fn node_handle_storage_sample_por() {
     let (cfg, _dir) = storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
@@ -1280,10 +1375,12 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
         },
     };
     let context = RepairTransactionContextV1 {
+        network_id: transaction_network_id(0xC8),
         chain_id: ChainId::from("native-repair-test-chain"),
         finalized_cursor,
     };
     let stale_context = RepairTransactionContextV1 {
+        network_id: context.network_id,
         chain_id: context.chain_id.clone(),
         finalized_cursor: RepairFinalizedCursorV1 {
             height: 8,

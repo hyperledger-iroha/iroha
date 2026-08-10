@@ -364,7 +364,7 @@ def _route(
         },
         "settlement": {
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-            "custody_account_id": AUTHORITY,
+            "custody_owner": AUTHORITY,
             "payload_amount_scale": 9,
         },
     }
@@ -883,7 +883,7 @@ def test_registry_validates_full_key_and_rejects_retired_or_aliased_routes() -> 
         normalize_sccp_registry(wrong_asset)
     noncanonical_custody = _registry()
     noncanonical_custody["lanes"][0]["routes"][0]["settlement"][
-        "custody_account_id"
+        "custody_owner"
     ] = "n753" + AUTHORITY.removeprefix("sora")
     with pytest.raises(ValueError, match="exact canonical rendering"):
         normalize_sccp_registry(noncanonical_custody)

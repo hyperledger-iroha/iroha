@@ -137,7 +137,7 @@ public struct SccpGovernedRouteV1: Equatable, Sendable {
     public let sourceEmitter: SccpSourceEmitterV1
     public let destination: SccpDestinationDeploymentV1
     public let assetDefinitionId: String
-    public let custodyAccountId: String
+    public let custodyOwner: String
     public let payloadAmountScale: UInt32
     public let routeConfigurationHash: Data
 }
@@ -921,17 +921,17 @@ private enum SccpExactParser {
               sourceParts.runtimeCodeHash == destination.routeCodeHash
         else { throw SccpV1Error.invalid("\(label) source identity does not name its destination route deployment") }
         let settlement = try object(item, "settlement")
-        try SccpStrictJSON.exactFields(settlement, ["asset_definition_id", "custody_account_id", "payload_amount_scale"], label: "\(label).settlement")
+        try SccpStrictJSON.exactFields(settlement, ["asset_definition_id", "custody_owner", "payload_amount_scale"], label: "\(label).settlement")
         let assetDefinition = try SccpStrictJSON.text(settlement, "asset_definition_id")
         guard assetDefinition == "6TEAJqbb8oEPmLncoNiMRbLEK6tw" else { throw SccpV1Error.invalid("\(label) must settle canonical Taira XOR") }
-        let custody = try SccpStrictJSON.text(settlement, "custody_account_id")
+        let custody = try SccpStrictJSON.text(settlement, "custody_owner")
         guard let address = try? AccountAddress.parseEncoded(custody),
               let canonical = try? address.toI105(
                   networkPrefix: SccpV1.tairaI105DiscriminantV1
               ), canonical == custody
         else {
             throw SccpV1Error.invalid(
-                "\(label).custody_account_id must be a canonical Taira I105 AccountId"
+                "\(label).custody_owner must be a canonical Taira I105 AccountId"
             )
         }
         let scale = try SccpStrictJSON.uint32(settlement, "payload_amount_scale", minimum: 9, maximum: 9)
@@ -960,7 +960,7 @@ private enum SccpExactParser {
             sourceEmitter: source,
             destination: destination,
             assetDefinitionId: assetDefinition,
-            custodyAccountId: custody,
+            custodyOwner: custody,
             payloadAmountScale: scale,
             routeConfigurationHash: configuration
         )

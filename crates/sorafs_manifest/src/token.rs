@@ -35,7 +35,7 @@ pub struct StreamTokenBodyV1 {
 impl StreamTokenBodyV1 {
     /// Serialises the body into canonical Norito bytes suitable for signing.
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::to_bytes(self)
+        norito::encode_canonical(self)
     }
 
     /// Build the exact domain-separated payload that an external Ed25519
@@ -166,6 +166,30 @@ mod tests {
         let hash = token.body_hash().expect("hash");
         let bytes = body.to_canonical_bytes().expect("bytes");
         assert_eq!(hash.as_bytes(), blake3::hash(&bytes).as_bytes());
+    }
+
+    #[test]
+    fn canonical_body_and_signature_ignore_ambient_layout_flags() {
+        let body = sample_body();
+        let signing = SigningKey::from_bytes(&[0x42; 32]);
+        let expected_body = body
+            .to_canonical_bytes()
+            .expect("encode canonical stream-token body");
+        let expected_token =
+            StreamTokenV1::sign(body.clone(), &signing).expect("sign canonical stream-token body");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+
+        assert_eq!(
+            body.to_canonical_bytes()
+                .expect("encode under alternate ambient flags"),
+            expected_body
+        );
+        assert_eq!(
+            StreamTokenV1::sign(body, &signing).expect("sign under alternate ambient flags"),
+            expected_token
+        );
     }
 
     #[test]

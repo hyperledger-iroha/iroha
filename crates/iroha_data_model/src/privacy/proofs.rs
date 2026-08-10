@@ -357,14 +357,9 @@ pub enum PrivacyStatementValidationError {
     /// Supplied consensus limits are invalid.
     #[error("privacy statement limits are invalid: {0}")]
     InvalidLimits(PrivacyConsensusLimitsValidationError),
-    /// Chain id is empty or exceeds the native transcript bound.
-    #[error("privacy statement chain id uses {bytes} UTF-8 bytes; expected 1..={max}")]
-    InvalidChainIdLength {
-        /// Observed UTF-8 byte length.
-        bytes: u32,
-        /// Maximum admitted UTF-8 byte length.
-        max: u32,
-    },
+    /// Transcript network identity used the reserved all-zero hash.
+    #[error("privacy statement network id must be non-zero")]
+    ZeroNetworkId,
     /// Action index cannot occur under the transaction action limit.
     #[error("privacy statement action index {index} is outside 0..{max_actions}")]
     ActionIndexOutOfBounds {
@@ -1436,18 +1431,20 @@ mod exact12_fixture {
         str::FromStr as _,
     };
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_version::codec::EncodeVersioned as _;
 
     use super::*;
     use crate::{
+        NetworkId,
+        block::BlockHeader,
         domain::DomainId,
         isi::{InstructionBox, privacy::SubmitPrivacyProofV1},
         metadata::Metadata,
         name::Name,
         transaction::{
-            Executable, FeePaymentIntent, TransactionBuilder, TransactionPayload,
-            signed::PrivacyTransactionIntentErrorV1,
+            Executable, FeePaymentIntent, TransactionBuilder, TransactionDomain,
+            TransactionPayload, signed::PrivacyTransactionIntentErrorV1,
         },
     };
 
@@ -1532,7 +1529,7 @@ mod exact12_fixture {
 
     pub(super) fn context() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
-            chain_id: "privacy-test-chain".parse().expect("chain id"),
+            network_id: network_id(200),
             action_index: 0,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(raw(6)),
             parameter_id: PrivacyParameterIdV1::new(raw(1)),
@@ -1541,6 +1538,12 @@ mod exact12_fixture {
             statement_schema_digest: PrivacyStatementSchemaDigestV1::new(raw(4)),
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(5)),
         }
+    }
+
+    pub(super) fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
     }
 
     pub(super) fn commitment(seed: u8) -> PrivacyCommitmentV1 {
@@ -2362,7 +2365,6 @@ mod exact12_fixture {
         row_index: usize,
     ) -> Result<PrivacyExact12CompleteRowV1, PrivacyExact12FixtureErrorV1> {
         let envelope = try_envelope(statement)?;
-        let chain = envelope.statement.context().chain_id.clone();
         let signing_key = exact12_signing_key_pair_v1();
         let authority = AccountId::new(signing_key.public_key().clone());
         let row_offset = u64::try_from(row_index).map_err(|_| {
@@ -2377,7 +2379,7 @@ mod exact12_fixture {
                 )
             })?;
         let mut payload = TransactionPayload {
-            chain,
+            domain: TransactionDomain::Network(network_id(0xA5)),
             authority,
             creation_time_ms: 1_700_000_000_000_u64
                 .checked_add(row_offset)

@@ -1,4 +1,5 @@
 use super::*;
+use crate::musubi::ArchiveId;
 use crate::sorafs::{
     capacity::{
         CapacityDeclarationRecord, CapacityDisputeId, CapacityDisputeOutcome,
@@ -34,8 +35,6 @@ isi! {
         /// Canonical Norito-encoded `sorafs_manifest::ManifestV1` payload.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
         pub manifest_payload: Vec<u8>,
-        /// Epoch (inclusive) recorded for the submission event.
-        pub submitted_epoch: u64,
         /// Optional alias binding approved with the manifest.
         pub alias: Option<ManifestAliasBinding>,
         /// Optional predecessor manifest digest forming a succession chain.
@@ -50,8 +49,6 @@ isi! {
 pub struct ApprovePinManifest {
     /// Manifest digest previously registered with the pin registry.
     pub digest: ManifestDigest,
-        /// Epoch (inclusive) when the manifest becomes part of the active replication set.
-        pub approved_epoch: u64,
         /// Optional governance envelope (`manifest_signatures.json`) attached to the approval.
         #[cfg_attr(
             feature = "json",
@@ -74,8 +71,6 @@ isi! {
 pub struct RetirePinManifest {
     /// Manifest digest to retire.
     pub digest: ManifestDigest,
-        /// Epoch (inclusive) after which the manifest is no longer required.
-        pub retired_epoch: u64,
         /// Optional human-readable reason recorded alongside the retirement.
         pub reason: Option<String>,
     }
@@ -100,7 +95,12 @@ pub struct BindManifestAlias {
 impl crate::seal::Instruction for BindManifestAlias {}
 
 isi! {
-    /// Register or update a provider capacity declaration.
+    /// Register or update capacity for an already governed, bonded provider.
+    ///
+    /// Execution requires the transaction authority to be the exact registered
+    /// provider owner and the declaration's stake to be covered by the
+    /// owner-funded native reserve ledger. This instruction never creates or
+    /// changes a provider-owner binding.
 pub struct RegisterCapacityDeclaration {
     /// Declaration record persisted by the capacity registry.
     pub record: CapacityDeclarationRecord,
@@ -141,6 +141,8 @@ pub struct IssueReplicationOrder {
         pub issued_epoch: u64,
         /// Epoch (inclusive) when the order expires.
         pub deadline_epoch: u64,
+        /// Optional immutable Musubi archive purpose installed atomically with this order.
+        pub musubi_archive: Option<ArchiveId>,
     }
 }
 
@@ -195,7 +197,10 @@ pub struct ExpireReplicationOrder {
 impl crate::seal::Instruction for ExpireReplicationOrder {}
 
 isi! {
-    /// Register or update the owner binding for a `SoraFS` provider.
+    /// Retired direct provider-owner registration surface.
+    ///
+    /// Core rejects this instruction unconditionally. Provider ownership is
+    /// established only by enacting a [`SorafsProviderGovernanceActionV1`].
 pub struct RegisterProviderOwner {
     /// Provider identifier that will be bound.
     pub provider_id: ProviderId,
@@ -207,7 +212,10 @@ pub struct RegisterProviderOwner {
 impl crate::seal::Instruction for RegisterProviderOwner {}
 
 isi! {
-    /// Remove the owner binding for a `SoraFS` provider.
+    /// Retired direct provider-owner removal surface.
+    ///
+    /// Core rejects this instruction unconditionally. Provider ownership is
+    /// removed only by enacting a [`SorafsProviderGovernanceActionV1`].
 pub struct UnregisterProviderOwner {
     /// Provider identifier whose binding will be removed.
     pub provider_id: ProviderId,
@@ -215,6 +223,155 @@ pub struct UnregisterProviderOwner {
 }
 
 impl crate::seal::Instruction for UnregisterProviderOwner {}
+
+/// Establish one previously unknown `SoraFS` provider-owner binding.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct EstablishSorafsProviderOwnerV1 {
+    /// Provider identifier that must not already have an owner.
+    pub provider_id: ProviderId,
+    /// Existing account that will own the provider.
+    pub owner: AccountId,
+}
+
+/// Compare-and-set replacement of one `SoraFS` provider owner.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct RebindSorafsProviderOwnerV1 {
+    /// Provider identifier whose owner will be replaced.
+    pub provider_id: ProviderId,
+    /// Exact current owner required for compare-and-set.
+    pub expected_owner: AccountId,
+    /// Existing account that becomes the next owner.
+    pub next_owner: AccountId,
+}
+
+/// Compare-and-remove one `SoraFS` provider-owner binding.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct RemoveSorafsProviderOwnerV1 {
+    /// Provider identifier whose owner will be removed.
+    pub provider_id: ProviderId,
+    /// Exact current owner required for compare-and-remove.
+    pub expected_owner: AccountId,
+}
+
+/// Closed provider-owner transition admitted only through native governance.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(
+        tag = "action",
+        content = "value",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )
+)]
+pub enum SorafsProviderGovernanceActionV1 {
+    /// Establish a provider that has no owner binding.
+    #[codec(index = 0)]
+    Establish(EstablishSorafsProviderOwnerV1),
+    /// Replace the exact current owner.
+    #[codec(index = 1)]
+    Rebind(RebindSorafsProviderOwnerV1),
+    /// Remove the exact current owner.
+    #[codec(index = 2)]
+    Remove(RemoveSorafsProviderOwnerV1),
+}
+
+impl SorafsProviderGovernanceActionV1 {
+    /// Validate the closed action before proposal admission or enactment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero provider identifier or a no-op rebind.
+    pub fn validate(&self) -> Result<(), crate::error::ParseError> {
+        let provider_id = match self {
+            Self::Establish(action) => action.provider_id,
+            Self::Rebind(action) => {
+                if action.expected_owner == action.next_owner {
+                    return Err(crate::error::ParseError::new(
+                        "SoraFS provider-owner rebind must change the owner",
+                    ));
+                }
+                action.provider_id
+            }
+            Self::Remove(action) => action.provider_id,
+        };
+        if provider_id == ProviderId::default() {
+            return Err(crate::error::ParseError::new(
+                "SoraFS provider governance action requires a non-zero provider id",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Provider identifier affected by this transition.
+    #[must_use]
+    pub const fn provider_id(&self) -> ProviderId {
+        match self {
+            Self::Establish(action) => action.provider_id,
+            Self::Rebind(action) => action.provider_id,
+            Self::Remove(action) => action.provider_id,
+        }
+    }
+}
 
 isi! {
     /// Compare-and-set the completion authority for a `SoraFS` provider.
@@ -253,7 +410,12 @@ isi! {
 impl crate::seal::Instruction for SetPricingSchedule {}
 
 isi! {
-    /// Upsert the credit ledger entry for a storage provider.
+    /// Upsert the governed credit projection for a storage provider.
+    ///
+    /// The provider-owner binding and owner-funded native reserve account must
+    /// already exist. Submitted `bonded + slashed` must exactly equal the
+    /// locked reserve balance net of treasury-funded principal, and an upsert
+    /// cannot reset slash history or create bonded collateral.
     pub struct UpsertProviderCredit {
         /// Credit record snapshot used to seed or update governance accounting.
         pub record: ProviderCreditRecord,
@@ -1106,13 +1268,11 @@ impl RegisterPinManifest {
     #[must_use]
     pub fn new(
         manifest_payload: Vec<u8>,
-        submitted_epoch: u64,
         alias: Option<ManifestAliasBinding>,
         successor_of: Option<ManifestDigest>,
     ) -> Self {
         Self {
             manifest_payload,
-            submitted_epoch,
             alias,
             successor_of,
         }
@@ -1124,13 +1284,11 @@ impl ApprovePinManifest {
     #[must_use]
     pub fn new(
         digest: ManifestDigest,
-        approved_epoch: u64,
         council_envelope: Option<Vec<u8>>,
         council_envelope_digest: Option<[u8; 32]>,
     ) -> Self {
         Self {
             digest,
-            approved_epoch,
             council_envelope,
             council_envelope_digest,
         }
@@ -1140,12 +1298,8 @@ impl ApprovePinManifest {
 impl RetirePinManifest {
     /// Create a new `RetirePinManifest` instruction.
     #[must_use]
-    pub fn new(digest: ManifestDigest, retired_epoch: u64, reason: Option<String>) -> Self {
-        Self {
-            digest,
-            retired_epoch,
-            reason,
-        }
+    pub fn new(digest: ManifestDigest, reason: Option<String>) -> Self {
+        Self { digest, reason }
     }
 }
 
@@ -1206,7 +1360,15 @@ impl IssueReplicationOrder {
             order_payload,
             issued_epoch,
             deadline_epoch,
+            musubi_archive: None,
         }
+    }
+
+    /// Bind this order to one already-registered immutable Musubi archive.
+    #[must_use]
+    pub const fn for_musubi_archive(mut self, archive_id: ArchiveId) -> Self {
+        self.musubi_archive = Some(archive_id);
+        self
     }
 }
 
@@ -1873,21 +2035,18 @@ macro_rules! impl_sorafs_decode_from_slice {
 
 impl_sorafs_decode_from_slice!(RegisterPinManifest {
     manifest_payload: Vec<u8>,
-    submitted_epoch: u64,
     alias: Option<ManifestAliasBinding>,
     successor_of: Option<ManifestDigest>,
 });
 
 impl_sorafs_decode_from_slice!(ApprovePinManifest {
     digest: ManifestDigest,
-    approved_epoch: u64,
     council_envelope: Option<Vec<u8>>,
     council_envelope_digest: Option<[u8; 32]>,
 });
 
 impl_sorafs_decode_from_slice!(RetirePinManifest {
     digest: ManifestDigest,
-    retired_epoch: u64,
     reason: Option<String>,
 });
 
@@ -1915,6 +2074,7 @@ impl_sorafs_decode_from_slice!(IssueReplicationOrder {
     order_payload: Vec<u8>,
     issued_epoch: u64,
     deadline_epoch: u64,
+    musubi_archive: Option<ArchiveId>,
 });
 
 impl_sorafs_decode_from_slice!(CompleteReplicationOrder {
@@ -2223,6 +2383,59 @@ mod tests {
 
     fn provider(byte: u8) -> ProviderId {
         ProviderId::new([byte; 32])
+    }
+
+    #[test]
+    fn provider_governance_actions_are_closed_canonical_and_compare_and_set() {
+        let current = owner();
+        let next = AccountId::new(
+            "ed01201111111111111111111111111111111111111111111111111111111111111111"
+                .parse()
+                .expect("replacement public key"),
+        );
+        let actions = [
+            SorafsProviderGovernanceActionV1::Establish(EstablishSorafsProviderOwnerV1 {
+                provider_id: provider(0x31),
+                owner: current.clone(),
+            }),
+            SorafsProviderGovernanceActionV1::Rebind(RebindSorafsProviderOwnerV1 {
+                provider_id: provider(0x32),
+                expected_owner: current.clone(),
+                next_owner: next,
+            }),
+            SorafsProviderGovernanceActionV1::Remove(RemoveSorafsProviderOwnerV1 {
+                provider_id: provider(0x33),
+                expected_owner: current.clone(),
+            }),
+        ];
+        for action in actions {
+            action.validate().expect("valid governance action");
+            let encoded = norito::codec::Encode::encode(&action);
+            let decoded =
+                <SorafsProviderGovernanceActionV1 as norito::codec::DecodeAll>::decode_all(
+                    &mut encoded.as_slice(),
+                )
+                .expect("canonical action roundtrip");
+            assert_eq!(decoded, action);
+        }
+
+        assert!(
+            SorafsProviderGovernanceActionV1::Establish(EstablishSorafsProviderOwnerV1 {
+                provider_id: ProviderId::default(),
+                owner: current.clone(),
+            })
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SorafsProviderGovernanceActionV1::Rebind(RebindSorafsProviderOwnerV1 {
+                provider_id: provider(0x34),
+                expected_owner: current.clone(),
+                next_owner: current,
+            })
+            .validate()
+            .is_err()
+        );
     }
 
     fn xor_quantity_nanos(value: u128) -> Quantity {
@@ -2590,10 +2803,33 @@ mod tests {
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
 
+    #[test]
+    fn issue_replication_order_rejects_the_pre_binding_wire_layout() {
+        #[derive(Encode)]
+        struct PreBindingIssueReplicationOrder {
+            order_id: ReplicationOrderId,
+            order_payload: Vec<u8>,
+            issued_epoch: u64,
+            deadline_epoch: u64,
+        }
+
+        let retired = PreBindingIssueReplicationOrder {
+            order_id: order_id(),
+            order_payload: vec![0x01, 0x02, 0x03],
+            issued_epoch: 70,
+            deadline_epoch: 90,
+        }
+        .encode();
+        assert!(
+            IssueReplicationOrder::decode_from_slice(&retired).is_err(),
+            "the four-field pre-binding wire must be regenerated, not defaulted"
+        );
+    }
+
     #[cfg(feature = "json")]
     #[test]
     fn register_pin_manifest_json_roundtrip() {
-        let manifest = RegisterPinManifest::new(vec![1, 2, 3], 42, None, None);
+        let manifest = RegisterPinManifest::new(vec![1, 2, 3], None, None);
 
         let value = norito::json::to_value(&manifest).expect("register pin manifest json");
         let decoded: RegisterPinManifest =
@@ -2691,19 +2927,16 @@ mod tests {
     fn sorafs_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RegisterPinManifest::new(
             vec![0x01, 0x02, 0x03],
-            42,
             Some(alias()),
             Some(digest(0x10)),
         ));
         assert_slice_roundtrip(ApprovePinManifest::new(
             digest(0x11),
-            64,
             Some(vec![0xCA, 0xFE]),
             Some([0x23; 32]),
         ));
         assert_slice_roundtrip(RetirePinManifest::new(
             digest(0x11),
-            128,
             Some("superseded".to_owned()),
         ));
         assert_slice_roundtrip(BindManifestAlias::new(digest(0x11), alias(), 65, 365));
@@ -2716,6 +2949,10 @@ mod tests {
             70,
             90,
         ));
+        assert_slice_roundtrip(
+            IssueReplicationOrder::new(order_id(), vec![0x04, 0x05], 70, 90)
+                .for_musubi_archive(ArchiveId::new([0xA5; 32])),
+        );
         assert_slice_roundtrip(CompleteReplicationOrder::new(
             order_id(),
             provider(0x35),
@@ -2958,20 +3195,15 @@ mod tests {
         let registry = crate::isi::registry::default();
         assert_registry_decodes(
             &registry,
-            RegisterPinManifest::new(
-                vec![0x01, 0x02, 0x03],
-                42,
-                Some(alias()),
-                Some(digest(0x10)),
-            ),
+            RegisterPinManifest::new(vec![0x01, 0x02, 0x03], Some(alias()), Some(digest(0x10))),
         );
         assert_registry_decodes(
             &registry,
-            ApprovePinManifest::new(digest(0x11), 64, Some(vec![0xCA, 0xFE]), Some([0x23; 32])),
+            ApprovePinManifest::new(digest(0x11), Some(vec![0xCA, 0xFE]), Some([0x23; 32])),
         );
         assert_registry_decodes(
             &registry,
-            RetirePinManifest::new(digest(0x11), 128, Some("superseded".to_owned())),
+            RetirePinManifest::new(digest(0x11), Some("superseded".to_owned())),
         );
         assert_registry_decodes(
             &registry,

@@ -711,8 +711,10 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
     let chain: ChainId = harness.cfg.common.chain.clone();
     let key_pair = checked_norito_ingress_client_fixture();
     let account = AccountId::of(key_pair.public_key().clone());
+    let network_id = harness.network_id;
     let client = Client::new(Config {
         chain: chain.clone(),
+        network_id,
         account: account.clone(),
         account_chain_discriminant: iroha_config::parameters::defaults::common::chain_discriminant(
         ),
@@ -731,7 +733,7 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
     });
 
     let tx = TransactionBuilder::new(
-        chain,
+        network_id,
         account,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

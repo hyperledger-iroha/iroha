@@ -178,7 +178,7 @@ or partially successful erasure-intent reconciliation must leave the replica
 unavailable for reads until authoritative restart recovery. A poisoned
 quarantine-object index must also surface as unavailable state, never as
 `NotFound`. The source tree supplies the injection contract, not a production
-CAS/HSM/object-lock implementation or deployment evidence.
+CAS/external-software-signer/object-lock implementation or deployment evidence.
 
 ### Fused privacy publication and signed Governance DAG
 
@@ -246,7 +246,7 @@ platforms fail closed. Governance outbound operations use only canonical
 descriptor/envelope request authentication, with the exact Ed25519 verifier,
 provider qualification, body bound, lifetime, skew, and replay identity
 revalidated around use; credential headers and compatibility representations
-are rejected. The deployment-owned broker executable and genuine HSM,
+are rejected. The deployment-owned broker executable and genuine external software signer,
 signer/store, Kubo/head, and writer/reader backends are not packaged in-tree.
 The local producer retains a canonical outgoing/incoming dual-signed
 key-transition journal and bounded signed qualification archives; archive

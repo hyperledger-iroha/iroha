@@ -754,14 +754,14 @@ fn build_stark_open_verify_envelope_bytes_for_columns(
 
 fn derive_ballot_nullifier_for_test(
     domain_tag: &str,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     election_id: &str,
     commit: &[u8; 32],
 ) -> [u8; 32] {
     use blake2::{Blake2b512, Digest as _};
 
     let mut input = Vec::with_capacity(
-        domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
+        domain_tag.len() + network_id.as_bytes().len() + election_id.len() + commit.len() + 24,
     );
     let push_len = |buf: &mut Vec<u8>, len: usize| {
         let len_u64 = len as u64;
@@ -769,8 +769,8 @@ fn derive_ballot_nullifier_for_test(
     };
     push_len(&mut input, domain_tag.len());
     input.extend_from_slice(domain_tag.as_bytes());
-    push_len(&mut input, chain_id.as_str().len());
-    input.extend_from_slice(chain_id.as_str().as_bytes());
+    push_len(&mut input, network_id.as_bytes().len());
+    input.extend_from_slice(network_id.as_bytes());
     push_len(&mut input, election_id.len());
     input.extend_from_slice(election_id.as_bytes());
     input.extend_from_slice(commit);
@@ -1319,7 +1319,7 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
 
     // Derive the proved payload by executing the IVM program once.
     let tx = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(
             Vec::new(),
@@ -1389,7 +1389,7 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         .expect("one attachment is a valid bounded proof list");
 
     let tx_proved = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(
             Vec::new(),
@@ -1926,7 +1926,7 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     );
     let halo2_nullifier = derive_ballot_nullifier_for_test(
         "gov:ballot:v1",
-        &state.chain_id,
+        state.network_id_ref(),
         &halo2_election_id,
         &halo2_commit,
     );
@@ -2020,7 +2020,7 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     );
     let stark_nullifier = derive_ballot_nullifier_for_test(
         "gov:ballot:v1",
-        &state.chain_id,
+        state.network_id_ref(),
         &stark_election_id,
         &stark_commit,
     );

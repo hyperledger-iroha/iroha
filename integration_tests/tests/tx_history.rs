@@ -415,7 +415,7 @@ fn sealed_entrypoints_for_instructions(
     reveal_deadline_height: u64,
 ) -> (Hash, TransactionEntrypoint, TransactionEntrypoint) {
     let inner_tx = TransactionBuilder::new(
-        client.chain.clone(),
+        client.network_id,
         client.account.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -523,7 +523,7 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
     let reveal_deadline_height = starting_height + 100;
     let marker = "sealed_reveal_marker".parse::<Name>()?;
     let inner_tx = TransactionBuilder::new(
-        client.chain.clone(),
+        client.network_id,
         client.account.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

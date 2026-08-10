@@ -16,6 +16,7 @@ import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.MusubiToriiClientV1
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /** Cross-SDK checks for the Rust-owned Musubi first-release JSON fixture. */
 class MusubiSdkV1FixtureTest {
@@ -815,11 +816,13 @@ class MusubiSdkV1FixtureTest {
             java.math.BigInteger.ONE,
             emptyMap(),
         )
+        val networkId = NetworkId.fromBytes(
+            ByteArray(32) { index -> if (index == 31) 9 else 8 },
+        )
         assertFails {
             MusubiResolverIndexPageV1(
                 resolverRequest,
-                "fixture-chain",
-                ByteArray(32) { 8 },
+                networkId,
                 listOf(second, first),
                 null,
                 snapshot,
@@ -828,8 +831,7 @@ class MusubiSdkV1FixtureTest {
         assertFails {
             MusubiResolverIndexPageV1(
                 resolverRequest,
-                "fixture-chain",
-                ByteArray(32) { 8 },
+                networkId,
                 listOf(first, first),
                 null,
                 snapshot,
@@ -837,8 +839,7 @@ class MusubiSdkV1FixtureTest {
         }
         val page = MusubiResolverIndexPageV1(
             resolverRequest,
-            "fixture-chain",
-            ByteArray(32) { 8 },
+            networkId,
             listOf(first),
             null,
             snapshot,

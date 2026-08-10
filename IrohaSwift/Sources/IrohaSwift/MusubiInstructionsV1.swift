@@ -29,7 +29,7 @@ public extension MusubiInstructionV1 {
         let instruction = try transactionInstructionFrame()
         return noritoEncode(
             typeName: MusubiInstructionNoritoV1.instructionBoxSchema,
-            payload: instruction.compactInstructionBoxPayload(),
+            payload: try instruction.compactInstructionBoxPayload(),
             flags: NoritoHeader.compactLen,
             payloadAlignment: 8
         )
@@ -1054,8 +1054,7 @@ private enum MusubiInstructionNoritoV1 {
 
     static func seedIngressBinding(_ value: MusubiSeedIngressReceiptBindingV1) throws -> Data {
         var writer = CompactNoritoWriter()
-        writer.writeField(chainID(value.chainId))
-        writer.writeField(Data(value.genesisBlockHash))
+        writer.writeField(value.networkId.bytes)
         writer.writeField(try CanonicalNorito.encodeCompactAccountId(value.publisher))
         writer.writeField(try CanonicalNorito.encodeCompactAccountId(value.ingressBroker))
         writer.writeField(try providerID(value.seedProvider))
@@ -1089,8 +1088,7 @@ private enum MusubiInstructionNoritoV1 {
         _ value: MusubiProviderBundleVerificationBindingV1
     ) throws -> Data {
         var writer = CompactNoritoWriter()
-        writer.writeField(chainID(value.chainID))
-        writer.writeField(Data(value.genesisBlockHash))
+        writer.writeField(value.networkId.bytes)
         writer.writeField(digest32(value.providerID))
         writer.writeField(try CanonicalNorito.encodeCompactAccountId(value.completedBy))
         writer.writeField(try completionAuthority(value.completionAuthority))
@@ -1329,10 +1327,6 @@ private enum MusubiInstructionNoritoV1 {
         action.writeUInt32LE(3)
         action.writeField(replacement.data)
         return action.data
-    }
-
-    static func chainID(_ value: String) -> Data {
-        newtype(CompactNorito.encodeString(value))
     }
 
     static func providerID(_ canonicalHex: String) throws -> Data {

@@ -108,7 +108,7 @@ scripts/run_localnet_throughput.sh --release --artifact-dir ./artifacts/localnet
 ```
 
 For repeated local runs, add `--target-dir <dir>` to pin `CARGO_TARGET_DIR`.
-When an `irohad` binary already exists under that target root, the wrapper now
+When an `iroha3d` binary already exists under that target root, the wrapper now
 reuses it and auto-sets `IROHA_TEST_SKIP_BUILD=1`; pass `--no-skip-build` to
 force the legacy nested-build path.
 

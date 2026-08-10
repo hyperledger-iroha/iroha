@@ -283,7 +283,7 @@ public sealed record class ToriiKagemushaOperationStatus
 
 internal static class ToriiKagemushaTransport
 {
-    internal const int BridgeAbiVersion = 21;
+    internal const int BridgeAbiVersion = 22;
     internal const int ManifestVersion = 4;
     internal const int MaxHops = 8;
     internal const int MaxTopUpNoritoRequestBytes = 512 * 1024;

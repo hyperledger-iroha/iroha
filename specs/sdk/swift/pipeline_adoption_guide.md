@@ -20,18 +20,14 @@ summary: Checklist and runbook for enabling the Torii pipeline endpoints inside 
 
 ✅ Acceptance criteria: every shipping build must leave the mode at `.pipeline`, log any temporary downgrades, and restore the default immediately after Torii recovers.
 
-# 3. Submission & Retry Semantics
+# 3. One-shot Submission Semantics
 
-`PipelineSubmitOptions` governs retries and idempotency:
+`PipelineSubmitOptions` governs only the idempotency key on the single submission attempt:
 
 ```swift
-var submitOptions = PipelineSubmitOptions(
-    maxRetries: 5,
-    initialBackoffSeconds: 0.75,
-    backoffMultiplier: 1.7,
-    retryableStatusCodes: [429, 500, 502, 503, 504],
+let submitOptions = PipelineSubmitOptions(
     idempotencyKeyFactory: { envelope in
-        // Default uses the transaction hash hex; override if a custom key is required.
+        // The default already uses the transaction hash hex.
         "swift-demo-\(envelope.hashHex)"
     }
 )
@@ -42,9 +38,10 @@ let sdk = IrohaSDK(
 )
 ```
 
-- Retries apply to transport failures and HTTP status codes listed in `retryableStatusCodes`. Each attempt sends the Norito payload with the optional `Idempotency-Key` header so Torii deduplicates replays (`PipelineSubmitOptions.defaultIdempotencyKeyFactory` already emits the envelope hash).
-- `PipelineSubmitOptions` are shared by the transaction builders (`TxBuilder.submit`, `IrohaSDK.submit`, and `IrohaSDK.submitAndWait`). Per-call overrides are available through `submit(envelope:pipelineSubmitOptions:...)`.
-- Exhausted retries surface `IrohaSDKError.pipelineSubmissionFailed` and, when `pendingTransactionQueue` is configured (see §5), the SDK persists the envelope for later replay.
+- `TxBuilder.submit`, `IrohaSDK.submit`, and `IrohaSDK.submitAndWait` send the signed Norito envelope exactly once. Redirects, transport failures, 429 responses, and 5xx responses are returned to the caller without replay.
+- `PipelineSubmitOptions.defaultIdempotencyKeyFactory` emits the envelope hash, but this server-side deduplication hint does not authorize a client retry.
+- After an ambiguous transport result, call `getTransactionStatus(hashHex:)`. Do not resubmit until the application has reconciled the original envelope hash.
+- Custom `ToriiTransactionSubmitting` implementations must reject redirects and provide the same one-shot contract.
 
 # 4. Polling, Classification, and Errors
 
@@ -71,29 +68,31 @@ let status = try await sdk.submitAndWait(
 - Use `ToriiClient.getTransactionStatus(hashHex:mode:)` when monitoring a hash submitted by other SDKs or CLI automation.
 - A `404` from `/v1/pipeline/transactions/status` indicates Torii has no cached status yet (for example after a restart), so the Swift SDK treats it as "pending" and continues polling.
 
-# 5. Offline Queueing & Recovery Evidence
+# 5. Caller-managed Archives & Recovery Evidence
 
-Swift clients should persist envelopes that exhaust their retry budget by configuring `PendingTransactionQueue`:
+Swift clients may archive an envelope explicitly before submission:
 
 ```swift
-let queueURL = FileManager.default
+let archiveURL = FileManager.default
     .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     .appendingPathComponent("pending.pipeline.queue")
 
-sdk.pendingTransactionQueue = try FilePendingTransactionQueue(fileURL: queueURL)
+let archive = try FilePendingTransactionQueue(fileURL: archiveURL)
+try archive.enqueue(envelope)
 ```
 
-- Envelopes replayed from the queue reuse the same `PipelineSubmitOptions`, idempotency key, and polling classification, guaranteeing that retries match the live submission semantics.
+- `IrohaSDK` never drains or submits this archive. The application owns reconciliation,
+  removal, and any explicit later action.
 - Before paging Torii, capture the context from `/v1/pipeline/recovery/{height}` via `ToriiClient.getPipelineRecovery(height:)` and export the JSON artifact with the incident report. IOS2 requires these snapshots so governance can prove that Swift clients observe the new recovery diagnostics.
-- Pair the recovery evidence with `ToriiClient.getTimeStatus()`/`getSumeragiStatus()` samples to show that queue drains align with the cluster state.
+- Pair the recovery evidence with `ToriiClient.getTimeStatus()`/`getSumeragiStatus()` samples and the transaction-hash status lookup.
 
 # 6. Observability & Reporting
 
 To satisfy IOS2 reporting gates:
 
-1. Log `pipelineEndpointMode`, `pipelineSubmitOptions`, and `pipelinePollOptions` at startup. Include the configuration in weekly digests and attach them to the `swift_parity_*` telemetry bundle exported by `scripts/swift_status_export.py`.
+1. Log `pipelineEndpointMode` and `pipelinePollOptions` at startup. Include the configuration in weekly digests and attach them to the `swift_parity_*` telemetry bundle exported by `scripts/swift_status_export.py`.
 2. When downgrades occur, annotate the Buildkite `ci/xcode-swift-parity` run and update `status.md` with the affected build numbers and hashes.
-3. Track `swift.torii.http.retry`/`swift.pipeline.queue.persisted`/`swift.pipeline.queue.replayed` events (see `specs/sdk/swift/telemetry_redaction.md`) to prove retry parity across shadow traffic.
+3. Track ambiguous one-shot outcomes and their hash-reconciliation results (see `specs/sdk/swift/telemetry_redaction.md`) without logging signed bodies.
 4. Store `submitAndWait` traces together with the Torii `/v1/pipeline/transactions/status` responses—auditors must be able to associate every operator-facing alert with the hash, final status, and recovery evidence mentioned above.
 
 Once the above artefacts are captured, update the roadmap entry for IOS2-WB2 and the Swift section of `status.md` so reviewers can trace the adoption across docs, code, and telemetry.

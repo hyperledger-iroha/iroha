@@ -52,7 +52,7 @@ the CI parity work can proceed with a frozen spec and documented action items.
 | Time (UTC) | Topic | Presenter |
 |------------|-------|-----------|
 | 14:00–14:10 | Welcome, objectives, success criteria | Swift Program PM |
-| 14:10–14:30 | `/v1/pipeline` + Norito RPC walkthrough (request/response envelopes, retries, ABI hash policy) | Torii Platform TL |
+| 14:10–14:30 | `/v1/pipeline` + Norito RPC walkthrough (one-shot envelopes, hash reconciliation, ABI hash policy) | Torii Platform TL |
 | 14:30–14:45 | Spec delta review vs. Swift blockers (fixtures, telemetry, `/v1/pipeline` adoption) | Swift IOS2 lead |
 | 14:45–15:05 | Cross-SDK fixture cadence + CI/telemetry requirements | SDK Program Lead + Observability TL |
 | 15:05–15:20 | Open issues + risk register updates (CR-2/CR-3, governance dependencies) | Swift Program PM |
@@ -80,7 +80,7 @@ the CI parity work can proceed with a frozen spec and documented action items.
 
 | Topic | Proposed Outcome | Owner | Evidence / Due |
 |-------|------------------|-------|----------------|
-| `/v1/pipeline` retries + canonical errors | Freeze error catalog + retry hints for IOS2 |  |  |
+| `/v1/pipeline` one-shot outcomes + canonical errors | Freeze ambiguous-outcome catalog and hash-reconciliation contract for IOS2 |  |  |
 | Norito RPC headers + telemetry | Confirm required headers + OTLP events |  |  |
 | Fixture cadence adjustments | Tue/Fri cadence sufficient? emergency policy? |  |  |
 | CI/exporter updates | What runs before merge + nightly? |  |  |
@@ -89,7 +89,7 @@ the CI parity work can proceed with a frozen spec and documented action items.
 
 | ID | Description | Owner | Target | Status/Notes |
 |----|-------------|-------|--------|--------------|
-| TSPEC-001 | Update `specs/torii/nrpc_spec.md` with agreed retry hints |  | 2026-11-28 |  |
+| TSPEC-001 | Update `specs/torii/nrpc_spec.md` with agreed one-shot outcome semantics |  | 2026-11-28 |  |
 | TSPEC-002 | Regenerate Swift/Android fixtures aligned with new schema |  | 2026-11-29 |  |
 | TSPEC-003 | Add `/v1/pipeline` parity tests + CI alert wiring |  | 2026-12-05 |  |
 | TSPEC-004 | Update `status.md` + weekly digest with decisions |  | T+1 day |  |

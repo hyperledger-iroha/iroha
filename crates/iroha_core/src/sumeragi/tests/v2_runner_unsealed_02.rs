@@ -325,7 +325,7 @@ fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
     let key_pair = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
         .expect("deterministic genesis key");
     let transaction = TransactionBuilder::new(
-        ChainId::from("height-one-resultless-projection"),
+        crate::sumeragi::synthetic_network_id("height-one-resultless-projection"),
         AccountId::new(key_pair.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -388,7 +388,7 @@ fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
     let key_pair = KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519)
         .expect("deterministic proposal key");
     let transaction = TransactionBuilder::new(
-        ChainId::from("locked-reproposal-exact-body"),
+        crate::sumeragi::synthetic_network_id("locked-reproposal-exact-body"),
         AccountId::new(key_pair.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

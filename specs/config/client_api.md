@@ -5,6 +5,19 @@ surfaces through `iroha_config::parameters::user::Torii`. The section below
 focuses on the Norito-RPC transport controls introduced for NRPC-1; future
 client API settings should extend this file.
 
+Client signer configurations pair `account.public_key` with exactly one of
+`account.private_key` or `account.private_key_file`. Production profiles use
+the file form; it is read once through a 4 KiB-bounded descriptor, must contain
+one canonical private key, and on Unix must grant no group/other access. The
+client rejects missing or duplicate signer sources before constructing the
+key pair.
+
+Clients likewise configure exactly one exact-network source: inline
+`network_id` or a canonical one-line `network_id_file`. Production templates
+point `network_id_file` at the same `/run/iroha/genesis.expected_hash` artifact
+used by validator `genesis.expected_hash_file`; missing, duplicate, multiline,
+or non-canonical values fail before a request can be signed.
+
 ### `torii.transport.norito_rpc`
 
 | Key | Type | Default | Description |

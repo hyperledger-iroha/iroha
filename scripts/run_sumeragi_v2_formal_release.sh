@@ -90,6 +90,7 @@ if [[ -n "${IROHA_RELEASE_SOURCE_MANIFEST_SHA256:-}" \
   echo "formal release source manifest disagrees with the parent release" >&2
   exit 1
 fi
+export IROHA_RELEASE_SOURCE_MANIFEST_SHA256="$source_manifest_sha256"
 
 verify_identity() {
   local checkpoint="$1"

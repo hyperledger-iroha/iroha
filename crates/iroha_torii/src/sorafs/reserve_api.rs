@@ -469,7 +469,7 @@ fn validate_reserve_signed_transaction(
     transaction: &SignedTransaction,
     route: ReserveCommandRouteV1,
 ) -> Result<(), Response> {
-    validate_reserve_signed_envelope_and_route(state.chain_id.as_ref(), transaction, route)?;
+    validate_reserve_signed_envelope_and_route(state.state.network_id_ref(), transaction, route)?;
     let view = state.state.query_view();
     let policy = FindSorafsReservePolicy::new()
         .execute(&view)
@@ -592,14 +592,14 @@ fn validate_reserve_signed_transaction(
 }
 
 fn validate_reserve_signed_envelope_and_route(
-    expected_chain: &iroha_data_model::ChainId,
+    expected_network: &iroha_data_model::NetworkId,
     transaction: &SignedTransaction,
     route: ReserveCommandRouteV1,
 ) -> Result<(), Response> {
-    if transaction.chain() != expected_chain {
+    if transaction.network_id() != Some(expected_network) {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
-            "SoraFS reserve transaction chain does not match this peer",
+            "SoraFS reserve transaction network does not match this peer",
         ));
     }
     transaction.verify_signature().map_err(|_| {
@@ -1403,11 +1403,21 @@ fn authenticate_reserve_read(
     method: &Method,
     uri: &Uri,
 ) -> Result<AccountId, Response> {
-    if !state.sorafs_node.is_enabled() {
-        return Err(feature_disabled());
-    }
-    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, &[], None) {
-        Ok(Some(verified)) => Ok(verified.account),
+    match crate::app_auth::verify_canonical_network_request(
+        &state.state,
+        state.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        &[],
+        None,
+    ) {
+        Ok(Some(verified)) => {
+            if !state.sorafs_node.is_enabled() {
+                return Err(feature_disabled());
+            }
+            Ok(verified.account)
+        }
         Ok(None) => Err(json_error(
             StatusCode::UNAUTHORIZED,
             "SoraFS reserve reads require X-Iroha canonical request authentication",
@@ -1734,9 +1744,9 @@ mod tests {
 
     use futures::{Sink, channel::mpsc, task::AtomicWaker};
     use iroha_core::{smartcontracts::Execute, state::World};
-    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId, Registrable,
+        NetworkId, Registrable,
         account::Account,
         asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
         block::BlockHeader,
@@ -1761,16 +1771,38 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn reserve_auth_rejects_foreign_exact_network_before_feature_disclosure() {
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        );
+        let method = Method::GET;
+        let uri: Uri = "/v1/sorafs/reserve/policy"
+            .parse()
+            .expect("reserve policy URI");
+        let (state, headers) = crate::tests_runtime_handlers::foreign_network_signed_app_fixture(
+            &method,
+            &uri,
+            &[],
+            0xD4,
+            0xE4,
+        );
+
+        let response = authenticate_reserve_read(&state, &headers, &method, &uri)
+            .expect_err("foreign-network reserve authorization must fail closed");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
     fn signed_transaction(
-        chain: &ChainId,
+        network_id: &NetworkId,
         instruction: InstructionBox,
         mutate: impl FnOnce(TransactionBuilder) -> TransactionBuilder,
     ) -> SignedTransaction {
-        signed_transactions(chain, vec![instruction], mutate)
+        signed_transactions(network_id, vec![instruction], mutate)
     }
 
     fn signed_transactions(
-        chain: &ChainId,
+        network_id: &NetworkId,
         instructions: Vec<InstructionBox>,
         mutate: impl FnOnce(TransactionBuilder) -> TransactionBuilder,
     ) -> SignedTransaction {
@@ -1778,7 +1810,7 @@ mod tests {
             KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519).expect("test key");
         let authority = AccountId::new(key_pair.public_key().clone());
         let mut builder = TransactionBuilder::new(
-            chain.clone(),
+            *network_id,
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -1786,6 +1818,12 @@ mod tests {
         mutate(builder)
             .with_instructions(instructions)
             .sign(key_pair.private_key())
+    }
+
+    fn reserve_test_network_id(marker: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([marker; Hash::LENGTH]),
+        ))
     }
 
     fn movement(kind: ReserveMovementKindV1) -> InstructionBox {
@@ -1965,16 +2003,16 @@ mod tests {
     }
 
     #[test]
-    fn signed_boundary_rejects_wrong_route_chain_and_noncanonical_envelope_fields() {
-        let chain = ChainId::from("reserve-boundary");
+    fn signed_boundary_rejects_wrong_route_network_and_noncanonical_envelope_fields() {
+        let network_id = reserve_test_network_id(0xA1);
         let withdrawal = signed_transaction(
-            &chain,
+            &network_id,
             movement(ReserveMovementKindV1::Withdrawal),
             |builder| builder,
         );
         assert_eq!(
             validate_reserve_signed_envelope_and_route(
-                &chain,
+                &network_id,
                 &withdrawal,
                 ReserveCommandRouteV1::RequestMovement(ReserveMovementKindV1::TopUp),
             )
@@ -1984,17 +2022,17 @@ mod tests {
         );
         assert_eq!(
             validate_reserve_signed_envelope_and_route(
-                &ChainId::from("other-chain"),
+                &reserve_test_network_id(0xA2),
                 &withdrawal,
                 ReserveCommandRouteV1::RequestMovement(ReserveMovementKindV1::Withdrawal),
             )
-            .expect_err("wrong chain")
+            .expect_err("wrong network")
             .status(),
             StatusCode::BAD_REQUEST
         );
 
         let nonce = signed_transaction(
-            &chain,
+            &network_id,
             movement(ReserveMovementKindV1::TopUp),
             |mut builder| {
                 builder.set_nonce(NonZeroU32::new(1).expect("nonce"));
@@ -2003,7 +2041,7 @@ mod tests {
         );
         assert_eq!(
             validate_reserve_signed_envelope_and_route(
-                &chain,
+                &network_id,
                 &nonce,
                 ReserveCommandRouteV1::RequestMovement(ReserveMovementKindV1::TopUp),
             )
@@ -2014,13 +2052,14 @@ mod tests {
 
         let mut forbidden_metadata = Metadata::default();
         forbidden_metadata.insert("forbidden".parse().expect("metadata key"), true);
-        let metadata =
-            signed_transaction(&chain, movement(ReserveMovementKindV1::TopUp), |builder| {
-                builder.with_metadata(forbidden_metadata)
-            });
+        let metadata = signed_transaction(
+            &network_id,
+            movement(ReserveMovementKindV1::TopUp),
+            |builder| builder.with_metadata(forbidden_metadata),
+        );
         assert_eq!(
             validate_reserve_signed_envelope_and_route(
-                &chain,
+                &network_id,
                 &metadata,
                 ReserveCommandRouteV1::RequestMovement(ReserveMovementKindV1::TopUp),
             )
@@ -2030,7 +2069,7 @@ mod tests {
         );
 
         let multiple = signed_transactions(
-            &chain,
+            &network_id,
             vec![
                 movement(ReserveMovementKindV1::TopUp),
                 movement(ReserveMovementKindV1::TopUp),
@@ -2039,7 +2078,7 @@ mod tests {
         );
         assert_eq!(
             validate_reserve_signed_envelope_and_route(
-                &chain,
+                &network_id,
                 &multiple,
                 ReserveCommandRouteV1::RequestMovement(ReserveMovementKindV1::TopUp),
             )

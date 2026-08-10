@@ -1176,7 +1176,7 @@ _SERVE_INGRESS_GATE_WORKER_REGRESSION_TEST_SHA256 = {
         "0c27de66d91cd2c0744cf962e673de7e54881838e12f4d920cbfeabeccbcf875"
     ),
     "selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle": (
-        "41a895827dc6eaa478f0ba88949ebaa405ce3fe05789201b0e48544c304bf303"
+        "956cda57dac79761f171293376a988eae0c1b2c8ad79dd0f5228f7a978d46f75"
     ),
 }
 _SERVICED_CANDIDATE_STORE_STRUCT_SHA256 = {
@@ -1511,7 +1511,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "10aefb03ef7e3f60e44d96637545b9f1073eaf03126db8dcb67b2ddf72d7f49a"
+        "f080dd6418dbbfb1cbc3cc762c16a6ac9b3842eeb5e2934baf8e574e85d32719"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"
@@ -1646,7 +1646,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
-    "run_inner": "712b12510c4adeee710d44dec94f811344b4e86ac0f3a4fb0184285f68c76032",
+    "run_inner": "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe",
 }
 _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
     "snapshot_roundtrips_and_rejects_a_b_a_resurrection": (
@@ -1790,7 +1790,7 @@ _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
         "329002c5d70440e4b06c7d6b7953abefffad11e097f8a6f2be43df02a07d5701"
     ),
     "admit_authenticated_payload": (
-        "5a415b6dd963bff9d6e5c90187d9f74558c05ac0a3534420a2a34d2fe335262d"
+        "b4c6e1a0d4c6f726e59c20494d6c189813b2f9b5d34fe73811219e539968ecb6"
     ),
     "prune_ingress_records": (
         "380a67be7fc040a1424c45ebbdd08fac6087450df43acb1521fa756df5ca1db8"
@@ -1798,7 +1798,7 @@ _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
 }
 _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256 = {
     "capacity_bypass_records_follow_current_lock_and_timeout_view": (
-        "c4f9a66c50a9216e3e07a3a01fff45d7753562a68bd06e08763cb4a30ef87cfc"
+        "5132c93697d0b4ed29e1b10cd1ca0fb3e2022ac5735afa7c26efb949b6065b65"
     ),
     "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote": (
         "fe36421732ae85439ae7bcdc1a3c3162470a49525736ea4feeef003f2744a027"

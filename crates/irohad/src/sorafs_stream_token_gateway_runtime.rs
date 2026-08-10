@@ -8,7 +8,7 @@
 use std::{fmt, sync::Arc, time::Duration};
 
 use iroha_config::parameters::actual::SorafsTokenConfig;
-use iroha_data_model::{ChainId, sorafs::reputation::derive_stream_token_gateway_id_v1};
+use iroha_data_model::{NetworkId, sorafs::reputation::derive_stream_token_gateway_id_v1};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_torii::sorafs::{
     StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionErrorV1,
@@ -86,7 +86,7 @@ impl From<StreamTokenGatewayAdmissionErrorV1> for StreamTokenGatewayRuntimeError
 /// cannot begin serving while a stale, substituted, or malformed durable
 /// callback prefix exists.
 pub(crate) fn prepare_capture(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     tokens: &SorafsTokenConfig,
     compliance_gateway_id: Option<&str>,
     provider: Option<Arc<dyn StreamTokenGatewayAdmissionProviderV1>>,
@@ -113,7 +113,7 @@ pub(crate) fn prepare_capture(
         .admission_provider_policy_digest
         .ok_or(StreamTokenGatewayRuntimeErrorV1::IncompleteBinding)?;
     let gateway_id = derive_stream_token_gateway_id_v1(
-        chain_id,
+        network_id,
         compliance_gateway_id.ok_or(StreamTokenGatewayRuntimeErrorV1::InvalidGatewayIdentity)?,
     )
     .map_err(|_| StreamTokenGatewayRuntimeErrorV1::InvalidGatewayIdentity)?;
@@ -197,6 +197,7 @@ const fn is_transient(error: StreamTokenGatewayAdmissionErrorV1) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::sorafs::{
         capacity::ProviderId,
         reputation::{PorTerminalOutcomeV1, StreamTokenValidationOutcomeV1},
@@ -214,6 +215,14 @@ mod tests {
     use super::*;
 
     const HANDLE: &str = "sealed://sorafs/stream-admission/eu-1";
+
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                vec![seed; 32],
+            )),
+        )
+    }
 
     fn token_config() -> SorafsTokenConfig {
         SorafsTokenConfig {
@@ -239,11 +248,8 @@ mod tests {
 
     fn qualification(revision: u64) -> StreamTokenGatewayAdmissionQualificationV1 {
         StreamTokenGatewayAdmissionQualificationV1 {
-            gateway_id: derive_stream_token_gateway_id_v1(
-                &ChainId::from("iroha3-taira"),
-                "gateway.dxb-1",
-            )
-            .expect("canonical gateway identity"),
+            gateway_id: derive_stream_token_gateway_id_v1(&network_id(0x61), "gateway.dxb-1")
+                .expect("canonical gateway identity"),
             revision,
             policy_digest: [0x42; 32],
             max_pending: 64,
@@ -350,7 +356,7 @@ mod tests {
     #[test]
     fn exact_configured_provider_is_live_qualified_before_launch() {
         let capture = prepare_capture(
-            &ChainId::from("iroha3-taira"),
+            &network_id(0x61),
             &token_config(),
             Some("gateway.dxb-1"),
             Some(provider(7, 0, 0)),
@@ -366,7 +372,7 @@ mod tests {
     #[test]
     fn provider_revision_substitution_fails_startup() {
         let error = prepare_capture(
-            &ChainId::from("iroha3-taira"),
+            &network_id(0x61),
             &token_config(),
             Some("gateway.dxb-1"),
             Some(provider(8, 0, 0)),
@@ -384,7 +390,7 @@ mod tests {
     #[test]
     fn malformed_pending_readback_fails_before_torii_launch() {
         let error = prepare_capture(
-            &ChainId::from("iroha3-taira"),
+            &network_id(0x61),
             &token_config(),
             Some("gateway.dxb-1"),
             Some(provider(7, 0, 1)),
@@ -402,7 +408,7 @@ mod tests {
     #[test]
     fn disabled_service_rejects_injected_provider() {
         let error = prepare_capture(
-            &ChainId::from("iroha3-taira"),
+            &network_id(0x61),
             &SorafsTokenConfig::default(),
             None,
             Some(provider(7, 0, 0)),
@@ -415,7 +421,7 @@ mod tests {
     #[test]
     fn enabled_service_requires_active_reputation_callback() {
         let error = prepare_capture(
-            &ChainId::from("iroha3-taira"),
+            &network_id(0x61),
             &token_config(),
             Some("gateway.dxb-1"),
             Some(provider(7, 0, 0)),

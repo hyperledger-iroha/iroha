@@ -56,7 +56,7 @@ fn store_tlv(vm: &mut IVM, cursor: &mut u64, tlv: &[u8]) -> u64 {
 
 fn derive_ballot_nullifier(
     domain_tag: &str,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     election_id: &str,
     commit: &[u8; 32],
 ) -> [u8; 32] {
@@ -68,12 +68,12 @@ fn derive_ballot_nullifier(
     }
 
     let mut input = Vec::with_capacity(
-        domain_tag.len() + chain_id.as_str().len() + election_id.len() + commit.len() + 24,
+        domain_tag.len() + network_id.as_bytes().len() + election_id.len() + commit.len() + 24,
     );
     push_len(&mut input, domain_tag.len());
     input.extend_from_slice(domain_tag.as_bytes());
-    push_len(&mut input, chain_id.as_str().len());
-    input.extend_from_slice(chain_id.as_str().as_bytes());
+    push_len(&mut input, network_id.as_bytes().len());
+    input.extend_from_slice(network_id.as_bytes());
     push_len(&mut input, election_id.len());
     input.extend_from_slice(election_id.as_bytes());
     input.extend_from_slice(commit);
@@ -161,7 +161,9 @@ seiyaku VendorBridgeGate {
     .execute(&authority, &mut stx)
     .expect("register vendor-bridge contract manifest");
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &authority,
         0,
         DataSpaceId::UNIVERSAL,
@@ -225,7 +227,8 @@ seiyaku VendorBridgeGate {
     );
 
     // Build a Norito-encoded SubmitBallot instruction (valid payload)
-    let nullifier = derive_ballot_nullifier("zkvote", &state.chain_id, "election1", &commit_bytes);
+    let nullifier =
+        derive_ballot_nullifier("zkvote", &state.network_id, "election1", &commit_bytes);
     let sb = iroha_data_model::isi::zk::SubmitBallot {
         election_id: "election1".to_string(),
         ciphertext: commit_bytes.to_vec(),

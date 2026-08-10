@@ -1,9 +1,12 @@
 //! Cargo-style workspace discovery and deterministic Musubi V1 metadata.
 //!
-//! Workspace loading is deliberately filesystem-aware. Every manifest and
-//! member is opened beneath a canonical root without traversing symlinks, and
-//! every local dependency is normalized and validated before it becomes part
-//! of the effective package graph.
+//! Workspace loading is deliberately filesystem-aware. On qualified Unix,
+//! every manifest final component is opened as one bounded, singly linked
+//! regular file beneath a canonically validated root; other targets return an
+//! unsupported error before reading. Every local dependency is normalized
+//! before it becomes part of the effective package graph. Ancestor validation
+//! remains path-based and does not claim protection from a deliberately timed
+//! ABA.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -17,12 +20,16 @@ use iroha_data_model::{
     name::Name,
 };
 
-use crate::manifest::{
-    ConcreteDependency, DependencyPath, DependencySpec, MANIFEST_FILE_NAME, Manifest,
-    ManifestError, PortablePath, ResolvedPackageManifest, WorkspaceManifest, parse_manifest,
+use crate::{
+    local_file::read_bounded_single_link_regular_file_v1,
+    manifest::{
+        ConcreteDependency, DependencyPath, DependencySpec, MANIFEST_FILE_NAME, Manifest,
+        ManifestError, PortablePath, ResolvedPackageManifest, WorkspaceManifest, parse_manifest,
+    },
 };
 
-const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+/// Maximum local bytes accepted for one first-release manifest.
+pub(crate) const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 type MemberSeed = (PathBuf, PathBuf, Manifest);
 
@@ -983,9 +990,23 @@ fn dependency_metadata(dependency: &EffectiveDependency) -> DependencyMetadata {
 }
 
 fn read_manifest(path: &Path) -> Result<Manifest, WorkspaceError> {
+    read_manifest_with_reader(path, read_bounded_single_link_regular_file_v1)
+}
+
+fn read_manifest_with_reader<F>(path: &Path, read_file: F) -> Result<Manifest, WorkspaceError>
+where
+    F: FnOnce(&Path, u64) -> io::Result<Vec<u8>>,
+{
     validate_manifest_file(path)?;
-    let source = fs::read_to_string(path)
-        .map_err(|error| WorkspaceError::io("read manifest as UTF-8", path, &error))?;
+    let bytes = read_file(path, MAX_MANIFEST_BYTES)
+        .map_err(|error| WorkspaceError::io("read bounded manifest", path, &error))?;
+    let source = String::from_utf8(bytes).map_err(|error| {
+        WorkspaceError::io(
+            "read manifest as UTF-8",
+            path,
+            &io::Error::new(io::ErrorKind::InvalidData, error),
+        )
+    })?;
     parse_manifest(&source).map_err(|error| WorkspaceError::manifest(path, &error))
 }
 
@@ -1188,9 +1209,12 @@ fn unsafe_path(path: &Path, message: impl Into<String>) -> WorkspaceError {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::io::Write as _;
+
+    #[cfg(unix)]
+    use std::process::Command;
 
     use tempfile::TempDir;
 
@@ -1431,6 +1455,92 @@ lib = { path = "../lib", package = "apps.sora/lib", version = "^1.0.0" }
                 .expect_err("symlinked member")
                 .kind(),
             WorkspaceErrorKind::UnsafeFilesystem
+        );
+    }
+
+    #[test]
+    fn manifest_reader_accepts_a_bounded_regular_leaf() {
+        let temp = TempDir::new().expect("temporary directory");
+        let manifest = temp.path().join(MANIFEST_FILE_NAME);
+        write_file(&manifest, STANDALONE);
+
+        let parsed = read_manifest(&manifest).expect("bounded regular manifest");
+        assert_eq!(parsed.schema_version, 1);
+        assert!(parsed.package.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manifest_reader_rejects_a_raced_regular_replacement() {
+        let temp = TempDir::new().expect("temporary directory");
+        let manifest = temp.path().join(MANIFEST_FILE_NAME);
+        let replacement = temp.path().join("replacement.toml");
+        write_file(&manifest, STANDALONE);
+        write_file(&replacement, STANDALONE);
+
+        let error = read_manifest_with_reader(&manifest, |path, maximum| {
+            crate::local_file::read_bounded_single_link_regular_file_with_hook_v1(
+                path,
+                maximum,
+                |path| {
+                    fs::remove_file(path)?;
+                    fs::rename(&replacement, path)
+                },
+            )
+        })
+        .expect_err("raced manifest replacement must fail");
+        assert_eq!(error.kind(), WorkspaceErrorKind::Io);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manifest_reader_rejects_a_raced_fifo_without_blocking() {
+        let temp = TempDir::new().expect("temporary directory");
+        let manifest = temp.path().join(MANIFEST_FILE_NAME);
+        write_file(&manifest, STANDALONE);
+
+        let error = read_manifest_with_reader(&manifest, |path, maximum| {
+            crate::local_file::read_bounded_single_link_regular_file_with_hook_v1(
+                path,
+                maximum,
+                |path| {
+                    fs::remove_file(path)?;
+                    let status = Command::new("mkfifo").arg(path).status()?;
+                    if !status.success() {
+                        return Err(io::Error::other("mkfifo failed"));
+                    }
+                    Ok(())
+                },
+            )
+        })
+        .expect_err("raced FIFO manifest must fail without hanging");
+        assert_eq!(error.kind(), WorkspaceErrorKind::Io);
+    }
+
+    #[test]
+    fn manifest_reader_rejects_hardlinked_and_oversized_leaves() {
+        let temp = TempDir::new().expect("temporary directory");
+        let manifest = temp.path().join(MANIFEST_FILE_NAME);
+        let alias = temp.path().join("Musubi.alias.toml");
+        write_file(&manifest, STANDALONE);
+        fs::hard_link(&manifest, &alias).expect("create manifest hard link");
+        assert_eq!(
+            read_manifest(&manifest)
+                .expect_err("hardlinked manifest must fail")
+                .kind(),
+            WorkspaceErrorKind::Io
+        );
+
+        fs::remove_file(&alias).expect("remove hard link");
+        fs::File::create(&manifest)
+            .expect("replace manifest")
+            .set_len(MAX_MANIFEST_BYTES + 1)
+            .expect("extend sparse manifest");
+        assert_eq!(
+            read_manifest(&manifest)
+                .expect_err("oversized manifest must fail")
+                .kind(),
+            WorkspaceErrorKind::Manifest
         );
     }
 

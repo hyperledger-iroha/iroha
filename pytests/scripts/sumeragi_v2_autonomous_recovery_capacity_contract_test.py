@@ -240,11 +240,55 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             errors,
         )
 
+    def test_current_autonomous_receipt_revalidation_cannot_repair_sidecars(
+        self,
+    ) -> None:
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/kura/autonomous_application_evidence.rs",
+            "        receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution\n"
+            "            && receipt.proposal == *proposal\n"
+            "            && self\n"
+            "                .lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)",
+            "        receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution\n"
+            "            && receipt.proposal == *proposal\n"
+            "            && self.lane_block_application_receipt_matches_merge_log(&receipt)",
+            "autonomous_current_merge_receipt_revalidator",
+        )
+
+    def test_predecessor_autonomous_receipt_revalidation_cannot_repair_sidecars(
+        self,
+    ) -> None:
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/kura/autonomous_application_evidence.rs",
+            "            && previous.proposal_height < descriptor.proposal_height\n"
+            "            && self\n"
+            "                .lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)",
+            "            && previous.proposal_height < descriptor.proposal_height\n"
+            "            && self.lane_block_application_receipt_matches_merge_log(&receipt)",
+            "autonomous_predecessor_merge_receipt_revalidator",
+        )
+
     def test_exact_incomplete_carrier_cannot_fall_back_to_route_latest(self) -> None:
         self.assert_source_mutation_rejected(
             "crates/iroha_core/src/kura/lane_artifact_budget.rs",
             ".execution_entries_for_bounded_identities(&historical_execution_identities)?",
             ".latest_execution_entry(&historical_execution_identities)?",
+            "exact_incomplete_carrier_reservation_rebuild",
+        )
+
+    def test_startup_carriers_cannot_be_reauthenticated_under_sidecar_locks(
+        self,
+    ) -> None:
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/kura/lane_artifact_budget.rs",
+            "self.ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked(\n"
+            "                pending_canonical_bytes,\n"
+            "                &entry,\n"
+            "                carrier.block_height,",
+            "self.ensure_post_wsv_lane_artifact_budget_reservation_locked(\n"
+            "                pending_canonical_bytes,\n"
+            "                &entry,\n"
+            "                carrier.block_height,",
             "exact_incomplete_carrier_reservation_rebuild",
         )
 

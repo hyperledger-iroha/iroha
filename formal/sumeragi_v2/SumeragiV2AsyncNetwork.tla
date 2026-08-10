@@ -29535,11 +29535,11 @@ AsyncSchedulerTypeInvariant ==
   /\ AsyncTransportTypeInvariant
   /\ AsyncIngressTypeInvariant
   /\ AsyncHistoricalRecoveryTypeInvariant
-  /\ AsyncProducerTypeInvariant
 
 AsyncTypeInvariant ==
   /\ TypeInvariant
   /\ AsyncSchedulerTypeInvariant
+  /\ AsyncProducerTypeInvariant
   /\ AsyncServeProducerEpisodeTypeInvariant
   /\ AsyncServiceActivationPairInvariant
   /\ ReceivedTimeoutVotePoolInvariant
@@ -29580,6 +29580,7 @@ AsyncGstRecoveryPhaseInvariant ==
 AsyncStrongTypeInvariant ==
   /\ StrongInductiveInvariant
   /\ AsyncSchedulerTypeInvariant
+  /\ AsyncProducerTypeInvariant
   /\ AsyncServeProducerEpisodeTypeInvariant
   /\ AsyncServeProducerEpisodeOwnershipInvariant
   /\ AsyncServiceActivationPairInvariant

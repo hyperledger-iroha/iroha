@@ -3,10 +3,11 @@ package org.hyperledger.iroha.sdk.client
 import java.time.Duration
 
 /**
- * Configurable retry policy for `IrohaClient` submissions.
+ * Configurable retry policy for caller-managed, replay-safe HTTP reads.
  *
  * The policy is deterministic: delays are derived from the attempt number and the configured
  * base delay, making it suitable for deterministic playback in tests and mobile environments.
+ * [HttpClientTransport] never applies it to signed transactions or other one-shot requests.
  */
 class RetryPolicy(
     @JvmField val maxAttempts: Int = 1,
@@ -41,8 +42,7 @@ class RetryPolicy(
      * Returns true if `status` is eligible for retrying regardless of remaining attempts.
      *
      * This mirrors the status-code selection logic used by `shouldRetryResponse`
-     * without the attempt check so callers can distinguish transient server failures from permanent
-     * rejections when deciding whether to queue a submission.
+     * without the attempt check. It must only be used with a `RETRY_SAFE` transport request.
      */
     fun isRetryableStatus(status: Int): Boolean {
         if (retryOnServerError && status >= 500) return true

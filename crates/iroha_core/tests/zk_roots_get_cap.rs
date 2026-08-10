@@ -109,6 +109,8 @@ fn zk_roots_get_respects_cap_and_max() {
             policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len: nonzero!(4_usize),
             tree_frontier_checkpoint_interval:
                 defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
@@ -148,15 +150,7 @@ fn zk_roots_get_respects_cap_and_max() {
         .into(),
         Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         // Register zk policy
-        iroha_data_model::isi::zk::RegisterZkAsset::new(
-            asset_def_id.clone(),
-            iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-            true,
-            true,
-            None,
-            None,
-        )
-        .into(),
+        iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None).into(),
     ] {
         stx.world
             .executor()

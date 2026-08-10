@@ -120,6 +120,37 @@ pub(super) struct TwoSlotStoreConfigV1 {
     max_payload_bytes: usize,
 }
 
+/// Validated deadline and polling cadence for one two-slot initialization lock.
+///
+/// This bound applies only while opening or creating the fixed store. Normal
+/// loads and compare-and-swap operations retain their separate blocking or
+/// typed nonblocking contracts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TwoSlotInitializationWaitV1 {
+    timeout: Duration,
+    retry_interval: Duration,
+}
+
+impl TwoSlotInitializationWaitV1 {
+    /// Construct a non-zero initialization wait bounded by the V1 hard limit.
+    pub(super) fn try_new(timeout: Duration, retry_interval: Duration) -> io::Result<Self> {
+        if timeout.is_zero()
+            || timeout > TWO_SLOT_INITIALIZATION_WAIT_MAX_V1
+            || retry_interval.is_zero()
+            || retry_interval > timeout
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance two-slot initialization wait is outside the V1 bound",
+            ));
+        }
+        Ok(Self {
+            timeout,
+            retry_interval,
+        })
+    }
+}
+
 impl TwoSlotStoreConfigV1 {
     /// Validate and construct one stable two-slot store identity.
     pub(super) fn try_new(
@@ -207,6 +238,30 @@ impl TwoSlotSnapshotV1 {
     }
 }
 
+/// Typed failure returned while attempting a nonblocking two-slot operation.
+#[derive(Debug)]
+pub(super) enum TwoSlotTryErrorV1 {
+    /// Either the process-local gate or the retained operating-system lock is busy.
+    Busy,
+    /// The operation reached the store and failed validation or I/O.
+    Io(io::Error),
+}
+
+impl From<io::Error> for TwoSlotTryErrorV1 {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+/// Typed result of one nonblocking two-slot compare-and-swap attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum TwoSlotCasOutcomeV1 {
+    /// The exact successor is durably stored, including an exact replay/no-op.
+    Stored(TwoSlotSnapshotV1),
+    /// The selected record is not the requested predecessor.
+    Conflict(TwoSlotSnapshotV1),
+}
+
 /// A bounded local store backed by two fixed, retained private files.
 #[derive(Debug, Clone)]
 pub(super) struct TwoSlotStoreV1 {
@@ -217,6 +272,26 @@ pub(super) struct TwoSlotStoreV1 {
     binding_digest: [u8; 32],
     slots: [TwoSlotFileV1; 2],
     process_lock: Arc<Mutex<()>>,
+}
+
+/// Exact init-lock lease retained across a caller-owned composite operation.
+///
+/// The init-lock identity is part of the immutable two-slot binding material,
+/// so unlink/recreate substitution cannot split cooperating writers across two
+/// independently lockable filesystem objects.
+pub(super) struct TwoSlotBoundOperationLeaseV1 {
+    store: TwoSlotStoreV1,
+    init_lock: Option<TwoSlotInitFileLockV1>,
+}
+
+impl fmt::Debug for TwoSlotBoundOperationLeaseV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TwoSlotBoundOperationLeaseV1")
+            .field("store", &self.store)
+            .field("init_lock_retained", &self.init_lock.is_some())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -904,6 +979,22 @@ impl RootedDirectory {
         initial_payload: &[u8],
     ) -> io::Result<TwoSlotStoreV1> {
         open_or_create_two_slot_store_v1_with(self, config, initial_payload, |_| Ok(()))
+    }
+
+    /// Open or initialize a two-slot store under a bounded cross-process wait.
+    pub(super) fn open_or_create_two_slot_store_v1_bounded(
+        &self,
+        config: TwoSlotStoreConfigV1,
+        initial_payload: &[u8],
+        wait: TwoSlotInitializationWaitV1,
+    ) -> io::Result<TwoSlotStoreV1> {
+        open_or_create_two_slot_store_v1_with_mode(
+            self,
+            config,
+            initial_payload,
+            TwoSlotInitializationLockModeV1::Bounded(wait),
+            |_| Ok(()),
+        )
     }
 
     /// Load an already initialized two-slot store without mutation.
@@ -2023,8 +2114,30 @@ impl RootedDirectory {
     }
 
     /// Remove one direct empty child directory by its exact retained identity.
-    #[cfg(any(windows, test))]
     pub(super) fn remove_empty_directory_binding(&self, child: Self) -> io::Result<()> {
+        self.remove_empty_directory_binding_with_hook(child, || Ok(()))
+    }
+
+    #[cfg(test)]
+    pub(super) fn remove_empty_directory_binding_with<BeforeRemove>(
+        &self,
+        child: Self,
+        before_remove: BeforeRemove,
+    ) -> io::Result<()>
+    where
+        BeforeRemove: FnOnce() -> io::Result<()>,
+    {
+        self.remove_empty_directory_binding_with_hook(child, before_remove)
+    }
+
+    fn remove_empty_directory_binding_with_hook<BeforeRemove>(
+        &self,
+        child: Self,
+        before_remove: BeforeRemove,
+    ) -> io::Result<()>
+    where
+        BeforeRemove: FnOnce() -> io::Result<()>,
+    {
         let binding = child.binding.as_ref().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -2047,13 +2160,17 @@ impl RootedDirectory {
             ));
         }
         if !child.child_names_bounded(1)?.is_empty() {
-            return Err(io::Error::other(format!(
-                "governance directory `{}` is not empty",
-                child.display_path.display()
-            )));
+            return Err(io::Error::new(
+                io::ErrorKind::DirectoryNotEmpty,
+                format!(
+                    "governance directory `{}` is not empty",
+                    child.display_path.display()
+                ),
+            ));
         }
         let name = binding.name.clone();
         let identity = child.identity;
+        before_remove()?;
         platform::remove_open_directory(&self.handle, &child.handle, &name, Some(identity))?;
         drop(child);
         match self.open_directory(&name) {
@@ -2507,6 +2624,14 @@ impl<'file> TwoSlotOsLock<'file> {
         Ok(Self { file, locked: true })
     }
 
+    fn try_acquire(file: &'file File) -> Result<Self, TwoSlotTryErrorV1> {
+        match File::try_lock(file) {
+            Ok(()) => Ok(Self { file, locked: true }),
+            Err(fs::TryLockError::WouldBlock) => Err(TwoSlotTryErrorV1::Busy),
+            Err(fs::TryLockError::Error(error)) => Err(TwoSlotTryErrorV1::Io(error)),
+        }
+    }
+
     fn release(mut self) -> io::Result<()> {
         let result = File::unlock(self.file);
         if result.is_ok() {
@@ -2533,7 +2658,7 @@ struct TwoSlotInitFileLockV1 {
 }
 
 impl TwoSlotInitFileLockV1 {
-    fn acquire(root: &RootedDirectory, config: &TwoSlotStoreConfigV1) -> io::Result<Self> {
+    fn open(root: &RootedDirectory, config: &TwoSlotStoreConfigV1) -> io::Result<Self> {
         let name = two_slot_init_lock_name(config);
         root.verify()?;
         let handle = match platform::open_read_write_file(&root.handle, &name) {
@@ -2549,6 +2674,22 @@ impl TwoSlotInitFileLockV1 {
             }
             Err(error) => return Err(error),
         };
+        Self::from_opened(root, name, handle, true)
+    }
+
+    fn open_existing(root: &RootedDirectory, config: &TwoSlotStoreConfigV1) -> io::Result<Self> {
+        let name = two_slot_init_lock_name(config);
+        root.verify()?;
+        let handle = platform::open_read_write_file(&root.handle, &name)?;
+        Self::from_opened(root, name, handle, false)
+    }
+
+    fn from_opened(
+        root: &RootedDirectory,
+        name: OsString,
+        handle: File,
+        durably_establish: bool,
+    ) -> io::Result<Self> {
         let metadata = handle.metadata()?;
         let path = root.display_path.join(&name);
         validate_file_metadata(&path, &metadata, 0, true)?;
@@ -2560,22 +2701,93 @@ impl TwoSlotInitFileLockV1 {
         }
         let identity = file_identity(&metadata)?;
         root.verify_file_binding(&name, &handle, identity, 0, true)?;
-        // Every contender establishes the empty lock file and its parent
-        // binding durably before it can serialize initialization. This covers
-        // the race where a non-creator opens the name before the creator has
-        // reached its parent-directory fsync.
-        handle.sync_all()?;
-        root.sync_all()?;
-        File::lock(&handle)?;
-        let lock = Self {
+        if durably_establish {
+            // Every initializer establishes the empty lock file and its parent
+            // binding durably before it can serialize initialization. This
+            // covers the race where a non-creator opens the name before the
+            // creator has reached its parent-directory fsync.
+            handle.sync_all()?;
+            root.sync_all()?;
+        }
+        Ok(Self {
             root: root.clone(),
             name,
             handle,
             identity,
-            locked: true,
-        };
+            locked: false,
+        })
+    }
+
+    fn acquire(root: &RootedDirectory, config: &TwoSlotStoreConfigV1) -> io::Result<Self> {
+        let mut lock = Self::open(root, config)?;
+        File::lock(&lock.handle)?;
+        lock.locked = true;
         lock.verify()?;
         Ok(lock)
+    }
+
+    fn acquire_bounded(
+        root: &RootedDirectory,
+        config: &TwoSlotStoreConfigV1,
+        wait: TwoSlotInitializationWaitV1,
+    ) -> io::Result<Self> {
+        let mut lock = Self::open(root, config)?;
+        let deadline = Instant::now().checked_add(wait.timeout).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "governance two-slot initialization deadline overflowed",
+            )
+        })?;
+        loop {
+            lock.verify()?;
+            match File::try_lock(&lock.handle) {
+                Ok(()) => {
+                    lock.locked = true;
+                    lock.verify()?;
+                    return Ok(lock);
+                }
+                Err(fs::TryLockError::WouldBlock) => {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "governance two-slot initialization lock wait expired",
+                        ));
+                    }
+                    std::thread::sleep(wait.retry_interval.min(deadline.duration_since(now)));
+                }
+                Err(fs::TryLockError::Error(error)) => return Err(error),
+            }
+        }
+    }
+
+    fn try_acquire_bound(
+        root: &RootedDirectory,
+        config: &TwoSlotStoreConfigV1,
+        expected_identity: FileIdentity,
+    ) -> Result<Self, TwoSlotTryErrorV1> {
+        let mut lock = Self::open_existing(root, config)?;
+        if lock.identity != expected_identity {
+            return Err(TwoSlotTryErrorV1::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "governance two-slot init lock identity was substituted",
+            )));
+        }
+        match File::try_lock(&lock.handle) {
+            Ok(()) => {
+                lock.locked = true;
+                lock.verify()?;
+                if lock.identity != expected_identity {
+                    return Err(TwoSlotTryErrorV1::Io(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "governance two-slot init lock identity changed during acquisition",
+                    )));
+                }
+                Ok(lock)
+            }
+            Err(fs::TryLockError::WouldBlock) => Err(TwoSlotTryErrorV1::Busy),
+            Err(fs::TryLockError::Error(error)) => Err(TwoSlotTryErrorV1::Io(error)),
+        }
     }
 
     fn verify(&self) -> io::Result<()> {
@@ -2605,6 +2817,12 @@ impl TwoSlotInitFileLockV1 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TwoSlotInitializationLockModeV1 {
+    Blocking,
+    Bounded(TwoSlotInitializationWaitV1),
+}
+
 impl Drop for TwoSlotInitFileLockV1 {
     fn drop(&mut self) {
         if self.locked {
@@ -2613,7 +2831,102 @@ impl Drop for TwoSlotInitFileLockV1 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TwoSlotCasModeV1 {
+    LegacyBlocking,
+    NonblockingTyped,
+}
+
+impl TwoSlotBoundOperationLeaseV1 {
+    /// Revalidate the exact bound init lock and immutable two-slot headers.
+    pub(super) fn verify(&self) -> io::Result<()> {
+        let init_lock = self.init_lock.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "governance two-slot bound operation lease was already released",
+            )
+        })?;
+        if init_lock.identity != self.store.init_lock_identity {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance two-slot bound operation lease identity diverged",
+            ));
+        }
+        init_lock.verify()?;
+        self.store.verify_exact_parent(&init_lock.root)?;
+        verify_two_slot_headers(&self.store)?;
+        init_lock.verify()
+    }
+
+    /// Revalidate and release this exact bound init-lock lease.
+    pub(super) fn release(mut self) -> io::Result<()> {
+        let verification = self.verify();
+        let release = self
+            .init_lock
+            .take()
+            .expect("validated bound operation lease retains its init lock")
+            .release();
+        match (verification, release) {
+            (Ok(()), Ok(())) => Ok(()),
+            (_, Err(error)) | (Err(error), Ok(())) => Err(error),
+        }
+    }
+}
+
 impl TwoSlotStoreV1 {
+    /// Try to retain the exact init lock committed into this store's headers.
+    ///
+    /// This nonblocking lease is intended for higher-level composite
+    /// operations that span external effects and a later two-slot CAS.
+    pub(super) fn try_acquire_bound_operation_lease(
+        &self,
+        parent: &RootedDirectory,
+    ) -> Result<TwoSlotBoundOperationLeaseV1, TwoSlotTryErrorV1> {
+        self.verify_exact_parent(parent)?;
+        verify_two_slot_headers(self)?;
+        let init_lock = TwoSlotInitFileLockV1::try_acquire_bound(
+            parent,
+            &self.config,
+            self.init_lock_identity,
+        )?;
+        let lease = TwoSlotBoundOperationLeaseV1 {
+            store: self.clone(),
+            init_lock: Some(init_lock),
+        };
+        match lease.verify() {
+            Ok(()) => Ok(lease),
+            Err(error) => {
+                let release = lease.release();
+                Err(TwoSlotTryErrorV1::Io(release.err().unwrap_or(error)))
+            }
+        }
+    }
+
+    fn verify_exact_parent(&self, parent: &RootedDirectory) -> io::Result<()> {
+        parent.verify()?;
+        self.directory.verify()?;
+        let binding = self.directory.binding.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "governance two-slot directory has no retained parent binding",
+            )
+        })?;
+        if binding.parent_identity != parent.identity
+            || !Arc::ptr_eq(&binding.parent, &parent.handle)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "governance two-slot operation lease parent diverged",
+            ));
+        }
+        parent.verify()
+    }
+
+    #[cfg(test)]
+    pub(super) fn init_lock_name_for_test(&self) -> OsString {
+        two_slot_init_lock_name(&self.config)
+    }
+
     fn with_exclusive_lock<ResultValue>(
         &self,
         operation: impl FnOnce(&Self) -> io::Result<ResultValue>,
@@ -2634,9 +2947,44 @@ impl TwoSlotStoreV1 {
         }
     }
 
+    fn with_try_exclusive_lock<ResultValue>(
+        &self,
+        operation: impl FnOnce(&Self) -> io::Result<ResultValue>,
+    ) -> Result<ResultValue, TwoSlotTryErrorV1> {
+        let process_guard = match self.process_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(TwoSlotTryErrorV1::Busy);
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err(TwoSlotTryErrorV1::Io(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "governance two-slot process lock is poisoned",
+                )));
+            }
+        };
+        let os_lock = TwoSlotOsLock::try_acquire(&self.slots[0].handle)?;
+        verify_two_slot_headers(self)?;
+        let result = operation(self);
+        let unlock = os_lock.release();
+        drop(process_guard);
+        match (result, unlock) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), _) => Err(TwoSlotTryErrorV1::Io(error)),
+            (Ok(_), Err(error)) => Err(TwoSlotTryErrorV1::Io(error)),
+        }
+    }
+
     /// Load the highest complete record after strict pair and lineage checks.
     pub(super) fn load(&self) -> io::Result<TwoSlotSnapshotV1> {
         self.with_exclusive_lock(|store| {
+            select_two_slot_record_unlocked(store).map(|record| two_slot_snapshot(store, record))
+        })
+    }
+
+    /// Attempt to load the highest complete record without waiting for either lock.
+    pub(super) fn try_load(&self) -> Result<TwoSlotSnapshotV1, TwoSlotTryErrorV1> {
+        self.with_try_exclusive_lock(|store| {
             select_two_slot_record_unlocked(store).map(|record| two_slot_snapshot(store, record))
         })
     }
@@ -2650,44 +2998,95 @@ impl TwoSlotStoreV1 {
         self.compare_and_swap_with(expected, payload, |_| Ok(()))
     }
 
+    /// Attempt one typed compare-and-swap without waiting for either lock.
+    pub(super) fn try_compare_and_swap(
+        &self,
+        expected: &TwoSlotSnapshotV1,
+        payload: &[u8],
+    ) -> Result<TwoSlotCasOutcomeV1, TwoSlotTryErrorV1> {
+        self.compare_and_swap_attempt_with(
+            expected,
+            payload,
+            TwoSlotCasModeV1::NonblockingTyped,
+            |_| Ok(()),
+        )
+    }
+
     fn compare_and_swap_with<Hook>(
         &self,
         expected: &TwoSlotSnapshotV1,
         payload: &[u8],
-        mut after_step: Hook,
+        after_step: Hook,
     ) -> io::Result<TwoSlotSnapshotV1>
     where
         Hook: FnMut(&'static str) -> io::Result<()>,
     {
+        match self.compare_and_swap_attempt_with(
+            expected,
+            payload,
+            TwoSlotCasModeV1::LegacyBlocking,
+            after_step,
+        ) {
+            Ok(TwoSlotCasOutcomeV1::Stored(snapshot)) => Ok(snapshot),
+            Ok(TwoSlotCasOutcomeV1::Conflict(_)) => Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance two-slot compare-and-swap predecessor changed",
+            )),
+            Err(TwoSlotTryErrorV1::Io(error)) => Err(error),
+            Err(TwoSlotTryErrorV1::Busy) => Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "governance two-slot lock unexpectedly busy in blocking operation",
+            )),
+        }
+    }
+
+    fn compare_and_swap_attempt_with<Hook>(
+        &self,
+        expected: &TwoSlotSnapshotV1,
+        payload: &[u8],
+        mode: TwoSlotCasModeV1,
+        mut after_step: Hook,
+    ) -> Result<TwoSlotCasOutcomeV1, TwoSlotTryErrorV1>
+    where
+        Hook: FnMut(&'static str) -> io::Result<()>,
+    {
         if payload.len() > self.config.max_payload_bytes {
-            return Err(io::Error::new(
+            return Err(TwoSlotTryErrorV1::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "governance two-slot successor payload is outside its configured bound",
-            ));
+            )));
         }
         if expected.domain != self.config.domain
             || expected.store_nonce != self.config.store_nonce
             || expected.max_payload_bytes != self.config.max_payload_bytes
             || expected.binding_digest != self.binding_digest
         {
-            return Err(io::Error::new(
+            return Err(TwoSlotTryErrorV1::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "governance two-slot predecessor belongs to another store or layout",
-            ));
+            )));
         }
-        self.with_exclusive_lock(|store| {
+        let operation = |store: &Self| {
             let current = select_two_slot_record_unlocked(store)?;
             if current.generation != expected.generation
                 || current.record_digest != expected.record_digest
                 || current.payload != expected.payload
             {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "governance two-slot compare-and-swap predecessor changed",
-                ));
+                let exact_replay = mode == TwoSlotCasModeV1::NonblockingTyped
+                    && expected.generation.checked_add(1) == Some(current.generation)
+                    && current.predecessor_digest == expected.record_digest
+                    && current.payload == payload;
+                let current = two_slot_snapshot(store, current);
+                return Ok(if exact_replay {
+                    TwoSlotCasOutcomeV1::Stored(current)
+                } else {
+                    TwoSlotCasOutcomeV1::Conflict(current)
+                });
             }
             if current.payload == payload {
-                return Ok(two_slot_snapshot(store, current));
+                return Ok(TwoSlotCasOutcomeV1::Stored(two_slot_snapshot(
+                    store, current,
+                )));
             }
             let generation = current.generation.checked_add(1).ok_or_else(|| {
                 io::Error::new(
@@ -2814,8 +3213,16 @@ impl TwoSlotStoreV1 {
                 ));
             }
             after_step("successor-readback-verified")?;
-            Ok(two_slot_snapshot(store, selected))
-        })
+            Ok(TwoSlotCasOutcomeV1::Stored(two_slot_snapshot(
+                store, selected,
+            )))
+        };
+        match mode {
+            TwoSlotCasModeV1::LegacyBlocking => self
+                .with_exclusive_lock(operation)
+                .map_err(TwoSlotTryErrorV1::Io),
+            TwoSlotCasModeV1::NonblockingTyped => self.with_try_exclusive_lock(operation),
+        }
     }
 
     #[cfg(test)]
@@ -3654,6 +4061,25 @@ fn open_or_create_two_slot_store_v1_with<Hook>(
     root: &RootedDirectory,
     config: TwoSlotStoreConfigV1,
     initial_payload: &[u8],
+    after_step: Hook,
+) -> io::Result<TwoSlotStoreV1>
+where
+    Hook: FnMut(&'static str) -> io::Result<()>,
+{
+    open_or_create_two_slot_store_v1_with_mode(
+        root,
+        config,
+        initial_payload,
+        TwoSlotInitializationLockModeV1::Blocking,
+        after_step,
+    )
+}
+
+fn open_or_create_two_slot_store_v1_with_mode<Hook>(
+    root: &RootedDirectory,
+    config: TwoSlotStoreConfigV1,
+    initial_payload: &[u8],
+    lock_mode: TwoSlotInitializationLockModeV1,
     mut after_step: Hook,
 ) -> io::Result<TwoSlotStoreV1>
 where
@@ -3671,7 +4097,12 @@ where
             "governance two-slot initial payload exceeds its configured bound",
         ));
     }
-    let init_file_lock = TwoSlotInitFileLockV1::acquire(root, &config)?;
+    let init_file_lock = match lock_mode {
+        TwoSlotInitializationLockModeV1::Blocking => TwoSlotInitFileLockV1::acquire(root, &config)?,
+        TwoSlotInitializationLockModeV1::Bounded(wait) => {
+            TwoSlotInitFileLockV1::acquire_bounded(root, &config, wait)?
+        }
+    };
     const RACE_RETRIES: usize = 4;
     let result = (|| {
         for attempt in 0..RACE_RETRIES {

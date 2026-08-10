@@ -37,9 +37,9 @@ def test_hedging_plan_uses_the_current_bridge_abi() -> None:
     assert source_match is not None
     assert canonical_match is not None
     assert header_match is not None
-    assert canonical_match.group(1) == header_match.group(1) == "21"
+    assert canonical_match.group(1) == header_match.group(1) == "22"
     assert "bridge source ABI is now 12" not in plan
-    assert "sole first-release ABI, version 21" in plan
+    assert "sole first-release ABI, version 22" in plan
 
 
 def test_reference_sdk_plan_does_not_reopen_native_orderbook_work() -> None:
@@ -86,13 +86,13 @@ def test_fixture_readmes_do_not_claim_native_or_provider_qualification() -> None
     assert "exercise chunk scheduling end-to-end" not in provider
     assert (
         "These fixtures do not provide or qualify authenticated multi-provider "
-        "transport, a governance-aware HSM/KMS completion signer, a sealed-CAS "
+        "transport, a governance-aware external software completion signer, a sealed-CAS "
         "retention backend, or four-validator deployment evidence."
         in provider
     )
     assert (
-        "It is not evidence of clean ABI-21 builds for all five native release "
-        "targets, skip-free SDK parity, published packages, external-HSM signing, "
+        "It is not evidence of clean ABI-22 builds for all five native release "
+        "targets, skip-free SDK parity, published packages, external software signing, "
         "a qualified provider deployment, or L1/L2 promotion."
         in cookbook
     )

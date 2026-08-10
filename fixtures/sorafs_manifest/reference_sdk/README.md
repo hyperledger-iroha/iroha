@@ -8,7 +8,7 @@ The test-only signed, closed inventory covers 82 payload artifacts, 32 exact
 `ValidationOutcomeV1` files, and 38 negative payload vectors. All eight
 appeal-finance `CancelAssetLock` JSON/Norito files are mandatory; a missing file
 fails validation rather than skipping a capability. These checked-in fixtures
-do not qualify the current native packages: clean ABI-21 builds and unskipped
+do not qualify the current native packages: clean ABI-22 builds and unskipped
 replay remain required for all five release targets.
 
 - `appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json`

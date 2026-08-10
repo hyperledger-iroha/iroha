@@ -94,7 +94,7 @@ release_gate_boundary "release-inventory:after-natural-completion" || exit $?
 # Every real-network leg in this parent shell must fail rather than translate a
 # socket/sandbox denial into a successful developer skip.
 export IROHA_TEST_REQUIRE_NETWORK=1
-unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_irohad CARGO_BIN_EXE_kagami
+unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
 unset IROHA_TEST_SKIP_BUILD IROHA_TEST_ALLOW_REENTRANT_BUILD
@@ -1153,6 +1153,9 @@ required_production_liveness_tests=(
   kura::tests::certified_lane_block_encoding_enforces_source_envelope
   kura::tests::replace_top_block_replay_metadata_preflight_fails_closed_without_mutation
   kura::tests::lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered
+  kura::tests::autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation
+  kura::tests::unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart
+  kura::tests::merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal
   kura::lane_geometry::tests::first_release_retirement_classifies_recovery_sync_failure_as_retryable
   kura::lane_geometry::tests::first_release_retirement_discards_unpublished_temp_for_every_fixed_pair
   kura::lane_geometry::tests::first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion
@@ -1402,6 +1405,7 @@ required_production_liveness_tests=(
   merge_sidecar::tests::transient_materialization_release_keeps_exact_retry
   merge_sidecar::tests::transient_response_capacity_defers_materialization_on_the_same_delivery
   merge_sidecar::tests::writable_reconnect_during_materialization_keeps_exact_authorized_tenure
+  state::tests::block_leaves_governance_unlock_audit_clean_when_no_locks_are_expired
   sumeragi::v2::tests::deferred_locked_commit_delivery_tracks_generation_after_tc
   sumeragi::v2::tests::prelock_current_commit_is_readmitted_with_priority_neutral_service_identity
   sumeragi::v2::tests::tc_reset_readmits_exact_locked_commit_once_per_generation
@@ -1997,7 +2001,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=857
+readonly expected_production_liveness_test_count=861
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2025,10 +2029,10 @@ production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
 )"
 production_irohad_unit_list="$(
-  run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control -- --list
+  run_cargo test --locked --offline -p irohad --bin iroha3d --features test-network-message-control -- --list
 )"
 production_irohad_ignored_unit_list="$(
-  run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control -- --list --ignored
+  run_cargo test --locked --offline -p irohad --bin iroha3d --features test-network-message-control -- --list --ignored
 )"
 production_config_unit_list="$(run_cargo test --locked --offline -p iroha_config --lib -- --list)"
 production_config_ignored_unit_list="$(
@@ -2096,7 +2100,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 857-test liveness inventory above. The later
+# not belong to the canonical 861-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -3017,6 +3021,7 @@ production_liveness_modules=(
   nexus::lane_relay::tests
   sumeragi::authoritative_runtime_gate_tests
   merge_sidecar::tests
+  state::tests
   sumeragi::v2_core::tests
   sumeragi::v2_core::network_simulation
   sumeragi::v2_core::refinement::tests
@@ -3059,6 +3064,7 @@ production_liveness_leg_ids=(
   production-lane-relay-exact-ownership
   production-authoritative-ingress
   production-merge-sidecar
+  production-state-governance-unlock-audit
   production-v2-core
   production-v2-core-network-simulation
   production-v2-core-refinement
@@ -3137,10 +3143,10 @@ for module_index in "${!production_liveness_modules[@]}"; do
   elif [[ "$module" == consensus_message_control::tests \
     || "$module" == network_relay_tests \
     || "$module" == tests::relay_fairness ]]; then
-    module_command="cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control ${module} -- --test-threads=1"
+    module_command="cargo test --locked --offline -p irohad --bin iroha3d --features test-network-message-control ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control \
+      run_cargo test --locked --offline -p irohad --bin iroha3d --features test-network-message-control \
         "$module" -- --test-threads=1
   elif [[ "$module" == parameters::* ]]; then
     module_command="cargo test --locked --offline -p iroha_config --lib ${module} -- --test-threads=1"
@@ -3227,15 +3233,16 @@ run_final_workspace_verification() {
   verify_release_identity "after final source-sealed full workspace verification"
 }
 
-# Pin the production-soak execution profile and its serialized evidence schema
-# before any real network is started. Cargo's filter succeeds on zero tests, so
-# require every exact non-ignored contract before executing it with `--exact`.
+# Pin the production-soak evidence contract and strict all-validator restart
+# gate. Cargo's filter succeeds on zero tests, so require every exact unignored
+# test before executing it with `--exact`.
 required_taira_release_contract_tests=(
   taira_public_localnet::release_execution_profile_accepts_only_the_exact_positive_profile
   taira_public_localnet::release_execution_profile_rejects_wrong_or_blank_build_profiles
   taira_public_localnet::release_execution_profile_rejects_cargo_profile_mismatch
   taira_public_localnet::release_execution_profile_rejects_non_exact_offline_values
   taira_public_localnet::simulation_summary_json_records_release_profile_and_status_evidence
+  taira_public_localnet::strict_restart::taira_localnet_restart_catchup_behavior
 )
 taira_release_contract_target="consensus_and_da"
 taira_release_contract_list="$(
@@ -3639,16 +3646,16 @@ release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-release-receipt:after-natural-completion" || exit $?
 release_receipt_pass_summary="$(
-  grep -Ec '^362 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^363 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 362 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 363 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 362 \
+  preflight-release-receipt pytest 363 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -3710,13 +3717,16 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::test_inflight_composed_contract_rejects_tla_snapshot_nonstutter_mapping
   pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal
   pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_layout_contract_rejects_membership_only_lane_authorship
+  pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_binds_current_semantic_sources
+  pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_ledger_weakening
+  pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_semantic_source_mutation
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
-# Collection is source-bound as 5,127 ledger/checker cases (including the
+# Collection is source-bound as 5,129 ledger/checker cases (including the
 # lexically executed case components), 28 pinned-Verus evidence cases,
 # 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 29 Native/passive
-# multilane source-contract cases, and 11 cases from nine selected layout
-# selectors.
+  # multilane source-contract cases, and eighteen cases from twelve selected
+# layout/wire selectors.
 release_gate_boundary "preflight-proof-fidelity:before" || exit $?
 set +e
 PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
@@ -3725,15 +3735,15 @@ proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^5218 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^5227 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5218 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5227 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 5218 \
+  preflight-proof-fidelity pytest 5227 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -3766,7 +3776,7 @@ record_corridor_log \
 ((corridor_enabled)) || rm -f -- "$formal_launcher_contract_log"
 
 # Run the complete mocked soak launcher/evidence corpus as one exact file-bound
-# preflight. The 42-pass summary rejects missing, added, skipped, or xfailed
+# preflight. The 43-pass summary rejects missing, added, skipped, or xfailed
 # cases before the release corridor can trust the 24-hour evidence path.
 taira_soak_contract_files=(
   pytests/scripts/taira_v2_soak_test.py::test_launcher_pins_complete_profile_and_runs_exactly_one_test
@@ -3789,15 +3799,15 @@ taira_soak_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-taira-soak:after-natural-completion" || exit $?
 taira_soak_pass_summary="$(
-  grep -Ec '^42 passed in [0-9]+([.][0-9]+)?s$' "$taira_soak_contract_log" || true
+  grep -Ec '^43 passed in [0-9]+([.][0-9]+)?s$' "$taira_soak_contract_log" || true
 )"
 if ((taira_soak_pipeline_status[0] != 0 || taira_soak_pipeline_status[1] != 0)) \
   || [[ "$taira_soak_pass_summary" != 1 ]]; then
-  echo "Taira v2 soak launcher/evidence preflight did not run exactly 42 passing tests (pytest=${taira_soak_pipeline_status[0]}, tee=${taira_soak_pipeline_status[1]})" >&2
+  echo "Taira v2 soak launcher/evidence preflight did not run exactly 43 passing tests (pytest=${taira_soak_pipeline_status[0]}, tee=${taira_soak_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-taira-soak pytest 42 \
+  preflight-taira-soak pytest 43 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${taira_soak_contract_files[*]}" \
   "$taira_soak_contract_log" \
   "${taira_soak_pipeline_status[0]}" "${taira_soak_pipeline_status[1]}"
@@ -3810,11 +3820,10 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 40 production modules + 9 G-UNIT groups + 2 data-model contracts
-  # + 5 Taira contracts + 1 cross-SDK Rust leg + 1 Native AMX fixture check
-  # + 6 grouped SDK parity legs + 1 Rust diagnostics leg + 5 SDK diagnostics
-  # legs + 11 contract preflights + 6 final workspace-verification legs.
-  readonly expected_corridor_leg_count=87
+  # 41 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
+  # command + 6 Taira + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped
+  # SDK + 6 diagnostics + 11 pytest legs = 89.
+  readonly expected_corridor_leg_count=89
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1

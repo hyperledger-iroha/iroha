@@ -1413,6 +1413,327 @@ def test_fixed_selected_service_outcome_rejects_weakening_and_fake_progress(
 
 
 @pytest.mark.parametrize(
+    ("symbol", "critical_filter"),
+    (
+        (
+            "AsyncCandidateLifecycleDurableOwnerTokensForNodeAfter",
+            "FreshRestartCandidateSequence(\n"
+            "            RestartReplay(node))'[candidateIndex].causalOrigin\n"
+            "            \\notin "
+            "AsyncScheduledCandidateOriginsForNodeAfter(node)",
+        ),
+        (
+            "AsyncCandidateLifecycleDurableOwnerTokensForNodeAfter",
+            "HistoricalLockedRetransmitSuccessors(node)'[\n"
+            "            candidateIndex].causalOrigin\n"
+            "            \\notin "
+            "AsyncScheduledCandidateOriginsForNodeAfter(node)",
+        ),
+        (
+            "AsyncCandidateLifecycleActiveOriginsForNodeIn",
+            "candidateRecord.slot \\in AsyncCandidateLifecycleActiveSlots",
+        ),
+        (
+            "AsyncCandidateRecordedLifecycleStageIdentityInvariant",
+            "serviced.causalOrigin = candidate.causalOrigin",
+        ),
+        (
+            "AsyncCandidateServiceMarker",
+            "causalOrigin |-> candidate.causalOrigin,",
+        ),
+        (
+            "AsyncCandidateServiceTombstone",
+            "causalOrigin |-> candidate.causalOrigin,",
+        ),
+        (
+            "AsyncCandidateServiceOwnerPartitionInvariantIn",
+            "lifecycle.origin = serviced.causalOrigin",
+        ),
+        (
+            "AsyncCandidateServiceOwnerPartitionInvariantIn",
+            "left.causalOrigin = right.causalOrigin",
+        ),
+        (
+            "IngressProtectedSlotCountAfterAdmission",
+            "IngressProtectedSlotCountAfterAdmissionVia(item, item.source)",
+        ),
+        (
+            "IngressUsableCapacityAfterAdmission",
+            "IngressUsableCapacityAfterAdmissionVia(item, item.source)",
+        ),
+    ),
+)
+def test_async_exact_contract_normalizations_are_pinned(
+    symbol: str,
+    critical_filter: str,
+) -> None:
+    """The normalized source table agrees with TLA+ and rejects weakening."""
+
+    module = load_checker()
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"), filename=str(SCRIPT))
+    checker = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_async_source_fidelity_errors"
+    )
+    located_tables = []
+    for node in ast.walk(checker):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "exact"
+            for target in node.targets
+        ):
+            located_tables.append((node.lineno, node.value))
+        elif (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id == "exact"
+            and node.value.func.attr == "update"
+            and len(node.value.args) == 1
+        ):
+            located_tables.append((node.lineno, node.value.args[0]))
+    exact_tables = [table for _, table in sorted(located_tables)]
+    assert all(isinstance(table, ast.Dict) for table in exact_tables)
+    reviewed = {}
+    for table in exact_tables:
+        reviewed.update(
+            {
+                ast.literal_eval(key): ast.literal_eval(value)
+                for key, value in zip(table.keys, table.values)
+            }
+        )
+    assert symbol in reviewed
+    expected = reviewed[symbol]
+    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(
+        encoding="utf-8"
+    )
+    extracted = module._top_level_operator_body(
+        source, symbol, preserve_string_contents=True
+    )
+    assert extracted is not None
+    assert " ".join(extracted[0].split()) == expected
+
+    mutated = mutate_tla_operator(source, symbol, critical_filter, "TRUE")
+    mutated_body = module._top_level_operator_body(
+        mutated, symbol, preserve_string_contents=True
+    )
+    assert mutated_body is not None
+    assert " ".join(mutated_body[0].split()) != expected
+
+
+@pytest.mark.parametrize(
+    ("symbol", "critical_domain", "weakened_domain"),
+    (
+        (
+            "AdequateLeaderTargetRankServiceExitProperty",
+            "AdequateLeaderFrozenCandidateOwnerUniverse(",
+            "AdequateLeaderFrozenOwnerUniverse(",
+        ),
+        (
+            "AdequateLeaderTargetSubjectSwitchCarryStepProperty",
+            "AdequateLeaderFrozenCandidateOwnerUniverse(",
+            "AdequateLeaderFrozenSubjectSwitchOwnerUniverse(",
+        ),
+        (
+            "AdequateLeaderTargetAnchoredSubjectSwitchBudgetFrontier",
+            "AdequateLeaderFrozenCandidateOwnerUniverse(",
+            "AdequateLeaderFrozenSubjectSwitchOwnerUniverse(",
+        ),
+        (
+            "AdequateLeaderTargetAnchoredSubjectSwitchBudgetDescentProperty",
+            "AdequateLeaderFrozenCandidateOwnerUniverse(",
+            "AdequateLeaderFrozenSubjectSwitchOwnerUniverse(",
+        ),
+        (
+            "AdequateLeaderTargetOccurrenceRankServiceProperty",
+            "AdequateLeaderFrozenCandidateOwnerUniverse(",
+            "AdequateLeaderFrozenOwnerUniverse(",
+        ),
+        (
+            "AdequateLeaderTargetNonDescentEpisodeClosureProperty",
+            "AdequateLeaderFrozenCandidateOwnerUniverse(",
+            "AdequateLeaderFrozenOwnerUniverse(",
+        ),
+    ),
+)
+def test_adequate_leader_dependent_quantifier_normalizations_are_pinned(
+    symbol: str,
+    critical_domain: str,
+    weakened_domain: str,
+) -> None:
+    """Dependent quantifiers match current TLA+ and reject broader owners."""
+
+    module = load_checker()
+    module_name = "SumeragiV2AdequateLeaderServiceClosureProofs"
+    expected = module.EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES[
+        (module_name, symbol)
+    ]
+    source = (module.FORMAL_DIR / f"{module_name}.tla").read_text(
+        encoding="utf-8"
+    )
+    extracted = module._top_level_operator_body(
+        source, symbol, preserve_string_contents=True
+    )
+    assert extracted is not None
+    assert " ".join(extracted[0].split()) == expected
+
+    mutated = mutate_tla_operator(
+        source, symbol, critical_domain, weakened_domain
+    )
+    mutated_body = module._top_level_operator_body(
+        mutated, symbol, preserve_string_contents=True
+    )
+    assert mutated_body is not None
+    assert " ".join(mutated_body[0].split()) != expected
+
+
+@pytest.mark.parametrize(
+    ("symbol", "critical_filter", "weakened_filter"),
+    (
+        (
+            "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates",
+            "owned.schedulerOrdinal < targetOrdinal",
+            "owned.schedulerOrdinal <= targetOrdinal",
+        ),
+        (
+            "AsyncCandidateProducerContinuationFrozenCandidateTokens",
+            "1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)",
+            "1..1",
+        ),
+        (
+            "AsyncCandidateProducerContinuationFrozenStatusTokens",
+            "1..AsyncCandidateProducerContinuationStatusRank(record.status)",
+            "1..1",
+        ),
+    ),
+)
+def test_producer_continuation_frozen_projection_normalizations_are_pinned(
+    symbol: str,
+    critical_filter: str,
+    weakened_filter: str,
+) -> None:
+    """Frozen producer carriers retain their normalized reviewed filters."""
+
+    module = load_checker()
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"), filename=str(SCRIPT))
+    checker = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_async_candidate_producer_continuation_contract_errors"
+    )
+    exact = next(
+        node.value
+        for node in checker.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "exact_proof_operators"
+            for target in node.targets
+        )
+    )
+    assert isinstance(exact, ast.Dict)
+    expected = next(
+        ast.literal_eval(value)
+        for key, value in zip(exact.keys, exact.values)
+        if ast.literal_eval(key) == symbol
+    )
+    source = (
+        module.FORMAL_DIR
+        / "SumeragiV2AsyncCandidateProducerContinuationProofs.tla"
+    ).read_text(encoding="utf-8")
+    extracted = module._top_level_operator_body(
+        source, symbol, preserve_string_contents=True
+    )
+    assert extracted is not None
+    assert " ".join(extracted[0].split()) == expected
+
+    mutated = mutate_tla_operator(
+        source,
+        symbol,
+        critical_filter,
+        weakened_filter,
+    )
+    mutated_body = module._top_level_operator_body(
+        mutated, symbol, preserve_string_contents=True
+    )
+    assert mutated_body is not None
+    assert " ".join(mutated_body[0].split()) != expected
+
+
+@pytest.mark.parametrize(
+    ("symbol", "critical_filter", "weakened_filter"),
+    (
+        (
+            "AsyncLeaderWireIngressCarrierCoordinates",
+            "AsyncLeaderWireAdmissionMatchesRecord(",
+            "TRUE \\/ AsyncLeaderWireAdmissionMatchesRecord(",
+        ),
+        (
+            "AsyncOrdinaryIngressCarrierCoordinates",
+            "= carrier.carrierIdentity",
+            "# carrier.carrierIdentity",
+        ),
+        (
+            "AsyncLeaderWireIngressCarrierCoordinatesAfter",
+            "AsyncLeaderWireAdmissionMatchesRecord(",
+            "TRUE \\/ AsyncLeaderWireAdmissionMatchesRecord(",
+        ),
+    ),
+)
+def test_ingress_carrier_coordinate_normalizations_are_pinned(
+    symbol: str,
+    critical_filter: str,
+    weakened_filter: str,
+) -> None:
+    """The coordinate products retain their nested filtered carriers."""
+
+    module = load_checker()
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"), filename=str(SCRIPT))
+    checker = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_async_source_fidelity_errors"
+    )
+    contracts = next(
+        node.value
+        for node in checker.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "async_filtered_projections"
+            for target in node.targets
+        )
+    )
+    assert isinstance(contracts, ast.Dict)
+    expected = next(
+        ast.literal_eval(value)
+        for key, value in zip(contracts.keys, contracts.values)
+        if ast.literal_eval(key) == symbol
+    )
+    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(
+        encoding="utf-8"
+    )
+    extracted = module._top_level_operator_body(
+        source, symbol, preserve_string_contents=True
+    )
+    assert extracted is not None
+    assert " ".join(extracted[0].split()) == " ".join(expected.split())
+
+    mutated = mutate_tla_operator(
+        source, symbol, critical_filter, weakened_filter
+    )
+    mutated_body = module._top_level_operator_body(
+        mutated, symbol, preserve_string_contents=True
+    )
+    assert mutated_body is not None
+    assert " ".join(mutated_body[0].split()) != " ".join(expected.split())
+
+
+@pytest.mark.parametrize(
     ("symbol", "critical_filter", "weakened_filter"),
     (
         (
@@ -2399,10 +2720,17 @@ def test_non_vacuous_async_quantifier_contracts_reject_grouped_binders(
 
 
 @pytest.mark.parametrize(
-    ("symbol", "parenthesized", "chained"),
+    ("symbol", "canonical", "mutation"),
     (
         (
             "ExactDecisionRequestClockPrefixFairOwnerUsesExistingFairness",
+            "  \\A initialContext:\n"
+            "    \\A node \\in AsyncVotersAt(initialContext):\n"
+            "      \\A fairOwner \\in AsyncCausalEpisodeFairOwnerKinds:\n"
+            "    AsyncSpecAt(initialContext)\n"
+            "      => WF_AsyncAllVars(\n"
+            "           AsyncCausalEpisodeFairAction(node, fairOwner))",
+            "  \\A initialContext, snapshot:\n"
             "    (/\\ snapshot.node \\in AsyncVotersAt(initialContext)\n"
             "     /\\ ExactDecisionRequestClockPrefixFairOwner(snapshot)\n"
             "          \\in AsyncCausalEpisodeFairOwnerKinds)\n"
@@ -2410,13 +2738,6 @@ def test_non_vacuous_async_quantifier_contracts_reject_grouped_binders(
             "            => WF_AsyncAllVars(\n"
             "                 ExactDecisionRequestClockPrefixFairAction("
             "snapshot)))",
-            "    /\\ snapshot.node \\in AsyncVotersAt(initialContext)\n"
-            "    /\\ ExactDecisionRequestClockPrefixFairOwner(snapshot)\n"
-            "         \\in AsyncCausalEpisodeFairOwnerKinds\n"
-            "      => AsyncSpecAt(initialContext)\n"
-            "           => WF_AsyncAllVars(\n"
-            "                ExactDecisionRequestClockPrefixFairAction("
-            "snapshot))",
         ),
         (
             "ExactDecisionRequestLifecycleConcreteOwnerUsesAsyncFairness",
@@ -2456,11 +2777,11 @@ def test_non_vacuous_async_quantifier_contracts_reject_grouped_binders(
         ),
     ),
 )
-def test_exact_decision_fairness_rejects_unparenthesized_implication_chain(
+def test_exact_decision_fairness_rejects_unreviewed_statement_drift(
     tmp_path: Path,
     symbol: str,
-    parenthesized: str,
-    chained: str,
+    canonical: str,
+    mutation: str,
 ) -> None:
     module = load_checker()
     formal_dir = tmp_path / "formal"
@@ -2473,7 +2794,7 @@ def test_exact_decision_fairness_rejects_unparenthesized_implication_chain(
 
     source = path.read_text(encoding="utf-8")
     path.write_text(
-        mutate_tla_theorem(source, symbol, parenthesized, chained),
+        mutate_tla_theorem(source, symbol, canonical, mutation),
         encoding="utf-8",
     )
 
@@ -2481,7 +2802,7 @@ def test_exact_decision_fairness_rejects_unparenthesized_implication_chain(
 
     assert any(
         symbol in error
-        and "exact parenthesized antecedent/consequent" in error
+        and "exact reviewed fairness implication" in error
         for error in errors
     ), errors
 

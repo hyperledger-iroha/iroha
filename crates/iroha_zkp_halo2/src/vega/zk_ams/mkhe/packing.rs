@@ -86,6 +86,134 @@ struct T256Fp2 {
     c1: Scalar,
 }
 
+/// Bounded scratch owner for decoded scalar coefficients and slots.
+/// Deliberately neither `Clone` nor `Debug`.
+struct ZeroizingPackingScalarsV1(Vec<Scalar>);
+
+impl ZeroizingPackingScalarsV1 {
+    fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(capacity)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        Ok(Self(values))
+    }
+
+    fn as_slice(&self) -> &[Scalar] {
+        &self.0
+    }
+
+    fn push(&mut self, value: Scalar) {
+        self.0.push(value);
+    }
+
+    fn take(&mut self) -> Vec<Scalar> {
+        core::mem::take(&mut self.0)
+    }
+}
+
+/// Canonical decoded-byte owner retained until the public decoder returns.
+/// Deliberately neither `Clone` nor `Debug`.
+struct ZeroizingPackingBytesV1(Vec<[u8; 32]>);
+
+impl ZeroizingPackingBytesV1 {
+    fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(capacity)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        Ok(Self(values))
+    }
+
+    fn take(&mut self) -> Vec<[u8; 32]> {
+        core::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ZeroizingPackingBytesV1 {
+    fn drop(&mut self) {
+        let values = core::hint::black_box(&mut self.0);
+        for value in values.iter_mut() {
+            value.fill(0);
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *values);
+    }
+}
+
+impl Drop for ZeroizingPackingScalarsV1 {
+    fn drop(&mut self) {
+        let values = core::hint::black_box(&mut self.0);
+        for value in values.iter_mut() {
+            value.clear_secret();
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *values);
+    }
+}
+
+/// Bounded scratch owner for the quadratic-extension NTT evaluations used by
+/// packed decoding. Deliberately neither `Clone` nor `Debug`.
+struct ZeroizingPackingFp2V1(Vec<T256Fp2>);
+
+impl ZeroizingPackingFp2V1 {
+    fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(capacity)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        Ok(Self(values))
+    }
+
+    fn push(&mut self, value: T256Fp2) {
+        self.0.push(value);
+    }
+}
+
+impl Drop for ZeroizingPackingFp2V1 {
+    fn drop(&mut self) {
+        let values = core::hint::black_box(&mut self.0);
+        for value in values.iter_mut() {
+            value.c0.clear_secret();
+            value.c1.clear_secret();
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *values);
+    }
+}
+
+/// Exact release-RNS plaintext owner used only while hashing a native binding.
+/// Deliberately neither `Clone` nor `Debug`.
+struct ZeroizingPackedRnsBindingV1(RnsPolynomial);
+
+#[cfg(test)]
+std::thread_local! {
+    static PACKED_RNS_BINDING_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn packed_rns_binding_zeroized_drop_count_v1() -> usize {
+    PACKED_RNS_BINDING_ZEROIZED_DROPS_V1
+        .try_with(std::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+impl Drop for ZeroizingPackedRnsBindingV1 {
+    fn drop(&mut self) {
+        let coefficients = core::hint::black_box(&mut self.0.coefficients);
+        coefficients.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        if coefficients.iter().all(|coefficient| *coefficient == 0) {
+            let _ = PACKED_RNS_BINDING_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        let _ = core::hint::black_box(&mut *coefficients);
+    }
+}
+
 impl T256Fp2 {
     fn zero() -> Self {
         Self {
@@ -686,24 +814,27 @@ pub fn decode_zk_ams_t256_packed_plaintext_v1(
 ) -> Result<Vec<[u8; 32]>, ZkAmsMkheErrorV1> {
     validate_layout(layout)?;
     validate_packed(layout, packed)?;
-    let coefficients = packed
-        .coefficients
-        .iter()
-        .map(|bytes| {
-            Scalar::from_be_bytes_exact(*bytes).map_err(|_| ZkAmsMkheErrorV1::InvalidPolynomial)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let slots = decode_coefficients(&coefficients, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1)?
-        .into_iter()
-        .map(Scalar::to_be_bytes)
-        .collect::<Vec<_>>();
-    if slots[packed.used_slots as usize..]
+    let mut coefficients = ZeroizingPackingScalarsV1::with_capacity(packed.coefficients.len())?;
+    for bytes in &packed.coefficients {
+        coefficients.push(
+            Scalar::from_be_bytes_exact(*bytes).map_err(|_| ZkAmsMkheErrorV1::InvalidPolynomial)?,
+        );
+    }
+    let slots = ZeroizingPackingScalarsV1(decode_coefficients(
+        coefficients.as_slice(),
+        ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
+    )?);
+    let mut decoded = ZeroizingPackingBytesV1::with_capacity(slots.as_slice().len())?;
+    decoded
+        .0
+        .extend(slots.as_slice().iter().copied().map(Scalar::to_be_bytes));
+    if decoded.0[packed.used_slots as usize..]
         .iter()
         .any(|slot| *slot != [0; 32])
     {
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
-    Ok(slots)
+    Ok(decoded.take())
 }
 
 /// Apply the exact slot permutation as an independent plaintext oracle.
@@ -839,6 +970,24 @@ pub(super) fn packed_plaintext_to_rns_v1(
     validate_layout(layout)?;
     validate_packed(layout, packed)?;
     RnsPolynomial::from_t256_plaintext_bytes(&release_profile_v1(), &packed.coefficients)
+}
+
+/// Recompute the exact release-RNS image of one canonical packed chunk and
+/// return its limb-major digest.
+///
+/// This is a native equality check, not a proof verifier: the caller supplies
+/// the plaintext coefficients, and this function derives every residue under
+/// all release moduli after rechecking the packed artifact.  It is useful to
+/// bind an in-process verified capability to the real 38-limb representation,
+/// but cannot replace the missing RNS-Link carry/quotient proof on untrusted
+/// wire bytes.
+pub(super) fn packed_plaintext_rns_binding_digest_v1(
+    layout: ZkAmsT256PackingLayoutV1,
+    packed: &ZkAmsT256PackedPlaintextV1,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let profile = release_profile_v1();
+    let polynomial = ZeroizingPackedRnsBindingV1(packed_plaintext_to_rns_v1(layout, packed)?);
+    rns_polynomial_digest(&profile, &polynomial.0)
 }
 
 fn validate_layout(layout: ZkAmsT256PackingLayoutV1) -> Result<(), ZkAmsMkheErrorV1> {
@@ -1175,7 +1324,7 @@ fn check_rotation_workspace(profile: &BgvProfile) -> Result<(), ZkAmsMkheErrorV1
     Ok(())
 }
 
-fn rns_polynomial_digest(
+pub(super) fn rns_polynomial_digest(
     profile: &BgvProfile,
     polynomial: &RnsPolynomial,
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
@@ -1500,23 +1649,23 @@ fn decode_coefficients(
     let root = root_for_degree(degree)?;
     let omega = root.mul(root);
     let mut twist = T256Fp2::one();
-    let mut evaluations = Vec::with_capacity(degree);
+    let mut evaluations = ZeroizingPackingFp2V1::with_capacity(degree)?;
     for coefficient in coefficients {
         evaluations.push(T256Fp2::from_base(*coefficient).mul(twist));
         twist = twist.mul(root);
     }
-    cyclic_ntt(&mut evaluations, omega);
-    let mut slots = Vec::with_capacity(degree / 2);
+    cyclic_ntt(&mut evaluations.0, omega);
+    let mut slots = ZeroizingPackingScalarsV1::with_capacity(degree / 2)?;
     for slot in 0..degree / 2 {
         let index = slot_root_index(degree, slot)?;
         let conjugate = degree - 1 - index;
-        let value = evaluations[index];
-        if !value.c1.is_zero() || evaluations[conjugate] != value || slots.len() != slot {
+        let value = evaluations.0[index];
+        if !value.c1.is_zero() || evaluations.0[conjugate] != value || slots.0.len() != slot {
             return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
         }
         slots.push(value.c0);
     }
-    Ok(slots)
+    Ok(slots.take())
 }
 
 fn slot_root_index(degree: usize, slot: usize) -> Result<usize, ZkAmsMkheErrorV1> {
@@ -1591,6 +1740,8 @@ fn mod_pow_usize(mut base: usize, mut exponent: usize, modulus: usize) -> usize 
 
 #[cfg(test)]
 pub(super) mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
     use super::*;
 
     fn schoolbook_negacyclic(left: &[Scalar], right: &[Scalar]) -> Vec<Scalar> {
@@ -1607,6 +1758,46 @@ pub(super) mod tests {
             }
         }
         output
+    }
+
+    #[test]
+    fn packed_rns_binding_owner_zeroizes_success_error_and_unwind() {
+        let owner = || {
+            ZeroizingPackedRnsBindingV1(RnsPolynomial {
+                coefficients: vec![3, 5, 8],
+            })
+        };
+
+        let before_success = packed_rns_binding_zeroized_drop_count_v1();
+        drop(owner());
+        assert_eq!(
+            packed_rns_binding_zeroized_drop_count_v1(),
+            before_success + 1
+        );
+
+        fn reject_owner(_owner: ZeroizingPackedRnsBindingV1) -> Result<(), ZkAmsMkheErrorV1> {
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        }
+        let before_error = packed_rns_binding_zeroized_drop_count_v1();
+        assert_eq!(
+            reject_owner(owner()),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        assert_eq!(
+            packed_rns_binding_zeroized_drop_count_v1(),
+            before_error + 1
+        );
+
+        let before_unwind = packed_rns_binding_zeroized_drop_count_v1();
+        let unwind = catch_unwind(AssertUnwindSafe(|| {
+            let _owner = owner();
+            panic!("intentional packed RNS binding erasure audit");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            packed_rns_binding_zeroized_drop_count_v1(),
+            before_unwind + 1
+        );
     }
 
     fn release_sparse_cosine_coefficients() -> Vec<Scalar> {
@@ -1975,6 +2166,30 @@ pub(super) mod tests {
         assert_eq!(
             packed.digest,
             ZK_AMS_T256_RELEASE_PACKED_INPUT_KAT_DIGEST_V1
+        );
+        assert_eq!(release_profile_v1().moduli.len(), 38);
+        assert_ne!(
+            packed_plaintext_rns_binding_digest_v1(layout, &packed).unwrap(),
+            [0; 32]
+        );
+        let mut stale_coefficient_digest = packed.clone();
+        stale_coefficient_digest.coefficients[0][31] ^= 1;
+        assert_eq!(
+            packed_plaintext_rns_binding_digest_v1(layout, &stale_coefficient_digest),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        let mut stale_metadata_digest = packed.clone();
+        stale_metadata_digest.used_slots -= 1;
+        assert_eq!(
+            packed_plaintext_rns_binding_digest_v1(layout, &stale_metadata_digest),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        let mut noncanonical_binding = packed.clone();
+        noncanonical_binding.used_slots -= 1;
+        noncanonical_binding.digest = packed_plaintext_digest(&noncanonical_binding).unwrap();
+        assert_eq!(
+            packed_plaintext_rns_binding_digest_v1(layout, &noncanonical_binding),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
         );
         assert_eq!(
             decode_zk_ams_t256_packed_plaintext_v1(layout, &packed).unwrap(),

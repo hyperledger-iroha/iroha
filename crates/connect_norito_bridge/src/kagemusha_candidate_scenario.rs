@@ -257,11 +257,11 @@ fn validate_request_opening(
         "recipient request signature, lifetime, or public binding is invalid".to_owned()
     })?;
     let manifest = &candidate.manifest;
-    if request.chain_id != manifest.chain_id
+    if request.network_id != manifest.network_id
         || request.asset != manifest.asset
         || request.amount.scale != manifest.asset_scale
     {
-        return Err("recipient request does not select the candidate chain/asset/scale".to_owned());
+        return Err("recipient request mismatches candidate network/asset/scale".to_owned());
     }
     opening
         .validate()
@@ -282,9 +282,13 @@ fn validate_request_opening(
     {
         return Err("recipient opening does not bind the signed prover material".to_owned());
     }
-    let note =
-        derive_kagemusha_owned_note_v2(&request.chain_id, &request.asset, request.amount, opening)
-            .map_err(|_| "failed to derive recipient note from its opening".to_owned())?;
+    let note = derive_kagemusha_owned_note_v2(
+        &request.network_id,
+        &request.asset,
+        request.amount,
+        opening,
+    )
+    .map_err(|_| "failed to derive recipient note from its opening".to_owned())?;
     if note != request.recipient_output {
         return Err("recipient opening does not derive the signed recipient output".to_owned());
     }
@@ -435,7 +439,7 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
     let init_opening: KagemushaNoteOpeningV2 =
         decode(bytes(&files, "init-opening-v2.norito")?, "init opening")?;
     let init_note = derive_kagemusha_owned_note_v2(
-        &candidate.manifest.chain_id,
+        &candidate.manifest.network_id,
         &candidate.manifest.asset,
         anchor.amount,
         &init_opening,
@@ -488,7 +492,7 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
         "hop-one change opening",
     )?;
     let hop_one_change = derive_kagemusha_owned_note_v2(
-        &candidate.manifest.chain_id,
+        &candidate.manifest.network_id,
         &candidate.manifest.asset,
         hop_one_change_amount,
         &hop_one_change_opening,
@@ -537,7 +541,7 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
         "hop-two change opening",
     )?;
     let hop_two_change = derive_kagemusha_owned_note_v2(
-        &candidate.manifest.chain_id,
+        &candidate.manifest.network_id,
         &candidate.manifest.asset,
         hop_two_change_amount,
         &hop_two_change_opening,
@@ -568,7 +572,7 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
         .validate_at(duplicate_verified_at)
         .map_err(|_| "duplicate-input recipient request is invalid or expired".to_owned())?;
     validate_request_material_without_opening(&duplicate_request)?;
-    if duplicate_request.chain_id != candidate.manifest.chain_id
+    if duplicate_request.network_id != candidate.manifest.network_id
         || duplicate_request.asset != candidate.manifest.asset
         || duplicate_request.amount != hop_one_request.amount
     {

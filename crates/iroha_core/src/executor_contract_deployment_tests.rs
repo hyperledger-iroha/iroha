@@ -40,13 +40,13 @@ fn contract_deployment_bootstrap_instructions(
 fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
     let keypair = checked_keypair();
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = ChainId::from("contract-deployment-bootstrap-shape");
+    let network_id = executor_test_network_id(b"contract-deployment-bootstrap-shape");
     let code_hash = Hash::new(b"contract deployment bootstrap shape");
     let world = World::new();
 
     let sign = |instructions: Vec<InstructionBox>| {
         TransactionBuilder::new(
-            chain.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -201,7 +201,7 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
         iroha_data_model::isi::smart_contract_code::CommitContractDeployment {
             expected_deploy_nonce: 0,
             contract_address: ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &network_id,
                 &authority,
                 0,
                 DataSpaceId::UNIVERSAL,
@@ -224,7 +224,7 @@ fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
     );
 
     let proved_transaction = TransactionBuilder::new(
-        chain,
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -264,25 +264,24 @@ fn initial_executor_bootstraps_missing_deployment_authority_and_meters_grant() {
         contract_upload_instruction(code_hash, 0),
     );
     let expected_gas = crate::gas::meter_instructions(&instructions);
+    let state = State::new_with_chain(
+        World::new(),
+        Kura::blank_kura_for_testing(),
+        query::store::LiveQueryStore::start_test(),
+        chain,
+    );
     let transaction = TransactionBuilder::new(
-        chain.clone(),
+        state.network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_executable(Executable::Instructions(instructions.into()))
     .sign(keypair.private_key());
-    let world = World::new();
     assert!(allows_contract_deployment_self_bootstrap(
-        &world.view(),
+        state.view().world(),
         &authority,
         &transaction
     ));
-    let state = State::new_with_chain(
-        world,
-        Kura::blank_kura_for_testing(),
-        query::store::LiveQueryStore::start_test(),
-        chain,
-    );
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
     let mut state_transaction = block.transaction();
     let mut ivm_cache = IvmCache::new();
@@ -334,16 +333,21 @@ fn default_user_provided_executor_bootstraps_missing_deployment_authority() {
         contract_deployment_permission(),
         contract_upload_instruction(code_hash, 0),
     );
+    let state = State::new_with_chain(
+        World::new(),
+        Kura::blank_kura_for_testing(),
+        query::store::LiveQueryStore::start_test(),
+        chain,
+    );
     let transaction = TransactionBuilder::new(
-        chain.clone(),
+        state.network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_executable(Executable::Instructions(instructions.into()))
     .sign(keypair.private_key());
-    let world = World::new();
     assert!(allows_contract_deployment_self_bootstrap(
-        &world.view(),
+        state.view().world(),
         &authority,
         &transaction
     ));
@@ -353,13 +357,6 @@ fn default_user_provided_executor_bootstraps_missing_deployment_authority() {
         unreachable!("test constructs a user-provided executor")
     };
     let (runtime_stats_before, _) = loaded_executor.runtime_pool_snapshot();
-
-    let state = State::new_with_chain(
-        world,
-        Kura::blank_kura_for_testing(),
-        query::store::LiveQueryStore::start_test(),
-        chain,
-    );
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
     let mut state_transaction = block.transaction();
     let mut ivm_cache = IvmCache::new();
@@ -415,8 +412,15 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
     let authority = AccountId::new(keypair.public_key().clone());
     let chain = ChainId::from("contract-deployment-bootstrap-user-provided-replay");
     let code_hash = Hash::new(b"default user-provided deployment bootstrap replay");
+    let account = Account::new(authority.clone()).build(&authority);
+    let state = State::new_with_chain(
+        World::with([], [account], []),
+        Kura::blank_kura_for_testing(),
+        query::store::LiveQueryStore::start_test(),
+        chain,
+    );
     let transaction = TransactionBuilder::new(
-        chain.clone(),
+        state.network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -430,13 +434,6 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
         .into(),
     ))
     .sign(keypair.private_key());
-    let account = Account::new(authority.clone()).build(&authority);
-    let state = State::new_with_chain(
-        World::with([], [account], []),
-        Kura::blank_kura_for_testing(),
-        query::store::LiveQueryStore::start_test(),
-        chain,
-    );
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
     assert!(!allows_contract_deployment_self_bootstrap(
         &block.world,
@@ -462,8 +459,8 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
             .expect_err("an existing authority cannot replay the bootstrap prefix")
     };
     assert!(matches!(error, ValidationFail::NotPermitted(message) if
-            message.contains("CanRegisterSmartContractCode")
-                && message.contains("genesis block")));
+        message.contains("CanRegisterSmartContractCode")
+            && message.contains("genesis block")));
     let (runtime_stats_after, _) = loaded_executor.runtime_pool_snapshot();
     assert_eq!(
         runtime_stats_after.hits + runtime_stats_after.misses,
@@ -529,19 +526,19 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
         ("malformed same-name grant", malformed, 1),
         ("reordered prefix", reordered, 2),
     ] {
-        let transaction = TransactionBuilder::new(
-            chain.clone(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_executable(Executable::Instructions(instructions.into()))
-        .sign(keypair.private_key());
         let state = State::new_with_chain(
             World::new(),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
             chain.clone(),
         );
+        let transaction = TransactionBuilder::new(
+            state.network_id,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Instructions(instructions.into()))
+        .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         assert!(
             !allows_contract_deployment_self_bootstrap(&block.world, &authority, &transaction),
@@ -623,8 +620,8 @@ fn user_provided_borrowed_overlay_rejects_deployment_permission_before_runtime_d
         )
         .expect_err("borrowed overlay permission mutation must be consensus-gated");
     assert!(matches!(error, ValidationFail::NotPermitted(message) if
-            message.contains("CanRegisterSmartContractCode")
-                && message.contains("genesis block")));
+        message.contains("CanRegisterSmartContractCode")
+            && message.contains("genesis block")));
     let (runtime_stats_after, _) = loaded_executor.runtime_pool_snapshot();
     assert_eq!(runtime_stats_after, runtime_stats_before);
     assert!(
@@ -647,10 +644,10 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
         World::with([], [account], []),
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
-        chain.clone(),
+        chain,
     );
     let transaction = TransactionBuilder::new(
-        chain,
+        state.network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -686,7 +683,7 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
         )
         .expect_err("an existing authority cannot replay the bootstrap prefix");
     assert!(matches!(error, ValidationFail::NotPermitted(message) if
-            message.contains("only allowed inside the genesis block")));
+        message.contains("only allowed inside the genesis block")));
     assert!(
         !state_transaction
             .world
@@ -747,7 +744,7 @@ fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payl
             .execute_instruction(&mut state_transaction, &authority, instruction)
             .expect_err("deployment permission mutation must remain genesis-only");
         assert!(matches!(error, ValidationFail::NotPermitted(message) if
-                message.contains("only allowed inside the genesis block")));
+            message.contains("only allowed inside the genesis block")));
     }
 
     let stored: BTreeSet<_> = state_transaction

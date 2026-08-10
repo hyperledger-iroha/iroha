@@ -4,6 +4,7 @@ import { blake2b } from "@noble/hashes/blake2b";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
 import { AccountAddress } from "./address.js";
+import { networkIdBytes } from "./networkId.js";
 
 const encoder = new TextEncoder();
 const SID_PREFIX = encoder.encode("iroha-connect|sid|");
@@ -18,6 +19,14 @@ const RELAY_AUTH_DOMAIN = encoder.encode("iroha-connect|relay-auth|v1");
 const CONNECT_ENVELOPE_TYPE_NAME = "iroha_torii_shared::connect::EnvelopeV1";
 const CONNECT_URI_VERSION = "1";
 const CONNECT_URI_SCHEME = "iroha://connect";
+const CONNECT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const CONNECT_RESPONSE_FIELDS = new Set([
+  "sid", "network_id", "app_pk", "nonce", "wallet_uri", "app_uri",
+  "token_app", "token_wallet", "token_management", "token_relay",
+]);
+const CONNECT_URI_FIELDS = new Set([
+  "sid", "network_id", "app_pk", "nonce", "node", "v", "role", "token", "relay",
+]);
 const DEFAULT_CONNECT_LAUNCH_PROTOCOL = "irohaconnect";
 const DEFAULT_TORII_BASE_URL = "https://taira.sora.org";
 const UINT64_MASK = (1n << 64n) - 1n;
@@ -225,10 +234,12 @@ function normalizeConnectProtocol(value, name = "protocol") {
   return normalized.endsWith(":") ? normalized.slice(0, -1) : normalized;
 }
 
-function buildConnectUri(sidBase64Url, chainId, node, role, token = null) {
+function buildConnectUri(sidBase64Url, networkId, appPublicKey, nonce, node, role, token = null) {
   const params = new URLSearchParams({
     sid: sidBase64Url,
-    chain_id: chainId,
+    network_id: networkId.toString(),
+    app_pk: toBase64Url(appPublicKey),
+    nonce: toBase64Url(nonce),
     v: CONNECT_URI_VERSION,
     role: normalizeConnectRole(role),
   });
@@ -256,7 +267,8 @@ export function createConnectSessionPreview(options = {}) {
   if (!options || typeof options !== "object") {
     throw new TypeError("options must be an object");
   }
-  const chainId = requireNonEmptyString(options.chainId, "chainId");
+  const networkId = options.networkId;
+  const exactNetworkId = networkIdBytes(networkId, "networkId");
   const node =
     options.node === undefined || options.node === null
       ? null
@@ -280,13 +292,13 @@ export function createConnectSessionPreview(options = {}) {
   if (nonce.length !== 16) {
     throw new RangeError(`nonce must be 16 bytes (received ${nonce.length})`);
   }
-  const sidBytes = blake2b(concatBytes(SID_PREFIX, encoder.encode(chainId), publicKey, nonce), {
+  const sidBytes = blake2b(concatBytes(SID_PREFIX, exactNetworkId, publicKey, nonce), {
     dkLen: 32,
   });
   const sidBase64Url = toBase64Url(sidBytes);
   const toriiBaseUrl = node || baseUrlFromLocation();
   return {
-    chainId,
+    networkId,
     node,
     sidBytes,
     sidBase64Url,
@@ -295,8 +307,8 @@ export function createConnectSessionPreview(options = {}) {
       publicKey,
       privateKey,
     },
-    walletUri: buildConnectUri(sidBase64Url, chainId, node, "wallet"),
-    appUri: buildConnectUri(sidBase64Url, chainId, node, "app"),
+    walletUri: buildConnectUri(sidBase64Url, networkId, publicKey, nonce, node, "wallet"),
+    appUri: buildConnectUri(sidBase64Url, networkId, publicKey, nonce, node, "app"),
     wsUrl: buildConnectWebSocketUrl(toriiBaseUrl, sidBase64Url, "app"),
     createdAt: Date.now(),
   };
@@ -310,7 +322,17 @@ function getFetch(fetchImpl) {
   return resolved;
 }
 
-export async function registerConnectSession(baseUrl, sid, options = {}) {
+export async function registerConnectSession(baseUrl, preview, options = {}) {
+  const normalized = normalizePreviewInput(preview);
+  const payload = {
+    sid: toBase64Url(normalized.sidBytes),
+    network_id: normalized.networkId.toString(),
+    app_pk: toBase64Url(normalized.appKeyPair.publicKey),
+    nonce: toBase64Url(normalized.nonce),
+  };
+  if (options.node !== undefined && options.node !== null) {
+    payload.node = requireNonEmptyString(options.node, "node");
+  }
   const response = await getFetch(options.fetchImpl)(
     new URL("/v1/connect/session", `${requireNonEmptyString(baseUrl, "baseUrl")}/`),
     {
@@ -319,18 +341,93 @@ export async function registerConnectSession(baseUrl, sid, options = {}) {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify(
-        options.node === undefined || options.node === null
-          ? { sid: requireNonEmptyString(sid, "sid") }
-          : { sid: requireNonEmptyString(sid, "sid"), node: requireNonEmptyString(options.node, "node") },
-      ),
+      body: JSON.stringify(payload),
     },
   );
   if (!response.ok) {
     const message = await response.text().catch(() => response.statusText);
     throw new Error(`${response.status} ${response.statusText}: ${message || "unable to create connect session"}`);
   }
-  return response.json();
+  const session = await response.json();
+  validateRegisteredConnectSession(session, payload);
+  return session;
+}
+
+function validateRegisteredConnectSession(session, expected) {
+  if (!session || typeof session !== "object" || Array.isArray(session)) {
+    throw new TypeError("Connect session response must be an object");
+  }
+  for (const field of Object.keys(session)) {
+    if (!CONNECT_RESPONSE_FIELDS.has(field)) {
+      throw new Error(`Connect session response contains unsupported field ${field}`);
+    }
+  }
+  const identity = {
+    sid: requireExactNonEmptyString(session.sid, "session.sid"),
+    network_id: requireExactNonEmptyString(session.network_id, "session.network_id"),
+    app_pk: requireExactNonEmptyString(session.app_pk, "session.app_pk"),
+    nonce: requireExactNonEmptyString(session.nonce, "session.nonce"),
+  };
+  for (const field of ["sid", "network_id", "app_pk", "nonce"]) {
+    if (identity[field] !== expected[field]) {
+      throw new Error(`Torii substituted the canonical Connect session ${field}`);
+    }
+  }
+  const tokens = {
+    app: requireConnectToken(session.token_app, "session.token_app"),
+    wallet: requireConnectToken(session.token_wallet, "session.token_wallet"),
+    management: requireConnectToken(session.token_management, "session.token_management"),
+    relay: requireConnectToken(session.token_relay, "session.token_relay"),
+  };
+  validateRegisteredConnectUri(session.wallet_uri, "wallet", identity, expected.node, tokens.wallet, tokens.relay);
+  validateRegisteredConnectUri(session.app_uri, "app", identity, expected.node, tokens.app, tokens.relay);
+}
+
+function validateRegisteredConnectUri(value, role, identity, node, token, relay) {
+  const literal = requireExactNonEmptyString(value, `session.${role}_uri`);
+  let parsed;
+  try {
+    parsed = new URL(literal);
+  } catch {
+    throw new Error(`session.${role}_uri must be an absolute Connect URI`);
+  }
+  if (parsed.protocol !== "iroha:" || parsed.host !== "connect" || parsed.pathname || parsed.hash) {
+    throw new Error(`session.${role}_uri must use iroha://connect without a path or fragment`);
+  }
+  const query = new Map();
+  for (const [key, entry] of parsed.searchParams) {
+    if (!CONNECT_URI_FIELDS.has(key)) {
+      throw new Error(`session.${role}_uri contains unsupported parameter ${key}`);
+    }
+    if (query.has(key)) {
+      throw new Error(`session.${role}_uri contains duplicate parameter ${key}`);
+    }
+    query.set(key, entry);
+  }
+  const expectedValues = {
+    ...identity,
+    node: node ?? "",
+    v: CONNECT_URI_VERSION,
+    role,
+    token,
+    relay,
+  };
+  for (const field of CONNECT_URI_FIELDS) {
+    if (!query.has(field)) {
+      throw new Error(`session.${role}_uri is missing required parameter ${field}`);
+    }
+    if (query.get(field) !== expectedValues[field]) {
+      throw new Error(`session.${role}_uri substituted Connect parameter ${field}`);
+    }
+  }
+}
+
+function requireConnectToken(value, name) {
+  const token = requireExactNonEmptyString(value, name);
+  if (!CONNECT_TOKEN_PATTERN.test(token)) {
+    throw new TypeError(`${name} must be a canonical 32-byte unpadded base64url token`);
+  }
+  return token;
 }
 
 export async function deleteConnectSession(baseUrl, sid, options = {}) {
@@ -660,11 +757,11 @@ function encodePermissions(permissions) {
   );
 }
 
-function encodeOpenControl({ appPublicKey, chainId, appMeta, permissions }) {
+function encodeOpenControl({ appPublicKey, networkId, appMeta, permissions }) {
   const body = encodeNoritoStruct([
     toUint8Array(appPublicKey, "appPublicKey"),
     encodeAppMeta(appMeta),
-    encodeNoritoStruct([encodeNoritoString(chainId)]),
+    encodeNoritoStruct([networkIdBytes(networkId, "networkId")]),
     encodePermissions(permissions),
   ]);
   return concatBytes(u32ToBytes(CONTROL_OPEN), u64ToBytes(body.length), body);
@@ -1109,6 +1206,21 @@ function isNoritoNoneOption(bytes) {
   return bytes.length === 4 && readU32(bytes, 0, "option.tag") === 0;
 }
 
+function unwrapNoritoOption(bytes, context) {
+  if (isNoritoNoneOption(bytes)) {
+    return null;
+  }
+  if (bytes[0] !== 1) {
+    throw new Error(`${context} has an invalid option tag`);
+  }
+  const state = { offset: 1 };
+  const value = readLengthPrefixedSlice(bytes, state, context);
+  if (state.offset !== bytes.length) {
+    throw new Error(`${context} has trailing bytes`);
+  }
+  return value;
+}
+
 function accountEd25519PublicKey(accountId) {
   const address = AccountAddress.fromI105(accountId);
   const controller = address._controller;
@@ -1142,16 +1254,27 @@ function requireValidEd25519Signature(signature, message, publicKey) {
 }
 
 function buildApprovalPreimage(preview, control, relayToken) {
-  if (!isNoritoNoneOption(control.permissions) || !isNoritoNoneOption(control.proof)) {
-    throw new Error("Connect approval verification does not support permission/proof payloads yet");
-  }
-  return concatBytes(
+  const permissions = unwrapNoritoOption(control.permissions, "approve.permissions");
+  const proof = unwrapNoritoOption(control.proof, "approve.proof");
+  const constraints = encodeNoritoStruct([networkIdBytes(preview.networkId, "preview.networkId")]);
+  const fields = [
     taggedApproveField("domain", APPROVE_DOMAIN),
+    taggedApproveField("network_id", networkIdBytes(preview.networkId, "preview.networkId")),
+    taggedApproveField("constraints", blake2b(constraints, { dkLen: 32 })),
     taggedApproveField("sid", preview.sidBytes),
     taggedApproveField("app_pk", preview.appKeyPair.publicKey),
     taggedApproveField("wallet_pk", control.walletPublicKey),
     taggedApproveField("account_id", encoder.encode(control.accountId)),
-    taggedApproveField("relay_auth", relayAuthHash(preview.sidBytes, relayToken)),
+  ];
+  if (permissions !== null) {
+    fields.push(taggedApproveField("permissions", blake2b(permissions, { dkLen: 32 })));
+  }
+  if (proof !== null) {
+    fields.push(taggedApproveField("proof", blake2b(proof, { dkLen: 32 })));
+  }
+  fields.push(taggedApproveField("relay_auth", relayAuthHash(preview.sidBytes, relayToken)));
+  return concatBytes(
+    ...fields,
   );
 }
 
@@ -1249,9 +1372,15 @@ function normalizePreviewInput(preview) {
   if (publicKey.length !== 32 || privateKey.length !== 32) {
     throw new RangeError("preview.appKeyPair must contain 32-byte X25519 keys");
   }
+  networkIdBytes(preview.networkId, "preview.networkId");
+  const nonce = toUint8Array(preview.nonce, "preview.nonce");
+  if (nonce.length !== 16) {
+    throw new RangeError(`preview.nonce must be 16 bytes (received ${nonce.length})`);
+  }
   return {
     sidBytes,
-    chainId: requireNonEmptyString(preview.chainId, "preview.chainId"),
+    networkId: preview.networkId,
+    nonce,
     appKeyPair: {
       publicKey,
       privateKey,
@@ -1524,7 +1653,7 @@ export function createConnectAppSession(options = {}) {
       sendControl(
         encodeOpenControl({
           appPublicKey: preview.appKeyPair.publicKey,
-          chainId: preview.chainId,
+          networkId: preview.networkId,
           appMeta: options.appMeta ?? null,
           permissions: options.permissions ?? null,
         }),

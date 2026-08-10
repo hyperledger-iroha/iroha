@@ -30,7 +30,7 @@ and the A6 tracker in `specs/project_tracker/npos_sumeragi_phase_a.md`.
 1. **Hardware.** Dedicated host with ≥16 physical cores, 64 GiB RAM, and fast
    local SSD. Disable background workloads that could mask pacemaker timing.
 2. **Build profile.** `cargo build --profile release --workspace` (matching the
-   commit you intend to certify) and ensure `iroha_cli`, `irohad`, and the
+   commit you intend to certify) and ensure `iroha`, `iroha3d`, and the
    integration test binaries are available.
 3. **Environment.** Export `SUMERAGI_NPOS_STRESS_*` overrides only when testing
    bespoke matrices; the helpers set them automatically. Keep `RUST_LOG` at

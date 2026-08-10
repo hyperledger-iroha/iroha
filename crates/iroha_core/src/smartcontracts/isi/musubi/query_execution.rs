@@ -20,16 +20,7 @@ impl ValidSingularQuery for FindMusubiExactReleaseV1 {
     ) -> Result<MusubiExactReleaseSnapshotV1, QueryExecutionFail> {
         self.request.release.validate().map_err(query_invalid)?;
         let snapshot = query_snapshot(state_ro)?;
-        let chain_id = state_ro.chain_id().clone();
-        let genesis_hash = state_ro
-            .block_hashes()
-            .first()
-            .map(|hash| *hash.as_ref())
-            .ok_or_else(|| {
-                QueryExecutionFail::Conversion(
-                    "Musubi exact release queries require a finalized genesis block".to_owned(),
-                )
-            })?;
+        let network_id = *state_ro.network_id();
         let world = state_ro.world();
         let home_release = world.musubi_releases().get(&self.request.release).cloned();
         let universal_release = world
@@ -47,8 +38,7 @@ impl ValidSingularQuery for FindMusubiExactReleaseV1 {
             }
         };
         let response = MusubiExactReleaseSnapshotV1 {
-            chain_id,
-            genesis_hash,
+            network_id,
             snapshot,
             home_release,
             universal_release,
@@ -164,16 +154,7 @@ impl ValidMusubiSingularQuery for FindMusubiResolverIndexV1 {
             requirement.validate().map_err(query_invalid)?;
         }
         let snapshot = query_snapshot(state_ro)?;
-        let chain_id = state_ro.chain_id().clone();
-        let genesis_hash = state_ro
-            .block_hashes()
-            .first()
-            .map(|hash| *hash.as_ref())
-            .ok_or_else(|| {
-                QueryExecutionFail::Conversion(
-                    "Musubi resolver queries require a finalized genesis block".to_owned(),
-                )
-            })?;
+        let network_id = *state_ro.network_id();
         let query_hash = resolver_query_hash(&self.request);
         let start = package_release_page_start(&self.request.package, &self.request.page)?;
         let rows = state_ro
@@ -197,8 +178,7 @@ impl ValidMusubiSingularQuery for FindMusubiResolverIndexV1 {
         )?;
         let page = MusubiResolverIndexPageV1 {
             query: self.request.clone(),
-            chain_id,
-            genesis_hash,
+            network_id,
             items,
             next_cursor,
             snapshot,
@@ -285,16 +265,7 @@ impl ValidMusubiSingularQuery for FindMusubiArchiveLocationsV1 {
             .into());
         }
         let snapshot = query_snapshot(state_ro)?;
-        let chain_id = state_ro.chain_id().clone();
-        let genesis_hash = state_ro
-            .block_hashes()
-            .first()
-            .map(|hash| *hash.as_ref())
-            .ok_or_else(|| {
-                QueryExecutionFail::Conversion(
-                    "Musubi archive-location queries require a finalized genesis block".to_owned(),
-                )
-            })?;
+        let network_id = *state_ro.network_id();
         let query_hash = archive_location_query_hash(&self.request);
         let archive = state_ro
             .world()
@@ -329,8 +300,7 @@ impl ValidMusubiSingularQuery for FindMusubiArchiveLocationsV1 {
             .collect::<Result<Vec<_>, QueryExecutionFail>>()?;
         let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
         let page = MusubiArchiveLocationPageV1 {
-            chain_id,
-            genesis_hash,
+            network_id,
             archive,
             items,
             next_cursor,
@@ -356,16 +326,7 @@ impl ValidSingularQuery for FindMusubiArchiveRetentionV1 {
         {
             return Err(QueryExecutionFail::Expired);
         }
-        let chain_id = state_ro.chain_id().clone();
-        let genesis_hash = state_ro
-            .block_hashes()
-            .first()
-            .map(|hash| *hash.as_ref())
-            .ok_or_else(|| {
-                QueryExecutionFail::Conversion(
-                    "Musubi archive-retention queries require a finalized genesis block".to_owned(),
-                )
-            })?;
+        let network_id = *state_ro.network_id();
         let world = state_ro.world();
         let mut items = Vec::with_capacity(self.request.archive_ids.len());
         for archive_id in &self.request.archive_ids {
@@ -383,8 +344,7 @@ impl ValidSingularQuery for FindMusubiArchiveRetentionV1 {
             finalized_block.header().creation_time_ms,
         )?;
         let page = MusubiArchiveRetentionPageV1 {
-            chain_id,
-            genesis_hash,
+            network_id,
             items,
             snapshot,
             finalized_time_ms,
@@ -572,16 +532,7 @@ impl ValidMusubiSingularQuery for FindMusubiOrderedPrefixV1 {
     ) -> Result<MusubiOrderedPackagePageV1, MusubiQueryExecutionErrorV1> {
         self.request.prefix.validate().map_err(query_invalid)?;
         let snapshot = query_snapshot(state_ro)?;
-        let chain_id = state_ro.chain_id().clone();
-        let genesis_hash = state_ro
-            .block_hashes()
-            .first()
-            .map(|hash| *hash.as_ref())
-            .ok_or_else(|| {
-                QueryExecutionFail::Conversion(
-                    "Musubi directory queries require a finalized genesis block".to_owned(),
-                )
-            })?;
+        let network_id = *state_ro.network_id();
         let query_hash = ordered_prefix_query_hash(&self.request);
         let prefix = self.request.prefix.as_str();
         let (start, namespace, name_prefix) = directory_query_start(&self.request)?;
@@ -604,8 +555,7 @@ impl ValidMusubiSingularQuery for FindMusubiOrderedPrefixV1 {
         let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
         let page = MusubiOrderedPackagePageV1 {
             query: self.request.clone(),
-            chain_id,
-            genesis_hash,
+            network_id,
             namespace_binding,
             items,
             next_cursor,

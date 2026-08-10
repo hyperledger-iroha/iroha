@@ -1,5 +1,14 @@
 # Executed lexically in write_sumeragi_v2_release_receipt.py; do not import directly.
 
+_WIRE_RELEASE_INVARIANT_PYTEST_NODES = (
+    "pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::"
+    "test_wire_release_invariant_binds_current_semantic_sources "
+    "pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::"
+    "test_wire_release_invariant_rejects_ledger_weakening "
+    "pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::"
+    "test_wire_release_invariant_rejects_semantic_source_mutation"
+)
+
 
 def _sdk_suite_source_manifest(repo_root: Path, suite: str) -> str:
     """Resolve one reviewed SDK suite through its source-bound closure tool."""

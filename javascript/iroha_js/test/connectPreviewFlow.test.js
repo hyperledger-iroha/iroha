@@ -2,6 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { bootstrapConnectPreviewSession } from "../src/connectPreviewFlow.js";
+import { NetworkId } from "../src/networkId.js";
+
+function testNetworkId() {
+  const bytes = new Uint8Array(32).fill(0x41);
+  bytes[31] |= 1;
+  return NetworkId.fromBytes(bytes);
+}
 
 class FakeToriiClient {
   constructor(response = {}) {
@@ -25,13 +32,16 @@ class FakeToriiClient {
     return {
       ...this.response,
       sid: payload.sid,
+      network_id: payload.networkId,
+      app_pk: Buffer.from(payload.appPublicKey).toString("base64url"),
+      nonce: Buffer.from(payload.nonce).toString("base64url"),
     };
   }
 }
 
 function fixedPreviewOptions(overrides = {}) {
   return {
-    chainId: "alpha-net",
+    networkId: testNetworkId(),
     node: "torii.devnet.example",
     nonce: Buffer.alloc(16, 0x11),
     appKeyPair: {
@@ -62,6 +72,7 @@ test("bootstrapConnectPreviewSession registers by default", async () => {
   assert.equal(result.tokens?.relay, "relay-token");
   assert.equal(client.calls.length, 1);
   assert.equal(client.calls[0].sid, result.preview.sidBase64Url);
+  assert.equal(client.calls[0].networkId, result.preview.networkId);
   assert.equal(client.calls[0].node, "torii.devnet.example");
 });
 

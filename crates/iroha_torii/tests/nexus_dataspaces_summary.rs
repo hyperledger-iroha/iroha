@@ -159,7 +159,6 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         metadata: Default::default(),
         balance_scope_policy: AssetBalancePolicy::Global,
         owning_domain: Some(domain_id.clone()),
-        confidential_policy: Default::default(),
     })
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
@@ -333,7 +332,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
         metadata: Default::default(),
         balance_scope_policy: AssetBalancePolicy::Global,
         owning_domain: Some(domain_id.clone()),
-        confidential_policy: Default::default(),
     })
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
@@ -654,7 +652,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         metadata: Default::default(),
         balance_scope_policy: AssetBalancePolicy::Global,
         owning_domain: Some(domain_id.clone()),
-        confidential_policy: Default::default(),
     })
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
@@ -815,7 +812,6 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         metadata: Default::default(),
         balance_scope_policy: AssetBalancePolicy::Global,
         owning_domain: Some(domain_id.clone()),
-        confidential_policy: Default::default(),
     })
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
@@ -1088,6 +1084,7 @@ fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId)
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -1105,6 +1102,7 @@ fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId)
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,

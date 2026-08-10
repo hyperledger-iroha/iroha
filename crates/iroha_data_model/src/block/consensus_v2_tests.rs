@@ -5,6 +5,12 @@ mod tests {
 
     use super::*;
 
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
+
     #[test]
     fn consensus_modes_project_canonical_protocol_identities() {
         assert_eq!(ConsensusMode::Permissioned.tag(), PERMISSIONED_TAG);
@@ -94,10 +100,21 @@ mod tests {
         let parent = Hash::new(b"parent");
         let ordinary = Hash::new(b"ordinary writes");
         let topup = Hash::new(b"topup tree");
-        let executed = Hash::new(b"executed block wire");
+        let executed_block_wire = b"executed block wire";
+        let executed_block_wire_len =
+            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
+        let executed = Hash::new(executed_block_wire);
         let post = ExecutionCommitment::topup_post_state_root(2, ordinary, topup);
-        let canonical = ExecutionCommitment::new(parent, post, ordinary, Some(topup), 2, executed)
-            .expect("canonical top-up commitment");
+        let canonical = ExecutionCommitment::new_without_merge_carrier(
+            parent,
+            post,
+            ordinary,
+            Some(topup),
+            2,
+            executed_block_wire_len,
+            executed,
+        )
+        .expect("canonical top-up commitment");
         assert_eq!(canonical.validate(), Ok(()));
         assert_eq!(canonical.executed_block_wire_hash, executed);
 
@@ -109,27 +126,37 @@ mod tests {
         );
 
         assert_eq!(
-            ExecutionCommitment::new(
+            ExecutionCommitment::new_without_merge_carrier(
                 parent,
                 Hash::new(b"wrong"),
                 ordinary,
                 Some(topup),
                 2,
+                executed_block_wire_len,
                 executed,
             ),
             Err(ValidationError::ExecutionCommitmentPostRootMismatch)
         );
         assert_eq!(
-            ExecutionCommitment::new(parent, post, ordinary, Some(topup), 0, executed),
+            ExecutionCommitment::new_without_merge_carrier(
+                parent,
+                post,
+                ordinary,
+                Some(topup),
+                0,
+                executed_block_wire_len,
+                executed,
+            ),
             Err(ValidationError::InvalidExecutionCommitment)
         );
         assert_eq!(
-            ExecutionCommitment::new(
+            ExecutionCommitment::new_without_merge_carrier(
                 parent,
                 post,
                 ordinary,
                 Some(topup),
                 MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+                executed_block_wire_len,
                 executed,
             ),
             Err(ValidationError::TooManyKagemushaTopupAnchors)
@@ -148,12 +175,36 @@ mod tests {
             executed_block_wire_hash: Hash,
         }
 
+        #[derive(Encode)]
+        struct ExecutionCommitmentWithoutLaneFinalityManifest {
+            parent_state_root: Hash,
+            post_state_root: Hash,
+            ordinary_writes_root: Hash,
+            topup_anchor_root: Option<Hash>,
+            topup_anchor_count: u32,
+            native_amx_application_manifest_version: u16,
+            native_amx_application_manifest_root: Hash,
+            native_amx_application_manifest_count: u32,
+            merge_carrier: Option<MergeCarrierCommitmentV1>,
+            executed_block_wire_len: u64,
+            executed_block_wire_hash: Hash,
+        }
+
         let parent = Hash::new(b"native manifest parent");
         let post = Hash::new(b"native manifest post");
         let ordinary = Hash::new(b"native manifest ordinary");
-        let executed = Hash::new(b"native manifest executed wire");
+        let executed_block_wire = b"native manifest executed wire";
+        let executed_block_wire_len =
+            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
+        let executed = Hash::new(executed_block_wire);
         let root = Hash::new(b"native manifest non-empty root");
-        let empty = ExecutionCommitment::without_topups(parent, post, ordinary, executed);
+        let empty = ExecutionCommitment::without_topups_or_merge_carrier(
+            parent,
+            post,
+            ordinary,
+            executed_block_wire_len,
+            executed,
+        );
         assert_eq!(
             empty.native_amx_application_manifest_root,
             native_amx_application_manifest_empty_root()
@@ -174,22 +225,43 @@ mod tests {
             ExecutionCommitment::decode_all(&mut legacy_cursor).is_err(),
             "the pre-manifest execution commitment must not decode implicitly"
         );
-        let canonical = ExecutionCommitment::new_with_native_amx_application_manifest(
-            parent,
-            post,
-            ordinary,
-            None,
-            0,
-            NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            root,
-            1,
-            executed,
-        )
-        .expect("canonical Native AMX manifest commitment");
+        let omitted_lane_finality = ExecutionCommitmentWithoutLaneFinalityManifest {
+            parent_state_root: parent,
+            post_state_root: post,
+            ordinary_writes_root: ordinary,
+            topup_anchor_root: None,
+            topup_anchor_count: 0,
+            native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
+            native_amx_application_manifest_count: 0,
+            merge_carrier: None,
+            executed_block_wire_len,
+            executed_block_wire_hash: executed,
+        }
+        .encode();
+        let mut omitted_lane_finality_cursor = omitted_lane_finality.as_slice();
+        assert!(
+            ExecutionCommitment::decode_all(&mut omitted_lane_finality_cursor).is_err(),
+            "the lane-finality manifest is a required execution-commitment wire field"
+        );
+        let canonical =
+            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
+                parent,
+                post,
+                ordinary,
+                None,
+                0,
+                NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                root,
+                1,
+                executed_block_wire_len,
+                executed,
+            )
+            .expect("canonical Native AMX manifest commitment");
         assert_eq!(canonical.validate(), Ok(()));
 
         assert_eq!(
-            ExecutionCommitment::new_with_native_amx_application_manifest(
+            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
                 parent,
                 post,
                 ordinary,
@@ -198,12 +270,13 @@ mod tests {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 root,
                 0,
+                executed_block_wire_len,
                 executed,
             ),
             Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment)
         );
         assert_eq!(
-            ExecutionCommitment::new_with_native_amx_application_manifest(
+            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
                 parent,
                 post,
                 ordinary,
@@ -212,12 +285,13 @@ mod tests {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 root,
                 MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1,
+                executed_block_wire_len,
                 executed,
             ),
             Err(ValidationError::TooManyNativeAmxApplicationManifestLeaves)
         );
         assert_eq!(
-            ExecutionCommitment::new_with_native_amx_application_manifest(
+            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
                 parent,
                 post,
                 ordinary,
@@ -226,6 +300,7 @@ mod tests {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION + 1,
                 root,
                 1,
+                executed_block_wire_len,
                 executed,
             ),
             Err(ValidationError::InvalidNativeAmxApplicationManifestVersion)
@@ -346,7 +421,7 @@ mod tests {
     fn context(powers: &[u64]) -> HeightContext {
         let roster = roster(powers);
         HeightContext {
-            chain_id: ChainId::from("sumeragi-v2-test"),
+            network_id: network_id(0xA1),
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 2,
@@ -393,13 +468,15 @@ mod tests {
     }
 
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
-        ExecutionCommitment::new(
+        let executed_block_wire = [seed, 6];
+        ExecutionCommitment::new_without_merge_carrier(
             Hash::new([seed, 3]),
             Hash::new([seed, 4]),
             Hash::new([seed, 5]),
             None,
             0,
-            Hash::new([seed, 6]),
+            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64"),
+            Hash::new(executed_block_wire),
         )
         .expect("canonical fixture execution commitment")
     }
@@ -746,6 +823,7 @@ mod tests {
             height: 1,
             view: 0,
         };
+        let invalid_parent_executed_block_wire = b"executed block wire";
         invalid_parent_execution.parent_commit_qc = Some(QuorumCertificate {
             round: invalid_parent_round,
             proposal_round: invalid_parent_round,
@@ -760,7 +838,11 @@ mod tests {
                 native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
                 native_amx_application_manifest_count: 0,
-                executed_block_wire_hash: Hash::new(b"executed block wire"),
+                lane_finality_manifest: None,
+                merge_carrier: None,
+                executed_block_wire_len: u64::try_from(invalid_parent_executed_block_wire.len())
+                    .expect("fixture wire length fits u64"),
+                executed_block_wire_hash: Hash::new(invalid_parent_executed_block_wire),
             },
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0x62; 48],
@@ -1172,7 +1254,7 @@ mod tests {
         };
         let commit_request = CommitCertificateRequest {
             protocol_version: PROTOCOL_VERSION,
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             context_id: context.id(),
             height: context.height,
             requester: context.roster[3].validator.clone(),
@@ -1818,12 +1900,12 @@ mod tests {
     }
 
     #[test]
-    fn commit_certificate_discovery_binds_chain_context_request_and_commit_phase() {
+    fn commit_certificate_discovery_binds_network_context_request_and_commit_phase() {
         let context = context(&[1, 1, 1, 1]);
         let commit = qc(&context, 9, GlobalPhase::Commit, vec![0, 1, 2]);
         let request = CommitCertificateRequest {
             protocol_version: PROTOCOL_VERSION,
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             context_id: context.id(),
             height: context.height,
             requester: peer(99),
@@ -1849,10 +1931,10 @@ mod tests {
                 .starts_with(b"iroha:sumeragi:v2:commit-certificate-response")
         );
 
-        let mut cross_chain = request.clone();
-        cross_chain.chain_id = ChainId::from("other-chain");
+        let mut cross_network = request.clone();
+        cross_network.network_id = network_id(0xA2);
         assert_eq!(
-            cross_chain.validate(&context),
+            cross_network.validate(&context),
             Err(ValidationError::WrongHeightContext)
         );
         let mut wrong_height = request.clone();
@@ -2584,7 +2666,7 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
-    fn execution_commitment_json_requires_explicit_merge_carrier() {
+    fn execution_commitment_json_requires_explicit_finality_and_merge_manifests() {
         use iroha_schema::{IntoSchema as _, Metadata};
 
         let schema = ExecutionCommitment::schema();
@@ -2603,6 +2685,15 @@ mod tests {
             merge_carrier.ty,
             core::any::TypeId::of::<Option<MergeCarrierCommitmentV1>>()
         );
+        let lane_finality_manifest = metadata
+            .declarations
+            .iter()
+            .find(|field| field.name == "lane_finality_manifest")
+            .expect("lane finality manifest schema declaration");
+        assert_eq!(
+            lane_finality_manifest.ty,
+            core::any::TypeId::of::<Option<MerkleTreeCommitment<LaneFinalityStatement>>>()
+        );
 
         let carrier_free = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"json parent"),
@@ -2620,6 +2711,7 @@ mod tests {
         for commitment in [carrier_free, with_carrier] {
             let value = norito::json::to_value(&commitment).expect("serialize commitment");
             assert!(value.get("merge_carrier").is_some());
+            assert!(value.get("lane_finality_manifest").is_some());
             let decoded = norito::json::from_value::<ExecutionCommitment>(value)
                 .expect("explicit merge carrier projection decodes");
             assert_eq!(decoded, commitment);
@@ -2634,6 +2726,19 @@ mod tests {
         let error = norito::json::from_value::<ExecutionCommitment>(missing)
             .expect_err("omitted merge carrier must reject");
         assert!(error.to_string().contains("missing field `merge_carrier`"));
+
+        let mut missing = norito::json::to_value(&carrier_free).expect("serialize commitment");
+        missing
+            .as_object_mut()
+            .expect("commitment is an object")
+            .remove("lane_finality_manifest");
+        let error = norito::json::from_value::<ExecutionCommitment>(missing)
+            .expect_err("omitted lane finality manifest must reject");
+        assert!(
+            error
+                .to_string()
+                .contains("missing field `lane_finality_manifest`")
+        );
     }
 
     #[test]

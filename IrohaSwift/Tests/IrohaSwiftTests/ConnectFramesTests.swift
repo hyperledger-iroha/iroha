@@ -29,15 +29,22 @@ final class ConnectFramesTests: XCTestCase {
 
     func testOpenFrameRoundTrip() throws {
         try requireConnectCodec()
-        let open = ConnectOpen(appPublicKey: Data(repeating: 0x11, count: 32),
+        let appPublicKey = Data(repeating: 0x11, count: 32)
+        let nonce = Data(repeating: 0x33, count: 16)
+        let sessionID = try ConnectCrypto.deriveSessionID(
+            networkID: TestNetworkIds.canonical,
+            appPublicKey: appPublicKey,
+            nonce: nonce
+        )
+        let open = ConnectOpen(appPublicKey: appPublicKey,
                                appMetadata: ConnectAppMetadata(name: "demo", iconURL: nil, description: nil),
-                               constraints: ConnectConstraints(chainID: "chain"),
+                               constraints: ConnectConstraints(networkID: TestNetworkIds.canonical),
                                permissions: ConnectPermissions(methods: ["sign"]))
-        let frame = ConnectFrame(sessionID: Data(repeating: 0x22, count: 32),
+        let frame = ConnectFrame(sessionID: sessionID,
                                  direction: .appToWallet,
                                  sequence: 1,
                                  kind: .control(.open(open)))
-        let encoded = try ConnectCodec.encode(frame)
+        let encoded = try ConnectCodec.encode(frame, launchNonce: nonce)
         let decoded = try ConnectCodec.decode(encoded)
         XCTAssertEqual(decoded.sessionID, frame.sessionID)
         XCTAssertEqual(decoded.direction, frame.direction)

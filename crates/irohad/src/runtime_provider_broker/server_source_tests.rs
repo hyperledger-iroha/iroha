@@ -82,7 +82,7 @@ fn production_unary_binding_caps_accept_defaults_and_reject_cap_plus_one() {
             .expect("construct checkpoint Ed25519 public key");
     let mut appeal = plain_runtime_binding(
         IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint,
-        "hsm://sorafs/appeal-finance/checkpoint-primary",
+        "sealed://sorafs/appeal-finance/checkpoint-primary",
     );
     appeal.appeal_finance_checkpoint_binding = Some(AppealFinanceCheckpointBindingWireV1 {
         public_key: checkpoint_public_key,
@@ -116,7 +116,7 @@ fn production_unary_binding_caps_accept_defaults_and_reject_cap_plus_one() {
     );
 
     let signer_details = ProviderIngestSignerBindingWireV1 {
-        runtime_handle: "pkcs11://sorafs/provider-ingest/signer-primary".to_owned(),
+        runtime_handle: "software://sorafs/provider-ingest/signer-primary".to_owned(),
         adapter_revision: 3,
         signer_policy_id: [0xA1; 32],
         signer_policy_revision: 1,
@@ -715,7 +715,11 @@ fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalifica
             TEST_SIGNER_KEY
         }
 
-        fn sign(&self, _payload: &[u8]) -> Result<[u8; 64], String> {
+        fn sign(
+            &self,
+            _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
+            _payload: &[u8],
+        ) -> Result<[u8; 64], String> {
             Ok([0xA5; 64])
         }
     }
@@ -890,7 +894,11 @@ fn broker_server_requalifies_complete_catalog_immediately_before_ready() {
             TEST_SIGNER_KEY
         }
 
-        fn sign(&self, _payload: &[u8]) -> Result<[u8; 64], String> {
+        fn sign(
+            &self,
+            _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
+            _payload: &[u8],
+        ) -> Result<[u8; 64], String> {
             Ok([0xA5; 64])
         }
     }
@@ -961,7 +969,11 @@ fn broker_server_preserves_requalification_failure_during_shutdown() {
             TEST_SIGNER_KEY
         }
 
-        fn sign(&self, _payload: &[u8]) -> Result<[u8; 64], String> {
+        fn sign(
+            &self,
+            _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
+            _payload: &[u8],
+        ) -> Result<[u8; 64], String> {
             Ok([0xA5; 64])
         }
     }
@@ -1040,6 +1052,67 @@ fn stock_registry_projects_exact_streamed_provider_source_limits() {
 }
 
 #[test]
+fn musubi_source_fetch_v2_reconstructs_exact_private_binding() {
+    let payload = vec![0xD7; 4 * 1024 + 19];
+    let (generic_authorization, manifest, plan) = test_source_material(payload.clone());
+    let (authorization, musubi) =
+        test_source_musubi_fetch_binding(&generic_authorization, &manifest, &plan);
+    let expected_musubi = musubi.clone();
+    let observed_request = Arc::new(Mutex::new(None));
+    let source_backend = ServerTestProviderSource {
+        payload: payload.clone(),
+        manifest,
+        plan,
+        revision: Arc::new(AtomicU64::new(5)),
+        fetch_delay: Duration::ZERO,
+        drift_on_eof: false,
+        observed_request: Some(Arc::clone(&observed_request)),
+    };
+    let bindings = source_test_catalog(Duration::from_secs(5), 64 * 1024, 1);
+    let (_directory, policy, shutdown, server) =
+        start_source_test_server(source_backend, bindings.clone());
+    let source = connect_test_source(&policy, &bindings);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build Musubi source client runtime");
+    let request = sorafs_node::ProviderIngestSourceRequestV1::new(
+        authorization.clone(),
+        SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+        Some(musubi),
+    )
+    .expect("construct Musubi source request");
+    let mut fetched = runtime
+        .block_on(
+            sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(source.as_ref(), request),
+        )
+        .expect("open Musubi source stream");
+    let mut observed_payload = Vec::new();
+    std::io::Read::read_to_end(&mut fetched.reader, &mut observed_payload)
+        .expect("read authenticated Musubi source stream");
+    assert_eq!(observed_payload, payload);
+    let observed = observed_request
+        .lock()
+        .expect("lock captured source request")
+        .take()
+        .expect("server backend received source request");
+    assert_eq!(observed.authorization(), &authorization);
+    assert_eq!(
+        observed.source_provider_ids(),
+        SERVER_TEST_SOURCE_PROVIDER_IDS.as_slice()
+    );
+    assert_eq!(observed.musubi_archive(), Some(&expected_musubi));
+    drop(fetched);
+    drop(source);
+    drop(runtime);
+    shutdown.request_shutdown();
+    server
+        .join()
+        .expect("join Musubi source broker")
+        .expect("Musubi source broker exits cleanly");
+}
+
+#[test]
 fn stalled_source_stream_releases_unary_session_capacity() {
     let payload = vec![0xA7; 8 * 1024 * 1024];
     let (authorization, manifest, plan) = test_source_material(payload.clone());
@@ -1050,6 +1123,7 @@ fn stalled_source_stream_releases_unary_session_capacity() {
         revision: Arc::new(AtomicU64::new(5)),
         fetch_delay: Duration::ZERO,
         drift_on_eof: false,
+        observed_request: None,
     };
     let bindings = source_test_catalog(Duration::from_secs(10), 16 * 1024 * 1024, 1);
     let (_directory, policy, shutdown, server) =
@@ -1063,10 +1137,12 @@ fn stalled_source_stream_releases_unary_session_capacity() {
         .block_on(
             sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(
                 source.as_ref(),
-                sorafs_node::ProviderIngestSourceRequestV1 {
-                    authorization: authorization.clone(),
-                    source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
-                },
+                sorafs_node::ProviderIngestSourceRequestV1::new(
+                    authorization.clone(),
+                    SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                    None,
+                )
+                .expect("construct generic source request"),
             ),
         )
         .expect("open stalled source stream");
@@ -1074,10 +1150,12 @@ fn stalled_source_stream_releases_unary_session_capacity() {
         runtime.block_on(
             sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(
                 source.as_ref(),
-                sorafs_node::ProviderIngestSourceRequestV1 {
+                sorafs_node::ProviderIngestSourceRequestV1::new(
                     authorization,
-                    source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
-                },
+                    SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                    None,
+                )
+                .expect("construct generic source request"),
             )
         ),
         Err(sorafs_node::ProviderIngestSourceFetchErrorV1::ContentRejected)
@@ -1112,6 +1190,7 @@ fn source_stream_post_qualification_runs_after_exact_backend_eof() {
         revision: Arc::clone(&revision),
         fetch_delay: Duration::ZERO,
         drift_on_eof: true,
+        observed_request: None,
     };
     let bindings = source_test_catalog(Duration::from_secs(5), 2 * 1024 * 1024, 1);
     let (_directory, policy, shutdown, server) =
@@ -1125,10 +1204,12 @@ fn source_stream_post_qualification_runs_after_exact_backend_eof() {
         .block_on(
             sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(
                 source.as_ref(),
-                sorafs_node::ProviderIngestSourceRequestV1 {
+                sorafs_node::ProviderIngestSourceRequestV1::new(
                     authorization,
-                    source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
-                },
+                    SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                    None,
+                )
+                .expect("construct generic source request"),
             ),
         )
         .expect("open source stream");
@@ -1159,6 +1240,7 @@ fn source_fetch_future_obeys_configured_absolute_timeout() {
         revision: Arc::new(AtomicU64::new(5)),
         fetch_delay: Duration::from_millis(1_500),
         drift_on_eof: false,
+        observed_request: None,
     };
     let bindings = source_test_catalog(Duration::from_millis(200), 1024, 1);
     let (_directory, policy, shutdown, server) =
@@ -1173,10 +1255,12 @@ fn source_fetch_future_obeys_configured_absolute_timeout() {
         runtime.block_on(
             sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(
                 source.as_ref(),
-                sorafs_node::ProviderIngestSourceRequestV1 {
+                sorafs_node::ProviderIngestSourceRequestV1::new(
                     authorization,
-                    source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
-                },
+                    SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+                    None,
+                )
+                .expect("construct generic source request"),
             )
         ),
         Err(sorafs_node::ProviderIngestSourceFetchErrorV1::Unavailable)
@@ -1371,6 +1455,7 @@ fn broker_server_rejects_excess_persistent_session_without_queueing() {
     // itself compatible with the expected rejection.
     let request = make_handshake_request(
         "server-test-chain",
+        server_test_network_id(),
         vec![signer_binding_for_server()],
         [0xC7; 32],
     )
@@ -1394,6 +1479,7 @@ fn broker_server_rejects_excess_persistent_session_without_queueing() {
         match BrokerSession::connect(
             &policy,
             "server-test-chain",
+            server_test_network_id(),
             vec![signer_binding_for_server()],
         ) {
             Ok((session, _)) => break session,
@@ -1760,6 +1846,239 @@ fn source_reader_drop_closes_unverified_connection() {
 }
 
 #[test]
+fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
+    let payload = vec![0xD1; 4096];
+    let (authorization, manifest, plan) = test_source_material(payload);
+    let bindings = source_test_catalog(Duration::from_secs(5), 64 * 1024, 1);
+    let binding =
+        ProviderBindingWireV1::try_from_binding(bindings.iter().next().expect("source binding"))
+            .expect("project source binding");
+
+    let generic = source_request_to_wire(
+        sorafs_node::ProviderIngestSourceRequestV1::new(
+            authorization.clone(),
+            SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+            None,
+        )
+        .expect("construct generic source request"),
+        "server-test-chain",
+    )
+    .expect("project generic V2 source wire");
+    assert_eq!(
+        validate_source_fetch_request(
+            &generic,
+            &binding,
+            Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
+            Some("server-test-chain"),
+        ),
+        Ok(())
+    );
+
+    let (musubi_authorization, musubi) =
+        test_source_musubi_fetch_binding(&authorization, &manifest, &plan);
+    let request = sorafs_node::ProviderIngestSourceRequestV1::new(
+        musubi_authorization.clone(),
+        SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+        Some(musubi.clone()),
+    )
+    .expect("construct Musubi source request");
+    let exact = source_request_to_wire(request, "server-test-chain")
+        .expect("project exact Musubi V2 source wire");
+    assert_eq!(
+        validate_source_fetch_request(
+            &exact,
+            &binding,
+            Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
+            Some("server-test-chain"),
+        ),
+        Ok(())
+    );
+
+    let mut later_cursor = exact.clone();
+    later_cursor
+        .musubi_archive
+        .as_mut()
+        .expect("Musubi wire")
+        .observed_finalized_cursor = sorafs_node::ProviderIngestFinalizedCursorV1 {
+        height: authorization.finalized_height().saturating_add(1),
+        block_hash: [0x78; 32],
+    };
+    assert_eq!(
+        validate_source_fetch_request(
+            &later_cursor,
+            &binding,
+            Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
+            Some("server-test-chain"),
+        ),
+        Ok(()),
+        "a current informational claim may be newer than its retained admission"
+    );
+
+    let rejects = |candidate: &ProviderIngestSourceFetchRequestWireV2| {
+        assert_eq!(
+            validate_source_fetch_request(
+                candidate,
+                &binding,
+                Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
+                Some("server-test-chain"),
+            ),
+            Err(BrokerError::Rejected)
+        );
+    };
+
+    let mut zero_genesis = exact.clone();
+    zero_genesis
+        .musubi_archive
+        .as_mut()
+        .expect("Musubi wire")
+        .genesis_block_hash = [0; 32];
+    rejects(&zero_genesis);
+
+    let mut zero_cursor = exact.clone();
+    zero_cursor
+        .musubi_archive
+        .as_mut()
+        .expect("Musubi wire")
+        .observed_finalized_cursor
+        .height = 0;
+    rejects(&zero_cursor);
+
+    let mut forked_cursor = exact.clone();
+    forked_cursor
+        .musubi_archive
+        .as_mut()
+        .expect("Musubi wire")
+        .observed_finalized_cursor
+        .block_hash = [0xE0; 32];
+    rejects(&forked_cursor);
+
+    let mut wrong_order = exact.clone();
+    wrong_order
+        .musubi_archive
+        .as_mut()
+        .expect("Musubi wire")
+        .binding
+        .replication_order =
+        iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0xE1; 32]);
+    rejects(&wrong_order);
+
+    let mut wrong_archive = exact.clone();
+    wrong_archive
+        .musubi_archive
+        .as_mut()
+        .expect("Musubi wire")
+        .binding
+        .archive_id = iroha_data_model::musubi::ArchiveId::new([0xE2; 32]);
+    rejects(&wrong_archive);
+
+    let mut wrong_root = exact.clone();
+    let wrong_root_binding = &mut wrong_root
+        .musubi_archive
+        .as_mut()
+        .expect("Musubi wire")
+        .binding;
+    wrong_root_binding.commitment.root_cid =
+        iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([0xE3; 32])
+            .expect("alternate canonical root CID");
+    wrong_root_binding.archive_id = wrong_root_binding.commitment.archive_id();
+    rejects(&wrong_root);
+
+    let mut wrong_chunker = exact.clone();
+    let wrong_chunker_binding = &mut wrong_chunker
+        .musubi_archive
+        .as_mut()
+        .expect("Musubi wire")
+        .binding;
+    wrong_chunker_binding.commitment.chunker.name = "other".to_owned();
+    wrong_chunker_binding.archive_id = wrong_chunker_binding.commitment.archive_id();
+    rejects(&wrong_chunker);
+
+    let mut wrong_plan = exact.clone();
+    let wrong_plan_binding = &mut wrong_plan
+        .musubi_archive
+        .as_mut()
+        .expect("Musubi wire")
+        .binding;
+    wrong_plan_binding.commitment.chunk_plan_digest =
+        iroha_data_model::musubi::MusubiContentDigestV1::new([0xE4; 32]);
+    wrong_plan_binding.archive_id = wrong_plan_binding.commitment.archive_id();
+    rejects(&wrong_plan);
+
+    let mut wrong_por = exact.clone();
+    let wrong_por_binding = &mut wrong_por
+        .musubi_archive
+        .as_mut()
+        .expect("Musubi wire")
+        .binding;
+    wrong_por_binding.commitment.por_root =
+        iroha_data_model::musubi::MusubiContentDigestV1::new([0xE5; 32]);
+    wrong_por_binding.archive_id = wrong_por_binding.commitment.archive_id();
+    rejects(&wrong_por);
+
+    let mut wrong_length = exact;
+    let wrong_length_binding = &mut wrong_length
+        .musubi_archive
+        .as_mut()
+        .expect("Musubi wire")
+        .binding;
+    wrong_length_binding.commitment.content_length = wrong_length_binding
+        .commitment
+        .content_length
+        .saturating_add(1);
+    wrong_length_binding.archive_id = wrong_length_binding.commitment.archive_id();
+    rejects(&wrong_length);
+
+    let wrong_chain_request = sorafs_node::ProviderIngestSourceRequestV1::new(
+        musubi_authorization,
+        SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+        Some(musubi),
+    )
+    .expect("construct chain-bound Musubi request");
+    assert_eq!(
+        source_request_to_wire(wrong_chain_request, "other-chain"),
+        Err(BrokerError::BindingMismatch)
+    );
+}
+
+#[test]
+fn source_fetch_v2_rejects_retired_operation_28_and_legacy_wire() {
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+    struct LegacyProviderIngestSourceFetchRequestWireV1 {
+        authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
+        source_provider_ids: Vec<[u8; 32]>,
+    }
+
+    let bindings = source_test_catalog(Duration::from_secs(5), 64 * 1024, 1);
+    let binding =
+        ProviderBindingWireV1::try_from_binding(bindings.iter().next().expect("source binding"))
+            .expect("project source binding");
+    let legacy = LegacyProviderIngestSourceFetchRequestWireV1 {
+        authorization: test_source_authorization(16),
+        source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
+    };
+    let payload = encode_canonical(&legacy, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1)
+        .expect("encode retired source request");
+    assert!(
+        decode_canonical::<ProviderIngestSourceFetchRequestWireV2>(
+            &payload,
+            MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
+        )
+        .is_err(),
+        "the retired two-field wire must not decode as V2"
+    );
+    assert!(!operation_is_known(28));
+    let request = make_operation_request([0x91; 32], 1, binding, [0x92; 32], 28, payload)
+        .expect("construct retired operation request");
+    assert_eq!(
+        validate_operation_request_for_session(
+            &request,
+            "server-test-chain",
+            &server_test_network_id()
+        ),
+        Err(BrokerError::BindingMismatch)
+    );
+}
+
 fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_allocating() {
     assert_eq!(
         validate_source_metadata_lengths(sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1, 1),
@@ -1831,19 +2150,20 @@ fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_alloc
         evidence_viewer_archive_max_bytes: None,
         moderation_panel_notification_archive_binding: None,
     };
-    let fetch = ProviderIngestSourceFetchRequestWireV1 {
+    let fetch = ProviderIngestSourceFetchRequestWireV2 {
         authorization: test_source_authorization(17),
         source_provider_ids: vec![[1; 32], [2; 32]],
+        musubi_archive: None,
     };
     assert_eq!(
-        validate_source_fetch_request(&fetch, &binding, None),
+        validate_source_fetch_request(&fetch, &binding, None, None),
         Err(BrokerError::Rejected)
     );
     let mut too_many_sources = fetch;
     too_many_sources.authorization = test_source_authorization(16);
     too_many_sources.source_provider_ids.push([3; 32]);
     assert_eq!(
-        validate_source_fetch_request(&too_many_sources, &binding, None),
+        validate_source_fetch_request(&too_many_sources, &binding, None, None),
         Err(BrokerError::Rejected)
     );
 }
@@ -1989,6 +2309,7 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
         .expect("observe exact stream-token gateway backend");
     let state = BrokerServerStateV1 {
         chain_id: "server-test-chain".to_owned(),
+        network_id: server_test_network_id(),
         catalog: vec![binding.clone()],
         observations: vec![observation.clone()],
         backends,

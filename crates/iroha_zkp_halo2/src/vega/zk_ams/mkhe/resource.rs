@@ -222,18 +222,18 @@ mod tests {
         assert_eq!(certificate.proof_envelope_header_wire_bytes, 151);
         assert_eq!(certificate.max_round_contribution_proof_bytes, 27_262_691);
         assert_eq!(certificate.max_decryption_share_proof_bytes, 27_262_691);
-        assert_eq!(certificate.streamed_hybrid_workspace_bytes, 161_481_912);
+        assert_eq!(certificate.streamed_hybrid_workspace_bytes, 166_723_776);
         assert_eq!(certificate.ring_multiplication_work_units, 89_653_248);
         assert_eq!(
             certificate.hybrid_key_switch_decomposition_work_units,
-            14_952_169_472
+            3_297_247_232
         );
         assert_eq!(certificate.hybrid_key_switch_ntt_work_units, 6_813_646_848);
         assert_eq!(
             certificate.hybrid_key_switch_accumulator_work_units,
             378_535_936
         );
-        assert_eq!(certificate.hybrid_key_switch_work_units, 22_144_352_256);
+        assert_eq!(certificate.hybrid_key_switch_work_units, 10_489_430_016);
         assert_eq!(
             certificate.hybrid_key_switch_work_units,
             certificate.hybrid_key_switch_decomposition_work_units
@@ -241,14 +241,16 @@ mod tests {
                 + certificate.hybrid_key_switch_accumulator_work_units
         );
         assert_eq!(certificate.max_composed_rotation_key_switch_count, 8);
+        assert_eq!(certificate.max_composed_rotation_work_units, 83_915_440_128);
+        assert_eq!(profile.max_work_units, 100_000_000_000);
         assert_eq!(
-            certificate.max_composed_rotation_work_units,
-            177_154_818_048
+            profile.max_work_units - certificate.max_composed_rotation_work_units,
+            16_084_559_872
         );
         assert!(certificate.ciphertext_ceiling_met);
         assert!(certificate.per_evaluated_key_ceiling_met);
         assert!(certificate.workspace_ceiling_met);
-        assert!(!certificate.composed_rotation_work_ceiling_met);
+        assert!(certificate.composed_rotation_work_ceiling_met);
         assert!(!certificate.contribution_proof_sizes_certified);
         assert!(!certificate.evaluated_key_artifact_transport_certified);
         assert!(!certificate.phase23_work_measured);
@@ -326,8 +328,8 @@ mod tests {
         let profile = super::super::manifest::release_profile_v1();
         let baseline = derive_resource_certificate_v1(&profile, 8).expect("eight-party release");
         assert_eq!(baseline.max_composed_rotation_key_switch_count, 8);
-        assert_eq!(baseline.max_composed_rotation_work_units, 177_154_818_048);
-        assert!(!baseline.composed_rotation_work_ceiling_met);
+        assert_eq!(baseline.max_composed_rotation_work_units, 83_915_440_128);
+        assert!(baseline.composed_rotation_work_ceiling_met);
 
         for party_count in 2..=8 {
             let candidate =
@@ -341,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn multiplication_only_undercount_cannot_close_the_rotation_gate() {
+    fn multiplication_only_undercount_is_rejected_after_hoisting() {
         let profile = super::super::manifest::release_profile_v1();
         let certificate =
             derive_resource_certificate_v1(&profile, 8).expect("resource certificate");
@@ -353,8 +355,8 @@ mod tests {
 
         assert_eq!(multiplication_only, 54_509_174_784);
         assert!(multiplication_only <= profile.max_work_units);
-        assert!(certificate.max_composed_rotation_work_units > profile.max_work_units);
-        assert!(!certificate.composed_rotation_work_ceiling_met);
+        assert!(certificate.max_composed_rotation_work_units <= profile.max_work_units);
+        assert!(certificate.composed_rotation_work_ceiling_met);
 
         let mut stale_ceiling = profile;
         stale_ceiling.max_work_units = multiplication_only;

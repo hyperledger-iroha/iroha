@@ -5062,7 +5062,7 @@ impl From<ReplayError> for ReducerError {
 
 #[cfg(test)]
 mod source_link_tests {
-    use super::super::{ChainId, ContextId, Digest, Validator, VotingMode, VotingPower};
+    use super::super::{ContextId, Digest, NetworkId, Validator, VotingMode, VotingPower};
     use super::*;
 
     fn reducer() -> Reducer {
@@ -5071,7 +5071,7 @@ mod source_link_tests {
             .collect();
         let context = HeightContext::new(
             ContextId::repeat(0x91),
-            ChainId::repeat(0x92),
+            NetworkId::repeat(0x92),
             2,
             Some(CertificateRef::new(
                 ContextId::repeat(0x90),

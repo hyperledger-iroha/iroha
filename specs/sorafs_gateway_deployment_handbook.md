@@ -18,7 +18,7 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 |-------------|-------|
 | Torii build ≥ `2026-02-18` | Must include stream-token enforcement and the `sorafs.gateway` config surface. |
 | GAR admission artefacts | Gateway admission envelope + manifest signed via governance tooling. |
-| Stream token runtime signer | Non-exportable Ed25519 key in the approved HSM/KMS, a runtime-injected signer adapter, and a reviewed non-secret handle/public-key/revision/public-policy-digest binding. Distribute the public key through authenticated provider inventory and rotate as described in §5.4. |
+| Stream token runtime signer | Encrypted runtime-only Ed25519 key in an independently administered external software signer, an authenticated runtime adapter, and a reviewed non-secret handle/public-key/revision/public-policy-digest binding. Distribute the public key through authenticated provider inventory and rotate as described in §5.4. |
 | Observability stack | Prometheus + Grafana dashboards (`grafana_sorafs_gateway_*`) shipped in `specs/`. |
 | Smoke tooling | Latest `sorafs-fetch` CLI (`cargo run -p sorafs_fetch -- --help`) with the gateway options described below. |
 
@@ -36,7 +36,7 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 
    [sorafs.storage.stream_tokens]
    enabled = true
-   signer_handle = "pkcs11:prod/stream-token/v4"
+   signer_handle = "software://sorafs/stream-token/primary"
    signer_public_key_hex = "<64-lowercase-hex-characters>"
    signer_revision = 4
    signer_policy_digest_hex = "<64-lowercase-nonzero-hex-characters>"
@@ -58,7 +58,7 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 4. Configure observability exporters (Prometheus scrape of `torii_metrics` endpoint). Dashboards referenced in §4 expect metric names `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_stream_token_denials_total{reason=…}`, etc.
 
 The TOML `enabled` value is the only production activation control; do not use
-an environment override. The deployment launcher must inject the HSM/KMS signer
+an environment override. The deployment launcher must inject the external software-signer
 adapter whose reported non-secret handle, 32-byte Ed25519 public key, non-zero
 adapter revision, and non-zero public-policy digest exactly match
 `signer_handle`, `signer_public_key_hex`, `signer_revision`, and
@@ -219,15 +219,15 @@ Recommended alerts:
 
 ### 5.4 Key Rotation
 
-1. Create a fresh Ed25519 key inside the approved HSM/KMS and keep it
-   non-exportable. Assign it a new non-secret signer handle; do not copy a seed
+1. Create a fresh Ed25519 key inside the independently administered software
+   signer and keep it encrypted and runtime-only. Assign it a new non-secret signer handle; do not copy a seed
    into a file, environment variable, configuration value, or deployment
    artefact.
 2. In one reviewed rollout, inject the adapter bound to that handle and update
    `signer_handle`, `signer_public_key_hex`, `signer_revision`,
    `signer_policy_digest_hex`, and `key_version`. Restart the issuer and require
    both exact startup qualification probes to pass.
-3. Issue a probe token and require strict verification of the HSM/KMS signature
+3. Issue a probe token and require strict verification of the software-signer signature
    against the newly configured public key before publishing that key in the
    authenticated provider deployment inventory. The endpoint's
    `X-SoraFS-Verifying-Key` header is useful for comparison but is not a trust
@@ -240,7 +240,7 @@ Recommended alerts:
    overlap window is required, use separately named old/new descriptors so each
    token remains bound to its own pinned key, then remove the old descriptor no
    later than its final token expiry.
-6. Revoke and destroy the old HSM/KMS key. Retain only its non-secret handle,
+6. Revoke and destroy the old software-signing key. Retain only its non-secret handle,
    public-key fingerprint, `token_pk_version`, activation time, final expiry,
    change approval, and negative probes proving old-key, cross-key, and
    wrong-handle tokens are rejected.

@@ -21,6 +21,7 @@ import java.util.concurrent.CompletableFuture;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 
 /** Strict VPN response-schema and successful-status contract coverage. */
 final class HttpClientTransportVpnParserTests {
@@ -406,7 +407,10 @@ final class HttpClientTransportVpnParserTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             new StubResponseExecutor(status, body.getBytes(StandardCharsets.UTF_8)),
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+            ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .setLocalSigningContext(new LocalSigningContext(TestNetworkIds.canonical()))
+                .build());
     expectRuntimeException(
         () -> call.invoke(transport),
         "VPN route must reject unexpected successful status " + status);

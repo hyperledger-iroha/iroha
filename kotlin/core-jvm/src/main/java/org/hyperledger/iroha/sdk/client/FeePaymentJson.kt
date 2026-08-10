@@ -15,9 +15,9 @@ internal object FeePaymentJson {
         )
         requireExactKeys(
             root,
-            setOf("id", "lifecycle", "active_revision", "staged_revision", "scheduled_activation"),
+            setOf("id", "payout_account", "lifecycle", "active_revision", "staged_revision", "scheduled_activation"),
             "fee sponsor program response",
-            required = setOf("id", "lifecycle"),
+            required = setOf("id", "payout_account", "lifecycle"),
         )
         val id = objectValue(root["id"], "fee sponsor program response.id")
         requireExactKeys(id, setOf("sponsor", "name"), "fee sponsor program response.id")
@@ -51,6 +51,8 @@ internal object FeePaymentJson {
                 id["name"] as? String
                     ?: throw IllegalArgumentException("fee sponsor program response.id.name must be a string"),
             ),
+            root["payout_account"] as? String
+                ?: throw IllegalArgumentException("fee sponsor program response.payout_account must be a string"),
             when (lifecycle["state"]) {
                 "staged" -> FeeSponsorProgramLifecycle.STAGED
                 "paused" -> FeeSponsorProgramLifecycle.PAUSED

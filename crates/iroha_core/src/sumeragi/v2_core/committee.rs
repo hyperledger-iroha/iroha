@@ -309,7 +309,7 @@ impl Error for CommitteeError {}
 #[cfg(test)]
 mod tests {
     use super::super::types::{
-        ChainId, ContextId, Digest, HeightContext, Validator, VotingMode, VotingPower,
+        ContextId, Digest, HeightContext, NetworkId, Validator, VotingMode, VotingPower,
     };
     use super::*;
 
@@ -326,7 +326,7 @@ mod tests {
         height_seed[31] = seed_offset;
         HeightContext::new(
             ContextId::repeat(0x50),
-            ChainId::repeat(0x51),
+            NetworkId::repeat(0x51),
             1,
             None,
             0,

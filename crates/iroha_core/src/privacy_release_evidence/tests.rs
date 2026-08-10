@@ -31,7 +31,7 @@ fn zk_ace_and_bootle_release_contexts_bind_every_compiled_profile_digest() {
         let baseline =
             norito::encode_canonical(&release_statement_context_from_compiled_profile_v1(
                 &profile,
-                ChainId::from("taira-privacy-release-evidence-v1"),
+                release_network_id_from_genesis_hash([0xa7; 32]),
                 3,
                 PrivacyTransactionIntentDigestV1::new([0x51; 32]),
             ))
@@ -42,7 +42,7 @@ fn zk_ace_and_bootle_release_contexts_bind_every_compiled_profile_digest() {
             let changed =
                 norito::encode_canonical(&release_statement_context_from_compiled_profile_v1(
                     &changed,
-                    ChainId::from("taira-privacy-release-evidence-v1"),
+                    release_network_id_from_genesis_hash([0xa7; 32]),
                     3,
                     PrivacyTransactionIntentDigestV1::new([0x51; 32]),
                 ))
@@ -160,7 +160,7 @@ fn zk_ams_release_lineage_uses_distinct_single_action_transactions() {
 
     assert_eq!(ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1, 0);
     assert_eq!(ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1, 0);
-    assert_eq!(admission.chain_id, provision.chain_id);
+    assert_eq!(admission.network_id, provision.network_id);
     assert_eq!(admission.authority, provision.authority);
     assert_eq!(admission.time_to_live, provision.time_to_live);
     assert_eq!(admission.fee_payment, provision.fee_payment);
@@ -187,12 +187,13 @@ fn zk_ams_release_envelope_distinguishes_admission_from_native_rejection() {
         PrivacyZkAmsRegistryRecordDigestV1::new([0x42; 32]),
     )
     .expect("canonical provisioning statement");
-    let authoritative_chain_id = ChainId::from(ZK_AMS_RELEASE_CHAIN_ID_V1);
+    let authoritative_network_id =
+        release_network_id_from_genesis_hash(ZK_AMS_RELEASE_GENESIS_HASH_V1);
 
     let native_rejection = verify_zk_ams_release_production_envelope_v1(
         &statement,
         &[0x01],
-        &authoritative_chain_id,
+        &authoritative_network_id,
         ZK_AMS_RELEASE_GENESIS_HASH_V1,
         ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
     );
@@ -214,7 +215,7 @@ fn zk_ams_release_envelope_distinguishes_admission_from_native_rejection() {
     let pre_native_rejection = verify_zk_ams_release_production_envelope_v1(
         &impossible_second_action,
         &[0x01],
-        &authoritative_chain_id,
+        &authoritative_network_id,
         ZK_AMS_RELEASE_GENESIS_HASH_V1,
         ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
     );
@@ -247,7 +248,7 @@ fn zk_ams_release_envelope_distinguishes_admission_from_native_rejection() {
     let oversized_rejection = verify_zk_ams_release_production_envelope_v1(
         &statement,
         &oversized,
-        &authoritative_chain_id,
+        &authoritative_network_id,
         ZK_AMS_RELEASE_GENESIS_HASH_V1,
         ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
     );
@@ -277,7 +278,8 @@ fn jindo_release_envelope_requires_the_production_native_dispatch() {
     let profile =
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
             .expect("compiled Jindo profile");
-    let authoritative_chain_id = ChainId::from(JINDO_RELEASE_CHAIN_ID_V1);
+    let authoritative_network_id =
+        release_network_id_from_genesis_hash(JINDO_RELEASE_GENESIS_HASH_V1);
     let polynomial_commitments = (1_i32..=4)
         .map(|coefficient| {
             let mut encoding =
@@ -289,7 +291,7 @@ fn jindo_release_envelope_requires_the_production_native_dispatch() {
     let statement = iroha_data_model::privacy::IrohaJindoPolynomialCommitmentStatementV1 {
         context: release_statement_context_from_compiled_profile_v1(
             &profile,
-            authoritative_chain_id.clone(),
+            authoritative_network_id,
             JINDO_RELEASE_ACTION_INDEX_V1,
             PrivacyTransactionIntentDigestV1::new([0x51; 32]),
         ),
@@ -301,7 +303,7 @@ fn jindo_release_envelope_requires_the_production_native_dispatch() {
     let native_rejection = verify_jindo_release_production_envelope_v1(
         &statement,
         &[0x01],
-        &authoritative_chain_id,
+        &authoritative_network_id,
         JINDO_RELEASE_GENESIS_HASH_V1,
         JINDO_RELEASE_ACTION_INDEX_V1,
     );
@@ -323,7 +325,7 @@ fn jindo_release_envelope_requires_the_production_native_dispatch() {
     let pre_native_rejection = verify_jindo_release_production_envelope_v1(
         &impossible_second_action,
         &[0x01],
-        &authoritative_chain_id,
+        &authoritative_network_id,
         JINDO_RELEASE_GENESIS_HASH_V1,
         JINDO_RELEASE_ACTION_INDEX_V1,
     );
@@ -351,7 +353,7 @@ fn vega_release_fixture_uses_the_canonical_single_taira_action() {
         .expect("compiled Vega profile");
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let context = PrivacyStatementContextV1 {
-        chain_id: transaction.chain_id.clone(),
+        network_id: transaction.network_id,
         action_index: VEGA_RELEASE_ACTION_INDEX_V1,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x27; 32]),
         parameter_id: profile.parameter_id,
@@ -371,8 +373,8 @@ fn vega_release_fixture_uses_the_canonical_single_taira_action() {
         .expect("Vega is the sole privacy action in its transaction");
     assert_eq!(VEGA_RELEASE_ACTION_INDEX_V1, 0);
     assert_eq!(
-        transaction.chain_id,
-        ChainId::from(VEGA_RELEASE_CHAIN_ID_V1)
+        transaction.network_id,
+        release_network_id_from_genesis_hash([0xa7; 32])
     );
     assert_eq!(
         transaction.creation_time,
@@ -398,13 +400,13 @@ fn vega_release_envelope_requires_the_production_native_dispatch() {
     let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
         .expect("compiled Vega profile");
-    let authoritative_chain_id = ChainId::from(VEGA_RELEASE_CHAIN_ID_V1);
+    let authoritative_network_id = release_network_id_from_genesis_hash(fixture.genesis_hash);
     let input = fixture.public_input;
     let record = fixture.issuer_record;
     let mut statement = VegaExistingCredentialStatementV1 {
         context: release_statement_context_from_compiled_profile_v1(
             &profile,
-            authoritative_chain_id.clone(),
+            authoritative_network_id,
             VEGA_RELEASE_ACTION_INDEX_V1,
             PrivacyTransactionIntentDigestV1::new([0x27; 32]),
         ),
@@ -431,7 +433,7 @@ fn vega_release_envelope_requires_the_production_native_dispatch() {
         &statement,
         Some(&record),
         &[0x01],
-        &authoritative_chain_id,
+        &authoritative_network_id,
         fixture.genesis_hash,
         VEGA_RELEASE_ACTION_INDEX_V1,
         VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
@@ -456,7 +458,7 @@ fn vega_release_envelope_requires_the_production_native_dispatch() {
         &statement,
         Some(&record),
         &[0x01],
-        &authoritative_chain_id,
+        &authoritative_network_id,
         fixture.genesis_hash,
         VEGA_RELEASE_ACTION_INDEX_V1,
         VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
@@ -579,13 +581,15 @@ fn vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift
         "the internal proof-empty projection must never be submittable"
     );
 
-    let mut changed_chain = payload.clone();
-    changed_chain.chain = ChainId::from("vega-signed-action-wrong-chain-v1");
+    let mut changed_network = payload.clone();
+    changed_network.domain = iroha_data_model::transaction::TransactionDomain::Network(
+        release_network_id_from_genesis_hash([0xa8; 32]),
+    );
     assert!(
-        changed_chain
+        changed_network
             .validate_privacy_transaction_intent_binding_v1()
             .is_err(),
-        "chain mutation must invalidate the signed intent"
+        "network mutation must invalidate the signed intent"
     );
     let mut changed_authority = payload.clone();
     changed_authority.authority =

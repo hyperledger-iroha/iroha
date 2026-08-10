@@ -28,10 +28,11 @@ use iroha_data_model::{
     permission::Permission,
     prelude::QueryBuilderExt,
     privacy::{
-        PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1, PrivacyCompiledProfileResultV1,
-        PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1, PrivacyParameterDigestV1,
-        PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
-        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        PrivacyCapabilityLimitationV1, PrivacyCapabilityReadinessV1,
+        PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
+        PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1,
+        PrivacyParameterDigestV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
+        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
     },
     query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
@@ -78,7 +79,9 @@ fn is_exact_replay_error(error: &eyre::Report) -> bool {
     .any(|needle| error_chain_contains(error, needle))
 }
 
-fn jindo_row(snapshot: &PrivacyCapabilitySnapshotV1) -> Result<PrivacyCapabilityRowV1> {
+fn jindo_row(
+    snapshot: &PrivacyExact12CapabilityManifestV1,
+) -> Result<PrivacyExact12CapabilityRowV1> {
     snapshot
         .protocols
         .iter()
@@ -88,7 +91,7 @@ fn jindo_row(snapshot: &PrivacyCapabilitySnapshotV1) -> Result<PrivacyCapability
 }
 
 fn assert_exact_jindo_row(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     compiled: PrivacyCompiledProfileSnapshotV1,
     activation: Option<PrivacyProtocolActivationRecordV1>,
     context: &str,
@@ -106,6 +109,17 @@ fn assert_exact_jindo_row(
         row.activation == activation,
         "{context}: Jindo activation mismatch: expected {activation:?}, got {:?}",
         row.activation
+    );
+    ensure!(
+        row.readiness == PrivacyCapabilityReadinessV1::AvailableExperimental,
+        "{context}: revised Jindo must remain explicitly available-experimental"
+    );
+    ensure!(
+        row.limitation
+            == Some(
+                PrivacyCapabilityLimitationV1::MissingDistributionWideKnowledgeSoundnessEvidence,
+            ),
+        "{context}: revised Jindo omitted its missing knowledge-soundness evidence"
     );
     Ok(())
 }
@@ -179,7 +193,7 @@ fn build_jindo_action(
         .duration_since(UNIX_EPOCH)
         .wrap_err("system clock is before the Unix epoch")?;
     let context = JindoPrivacyActionTransactionContextV1 {
-        chain_id: client.chain.clone(),
+        network_id: client.network_id,
         authority: client.account.clone(),
         creation_time,
         time_to_live: Some(Duration::from_secs(3_600)),
@@ -291,7 +305,7 @@ async fn wait_for_all_peer_activations(
     compiled: PrivacyCompiledProfileSnapshotV1,
     activation: Option<PrivacyProtocolActivationRecordV1>,
     context: &str,
-) -> Result<Vec<PrivacyCapabilitySnapshotV1>> {
+) -> Result<Vec<PrivacyExact12CapabilityManifestV1>> {
     let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
     let mut last_observed = Vec::new();
     loop {
@@ -778,6 +792,9 @@ async fn canonical_jindo_direct_action_survives_four_peer_activation_replay_and_
         ensure!(
             canonical_genesis_hash(&bounded_client(restart_peer.client()))? == genesis_hash,
             "restarted peer derived a different canonical genesis hash"
+        );
+        println!(
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_jindo_network::canonical_jindo_direct_action_survives_four_peer_activation_replay_and_restart:passed"
         );
         Ok(())
     }

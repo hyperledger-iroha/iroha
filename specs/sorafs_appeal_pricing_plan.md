@@ -1,6 +1,6 @@
 ---
 title: Moderation Appeal Pricing Engine
-summary: SFM-4b2 implementation status for deterministic appeal pricing, durable finalized-ledger deposit and settlement forwarding, runtime HSM signer bindings, moderation handoff, and remaining validation/deployment gates.
+summary: SFM-4b2 implementation status for deterministic appeal pricing, durable finalized-ledger deposit and settlement forwarding, external software-signer bindings, moderation handoff, and remaining validation/deployment gates.
 ---
 
 # Moderation Appeal Pricing Engine
@@ -99,7 +99,7 @@ reviewed evidence collection planner/runner with a dry-run
 `evidence_contract` map for the selected required kinds.
 The source implementation is not itself production evidence. Closure still
 requires focused Rust validation, four-validator duplicate/race/restart/fork
-tests, a real independently administered PKCS#11/HSM/KMS provider bundle,
+tests, a real independently administered external software-signer service,
 alert-routing validation, and signed evidence from the reviewed reference
 deployment. No file key, environment key, software test signer, request-only
 one-step path, or pre-commit local receipt can satisfy that evidence gate.

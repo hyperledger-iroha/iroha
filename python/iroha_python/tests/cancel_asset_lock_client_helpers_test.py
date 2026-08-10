@@ -14,6 +14,8 @@ from iroha_python import (
     CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
     Ed25519KeyPair,
     Instruction,
+    LocalSigningContext,
+    NetworkId,
     ToriiClient,
     TransactionConfig,
     TransactionDraft,
@@ -21,7 +23,10 @@ from iroha_python import (
     decode_cancel_asset_lock_v1,
 )
 
+CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
+NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 FEE_PAYMENT = authority_fee_payment(charge_limits=[])
+TRANSACTION_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
 
 
 class NoRequestSession:
@@ -65,7 +70,7 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
 
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority=source,
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
@@ -118,6 +123,7 @@ def test_cancel_asset_lock_and_wait_builds_compare_and_cancel_instruction() -> N
         "http://torii.example",
         session=NoRequestSession(),
         max_retries=0,
+        local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
     )
     captured: dict[str, object] = {}
 
@@ -129,7 +135,6 @@ def test_cancel_asset_lock_and_wait_builds_compare_and_cancel_instruction() -> N
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     result = client.cancel_asset_lock_and_wait(
-        chain_id="chain",
         authority=account_address(0x72),
         fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
@@ -176,11 +181,11 @@ def test_cancel_asset_lock_and_wait_requires_expected_remaining_amount() -> None
         "http://torii.example",
         session=NoRequestSession(),
         max_retries=0,
+        local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
     )
 
     with pytest.raises(TypeError, match="expected_remaining_amount"):
         client.cancel_asset_lock_and_wait(  # type: ignore[call-arg]
-            chain_id="chain",
             authority=account_address(0x72),
             fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
@@ -194,11 +199,11 @@ def test_cancel_asset_lock_and_wait_rejects_non_positive_remaining_amount() -> N
         "http://torii.example",
         session=NoRequestSession(),
         max_retries=0,
+        local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
     )
 
     with pytest.raises(ValueError, match="expected_remaining_amount must be positive"):
         client.cancel_asset_lock_and_wait(
-            chain_id="chain",
             authority=account_address(0x72),
             fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
@@ -269,7 +274,7 @@ def test_cancel_asset_lock_bounds_exact_utf8_lock_id_preimage() -> None:
     Instruction.cancel_asset_lock(exact_bound, "1")
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority=account_address(0x75),
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
@@ -294,7 +299,7 @@ def test_cancel_asset_lock_rejects_unclean_lock_id_preimage(lock_id: str) -> Non
 
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority=account_address(0x75),
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
@@ -329,7 +334,7 @@ def test_asset_lock_transaction_draft_rejects_non_positive_amounts(
     account = account_address(0x74)
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority=account,
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
@@ -361,7 +366,7 @@ def test_asset_lock_transaction_draft_rejects_non_positive_expected_remaining_am
     account = account_address(0x75)
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority=account,
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
@@ -385,7 +390,7 @@ def test_asset_lock_transaction_draft_rejects_empty_identifiers() -> None:
     account = account_address(0x75)
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority=account,
             fee_payment=authority_fee_payment(charge_limits=[]),
         )

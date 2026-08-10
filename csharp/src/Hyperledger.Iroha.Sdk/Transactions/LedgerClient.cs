@@ -12,11 +12,11 @@ public sealed class LedgerClient
     }
 
     public TransactionBuilder BuildTransaction(
-        string chainId,
+        NetworkId networkId,
         string authorityAccountId,
         FeePaymentIntent feePayment)
     {
-        return new TransactionBuilder(chainId, authorityAccountId, feePayment);
+        return new TransactionBuilder(networkId, authorityAccountId, feePayment);
     }
 
     /// <summary>

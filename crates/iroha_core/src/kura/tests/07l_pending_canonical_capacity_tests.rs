@@ -55,14 +55,20 @@ fn shared_autonomous_mutation_gate_counts_pending_canonical_bytes_exactly() {
 
     let (temp_dir, mut kura) = pending_canonical_capacity_fixture();
     let pending = pending_canonical_capacity_snapshot(&kura);
-    assert!(pending > 0, "fixture must contain an in-memory canonical block");
+    assert!(
+        pending > 0,
+        "fixture must contain an in-memory canonical block"
+    );
     let exact_limit = pending_canonical_capacity_stable_required(&kura, pending)
         .checked_add(ADDITIONAL_PEAK)
         .expect("pending mutation exact limit fits");
     let directory_before = snapshot_regular_files_recursively(temp_dir.path());
     let disk_usage_before = kura.disk_usage.load(Ordering::Relaxed);
     let total_disk_usage_before = kura.disk_usage_total.load(Ordering::Relaxed);
-    let reservations_before = kura.post_wsv_lane_artifact_budget_reservations.lock().clone();
+    let reservations_before = kura
+        .post_wsv_lane_artifact_budget_reservations
+        .lock()
+        .clone();
 
     Arc::get_mut(&mut kura)
         .expect("pending capacity Kura remains exclusive")
@@ -86,7 +92,10 @@ fn shared_autonomous_mutation_gate_counts_pending_canonical_bytes_exactly() {
             temp_dir.path(),
         )
     };
-    assert!(rejected.is_err(), "one byte under the exact peak must reject");
+    assert!(
+        rejected.is_err(),
+        "one byte under the exact peak must reject"
+    );
     assert_eq!(
         snapshot_regular_files_recursively(temp_dir.path()),
         directory_before,
@@ -130,12 +139,18 @@ fn shared_autonomous_mutation_gate_counts_pending_canonical_bytes_exactly() {
 fn startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation() {
     let (temp_dir, mut kura) = pending_canonical_capacity_fixture();
     let pending = pending_canonical_capacity_snapshot(&kura);
-    assert!(pending > 0, "fixture must contain an in-memory canonical block");
+    assert!(
+        pending > 0,
+        "fixture must contain an in-memory canonical block"
+    );
     let exact_limit = pending_canonical_capacity_stable_required(&kura, pending);
     let directory_before = snapshot_regular_files_recursively(temp_dir.path());
     let disk_usage_before = kura.disk_usage.load(Ordering::Relaxed);
     let total_disk_usage_before = kura.disk_usage_total.load(Ordering::Relaxed);
-    let reservations_before = kura.post_wsv_lane_artifact_budget_reservations.lock().clone();
+    let reservations_before = kura
+        .post_wsv_lane_artifact_budget_reservations
+        .lock()
+        .clone();
 
     Arc::get_mut(&mut kura)
         .expect("startup capacity Kura remains exclusive")
@@ -174,9 +189,7 @@ fn startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation(
     });
 
     let deadline = Instant::now() + Duration::from_secs(5);
-    while kura.pending_budget_raw_scans.load(Ordering::Relaxed) == 0
-        && Instant::now() < deadline
-    {
+    while kura.pending_budget_raw_scans.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
         thread::yield_now();
     }
     assert_eq!(

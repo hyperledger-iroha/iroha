@@ -2,7 +2,8 @@
 //!
 //! Pass exactly one of `--write` or `--check` for the checked-in fixture tree.
 //! An isolated `--output-dir PATH` remains an implicit write for the fixture
-//! parity workflow, and may also be paired with an explicit mode.
+//! parity workflow, and may also be paired with an explicit mode. Secure
+//! fixture reads and publication are currently Unix-only.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -20,8 +21,6 @@ use std::{
 
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-#[cfg(windows)]
-use std::os::windows::fs::MetadataExt as _;
 #[cfg(unix)]
 use std::os::{fd::AsRawFd as _, unix::fs::MetadataExt as _};
 
@@ -71,6 +70,26 @@ const REFERENCE_SDK_INVENTORY_SCHEMA: &str = "sorafs.reference_sdk.validation_fi
 const REFERENCE_SDK_INVENTORY_SCOPE: &str = "sorafs_v1_release";
 const DEFAULT_FIXTURES_ROOT: &str = "fixtures/sorafs_manifest";
 
+fn require_secure_fixture_filesystem() -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        Err(unsupported_secure_fixture_filesystem_error())
+    }
+}
+
+#[cfg(not(unix))]
+fn unsupported_secure_fixture_filesystem_error() -> io::Error {
+    // TODO: Add stable handle-relative identity and no-follow support for non-Unix hosts.
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "secure SoraFS fixture generation requires Unix file identities and handle-relative directory binding",
+    )
+}
+
 struct BoundDirectory {
     display_path: PathBuf,
     canonical_path: PathBuf,
@@ -79,6 +98,7 @@ struct BoundDirectory {
 
 impl BoundDirectory {
     fn open(path: &Path, label: &str) -> Result<Self, Box<dyn Error>> {
+        require_secure_fixture_filesystem()?;
         require_real_directory_ancestry(path, label)?;
         let before = fs::symlink_metadata(path)
             .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?;
@@ -139,6 +159,7 @@ impl BoundDirectory {
         display_path: &Path,
         label: &str,
     ) -> Result<Self, Box<dyn Error>> {
+        require_secure_fixture_filesystem()?;
         let before = fs::symlink_metadata(bound_path).map_err(|error| {
             format!(
                 "failed to inspect {label} `{}`: {error}",
@@ -235,14 +256,13 @@ static WORKING_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());
 struct BoundWorkingDirectory {
     #[cfg(unix)]
     previous: File,
-    #[cfg(not(unix))]
-    previous: PathBuf,
     active: bool,
     _lock: MutexGuard<'static, ()>,
 }
 
 impl BoundWorkingDirectory {
     fn enter(root: &BoundDirectory) -> Result<Self, Box<dyn Error>> {
+        require_secure_fixture_filesystem()?;
         let lock = WORKING_DIRECTORY_LOCK
             .lock()
             .map_err(|_| "fixture generator working-directory lock is poisoned")?;
@@ -264,23 +284,8 @@ impl BoundWorkingDirectory {
         }
         #[cfg(not(unix))]
         {
-            // Windows fixture generation remains path-bound and is followed by
-            // canonical path plus metadata identity revalidation. A future
-            // Windows-hosted fixture lane should use a directory-handle
-            // current-directory primitive before it is release-authoritative.
-            let previous = env::current_dir()
-                .map_err(|error| format!("failed to bind the current directory: {error}"))?;
-            env::set_current_dir(&root.canonical_path).map_err(|error| {
-                format!(
-                    "failed to enter bound fixture output root `{}`: {error}",
-                    root.display_path.display()
-                )
-            })?;
-            Ok(Self {
-                previous,
-                active: true,
-                _lock: lock,
-            })
+            let _ = (root, lock);
+            unreachable!("non-Unix fixture generation failed before directory binding")
         }
     }
 
@@ -298,7 +303,10 @@ impl BoundWorkingDirectory {
         }
         #[cfg(not(unix))]
         {
-            env::set_current_dir(&self.previous)
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "secure fixture working-directory binding is unavailable",
+            ))
         }
     }
 }
@@ -420,14 +428,8 @@ fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 }
 
 #[cfg(not(unix))]
-fn same_directory_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    // The non-Unix fallback binds creation and modification metadata in
-    // addition to canonical-path revalidation. It is not used by the
-    // release-authoritative Unix fixture lane.
-    left.is_dir()
-        && right.is_dir()
-        && left.created().ok() == right.created().ok()
-        && left.modified().ok() == right.modified().ok()
+fn same_directory_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -565,6 +567,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         print_usage();
         return Ok(());
     }
+    require_secure_fixture_filesystem()?;
     if args.mode == Mode::Check {
         ensure_no_publication_lock(&args.fixtures_root)?;
     }
@@ -694,7 +697,9 @@ fn print_usage() {
          Generate the canonical SoraFS PoR, PoTR, repair, governance, moderation,\n\
          ValidationOutcomeV1, and signed reference-SDK inventory fixtures.\n\
          An isolated --output-dir without a mode implies --write.\n\
-         PATH must be an existing, complete, non-symlink sorafs_manifest tree."
+         PATH must be an existing, complete, non-symlink sorafs_manifest tree.\n\
+         Secure fixture generation is currently supported only on Unix; other targets fail\n\
+         before inspecting the fixture tree."
     );
 }
 
@@ -1764,27 +1769,9 @@ fn file_identity(metadata: &fs::Metadata, _path: &Path) -> Result<FileIdentity, 
     })
 }
 
-#[cfg(windows)]
-fn file_identity(metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity, Box<dyn Error>> {
-    Ok(FileIdentity {
-        volume: u64::from(
-            metadata.volume_serial_number().ok_or_else(|| {
-                format!("could not read volume identity for `{}`", path.display())
-            })?,
-        ),
-        file: metadata
-            .file_index()
-            .ok_or_else(|| format!("could not read file identity for `{}`", path.display()))?,
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
-fn file_identity(_metadata: &fs::Metadata, path: &Path) -> Result<FileIdentity, Box<dyn Error>> {
-    Err(format!(
-        "fixture publication cannot authenticate file identity on this platform: `{}`",
-        path.display()
-    )
-    .into())
+#[cfg(not(unix))]
+fn file_identity(_metadata: &fs::Metadata, _path: &Path) -> Result<FileIdentity, Box<dyn Error>> {
+    Err(unsupported_secure_fixture_filesystem_error().into())
 }
 
 #[cfg(unix)]
@@ -1799,25 +1786,9 @@ fn ensure_single_hard_link(metadata: &fs::Metadata, path: &Path) -> Result<(), B
     Ok(())
 }
 
-#[cfg(windows)]
-fn ensure_single_hard_link(metadata: &fs::Metadata, path: &Path) -> Result<(), Box<dyn Error>> {
-    if metadata.number_of_links() != Some(1) {
-        return Err(format!(
-            "fixture file `{}` must have exactly one hard link",
-            path.display()
-        )
-        .into());
-    }
-    Ok(())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn ensure_single_hard_link(_metadata: &fs::Metadata, path: &Path) -> Result<(), Box<dyn Error>> {
-    Err(format!(
-        "fixture publication cannot authenticate hard links on this platform: `{}`",
-        path.display()
-    )
-    .into())
+#[cfg(not(unix))]
+fn ensure_single_hard_link(_metadata: &fs::Metadata, _path: &Path) -> Result<(), Box<dyn Error>> {
+    Err(unsupported_secure_fixture_filesystem_error().into())
 }
 
 #[derive(Clone)]
@@ -1943,8 +1914,16 @@ fn write_new_regular_file(path: &Path, bytes: &[u8]) -> Result<FileIdentity, Box
 }
 
 fn sync_directory(path: &Path) -> Result<(), Box<dyn Error>> {
-    File::open(path)?.sync_all()?;
-    Ok(())
+    #[cfg(unix)]
+    {
+        File::open(path)?.sync_all()?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Err(unsupported_secure_fixture_filesystem_error().into())
+    }
 }
 
 struct TemporaryFileGuard {
@@ -2616,17 +2595,9 @@ fn hard_link_count(metadata: &fs::Metadata) -> Result<u64, Box<dyn Error>> {
     Ok(metadata.nlink())
 }
 
-#[cfg(windows)]
-fn hard_link_count(metadata: &fs::Metadata) -> Result<u64, Box<dyn Error>> {
-    metadata
-        .number_of_links()
-        .map(u64::from)
-        .ok_or_else(|| "could not read fixture hard-link count".into())
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn hard_link_count(_metadata: &fs::Metadata) -> Result<u64, Box<dyn Error>> {
-    Err("fixture publication cannot authenticate hard links on this platform".into())
+    Err(unsupported_secure_fixture_filesystem_error().into())
 }
 
 fn sign_governance_log_node_mldsa(
@@ -4887,6 +4858,7 @@ mod tests {
         parse_args(args.map(OsString::from)).map_err(|error| error.to_string())
     }
 
+    #[cfg(unix)]
     fn physical_path(path: &Path) -> PathBuf {
         fs::canonicalize(path).expect("canonical temporary path")
     }
@@ -5054,6 +5026,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn output_root_binding_rejects_an_existing_non_directory() {
         let temporary = tempfile::tempdir().expect("temporary directory");
@@ -5066,6 +5039,22 @@ mod tests {
             .to_string();
 
         assert!(error.contains("directories only") || error.contains("non-symlink directory"));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn output_root_binding_fails_before_path_inspection_on_non_unix() {
+        let temporary = tempdir().expect("temporary directory");
+        let missing = temporary.path().join("must-remain-absent");
+
+        let error = BoundDirectory::open(&missing, "test fixture output")
+            .err()
+            .expect("non-Unix binding must fail");
+        let io_error = error
+            .downcast_ref::<io::Error>()
+            .expect("unsupported binding error");
+        assert_eq!(io_error.kind(), io::ErrorKind::Unsupported);
+        assert!(!missing.exists());
     }
 
     #[cfg(unix)]

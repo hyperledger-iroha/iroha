@@ -638,6 +638,102 @@ fn sorafs_storage_token_openapi_requires_the_credential_and_diagnostic_headers()
 }
 
 #[test]
+fn sorafs_pin_list_openapi_is_finalized_bounded_keyset_readback() {
+    const PATH: &str = "/v1/sorafs/pin";
+    let document = generate_spec();
+    let operation = openapi_operation(&document, PATH, "get");
+    assert_eq!(
+        operation_response_schema_ref(operation, "200", PATH),
+        "#/components/schemas/PinManifestPageV1"
+    );
+    assert_eq!(
+        operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .map(|content| content.keys().cloned().collect::<BTreeSet<_>>()),
+        Some(BTreeSet::from([
+            "application/json".to_owned(),
+            "application/x-norito".to_owned(),
+        ])),
+        "pin-list OpenAPI response must advertise both supported representations"
+    );
+    let description = operation
+        .get("description")
+        .and_then(Value::as_str)
+        .expect("pin-list operation description");
+    assert!(
+        description.contains("exclusive keyset cursor")
+            && description.contains("O(1) consensus-maintained")
+            && description.contains("Offset pagination")
+            && description.contains("bounded detail route"),
+        "pin-list operation must document the finalized bounded hard cut"
+    );
+
+    let parameters = operation
+        .get("parameters")
+        .and_then(Value::as_array)
+        .expect("pin-list parameters");
+    assert_eq!(
+        parameters
+            .iter()
+            .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "after_digest_hex",
+            "expected_finalized_block_hash_hex",
+            "expected_finalized_height",
+            "limit",
+            "max_bytes",
+            "status",
+        ])
+    );
+    assert!(
+        parameters
+            .iter()
+            .all(|parameter| parameter.get("name").and_then(Value::as_str) != Some("offset"))
+    );
+
+    let schemas = component_schemas(&document);
+    assert_strict_object_schema(
+        schemas,
+        "PinManifestPageV1",
+        &["finalized_cursor", "charged_usage", "manifests", "has_more"],
+        &["next_after_digest"],
+    );
+    assert_strict_object_schema(
+        schemas,
+        "PinManifestSummaryV1",
+        &[
+            "digest",
+            "submitted_by",
+            "submitted_epoch",
+            "content_length",
+            "retention_epoch",
+            "status",
+        ],
+        &["successor_of"],
+    );
+    assert_strict_object_schema(
+        schemas,
+        "PinResourceUsage",
+        &["manifest_count", "content_bytes"],
+        &[],
+    );
+    assert_eq!(
+        property_ref(schemas, "PinManifestPageV1", "finalized_cursor"),
+        "#/components/schemas/PinManifestFinalizedCursorV1"
+    );
+    assert_eq!(
+        property_ref(schemas, "PinManifestPageV1", "charged_usage"),
+        "#/components/schemas/PinResourceUsage"
+    );
+}
+
+#[test]
 fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
     const PATH: &str = "/v1/sorafs/pin/{digest_hex}";
     const RETIRED_TOP_LEVEL_FIELDS: [&str; 10] = [
@@ -1500,6 +1596,34 @@ fn hedging_billing_openapi_is_authenticated_bounded_and_private() {
     );
 
     let schemas = component_schemas(&document);
+    let hedge_intent = schemas
+        .get("HedgeIntentV1")
+        .and_then(Value::as_object)
+        .expect("hedge-intent schema");
+    let required = hedge_intent
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("hedge-intent required fields");
+    assert!(
+        required
+            .iter()
+            .any(|field| field.as_str() == Some("network_id"))
+    );
+    assert!(
+        !required
+            .iter()
+            .any(|field| field.as_str() == Some("chain_id"))
+    );
+    assert_eq!(
+        hedge_intent
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("network_id"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str),
+        Some("#/components/schemas/NetworkId")
+    );
     for (schema_name, tag, variants) in [
         (
             "HedgingBillingRetentionScopeV1",

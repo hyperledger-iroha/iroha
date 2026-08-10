@@ -157,7 +157,7 @@ onboarding ticket.
   record. Its hash, live-state anchor, dispositions, framed instructions, and
   exact asset totals replace ad-hoc payment-proof and per-resource submission
   logs.
-- Use `irohad --check-config` and the authenticated onboarding-readiness report
+- Use `iroha3d --check-config` and the authenticated onboarding-readiness report
   as the preflight evidence for generated or manually operated peers.
 - Running `sns_bulk_onboard.py` without a mode flag only writes a verified plan.
   An approved mutation must pass `--apply` explicitly; tokens and key material

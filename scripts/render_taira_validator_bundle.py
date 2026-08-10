@@ -1655,10 +1655,14 @@ def render_validator_config(
     template_text: str,
     validator: ValidatorEntry,
     validators: list[ValidatorEntry],
+    validator_private_key_file: Path,
+    soranet_transport_private_key_file: Path,
     shared_secrets: SharedSecrets | None = None,
     onboarding_private_key_file: Path | None = None,
     onboarding_token_hash: str | None = None,
     faucet_private_key_file: Path | None = None,
+    kagemusha_commands_private_key_file: Path | None = None,
+    streaming_identity_private_key_file: Path | None = None,
     manifest_directory: Path = DEFAULT_INSTALL_ROOT / "manifests",
     sorafs_admission_directory: Path = DEFAULT_INSTALL_ROOT / "sorafs_admission",
     sumeragi_body_bytes: int | None = None,
@@ -1671,7 +1675,6 @@ def render_validator_config(
     current_section: str | None = None
     skipping_array: str | None = None
     body_bytes_rewritten = False
-    staged_genesis_hash_placeholder = False
     genesis_expected_hash_rewritten = False
     genesis_file_rewritten = False
     rendered: list[str] = []
@@ -1698,8 +1701,14 @@ def render_validator_config(
         if current_section is None and stripped.startswith("public_key = "):
             rendered.append(f"public_key = {_quote_toml(validator.public_key)}")
             continue
-        if current_section is None and stripped.startswith("private_key = "):
-            rendered.append(f"private_key = {_quote_toml(validator.private_key)}")
+        if current_section is None and (
+            stripped.startswith("private_key = ")
+            or stripped.startswith("private_key_file = ")
+        ):
+            rendered.append(
+                "private_key_file = "
+                + _quote_toml(str(validator_private_key_file))
+            )
             continue
         if current_section is None and stripped.startswith(
             "soranet_transport_public_key = "
@@ -1709,12 +1718,13 @@ def render_validator_config(
                 + _quote_toml(validator.soranet_transport_public_key)
             )
             continue
-        if current_section is None and stripped.startswith(
-            "soranet_transport_private_key = "
+        if current_section is None and (
+            stripped.startswith("soranet_transport_private_key = ")
+            or stripped.startswith("soranet_transport_private_key_file = ")
         ):
             rendered.append(
-                "soranet_transport_private_key = "
-                + _quote_toml(validator.soranet_transport_private_key)
+                "soranet_transport_private_key_file = "
+                + _quote_toml(str(soranet_transport_private_key_file))
             )
             continue
         if current_section is None and stripped == "trusted_peers = [":
@@ -1751,13 +1761,15 @@ def render_validator_config(
             and genesis_file is not None
         ):
             continue
-        if current_section == "[genesis]" and stripped.startswith("expected_hash = "):
+        if current_section == "[genesis]" and (
+            stripped.startswith("expected_hash = ")
+            or stripped.startswith("expected_hash_file = ")
+        ):
             genesis_expected_hash_rewritten = True
             if genesis_expected_hash is None:
                 rendered.append(
-                    f'expected_hash = "{GENESIS_EXPECTED_HASH_PLACEHOLDER}"'
+                    'expected_hash_file = "/run/iroha/genesis.expected_hash"'
                 )
-                staged_genesis_hash_placeholder = True
             else:
                 rendered.append(f'expected_hash = "{genesis_expected_hash}"')
             continue
@@ -1846,11 +1858,15 @@ def render_validator_config(
             continue
         if (
             current_section == "[torii.kagemusha_commands]"
-            and stripped.startswith("private_key = ")
-            and shared.kagemusha_commands_private_key is not None
+            and (
+                stripped.startswith("private_key = ")
+                or stripped.startswith("private_key_file = ")
+            )
+            and kagemusha_commands_private_key_file is not None
         ):
             rendered.append(
-                f"private_key = {_quote_toml(shared.kagemusha_commands_private_key)}"
+                "private_key_file = "
+                + _quote_toml(str(kagemusha_commands_private_key_file))
             )
             continue
         if current_section == "[soracloud_runtime.submission.signer]":
@@ -1918,11 +1934,15 @@ def render_validator_config(
             continue
         if (
             current_section == "[streaming]"
-            and stripped.startswith("identity_private_key = ")
-            and shared.streaming_identity_private_key is not None
+            and (
+                stripped.startswith("identity_private_key = ")
+                or stripped.startswith("identity_private_key_file = ")
+            )
+            and streaming_identity_private_key_file is not None
         ):
             rendered.append(
-                f"identity_private_key = {_quote_toml(shared.streaming_identity_private_key)}"
+                "identity_private_key_file = "
+                + _quote_toml(str(streaming_identity_private_key_file))
             )
             continue
         if current_section == "[nexus.registry]" and stripped.startswith(
@@ -1951,19 +1971,14 @@ def render_validator_config(
     if not genesis_expected_hash_rewritten:
         raise ValueError(
             f"rendered config for `{validator.slug}` lacks the mandatory "
-            "`[genesis] expected_hash` assignment"
+            "`[genesis] expected_hash` or `expected_hash_file` assignment"
         )
     if genesis_file is not None and not genesis_file_rewritten:
         raise ValueError(
             f"rendered config for `{validator.slug}` lacks the mandatory "
             "`[genesis]` table needed for its bundle-local file"
         )
-    unresolved_text = rendered_text
-    if staged_genesis_hash_placeholder:
-        unresolved_text = unresolved_text.replace(
-            f'expected_hash = "{GENESIS_EXPECTED_HASH_PLACEHOLDER}"', "", 1
-        )
-    if "REPLACE_WITH_" in unresolved_text:
+    if "REPLACE_WITH_" in rendered_text:
         raise ValueError(
             f"rendered config for `{validator.slug}` still contains template placeholder "
             "values; provide the matching validator/shared secrets in the roster or "
@@ -2056,6 +2071,8 @@ def render_bundle(
             )
         onboarding_private_key_file: Path | None = None
         faucet_private_key_file: Path | None = None
+        kagemusha_commands_private_key_file: Path | None = None
+        streaming_identity_private_key_file: Path | None = None
         if bundle_root is None:
             installed_runtime_dir = install_root / "runtime"
             installed_manifest_dir = install_root / "manifests"
@@ -2072,6 +2089,18 @@ def render_bundle(
             privacy_issuer_state_dir = (
                 target_dir / "runtime/privacy/bootle-lantern/issuer"
             )
+        validator_private_key_file = installed_runtime_dir / "validator-signer.key"
+        soranet_transport_private_key_file = (
+            installed_runtime_dir / "soranet-transport.key"
+        )
+        _write_private_text(
+            runtime_dir / "validator-signer.key",
+            validator.private_key,
+        )
+        _write_private_text(
+            runtime_dir / "soranet-transport.key",
+            validator.soranet_transport_private_key,
+        )
         if secret_material is not None:
             shared = secret_material.shared
             if shared.account_onboarding_private_key is not None:
@@ -2093,6 +2122,22 @@ def render_bundle(
                     runtime_dir / "faucet-signer.key",
                     shared.torii_faucet_private_key,
                 )
+            if shared.kagemusha_commands_private_key is not None:
+                kagemusha_commands_private_key_file = (
+                    installed_runtime_dir / "kagemusha-command-signer.key"
+                )
+                _write_private_text(
+                    runtime_dir / "kagemusha-command-signer.key",
+                    shared.kagemusha_commands_private_key,
+                )
+            if shared.streaming_identity_private_key is not None:
+                streaming_identity_private_key_file = (
+                    installed_runtime_dir / "streaming-identity.key"
+                )
+                _write_private_text(
+                    runtime_dir / "streaming-identity.key",
+                    shared.streaming_identity_private_key,
+                )
 
         target_path = target_dir / "config.toml"
         _write_private_text(
@@ -2101,10 +2146,14 @@ def render_bundle(
                 template_text,
                 validator,
                 validators,
+                validator_private_key_file=validator_private_key_file,
+                soranet_transport_private_key_file=soranet_transport_private_key_file,
                 shared_secrets=secret_material.shared if secret_material else None,
                 onboarding_private_key_file=onboarding_private_key_file,
                 onboarding_token_hash=resolved_onboarding_token_hash,
                 faucet_private_key_file=faucet_private_key_file,
+                kagemusha_commands_private_key_file=kagemusha_commands_private_key_file,
+                streaming_identity_private_key_file=streaming_identity_private_key_file,
                 manifest_directory=installed_manifest_dir,
                 sorafs_admission_directory=installed_sorafs_admission_dir,
                 sumeragi_body_bytes=sumeragi_body_bytes,

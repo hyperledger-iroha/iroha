@@ -656,8 +656,15 @@ fn require_canonical_auth(
     uri: &Uri,
     body: &[u8],
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
-    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, body, None)
-    {
+    match crate::app_auth::verify_canonical_network_request(
+        &state.state,
+        state.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        body,
+        None,
+    ) {
         Ok(Some(verified)) => Ok(verified),
         Ok(None) | Err(_) => Err(fixed_error(
             StatusCode::UNAUTHORIZED,
@@ -954,6 +961,25 @@ fn private_no_store_response(mut response: Response) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hedging_billing_auth_rejects_foreign_exact_network() {
+        let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        );
+        let method = Method::POST;
+        let uri: Uri = "/v1/sorafs/finance/owner-statements"
+            .parse()
+            .expect("hedging billing URI");
+        let body = b"{}";
+        let (state, headers) = crate::tests_runtime_handlers::foreign_network_signed_app_fixture(
+            &method, &uri, body, 0xD3, 0xE3,
+        );
+
+        let response = require_canonical_auth(&state, &headers, &method, &uri, body)
+            .expect_err("foreign-network billing authorization must fail closed");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 
     fn digest_hex(byte: u8) -> String {
         hex::encode([byte; 32])

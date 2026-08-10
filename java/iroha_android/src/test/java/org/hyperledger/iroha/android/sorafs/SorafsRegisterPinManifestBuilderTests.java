@@ -28,7 +28,7 @@ public final class SorafsRegisterPinManifestBuilderTests {
     defensivelyCopiesManifestPayload();
     rejectsMissingRequiredFields();
     rejectsMalformedSuccessorDigest();
-    rejectsNegativeSubmittedEpoch();
+    rejectsRetiredSubmittedEpoch();
     rejectsPartialAliasBinding();
     rejectsMalformedAndOversizedAliasProof();
     rejectsLegacyAndUnknownArguments();
@@ -42,10 +42,9 @@ public final class SorafsRegisterPinManifestBuilderTests {
     final RegisterPinManifestInstruction payload =
         RegisterPinManifestInstruction.builder()
             .setManifestPayloadBase64(requireString(instruction, "manifest_payload_base64"))
-            .setSubmittedEpoch(requireNumber(instruction.get("submitted_epoch")))
             .build();
     final InstructionBox box = payload.toInstructionBox();
-    assert box.arguments().size() == 3 : "unexpected retired consensus fields";
+    assert box.arguments().size() == 2 : "unexpected retired consensus fields";
     assert Objects.equals(
         box.arguments().get("manifest_payload_base64"),
         requireString(instruction, "manifest_payload_base64"));
@@ -85,7 +84,6 @@ public final class SorafsRegisterPinManifestBuilderTests {
     final RegisterPinManifestInstruction instruction =
         RegisterPinManifestInstruction.builder()
             .setManifestPayload(source)
-            .setSubmittedEpoch(1)
             .build();
     Arrays.fill(source, (byte) 0);
     assert Arrays.equals(expected, instruction.manifestPayloadBytes());
@@ -96,17 +94,11 @@ public final class SorafsRegisterPinManifestBuilderTests {
 
   private static void rejectsMissingRequiredFields() {
     expectIllegalState(
-        () ->
-            RegisterPinManifestInstruction.builder()
-                .setSubmittedEpoch(1)
-                .build(),
+        () -> RegisterPinManifestInstruction.builder().build(),
         "missing manifest payload must fail");
-    expectIllegalState(
-        () ->
-            RegisterPinManifestInstruction.builder()
-                .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
-                .build(),
-        "missing submitted epoch must fail");
+    RegisterPinManifestInstruction.builder()
+        .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
+        .build();
   }
 
   private static void rejectsMalformedSuccessorDigest() {
@@ -123,15 +115,12 @@ public final class SorafsRegisterPinManifestBuilderTests {
     }
   }
 
-  private static void rejectsNegativeSubmittedEpoch() {
-    expectIllegalArgument(
-        () -> RegisterPinManifestInstruction.builder().setSubmittedEpoch(-1),
-        "negative submitted epoch must fail");
+  private static void rejectsRetiredSubmittedEpoch() {
     final Map<String, String> arguments = baseArguments();
-    arguments.put("submitted_epoch", "NaN");
+    arguments.put("submitted_epoch", "1");
     expectIllegalArgument(
         () -> RegisterPinManifestInstruction.fromArguments(arguments),
-        "nonnumeric submitted epoch must fail");
+        "caller-supplied submitted epoch must fail");
   }
 
   private static void rejectsPartialAliasBinding() {
@@ -192,7 +181,7 @@ public final class SorafsRegisterPinManifestBuilderTests {
         "wrong action must fail");
 
     for (final String key :
-        new String[] {"action", "manifest_payload_base64", "submitted_epoch"}) {
+        new String[] {"action", "manifest_payload_base64"}) {
       final Map<String, String> missing = baseArguments();
       missing.remove(key);
       expectIllegalArgument(
@@ -216,8 +205,7 @@ public final class SorafsRegisterPinManifestBuilderTests {
 
   private static RegisterPinManifestInstruction.Builder baseBuilder() {
     return RegisterPinManifestInstruction.builder()
-        .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
-        .setSubmittedEpoch(1);
+        .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64);
   }
 
   private static Map<String, String> baseArguments() {
@@ -298,10 +286,4 @@ public final class SorafsRegisterPinManifestBuilderTests {
     return (String) value;
   }
 
-  private static long requireNumber(final Object value) {
-    if (value instanceof Number) {
-      return ((Number) value).longValue();
-    }
-    throw new IllegalStateException("Expected numeric value, found: " + value);
-  }
 }

@@ -54,7 +54,7 @@ impl BuildLine {
     )]
     pub const fn daemon_bin(self) -> &'static str {
         match self {
-            Self::Iroha2 | Self::Iroha3 => "irohad",
+            Self::Iroha2 | Self::Iroha3 => "iroha3d",
         }
     }
 
@@ -104,8 +104,8 @@ mod tests {
         assert_eq!(i3.as_str(), "iroha3");
         assert_eq!(i2.cli_bin(), "iroha");
         assert_eq!(i3.cli_bin(), "iroha");
-        assert_eq!(i2.daemon_bin(), "irohad");
-        assert_eq!(i3.daemon_bin(), "irohad");
+        assert_eq!(i2.daemon_bin(), "iroha3d");
+        assert_eq!(i3.daemon_bin(), "iroha3d");
         assert!(i2.is_iroha2());
         assert!(i3.is_iroha3());
     }

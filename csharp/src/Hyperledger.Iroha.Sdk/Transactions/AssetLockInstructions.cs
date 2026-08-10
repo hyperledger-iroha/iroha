@@ -15,7 +15,6 @@ namespace Hyperledger.Iroha.Transactions;
 /// </summary>
 public sealed record class CancelAssetLockInstruction : TransactionInstruction
 {
-    private const byte CompactLengthFlag = 0x02;
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
     /// <summary>The native V1 instruction type and wire identifier.</summary>
@@ -132,8 +131,8 @@ public sealed record class CancelAssetLockInstruction : TransactionInstruction
     {
         return NoritoCodec.Encode(
             NativeTypeName,
-            EncodeNativePayload(compactLengths: true),
-            CompactLengthFlag);
+            EncodeNativePayload(),
+            NoritoCodec.CanonicalLayoutFlags);
     }
 
     /// <summary>
@@ -162,17 +161,14 @@ public sealed record class CancelAssetLockInstruction : TransactionInstruction
                 nameof(archive),
                 error);
         }
-        if (flags != CompactLengthFlag)
+        if (flags != NoritoCodec.CanonicalLayoutFlags)
         {
             throw new ArgumentException(
                 "CancelAssetLock V1 requires compact-length Norito framing.",
                 nameof(archive));
         }
 
-        var decoded = DecodeNativePayload(
-            payload,
-            compactLengths: true,
-            nameof(archive));
+        var decoded = DecodeNativePayload(payload, nameof(archive));
         if (!decoded.EncodeNorito().AsSpan().SequenceEqual(archive))
         {
             throw new ArgumentException(
@@ -344,18 +340,16 @@ public sealed record class CancelAssetLockInstruction : TransactionInstruction
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
-        return EncodeNativePayload(compactLengths: false);
+        return EncodeNativePayload();
     }
 
-    private byte[] EncodeNativePayload(bool compactLengths)
+    private byte[] EncodeNativePayload()
     {
-        var writer = new AssetLockInstructionValidation.FieldWriter(
-            compactLengths);
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(escrowId);
         writer.WriteField(
             AssetLockInstructionValidation.EncodeQuantity(
-                expectedRemainingAmount,
-                compactLengths));
+                expectedRemainingAmount));
         return writer.ToArray();
     }
 
@@ -416,14 +410,19 @@ public sealed record class CancelAssetLockInstruction : TransactionInstruction
 
     private static CancelAssetLockInstruction DecodeNativePayload(
         ReadOnlySpan<byte> payload,
-        bool compactLengths,
         string parameterName)
     {
-        var reader = new AssetLockInstructionValidation.FixedFieldReader(
+        if (payload.Length > AssetLockInstructionValidation.MaximumNativePayloadBytesV1)
+        {
+            throw new ArgumentException(
+                "CancelAssetLock exceeds the bounded native V1 payload size.",
+                parameterName);
+        }
+
+        var reader = new CanonicalNoritoReader(
             payload,
             "CancelAssetLock",
-            parameterName,
-            compactLengths);
+            parameterName);
         var escrowId = reader.ReadField("escrow_id");
         var expectedRemainingAmount = reader.ReadField(
             "expected_remaining_amount");
@@ -434,14 +433,13 @@ public sealed record class CancelAssetLockInstruction : TransactionInstruction
                 parameterName),
             AssetLockInstructionValidation.DecodePositiveQuantity(
                 expectedRemainingAmount,
-                parameterName,
-                compactLengths));
+                parameterName));
     }
 }
 
 internal static class AssetLockInstructionValidation
 {
-    private const int MaximumNativePayloadBytesV1 = 256;
+    internal const int MaximumNativePayloadBytesV1 = 256;
 
     internal static byte[] DeriveEscrowId(
         string? lockId,
@@ -600,19 +598,18 @@ internal static class AssetLockInstructionValidation
     }
 
     internal static byte[] EncodeQuantity(
-        NumericV1.QuantityValue value,
-        bool compactLengths)
+        NumericV1.QuantityValue value)
     {
         RequirePositiveQuantity(value, nameof(value));
         var mantissaBytes = value.Mantissa.ToByteArray(
             isUnsigned: false,
             isBigEndian: false);
 
-        var mantissa = new OfflineNoritoWriter();
+        var mantissa = new CanonicalNoritoWriter();
         mantissa.WriteUInt32LittleEndian((uint)mantissaBytes.Length);
         mantissa.WriteBytes(mantissaBytes);
 
-        var writer = new FieldWriter(compactLengths);
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(mantissa.ToArray());
         var scale = new byte[sizeof(uint)];
         BinaryPrimitives.WriteUInt32LittleEndian(
@@ -624,14 +621,12 @@ internal static class AssetLockInstructionValidation
 
     internal static NumericV1.QuantityValue DecodePositiveQuantity(
         ReadOnlySpan<byte> payload,
-        string parameterName,
-        bool compactLengths)
+        string parameterName)
     {
-        var reader = new FixedFieldReader(
+        var reader = new CanonicalNoritoReader(
             payload,
             "CancelAssetLock.expected_remaining_amount",
-            parameterName,
-            compactLengths);
+            parameterName);
         var mantissaPayload = reader.ReadField("mantissa");
         var scalePayload = reader.ReadField("scale");
         reader.RequireEnd();
@@ -694,9 +689,7 @@ internal static class AssetLockInstructionValidation
                 error);
         }
         RequirePositiveQuantity(quantity, parameterName);
-        if (!EncodeQuantity(
-                quantity,
-                compactLengths).AsSpan().SequenceEqual(payload))
+        if (!EncodeQuantity(quantity).AsSpan().SequenceEqual(payload))
         {
             throw new ArgumentException(
                 "CancelAssetLock quantity is not canonically encoded.",
@@ -721,163 +714,4 @@ internal static class AssetLockInstructionValidation
         return (ushort)crc;
     }
 
-    internal sealed class FieldWriter
-    {
-        private readonly List<byte> buffer = [];
-        private readonly bool compactLengths;
-
-        internal FieldWriter(bool compactLengths)
-        {
-            this.compactLengths = compactLengths;
-        }
-
-        internal void WriteField(ReadOnlySpan<byte> payload)
-        {
-            if (compactLengths)
-            {
-                WriteVarUInt64(checked((ulong)payload.Length));
-            }
-            else
-            {
-                Span<byte> length = stackalloc byte[sizeof(ulong)];
-                BinaryPrimitives.WriteUInt64LittleEndian(
-                    length,
-                    checked((ulong)payload.Length));
-                WriteBytes(length);
-            }
-            WriteBytes(payload);
-        }
-
-        internal byte[] ToArray() => [.. buffer];
-
-        private void WriteVarUInt64(ulong value)
-        {
-            do
-            {
-                var next = (byte)(value & 0x7f);
-                value >>= 7;
-                if (value != 0)
-                {
-                    next |= 0x80;
-                }
-                buffer.Add(next);
-            }
-            while (value != 0);
-        }
-
-        private void WriteBytes(ReadOnlySpan<byte> bytes)
-        {
-            foreach (var value in bytes)
-            {
-                buffer.Add(value);
-            }
-        }
-    }
-
-    internal ref struct FixedFieldReader
-    {
-        private readonly ReadOnlySpan<byte> payload;
-        private readonly string context;
-        private readonly string parameterName;
-        private int offset;
-
-        internal FixedFieldReader(
-            ReadOnlySpan<byte> payload,
-            string context,
-            string parameterName,
-            bool compactLengths = false)
-        {
-            if (payload.Length > MaximumNativePayloadBytesV1)
-            {
-                throw new ArgumentException(
-                    $"{context} exceeds the bounded native V1 payload size.",
-                    parameterName);
-            }
-            this.payload = payload;
-            this.context = context;
-            this.parameterName = parameterName;
-            this.compactLengths = compactLengths;
-            offset = 0;
-        }
-
-        private readonly bool compactLengths;
-
-        internal ReadOnlySpan<byte> ReadField(string fieldName)
-        {
-            ulong length;
-            if (compactLengths)
-            {
-                length = ReadCanonicalVarUInt64(fieldName);
-            }
-            else
-            {
-                if (offset > payload.Length - sizeof(ulong))
-                {
-                    throw new ArgumentException(
-                        $"{context}.{fieldName} length is truncated.",
-                        parameterName);
-                }
-                length = BinaryPrimitives.ReadUInt64LittleEndian(
-                    payload.Slice(offset, sizeof(ulong)));
-                offset += sizeof(ulong);
-            }
-            if (length > int.MaxValue
-                || (int)length > payload.Length - offset)
-            {
-                throw new ArgumentException(
-                    $"{context}.{fieldName} length is invalid.",
-                    parameterName);
-            }
-            var field = payload.Slice(offset, (int)length);
-            offset += (int)length;
-            return field;
-        }
-
-        private ulong ReadCanonicalVarUInt64(string fieldName)
-        {
-            ulong value = 0;
-            var shift = 0;
-            for (var index = 0; index < 10; index++)
-            {
-                if (offset >= payload.Length)
-                {
-                    throw new ArgumentException(
-                        $"{context}.{fieldName} compact length is truncated.",
-                        parameterName);
-                }
-                var current = payload[offset++];
-                if (index == 9 && (current & 0xfe) != 0)
-                {
-                    throw new ArgumentException(
-                        $"{context}.{fieldName} compact length overflows u64.",
-                        parameterName);
-                }
-                value |= (ulong)(current & 0x7f) << shift;
-                if ((current & 0x80) == 0)
-                {
-                    if (index > 0 && current == 0)
-                    {
-                        throw new ArgumentException(
-                            $"{context}.{fieldName} compact length is not canonical.",
-                            parameterName);
-                    }
-                    return value;
-                }
-                shift += 7;
-            }
-            throw new ArgumentException(
-                $"{context}.{fieldName} compact length is invalid.",
-                parameterName);
-        }
-
-        internal void RequireEnd()
-        {
-            if (offset != payload.Length)
-            {
-                throw new ArgumentException(
-                    $"{context} contains trailing fields or bytes.",
-                    parameterName);
-            }
-        }
-    }
 }

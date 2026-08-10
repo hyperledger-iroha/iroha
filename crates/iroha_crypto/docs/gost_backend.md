@@ -77,7 +77,7 @@ Hardening` roadmap line items and will be updated as decisions land.
 
 ## Operator Guidance (Task G3)
 
-- Build all binaries that need to handle TC26 keys (`irohad`, `iroha_cli`, tooling such as
+- Build all binaries that need to handle TC26 keys (`iroha3d`, `iroha`, tooling such as
   `kagami`) with `--features gost` so the algorithm IDs and parsing helpers are available
   end to end.
 - Provision validator keys with `kagami crypto generate --algorithm gost3410-2012-*-paramset-*`.

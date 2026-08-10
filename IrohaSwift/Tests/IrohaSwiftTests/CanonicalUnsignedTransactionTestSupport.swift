@@ -4,7 +4,7 @@ import Foundation
 
 enum CanonicalUnsignedTransactionTestSupport {
   static func transactionPayload(
-    chainId: String,
+    networkId: NetworkId,
     authority: String,
     creationTimeMs: UInt64,
     executable: Data,
@@ -13,11 +13,12 @@ enum CanonicalUnsignedTransactionTestSupport {
     feePayment: FeePaymentIntent,
     metadata: [String: ToriiJSONValue] = [:]
   ) throws -> Data {
-    var chain = CompactNoritoWriter()
-    chain.writeField(CompactNorito.encodeString(chainId))
+    var domain = CompactNoritoWriter()
+    domain.writeUInt32LE(0)
+    domain.writeField(networkId.bytes)
 
     var payload = CompactNoritoWriter()
-    payload.writeField(chain.data)
+    payload.writeField(domain.data)
     payload.writeField(
       try AccountAddress.parseEncoded(authority)
         .compactNoritoAccountControllerPayload()
@@ -38,7 +39,7 @@ enum CanonicalUnsignedTransactionTestSupport {
 
   static func genericPayload(
     authority: String,
-    chainId: String = "test-chain",
+    networkId: NetworkId = TestNetworkIds.canonical,
     creationTimeMs: UInt64 = 123,
     feePayment: FeePaymentIntent = .authority(chargeLimits: [], gasLimit: nil)
   ) throws -> Data {
@@ -48,7 +49,7 @@ enum CanonicalUnsignedTransactionTestSupport {
     executable.writeUInt32LE(0)
     executable.writeField(instructions.data)
     return try transactionPayload(
-      chainId: chainId,
+      networkId: networkId,
       authority: authority,
       creationTimeMs: creationTimeMs,
       executable: executable.data,
@@ -61,7 +62,7 @@ enum CanonicalUnsignedTransactionTestSupport {
     request: ToriiContractCallRequest,
     contractAddress: String,
     codeHashHex: String,
-    chainId: String
+    networkId: NetworkId
   ) throws -> Data {
     var invocation = CompactNoritoWriter()
     invocation.writeField(CompactNorito.encodeString(contractAddress))
@@ -100,7 +101,7 @@ enum CanonicalUnsignedTransactionTestSupport {
       metadata["contract_payload"] = payload
     }
     return try transactionPayload(
-      chainId: chainId,
+      networkId: networkId,
       authority: request.authority,
       creationTimeMs: request.creationTimeMs!,
       executable: executable.data,
@@ -112,7 +113,7 @@ enum CanonicalUnsignedTransactionTestSupport {
 
   static func assetPayload(
     request: ToriiAssetTransferRequest,
-    chainId: String
+    networkId: NetworkId
   ) throws -> Data {
     var source = CompactNoritoWriter()
     source.writeField(
@@ -172,7 +173,7 @@ enum CanonicalUnsignedTransactionTestSupport {
 
     let metadata = request.memo.map { ["memo": ToriiJSONValue.string($0)] } ?? [:]
     return try transactionPayload(
-      chainId: chainId,
+      networkId: networkId,
       authority: request.authority,
       creationTimeMs: request.creationTimeMs,
       executable: executable.data,

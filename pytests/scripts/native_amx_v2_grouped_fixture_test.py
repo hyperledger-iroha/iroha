@@ -118,7 +118,7 @@ def _validate_qc(qc: dict[str, Any], expected_phase: str) -> None:
     assert body["planned_coordinator_block_height"] >= 1
     assert SOURCE_ID_RE.fullmatch(body["source_id"])
     for field in (
-        "chain_id_hash",
+        "network_id",
         "tx_entrypoint_hash",
         "plan_digest",
         "coordinator_lane_incarnation",
@@ -236,7 +236,7 @@ def _validate_receipt_group(document: dict[str, Any]) -> None:
         assert receipt["lane_block_height"] == group["block_height"]
         assert receipt["authority_context_height"] >= 1
         for field in (
-            "chain_id_hash",
+            "network_id",
             "plan_digest",
             "lane_incarnation",
             "coordinator_proposal_hash",
@@ -280,7 +280,7 @@ def _validate_receipt_group(document: dict[str, Any]) -> None:
             assert body["epoch"] == expected_epoch
             assert body["source_id"] == receipt["source_id"]
             assert body["tx_entrypoint_hash"] == expected_entrypoint
-            assert body["chain_id_hash"] == receipt["chain_id_hash"]
+            assert body["network_id"] == receipt["network_id"]
             assert body["plan_digest"] == receipt["plan_digest"]
             assert body["coordinator_lane_id"] == receipt["lane_id"]
             assert body["coordinator_dataspace_id"] == receipt["dataspace_id"]

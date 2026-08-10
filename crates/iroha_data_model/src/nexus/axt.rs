@@ -5,14 +5,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey, Signature};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use iroha_zkp_halo2::poseidon::hash_bytes as poseidon_hash_bytes;
 use norito::codec::{Decode, Encode, encode_adaptive};
 use thiserror::Error;
 
-use crate::nexus::{DataSpaceId, LaneId};
+use crate::{
+    NetworkId,
+    block::BlockHeader,
+    nexus::{DataSpaceId, LaneId, UniversalAccountId},
+};
 
 /// Canonical 32-byte binding derived from an AXT descriptor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
@@ -469,22 +473,109 @@ pub struct HandleSubject {
     pub origin_dsid: Option<DataSpaceId>,
 }
 
-/// Subset of the asset handle ticket encoded by dataspace capability issuers.
+/// Domain separator for V1 issuer signatures over asset handles.
+pub const AXT_HANDLE_ISSUER_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:axt:asset-handle-issuer:v1\0";
+
+/// Immutable admission context for one V1 AXT issuer signature.
+///
+/// None of these values is selected by the submitted handle. Validators
+/// reconstruct the context from the exact network, committed issuer policy,
+/// and currently executing IVM image before checking the signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AxtHandleIssuerContextV1 {
+    /// Exact genesis-derived network identity.
+    pub network_id: NetworkId,
+    /// Dataspace whose committed policy authorizes the handle.
+    pub asset_dsid: DataSpaceId,
+    /// Committed UAID authorized to issue handles for the dataspace.
+    pub issuer: UniversalAccountId,
+    /// Exact committed issuer/permission-manifest root.
+    pub issuer_manifest_root: [u8; 32],
+    /// Hash of the exact IVM program image allowed to exercise the handle.
+    pub code_root: [u8; 32],
+    /// Pointer/syscall ABI version whose semantics are authorized.
+    pub abi_version: u16,
+    /// Canonical hash of the authorized ABI surface.
+    pub abi_hash: [u8; 32],
+}
+
+impl Default for AxtHandleIssuerContextV1 {
+    /// Return a syntactic fixture context that cannot match committed policy.
+    ///
+    /// This exists for context-free codec/shape fixtures. Issuers must replace
+    /// every field with exact committed values before signing; admission always
+    /// reconstructs and compares the complete context.
+    fn default() -> Self {
+        Self {
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xF1; 32])),
+            ),
+            asset_dsid: DataSpaceId::UNIVERSAL,
+            issuer: UniversalAccountId::from_hash(Hash::prehashed([0xF3; 32])),
+            issuer_manifest_root: [0xF5; 32],
+            code_root: [0xF7; 32],
+            abi_version: 1,
+            abi_hash: [0xF9; 32],
+        }
+    }
+}
+
+/// Canonical V1 statement authenticated by an AXT capability issuer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct AssetHandle {
+pub struct AssetHandleIssuerPayloadV1 {
+    /// Immutable admission context reconstructed by the validating host.
+    pub context: AxtHandleIssuerContextV1,
+    /// Declared operations permitted by the capability.
+    pub scope: Vec<String>,
+    /// Capability subject.
+    pub subject: HandleSubject,
+    /// Capability budget.
+    pub budget: HandleBudget,
+    /// Exact active policy era.
+    pub active_handle_era: u64,
+    /// Exact next per-dataspace capability counter.
+    pub next_handle_counter: u64,
+    /// Composability group and epoch.
+    pub group_binding: GroupBinding,
+    /// Authorized execution lane.
+    pub target_lane: LaneId,
+    /// Descriptor/AXT execution context.
+    pub axt_binding: AxtBinding,
+    /// Exact active manifest root.
+    pub manifest_view_root: [u8; 32],
+    /// Capability expiry slot.
+    pub expiry_slot: u64,
+    /// Requested clock-skew allowance, if any.
+    pub max_clock_skew_ms: Option<u32>,
+}
+
+/// Unsigned AXT capability claims prepared by an issuer.
+///
+/// This type cannot enter an AXT envelope. Signing consumes it and returns the
+/// admission-ready [`AssetHandle`] whose signature is mandatory on the wire.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AssetHandleDraft {
     /// Declared permissions (example values such as "transfer").
     pub scope: Vec<String>,
     /// Subject bound to the capability.
     pub subject: HandleSubject,
     /// Budget parameters controlling single-/multi-use semantics.
     pub budget: HandleBudget,
-    /// Logical era counter for revocation sequencing.
+    /// Exact active policy era selected for this draft.
     pub handle_era: u64,
-    /// Per-use nonce guarding replay.
+    /// Exact next per-dataspace counter selected for this draft.
     pub sub_nonce: u64,
     /// Dataspace composability group binding.
     pub group_binding: GroupBinding,
@@ -499,6 +590,215 @@ pub struct AssetHandle {
     /// Optional wall-clock skew allowance enforced by the host.
     #[norito(default)]
     pub max_clock_skew_ms: Option<u32>,
+}
+
+impl AssetHandleDraft {
+    /// Build the exact statement authenticated by the dataspace issuer.
+    #[must_use]
+    pub fn issuer_payload_v1(
+        &self,
+        context: AxtHandleIssuerContextV1,
+    ) -> AssetHandleIssuerPayloadV1 {
+        AssetHandleIssuerPayloadV1 {
+            context,
+            scope: self.scope.clone(),
+            subject: self.subject.clone(),
+            budget: self.budget.clone(),
+            active_handle_era: self.handle_era,
+            next_handle_counter: self.sub_nonce,
+            group_binding: self.group_binding.clone(),
+            target_lane: self.target_lane,
+            axt_binding: self.axt_binding,
+            manifest_view_root: self.manifest_view_root,
+            expiry_slot: self.expiry_slot,
+            max_clock_skew_ms: self.max_clock_skew_ms,
+        }
+    }
+
+    /// Encode the domain-separated canonical V1 issuer-signature preimage.
+    #[must_use]
+    pub fn issuer_signature_preimage_v1(&self, context: AxtHandleIssuerContextV1) -> Vec<u8> {
+        let payload = self.issuer_payload_v1(context);
+        let encoded = encode_adaptive(&payload);
+        let mut preimage = Vec::with_capacity(
+            AXT_HANDLE_ISSUER_SIGNATURE_DOMAIN_V1
+                .len()
+                .saturating_add(encoded.len()),
+        );
+        preimage.extend_from_slice(AXT_HANDLE_ISSUER_SIGNATURE_DOMAIN_V1);
+        preimage.extend_from_slice(&encoded);
+        preimage
+    }
+
+    /// Authenticate this handle with the committed dataspace issuer's key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a cryptographic signing error when the private key is invalid.
+    pub fn sign_by_issuer_v1(
+        self,
+        context: AxtHandleIssuerContextV1,
+        private_key: &PrivateKey,
+    ) -> Result<AssetHandle, iroha_crypto::Error> {
+        let preimage = self.issuer_signature_preimage_v1(context);
+        let issuer_signature = Signature::try_new(private_key, &preimage)?;
+        Ok(AssetHandle::from_signed_draft(
+            self,
+            context,
+            issuer_signature,
+        ))
+    }
+}
+
+/// Admission-ready AXT capability with a mandatory issuer signature.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AssetHandle {
+    /// Declared permissions (example values such as "transfer").
+    pub scope: Vec<String>,
+    /// Subject bound to the capability.
+    pub subject: HandleSubject,
+    /// Budget parameters controlling single-/multi-use semantics.
+    pub budget: HandleBudget,
+    /// Exact active era selected by committed issuer policy.
+    pub handle_era: u64,
+    /// Exact next per-dataspace counter selected by committed issuer policy.
+    pub sub_nonce: u64,
+    /// Dataspace composability group binding.
+    pub group_binding: GroupBinding,
+    /// Lane the handle is authorized to execute on.
+    pub target_lane: LaneId,
+    /// Poseidon-style binding of this handle to a descriptor.
+    pub axt_binding: AxtBinding,
+    /// Exact committed manifest root observed by the issuer.
+    pub manifest_view_root: [u8; 32],
+    /// Expiry slot for freshness enforcement.
+    pub expiry_slot: u64,
+    /// Optional wall-clock skew allowance enforced by the host.
+    #[norito(default)]
+    pub max_clock_skew_ms: Option<u32>,
+    /// Immutable network, issuer, code, and ABI context authenticated by the signature.
+    pub issuer_context: AxtHandleIssuerContextV1,
+    /// Issuer signature over the canonical V1 handle statement.
+    pub issuer_signature: Signature,
+}
+
+impl AssetHandle {
+    fn from_signed_draft(
+        draft: AssetHandleDraft,
+        issuer_context: AxtHandleIssuerContextV1,
+        issuer_signature: Signature,
+    ) -> Self {
+        Self {
+            scope: draft.scope,
+            subject: draft.subject,
+            budget: draft.budget,
+            handle_era: draft.handle_era,
+            sub_nonce: draft.sub_nonce,
+            group_binding: draft.group_binding,
+            target_lane: draft.target_lane,
+            axt_binding: draft.axt_binding,
+            manifest_view_root: draft.manifest_view_root,
+            expiry_slot: draft.expiry_slot,
+            max_clock_skew_ms: draft.max_clock_skew_ms,
+            issuer_context,
+            issuer_signature,
+        }
+    }
+
+    /// Recover the unsigned claims for canonical signature verification.
+    #[must_use]
+    pub fn draft(&self) -> AssetHandleDraft {
+        AssetHandleDraft {
+            scope: self.scope.clone(),
+            subject: self.subject.clone(),
+            budget: self.budget.clone(),
+            handle_era: self.handle_era,
+            sub_nonce: self.sub_nonce,
+            group_binding: self.group_binding.clone(),
+            target_lane: self.target_lane,
+            axt_binding: self.axt_binding,
+            manifest_view_root: self.manifest_view_root,
+            expiry_slot: self.expiry_slot,
+            max_clock_skew_ms: self.max_clock_skew_ms,
+        }
+    }
+
+    /// Verify this handle against the issuer key resolved from committed policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`iroha_crypto::Error::BadSignature`] when the carried context
+    /// differs from the authoritative context or the signature is invalid.
+    pub fn verify_issuer_signature_v1(
+        &self,
+        context: AxtHandleIssuerContextV1,
+        issuer: &PublicKey,
+    ) -> Result<(), iroha_crypto::Error> {
+        if self.issuer_context != context {
+            return Err(iroha_crypto::Error::BadSignature);
+        }
+        self.issuer_signature.verify(
+            issuer,
+            &self
+                .draft()
+                .issuer_signature_preimage_v1(self.issuer_context),
+        )
+    }
+}
+
+/// Error returned when a handle does not represent the one allowed ratchet step.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum AxtHandleSequenceError {
+    /// The handle does not use the exact active manifest era.
+    #[error("handle era mismatch: expected {expected}, found {actual}")]
+    EraMismatch {
+        /// Active manifest era.
+        expected: u64,
+        /// Caller-supplied era.
+        actual: u64,
+    },
+    /// The handle does not use the exact next counter.
+    #[error("handle sub-nonce mismatch: expected {expected}, found {actual}")]
+    SubNonceMismatch {
+        /// Next admissible counter.
+        expected: u64,
+        /// Caller-supplied counter.
+        actual: u64,
+    },
+    /// The counter cannot advance without wrapping.
+    #[error("handle sub-nonce counter is exhausted")]
+    CounterExhausted,
+}
+
+/// Validate one exact era/counter transition and return the next counter.
+///
+/// This deliberately rejects both stale values and caller-selected future
+/// values. The active manifest controls the era; accepted handles advance only
+/// the per-dataspace counter by one.
+pub fn next_axt_handle_sub_nonce(
+    policy: &AxtPolicyEntry,
+    handle: &AssetHandle,
+) -> Result<u64, AxtHandleSequenceError> {
+    if handle.handle_era != policy.active_handle_era {
+        return Err(AxtHandleSequenceError::EraMismatch {
+            expected: policy.active_handle_era,
+            actual: handle.handle_era,
+        });
+    }
+    if handle.sub_nonce != policy.next_handle_counter {
+        return Err(AxtHandleSequenceError::SubNonceMismatch {
+            expected: policy.next_handle_counter,
+            actual: handle.sub_nonce,
+        });
+    }
+    handle
+        .sub_nonce
+        .checked_add(1)
+        .ok_or(AxtHandleSequenceError::CounterExhausted)
 }
 
 /// Simplified representation of spend operations.
@@ -667,10 +967,10 @@ pub struct AxtPolicyEntry {
     pub manifest_root: [u8; 32],
     /// Lane the handle must target.
     pub target_lane: LaneId,
-    /// Minimum allowed handle era.
-    pub min_handle_era: u64,
-    /// Minimum allowed sub-nonce.
-    pub min_sub_nonce: u64,
+    /// Exact active handle era.
+    pub active_handle_era: u64,
+    /// Exact next admissible handle counter.
+    pub next_handle_counter: u64,
     /// Current slot used for expiry checks.
     pub current_slot: u64,
 }
@@ -811,12 +1111,12 @@ pub struct AxtRejectContext {
     /// Human-readable detail string for operators.
     #[norito(default)]
     pub detail: String,
-    /// Minimum handle era hinted by the policy, when available.
+    /// Exact active handle era, when available.
     #[norito(default)]
-    pub next_min_handle_era: Option<u64>,
-    /// Minimum sub-nonce hinted by the policy, when available.
+    pub active_handle_era: Option<u64>,
+    /// Exact next handle counter, when available.
     #[norito(default)]
-    pub next_min_sub_nonce: Option<u64>,
+    pub next_handle_counter: Option<u64>,
 }
 
 impl core::fmt::Display for AxtRejectContext {
@@ -829,11 +1129,11 @@ impl core::fmt::Display for AxtRejectContext {
         if let Some(snapshot_version) = self.snapshot_version {
             write!(f, ", snapshot={snapshot_version}")?;
         }
-        if let Some(era) = self.next_min_handle_era {
-            write!(f, ", next_min_handle_era={era}")?;
+        if let Some(era) = self.active_handle_era {
+            write!(f, ", active_handle_era={era}")?;
         }
-        if let Some(sub_nonce) = self.next_min_sub_nonce {
-            write!(f, ", next_min_sub_nonce={sub_nonce}")?;
+        if let Some(sub_nonce) = self.next_handle_counter {
+            write!(f, ", next_handle_counter={sub_nonce}")?;
         }
         write!(f, ")")
     }
@@ -852,9 +1152,9 @@ pub enum AxtRejectReason {
     Lane,
     /// Manifest root validation failed.
     Manifest,
-    /// Handle era below the policy minimum.
+    /// Handle era differs from the exact active era.
     HandleEra,
-    /// Sub-nonce below the policy minimum.
+    /// Handle counter differs from the exact next counter.
     SubNonce,
     /// Proof or handle expired relative to the current slot.
     Expiry,
@@ -1163,6 +1463,7 @@ fn validate_write_paths(dsid: DataSpaceId, paths: &[String]) -> Result<(), AxtVa
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
     use norito::{decode_from_bytes, to_bytes};
 
     use super::*;
@@ -1176,6 +1477,215 @@ mod tests {
                 write: vec!["ledger".into()],
             }],
         }
+    }
+
+    fn test_network_id(seed: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            seed,
+        )))
+    }
+
+    fn issuer_context(network_id: NetworkId, asset_dsid: DataSpaceId) -> AxtHandleIssuerContextV1 {
+        AxtHandleIssuerContextV1 {
+            network_id,
+            asset_dsid,
+            issuer: UniversalAccountId::from_hash(Hash::new(b"axt-test-issuer")),
+            issuer_manifest_root: [0x5A; 32],
+            code_root: [0xC0; 32],
+            abi_version: 1,
+            abi_hash: [0xAB; 32],
+        }
+    }
+
+    fn sample_asset_handle_draft() -> AssetHandleDraft {
+        AssetHandleDraft {
+            scope: vec!["transfer".into()],
+            subject: HandleSubject {
+                account: "issuer-bound-account".into(),
+                origin_dsid: Some(DataSpaceId::new(7)),
+            },
+            budget: HandleBudget {
+                remaining: Quantity::from(50_u64),
+                per_use: Some(Quantity::from(10_u64)),
+            },
+            handle_era: 9,
+            sub_nonce: 3,
+            group_binding: GroupBinding {
+                composability_group_id: b"settlement".to_vec(),
+                epoch_id: 4,
+            },
+            target_lane: LaneId::new(2),
+            axt_binding: AxtBinding::new([0xA5; 32]),
+            manifest_view_root: [0x5A; 32],
+            expiry_slot: 100,
+            max_clock_skew_ms: Some(25),
+        }
+    }
+
+    fn sample_asset_handle() -> AssetHandle {
+        let issuer = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
+        sample_asset_handle_draft()
+            .sign_by_issuer_v1(
+                issuer_context(test_network_id(b"sequence-network"), DataSpaceId::new(7)),
+                issuer.private_key(),
+            )
+            .expect("sign sample handle")
+    }
+
+    #[test]
+    fn unsigned_draft_cannot_decode_as_admission_handle() {
+        let encoded = to_bytes(&sample_asset_handle_draft()).expect("encode unsigned draft");
+        assert!(
+            decode_from_bytes::<AssetHandle>(&encoded).is_err(),
+            "the admission wire type must require its issuer context and signature"
+        );
+    }
+
+    #[test]
+    fn asset_handle_issuer_signature_binds_every_policy_field_and_network() {
+        let issuer = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+        let impostor = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
+        let dsid = DataSpaceId::new(7);
+        let context = issuer_context(test_network_id(b"iroha-test-network"), dsid);
+        let signed = sample_asset_handle_draft()
+            .sign_by_issuer_v1(context, issuer.private_key())
+            .expect("sign fixture handle");
+
+        assert!(
+            signed
+                .verify_issuer_signature_v1(context, issuer.public_key())
+                .is_ok()
+        );
+        assert!(
+            signed
+                .verify_issuer_signature_v1(context, impostor.public_key())
+                .is_err(),
+            "a forged issuer must not authenticate"
+        );
+
+        let mut wrong_contexts = Vec::new();
+        let mut wrong = context;
+        wrong.network_id = test_network_id(b"other-network");
+        wrong_contexts.push(wrong);
+        let mut wrong = context;
+        wrong.asset_dsid = DataSpaceId::new(8);
+        wrong_contexts.push(wrong);
+        let mut wrong = context;
+        wrong.issuer = UniversalAccountId::from_hash(Hash::new(b"other-issuer"));
+        wrong_contexts.push(wrong);
+        let mut wrong = context;
+        wrong.issuer_manifest_root[0] ^= 1;
+        wrong_contexts.push(wrong);
+        let mut wrong = context;
+        wrong.code_root[0] ^= 1;
+        wrong_contexts.push(wrong);
+        let mut wrong = context;
+        wrong.abi_version += 1;
+        wrong_contexts.push(wrong);
+        let mut wrong = context;
+        wrong.abi_hash[0] ^= 1;
+        wrong_contexts.push(wrong);
+        for wrong in wrong_contexts {
+            assert!(
+                signed
+                    .verify_issuer_signature_v1(wrong, issuer.public_key())
+                    .is_err(),
+                "issuer signatures must bind the exact external admission context"
+            );
+        }
+
+        let mut altered = Vec::new();
+        let mut handle = signed.clone();
+        handle.scope.push("mint".into());
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.subject.account.push_str("-altered");
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.budget.remaining = Quantity::from(51_u64);
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.handle_era += 1;
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.sub_nonce += 1;
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.group_binding.epoch_id += 1;
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.target_lane = LaneId::new(3);
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.axt_binding = AxtBinding::new([0xA4; 32]);
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.manifest_view_root[0] ^= 1;
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.expiry_slot += 1;
+        altered.push(handle);
+        let mut handle = signed.clone();
+        handle.max_clock_skew_ms = Some(26);
+        altered.push(handle);
+
+        for altered in altered {
+            assert!(
+                altered
+                    .verify_issuer_signature_v1(context, issuer.public_key())
+                    .is_err(),
+                "altering an issuer-bound handle field must invalidate the signature"
+            );
+        }
+    }
+
+    #[test]
+    fn handle_sequence_accepts_only_exact_checked_progression() {
+        let mut policy = AxtPolicyEntry {
+            manifest_root: [0x5A; 32],
+            target_lane: LaneId::new(2),
+            active_handle_era: 9,
+            next_handle_counter: 3,
+            current_slot: 1,
+        };
+        let mut handle = sample_asset_handle();
+
+        assert_eq!(next_axt_handle_sub_nonce(&policy, &handle), Ok(4));
+        policy.next_handle_counter = 4;
+        handle.sub_nonce = 4;
+        assert_eq!(next_axt_handle_sub_nonce(&policy, &handle), Ok(5));
+
+        handle.sub_nonce = 3;
+        assert!(matches!(
+            next_axt_handle_sub_nonce(&policy, &handle),
+            Err(AxtHandleSequenceError::SubNonceMismatch {
+                expected: 4,
+                actual: 3
+            })
+        ));
+        handle.sub_nonce = u64::MAX;
+        assert!(matches!(
+            next_axt_handle_sub_nonce(&policy, &handle),
+            Err(AxtHandleSequenceError::SubNonceMismatch { .. })
+        ));
+        handle.sub_nonce = policy.next_handle_counter;
+        handle.handle_era = u64::MAX;
+        assert!(matches!(
+            next_axt_handle_sub_nonce(&policy, &handle),
+            Err(AxtHandleSequenceError::EraMismatch {
+                expected: 9,
+                actual: u64::MAX
+            })
+        ));
+
+        policy.active_handle_era = u64::MAX;
+        policy.next_handle_counter = u64::MAX;
+        handle.handle_era = u64::MAX;
+        handle.sub_nonce = u64::MAX;
+        assert_eq!(
+            next_axt_handle_sub_nonce(&policy, &handle),
+            Err(AxtHandleSequenceError::CounterExhausted)
+        );
     }
 
     fn sample_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
@@ -1489,6 +1999,18 @@ mod tests {
                     manifest_view_root: [1u8; 32],
                     expiry_slot: 10,
                     max_clock_skew_ms: Some(0),
+                    issuer_context: AxtHandleIssuerContextV1 {
+                        network_id: test_network_id(b"envelope-roundtrip-network"),
+                        asset_dsid: dsid,
+                        issuer: UniversalAccountId::from_hash(Hash::new(
+                            b"envelope-roundtrip-issuer",
+                        )),
+                        issuer_manifest_root: [1u8; 32],
+                        code_root: Hash::new(b"envelope-roundtrip-code").into(),
+                        abi_version: 1,
+                        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+                    },
+                    issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
                 },
                 intent: RemoteSpendIntent {
                     asset_dsid: dsid,
@@ -1546,8 +2068,8 @@ mod tests {
         let policy = AxtPolicyEntry {
             manifest_root: [0x42; 32],
             target_lane: LaneId::new(1),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 1,
         };
         let first = AxtPolicyBinding {

@@ -539,9 +539,8 @@ async fn submit_signed_transaction_posts_versioned_bytes() {
     };
 
     let keypair = KeyPair::random();
-    let chain: ChainId = "mochi-test".parse().expect("chain id");
     let tx = TransactionBuilder::new(
-        chain,
+        test_network_id(),
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -584,13 +583,16 @@ async fn execute_query_decodes_response() {
 
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());
-    let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
-        FindExecutorDataModel,
-    ))
-    .with_authority(account_id)
-    .sign(&keypair);
-
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = ToriiClient::new_for_network(server.url("/"), test_network_id()).expect("client");
+    let signed_query = client
+        .sign_query(
+            QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
+                FindExecutorDataModel,
+            )),
+            account_id,
+            &keypair,
+        )
+        .expect("sign query");
     let response = client
         .execute_query(&signed_query)
         .await
@@ -600,6 +602,53 @@ async fn execute_query_decodes_response() {
     let (_, remaining_items, continue_cursor) = response.into_parts();
     assert_eq!(remaining_items, 0);
     assert!(continue_cursor.is_none());
+}
+
+#[test]
+fn sign_query_requires_an_exact_network_identity() {
+    let client = ToriiClient::new("http://127.0.0.1:8080").expect("client");
+    let keypair = KeyPair::random();
+    let account_id = AccountId::new(keypair.public_key().clone());
+
+    let error = client
+        .sign_query(
+            QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
+                FindExecutorDataModel,
+            )),
+            account_id,
+            &keypair,
+        )
+        .expect_err("a general Torii client must not invent signed-query lineage");
+
+    assert!(matches!(error, ToriiError::SignedQueryContext(_)));
+}
+
+#[test]
+fn sign_query_binds_lineage_freshness_and_one_shot_nonce() {
+    let network_id = test_network_id();
+    let client = ToriiClient::new_for_network("http://127.0.0.1:8080", network_id)
+        .expect("network-bound client");
+    let keypair = KeyPair::random();
+    let account_id = AccountId::new(keypair.public_key().clone());
+
+    let signed = client
+        .sign_query(
+            QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
+                FindExecutorDataModel,
+            )),
+            account_id,
+            &keypair,
+        )
+        .expect("sign query");
+
+    assert_eq!(client.network_id(), Some(network_id));
+    assert_eq!(signed.payload.network_id, network_id);
+    assert!(signed.payload.creation_time_ms > 0);
+    assert_eq!(signed.payload.time_to_live_ms.get(), 100_000);
+    assert_ne!(signed.payload.nonce, [0_u8; 32]);
+    signed
+        .verify_signature()
+        .expect("signature covers every replay-context field");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -614,13 +663,16 @@ async fn execute_query_returns_unexpected_status() {
 
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());
-    let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
-        FindExecutorDataModel,
-    ))
-    .with_authority(account_id)
-    .sign(&keypair);
-
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = ToriiClient::new_for_network(server.url("/"), test_network_id()).expect("client");
+    let signed_query = client
+        .sign_query(
+            QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
+                FindExecutorDataModel,
+            )),
+            account_id,
+            &keypair,
+        )
+        .expect("sign query");
     let err = client
         .execute_query(&signed_query)
         .await
@@ -647,13 +699,16 @@ async fn execute_query_reports_decode_error() {
 
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());
-    let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
-        FindExecutorDataModel,
-    ))
-    .with_authority(account_id)
-    .sign(&keypair);
-
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = ToriiClient::new_for_network(server.url("/"), test_network_id()).expect("client");
+    let signed_query = client
+        .sign_query(
+            QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
+                FindExecutorDataModel,
+            )),
+            account_id,
+            &keypair,
+        )
+        .expect("sign query");
     let err = client
         .execute_query(&signed_query)
         .await
@@ -1116,12 +1171,13 @@ async fn fetch_lane_lifecycle_status_reports_unexpected_status() {
 #[test]
 fn lane_lifecycle_transaction_binds_status_and_requires_permission() {
     let status = lifecycle_status(true);
+    let network_id = test_network_id();
     let alice = crate::compose::development_signing_authorities()
         .iter()
         .find(|signer| signer.allows_permission(InstructionPermission::SetParameters))
         .expect("development CanSetParameters signer");
     let transaction = build_lane_lifecycle_transaction(
-        "mochi-test",
+        network_id,
         alice,
         &status,
         LaneLifecyclePlan {
@@ -1133,6 +1189,7 @@ fn lane_lifecycle_transaction_binds_status_and_requires_permission() {
     transaction
         .verify_signature()
         .expect("lifecycle signature verifies");
+    assert_eq!(transaction.network_id(), Some(&network_id));
     let iroha_data_model::transaction::Executable::Instructions(instructions) =
         transaction.instructions()
     else {
@@ -1154,9 +1211,13 @@ fn lane_lifecycle_transaction_binds_status_and_requires_permission() {
         .iter()
         .find(|signer| !signer.allows_permission(InstructionPermission::SetParameters))
         .expect("restricted development signer");
-    let error =
-        build_lane_lifecycle_transaction("mochi-test", bob, &status, LaneLifecyclePlan::default())
-            .expect_err("signer without CanSetParameters must be rejected locally");
+    let error = build_lane_lifecycle_transaction(
+        test_network_id(),
+        bob,
+        &status,
+        LaneLifecyclePlan::default(),
+    )
+    .expect_err("signer without CanSetParameters must be rejected locally");
     assert!(error.to_string().contains("CanSetParameters"));
 }
 
@@ -1168,13 +1229,35 @@ fn lane_lifecycle_transaction_rejects_forged_status_hash() {
         .first()
         .expect("development signer");
     let error = build_lane_lifecycle_transaction(
-        "mochi-test",
+        test_network_id(),
         signer,
         &status,
         LaneLifecyclePlan::default(),
     )
     .expect_err("forged status hash must fail closed");
     assert!(error.to_string().contains("catalog hash mismatch"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_lifecycle_rejects_network_id_different_from_client() {
+    let configured_network_id = test_network_id();
+    let supplied_network_id = NetworkId::from_genesis_hash(HashOf::<
+        iroha_data_model::block::BlockHeader,
+    >::from_untyped_unchecked(
+        Hash::prehashed([0x42; Hash::LENGTH])
+    ));
+    let client =
+        ToriiClient::new_for_network("http://127.0.0.1:9", configured_network_id).expect("client");
+    let signer = crate::compose::development_signing_authorities()
+        .first()
+        .expect("development signer");
+
+    let error = client
+        .apply_lane_lifecycle(supplied_network_id, signer, LaneLifecyclePlan::default())
+        .await
+        .expect_err("mismatched exact network identity must fail before I/O");
+
+    assert!(matches!(error, ToriiError::SignedQueryContext(_)));
 }
 
 #[tokio::test(flavor = "current_thread")]

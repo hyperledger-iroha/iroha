@@ -147,6 +147,7 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = iroha_torii::Torii::new(
         ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,

@@ -6,18 +6,20 @@ usage() {
   cat <<'USAGE'
 release_sorafs_cli.sh --manifest <path> [options]
 
-Signs a canonical aggregate SoraFS release manifest through a reviewed external
-Ed25519 signer (for example, a PKCS#11/HSM adapter), then verifies the exact
-manifest, raw public key, and 64-byte signature with a SHA256-pinned
-`sorafs-validate release-manifest` binary.
+Signs a canonical aggregate SoraFS release manifest through the reviewed
+`authenticated_external_signer` provider with exact `software` backend, then
+verifies the manifest, raw public key, and 64-byte Ed25519 signature with a
+SHA256-pinned `sorafs-validate release-manifest` binary. A successful run emits
+`software-key-qualified`; it never emits an HSM-qualified claim. The provider
+boundary remains compatible with a later HSM adapter backed by new evidence.
 
 Required:
   --manifest <path>
       Canonical aggregate release manifest JSON.
   --external-signer <path>
-      Executable Ed25519 signer adapter. Its first two positional arguments are
-      MANIFEST_PATH and a new SIGNATURE_OUTPUT_PATH; it must write exactly 64
-      raw signature bytes.
+      Executable adapter for the authenticated external software Ed25519 signer
+      service. Its first two positional arguments are MANIFEST_PATH and a new
+      SIGNATURE_OUTPUT_PATH; it must write exactly 64 raw signature bytes.
   --signing-public-key <path>
       Exactly 32 raw bytes for the governed Ed25519 public key.
   --trusted-signing-fingerprint <hex>
@@ -176,6 +178,9 @@ require_sha256() {
 }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly release_signing_provider="authenticated_external_signer"
+readonly release_signing_backend="software"
+readonly signer_qualification="software-key-qualified"
 workspace="$(cd "${script_dir}/.." && pwd)"
 manifest_path=""
 external_signer=""
@@ -270,7 +275,9 @@ require_sha256 \
   "$trusted_release_manifest_verifier_sha256"
 
 validate_existing_file_path "aggregate release manifest" "$manifest_path"
-validate_existing_executable_file_path "external Ed25519 signer" "$external_signer"
+validate_existing_executable_file_path \
+  "authenticated external software Ed25519 signer adapter" \
+  "$external_signer"
 validate_existing_file_path "raw Ed25519 signing public key" "$signing_public_key"
 validate_existing_executable_file_path \
   "native release-manifest verifier" \
@@ -309,7 +316,7 @@ prepare_new_output_file_path \
   "release verification summary output" \
   "$verification_summary_out"
 
-echo "Signing aggregate release manifest through the reviewed Ed25519 signer..."
+echo "Signing aggregate release manifest through the authenticated external software Ed25519 signer..."
 verification_json="$(
   python3 "$release_manifest_signing_helper" sign \
     --manifest "$manifest_path" \
@@ -335,3 +342,6 @@ echo "  Manifest     : $manifest_path"
 echo "  Signature    : $signature_out"
 echo "  Public key   : $public_key_out"
 echo "  Verification : $verification_summary_out"
+echo "  Provider     : $release_signing_provider"
+echo "  Backend      : $release_signing_backend"
+echo "  Qualification: $signer_qualification"

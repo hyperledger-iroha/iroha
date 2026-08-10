@@ -7,6 +7,7 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.tx.TransactionBuilder
@@ -25,6 +26,7 @@ object AliasPlanApply {
     fun buildTransactionPayload(
         request: AliasSetupPlanRequestV1,
         plan: AliasTransactionPlanV1,
+        networkId: NetworkId,
         chainDiscriminant: Int,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
@@ -35,6 +37,7 @@ object AliasPlanApply {
         plan,
         DefaultAliasPlanBodyNoritoEncoder,
         DefaultAliasEnsureInstructionFrameCodec,
+        networkId,
         chainDiscriminant,
         feePayment,
         creationTimeMs,
@@ -46,7 +49,8 @@ object AliasPlanApply {
      * Builds one ordinary transaction containing every exact planner frame.
      *
      * No alias mutation endpoint is involved. The caller supplies only generic transaction fields;
-     * authority and chain are pinned by the signed planner response.
+     * authority and exact network are pinned by the signed planner response. The caller's trusted
+     * genesis context must match that committed `NetworkId` before any transaction is built.
      */
     @JvmStatic
     @JvmOverloads
@@ -55,6 +59,7 @@ object AliasPlanApply {
         plan: AliasTransactionPlanV1,
         bodyEncoder: AliasPlanBodyNoritoEncoder,
         frameCodec: AliasEnsureInstructionFrameCodec,
+        networkId: NetworkId,
         chainDiscriminant: Int,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
@@ -62,6 +67,9 @@ object AliasPlanApply {
         metadata: Map<String, JsonValue> = emptyMap(),
     ): TransactionPayload {
         require(creationTimeMs >= 0) { "creationTimeMs must not be negative" }
+        require(plan.body.networkId == networkId) {
+            "alias setup plan NetworkId does not match the trusted transaction network"
+        }
         require(plan.body.validUntilMs > creationTimeMs) { "alias setup plan has expired" }
         val bodyBytes = bodyEncoder.encode(plan.body)
         require(bodyBytes.isNotEmpty()) { "canonical alias plan body must not be empty" }
@@ -76,7 +84,7 @@ object AliasPlanApply {
             InstructionBox.fromWirePayload(frame.wireId, frame.framedPayload)
         }
         return TransactionPayload(
-            chainId = plan.body.chainId,
+            networkId = networkId,
             authority = plan.body.authority,
             creationTimeMs = creationTimeMs,
             executable = Executable.instructions(instructions),
@@ -94,6 +102,7 @@ object AliasPlanApply {
         client: IrohaClient,
         request: AliasSetupPlanRequestV1,
         plan: AliasTransactionPlanV1,
+        networkId: NetworkId,
         bodyEncoder: AliasPlanBodyNoritoEncoder,
         frameCodec: AliasEnsureInstructionFrameCodec,
         chainDiscriminant: Int,
@@ -109,6 +118,7 @@ object AliasPlanApply {
             plan,
             bodyEncoder,
             frameCodec,
+            networkId,
             chainDiscriminant,
             feePayment,
             creationTimeMs,
@@ -125,6 +135,7 @@ object AliasPlanApply {
         client: IrohaClient,
         request: AliasSetupPlanRequestV1,
         plan: AliasTransactionPlanV1,
+        networkId: NetworkId,
         chainDiscriminant: Int,
         transactionBuilder: TransactionBuilder,
         signer: Signer,
@@ -136,6 +147,7 @@ object AliasPlanApply {
         client,
         request,
         plan,
+        networkId,
         DefaultAliasPlanBodyNoritoEncoder,
         DefaultAliasEnsureInstructionFrameCodec,
         chainDiscriminant,

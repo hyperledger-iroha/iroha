@@ -557,7 +557,7 @@ fn competing_retry_queue_plan_bindings_choose_one_deterministic_admission() {
         tag,
     );
     let retry_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        &state.chain_id,
+        &state.network_id,
         &queue_plan_entrypoint_for_state_test(&state, tag),
         &routing_plan,
         first_binding.admission_context.clone(),
@@ -929,7 +929,7 @@ fn queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set() {
         0x79,
     );
     let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-        &state.chain_id,
+        &state.network_id,
         &certificate,
     )
     .expect("fixture multi-route QueuePlan admission");
@@ -967,7 +967,7 @@ fn queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set() {
         world.commit();
     }
     let obligation_key = State::queue_plan_pending_obligation_marker_key(
-        obligation.chain_id_digest,
+        obligation.network_id_digest,
         obligation.entrypoint_hash.clone(),
     )
     .expect("fixture multi-route obligation key");
@@ -1036,13 +1036,13 @@ fn queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set() {
     let ordered_certificates = candidate.queue_plan_admissions.clone();
     let first_admission =
         crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-            &state.chain_id,
+            &state.network_id,
             &ordered_certificates[0],
         )
         .expect("fixture first canonical batch admission");
     let second_admission =
         crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-            &state.chain_id,
+            &state.network_id,
             &ordered_certificates[1],
         )
         .expect("fixture second canonical batch admission");
@@ -1061,12 +1061,12 @@ fn queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set() {
         State::queue_plan_admission_registry_marker_key(&second_admission.registry_key)
             .expect("fixture second batch registry key");
     let first_obligation_key = State::queue_plan_pending_obligation_marker_key(
-        first_obligation.chain_id_digest,
+        first_obligation.network_id_digest,
         first_obligation.entrypoint_hash.clone(),
     )
     .expect("fixture first batch obligation key");
     let second_obligation_key = State::queue_plan_pending_obligation_marker_key(
-        second_obligation.chain_id_digest,
+        second_obligation.network_id_digest,
         second_obligation.entrypoint_hash.clone(),
     )
     .expect("fixture second batch obligation key");
@@ -1237,7 +1237,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
 
     let conflicting_entrypoint = queue_plan_entrypoint_for_state_test(&state, tag);
     let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        &state.chain_id,
+        &state.network_id,
         &conflicting_entrypoint,
         &routing_plan,
         binding.admission_context.clone(),
@@ -1282,7 +1282,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
                 &mut world.smart_contract_state,
-                conflicting_binding.chain_id_digest,
+                conflicting_binding.network_id_digest,
                 conflicting_binding.entrypoint_hash,
             )
             .expect("resolve coherent conflicting obligation")
@@ -1362,7 +1362,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
     let salt = [0xA5; 32];
     let reveal_deadline_height = 64;
     let commitment = iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
-        sealed_transaction.chain(),
+        state.network_id_ref(),
         &sealed_transaction,
         salt,
         reveal_deadline_height,
@@ -1382,7 +1382,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         sealed_tag,
     );
     let sealed_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        &state.chain_id,
+        &state.network_id,
         &sealed_entrypoint,
         &routing_plan,
         sealed_template_binding.admission_context,
@@ -1411,7 +1411,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
                 &mut world.smart_contract_state,
-                sealed_binding.chain_id_digest,
+                sealed_binding.network_id_digest,
                 sealed_binding.entrypoint_hash,
             )
             .expect("resolve sealed-reveal pending obligation")
@@ -1623,7 +1623,7 @@ fn queue_plan_pending_obligation_authenticates_copies_before_counter_mutation() 
         tag,
     );
     let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-        &state.chain_id,
+        &state.network_id,
         &certificate,
     )
     .expect("fixture QueuePlan admission certificate");
@@ -1632,7 +1632,7 @@ fn queue_plan_pending_obligation_authenticates_copies_before_counter_mutation() 
     seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
 
     let alternate_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        &state.chain_id,
+        &state.network_id,
         &queue_plan_entrypoint_for_state_test(&state, tag),
         &routing_plan,
         binding.admission_context.clone(),
@@ -1642,7 +1642,10 @@ fn queue_plan_pending_obligation_authenticates_copies_before_counter_mutation() 
     alternate_binding
         .validate_structure()
         .expect("alternate QueuePlan binding is structurally valid");
-    assert_eq!(alternate_binding.chain_id_digest, binding.chain_id_digest);
+    assert_eq!(
+        alternate_binding.network_id_digest,
+        binding.network_id_digest
+    );
     assert_eq!(alternate_binding.entrypoint_hash, binding.entrypoint_hash);
     assert_eq!(
         alternate_binding.signed_transaction_hash,
@@ -1651,7 +1654,7 @@ fn queue_plan_pending_obligation_authenticates_copies_before_counter_mutation() 
     assert_ne!(alternate_binding.canonical_hash(), binding.canonical_hash());
 
     let obligation_key = State::queue_plan_pending_obligation_marker_key(
-        binding.chain_id_digest,
+        binding.network_id_digest,
         binding.entrypoint_hash.clone(),
     )
     .expect("fixture pending-obligation key");
@@ -1735,7 +1738,7 @@ fn queue_plan_pending_obligation_authenticates_copies_before_counter_mutation() 
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
                 &mut world.smart_contract_state,
-                binding.chain_id_digest,
+                binding.network_id_digest,
                 binding.entrypoint_hash.clone(),
             )
             .is_err(),
@@ -1812,12 +1815,12 @@ fn queue_plan_pending_resolution_decrements_only_exact_bound_route_counts() {
     )
     .expect("fixture single coordinator member key");
     let native_obligation_key = State::queue_plan_pending_obligation_marker_key(
-        native_binding.chain_id_digest,
+        native_binding.network_id_digest,
         native_binding.entrypoint_hash.clone(),
     )
     .expect("fixture Native pending-obligation key");
     let single_obligation_key = State::queue_plan_pending_obligation_marker_key(
-        single_binding.chain_id_digest,
+        single_binding.network_id_digest,
         single_binding.entrypoint_hash.clone(),
     )
     .expect("fixture single-route pending-obligation key");
@@ -1842,7 +1845,7 @@ fn queue_plan_pending_resolution_decrements_only_exact_bound_route_counts() {
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
                 &mut world.smart_contract_state,
-                native_binding.chain_id_digest,
+                native_binding.network_id_digest,
                 native_binding.entrypoint_hash.clone(),
             )
             .expect("resolve exact Native QueuePlan obligation")
@@ -1910,7 +1913,7 @@ fn queue_plan_pending_resolution_decrements_only_exact_bound_route_counts() {
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
                 &mut world.smart_contract_state,
-                single_binding.chain_id_digest,
+                single_binding.network_id_digest,
                 single_binding.entrypoint_hash,
             )
             .expect("resolve exact single-route QueuePlan obligation")
@@ -1974,7 +1977,7 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         );
         let first_admission =
             crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-                &state.chain_id,
+                &state.network_id,
                 &first_certificate,
             )
             .expect("fixture first QueuePlan admission certificate");
@@ -2016,12 +2019,12 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
                 .expect("fixture first exact route-member payload")
         };
         let first_obligation_key = State::queue_plan_pending_obligation_marker_key(
-            first_binding.chain_id_digest,
+            first_binding.network_id_digest,
             first_binding.entrypoint_hash.clone(),
         )
         .expect("fixture first obligation key");
         let second_obligation_key = State::queue_plan_pending_obligation_marker_key(
-            second_binding.chain_id_digest,
+            second_binding.network_id_digest,
             second_binding.entrypoint_hash.clone(),
         )
         .expect("fixture second obligation key");
@@ -2066,7 +2069,7 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             assert!(
                 State::resolve_queue_plan_pending_obligation_in_storage(
                     &mut world.smart_contract_state,
-                    first_binding.chain_id_digest,
+                    first_binding.network_id_digest,
                     first_binding.entrypoint_hash.clone(),
                 )
                 .is_err(),
@@ -2152,7 +2155,7 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
                 &mut world.smart_contract_state,
-                first_binding.chain_id_digest,
+                first_binding.network_id_digest,
                 first_binding.entrypoint_hash,
             )
             .is_err(),
@@ -2194,7 +2197,7 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         );
         let admission =
             crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-                &state.chain_id,
+                &state.network_id,
                 &certificate,
             )
             .expect("fixture oversized-member QueuePlan admission certificate");
@@ -2215,7 +2218,7 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         }
 
         let obligation_key = State::queue_plan_pending_obligation_marker_key(
-            binding.chain_id_digest,
+            binding.network_id_digest,
             binding.entrypoint_hash.clone(),
         )
         .expect("fixture oversized-member obligation key");
@@ -2246,7 +2249,7 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
                 &mut world.smart_contract_state,
-                binding.chain_id_digest,
+                binding.network_id_digest,
                 binding.entrypoint_hash,
             )
             .is_err(),
@@ -2364,7 +2367,7 @@ fn queue_plan_pending_resolution_corrupt_route_counts_fail_without_partial_mutat
         };
 
         let obligation_key = State::queue_plan_pending_obligation_marker_key(
-            binding.chain_id_digest,
+            binding.network_id_digest,
             binding.entrypoint_hash.clone(),
         )
         .expect("fixture pending-obligation key");
@@ -2398,7 +2401,7 @@ fn queue_plan_pending_resolution_corrupt_route_counts_fail_without_partial_mutat
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
                 &mut world.smart_contract_state,
-                binding.chain_id_digest,
+                binding.network_id_digest,
                 binding.entrypoint_hash,
             )
             .is_err(),
@@ -2446,12 +2449,12 @@ fn queue_plan_pending_resolution_corrupt_route_counts_fail_without_partial_mutat
     seed_exact_queue_plan_admission_state_for_test(&state, &first_certificate);
     seed_exact_queue_plan_admission_state_for_test(&state, &second_certificate);
     let first_obligation_key = State::queue_plan_pending_obligation_marker_key(
-        first_binding.chain_id_digest,
+        first_binding.network_id_digest,
         first_binding.entrypoint_hash.clone(),
     )
     .expect("fixture first bulk obligation key");
     let second_obligation_key = State::queue_plan_pending_obligation_marker_key(
-        second_binding.chain_id_digest,
+        second_binding.network_id_digest,
         second_binding.entrypoint_hash.clone(),
     )
     .expect("fixture second bulk obligation key");
@@ -2617,7 +2620,7 @@ fn queue_plan_registry_presence_is_bounded_and_malformed_markers_fail_closed() {
     );
 
     let obligation_key = State::queue_plan_pending_obligation_marker_key(
-        binding.chain_id_digest,
+        binding.network_id_digest,
         binding.entrypoint_hash.clone(),
     )
     .expect("fixture pending-obligation key");
@@ -3015,7 +3018,7 @@ fn same_carrier_queue_plan_certificate_cannot_authorize_autonomous_execution() {
         tag,
     );
     binding
-        .validate_for_request(&state.chain_id, &entrypoint, &routing_plan)
+        .validate_for_request(&state.network_id, &entrypoint, &routing_plan)
         .expect("fixture certificate binds the autonomous transaction");
     {
         let mut world = state.world.block();

@@ -39,6 +39,22 @@ BY Isa
        AsyncSchedulerExceptHistoricalRecoveryTargets,
        AsyncLocalAdmissionVars, AsyncIoVars, AsyncDeferredVars
 
+THEOREM AsyncInitEstablishesProducerTypeInvariant ==
+  \A initialContext:
+    AsyncInitAt(initialContext) => AsyncProducerTypeInvariant
+BY FS_EmptySet, Zenon
+   DEF AsyncInitAt, AsyncBaseInitAt, AsyncProducerInit,
+       AsyncProducerTypeInvariant, AsyncProducerJournalClosed
+
+THEOREM AsyncInitEstablishesServeProducerEpisodeTypeInvariant ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => AsyncServeProducerEpisodeTypeInvariant
+BY Zenon
+   DEF AsyncInitAt, AsyncBaseInitAt,
+       AsyncServeProducerEpisodeInit,
+       AsyncServeProducerEpisodeTypeInvariant
+
 THEOREM AsyncInitEstablishesSchedulerType ==
   \A initialContext:
     (AsyncInitAt(initialContext) /\ TypeInvariant)

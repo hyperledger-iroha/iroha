@@ -26,7 +26,7 @@ use thiserror::Error;
 #[cfg(feature = "json")]
 use crate::parameter::{CustomParameter, CustomParameterId};
 use crate::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     sorafs::capacity::{CapacityDisputeId, CapacityDisputeOutcome, ProviderId},
 };
@@ -66,7 +66,7 @@ pub const REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1: &[u8] =
 /// Domain separator for canonical stream-token validation identifiers.
 pub const STREAM_TOKEN_VALIDATION_ID_DOMAIN_V1: &[u8] =
     b"sorafs.reputation.stream-token.validation-id.v1";
-/// Domain separator for stable, chain-scoped regional gateway identities.
+/// Domain separator for stable, network-scoped regional gateway identities.
 pub const STREAM_TOKEN_GATEWAY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.reputation.stream-token.gateway-id.v1";
 /// Domain separator for exact request-nonce commitments.
@@ -80,8 +80,6 @@ pub const STREAM_TOKEN_REQUEST_CONTEXT_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.reputation.stream-token.request-context.v1";
 /// First-release canonical stream-token request-context version.
 pub const STREAM_TOKEN_REQUEST_CONTEXT_VERSION_V1: u8 = 1;
-/// Maximum canonical chain-identity bytes accepted by gateway-id derivation.
-pub const STREAM_TOKEN_GATEWAY_CHAIN_ID_MAX_BYTES_V1: usize = 255;
 /// Maximum governed compliance-gateway identity bytes.
 pub const STREAM_TOKEN_COMPLIANCE_GATEWAY_ID_MAX_BYTES_V1: usize = 128;
 /// Exact canonical first-release manifest-root CID bytes.
@@ -148,7 +146,7 @@ impl ReputationFinalizedArchiveRetentionTargetV1 {
 /// must submit the exact target as a custom parameter, and consensus validates
 /// that target against an already committed block. Successive requests form a
 /// strict digest-linked sequence so replicas can reconcile them idempotently.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -156,8 +154,8 @@ impl ReputationFinalizedArchiveRetentionTargetV1 {
 pub struct ReputationFinalizedArchiveRetentionRequestV1 {
     /// Schema version.
     pub version: u16,
-    /// Exact chain whose archive may be compacted.
-    pub chain_id: ChainId,
+    /// Exact network whose archive may be compacted.
+    pub network_id: NetworkId,
     /// Monotonic request sequence beginning at one.
     pub sequence: u64,
     /// Digest of the immediately preceding canonical request.
@@ -181,14 +179,14 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
     /// Rejects invalid targets, sequence/predecessor combinations, or a
     /// canonical encoding failure.
     pub fn try_new(
-        chain_id: ChainId,
+        network_id: NetworkId,
         sequence: u64,
         predecessor_request_digest: Option<[u8; 32]>,
         compact_through: ReputationFinalizedArchiveRetentionTargetV1,
     ) -> Result<Self, ReputationFinalizedArchiveRetentionRequestErrorV1> {
         let mut request = Self {
             version: REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_VERSION_V1,
-            chain_id,
+            network_id,
             sequence,
             predecessor_request_digest,
             compact_through,
@@ -263,7 +261,7 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
     ///
     /// # Errors
     ///
-    /// Rejects cross-chain changes, skips, rollback, equivocation, or an
+    /// Rejects cross-network changes, skips, rollback, equivocation, or an
     /// incorrect predecessor digest.
     pub fn validate_transition(
         previous: Option<&Self>,
@@ -281,8 +279,8 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
         if next == previous {
             return Ok(());
         }
-        if next.chain_id != previous.chain_id {
-            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::ChainChanged);
+        if next.network_id != previous.network_id {
+            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::NetworkChanged);
         }
         let expected_sequence = previous
             .sequence
@@ -312,8 +310,8 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
                 },
             );
         }
-        if self.chain_id.as_str().is_empty() {
-            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::EmptyChainId);
+        if self.network_id.as_bytes()[31] & 1 != 1 {
+            return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::InvalidNetworkId);
         }
         if self.sequence == 0 {
             return Err(ReputationFinalizedArchiveRetentionRequestErrorV1::ZeroSequence);
@@ -338,7 +336,7 @@ impl ReputationFinalizedArchiveRetentionRequestV1 {
     ) -> Result<[u8; 32], ReputationFinalizedArchiveRetentionRequestErrorV1> {
         let material = (
             self.version,
-            self.chain_id.clone(),
+            self.network_id,
             self.sequence,
             self.predecessor_request_digest,
             self.compact_through,
@@ -361,9 +359,9 @@ pub enum ReputationFinalizedArchiveRetentionRequestErrorV1 {
         /// Observed version.
         found: u16,
     },
-    /// The request carries an empty chain id.
-    #[error("retention-request chain id must be non-empty")]
-    EmptyChainId,
+    /// The request carries a malformed exact network identity.
+    #[error("retention-request network id must be an exact marked genesis hash")]
+    InvalidNetworkId,
     /// Sequence zero is reserved.
     #[error("retention-request sequence must begin at one")]
     ZeroSequence,
@@ -391,9 +389,9 @@ pub enum ReputationFinalizedArchiveRetentionRequestErrorV1 {
     /// A non-initial request appeared without a predecessor state.
     #[error("retention request has invalid initial lineage")]
     InvalidInitialLineage,
-    /// A successor targets another chain.
-    #[error("retention request chain changed")]
-    ChainChanged,
+    /// A successor targets another network.
+    #[error("retention request network changed")]
+    NetworkChanged,
     /// The preceding sequence cannot advance.
     #[error("retention request sequence overflowed")]
     SequenceOverflow,
@@ -1107,11 +1105,9 @@ impl StreamTokenValidationStatusV1 {
 /// Hard-cut validation failures for canonical stream-token gateway and request context.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum StreamTokenRequestContextErrorV1 {
-    /// The chain identity is empty, oversized, or not a canonical lowercase token.
-    #[error(
-        "stream-token chain identity must contain 1-{STREAM_TOKEN_GATEWAY_CHAIN_ID_MAX_BYTES_V1} canonical lowercase ASCII bytes"
-    )]
-    InvalidChainId,
+    /// The exact network identity is malformed.
+    #[error("stream-token network identity must be an exact marked genesis hash")]
+    InvalidNetworkId,
     /// The governed gateway identity is empty, oversized, or not canonical.
     #[error(
         "stream-token compliance gateway identity must contain 1-{STREAM_TOKEN_COMPLIANCE_GATEWAY_ID_MAX_BYTES_V1} canonical lowercase ASCII bytes"
@@ -1179,22 +1175,21 @@ pub enum StreamTokenRequestContextErrorV1 {
 ///
 /// The V1 hash input is:
 ///
-/// `domain || chain_len_le_u64 || chain_utf8 || gateway_len_le_u64 || gateway_utf8`.
+/// `domain || network_id || gateway_len_le_u64 || gateway_utf8`.
 ///
-/// Both textual components are exact canonical lowercase ASCII tokens. Signer
-/// public keys are deliberately excluded so signer rotation cannot reset the
-/// gateway's sealed validation sequence.
+/// The network identity is the exact genesis-header hash and the gateway component is an exact
+/// canonical lowercase ASCII token. Signer public keys are deliberately excluded so signer
+/// rotation cannot reset the gateway's sealed validation sequence.
 ///
 /// # Errors
 ///
 /// Rejects empty, oversized, noncanonical, length-overflowing, or inert input.
 pub fn derive_stream_token_gateway_id_v1(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     compliance_gateway_id: &str,
 ) -> Result<[u8; 32], StreamTokenRequestContextErrorV1> {
-    let chain_id = chain_id.as_str();
-    if !is_canonical_stream_token_identity(chain_id, STREAM_TOKEN_GATEWAY_CHAIN_ID_MAX_BYTES_V1) {
-        return Err(StreamTokenRequestContextErrorV1::InvalidChainId);
+    if network_id.as_bytes()[31] & 1 != 1 {
+        return Err(StreamTokenRequestContextErrorV1::InvalidNetworkId);
     }
     if !is_canonical_stream_token_identity(
         compliance_gateway_id,
@@ -1205,7 +1200,7 @@ pub fn derive_stream_token_gateway_id_v1(
 
     let mut hasher = blake3::Hasher::new();
     hasher.update(STREAM_TOKEN_GATEWAY_ID_DOMAIN_V1);
-    update_length_framed_digest(&mut hasher, chain_id.as_bytes(), "chain_id")?;
+    hasher.update(network_id.as_bytes());
     update_length_framed_digest(
         &mut hasher,
         compliance_gateway_id.as_bytes(),
@@ -2826,6 +2821,14 @@ mod tests {
         AccountId::new(keypair.public_key().clone())
     }
 
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::new(vec![seed; 32]),
+            ),
+        )
+    }
+
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -2899,8 +2902,24 @@ mod tests {
         height: u64,
         block_hash: u8,
     ) -> ReputationFinalizedArchiveRetentionRequestV1 {
+        retention_request_on_network(
+            network_id(0x52),
+            sequence,
+            predecessor_request_digest,
+            height,
+            block_hash,
+        )
+    }
+
+    fn retention_request_on_network(
+        network_id: NetworkId,
+        sequence: u64,
+        predecessor_request_digest: Option<[u8; 32]>,
+        height: u64,
+        block_hash: u8,
+    ) -> ReputationFinalizedArchiveRetentionRequestV1 {
         ReputationFinalizedArchiveRetentionRequestV1::try_new(
-            ChainId::from("reputation-retention-test"),
+            network_id,
             sequence,
             predecessor_request_digest,
             ReputationFinalizedArchiveRetentionTargetV1::try_new(height, [block_hash; 32])
@@ -2923,11 +2942,11 @@ mod tests {
 
         #[cfg(feature = "json")]
         {
-            let parameter = request.clone().into_custom_parameter();
+            let parameter = request.into_custom_parameter();
             assert_eq!(
                 ReputationFinalizedArchiveRetentionRequestV1::from_custom_parameter(&parameter)
                     .expect("decode strict custom parameter"),
-                Some(request.clone())
+                Some(request)
             );
             let json = norito::json::to_string(&request).expect("encode request JSON");
             let decoded: ReputationFinalizedArchiveRetentionRequestV1 =
@@ -2947,6 +2966,17 @@ mod tests {
         let successor = retention_request(2, Some(first.request_digest), 8, 0x81);
         ReputationFinalizedArchiveRetentionRequestV1::validate_transition(Some(&first), &successor)
             .expect("exact successor");
+
+        let foreign_network =
+            retention_request_on_network(network_id(0x53), 2, Some(first.request_digest), 8, 0x81);
+        assert_eq!(
+            ReputationFinalizedArchiveRetentionRequestV1::validate_transition(
+                Some(&first),
+                &foreign_network,
+            ),
+            Err(ReputationFinalizedArchiveRetentionRequestErrorV1::NetworkChanged),
+            "the same display label cannot make different genesis identities interchangeable",
+        );
 
         let skipped = retention_request(3, Some(first.request_digest), 9, 0x91);
         assert_eq!(
@@ -3476,48 +3506,39 @@ mod tests {
 
     #[test]
     fn stream_token_gateway_id_derivation_is_canonical_and_golden() {
-        let gateway_id =
-            derive_stream_token_gateway_id_v1(&ChainId::from("iroha3-taira"), "gateway.dxb-1")
-                .expect("canonical gateway identity");
+        let taira = network_id(0x61);
+        let gateway_id = derive_stream_token_gateway_id_v1(&taira, "gateway.dxb-1")
+            .expect("canonical gateway identity");
         assert_eq!(
             hex::encode(gateway_id),
-            "666e62792547941724bdf7d0fbc09d9297fb4f8c8e176bc7ca44fec1050db254"
+            "d5d601205b62a52229ade1926bb6f0986849f1e9808b86054583165f57ef2be4"
         );
 
         let split_a =
-            derive_stream_token_gateway_id_v1(&ChainId::from("ab"), "c").expect("first framing");
+            derive_stream_token_gateway_id_v1(&taira, "a.bc").expect("first canonical gateway");
         let split_b =
-            derive_stream_token_gateway_id_v1(&ChainId::from("a"), "bc").expect("second framing");
+            derive_stream_token_gateway_id_v1(&taira, "ab.c").expect("second canonical gateway");
         assert_ne!(
             split_a, split_b,
-            "explicit length frames must prevent component-boundary aliases"
+            "explicit length frames must prevent gateway-boundary aliases"
         );
         assert_ne!(
             gateway_id,
-            derive_stream_token_gateway_id_v1(&ChainId::from("iroha3-nexus"), "gateway.dxb-1")
-                .expect("other chain"),
-            "gateway identities must be chain-scoped"
+            derive_stream_token_gateway_id_v1(&network_id(0x62), "gateway.dxb-1")
+                .expect("other network"),
+            "same-label deployments with different genesis hashes must not alias"
         );
         assert_ne!(
             gateway_id,
-            derive_stream_token_gateway_id_v1(&ChainId::from("iroha3-taira"), "gateway.dxb-2")
-                .expect("other gateway"),
+            derive_stream_token_gateway_id_v1(&taira, "gateway.dxb-2").expect("other gateway"),
             "governed gateway identities must not alias"
         );
 
-        let oversized_chain = "a".repeat(STREAM_TOKEN_GATEWAY_CHAIN_ID_MAX_BYTES_V1 + 1);
-        for invalid_chain in ["", "iroha3 taira", "iroha3/taira", oversized_chain.as_str()] {
-            assert!(
-                invalid_chain.parse::<ChainId>().is_err(),
-                "globally invalid chain identity reached the stream-token layer"
-            );
-        }
-        let uppercase = "Iroha3-taira"
-            .parse::<ChainId>()
-            .expect("uppercase is valid in the case-sensitive global ChainId grammar");
-        assert_eq!(
-            derive_stream_token_gateway_id_v1(&uppercase, "gateway.dxb-1"),
-            Err(StreamTokenRequestContextErrorV1::InvalidChainId)
+        let mut unmarked = *taira.as_bytes();
+        unmarked[31] &= !1;
+        assert!(
+            NetworkId::decode(&mut unmarked.as_slice()).is_err(),
+            "unmarked network identities must fail before gateway derivation",
         );
         let oversized_gateway = "a".repeat(STREAM_TOKEN_COMPLIANCE_GATEWAY_ID_MAX_BYTES_V1 + 1);
         for invalid_gateway in [
@@ -3528,7 +3549,7 @@ mod tests {
             oversized_gateway.as_str(),
         ] {
             assert_eq!(
-                derive_stream_token_gateway_id_v1(&ChainId::from("iroha3-taira"), invalid_gateway),
+                derive_stream_token_gateway_id_v1(&taira, invalid_gateway),
                 Err(StreamTokenRequestContextErrorV1::InvalidComplianceGatewayId)
             );
         }
@@ -3612,9 +3633,8 @@ mod tests {
             "missing and present-but-empty token headers must never alias"
         );
 
-        let gateway_id =
-            derive_stream_token_gateway_id_v1(&ChainId::from("iroha3-taira"), "gateway.dxb-1")
-                .expect("gateway id");
+        let gateway_id = derive_stream_token_gateway_id_v1(&network_id(0x61), "gateway.dxb-1")
+            .expect("gateway id");
         assert_ne!(
             gateway_id,
             car.digest().expect("context digest"),

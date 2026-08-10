@@ -145,13 +145,13 @@
     },
     {
       "type": "timeseries",
-      "title": "Replication Backlog",
+      "title": "Retained Pin Records",
       "id": 4,
       "datasource": "$datasource",
       "targets": [
         {
-          "expr": "torii_sorafs_replication_backlog_total",
-          "legendFormat": "pending orders",
+          "expr": "torii_sorafs_pin_retained_manifests",
+          "legendFormat": "retained records",
           "refId": "A"
         }
       ],
@@ -165,19 +165,19 @@
     },
     {
       "type": "timeseries",
-      "title": "Expired Orders / 5m",
+      "title": "Live Pinned Content",
       "id": 5,
       "datasource": "$datasource",
       "targets": [
         {
-          "expr": "sum(increase(torii_sorafs_registry_orders_total{status=\"expired\"}[5m]))",
-          "legendFormat": "expired",
+          "expr": "torii_sorafs_pin_live_content_bytes",
+          "legendFormat": "live content bytes",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "bytes",
           "min": 0
         },
         "overrides": []

@@ -7,13 +7,13 @@
 //! index snapshot before invoking the pure backtracking resolver.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
     error::Error,
     fmt,
 };
 
 use iroha_data_model::musubi::{
-    MUSUBI_MAX_PAGE_SIZE_V1, MUSUBI_MAX_RESOLUTION_NODES_V1, MusubiDependencyKindV1,
+    MUSUBI_MAX_DEPENDENCIES_V1, MUSUBI_MAX_PAGE_SIZE_V1, MusubiDependencyKindV1,
     MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1, MusubiOrderedPrefixV1,
     MusubiPackageIdV1, MusubiPackageSelectorV1, MusubiPageRequestV1, MusubiRegistrySnapshotV1,
     MusubiResolverIndexPageV1, MusubiResolverIndexQueryV1, MusubiResolverReleaseRowV1,
@@ -21,18 +21,17 @@ use iroha_data_model::musubi::{
 };
 
 use crate::{
-    lockfile::LockfileV1,
+    lockfile::{LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1, MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1},
     manifest::ConcreteDependency,
     registry::{RegistryErrorV1, RegistryReadClientV1},
     registry_cache::{CachedResolverSourceV1, RecordingResolverSourceV1, ResolverIndexCacheV1},
     resolver::{
-        ResolveModeV1, ResolveOutcomeV1, ResolveRequestV1, ResolverError, TargetedUpdateV1,
+        MAX_COLLECTED_RESOLVER_DEPENDENCIES_V1, MAX_COLLECTED_RESOLVER_ROWS_V1, ResolveModeV1,
+        ResolveOutcomeV1, ResolveRequestV1, ResolverError, TargetedUpdateV1,
         WorkspaceDependencyReqV1, WorkspaceRootReqV1, resolve, resolve_fresh,
     },
     workspace::{EffectiveDependency, Workspace, WorkspaceError, WorkspaceMember},
 };
-
-const MAX_COLLECTED_RESOLVER_ROWS_V1: usize = MUSUBI_MAX_RESOLUTION_NODES_V1 * 16;
 
 /// Read-only finalized registry surface needed by dependency resolution.
 pub trait ResolverRegistrySourceV1 {
@@ -90,11 +89,11 @@ pub enum GraphErrorV1 {
     OfflineMiss(String),
     /// A namespace/package selector had no exact immutable binding.
     PackageNotFound(MusubiPackageSelectorV1),
-    /// Independent pages did not represent one exact chain/genesis/snapshot.
+    /// Independent pages did not represent one exact network and snapshot.
     SnapshotChanged,
     /// Finalized query output was internally inconsistent.
     InvalidRegistryData(String),
-    /// The bounded candidate collection exceeded its fixed safety ceiling.
+    /// Local edges or candidate collection work exceeded a fixed safety ceiling.
     CandidateLimit,
     /// The deterministic solver rejected the collected graph.
     Resolver(ResolverError),
@@ -111,7 +110,7 @@ impl fmt::Display for GraphErrorV1 {
                 write!(formatter, "registry package `{package}` was not found")
             }
             Self::SnapshotChanged => formatter.write_str(
-                "registry pages changed finalized chain, genesis, or sparse-index snapshot",
+                "registry pages changed finalized network identity or sparse-index snapshot",
             ),
             Self::InvalidRegistryData(reason) => {
                 write!(
@@ -121,7 +120,7 @@ impl fmt::Display for GraphErrorV1 {
             }
             Self::CandidateLimit => write!(
                 formatter,
-                "resolver candidate collection exceeds {MAX_COLLECTED_RESOLVER_ROWS_V1} rows"
+                "resolver collection exceeds {MUSUBI_MAX_DEPENDENCIES_V1} dependencies for one local root, {MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1} local-root edges in total, {MAX_COLLECTED_RESOLVER_ROWS_V1} candidate row occurrences, or {MAX_COLLECTED_RESOLVER_DEPENDENCIES_V1} candidate dependency occurrences"
             ),
             Self::Resolver(error) => write!(formatter, "{error}"),
         }
@@ -152,8 +151,7 @@ impl From<ResolverError> for GraphErrorV1 {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RegistryAnchorV1 {
-    chain_id: iroha_data_model::ChainId,
-    genesis_hash: [u8; 32],
+    network_id: iroha_data_model::NetworkId,
     snapshot: MusubiRegistrySnapshotV1,
 }
 
@@ -165,8 +163,7 @@ impl RegistryAnchorV1 {
         Self::observe(
             anchor,
             Self {
-                chain_id: page.chain_id.clone(),
-                genesis_hash: page.genesis_hash,
+                network_id: page.network_id,
                 snapshot: page.snapshot,
             },
         )
@@ -179,8 +176,7 @@ impl RegistryAnchorV1 {
         Self::observe(
             anchor,
             Self {
-                chain_id: page.chain_id.clone(),
-                genesis_hash: page.genesis_hash,
+                network_id: page.network_id,
                 snapshot: page.snapshot,
             },
         )
@@ -360,6 +356,7 @@ fn resolve_workspace_from_source_with_policy<S: ResolverRegistrySourceV1>(
     fresh_only: bool,
 ) -> Result<ResolveOutcomeV1, GraphErrorV1> {
     let local_roots = collect_local_roots(workspace, selected)?;
+    validate_local_root_edge_bound(&local_roots)?;
     let mut anchor = None;
     let mut bindings = BTreeMap::new();
     let mut selectors = local_roots
@@ -436,35 +433,67 @@ fn resolve_workspace_from_source_with_policy<S: ResolverRegistrySourceV1>(
 
     let mut queried = BTreeSet::new();
     let mut rows = BTreeMap::new();
+    let mut candidate_row_occurrences = 0_usize;
+    let mut candidate_dependency_occurrences = 0_usize;
     while let Some(query_key) = requirements.pop_first() {
         if !queried.insert(query_key.clone()) {
             continue;
         }
         let (package, requirement) = query_key;
-        let fetched = collect_requirement_rows(source, &package, &requirement, &mut anchor)?;
+        let remaining_rows = MAX_COLLECTED_RESOLVER_ROWS_V1
+            .checked_sub(candidate_row_occurrences)
+            .ok_or(GraphErrorV1::CandidateLimit)?;
+        let remaining_dependencies = MAX_COLLECTED_RESOLVER_DEPENDENCIES_V1
+            .checked_sub(candidate_dependency_occurrences)
+            .ok_or(GraphErrorV1::CandidateLimit)?;
+        let fetched = collect_requirement_rows(
+            source,
+            &package,
+            &requirement,
+            &mut anchor,
+            remaining_rows,
+            remaining_dependencies,
+        )?;
+        candidate_row_occurrences = candidate_row_occurrences
+            .checked_add(fetched.len())
+            .ok_or(GraphErrorV1::CandidateLimit)?;
+        candidate_dependency_occurrences =
+            fetched
+                .iter()
+                .try_fold(candidate_dependency_occurrences, |total, row| {
+                    total
+                        .checked_add(row.dependencies.len())
+                        .ok_or(GraphErrorV1::CandidateLimit)
+                })?;
         for row in fetched {
-            for dependency in &row.dependencies {
-                requirements.insert((dependency.package.clone(), dependency.requirement.clone()));
-            }
-            match rows.insert(row.release.clone(), row.clone()) {
-                Some(previous) if previous != row => {
+            let row_limit_reached = rows.len() >= MAX_COLLECTED_RESOLVER_ROWS_V1;
+            match rows.entry(row.release.clone()) {
+                Entry::Occupied(occupied) if occupied.get() != &row => {
                     return Err(GraphErrorV1::InvalidRegistryData(format!(
                         "conflicting rows for `{}`",
                         row.release
                     )));
                 }
-                _ => {}
-            }
-            if rows.len() > MAX_COLLECTED_RESOLVER_ROWS_V1 {
-                return Err(GraphErrorV1::CandidateLimit);
+                Entry::Occupied(_) => {}
+                Entry::Vacant(vacant) => {
+                    if row_limit_reached {
+                        return Err(GraphErrorV1::CandidateLimit);
+                    }
+                    for dependency in &row.dependencies {
+                        let key = (dependency.package.clone(), dependency.requirement.clone());
+                        if !queried.contains(&key) {
+                            requirements.insert(key);
+                        }
+                    }
+                    vacant.insert(row);
+                }
             }
         }
     }
 
     let anchor = anchor.expect("one ordered or resolver query establishes an anchor");
     let request = ResolveRequestV1 {
-        chain_id: anchor.chain_id,
-        genesis_hash: anchor.genesis_hash,
+        network_id: anchor.network_id,
         snapshot: anchor.snapshot,
         roots,
         rows: rows.into_values().collect(),
@@ -478,6 +507,24 @@ fn resolve_workspace_from_source_with_policy<S: ResolverRegistrySourceV1>(
         resolve(request)
     }
     .map_err(GraphErrorV1::from)
+}
+
+fn validate_local_root_edge_bound(roots: &[LocalRootSpecV1]) -> Result<(), GraphErrorV1> {
+    if roots
+        .iter()
+        .any(|root| root.dependencies.len() > MUSUBI_MAX_DEPENDENCIES_V1)
+    {
+        return Err(GraphErrorV1::CandidateLimit);
+    }
+    let edge_count = roots.iter().try_fold(0_usize, |total, root| {
+        total
+            .checked_add(root.dependencies.len())
+            .ok_or(GraphErrorV1::CandidateLimit)
+    })?;
+    if edge_count > MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1 {
+        return Err(GraphErrorV1::CandidateLimit);
+    }
+    Ok(())
 }
 
 fn initial_requirement_queries(
@@ -551,43 +598,27 @@ pub fn collect_local_members(
         .values()
         .map(|member| (member.package.selector.clone(), member))
         .collect::<BTreeMap<_, _>>();
-    let mut pending = selected
-        .iter()
-        .map(|selector| {
-            by_selector
-                .get(selector)
-                .map(|member| (*member).clone())
-                .ok_or_else(|| {
-                    GraphErrorV1::InvalidRegistryData(format!(
-                        "selected package `{selector}` is not a workspace member"
-                    ))
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut pending = Vec::new();
+    let mut discovered_packages = BTreeMap::new();
+    let mut discovered_manifests = BTreeMap::new();
+    for selector in &selected {
+        let member = by_selector.get(selector).ok_or_else(|| {
+            GraphErrorV1::InvalidRegistryData(format!(
+                "selected package `{selector}` is not a workspace member"
+            ))
+        })?;
+        enqueue_local_member(
+            &mut pending,
+            &mut discovered_packages,
+            &mut discovered_manifests,
+            (*member).clone(),
+        )?;
+    }
     pending.sort_by(|left, right| right.package.selector.cmp(&left.package.selector));
 
     let mut packages = BTreeMap::<MusubiPackageSelectorV1, WorkspaceMember>::new();
-    let mut manifests = BTreeMap::new();
     while let Some(member) = pending.pop() {
-        if let Some(previous_path) = manifests.insert(
-            member.manifest_path.clone(),
-            member.package.selector.clone(),
-        ) && previous_path != member.package.selector
-        {
-            return Err(GraphErrorV1::InvalidRegistryData(format!(
-                "manifest `{}` changed package identity",
-                member.manifest_path.display()
-            )));
-        }
-        if let Some(previous) = packages.get(&member.package.selector) {
-            if previous.manifest_path != member.manifest_path {
-                return Err(GraphErrorV1::InvalidRegistryData(format!(
-                    "local package `{}` is declared by both `{}` and `{}`",
-                    member.package.selector,
-                    previous.manifest_path.display(),
-                    member.manifest_path.display()
-                )));
-            }
+        if packages.contains_key(&member.package.selector) {
             continue;
         }
         let include_dev = selected.contains(&member.package.selector);
@@ -597,7 +628,12 @@ pub fn collect_local_members(
             .chain(member.dev_dependencies.values().filter(|_| include_dev))
         {
             if let Some(manifest_path) = &dependency.local_manifest {
-                pending.push(workspace.load_path_package(manifest_path)?);
+                enqueue_local_member(
+                    &mut pending,
+                    &mut discovered_packages,
+                    &mut discovered_manifests,
+                    workspace.load_path_package(manifest_path)?,
+                )?;
             }
         }
         pending.sort_by(|left, right| right.package.selector.cmp(&left.package.selector));
@@ -605,6 +641,48 @@ pub fn collect_local_members(
     }
 
     Ok(packages.into_values().collect())
+}
+
+fn enqueue_local_member(
+    pending: &mut Vec<WorkspaceMember>,
+    discovered_packages: &mut BTreeMap<MusubiPackageSelectorV1, std::path::PathBuf>,
+    discovered_manifests: &mut BTreeMap<std::path::PathBuf, MusubiPackageSelectorV1>,
+    member: WorkspaceMember,
+) -> Result<(), GraphErrorV1> {
+    if let Some(previous_path) = discovered_packages.get(&member.package.selector) {
+        if previous_path != &member.manifest_path {
+            return Err(GraphErrorV1::InvalidRegistryData(format!(
+                "local package `{}` is declared by both `{}` and `{}`",
+                member.package.selector,
+                previous_path.display(),
+                member.manifest_path.display()
+            )));
+        }
+        return Ok(());
+    }
+    if let Some(previous_package) = discovered_manifests.get(&member.manifest_path)
+        && previous_package != &member.package.selector
+    {
+        return Err(GraphErrorV1::InvalidRegistryData(format!(
+            "manifest `{}` changed package identity",
+            member.manifest_path.display()
+        )));
+    }
+    if discovered_packages.len() >= MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1 {
+        return Err(GraphErrorV1::InvalidRegistryData(format!(
+            "selected and reachable local packages exceed the {MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1}-root consumer-lock bound"
+        )));
+    }
+    discovered_manifests.insert(
+        member.manifest_path.clone(),
+        member.package.selector.clone(),
+    );
+    discovered_packages.insert(
+        member.package.selector.clone(),
+        member.manifest_path.clone(),
+    );
+    pending.push(member);
+    Ok(())
 }
 
 fn local_requirement(
@@ -703,10 +781,13 @@ fn collect_requirement_rows<S: ResolverRegistrySourceV1>(
     package: &MusubiPackageIdV1,
     requirement: &MusubiVersionReqV1,
     anchor: &mut Option<RegistryAnchorV1>,
+    row_limit: usize,
+    dependency_limit: usize,
 ) -> Result<Vec<MusubiResolverReleaseRowV1>, GraphErrorV1> {
     let mut cursor = None;
     let mut seen_cursor_keys = BTreeSet::new();
     let mut rows = Vec::new();
+    let mut dependency_occurrences = 0_usize;
     loop {
         let request = MusubiResolverIndexQueryV1 {
             package: package.clone(),
@@ -731,10 +812,16 @@ fn collect_requirement_rows<S: ResolverRegistrySourceV1>(
                     row.release
                 )));
             }
-            rows.push(row);
-            if rows.len() > MAX_COLLECTED_RESOLVER_ROWS_V1 {
+            if rows.len() >= row_limit {
                 return Err(GraphErrorV1::CandidateLimit);
             }
+            dependency_occurrences = dependency_occurrences
+                .checked_add(row.dependencies.len())
+                .ok_or(GraphErrorV1::CandidateLimit)?;
+            if dependency_occurrences > dependency_limit {
+                return Err(GraphErrorV1::CandidateLimit);
+            }
+            rows.push(row);
         }
         let Some(next) = page.next_cursor else {
             break;
@@ -749,15 +836,37 @@ fn collect_requirement_rows<S: ResolverRegistrySourceV1>(
     Ok(rows)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::{fs, path::Path};
 
-    use iroha_data_model::musubi::{MusubiNamespaceBindingV1, MusubiPackageScopeV1};
+    use iroha_data_model::{
+        account::AccountId,
+        musubi::{
+            ArchiveId, MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiAbiBindingV1,
+            MusubiArchiveAvailabilityV1, MusubiArtifactGovernanceStateV1, MusubiContentDigestV1,
+            MusubiDependencyReqV1, MusubiNamespaceBindingV1, MusubiPackageScopeV1, MusubiReasonV1,
+            MusubiReleaseDigestV1, MusubiReleaseIdV1, MusubiReleaseSelectionStateV1,
+            MusubiReleaseYankV1, MusubiStorageAvailabilityV1,
+        },
+        prelude::{Algorithm, KeyPair},
+    };
     use tempfile::TempDir;
 
     use super::*;
     use crate::workspace::load_workspace;
+
+    fn network_id() -> iroha_data_model::NetworkId {
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            .parse()
+            .expect("network id")
+    }
+
+    fn account() -> AccountId {
+        let keypair =
+            KeyPair::try_from_seed(vec![17; 32], Algorithm::Ed25519).expect("fixture keypair");
+        AccountId::new(keypair.public_key().clone())
+    }
 
     const APP: &str = r#"manifest-version = 1
 [package]
@@ -773,6 +882,27 @@ exports = []
     fn write(path: &Path, source: &str) {
         fs::create_dir_all(path.parent().expect("fixture parent")).expect("create parent");
         fs::write(path, source).expect("write fixture");
+    }
+
+    fn local_package_manifest(name: &str, dependency: Option<(&str, &str)>) -> String {
+        let mut source = format!(
+            r#"manifest-version = 1
+[package]
+namespace = "apps.sora"
+name = "{name}"
+version = "1.0.0"
+edition = "1"
+abi-version = 1
+[lib]
+exports = []
+"#
+        );
+        if let Some((alias, path)) = dependency {
+            source.push_str(&format!(
+                "[dependencies]\n{alias} = {{ path = \"{path}\" }}\n"
+            ));
+        }
+        source
     }
 
     #[derive(Debug)]
@@ -847,8 +977,7 @@ exports = []
                     cursor: None,
                 },
             },
-            chain_id: "musubi-graph-test".parse().expect("chain id"),
-            genesis_hash: [7; 32],
+            network_id: network_id(),
             namespace_binding: MusubiNamespaceBindingV1 {
                 namespace: "apps.sora".parse().expect("namespace"),
                 home_dataspace: iroha_data_model::nexus::DataSpaceId::new(7),
@@ -862,6 +991,74 @@ exports = []
                 finalized_block_hash: [hash; 32],
                 index_revision: 4,
             },
+        }
+    }
+
+    fn resolver_page_with_one_dependency() -> MusubiResolverIndexPageV1 {
+        let snapshot = MusubiRegistrySnapshotV1 {
+            finalized_height: 10,
+            finalized_block_hash: [8; 32],
+            index_revision: 4,
+        };
+        let package = MusubiPackageIdV1::new(
+            iroha_data_model::nexus::DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "parent".parse().expect("package name"),
+        );
+        let leaf = MusubiPackageIdV1::new(
+            iroha_data_model::nexus::DataSpaceId::new(7),
+            MusubiPackageScopeV1::DataspaceRoot,
+            "leaf".parse().expect("package name"),
+        );
+        let release =
+            MusubiReleaseIdV1::new(package.clone(), "1.0.0".parse().expect("release version"));
+        let archive_id = ArchiveId::new([0x31; 32]);
+        MusubiResolverIndexPageV1 {
+            query: MusubiResolverIndexQueryV1 {
+                package,
+                requirement: Some(MusubiVersionReqV1::Any),
+                page: MusubiPageRequestV1 {
+                    limit: u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1).expect("page maximum fits u32"),
+                    cursor: None,
+                },
+            },
+            network_id: network_id(),
+            items: vec![MusubiResolverReleaseRowV1 {
+                release: release.clone(),
+                release_digest: MusubiReleaseDigestV1::new([0x32; 32]),
+                archive_id,
+                source_digest: MusubiContentDigestV1::new([0x33; 32]),
+                interface_digest: MusubiContentDigestV1::new([0x34; 32]),
+                abi: MusubiAbiBindingV1::new([0x35; 32]).expect("ABI binding"),
+                dependencies: vec![MusubiDependencyReqV1 {
+                    alias: "leaf".parse().expect("alias"),
+                    package: leaf,
+                    requirement: MusubiVersionReqV1::Any,
+                }],
+                selection: MusubiReleaseSelectionStateV1 {
+                    yank: MusubiReleaseYankV1 {
+                        release,
+                        yanked: false,
+                        reason: "fixture".parse::<MusubiReasonV1>().expect("reason"),
+                        changed_by: account(),
+                        changed_at_height: snapshot.finalized_height,
+                        revision: 1,
+                    },
+                    storage: MusubiArchiveAvailabilityV1 {
+                        archive_id,
+                        availability: MusubiStorageAvailabilityV1::Selectable,
+                        healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                        active_locations: 1,
+                        finalized_height: snapshot.finalized_height,
+                        finalized_block_hash: snapshot.finalized_block_hash,
+                        index_revision: snapshot.index_revision,
+                    },
+                    governance: MusubiArtifactGovernanceStateV1::Available,
+                },
+                index_revision: snapshot.index_revision,
+            }],
+            next_cursor: None,
+            snapshot,
         }
     }
 
@@ -883,8 +1080,7 @@ exports = []
         )
         .expect("dependency-free resolution");
         assert!(result.changed);
-        assert_eq!(result.lockfile.chain_id.as_str(), "musubi-graph-test");
-        assert_eq!(result.lockfile.genesis_hash, [7; 32]);
+        assert_eq!(result.lockfile.network_id, network_id());
         assert_eq!(result.lockfile.roots.len(), 1);
         assert!(result.lockfile.nodes.is_empty());
     }
@@ -911,6 +1107,38 @@ exports = []
             initial_requirement_queries(&roots),
             BTreeSet::from([(package, requirement)])
         );
+    }
+
+    #[test]
+    fn aggregate_local_root_edges_are_bounded_before_registry_collection() {
+        let root_with_edges = |root_index: usize, edge_count: usize| LocalRootSpecV1 {
+            package: format!("apps.sora/root{root_index}")
+                .parse()
+                .expect("root selector"),
+            dependencies: (0..edge_count)
+                .map(|edge_index| LocalDependencySpecV1 {
+                    alias: format!("d{edge_index:03}").parse().expect("alias"),
+                    kind: MusubiDependencyKindV1::Normal,
+                    package: format!("libs.sora/p{edge_index:03}")
+                        .parse()
+                        .expect("dependency selector"),
+                    requirement: MusubiVersionReqV1::Any,
+                })
+                .collect(),
+        };
+        let mut roots = vec![root_with_edges(0, 256), root_with_edges(1, 256)];
+        validate_local_root_edge_bound(&roots).expect("exact local-root edge corridor");
+
+        roots.push(root_with_edges(2, 1));
+        assert!(matches!(
+            validate_local_root_edge_bound(&roots),
+            Err(GraphErrorV1::CandidateLimit)
+        ));
+
+        assert!(matches!(
+            validate_local_root_edge_bound(&[root_with_edges(3, 257)]),
+            Err(GraphErrorV1::CandidateLimit)
+        ));
     }
 
     #[test]
@@ -986,6 +1214,70 @@ ignored = { package = "libs.sora/ignored", version = "^1.0.0" }
     }
 
     #[test]
+    fn reachable_local_packages_share_the_consumer_lock_root_bound() {
+        let temp = TempDir::new().expect("temporary directory");
+        let mut root_manifest = APP.to_owned();
+        root_manifest.push_str("[dependencies]\n");
+        for index in 0..(MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1 - 1) {
+            root_manifest.push_str(&format!("p{index:03} = {{ path = \"p{index:03}\" }}\n"));
+            write(
+                &temp.path().join(format!("p{index:03}/Musubi.toml")),
+                &local_package_manifest(&format!("p{index:03}"), None),
+            );
+        }
+        write(&temp.path().join("Musubi.toml"), &root_manifest);
+
+        let selected = vec!["apps.sora/app".parse().expect("selector")];
+        let workspace = load_workspace(temp.path()).expect("workspace at exact root bound");
+        let exact = collect_local_members(&workspace, &selected).expect("exact root bound");
+        assert_eq!(exact.len(), MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1);
+
+        let last_index = MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1 - 2;
+        write(
+            &temp.path().join(format!("p{last_index:03}/Musubi.toml")),
+            &local_package_manifest(&format!("p{last_index:03}"), Some(("extra", "extra"))),
+        );
+        write(
+            &temp
+                .path()
+                .join(format!("p{last_index:03}/extra/Musubi.toml")),
+            &local_package_manifest("extra", None),
+        );
+        let workspace = load_workspace(temp.path()).expect("workspace over root bound");
+        assert!(matches!(
+            collect_local_members(&workspace, &selected),
+            Err(GraphErrorV1::InvalidRegistryData(reason))
+                if reason.contains("257-root consumer-lock bound")
+        ));
+    }
+
+    #[test]
+    fn repeated_local_path_dependencies_consume_one_root_slot() {
+        let temp = TempDir::new().expect("temporary directory");
+        write(
+            &temp.path().join("Musubi.toml"),
+            &APP.replace(
+                "[lib]\nexports = []",
+                "[lib]\nexports = []\n[dependencies]\nfirst = { path = \"shared\" }\nsecond = { path = \"shared\" }",
+            ),
+        );
+        write(
+            &temp.path().join("shared/Musubi.toml"),
+            &local_package_manifest("shared", None),
+        );
+        let workspace = load_workspace(temp.path()).expect("workspace");
+        let selected = vec!["apps.sora/app".parse().expect("selector")];
+        let packages = collect_local_members(&workspace, &selected).expect("local packages");
+        assert_eq!(
+            packages
+                .iter()
+                .map(|member| member.package.selector.to_string())
+                .collect::<Vec<_>>(),
+            ["apps.sora/app", "apps.sora/shared"]
+        );
+    }
+
+    #[test]
     fn registry_anchor_rejects_snapshot_mixing() {
         let mut anchor = None;
         RegistryAnchorV1::observe_ordered(&mut anchor, &anchor_page(1)).expect("first anchor");
@@ -1020,8 +1312,7 @@ ignored = { package = "libs.sora/ignored", version = "^1.0.0" }
                     cursor: None,
                 },
             },
-            chain_id: "musubi-graph-test".parse().expect("chain id"),
-            genesis_hash: [7; 32],
+            network_id: network_id(),
             items: Vec::new(),
             next_cursor: Some(MusubiFinalizedCursorV1 {
                 snapshot,
@@ -1036,8 +1327,26 @@ ignored = { package = "libs.sora/ignored", version = "^1.0.0" }
             &package,
             &MusubiVersionReqV1::Any,
             &mut None,
+            MAX_COLLECTED_RESOLVER_ROWS_V1,
+            MAX_COLLECTED_RESOLVER_DEPENDENCIES_V1,
         )
         .expect_err("a repeating cursor must not create an infinite query loop");
         assert!(matches!(error, GraphErrorV1::InvalidRegistryData(_)));
+    }
+
+    #[test]
+    fn resolver_collection_enforces_the_remaining_dependency_work_budget() {
+        let page = resolver_page_with_one_dependency();
+        let package = page.query.package.clone();
+        let error = collect_requirement_rows(
+            &LoopingResolverRegistry { page },
+            &package,
+            &MusubiVersionReqV1::Any,
+            &mut None,
+            1,
+            0,
+        )
+        .expect_err("one dependency exceeds a zero remaining-work budget");
+        assert!(matches!(error, GraphErrorV1::CandidateLimit));
     }
 }

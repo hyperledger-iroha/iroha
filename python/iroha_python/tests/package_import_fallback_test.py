@@ -6,6 +6,28 @@ import sys
 from pathlib import Path
 
 
+def test_privacy_wallet_worker_contract_is_a_base_export() -> None:
+    import iroha_python
+    from iroha_python import privacy_wallet_worker
+
+    for name in privacy_wallet_worker.__all__:
+        assert name in iroha_python.__all__
+        assert getattr(iroha_python, name) is getattr(privacy_wallet_worker, name)
+
+    for retired in (
+        "PrivacyBootleLanternPresentationActionBuildResultV1",
+        "PrivacyJindoActionBuildResultV1",
+        "PrivacyVeRangeActionBuildResultV1",
+        "PrivacyVegaActionPreparationV1",
+        "PrivacyVegaActionBuildResultV1",
+        "PrivacyZkAceTransferActionBuildResultV1",
+        "PrivacyZkAmsBatchAdmissionActionBuildResultV1",
+        "PrivacyZkAmsProvisionAccountActionBuildResultV1",
+    ):
+        assert retired not in iroha_python.__all__
+        assert not hasattr(iroha_python, retired)
+
+
 def test_offline_readiness_verifier_roles_are_public_exports() -> None:
     import iroha_python
     from iroha_python import (

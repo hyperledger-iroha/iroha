@@ -8,6 +8,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { AccountAddress } from "../src/address.js";
 import { blake2b256 } from "../src/blake2b.js";
 import { getNativeBinding } from "../src/native.js";
+import { NetworkId } from "../src/networkId.js";
 import {
   BrowserTransactionCodecError,
   browserSignedTransactionHashHex,
@@ -42,6 +43,10 @@ const DESTINATION = AccountAddress.fromAccount({
 }).toI105();
 const ASSET_DEFINITION = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const SOURCE_ASSET = `${ASSET_DEFINITION}#${AUTHORITY}`;
+const NETWORK_ID = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
+const FOREIGN_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0x55));
 const EXPECTED_COMPACT_FIXTURE_KEYS = new Set([
   "schema.version",
   "source.fixture",
@@ -272,7 +277,7 @@ function replaceSignedPayload(versioned, payload) {
 
 function sampleInput(overrides = {}) {
   return {
-    chainId: "test-chain",
+    networkId: NETWORK_ID,
     authority: AUTHORITY,
     sourceAssetHoldingId: SOURCE_ASSET,
     quantity: "1.25",
@@ -290,7 +295,7 @@ function nativeBuild(input) {
   const native = getNativeBinding();
   assert.equal(typeof native.buildTransferAssetPayload, "function");
   return native.buildTransferAssetPayload(
-    input.chainId,
+    input.networkId.toBytes(),
     input.authority,
     input.sourceAssetHoldingId ?? input.sourceAssetId,
     String(input.quantity),
@@ -390,11 +395,63 @@ test("browser transfer payload is byte-for-byte native Rust canonical", () => {
   }
 });
 
+test("browser payload pins canonical TransactionDomain::Network wire and rejects domain aliases", () => {
+  const payload = buildBrowserTransferPayload(sampleInput());
+  const domain = readField(payload, 0);
+  const expectedNetworkBytes = Buffer.from(NETWORK_ID.toBytes());
+  assert.deepEqual(
+    domain.value,
+    Buffer.concat([u32(0), field(expectedNetworkBytes)]),
+  );
+  assert.equal(domain.value.readUInt32LE(0), 0);
+  assert.equal(domain.value[4], 32);
+  assert.deepEqual(domain.value.subarray(5), expectedNetworkBytes);
+
+  for (const alias of ["chain", "chainId", "chain_id"]) {
+    expectCodecError(
+      () => buildBrowserTransferPayload(sampleInput({ [alias]: "retired" })),
+      "invalid_input",
+      alias,
+    );
+  }
+  for (const invalid of [
+    "test-chain",
+    NETWORK_ID.toBytes(),
+    { literal: NETWORK_ID.literal, toBytes: () => NETWORK_ID.toBytes() },
+  ]) {
+    expectCodecError(
+      () => buildBrowserTransferPayload(sampleInput({ networkId: invalid })),
+      "invalid_input",
+    );
+  }
+
+  const replaceDomain = (archive) =>
+    Buffer.concat([field(archive), payload.subarray(domain.next)]);
+  const validate = (payloadBytes) =>
+    validateBrowserTransferSignable({
+      networkId: NETWORK_ID,
+      payloadBytes,
+      authority: AUTHORITY,
+      signingPublicKey: PUBLIC_KEY,
+    });
+  expectCodecError(() => validate(replaceDomain(u32(1))), "unsupported_payload");
+  expectCodecError(() => validate(replaceDomain(u32(2))), "unsupported_payload");
+  expectCodecError(
+    () => validate(replaceDomain(Buffer.concat([u32(0), field(Buffer.alloc(32, 2))]))),
+    "malformed_payload",
+  );
+  expectCodecError(
+    () => validate(replaceDomain(Buffer.concat([u32(0), field(Buffer.alloc(31, 1))]))),
+    "malformed_payload",
+  );
+});
+
 test("browser finalizer matches the native N-API bytes and entrypoint hash", () => {
   const input = sampleInput();
   const payload = buildBrowserTransferPayload(input);
   const { hashHex, signature } = signPayload(payload);
   const signable = {
+    networkId: NETWORK_ID,
     payloadBytes: payload,
     payloadHashHex: hashHex,
     authority: AUTHORITY,
@@ -409,6 +466,7 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
   const nativeBinding = getNativeBinding();
   assert.equal(typeof nativeBinding.finalizeSignedTransaction, "function");
   const native = nativeBinding.finalizeSignedTransaction({
+    networkId: NETWORK_ID.toBytes(),
     payloadBytes: payload,
     payloadHashHex: hashHex,
     signature,
@@ -629,7 +687,7 @@ test("browser snapshots Proxy data descriptors without invoking get traps", () =
   const proxiedInput = new Proxy(input, {
     get(target, property, receiver) {
       inputGets += 1;
-      if (property === "chainId") return "descriptor-get-mismatch";
+      if (property === "networkId") return "descriptor-get-mismatch";
       target.quantity = "999";
       return Reflect.get(target, property, receiver);
     },
@@ -640,6 +698,7 @@ test("browser snapshots Proxy data descriptors without invoking get traps", () =
 
   const { hashHex, signature } = signPayload(expectedPayload);
   const signable = {
+    networkId: NETWORK_ID,
     payloadBytes: expectedPayload,
     payloadHashHex: hashHex,
     authority: AUTHORITY,
@@ -686,8 +745,8 @@ test("browser snapshots Proxy data descriptors without invoking get traps", () =
       return Reflect.ownKeys(target);
     },
     getOwnPropertyDescriptor(target, property) {
-      if (property === "chainId") {
-        delete target.chainId;
+      if (property === "networkId") {
+        delete target.networkId;
         return undefined;
       }
       return Reflect.getOwnPropertyDescriptor(target, property);
@@ -814,14 +873,6 @@ test("browser metadata preserves prototype-shaped keys and enforces Rust Unicode
   );
   assert.throws(() => nativeBuild(sampleInput({ metadata: nelMetadata })));
   expectCodecError(
-    () => buildBrowserTransferPayload(sampleInput({ chainId: "bad\u0080chain" })),
-    "invalid_input",
-  );
-  expectCodecError(
-    () => buildBrowserTransferPayload(sampleInput({ chainId: "x".repeat(1_025) })),
-    "bounds_exceeded",
-  );
-  expectCodecError(
     () => buildBrowserTransferPayload(sampleInput({ metadata: { ["k".repeat(256)]: 1 } })),
     "invalid_metadata",
   );
@@ -833,10 +884,6 @@ test("browser metadata preserves prototype-shaped keys and enforces Rust Unicode
 
 test("browser rejects lone surrogates while preserving scalar and noncharacter parity", () => {
   for (const surrogate of ["\ud800", "\udfff"]) {
-    expectCodecError(
-      () => buildBrowserTransferPayload(sampleInput({ chainId: `bad${surrogate}` })),
-      "invalid_input",
-    );
     expectCodecError(
       () => buildBrowserTransferPayload(sampleInput({ metadata: { value: surrogate } })),
       "invalid_metadata",
@@ -856,7 +903,6 @@ test("browser rejects lone surrogates while preserving scalar and noncharacter p
   }
 
   const scalarInput = sampleInput({
-    chainId: "scalar-😀",
     metadata: { "emoji😀": "paired😀", noncharacters: "\ufdd0\u{10ffff}" },
   });
   assert.deepEqual(
@@ -895,6 +941,7 @@ test("browser rejects non-canonical scaled Numeric archives with trailing zeros"
   const nonCanonicalHash = browserTransactionPayloadHashHex(nonCanonicalPayload);
   const nonCanonicalSignature = signPayload(nonCanonicalPayload).signature;
   const signable = {
+    networkId: NETWORK_ID,
     payloadBytes: nonCanonicalPayload,
     payloadHashHex: nonCanonicalHash,
     authority: AUTHORITY,
@@ -918,6 +965,7 @@ test("browser rejects non-canonical scaled Numeric archives with trailing zeros"
   const canonicalSignature = signPayload(canonicalPayload).signature;
   const canonicalSigned = finalizeBrowserSignedTransaction(
     {
+      networkId: NETWORK_ID,
       payloadBytes: canonicalPayload,
       payloadHashHex: browserTransactionPayloadHashHex(canonicalPayload),
       authority: AUTHORITY,
@@ -955,7 +1003,12 @@ test("browser signed payload validation enforces byte caps before decoding or bi
   const payload = buildBrowserTransferPayload(sampleInput());
   const { hashHex, signature } = signPayload(payload);
   const baseline = finalizeBrowserSignedTransaction(
-    { payloadBytes: payload, payloadHashHex: hashHex, authority: AUTHORITY },
+    {
+      networkId: NETWORK_ID,
+      payloadBytes: payload,
+      payloadHashHex: hashHex,
+      authority: AUTHORITY,
+    },
     signature,
     PUBLIC_KEY,
   ).signedTransaction;
@@ -1007,7 +1060,12 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
   const payload = buildBrowserTransferPayload(sampleInput());
   const { hashHex, signature } = signPayload(payload);
   const expected = finalizeBrowserSignedTransaction(
-    { payloadBytes: payload, payloadHashHex: hashHex, authority: AUTHORITY },
+    {
+      networkId: NETWORK_ID,
+      payloadBytes: payload,
+      payloadHashHex: hashHex,
+      authority: AUTHORITY,
+    },
     signature,
     PUBLIC_KEY,
   );
@@ -1027,6 +1085,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
   );
   const reentrantFinalized = finalizeBrowserSignedTransaction(
     {
+      networkId: NETWORK_ID,
       payloadBytes: reentrantPayload,
       payloadHashHex: hashHex,
       authority: AUTHORITY,
@@ -1051,6 +1110,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
 
   const finalized = finalizeBrowserSignedTransaction(
     {
+      networkId: NETWORK_ID,
       payloadBytes: sharedPayloadView,
       payloadHashHex: hashHex,
       authority: AUTHORITY,
@@ -1075,7 +1135,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
   );
   expectCodecError(
     () => finalizeBrowserSignedTransaction(
-      { payloadBytes: payload, authority: AUTHORITY },
+      { networkId: NETWORK_ID, payloadBytes: payload, authority: AUTHORITY },
       new ArrayBuffer(65),
       PUBLIC_KEY,
     ),
@@ -1083,7 +1143,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
   );
   expectCodecError(
     () => finalizeBrowserSignedTransaction(
-      { payloadBytes: payload, authority: AUTHORITY },
+      { networkId: NETWORK_ID, payloadBytes: payload, authority: AUTHORITY },
       signature,
       new ArrayBuffer(33),
     ),
@@ -1092,7 +1152,7 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
 });
 
 test("browser strict Ed25519 rejects the mixed-torsion signature accepted by cofactored verify", () => {
-  const payload = buildBrowserTransferPayload(sampleInput({ chainId: "strict-sig" }));
+  const payload = buildBrowserTransferPayload(sampleInput());
   const payloadHashHex = browserTransactionPayloadHashHex(payload);
   const { publicKey, signature } = mixedTorsionSignature(
     Buffer.from(payloadHashHex, "hex"),
@@ -1105,6 +1165,7 @@ test("browser strict Ed25519 rejects the mixed-torsion signature accepted by cof
     "reviewer PoC must exercise noble's cofactored acceptance",
   );
   const signable = {
+    networkId: NETWORK_ID,
     payloadBytes: payload,
     payloadHashHex,
     authority: AUTHORITY,
@@ -1116,6 +1177,7 @@ test("browser strict Ed25519 rejects the mixed-torsion signature accepted by cof
   );
   assert.throws(() =>
     getNativeBinding().finalizeSignedTransaction({
+      networkId: NETWORK_ID.toBytes(),
       payloadBytes: payload,
       payloadHashHex,
       signature,
@@ -1129,6 +1191,7 @@ test("browser finalizer fails closed on contradictory signer and payload state",
   const payload = buildBrowserTransferPayload(sampleInput());
   const { hashHex, signature } = signPayload(payload);
   const signable = {
+    networkId: NETWORK_ID,
     payloadBytes: payload,
     payloadHashHex: hashHex,
     authority: AUTHORITY,
@@ -1137,6 +1200,15 @@ test("browser finalizer fails closed on contradictory signer and payload state",
   };
   const otherKey = Buffer.from(DESTINATION_PUBLIC_KEY);
 
+  expectCodecError(
+    () =>
+      finalizeBrowserSignedTransaction(
+        { ...signable, networkId: FOREIGN_NETWORK_ID },
+        signature,
+        PUBLIC_KEY,
+      ),
+    "network_id_mismatch",
+  );
   expectCodecError(
     () =>
       finalizeBrowserSignedTransaction(
@@ -1264,6 +1336,7 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
   const { hashHex, signature } = signPayload(payload);
   const finalized = finalizeBrowserSignedTransaction(
     {
+      networkId: NETWORK_ID,
       payloadBytes: payload,
       payloadHashHex: hashHex,
       authority: AUTHORITY,

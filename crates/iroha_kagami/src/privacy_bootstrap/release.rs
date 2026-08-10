@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
@@ -15,8 +16,10 @@ use iroha_core::privacy_engines::bootle_lantern::issuer::{
     taira_bootle_lantern_broker_contract_digest_v1,
     taira_bootle_lantern_issuer_profile_contract_digest_v1,
 };
-use iroha_crypto::sha256;
+use iroha_crypto::{Hash, HashOf, sha256};
 use iroha_data_model::{
+    NetworkId,
+    block::BlockHeader,
     isi::{
         InstructionBox,
         privacy::{
@@ -49,6 +52,9 @@ const MAX_INFLIGHT_V1: u64 = 2;
 const ISSUER_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.issuer.v1";
 const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v1";
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
+const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
+const ROLLOUT_PLAN_SHA256_V1: &str =
+    "63f3d331b25e5b240b3e8ac291b1fa64c6901b52f88b2ea2bb7bdb8af0889aa2";
 const CANONICAL_PLAN_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_bootstrap_plan.json");
 const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =
@@ -99,8 +105,6 @@ struct BrokerPublicMaterialV1 {
     issuer_parameter_digest_hex: String,
     policy_record_digest_hex: String,
     instruction_norito_sha256: String,
-    instruction_base64: String,
-    instruction: InstructionBox,
 }
 
 #[derive(Debug)]
@@ -186,8 +190,9 @@ pub(super) fn render_taira_release_v1<T: Write>(
         "genesis_sha256": (hex::encode(sha256(&artifacts.genesis))),
         "broker_public_path": (args.broker_public_output.display().to_string()),
         "broker_public_sha256": (hex::encode(sha256(&artifacts.broker_public))),
-        "activation_instruction_count": (PrivacyProtocolIdV1::COUNT as u64),
-        "issuer_policy_instruction_count": 1_u64,
+        "qualification_activation_template_count": (PrivacyProtocolIdV1::COUNT as u64),
+        "genesis_privacy_instruction_count": 0_u64,
+        "rollout_state": "not-executed",
     });
     writeln!(writer, "{}", norito::json::to_json(&status)?)?;
     Ok(())
@@ -202,17 +207,10 @@ fn compose_release_artifacts_v1(
     genesis_template: &[u8],
 ) -> color_eyre::Result<ReleaseArtifactsV1> {
     validate_taira_privacy_bootstrap_v1(activation_instructions, activation_report)?;
-    let (activation_hashes, activation_base64, activation_boxes) =
-        activation_material_v1(activation_report)?;
     let broker = parse_broker_public_export_v1(broker_export)?;
-    let plan = render_release_plan_v1(plan_template, &activation_hashes, &broker)?;
+    let plan = render_release_plan_v1(plan_template, &broker)?;
     let config = render_release_config_v1(config_template, &broker)?;
-    let genesis = render_release_genesis_v1(
-        genesis_template,
-        &activation_base64,
-        &activation_boxes,
-        &broker,
-    )?;
+    let genesis = render_release_genesis_v1(genesis_template)?;
     Ok(ReleaseArtifactsV1 {
         plan,
         config,
@@ -221,6 +219,7 @@ fn compose_release_artifacts_v1(
     })
 }
 
+#[cfg(test)]
 fn activation_material_v1(
     report_json: &[u8],
 ) -> color_eyre::Result<(Vec<String>, Vec<String>, Vec<InstructionBox>)> {
@@ -228,7 +227,7 @@ fn activation_material_v1(
         .wrap_err("failed to decode validated Taira activation report")?;
     let registration = object_field_v1(
         object_v1(&report, "activation report")?,
-        "genesis_registration",
+        "governance_activation_templates",
         "activation report",
     )?;
     let hashes = string_array_field_v1(
@@ -281,6 +280,7 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
             "issuer_parameter_digest_hex",
             "issuer_parameter_id_hex",
             "issuer_profile_digest_hex",
+            "network_id",
             "policy_id_hex",
             "policy_record_digest_hex",
             "registration_instruction",
@@ -301,6 +301,12 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
         "broker public export",
     )?;
     expect_string_v1(fields, "chain_id", CHAIN_ID_V1, "broker public export")?;
+    let network_id = string_field_v1(fields, "network_id", "broker public export")?
+        .parse::<NetworkId>()
+        .wrap_err("broker public export network_id is not canonical")?;
+    if network_id.as_bytes().iter().all(|byte| *byte == 0) {
+        bail!("broker public export network_id must be non-zero");
+    }
     expect_string_v1(
         fields,
         "runtime_provider_handle",
@@ -442,7 +448,7 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
     )?;
     let qualification = derive_taira_bootle_lantern_broker_qualification_digest_v1(
         &TairaBootleLanternBrokerQualificationInputsV1 {
-            chain_id: CHAIN_ID_V1,
+            network_id,
             runtime_provider_handle: PROVIDER_HANDLE_V1,
             runtime_provider_revision: PROVIDER_REVISION_V1,
             issuer_id: registration.policy.issuer_id,
@@ -477,14 +483,11 @@ fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPubli
         issuer_parameter_digest_hex,
         policy_record_digest_hex,
         instruction_norito_sha256: claimed_instruction_sha256.to_owned(),
-        instruction_base64: BASE64_STANDARD.encode(&instruction_bytes),
-        instruction,
     })
 }
 
 fn render_release_plan_v1(
     bytes: &[u8],
-    activation_hashes: &[String],
     broker: &BrokerPublicMaterialV1,
 ) -> color_eyre::Result<Vec<u8>> {
     let mut plan: JsonValue = norito::json::from_slice(bytes)
@@ -492,17 +495,6 @@ fn render_release_plan_v1(
     validate_staging_plan_v1(&plan)?;
     expect_canonical_template_bytes_v1(bytes, CANONICAL_PLAN_TEMPLATE_V1, "Taira privacy plan")?;
     let root = object_mut_v1(&mut plan, "privacy plan")?;
-    let registration = object_field_mut_v1(root, "genesis_registration", "privacy plan")?;
-    registration.insert(
-        "instruction_norito_sha256".to_owned(),
-        JsonValue::Array(
-            activation_hashes
-                .iter()
-                .cloned()
-                .map(JsonValue::String)
-                .collect(),
-        ),
-    );
     let bootle = object_field_mut_v1(root, "bootle_lantern_issuer", "privacy plan")?;
     bootle.insert(
         "public_export_sha256".to_owned(),
@@ -546,7 +538,7 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
             "chain_discriminant",
             "chain_id",
             "genesis_authority",
-            "genesis_registration",
+            "governance_rollout",
             "governance_permission",
             "privacy_catalog",
             "schema",
@@ -581,67 +573,64 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         "privacy plan",
     )?;
 
-    let registration = object_field_v1(root, "genesis_registration", "privacy plan")?;
+    let rollout = object_field_v1(root, "governance_rollout", "privacy plan")?;
     expect_exact_keys_v1(
-        registration,
+        rollout,
         &[
-            "activate_at_height",
-            "assurance",
-            "instruction_encoding",
-            "instruction_norito_sha256",
-            "lifecycle",
-            "minimum_activation_delay_blocks",
-            "pending_protocol_limits_tightening",
-            "proposed_at_height",
+            "activation_state",
+            "controller_observation_required",
+            "genesis_activation_forbidden",
+            "mode",
+            "notice_interval_blocks",
+            "observation_interval_blocks",
+            "rollout_plan_path",
+            "rollout_plan_sha256",
         ],
-        "genesis registration",
+        "governance rollout",
     )?;
     expect_string_v1(
-        registration,
-        "lifecycle",
-        "Proposed",
-        "genesis registration",
+        rollout,
+        "activation_state",
+        "not-executed",
+        "governance rollout",
     )?;
-    expect_u64_v1(
-        registration,
-        "proposed_at_height",
-        1,
-        "genesis registration",
+    expect_string_v1(
+        rollout,
+        "mode",
+        "governance-four-wave",
+        "governance rollout",
     )?;
+    expect_u64_v1(rollout, "notice_interval_blocks", 300, "governance rollout")?;
     expect_u64_v1(
-        registration,
-        "activate_at_height",
-        301,
-        "genesis registration",
-    )?;
-    expect_u64_v1(
-        registration,
-        "minimum_activation_delay_blocks",
+        rollout,
+        "observation_interval_blocks",
         300,
-        "genesis registration",
+        "governance rollout",
     )?;
     expect_string_v1(
-        registration,
-        "assurance",
-        "experimental",
-        "genesis registration",
+        rollout,
+        "rollout_plan_path",
+        ROLLOUT_PLAN_PATH_V1,
+        "governance rollout",
     )?;
     expect_string_v1(
-        registration,
-        "instruction_encoding",
-        "norito-instruction-box-base64",
-        "genesis registration",
+        rollout,
+        "rollout_plan_sha256",
+        ROLLOUT_PLAN_SHA256_V1,
+        "governance rollout",
     )?;
-    if registration
-        .get("pending_protocol_limits_tightening")
+    if rollout
+        .get("controller_observation_required")
         .and_then(JsonValue::as_bool)
-        != Some(false)
-        || registration
-            .get("instruction_norito_sha256")
-            .and_then(JsonValue::as_array)
-            .is_none_or(|values| !values.is_empty())
+        != Some(true)
+        || rollout
+            .get("genesis_activation_forbidden")
+            .and_then(JsonValue::as_bool)
+            != Some(true)
     {
-        bail!("privacy plan template is not an empty disabled genesis-registration staging plan");
+        bail!(
+            "privacy plan template must forbid genesis activation and require a controller observation"
+        );
     }
 
     validate_catalog_inventory_v1(object_field_v1(root, "privacy_catalog", "privacy plan")?)?;
@@ -959,9 +948,9 @@ fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::
         .ok_or_else(|| eyre!("Taira config root must be a table"))?;
     expect_toml_string_v1(
         root,
-        "private_key",
-        "REPLACE_WITH_VALIDATOR_PRIVATE_KEY",
-        "Taira validator private key",
+        "private_key_file",
+        "/run/secrets/iroha/taira-validator-private-key",
+        "Taira validator private-key handle",
     )?;
     expect_toml_string_v1(
         root,
@@ -971,16 +960,16 @@ fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::
     )?;
     expect_toml_string_v1(
         root,
-        "soranet_transport_private_key",
-        "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY",
-        "Taira SoraNet transport private key",
+        "soranet_transport_private_key_file",
+        "/run/secrets/iroha/taira-soranet-transport-private-key",
+        "Taira SoraNet transport private-key handle",
     )?;
     let torii = toml_table_field_v1(root, "torii", "Taira config")?;
     expect_toml_string_v1(
         toml_table_field_v1(torii, "kagemusha_commands", "Taira torii config")?,
-        "private_key",
-        "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY",
-        "Taira Kagemusha command private key",
+        "private_key_file",
+        "/run/secrets/iroha/taira-kagemusha-commands-private-key",
+        "Taira Kagemusha command private-key handle",
     )?;
     let onboarding = toml_table_field_v1(torii, "account_onboarding", "Taira torii config")?;
     expect_toml_string_v1(
@@ -1013,9 +1002,9 @@ fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::
     )?;
     expect_toml_string_v1(
         toml_table_field_v1(root, "streaming", "Taira config")?,
-        "identity_private_key",
-        "REPLACE_WITH_STREAMING_IDENTITY_PRIVATE_KEY",
-        "Taira streaming private key",
+        "identity_private_key_file",
+        "/run/secrets/iroha/taira-streaming-identity-private-key",
+        "Taira streaming private-key handle",
     )?;
     Ok(())
 }
@@ -1043,17 +1032,7 @@ fn expect_toml_string_v1(
     Ok(())
 }
 
-fn render_release_genesis_v1(
-    bytes: &[u8],
-    activation_base64: &[String],
-    activation_boxes: &[InstructionBox],
-    broker: &BrokerPublicMaterialV1,
-) -> color_eyre::Result<Vec<u8>> {
-    if activation_base64.len() != PrivacyProtocolIdV1::COUNT
-        || activation_boxes.len() != PrivacyProtocolIdV1::COUNT
-    {
-        bail!("Taira release genesis requires the complete exact-12 activation inventory");
-    }
+fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
     iroha_genesis::init_instruction_registry();
     let decoded_template: RawGenesisTransaction = norito::json::from_slice(bytes)
         .wrap_err("Taira genesis template cannot be decoded natively")?;
@@ -1082,9 +1061,9 @@ fn render_release_genesis_v1(
         }
     }
 
-    let mut genesis: JsonValue =
+    let genesis: JsonValue =
         norito::json::from_slice(bytes).wrap_err("Taira genesis template is not strict JSON")?;
-    let root = object_mut_v1(&mut genesis, "Taira genesis")?;
+    let root = object_v1(&genesis, "Taira genesis")?;
     expect_string_v1(root, "chain", CHAIN_ID_V1, "Taira genesis")?;
     expect_u64_v1(
         root,
@@ -1093,8 +1072,8 @@ fn render_release_genesis_v1(
         "Taira genesis",
     )?;
     let transactions = root
-        .get_mut("transactions")
-        .and_then(JsonValue::as_array_mut)
+        .get("transactions")
+        .and_then(JsonValue::as_array)
         .ok_or_else(|| eyre!("Taira genesis has no transaction array"))?;
     if transactions.is_empty() {
         bail!("Taira genesis has no transactions");
@@ -1139,8 +1118,8 @@ fn render_release_genesis_v1(
     expect_canonical_template_bytes_v1(bytes, CANONICAL_GENESIS_TEMPLATE_V1, "Taira genesis")?;
 
     let final_transaction = transactions
-        .last_mut()
-        .and_then(JsonValue::as_object_mut)
+        .last()
+        .and_then(JsonValue::as_object)
         .ok_or_else(|| eyre!("Taira genesis final transaction is not an object"))?;
     if final_transaction
         .get("parameters")
@@ -1156,67 +1135,9 @@ fn render_release_genesis_v1(
     {
         bail!("Taira genesis final transaction is not instruction-only");
     }
-    let instructions = final_transaction
-        .get_mut("instructions")
-        .and_then(JsonValue::as_array_mut)
-        .ok_or_else(|| eyre!("Taira genesis final transaction has no instruction array"))?;
-    instructions.extend(activation_base64.iter().cloned().map(JsonValue::String));
-    instructions.push(JsonValue::String(broker.instruction_base64.clone()));
-
     let rendered = json_pretty_bytes_v1(&genesis, "Taira privacy release genesis")?;
-    iroha_genesis::init_instruction_registry();
-    let decoded: RawGenesisTransaction = norito::json::from_slice(&rendered)
-        .wrap_err("rendered Taira release genesis cannot be decoded natively")?;
-    if decoded.chain_id().as_str() != CHAIN_ID_V1
-        || u64::from(decoded.chain_discriminant()) != CHAIN_DISCRIMINANT_V1
-    {
-        bail!("rendered Taira release genesis changed chain identity");
-    }
-    let decoded_instructions = decoded
-        .transactions()
-        .iter()
-        .flat_map(|transaction| transaction.instructions())
-        .collect::<Vec<_>>();
-    let activation_count = decoded_instructions
-        .iter()
-        .filter(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
-                .is_some()
-        })
-        .count();
-    let issuer_policy_count = decoded_instructions
-        .iter()
-        .filter(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<RegisterPrivacyBootleLanternIssuerPolicyV1>()
-                .is_some()
-        })
-        .count();
-    if activation_count != PrivacyProtocolIdV1::COUNT || issuer_policy_count != 1 {
-        bail!(
-            "rendered Taira release genesis must contain exactly twelve activations and one issuer-policy registration"
-        );
-    }
-    let expected_count = activation_boxes.len() + 1;
-    if decoded_instructions.len() < expected_count {
-        bail!("rendered Taira release genesis lost privacy instructions");
-    }
-    let privacy_tail = &decoded_instructions[decoded_instructions.len() - expected_count..];
-    for (index, (actual, expected)) in privacy_tail
-        .iter()
-        .take(activation_boxes.len())
-        .zip(activation_boxes)
-        .enumerate()
-    {
-        if *actual != expected {
-            bail!("rendered Taira activation instruction {index} changed during genesis decoding");
-        }
-    }
-    if privacy_tail.last().copied() != Some(&broker.instruction) {
-        bail!("rendered Taira issuer-policy instruction changed during genesis decoding");
+    if rendered != bytes {
+        bail!("Taira release genesis changed while proving that privacy activation is absent");
     }
     Ok(rendered)
 }
@@ -1512,9 +1433,13 @@ mod tests {
         let instruction_bytes =
             norito::to_bytes(&instruction).expect("encode boxed policy fixture");
         let stable_principal_digest = sha256(b"iroha.taira.release-composer.stable-principal.v1");
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed(sha256(b"iroha.taira.release-composer.genesis.v1")),
+            ));
         let qualification = derive_taira_bootle_lantern_broker_qualification_digest_v1(
             &TairaBootleLanternBrokerQualificationInputsV1 {
-                chain_id: CHAIN_ID_V1,
+                network_id,
                 runtime_provider_handle: PROVIDER_HANDLE_V1,
                 runtime_provider_revision: PROVIDER_REVISION_V1,
                 issuer_id: registration.policy.issuer_id,
@@ -1533,6 +1458,10 @@ mod tests {
         fields.insert(
             "chain_id".to_owned(),
             JsonValue::String(CHAIN_ID_V1.to_owned()),
+        );
+        fields.insert(
+            "network_id".to_owned(),
+            JsonValue::String(network_id.to_string()),
         );
         fields.insert(
             "runtime_provider_handle".to_owned(),
@@ -1663,11 +1592,11 @@ mod tests {
         assert_eq!(first.broker_public, export);
         let plan: JsonValue = norito::json::from_slice(&first.plan).expect("parse release plan");
         assert_eq!(
-            plan.pointer("/genesis_registration/instruction_norito_sha256")
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(PrivacyProtocolIdV1::COUNT)
+            plan.pointer("/governance_rollout/activation_state")
+                .and_then(JsonValue::as_str),
+            Some("not-executed")
         );
+        assert_eq!(first.genesis, GENESIS_TEMPLATE_V1);
         let expected_export_sha256 = hex::encode(sha256(&export));
         assert_eq!(
             plan.pointer("/bootle_lantern_issuer/public_export_sha256")
@@ -1818,8 +1747,8 @@ mod tests {
         let text = std::str::from_utf8(CONFIG_TEMPLATE_V1)
             .expect("config fixture UTF-8")
             .replacen(
-                "REPLACE_WITH_VALIDATOR_PRIVATE_KEY",
-                "materialized-private-key",
+                "private_key_file = \"/run/secrets/iroha/taira-validator-private-key\"",
+                "private_key = \"materialized-private-key\"",
                 1,
             );
         let broker = parse_broker_public_export_v1(&broker_export_fixture_v1())
@@ -1842,8 +1771,8 @@ mod tests {
                 "ed01200000000000000000000000000000000000000000000000000000000000000000",
             ),
             (
-                "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY",
-                "802620000000000000000000000000000000000000000000000000000000000000000000",
+                "soranet_transport_private_key_file = \"/run/secrets/iroha/taira-soranet-transport-private-key\"",
+                "soranet_transport_private_key = \"802620000000000000000000000000000000000000000000000000000000000000000000\"",
             ),
         ] {
             let text = std::str::from_utf8(CONFIG_TEMPLATE_V1)
@@ -1867,7 +1796,7 @@ mod tests {
         let mut plan = b"\n".to_vec();
         plan.extend_from_slice(PLAN_TEMPLATE_V1);
         assert!(
-            render_release_plan_v1(&plan, &[], &broker)
+            render_release_plan_v1(&plan, &broker)
                 .expect_err("reject whitespace-drifted plan template")
                 .to_string()
                 .contains("differs byte-for-byte")
@@ -1882,13 +1811,10 @@ mod tests {
                 .contains("differs byte-for-byte")
         );
 
-        let activations = activation_fixture_v1();
-        let (_, encoded, boxes) =
-            activation_material_v1(&activations.report_json).expect("activation material");
         let mut genesis = b"\n".to_vec();
         genesis.extend_from_slice(GENESIS_TEMPLATE_V1);
         assert!(
-            render_release_genesis_v1(&genesis, &encoded, &boxes, &broker)
+            render_release_genesis_v1(&genesis)
                 .expect_err("reject whitespace-drifted genesis template")
                 .to_string()
                 .contains("differs byte-for-byte")
@@ -1898,10 +1824,8 @@ mod tests {
     #[test]
     fn decoded_privacy_bootstrap_in_genesis_template_is_rejected() {
         let activations = activation_fixture_v1();
-        let (_, encoded, boxes) =
+        let (_, _, boxes) =
             activation_material_v1(&activations.report_json).expect("activation material");
-        let broker = parse_broker_public_export_v1(&broker_export_fixture_v1())
-            .expect("parse broker fixture");
         let mut genesis: JsonValue =
             norito::json::from_slice(GENESIS_TEMPLATE_V1).expect("parse genesis template");
         let mut one = String::new();
@@ -1923,7 +1847,7 @@ mod tests {
             .push(injected);
         let tampered = json_pretty_bytes_v1(&genesis, "tampered genesis").expect("render tamper");
         assert!(
-            render_release_genesis_v1(&tampered, &encoded, &boxes, &broker)
+            render_release_genesis_v1(&tampered)
                 .expect_err("reject pre-existing decoded privacy instruction")
                 .to_string()
                 .contains("already contains a privacy bootstrap instruction")
@@ -1932,12 +1856,6 @@ mod tests {
 
     #[test]
     fn wrong_and_scoped_governance_grants_are_rejected_before_composition() {
-        let activations = activation_fixture_v1();
-        let (_, encoded, boxes) =
-            activation_material_v1(&activations.report_json).expect("activation material");
-        let broker = parse_broker_public_export_v1(&broker_export_fixture_v1())
-            .expect("parse broker fixture");
-
         for scoped in [false, true] {
             let mut genesis: JsonValue =
                 norito::json::from_slice(GENESIS_TEMPLATE_V1).expect("parse genesis template");
@@ -1993,8 +1911,8 @@ mod tests {
             }
             let tampered =
                 json_pretty_bytes_v1(&genesis, "tampered genesis").expect("render tamper");
-            let error = render_release_genesis_v1(&tampered, &encoded, &boxes, &broker)
-                .expect_err("reject invalid governance grant");
+            let error =
+                render_release_genesis_v1(&tampered).expect_err("reject invalid governance grant");
             assert!(
                 error.to_string().contains("wrong authority")
                     || error.to_string().contains("must be unscoped")

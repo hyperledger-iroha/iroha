@@ -3,14 +3,15 @@ package org.hyperledger.iroha.sdk.crypto
 import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.instructions.RegisterZkAssetInstruction
 
 /** Thin JVM/JNI wrapper around `connect_norito_bridge` signing helpers. */
 class NativeSignerBridge private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 21
-        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 3
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 22
+        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 5
         private const val HASH_BYTES = 32
         private val nativeAvailable: Boolean = loadLibrary()
 
@@ -75,7 +76,7 @@ class NativeSignerBridge private constructor() {
         @JvmStatic
         fun encodeRegisterZkAssetSignedTransaction(
             algorithm: SigningAlgorithm,
-            chainId: String?,
+            networkId: NetworkId,
             chainDiscriminant: Int,
             authority: String?,
             creationTimeMs: Long,
@@ -89,7 +90,7 @@ class NativeSignerBridge private constructor() {
             val selected = requireNotNull(instruction) { "instruction must be provided" }
             val key = requirePrivateKey(privateKey)
             val feePaymentJson = feePaymentJson(feePayment)
-            val chainBytes = textBytes(chainId, "chainId")
+            val networkIdBytes = networkId.bytes()
             val authorityBytes = textBytes(authority, "authority")
             val assetBytes = textBytes(selected.asset, "asset")
             val unshieldBytes = optionalTextBytes(selected.unshieldVerifyingKey)
@@ -100,16 +101,13 @@ class NativeSignerBridge private constructor() {
             return requireNativeSignedOutput(
                 nativeEncodeRegisterZkAssetSignedTransaction(
                     algorithm.bridgeCode,
-                    chainBytes,
+                    networkIdBytes,
                     validatedChainDiscriminant,
                     authorityBytes,
                     creationTimeMs,
                     ttl,
                     hasTtl,
                     assetBytes,
-                    selected.mode.bridgeCode,
-                    selected.allowShield,
-                    selected.allowUnshield,
                     unshieldBytes,
                     selected.unshieldVerifyingKey != null,
                     shieldBytes,
@@ -216,16 +214,13 @@ class NativeSignerBridge private constructor() {
         @JvmStatic
         private external fun nativeEncodeRegisterZkAssetSignedTransaction(
             algorithmCode: Int,
-            chainId: ByteArray,
+            networkId: ByteArray,
             chainDiscriminant: Int,
             authority: ByteArray,
             creationTimeMs: Long,
             ttlMs: Long,
             ttlPresent: Boolean,
             asset: ByteArray,
-            modeCode: Int,
-            allowShield: Boolean,
-            allowUnshield: Boolean,
             unshieldVerifyingKey: ByteArray,
             unshieldVerifyingKeyPresent: Boolean,
             shieldVerifyingKey: ByteArray,

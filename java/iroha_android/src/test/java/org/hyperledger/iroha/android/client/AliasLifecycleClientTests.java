@@ -37,6 +37,7 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 import org.junit.Test;
 
 /** HTTP parity tests for safe alias lifecycle, typed reads, and sponsored onboarding. */
@@ -72,7 +73,7 @@ public final class AliasLifecycleClientTests {
         new AliasLifecycleTransactionPlanBodyV1(
             1,
             authority,
-            "test-chain",
+            TestNetworkIds.canonical(),
             new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
             new AliasLifecycleOperationV1.RenewLease(renewal),
             AliasLifecyclePlanDispositionV1.APPLY,
@@ -215,7 +216,7 @@ public final class AliasLifecycleClientTests {
             1,
             intent,
             authority,
-            "test-chain",
+            TestNetworkIds.canonical(),
             new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
             new AliasSetupModels.AliasPlanResourceV1(
                 resourceIntent, AliasSetupModels.AliasPlanDispositionV1.CREATE, null, 0L),
@@ -232,7 +233,8 @@ public final class AliasLifecycleClientTests {
         new CapturingExecutor(200, JsonEncoder.encode(receipt.toJsonMap()));
 
     transport(planExecutor)
-        .planSponsoredAccountOnboarding(intent, ONBOARDING_TOKEN, authority)
+        .planSponsoredAccountOnboarding(
+            intent, ONBOARDING_TOKEN, authority, TestNetworkIds.canonical())
         .join();
 
     assertTokenOnlyRequest(
@@ -248,7 +250,8 @@ public final class AliasLifecycleClientTests {
     final CapturingExecutor applyExecutor = new CapturingExecutor(200, applyResponse);
     final AccountOnboardingResponseV1 applied =
         transport(applyExecutor)
-            .applySponsoredAccountOnboarding(receipt, ONBOARDING_TOKEN, authority)
+            .applySponsoredAccountOnboarding(
+                receipt, ONBOARDING_TOKEN, authority, TestNetworkIds.canonical())
             .join();
     assertEquals(AccountOnboardingStatusV1.UNCHANGED, applied.status());
     assertTokenOnlyRequest(
@@ -288,7 +291,10 @@ public final class AliasLifecycleClientTests {
     final AccountOnboardingResponseV1 applied =
         transport(new CapturingExecutor(202, queuedBody))
             .applySponsoredAccountOnboarding(
-                fixture.receipt, ONBOARDING_TOKEN, fixture.authority)
+                fixture.receipt,
+                ONBOARDING_TOKEN,
+                fixture.authority,
+                fixture.receipt.body().networkId())
             .join();
     assertEquals(AccountOnboardingStatusV1.QUEUED, applied.status());
     assertEquals(hash, applied.transactionHashHex());
@@ -358,6 +364,7 @@ public final class AliasLifecycleClientTests {
         executor,
         ClientConfig.builder()
             .setBaseUri(URI.create("https://torii.example/api"))
+            .setLocalSigningContext(new LocalSigningContext(TestNetworkIds.canonical()))
             .build());
   }
 
@@ -415,7 +422,7 @@ public final class AliasLifecycleClientTests {
                 accountId,
                 Collections.emptyList()),
             authority,
-            "test-chain",
+            TestNetworkIds.canonical(),
             new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
             new AliasSetupModels.AliasPlanResourceV1(
                 intent,
@@ -467,7 +474,10 @@ public final class AliasLifecycleClientTests {
         () ->
             transport(new CapturingExecutor(status, body))
                 .applySponsoredAccountOnboarding(
-                    fixture.receipt, ONBOARDING_TOKEN, fixture.authority)
+                    fixture.receipt,
+                    ONBOARDING_TOKEN,
+                    fixture.authority,
+                    fixture.receipt.body().networkId())
                 .join());
   }
 

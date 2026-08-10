@@ -96,7 +96,9 @@ fn norito_rpc_verify_accepts_only_one_explicit_report_target() {
 #[test]
 fn norito_rpc_verify_help_describes_the_fixture_only_contract() {
     let help = NORITO_RPC_VERIFY_USAGE_DESCRIPTION.to_ascii_lowercase();
-    for required in ["fixture", "schema", "compact", "android", "python", "swift"] {
+    for required in [
+        "fixture", "alias", "schema", "compact", "android", "python", "swift",
+    ] {
         assert!(
             help.contains(required),
             "missing `{required}` from verifier help"
@@ -113,7 +115,14 @@ fn norito_rpc_verify_help_describes_the_fixture_only_contract() {
 #[test]
 fn norito_rpc_fixture_help_discloses_every_publication_surface() {
     let help = NORITO_RPC_FIXTURES_USAGE_DESCRIPTION.to_ascii_lowercase();
-    for required in ["canonical", "android", "python", "swift", "output root"] {
+    for required in [
+        "canonical",
+        "alias",
+        "android",
+        "python",
+        "swift",
+        "output root",
+    ] {
         assert!(
             help.contains(required),
             "missing `{required}` from fixture-owner help"

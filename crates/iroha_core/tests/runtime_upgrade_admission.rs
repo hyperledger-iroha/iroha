@@ -457,6 +457,7 @@ fn activation_allows_v1_in_same_block() {
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let chain: ChainId = "chain".parse().unwrap();
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
+    let network_id = *state.network_id_ref();
     install_current_lane_manifest_registry(&state);
 
     let prog_current = minimal_ivm_program(1);
@@ -505,7 +506,7 @@ fn activation_allows_v1_in_same_block() {
     stx2.apply();
 
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         account_id.clone(),
         fee_payment_with_gas_limit(TEST_GAS_LIMIT),
     )

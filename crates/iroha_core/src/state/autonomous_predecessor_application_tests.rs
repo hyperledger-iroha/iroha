@@ -57,16 +57,14 @@ fn autonomous_lane_predecessor_rejects_hash_only_absence_and_accepts_exact_wsv_f
         "an autonomous successor cannot treat missing economic evidence as application",
     );
 
-    let (key, payload) = State::encode_merge_lane_frontier_marker(
-        AppliedMergeLaneFrontierMarker {
-            version: 1,
-            lane_id,
-            dataspace_id,
-            lane_incarnation: incarnation,
-            lane_block_height: 1,
-            lane_block_descriptor_hash: previous_descriptor_hash,
-        },
-    )
+    let (key, payload) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker {
+        version: 1,
+        lane_id,
+        dataspace_id,
+        lane_incarnation: incarnation,
+        lane_block_height: 1,
+        lane_block_descriptor_hash: previous_descriptor_hash,
+    })
     .expect("encode exact autonomous predecessor frontier");
     let mut world = World::default();
     world.smart_contract_state.insert(key, payload);
@@ -97,16 +95,14 @@ fn autonomous_lane_predecessor_rejects_conflicting_or_malformed_wsv_frontier() {
     );
     let descriptor = &session.proposal.descriptor;
 
-    let (key, payload) = State::encode_merge_lane_frontier_marker(
-        AppliedMergeLaneFrontierMarker {
-            version: 1,
-            lane_id,
-            dataspace_id,
-            lane_incarnation: incarnation,
-            lane_block_height: 1,
-            lane_block_descriptor_hash: Hash::new(b"wrong-autonomous-predecessor"),
-        },
-    )
+    let (key, payload) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker {
+        version: 1,
+        lane_id,
+        dataspace_id,
+        lane_incarnation: incarnation,
+        lane_block_height: 1,
+        lane_block_descriptor_hash: Hash::new(b"wrong-autonomous-predecessor"),
+    })
     .expect("encode conflicting autonomous predecessor frontier");
     let mut conflicting_world = World::default();
     conflicting_world
@@ -166,7 +162,7 @@ fn ready_bearing_certificate_never_enters_ordinary_receipt_repair() {
         .expect("autonomous fixture carries one merge execution");
     let autonomous = Kura::decode_autonomous_lane_merge_bundle(
         &execution.source_bundle,
-        execution.autonomous_chain_id_hash,
+        execution.autonomous_network_id,
         execution.autonomous_epoch,
     )
     .expect("decode autonomous fixture bundle")

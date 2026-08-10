@@ -13,7 +13,7 @@ use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     isi::sorafs::{
         ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-        RegisterPinManifest, RegisterProviderOwner, SetProviderIngestCompletionAuthority,
+        RegisterPinManifest, SetProviderIngestCompletionAuthority,
     },
     prelude::*,
     sorafs::{
@@ -28,9 +28,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::sorafs::{
-    CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
-    CanIssueSorafsReplicationOrder, CanRegisterSorafsPin, CanRegisterSorafsProviderOwner,
-    CanRetireSorafsPin,
+    CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder,
 };
 use mv::storage::StorageReadOnly;
 use norito::{json, json::Value, to_bytes};
@@ -80,6 +78,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         order_payload,
         issued_epoch: 20,
         deadline_epoch: 28,
+        musubi_archive: None,
     }
     .execute(&alice(), &mut tx)?;
 
@@ -141,13 +140,9 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     {
         let world = &mut tx.world;
         for perm in [
-            Permission::from(CanRegisterSorafsPin),
-            Permission::from(CanApproveSorafsPin),
-            Permission::from(CanRetireSorafsPin),
             Permission::from(CanBindSorafsAlias),
             Permission::from(CanIssueSorafsReplicationOrder),
             Permission::from(CanCompleteSorafsReplicationOrder),
-            Permission::from(CanRegisterSorafsProviderOwner),
         ] {
             world.add_account_permission(&alice, perm);
         }
@@ -165,12 +160,6 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
         ProviderId::new([0x72; 32]),
         ProviderId::new([0x73; 32]),
     ] {
-        RegisterProviderOwner {
-            provider_id,
-            owner: alice.clone(),
-        }
-        .execute(&alice, tx)
-        .expect("register provider owner");
         let expected_current = tx
             .world()
             .provider_ingest_completion_authorities()
@@ -201,7 +190,6 @@ fn register_and_approve(
     );
     RegisterPinManifest {
         manifest_payload: manifest.encode().expect("encode registration fixture"),
-        submitted_epoch: 5,
         alias: None,
         successor_of: None,
     }
@@ -227,7 +215,6 @@ fn register_and_approve(
 
     ApprovePinManifest {
         digest,
-        approved_epoch: 5,
         council_envelope: Some(envelope),
         council_envelope_digest: None,
     }
@@ -514,7 +501,25 @@ fn make_state() -> State {
         [alice_account, bob_account],
         std::iter::empty::<AssetDefinition>(),
     );
-    State::new_for_testing(world, kura, live)
+    let mut state = State::new_for_testing(world, kura, live);
+    let mut governance = state.gov.clone();
+    governance.sorafs_provider_owners.extend(
+        [
+            ProviderId::new([0x51; 32]),
+            ProviderId::new([0x52; 32]),
+            ProviderId::new([0x53; 32]),
+            ProviderId::new([0x61; 32]),
+            ProviderId::new([0x62; 32]),
+            ProviderId::new([0x63; 32]),
+            ProviderId::new([0x71; 32]),
+            ProviderId::new([0x72; 32]),
+            ProviderId::new([0x73; 32]),
+        ]
+        .into_iter()
+        .map(|provider_id| (provider_id, alice.clone())),
+    );
+    state.set_gov(governance);
+    state
 }
 
 fn completion_anchor_header() -> iroha_data_model::block::BlockHeader {

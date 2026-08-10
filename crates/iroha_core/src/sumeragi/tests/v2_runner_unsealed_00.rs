@@ -278,7 +278,7 @@ fn context() -> (wire::HeightContext, Vec<KeyPair>) {
         .collect::<Vec<_>>();
     (
         wire::HeightContext {
-            chain_id: ChainId::from("v2-runner-test"),
+            network_id: crate::sumeragi::synthetic_network_id("v2-runner-test"),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -1092,7 +1092,7 @@ fn leader_wire_runtime_ingress_fixture() -> (
         None,
     );
     ingress
-        .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
+        .configure_roster_for_context(roster.clone(), &context.network_id, context.da_layout)
         .expect("configure runner leader-wire ingress");
     ingress.require_leader_wire_lifecycle_gate();
     let capacity = LeaderWireLifecycleStoreGate::derived_capacity(

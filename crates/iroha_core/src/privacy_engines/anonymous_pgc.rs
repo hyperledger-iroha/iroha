@@ -1356,7 +1356,7 @@ mod tests {
     fn binding() -> TranscriptBindingV1<'static> {
         let parameters = AnonymousPgcParametersV1::get().expect("parameters");
         TranscriptBindingV1 {
-            chain_id: b"taira-test",
+            network_id: &[0x31; 32],
             genesis_hash: [0x31; 32],
             action_index: 2,
             statement_digest: [0x32; 32],
@@ -1781,7 +1781,8 @@ mod tests {
         let (_, _, _, statement, proof) = fixture();
         let mut mutations = Vec::new();
         let mut changed = statement.transcript_binding;
-        changed.chain_id = b"other";
+        changed.network_id = &[0x32; 32];
+        changed.genesis_hash = [0x32; 32];
         mutations.push(changed);
         let mut changed = statement.transcript_binding;
         changed.genesis_hash[0] ^= 1;

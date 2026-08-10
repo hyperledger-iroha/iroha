@@ -1,7 +1,9 @@
 import type { Buffer } from "buffer";
+import type { NetworkId } from "./index.js";
 
 export interface NexusAppConfig {
-  chainId?: string;
+  /** Exact genesis-derived domain for transactions and Connect sessions. */
+  networkId?: NetworkId;
   baseUrl?: string;
   toriiBaseUrl?: string;
   connectBaseUrl?: string;
@@ -23,7 +25,7 @@ export interface NexusAppConfig {
 
 export interface NexusConnectOptions {
   sid?: string;
-  chainId?: string;
+  networkId?: NetworkId;
   node?: string | null;
   appKeyPair?: unknown;
   nonce?: Buffer | Uint8Array | ArrayBuffer | string;
@@ -81,7 +83,10 @@ export type NexusFeePayment =
     };
 
 export interface NexusTransferInput {
-  chainId?: string;
+  networkId?: NetworkId;
+  chain?: never;
+  chainId?: never;
+  chain_id?: never;
   authority?: string;
   accountId?: string;
   sourceAccountId?: string;
@@ -101,6 +106,8 @@ export interface NexusTransferInput {
 }
 
 export interface NexusSignableTransaction {
+  /** Application-pinned exact NetworkId expected in payloadBytes. */
+  networkId: NetworkId;
   payloadBytes: Buffer;
   payloadHashHex: string;
   authority: string;

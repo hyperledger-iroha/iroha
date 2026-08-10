@@ -94,7 +94,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
             XCTAssertEqual(concreteFrame.header.flags, UInt8(try fixtureUInt64(fixtureCase, "header_flags")))
             XCTAssertEqual(concreteFrame.payload, barePayload, identifier)
             XCTAssertEqual(
-                transactionFrame.compactInstructionBoxPayload().hexEncodedString(),
+                try transactionFrame.compactInstructionBoxPayload().hexEncodedString(),
                 fixtureCase["instruction_box_pair_hex"] as? String,
                 identifier
             )
@@ -114,7 +114,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         }
     }
 
-    func testTypedInstructionsEmbedExactFixturePairsInSignedBatch() throws {
+    func testTypedInstructionsEmbedExactFixturePairsInCanonicalNetworkSignedBatch() throws {
         let fixture = try loadFixture()
         let cases = try XCTUnwrap(fixture["cases"] as? [[String: Any]])
         XCTAssertEqual(cases.count, 19)
@@ -122,14 +122,14 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         let frames = try instructions.map { try $0.transactionInstructionFrame() }
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x42, count: 32))
         let authority = AccountId.make(publicKey: try signingKey.publicKey())
-        let chainID = "00000021"
+        let networkId = TestNetworkIds.canonical
         let sdk = IrohaSDK(
             baseURL: URL(string: "https://torii.example")!,
             creationTimeProvider: { 1_700_000_000_000 }
         )
 
         let envelope = try sdk.buildSignedExecutableBatch(
-            chainId: chainID,
+            networkId: networkId,
             authority: authority,
             entries: frames.map { TransactionBatchEntry.instruction($0) },
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
@@ -153,10 +153,6 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         let payload = try signedReader.readCompactField()
         XCTAssertEqual(try signedReader.readCompactField(), Data([0]))
         XCTAssertEqual(signedReader.remaining(), 0)
-        XCTAssertEqual(
-            payload.prefix(11).hexEncodedString(),
-            "0a09083030303030303231"
-        )
         var payloadReader = CanonicalNoritoReader(data: payload)
         var payloadFields: [Data] = []
         for _ in 0..<9 {
@@ -164,12 +160,10 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         }
         XCTAssertEqual(payloadReader.remaining(), 0)
 
-        var chainIDReader = CanonicalNoritoReader(data: payloadFields[0])
-        XCTAssertEqual(
-            try chainIDReader.readCompactField(),
-            CompactNorito.encodeString(chainID)
-        )
-        XCTAssertEqual(chainIDReader.remaining(), 0)
+        var domainReader = CanonicalNoritoReader(data: payloadFields[0])
+        XCTAssertEqual(try domainReader.readUInt32LE(), 0)
+        XCTAssertEqual(try domainReader.readCompactField(), networkId.bytes)
+        XCTAssertEqual(domainReader.remaining(), 0)
 
         var executableReader = CanonicalNoritoReader(data: payloadFields[3])
         XCTAssertEqual(try executableReader.readUInt32LE(), 4)
@@ -1096,7 +1090,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         try requireKeys(
             binding,
             [
-                "chain_id", "genesis_block_hash", "provider_id", "completed_by",
+                "network_id", "provider_id", "completed_by",
                 "completion_authority", "replication_order", "assignment_revision",
                 "completion_epoch", "finalized_anchor", "archive_id", "bundle_digest",
                 "descriptor_digest", "semantic_release_manifest_digest",
@@ -1128,8 +1122,9 @@ final class MusubiInstructionsV1Tests: XCTestCase {
         let anchor = try fixtureObject(binding["finalized_anchor"])
         try requireKeys(anchor, ["height", "block_hash"])
         return try MusubiProviderBundleVerificationBindingV1(
-            chainID: XCTUnwrap(binding["chain_id"] as? String),
-            genesisBlockHash: fixedBytes32(binding["genesis_block_hash"]),
+            networkId: NetworkId(
+                literal: try XCTUnwrap(binding["network_id"] as? String)
+            ),
             providerID: digestFromNewtypeHex(binding["provider_id"]),
             completedBy: XCTUnwrap(binding["completed_by"] as? String),
             completionAuthority: completionAuthority,

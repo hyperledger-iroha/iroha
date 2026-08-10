@@ -25,9 +25,8 @@
 //!
 //! 1. Production opens [`V2BodyStore`] first, validates its recovery catalog
 //!    against the durable ingress gate, constructs the adapter/runtime, then
-//!    calls [`V2EffectExecutor::open_with_body_store`]. Crate tests may use the
-//!    test-only combined `V2EffectExecutor::open` wrapper. At
-//!    height one, retain the already-authenticated staged genesis with
+//!    calls [`V2EffectExecutor::open_with_body_store`]. At height one, retain
+//!    the already-authenticated staged genesis with
 //!    [`V2EffectExecutor::install_authenticated_genesis_body`] before
 //!    dispatching startup effects. Move the returned [`V2BodyStore`] to the
 //!    storage/validation service thread. If
@@ -76,23 +75,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(test)]
-use std::path::Path;
-
 use super::v2_core::{
     CanonicalIdentityProjection, CheckedProductionTransition, EFFECTIVE_LOCK_TRACE_OWNER,
-    EFFECTIVE_LOCK_TRACE_RETIRE, EffectiveLockTraceProjection, EquivocationKind, EventTag,
-    ExactBodyOwnerProjection, ExactBodyRetirementAccounting, IDENTITY_DOMAIN_CONTEXT,
-    IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT,
-    IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD,
-    IDENTITY_KIND_CERTIFIED_BODY_REQUEST, IDENTITY_KIND_CONSENSUS_MESSAGE,
-    IDENTITY_KIND_DURABLE_BODY_FRAME, IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
-    IDENTITY_KIND_EXECUTION_COMMITMENT, IDENTITY_KIND_PAYLOAD_MANIFEST,
-    IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
-    IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP, ProductionDecisionIdentityProjection,
-    ProductionDecisionRecoveryTraceProjection, ProductionDurableBodyIdentityProjection,
-    ProductionHistoricalBodyPipelineTraceProjection, ProductionQuorumCertificateIdentityProjection,
-    SERVICE_CLASS_PROGRESS, TagProjection,
+    EFFECTIVE_LOCK_TRACE_RETIRE, EffectiveLockTraceProjection, EventTag, ExactBodyOwnerProjection,
+    ExactBodyRetirementAccounting, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
+    IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER,
+    IDENTITY_KIND_CANONICAL_PAYLOAD, IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+    IDENTITY_KIND_CONSENSUS_MESSAGE, IDENTITY_KIND_DURABLE_BODY_FRAME,
+    IDENTITY_KIND_EXECUTED_BLOCK_WIRE, IDENTITY_KIND_EXECUTION_COMMITMENT,
+    IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_QUORUM_CERTIFICATE,
+    IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP,
+    ProductionDecisionIdentityProjection, ProductionDecisionRecoveryTraceProjection,
+    ProductionDurableBodyIdentityProjection, ProductionHistoricalBodyPipelineTraceProjection,
+    ProductionQuorumCertificateIdentityProjection, SERVICE_CLASS_PROGRESS, TagProjection,
     check_production_body_capacity_retirement_effective_lock_transition,
     check_production_body_ownership_effective_lock_transition,
     check_production_decision_recovery_transition, check_production_effect_to_candidate_transition,
@@ -1540,12 +1535,10 @@ pub(crate) trait V2EffectServices {
         tag: EventTag,
         certificate: wire::TimeoutCertificate,
     ) -> Result<(), Self::Error>;
-    /// Persist or publish equivocation evidence.
+    /// Validate and persist complete authenticated equivocation evidence.
     fn report_equivocation(
         &mut self,
-        offender: PeerId,
-        round: wire::ConsensusRound,
-        kind: EquivocationKind,
+        evidence: wire::SumeragiV2Equivocation,
     ) -> Result<(), Self::Error>;
     /// Persist or publish certified-invalid-body evidence.
     fn report_invalid_certified_body(
@@ -2709,6 +2702,8 @@ enum RestartEffectSource {
     DurableBody,
     /// Durable Decision plus the exact fsynced validation marker.
     DurableDecision,
+    /// Complete authenticated artifacts persisted under a canonical WSV key.
+    DurableAccountabilityEvidence,
     /// Recovered view owns fresh process-local cleanup; old services no longer exist.
     RecoveredView,
     /// Non-progress diagnostic; losing it in a process crash cannot orphan work.
@@ -3576,41 +3571,6 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
 }
 
 impl V2EffectExecutor<SerializedV2Runtime> {
-    /// Open the exact-body store under an explicit signature-authority policy
-    /// and take ownership of the serialized runtime.
-    #[cfg(test)]
-    pub(crate) fn open(
-        runtime: SerializedV2Runtime,
-        body_store_root: impl AsRef<Path>,
-        context: wire::HeightContext,
-        requester: PeerId,
-        local_validator: Option<wire::ValidatorIndex>,
-        signature_policy: BlockSignaturePolicy,
-        output_guard: Arc<ConsensusOutputGuard>,
-        config: EffectQueueConfig,
-    ) -> Result<(Self, V2BodyStore), EffectExecutorError> {
-        let inner_output_guard = Arc::clone(&output_guard);
-        let construction = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-            EffectExecutorError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
-            )
-        })?;
-        let body_store =
-            V2BodyStore::open_with_policy(body_store_root, context.clone(), signature_policy)
-                .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
-        let opened = Self::open_with_body_store(
-            runtime,
-            body_store,
-            context,
-            requester,
-            local_validator,
-            inner_output_guard,
-            config,
-        )?;
-        construction.complete();
-        Ok(opened)
-    }
-
     /// Take ownership of an exact-body store opened during sealed preflight.
     ///
     /// Production uses this entry point after independently inspecting the
@@ -6045,10 +6005,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             AdapterEffect::ValidateBody { .. } => RestartEffectSource::DurableBody,
             AdapterEffect::Apply { .. } => RestartEffectSource::DurableDecision,
             AdapterEffect::EnterView { .. } => RestartEffectSource::RecoveredView,
-            AdapterEffect::ReportEquivocation { .. }
-            | AdapterEffect::ReportInvalidCertifiedBody { .. } => {
-                RestartEffectSource::DiagnosticOnly
+            AdapterEffect::ReportEquivocation { .. } => {
+                RestartEffectSource::DurableAccountabilityEvidence
             }
+            AdapterEffect::ReportInvalidCertifiedBody { .. } => RestartEffectSource::DiagnosticOnly,
         }
     }
 
@@ -8349,18 +8309,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                             "ReportEquivocation carried invalid evidence: {reason}"
                         ))
                     })?;
-                let offender = self
-                    .context
-                    .roster
-                    .get(usize::try_from(evidence.offender_index()).unwrap_or(usize::MAX))
-                    .map(|entry| entry.validator.clone())
-                    .ok_or_else(|| {
-                        EffectExecutorError::Contract(
-                            "ReportEquivocation offender is outside the frozen roster".to_owned(),
-                        )
-                    })?;
                 services
-                    .report_equivocation(offender, evidence.round(), evidence.kind())
+                    .report_equivocation(evidence.to_wire())
                     .map_err(service_error)
             }
             AdapterEffect::ReportInvalidCertifiedBody {
@@ -13451,7 +13401,7 @@ mod tests {
         )>,
         apply_tasks: Vec<ApplyTask>,
         entered_views: Vec<EventTag>,
-        equivocations: Vec<(PeerId, wire::ConsensusRound, EquivocationKind)>,
+        equivocations: Vec<wire::SumeragiV2Equivocation>,
         invalid_bodies: Vec<wire::BlockSubject>,
         rejected_validations: Vec<String>,
         statuses: Vec<EffectExecutorStatus>,
@@ -13758,13 +13708,11 @@ mod tests {
 
         fn report_equivocation(
             &mut self,
-            offender: PeerId,
-            round: wire::ConsensusRound,
-            kind: EquivocationKind,
+            evidence: wire::SumeragiV2Equivocation,
         ) -> Result<(), Self::Error> {
             self.check("equivocation")?;
             self.effect_service_order.push("equivocation");
-            self.equivocations.push((offender, round, kind));
+            self.equivocations.push(evidence);
             Ok(())
         }
 
@@ -13829,7 +13777,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let context = wire::HeightContext {
-                chain_id: "v2-effect-executor-test".into(),
+                network_id: crate::sumeragi::synthetic_network_id("v2-effect-executor-test"),
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
@@ -13844,11 +13792,11 @@ mod tests {
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 262_144,
+                    chunk_size_bytes: wire::MAX_DA_CHUNK_SIZE_BYTES,
                     data_shards: 1,
                     parity_shards: 1,
-                    max_payload_size_bytes: 1_048_576,
-                    max_chunk_count: 8,
+                    max_payload_size_bytes: u64::from(wire::MAX_DA_CHUNK_SIZE_BYTES),
+                    max_chunk_count: 2,
                 },
                 leader_seed: [0x33; 32],
             };
@@ -13974,7 +13922,9 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let context = wire::HeightContext {
-                chain_id: "v2-production-transport-regression".into(),
+                network_id: crate::sumeragi::synthetic_network_id(
+                    "v2-production-transport-regression",
+                ),
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
@@ -13989,11 +13939,11 @@ mod tests {
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
                     encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 262_144,
+                    chunk_size_bytes: wire::MAX_DA_CHUNK_SIZE_BYTES,
                     data_shards: 1,
                     parity_shards: 1,
-                    max_payload_size_bytes: 1_048_576,
-                    max_chunk_count: 8,
+                    max_payload_size_bytes: u64::from(wire::MAX_DA_CHUNK_SIZE_BYTES),
+                    max_chunk_count: 2,
                 },
                 leader_seed: [0x62; 32],
             };
@@ -14348,7 +14298,7 @@ mod tests {
             wire::ConsensusMessageV2Payload::CommitCertificateRequest(
                 wire::CommitCertificateRequest {
                     protocol_version: wire::PROTOCOL_VERSION,
-                    chain_id: fixture.context.chain_id.clone(),
+                    network_id: fixture.context.network_id.clone(),
                     context_id: fixture.context.id(),
                     height: fixture.context.height,
                     requester: PeerId::new(fixture.requester_key.public_key().clone()),
@@ -14649,7 +14599,7 @@ mod tests {
         ingress
             .configure_roster_for_context(
                 roster.clone(),
-                &fixture.context.chain_id,
+                &fixture.context.network_id,
                 fixture.context.da_layout,
             )
             .expect("configure response leader-wire ingress");
@@ -14788,7 +14738,7 @@ mod tests {
                 9,
                 round.height,
                 parent_hash,
-                Hash::new(b"chain id"),
+                fixture.context.network_id,
                 1,
                 HashOf::new(&Vec::<PeerId>::new()),
                 Vec::new(),
@@ -18185,7 +18135,7 @@ mod tests {
                     evidence: vote_equivocation_evidence(&fixture, 1),
                 },
                 None,
-                RestartEffectSource::DiagnosticOnly,
+                RestartEffectSource::DurableAccountabilityEvidence,
             ),
             (
                 AdapterEffect::ReportInvalidCertifiedBody {
@@ -22139,14 +22089,7 @@ mod tests {
             .expect("consume immediate effects");
         assert_eq!(services.broadcasts, vec![message]);
         assert_eq!(services.entered_views, vec![tag(1)]);
-        assert_eq!(
-            services.equivocations,
-            vec![(
-                fixture.context.roster[1].validator.clone(),
-                fixture.manifest.round,
-                EquivocationKind::Vote,
-            )]
-        );
+        assert_eq!(services.equivocations.len(), 1);
         assert_eq!(services.invalid_bodies, vec![fixture.manifest.subject]);
     }
 
@@ -25240,7 +25183,8 @@ mod tests {
         complete_local_proposal_chain(&mut executor, &mut services);
 
         let mut foreign_context = fixture.context.clone();
-        foreign_context.chain_id = "foreign-v2-effect-executor-test".into();
+        foreign_context.network_id =
+            crate::sumeragi::synthetic_network_id("foreign-v2-effect-executor-test");
         let mut foreign_commit = fixture.qc(wire::GlobalPhase::Commit);
         foreign_commit.round.context_id = foreign_context.id();
         foreign_commit.proposal_round.context_id = foreign_context.id();
@@ -27482,7 +27426,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: "serialized-body-rebind-test".into(),
+            network_id: crate::sumeragi::synthetic_network_id("serialized-body-rebind-test"),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -27497,11 +27441,11 @@ mod tests {
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 262_144,
+                chunk_size_bytes: wire::MAX_DA_CHUNK_SIZE_BYTES,
                 data_shards: 1,
                 parity_shards: 1,
-                max_payload_size_bytes: 1_048_576,
-                max_chunk_count: 8,
+                max_payload_size_bytes: u64::from(wire::MAX_DA_CHUNK_SIZE_BYTES),
+                max_chunk_count: 2,
             },
             leader_seed: [0x44; 32],
         };

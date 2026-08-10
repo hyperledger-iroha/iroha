@@ -21,9 +21,9 @@ use iroha_core::{
     state::{State, StateReadOnly, World, WorldReadOnly},
     tx::{AcceptedTransaction, TransactionBuilder},
 };
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    Registrable,
+    NetworkId, Registrable,
     account::{AccountAddress, AccountId},
     alias_setup::{
         AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
@@ -128,13 +128,20 @@ fn install_universal_parent_lease(world: &mut World, authority: &AccountId) {
 }
 
 fn build_onboarding_test_context() -> OnboardingTestContext {
+    build_onboarding_test_context_with(iroha_torii::test_utils::signed_query_network_id(), 0xD1)
+}
+
+fn build_onboarding_test_context_with(
+    network_id: NetworkId,
+    onboarding_signer_seed: u8,
+) -> OnboardingTestContext {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let authority_key_pair = checked_key_pair(
-        0xD1,
+        onboarding_signer_seed,
         Algorithm::Ed25519,
         "derive onboarding authority fixture",
     );
@@ -169,11 +176,12 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
     );
 
     let chain_id = iroha_data_model::ChainId::from("onboarding-test-chain");
-    let state = Arc::new(State::new_with_chain_for_testing(
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         world,
         kura.clone(),
         query,
         chain_id.clone(),
+        network_id,
     ));
     let nexus = state.nexus_snapshot();
     let lane_manifests = Arc::new(LaneManifestRegistry::from_config(
@@ -183,7 +191,7 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
     ));
     state.install_lane_manifests(&lane_manifests);
     let seed_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -259,6 +267,7 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
         {
             Torii::new(
                 chain_id.clone(),
+                network_id,
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),
@@ -276,6 +285,7 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
         {
             Torii::new(
                 chain_id.clone(),
+                network_id,
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),
@@ -295,6 +305,10 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
         queue,
         chain_id,
     }
+}
+
+fn distinct_onboarding_network_id(seed: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new([seed])))
 }
 
 fn onboarding_plan_request(alias: &str, account_id: &AccountId) -> norito::json::Value {
@@ -396,6 +410,20 @@ fn plan_disposition_kind(receipt: &norito::json::Value) -> &str {
         .unwrap_or_else(|| panic!("plan is missing a typed disposition: {receipt:?}"))
 }
 
+fn mutate_onboarding_receipt_body(
+    receipt: &norito::json::Value,
+    mutate: impl FnOnce(&mut norito::json::Map),
+) -> norito::json::Value {
+    let mut mutated = receipt.clone();
+    let body = mutated
+        .as_object_mut()
+        .and_then(|receipt| receipt.get_mut("body"))
+        .and_then(norito::json::Value::as_object_mut)
+        .expect("onboarding plan body object");
+    mutate(body);
+    mutated
+}
+
 fn assert_secret_free(response: &JsonResponse) {
     for forbidden in [
         ONBOARDING_API_TOKEN,
@@ -429,7 +457,7 @@ fn remove_exact_alias_permission(
     });
     let permission = iroha_core::alias_setup::exact_alias_permission_bundle(&intent)[0].clone();
     let fixture_tx = TransactionBuilder::new(
-        context.chain_id.clone(),
+        *context.state.network_id_ref(),
         account_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -491,6 +519,134 @@ fn sponsored_onboarding_catalog_contains_only_plan_apply_and_readiness() {
             "removed onboarding route must not be cataloged: {removed}"
         );
     }
+}
+
+#[tokio::test]
+async fn sponsored_onboarding_receipt_binds_exact_network_and_active_signer() {
+    let local_network = distinct_onboarding_network_id(0xA1);
+    let foreign_network = distinct_onboarding_network_id(0xA2);
+    let origin = build_onboarding_test_context_with(local_network, 0xD1);
+    let foreign_genesis = build_onboarding_test_context_with(foreign_network, 0xD1);
+    let rotated_signer = build_onboarding_test_context_with(local_network, 0xE1);
+    assert_eq!(origin.chain_id, foreign_genesis.chain_id);
+    assert_eq!(origin.chain_id, rotated_signer.chain_id);
+
+    let target = AccountId::new(
+        checked_key_pair(
+            0xD3,
+            Algorithm::Ed25519,
+            "derive cross-network onboarding target fixture",
+        )
+        .public_key()
+        .clone(),
+    );
+    let plan = send_onboarding_request(
+        &origin.app,
+        "/v1/accounts/onboard/plan",
+        &onboarding_plan_request("networkbound@universal", &target),
+    )
+    .await;
+    assert_eq!(plan.status, StatusCode::OK, "{}", plan.raw_body);
+    let local_network_literal = local_network.to_string();
+    let body = plan
+        .payload
+        .as_object()
+        .and_then(|receipt| receipt.get("body"))
+        .and_then(norito::json::Value::as_object)
+        .expect("onboarding plan body");
+    assert_eq!(
+        body.get("network_id").and_then(norito::json::Value::as_str),
+        Some(local_network_literal.as_str())
+    );
+    for retired in ["chain", "chainId", "chain_id"] {
+        assert!(!body.contains_key(retired));
+    }
+
+    let apply = onboarding_apply_request(plan.payload.clone());
+    for (context, replay) in [
+        (&foreign_genesis, "same-label foreign-genesis"),
+        (&rotated_signer, "retired onboarding signer"),
+    ] {
+        let response = send_onboarding_request(&context.app, "/v1/accounts/onboard", &apply).await;
+        assert_eq!(
+            response.status,
+            StatusCode::CONFLICT,
+            "{replay} replay escaped: {}",
+            response.raw_body
+        );
+        assert_eq!(
+            response_field(&response.payload, "code"),
+            "alias.onboarding.receipt_context_mismatch"
+        );
+        assert_eq!(context.queue.active_len(), 0);
+    }
+}
+
+#[tokio::test]
+async fn sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys() {
+    let context = build_onboarding_test_context();
+    let target = AccountId::new(
+        checked_key_pair(
+            0xD7,
+            Algorithm::Ed25519,
+            "derive onboarding receipt schema target fixture",
+        )
+        .public_key()
+        .clone(),
+    );
+    let plan = send_onboarding_request(
+        &context.app,
+        "/v1/accounts/onboard/plan",
+        &onboarding_plan_request("schemabound@universal", &target),
+    )
+    .await;
+    assert_eq!(plan.status, StatusCode::OK, "{}", plan.raw_body);
+
+    let genesis = mutate_onboarding_receipt_body(&plan.payload, |body| {
+        body.insert(
+            "network_id".to_owned(),
+            norito::json::Value::String("genesis".to_owned()),
+        );
+    });
+    let response = send_onboarding_request(
+        &context.app,
+        "/v1/accounts/onboard",
+        &onboarding_apply_request(genesis),
+    )
+    .await;
+    assert_eq!(
+        response.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        response.raw_body
+    );
+
+    for retired in ["chain", "chainId", "chain_id"] {
+        for keep_network_id in [false, true] {
+            let mutated = mutate_onboarding_receipt_body(&plan.payload, |body| {
+                if !keep_network_id {
+                    body.remove("network_id");
+                }
+                body.insert(
+                    retired.to_owned(),
+                    norito::json::Value::String(context.chain_id.to_string()),
+                );
+            });
+            let response = send_onboarding_request(
+                &context.app,
+                "/v1/accounts/onboard",
+                &onboarding_apply_request(mutated),
+            )
+            .await;
+            assert_eq!(
+                response.status,
+                StatusCode::BAD_REQUEST,
+                "retired key {retired} (keep_network_id={keep_network_id}) escaped: {}",
+                response.raw_body
+            );
+        }
+    }
+    assert_eq!(context.queue.active_len(), 0);
 }
 
 #[tokio::test]

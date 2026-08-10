@@ -101,8 +101,6 @@ fn remove_committed_hashes_clears_expiry_tracking() {
 async fn custom_expired_transaction_is_rejected() {
     const TTL_MS: u64 = 200;
 
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
     let max_txs_in_block = nonzero!(2_usize);
     let (alice_id, alice_keypair) = gen_account_in("wonderland");
     let kura = Kura::blank_kura_for_testing();
@@ -122,7 +120,7 @@ async fn custom_expired_transaction_is_rejected() {
     // unrelated to queue TTL behavior.
     let instructions = [Log::new(iroha_logger::Level::INFO, "ttl".into())];
     let mut tx = TransactionBuilder::new_with_time_source(
-        chain_id.clone(),
+        state.network_id,
         alice_id,
         &time_source,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -135,7 +133,7 @@ async fn custom_expired_transaction_is_rejected() {
         let crypto_cfg = state.crypto();
         AcceptedTransaction::accept_with_time_source(
             tx,
-            &chain_id,
+            state.network_id_ref(),
             max_clock_drift,
             tx_limits,
             &crypto_cfg,

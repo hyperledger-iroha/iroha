@@ -88,8 +88,7 @@ public final class ZkAssetMerklePath {
     return heightOrIndex;
   }
 
-  public boolean verify(
-      final byte[] commitment, final byte[] expectedRoot, final ZkAssetMerkleHasher hasher) {
+  public boolean verify(final byte[] commitment, final byte[] expectedRoot) {
     if (commitment == null
         || commitment.length != 32
         || expectedRoot == null
@@ -97,13 +96,7 @@ public final class ZkAssetMerklePath {
         || !Arrays.equals(rootAtHeight, expectedRoot)) {
       return false;
     }
-    byte[] current = commitment.clone();
-    for (int i = 0; i < siblings.size(); i++) {
-      current =
-          directions[i] == 0
-              ? hasher.hashPair(current, siblings.get(i))
-              : hasher.hashPair(siblings.get(i), current);
-    }
-    return Arrays.equals(current, expectedRoot);
+    return PrivacyNativeBridge.verifyConfidentialMerklePathV3(
+        commitment, leafIndex, siblings, directions, expectedRoot);
   }
 }

@@ -10,6 +10,10 @@ import java.util.concurrent.CompletableFuture
  *
  * The interface is intentionally expressed in terms of `TransportRequest` and
  * `TransportResponse` to avoid leaking JVM-specific HTTP client types into Android binaries.
+ * Implementations must inspect [TransportRequest.replayPolicy]. A `ONE_SHOT` request permits one
+ * underlying network dispatch only: redirects, authentication follow-ups, connection retries, and
+ * application retries are forbidden even when no response was received. The original failure must
+ * be surfaced so the caller can reconcile by transaction hash or create a freshly signed request.
  */
 interface HttpTransportExecutor : TransportExecutor {
 

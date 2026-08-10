@@ -182,7 +182,7 @@
         "previous.dataspace_id == descriptor.dataspace_id",
         "previous.lane_incarnation == descriptor.lane_incarnation",
         "previous.descriptor_hash == previous_descriptor_hash",
-        "self.lane_block_application_receipt_matches_merge_log(&receipt)"
+        "self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)"
       ],
       "ordered_tokens": [
         "let previous_height = descriptor.previous_lane_block_height",
@@ -191,7 +191,7 @@
         "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
         "previous.lane_incarnation == descriptor.lane_incarnation",
         "previous.descriptor_hash == previous_descriptor_hash",
-        "self.lane_block_application_receipt_matches_merge_log(&receipt)"
+        "self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)"
       ]
     },
     {
@@ -207,13 +207,13 @@
         "descriptor.lane_block_height",
         "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
         "receipt.proposal == *proposal",
-        "self.lane_block_application_receipt_matches_merge_log(&receipt)"
+        "self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)"
       ],
       "ordered_tokens": [
         "self.read_lane_block_application_receipt_without_sidecar_repair",
         "receipt.format == LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
         "receipt.proposal == *proposal",
-        "self.lane_block_application_receipt_matches_merge_log(&receipt)"
+        "self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(&receipt)"
       ]
     },
     {
@@ -274,7 +274,7 @@
         "self.ensure_certified_bundle_capacity_reservation_under_prune_guard",
         "self.write_certified_lane_block_artifact_with_authority_under_prune_guard",
         "self.persist_autonomous_lane_merge_bundle_under_prune_guard(&source)?",
-        "descriptor.lane_block_height, *chain_id_hash, *epoch, None, true"
+        "descriptor.lane_block_height, *network_id, *epoch, None, true"
       ],
       "ordered_tokens": [
         "let _prune_guard = self.prune_lock.lock()",
@@ -283,7 +283,7 @@
         "self.ensure_certified_bundle_capacity_reservation_under_prune_guard",
         "self.write_certified_lane_block_artifact_with_authority_under_prune_guard",
         "self.persist_autonomous_lane_merge_bundle_under_prune_guard(&source)?",
-        "descriptor.lane_block_height, *chain_id_hash, *epoch, None, true",
+        "descriptor.lane_block_height, *network_id, *epoch, None, true",
         "if published != source"
       ]
     },
@@ -785,7 +785,8 @@
         "latest_height != identity.0",
         "execution_entries_for_bounded_identities(&historical_execution_identities)",
         "merge_carrier_for_entry_under_prune_and_canonical_guards",
-        "ensure_post_wsv_lane_artifact_budget_reservation_locked"
+        "authenticated_carriers.push((entry_hash, carrier))",
+        "ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked"
       ],
       "ordered_tokens": [
         "let mut incomplete_seen = 0_usize",
@@ -801,7 +802,11 @@
         "execution_entries_for_bounded_identities(&historical_execution_identities)",
         "for entry_hash in carrier_hashes",
         "merge_carrier_for_entry_under_prune_and_canonical_guards",
-        "ensure_post_wsv_lane_artifact_budget_reservation_locked"
+        "authenticated_carriers.push((entry_hash, carrier))",
+        "let _geometry_guard = self.lane_geometry_lock.lock()",
+        "let _sidecar_guard = self.sidecar_lock.lock()",
+        "for (entry_hash, carrier) in authenticated_carriers",
+        "ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked"
       ]
     },
     {

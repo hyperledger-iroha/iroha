@@ -53,8 +53,10 @@ ROUTE_BODY_DIGEST = "9" * 64
 GENERATED_AT = 1_800_300_000
 DEPLOYMENT_ID = "moderation-panel-prod-20260701"
 ENVIRONMENT = "production"
-TOPOLOGY_SIGNER_IDENTITY = "sorafs-moderation-topology-qualification-software"
+TOPOLOGY_SIGNER_SERVICE_ID = "sorafs-moderation-topology-signer-a"
+TOPOLOGY_SIGNER_ADMINISTRATOR_ID = "sorafs-moderation-topology-admin-b"
 TOPOLOGY_SIGNER_KEY_REVISION = 7
+TOPOLOGY_SIGNER_POLICY_REVISION = 9
 TOPOLOGY_SIGNER_POLICY_DIGEST = hashlib.sha256(
     b"sorafs-moderation-topology-signer-policy-v1"
 ).hexdigest()
@@ -100,13 +102,16 @@ def write_signed_topology_qualification(tmp_path: Path) -> Path:
     envelope = {
         "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
         **binding,
-        "signer_identity": TOPOLOGY_SIGNER_IDENTITY,
+        "signer_authentication_kind": "external-ed25519",
         "signer_backend": "software",
+        "signer_service_id": TOPOLOGY_SIGNER_SERVICE_ID,
+        "signer_administrator_id": TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
         "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,
-        "signer_key_fingerprint_hex": hashlib.sha256(
+        "signer_policy_revision": TOPOLOGY_SIGNER_POLICY_REVISION,
+        "signer_public_key_fingerprint_sha256": hashlib.sha256(
             TOPOLOGY_VERIFICATION_PUBLIC_KEY
         ).hexdigest(),
-        "signer_policy_digest_hex": TOPOLOGY_SIGNER_POLICY_DIGEST,
+        "signer_policy_digest_sha256": TOPOLOGY_SIGNER_POLICY_DIGEST,
         "reviewed_at_unix": GENERATED_AT - 60,
         "signature_algorithm": "ed25519",
         "signature_hex": "00" * 64,
@@ -125,8 +130,10 @@ def write_signed_topology_qualification(tmp_path: Path) -> Path:
             summary_path,
             envelope_path,
             trusted_public_key=TOPOLOGY_VERIFICATION_PUBLIC_KEY,
-            trusted_signer_identity=TOPOLOGY_SIGNER_IDENTITY,
+            trusted_signer_service_id=TOPOLOGY_SIGNER_SERVICE_ID,
+            trusted_signer_administrator_id=TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
             trusted_key_revision=TOPOLOGY_SIGNER_KEY_REVISION,
+            trusted_policy_revision=TOPOLOGY_SIGNER_POLICY_REVISION,
             trusted_policy_digest_hex=TOPOLOGY_SIGNER_POLICY_DIGEST,
             now_unix=GENERATED_AT,
             max_review_age_secs=TOPOLOGY_MAX_REVIEW_AGE_SECS,
@@ -135,7 +142,8 @@ def write_signed_topology_qualification(tmp_path: Path) -> Path:
         )
     )
     assert authentication_errors == []
-    assert authenticated == binding
+    assert authenticated is not None
+    assert all(authenticated[field] == value for field, value in binding.items())
     return summary_path
 
 

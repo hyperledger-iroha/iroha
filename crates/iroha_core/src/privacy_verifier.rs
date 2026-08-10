@@ -9,7 +9,7 @@
 #[cfg(feature = "zk-stark")]
 use iroha_data_model::zk::ZkAcePrivacyPublicInputsV1;
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     asset::{AssetBalanceScope, AssetDefinitionId},
     privacy::{
@@ -142,8 +142,8 @@ pub(crate) struct PrivacyVerificationContextV1<'a> {
     pub(crate) activation: &'a PrivacyProtocolActivationRecordV1,
     /// Singleton chain-wide limits effective for this incoming block.
     pub(crate) consensus_limits: &'a PrivacyConsensusLimitsV1,
-    /// Exact node-configured chain identity.
-    pub(crate) chain_id: &'a ChainId,
+    /// Exact genesis-header-derived network identity.
+    pub(crate) network_id: &'a NetworkId,
     /// Hash of the committed genesis block.
     pub(crate) genesis_hash: [u8; 32],
     /// Height of the block executing this proof.
@@ -634,14 +634,23 @@ fn verify_privacy_envelope_after_compiled_activation_v1(
             ),
         )));
     }
-
-    let statement_context = envelope.statement.context();
-    if statement_context.chain_id != *context.chain_id {
+    if context.network_id.as_bytes() != &context.genesis_hash {
         return Err(PrivacyVerificationErrorV1::Context(Box::new(
             PrivacyVerificationContextFailureV1::new(
-                PrivacyVerificationContextFailureCodeV1::ChainIdMismatch,
-                context.chain_id.as_str(),
-                statement_context.chain_id.as_str(),
+                PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch,
+                context.network_id.to_string(),
+                format!("{:02x?}", context.genesis_hash),
+            ),
+        )));
+    }
+
+    let statement_context = envelope.statement.context();
+    if statement_context.network_id != *context.network_id {
+        return Err(PrivacyVerificationErrorV1::Context(Box::new(
+            PrivacyVerificationContextFailureV1::new(
+                PrivacyVerificationContextFailureCodeV1::NetworkIdMismatch,
+                context.network_id.to_string(),
+                statement_context.network_id.to_string(),
             ),
         )));
     }
@@ -733,7 +742,7 @@ fn verify_privacy_envelope_after_compiled_activation_v1(
                     ))
                 })?;
             let transcript = TranscriptBindingV1 {
-                chain_id: context.chain_id.as_str().as_bytes(),
+                network_id: context.network_id.as_bytes(),
                 genesis_hash: context.genesis_hash,
                 action_index: context.expected_action_index,
                 statement_digest: *envelope.statement_digest.as_bytes(),
@@ -1267,8 +1276,7 @@ fn fcmp_runtime_context_hash_v1(
 ) -> Result<[u8; 32], PrivacyVerificationErrorV1> {
     Ok(derive_fcmp_runtime_context_hash_v1(
         &FcmpRuntimeContextBindingV1 {
-            chain_id: context.chain_id,
-            genesis_hash: context.genesis_hash,
+            network_id: context.network_id,
             action_index: context.expected_action_index,
             statement_digest: envelope.statement_digest,
             parameter_id: envelope.parameter_id,
@@ -1547,7 +1555,7 @@ fn verify_zk_ams_v1(
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
     let binding = TranscriptBindingV1 {
-        chain_id: context.chain_id.as_str().as_bytes(),
+        network_id: context.network_id.as_bytes(),
         genesis_hash: context.genesis_hash,
         action_index: context.expected_action_index,
         statement_digest: *envelope.statement_digest.as_bytes(),
@@ -1658,7 +1666,7 @@ fn verify_jindo_batched_evaluation_v1(
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
     let transcript = TranscriptBindingV1 {
-        chain_id: context.chain_id.as_str().as_bytes(),
+        network_id: context.network_id.as_bytes(),
         genesis_hash: context.genesis_hash,
         action_index: context.expected_action_index,
         statement_digest: *envelope.statement_digest.as_bytes(),
@@ -1776,7 +1784,7 @@ fn verify_anonymous_pgc_payment_v1(
         .collect::<Result<Vec<_>, _>>()
         .map_err(native_pgc_error)?;
     let transcript = TranscriptBindingV1 {
-        chain_id: context.chain_id.as_str().as_bytes(),
+        network_id: context.network_id.as_bytes(),
         genesis_hash: context.genesis_hash,
         action_index: context.expected_action_index,
         statement_digest: *envelope.statement_digest.as_bytes(),
@@ -1947,8 +1955,10 @@ pub(crate) enum PrivacyVerificationErrorV1 {
 pub(crate) enum PrivacyVerificationContextFailureCodeV1 {
     /// No committed genesis digest was available.
     ZeroGenesisHash,
-    /// Prover-selected and node-configured chains differ.
-    ChainIdMismatch,
+    /// Prover-selected and node-configured networks differ.
+    NetworkIdMismatch,
+    /// The typed network identity and explicit trusted genesis hash differ.
+    NetworkGenesisMismatch,
     /// Prover-selected and transaction-local action indexes differ.
     ActionIndexMismatch,
 }
@@ -2375,9 +2385,10 @@ pub(crate) use tests::{ZkAceRuntimeFixtureForTest, zk_ace_runtime_fixture_for_te
 mod tests {
     use std::{str::FromStr as _, sync::OnceLock};
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         asset::AssetDefinitionId,
+        block::BlockHeader,
         domain::DomainId,
         name::Name,
         privacy::{
@@ -2389,13 +2400,13 @@ mod tests {
             PrivacyFcmpPoolBootstrapV1, PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1,
             PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyJindoFieldElementV1,
             PrivacyNamespaceScopeV1, PrivacyNoteEncryptionKeyDigestV1, PrivacyOrchardActionV1,
-            PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
-            PrivacyParameterIdV1, PrivacyPgcAccountBootstrapDigestV1,
-            PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-            PrivacyPoolNamespaceV1, PrivacyPqMaspPoolBootstrapV1,
-            PrivacyProofManagedPoolBootstrapV1, PrivacyProofSystemIdV1, PrivacyProofV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1,
-            PrivacyRootPublicationV1, PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
+            PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+            PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcBootstrapProofDigestV1,
+            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+            PrivacyPqMaspPoolBootstrapV1, PrivacyProofManagedPoolBootstrapV1,
+            PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
+            PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1, PrivacyRootPublicationV1,
+            PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
             PrivacyStatementValidationError, PrivacyTransactionIntentDigestV1,
             PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
             PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaMdlDateV1,
@@ -2496,6 +2507,12 @@ mod tests {
     const TEST_CONSENSUS_LIMITS: PrivacyConsensusLimitsV1 =
         PrivacyConsensusLimitsV1::taira_default();
 
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
+
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
@@ -2581,7 +2598,7 @@ mod tests {
         let (profile, _) = active_zk_x509_profile();
         let fixture = build_zk_x509_release_fixture_v1(
             PrivacyStatementContextV1 {
-                chain_id: ChainId::from("taira-zk-x509-dispatch-test"),
+                network_id: network_id(0xA7),
                 action_index: 0,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x62; 32]),
                 parameter_id: profile.parameter_id,
@@ -2727,7 +2744,7 @@ mod tests {
         PrivacyVerificationContextV1 {
             activation,
             consensus_limits: &TEST_CONSENSUS_LIMITS,
-            chain_id: &statement.context.chain_id,
+            network_id: &statement.context.network_id,
             genesis_hash,
             current_height: 10,
             expected_action_index: statement.context.action_index,
@@ -2755,10 +2772,10 @@ mod tests {
     fn valid_envelope() -> (
         PrivacyProofEnvelopeV1,
         PrivacyProtocolActivationRecordV1,
-        ChainId,
+        NetworkId,
     ) {
         let (compiled, activation) = active_profile();
-        let chain_id = ChainId::from("taira-privacy-test");
+        let network_id = network_id(0xA7);
         let native_profile = VeRangeBitLengthV1::Bits32;
         let values = [7_u64, 19_u64];
         let blindings = [secret(3), secret(5)];
@@ -2774,7 +2791,7 @@ mod tests {
             .map(|point| PrivacyP256PointV1::new(*point.as_bytes()))
             .collect();
         let context = PrivacyStatementContextV1 {
-            chain_id: chain_id.clone(),
+            network_id: network_id.clone(),
             action_index: 0,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xD1; 32]),
             parameter_id: compiled.parameter_id,
@@ -2799,8 +2816,8 @@ mod tests {
         let parameters =
             VeRangeParametersV1::for_profile(native_profile).expect("VeRange parameters");
         let transcript = TranscriptBindingV1 {
-            chain_id: chain_id.as_str().as_bytes(),
-            genesis_hash: [0xA7; 32],
+            network_id: network_id.as_bytes(),
+            genesis_hash: *network_id.as_bytes(),
             action_index: 0,
             statement_digest: *statement_digest.as_bytes(),
             parameter_id: *compiled.parameter_id.as_bytes(),
@@ -2836,7 +2853,7 @@ mod tests {
                 proof: PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(proof)),
             },
             activation,
-            chain_id,
+            network_id,
         )
     }
 
@@ -2849,7 +2866,7 @@ mod tests {
     struct JindoFixture {
         envelope: PrivacyProofEnvelopeV1,
         activation: PrivacyProtocolActivationRecordV1,
-        chain_id: ChainId,
+        network_id: NetworkId,
     }
 
     impl JindoFixture {
@@ -2864,7 +2881,7 @@ mod tests {
                     state_since_height: 2,
                 },
             ));
-            let chain_id = ChainId::from("taira-privacy-jindo-test");
+            let network_id = network_id(0xA7);
             let polynomials = vec![
                 vec![
                     jindo_field(3),
@@ -2893,7 +2910,7 @@ mod tests {
                 .unzip();
             let statement = IrohaJindoPolynomialCommitmentStatementV1 {
                 context: PrivacyStatementContextV1 {
-                    chain_id: chain_id.clone(),
+                    network_id: network_id.clone(),
                     action_index: 0,
                     transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xd2; 32]),
                     parameter_id: compiled.parameter_id,
@@ -2910,7 +2927,7 @@ mod tests {
                 PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement.clone());
             let statement_digest = typed_statement.digest().expect("Jindo statement digest");
             let transcript = TranscriptBindingV1 {
-                chain_id: chain_id.as_str().as_bytes(),
+                network_id: network_id.as_bytes(),
                 genesis_hash: [0xa7; 32],
                 action_index: 0,
                 statement_digest: *statement_digest.as_bytes(),
@@ -2942,7 +2959,7 @@ mod tests {
                     ),
                 },
                 activation,
-                chain_id,
+                network_id,
             }
         }
 
@@ -2953,7 +2970,7 @@ mod tests {
             PrivacyVerificationContextV1 {
                 activation: &self.activation,
                 consensus_limits,
-                chain_id: &self.chain_id,
+                network_id: &self.network_id,
                 genesis_hash: [0xa7; 32],
                 current_height: 10,
                 expected_action_index: 0,
@@ -2976,7 +2993,7 @@ mod tests {
     struct BootleLanternFixture {
         envelope: PrivacyProofEnvelopeV1,
         activation: PrivacyProtocolActivationRecordV1,
-        chain_id: ChainId,
+        network_id: NetworkId,
         policy: BootleLanternIssuerPolicyV1,
     }
 
@@ -2992,10 +3009,10 @@ mod tests {
                     state_since_height: 2,
                 },
             ));
-            let chain_id = ChainId::from("taira-privacy-bootle-lantern-test");
+            let network_id = network_id(0xA7);
             let genesis_hash = [0xA7; 32];
             let context = PrivacyStatementContextV1 {
-                chain_id: chain_id.clone(),
+                network_id: network_id.clone(),
                 action_index: 0,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xB4; 32]),
                 parameter_id: compiled.parameter_id,
@@ -3123,7 +3140,7 @@ mod tests {
                     )),
                 },
                 activation,
-                chain_id,
+                network_id,
                 policy,
             }
         }
@@ -3135,7 +3152,7 @@ mod tests {
             PrivacyVerificationContextV1 {
                 activation: &self.activation,
                 consensus_limits,
-                chain_id: &self.chain_id,
+                network_id: &self.network_id,
                 genesis_hash: [0xA7; 32],
                 current_height: 10,
                 expected_action_index: 0,
@@ -3186,7 +3203,7 @@ mod tests {
     fn vega_invalid_proof_fixture() -> (
         PrivacyProofEnvelopeV1,
         PrivacyProtocolActivationRecordV1,
-        ChainId,
+        NetworkId,
         PrivacyVegaIssuerRecordV1,
     ) {
         let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
@@ -3198,7 +3215,7 @@ mod tests {
                 state_since_height: 2,
             },
         ));
-        let chain_id = ChainId::from("taira-privacy-vega-test");
+        let network_id = network_id(0xA7);
         let issuer_record = PrivacyVegaIssuerRecordV1::new(
             PrivacyIssuerIdV1::new([0x41; 32]),
             1,
@@ -3214,7 +3231,7 @@ mod tests {
         .expect("canonical Vega issuer record");
         let mut statement = VegaExistingCredentialStatementV1 {
             context: PrivacyStatementContextV1 {
-                chain_id: chain_id.clone(),
+                network_id: network_id.clone(),
                 action_index: 0,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xd4; 32]),
                 parameter_id: compiled.parameter_id,
@@ -3265,7 +3282,7 @@ mod tests {
                 ])),
             },
             activation,
-            chain_id,
+            network_id,
             issuer_record,
         )
     }
@@ -3273,7 +3290,7 @@ mod tests {
     struct OrchardFixture {
         envelope: PrivacyProofEnvelopeV1,
         activation: PrivacyProtocolActivationRecordV1,
-        chain_id: ChainId,
+        network_id: NetworkId,
         namespace: PrivacyNamespaceV1,
         snapshot: PrivacyOrchardPoolSnapshotV1,
     }
@@ -3289,7 +3306,7 @@ mod tests {
                     state_since_height: 2,
                 },
             ));
-            let chain_id = ChainId::from("taira-privacy-orchard-test");
+            let network_id = network_id(0xA7);
             let pool_id = PrivacyPoolIdV1::new([0xB6; 32]);
             let namespace = PrivacyNamespaceV1::new(
                 PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
@@ -3303,13 +3320,12 @@ mod tests {
                 .expect("reserve keypair");
             let snapshot = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
                 namespace,
-                PrivacyOrchardPoolBootstrapDigestV1::new([0xB8; 32]),
                 asset_definition_id.clone(),
                 AssetBalanceScope::Global,
                 AccountId::new(reserve_key.public_key().clone()),
             );
             let statement_context = PrivacyStatementContextV1 {
-                chain_id: chain_id.clone(),
+                network_id: network_id.clone(),
                 action_index: 0,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x44; 32]),
                 parameter_id: compiled.parameter_id,
@@ -3384,7 +3400,7 @@ mod tests {
             Self {
                 envelope,
                 activation,
-                chain_id,
+                network_id,
                 namespace,
                 snapshot,
             }
@@ -3394,7 +3410,7 @@ mod tests {
             PrivacyVerificationContextV1 {
                 activation: &self.activation,
                 consensus_limits: &TEST_CONSENSUS_LIMITS,
-                chain_id: &self.chain_id,
+                network_id: &self.network_id,
                 genesis_hash: [0xA7; 32],
                 current_height: 10,
                 expected_action_index: 0,
@@ -3548,7 +3564,7 @@ mod tests {
     struct FcmpFixture {
         envelope: PrivacyProofEnvelopeV1,
         activation: PrivacyProtocolActivationRecordV1,
-        chain_id: ChainId,
+        network_id: NetworkId,
         snapshot: PrivacyProofManagedPoolSnapshotV1,
         initial_output: PrivacyFcmpOutputTupleV1,
     }
@@ -3564,7 +3580,7 @@ mod tests {
                     state_since_height: 2,
                 },
             ));
-            let chain_id = ChainId::from("taira-privacy-fcmp-test");
+            let network_id = network_id(0xA7);
             let pool_id = PrivacyPoolIdV1::new([0xC1; 32]);
             let asset_definition_id = AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
@@ -3661,7 +3677,7 @@ mod tests {
             let statement =
                 PrivacyStatementV1::MoneroFcmpPlusPlusV1(MoneroFcmpPlusPlusStatementV1 {
                     context: PrivacyStatementContextV1 {
-                        chain_id: chain_id.clone(),
+                        network_id: network_id.clone(),
                         action_index: 0,
                         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(
                             [0xC2; 32],
@@ -3706,7 +3722,7 @@ mod tests {
             let verification_context = PrivacyVerificationContextV1 {
                 activation: &activation,
                 consensus_limits: &TEST_CONSENSUS_LIMITS,
-                chain_id: &chain_id,
+                network_id: &network_id,
                 genesis_hash: [0xA7; 32],
                 current_height: 10,
                 expected_action_index: 0,
@@ -3740,7 +3756,7 @@ mod tests {
             Self {
                 envelope,
                 activation,
-                chain_id,
+                network_id,
                 snapshot,
                 initial_output,
             }
@@ -3753,7 +3769,7 @@ mod tests {
             PrivacyVerificationContextV1 {
                 activation: &self.activation,
                 consensus_limits: &TEST_CONSENSUS_LIMITS,
-                chain_id: &self.chain_id,
+                network_id: &self.network_id,
                 genesis_hash: [0xA7; 32],
                 current_height: 10,
                 expected_action_index: 0,
@@ -3776,7 +3792,7 @@ mod tests {
     pub(crate) struct FcmpRuntimeFixtureForTest {
         pub(crate) envelope: PrivacyProofEnvelopeV1,
         pub(crate) activation: PrivacyProtocolActivationRecordV1,
-        pub(crate) chain_id: ChainId,
+        pub(crate) network_id: NetworkId,
         pub(crate) snapshot: PrivacyProofManagedPoolSnapshotV1,
         pub(crate) initial_output: PrivacyFcmpOutputTupleV1,
         pub(crate) genesis_hash: [u8; 32],
@@ -3789,7 +3805,7 @@ mod tests {
         FcmpRuntimeFixtureForTest {
             envelope: fixture.envelope.clone(),
             activation: fixture.activation,
-            chain_id: fixture.chain_id.clone(),
+            network_id: fixture.network_id.clone(),
             snapshot: fixture.snapshot.clone(),
             initial_output: fixture.initial_output,
             genesis_hash: [0xA7; 32],
@@ -3802,7 +3818,7 @@ mod tests {
     pub(crate) struct ZkAceRuntimeFixtureForTest {
         pub(crate) envelope: PrivacyProofEnvelopeV1,
         pub(crate) activation: PrivacyProtocolActivationRecordV1,
-        pub(crate) chain_id: ChainId,
+        pub(crate) network_id: NetworkId,
         pub(crate) genesis_hash: [u8; 32],
         pub(crate) current_height: u64,
         pub(crate) block_timestamp_ms: u64,
@@ -3813,9 +3829,9 @@ mod tests {
         static FIXTURE: OnceLock<(
             PrivacyProofEnvelopeV1,
             PrivacyProtocolActivationRecordV1,
-            ChainId,
+            NetworkId,
         )> = OnceLock::new();
-        let (envelope, activation, chain_id) = FIXTURE.get_or_init(|| {
+        let (envelope, activation, network_id) = FIXTURE.get_or_init(|| {
             let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
                 .expect("compiled ZK-ACE profile");
             let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
@@ -3825,7 +3841,7 @@ mod tests {
                     state_since_height: 2,
                 },
             ));
-            let chain_id = ChainId::from("taira-zk-ace-runtime-test-v1");
+            let network_id = network_id(0xA7);
             let account = |seed: u8| {
                 let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                     .expect("ZK-ACE runtime account");
@@ -3835,7 +3851,7 @@ mod tests {
                 .expect("canonical ZK-ACE witness");
             let statement = ZkAcePqAuthorizationStatementV1 {
                 context: PrivacyStatementContextV1 {
-                    chain_id: chain_id.clone(),
+                    network_id: network_id.clone(),
                     action_index: 0,
                     transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x94; 32]),
                     parameter_id: compiled.parameter_id,
@@ -3863,7 +3879,7 @@ mod tests {
             let authorization_digest = derive_zk_ace_privacy_authorization_digest(&public_inputs)
                 .expect("ZK-ACE authorization digest");
             public_inputs.statement.replay_nullifier =
-                witness.replay_nullifier_v1(&authorization_digest, &chain_id);
+                witness.replay_nullifier_v1(&authorization_digest, &network_id);
             let proof = prove_zk_ace_privacy_v1(&public_inputs, &witness)
                 .expect("native ZK-ACE runtime proof");
             let statement =
@@ -3882,12 +3898,12 @@ mod tests {
                 statement,
                 proof: PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(proof)),
             };
-            (envelope, activation, chain_id)
+            (envelope, activation, network_id)
         });
         ZkAceRuntimeFixtureForTest {
             envelope: envelope.clone(),
             activation: *activation,
-            chain_id: chain_id.clone(),
+            network_id: network_id.clone(),
             genesis_hash: [0xA7; 32],
             current_height: 10,
             block_timestamp_ms: 1_800_000_000_000,
@@ -3898,7 +3914,7 @@ mod tests {
         pub(crate) batch_envelope: PrivacyProofEnvelopeV1,
         pub(crate) provision_envelope: PrivacyProofEnvelopeV1,
         pub(crate) activation: PrivacyProtocolActivationRecordV1,
-        pub(crate) chain_id: ChainId,
+        pub(crate) network_id: NetworkId,
         pub(crate) genesis_hash: [u8; 32],
         pub(crate) current_height: u64,
         pub(crate) block_timestamp_ms: u64,
@@ -3921,7 +3937,7 @@ mod tests {
                     state_since_height: 2,
                 },
             ));
-            let chain_id = ChainId::from("taira-zk-ams-runtime-test-v1");
+            let network_id = network_id(0xA7);
             let genesis_hash = [0xA7; 32];
             let issuer_signing_key = P256SigningKey::from_bytes((&[7_u8; 32]).into())
                 .expect("ZK-AMS issuer signing key");
@@ -4023,7 +4039,7 @@ mod tests {
                 },
             );
             let statement_context = |transaction_intent_byte: u8| PrivacyStatementContextV1 {
-                chain_id: chain_id.clone(),
+                network_id: network_id.clone(),
                 action_index: 0,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(
                     [transaction_intent_byte; 32],
@@ -4064,7 +4080,7 @@ mod tests {
                 .digest()
                 .expect("ZK-AMS batch statement digest");
             let batch_binding = TranscriptBindingV1 {
-                chain_id: chain_id.as_str().as_bytes(),
+                network_id: network_id.as_bytes(),
                 genesis_hash,
                 action_index: 0,
                 statement_digest: *batch_statement_digest.as_bytes(),
@@ -4158,7 +4174,7 @@ mod tests {
                 .digest()
                 .expect("ZK-AMS provision statement digest");
             let provision_binding = TranscriptBindingV1 {
-                chain_id: chain_id.as_str().as_bytes(),
+                network_id: network_id.as_bytes(),
                 genesis_hash,
                 action_index: 0,
                 statement_digest: *provision_statement_digest.as_bytes(),
@@ -4198,7 +4214,7 @@ mod tests {
                 batch_envelope,
                 provision_envelope,
                 activation,
-                chain_id,
+                network_id,
                 genesis_hash,
                 current_height: 10,
                 block_timestamp_ms: 1_800_000_000_000,
@@ -4213,7 +4229,7 @@ mod tests {
             batch_envelope: fixture.batch_envelope.clone(),
             provision_envelope: fixture.provision_envelope.clone(),
             activation: fixture.activation,
-            chain_id: fixture.chain_id.clone(),
+            network_id: fixture.network_id.clone(),
             genesis_hash: fixture.genesis_hash,
             current_height: fixture.current_height,
             block_timestamp_ms: fixture.block_timestamp_ms,
@@ -4237,7 +4253,7 @@ mod tests {
     struct PgcFixture {
         envelope: PrivacyProofEnvelopeV1,
         activation: PrivacyProtocolActivationRecordV1,
-        chain_id: ChainId,
+        network_id: NetworkId,
         namespace: PrivacyNamespaceV1,
         total_supply: u32,
         bootstrap_digest: PrivacyPgcAccountBootstrapDigestV1,
@@ -4265,7 +4281,7 @@ mod tests {
                     state_since_height: 2,
                 },
             ));
-            let chain_id = ChainId::from("taira-privacy-test");
+            let network_id = network_id(0xA7);
             let pool_id = PrivacyPoolIdV1::new([0xb1; 32]);
             let namespace = PrivacyNamespaceV1::new(
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
@@ -4365,7 +4381,7 @@ mod tests {
             let declared_next_root = next_root_override.unwrap_or(next_root);
             let declared_next_epoch = next_epoch_override.unwrap_or(next_epoch);
             let statement_context = PrivacyStatementContextV1 {
-                chain_id: chain_id.clone(),
+                network_id: network_id.clone(),
                 action_index: 0,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xD2; 32]),
                 parameter_id: compiled.parameter_id,
@@ -4397,7 +4413,7 @@ mod tests {
             let statement_digest = statement.digest().expect("PGC statement digest");
             let parameters = AnonymousPgcParametersV1::get().expect("PGC parameters");
             let transcript = TranscriptBindingV1 {
-                chain_id: chain_id.as_str().as_bytes(),
+                network_id: network_id.as_bytes(),
                 genesis_hash: [0xa7; 32],
                 action_index: 0,
                 statement_digest: *statement_digest.as_bytes(),
@@ -4448,7 +4464,7 @@ mod tests {
             Self {
                 envelope,
                 activation,
-                chain_id,
+                network_id,
                 namespace,
                 total_supply,
                 bootstrap_digest,
@@ -4463,7 +4479,7 @@ mod tests {
             PrivacyVerificationContextV1 {
                 activation: &self.activation,
                 consensus_limits: &TEST_CONSENSUS_LIMITS,
-                chain_id: &self.chain_id,
+                network_id: &self.network_id,
                 genesis_hash: [0xa7; 32],
                 current_height: 10,
                 expected_action_index: 0,
@@ -4503,13 +4519,13 @@ mod tests {
 
     fn verification_context<'a>(
         activation: &'a PrivacyProtocolActivationRecordV1,
-        chain_id: &'a ChainId,
+        network_id: &'a NetworkId,
     ) -> PrivacyVerificationContextV1<'a> {
         PrivacyVerificationContextV1 {
             activation,
             consensus_limits: &TEST_CONSENSUS_LIMITS,
-            chain_id,
-            genesis_hash: [0xA7; 32],
+            network_id,
+            genesis_hash: *network_id.as_bytes(),
             current_height: 10,
             expected_action_index: 0,
             block_timestamp_ms: 1_800_000_000_000,
@@ -4524,10 +4540,10 @@ mod tests {
 
     fn vega_verification_context<'a>(
         activation: &'a PrivacyProtocolActivationRecordV1,
-        chain_id: &'a ChainId,
+        network_id: &'a NetworkId,
         issuer_record: &'a PrivacyVegaIssuerRecordV1,
     ) -> PrivacyVerificationContextV1<'a> {
-        let mut context = verification_context(activation, chain_id);
+        let mut context = verification_context(activation, network_id);
         context.block_timestamp_ms = VEGA_TRUSTED_TIMESTAMP_MS;
         context.vega_issuer_record = Some(issuer_record);
         context
@@ -4574,11 +4590,11 @@ mod tests {
     fn assert_rejected(
         envelope: &PrivacyProofEnvelopeV1,
         activation: &PrivacyProtocolActivationRecordV1,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         label: &str,
     ) {
         assert!(
-            verify_privacy_envelope_v1(envelope, verification_context(activation, chain_id))
+            verify_privacy_envelope_v1(envelope, verification_context(activation, network_id))
                 .is_err(),
             "adversarial envelope `{label}` was accepted"
         );
@@ -4605,7 +4621,7 @@ mod tests {
         let context = || PrivacyVerificationContextV1 {
             activation: &fixture.activation,
             consensus_limits: &TEST_CONSENSUS_LIMITS,
-            chain_id: &fixture.chain_id,
+            network_id: &fixture.network_id,
             genesis_hash: fixture.genesis_hash,
             current_height: fixture.current_height,
             expected_action_index: 0,
@@ -4678,7 +4694,7 @@ mod tests {
         let context = |expected_action_index| PrivacyVerificationContextV1 {
             activation: &fixture.activation,
             consensus_limits: &TEST_CONSENSUS_LIMITS,
-            chain_id: &fixture.chain_id,
+            network_id: &fixture.network_id,
             genesis_hash: fixture.genesis_hash,
             current_height: fixture.current_height,
             expected_action_index,
@@ -4779,9 +4795,9 @@ mod tests {
 
     #[test]
     fn verified_verange_effects_are_exact_and_non_mutating() {
-        let (envelope, activation, chain_id) = valid_envelope();
+        let (envelope, activation, network_id) = valid_envelope();
         let effects =
-            verify_privacy_envelope_v1(&envelope, verification_context(&activation, &chain_id))
+            verify_privacy_envelope_v1(&envelope, verification_context(&activation, &network_id))
                 .expect("valid proof");
         assert_eq!(
             effects.protocol_id(),
@@ -5137,13 +5153,11 @@ mod tests {
         assert!(
             matches!(
                 error,
-                PrivacyVerificationErrorV1::NativeOrchard(ref detail)
-                    if matches!(
-                        detail.source,
-                        OrchardNativeErrorV1::SpendAuthorizationSignature { index: 0 }
-                    )
+                PrivacyVerificationErrorV1::Context(ref detail)
+                    if detail.code
+                        == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
             ),
-            "changed genesis must reach and fail the native Orchard authorization: {error:?}"
+            "changed genesis must fail the typed network binding: {error:?}"
         );
     }
 
@@ -5167,7 +5181,6 @@ mod tests {
         );
         let other_pool = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
             other_namespace,
-            PrivacyOrchardPoolBootstrapDigestV1::new([0xC2; 32]),
             fixture.snapshot.state().asset_definition_id().clone(),
             fixture.snapshot.state().public_balance_scope(),
             fixture.snapshot.state().reserve_account().clone(),
@@ -5182,7 +5195,6 @@ mod tests {
 
         let wrong_asset = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
             fixture.namespace,
-            PrivacyOrchardPoolBootstrapDigestV1::new([0xC3; 32]),
             AssetDefinitionId::derive_from_components(
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("wrong_orchard_asset").expect("name"),
@@ -5196,6 +5208,20 @@ mod tests {
             verify_privacy_envelope_v1(&fixture.envelope, context),
             Err(PrivacyVerificationErrorV1::OrchardState(detail))
                 if detail.code == PrivacyOrchardStateFailureCodeV1::AssetMismatch
+        ));
+
+        let wrong_scope = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
+            fixture.namespace,
+            fixture.snapshot.state().asset_definition_id().clone(),
+            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::new(7)),
+            fixture.snapshot.state().reserve_account().clone(),
+        );
+        let mut context = fixture.verification_context();
+        context.orchard_state = Some(&wrong_scope);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, context),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::PublicBalanceScopeMismatch
         ));
 
         let mut stale_anchor = fixture.envelope.clone();
@@ -5570,6 +5596,32 @@ mod tests {
                 if detail.code == PrivacyIvmPrivateNoteStateFailureCodeV1::AssetMismatch
         ));
 
+        let wrong_scope =
+            PrivacyProofManagedPoolSnapshotV1::canonical_private_note_bootstrap_for_test(
+                PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(
+                    PrivacyIvmPrivateNotePoolBootstrapV1 {
+                        pool_id: fixture.statement.pool_id,
+                        asset_definition_id: fixture.statement.asset_definition_id.clone(),
+                        public_balance_scope: AssetBalanceScope::Dataspace(
+                            iroha_data_model::nexus::DataSpaceId::new(7),
+                        ),
+                        reserve_account: fixture.reserve_account.clone(),
+                        program_id: fixture.statement.program_id,
+                        initial_note_commitments: vec![fixture.input_commitment],
+                    },
+                ),
+            );
+        assert!(matches!(
+            prepare_ivm_private_note_transition_v1(
+                &fixture.statement,
+                namespace,
+                Some(&wrong_scope),
+            ),
+            Err(PrivacyVerificationErrorV1::IvmPrivateNoteState(detail))
+                if detail.code
+                    == PrivacyIvmPrivateNoteStateFailureCodeV1::PublicBalanceScopeMismatch
+        ));
+
         let mut invalid_key = fixture.statement.clone();
         invalid_key.encrypted_outputs[0].ephemeral_public_key =
             PrivacyEncryptionKeyV1::new([u8::MAX; 32]);
@@ -5860,11 +5912,11 @@ mod tests {
         .expect("canonical PQA1 wrapper");
         let envelope = fixture.envelope(statement.clone(), outer.clone());
         let (_, activation) = active_profile();
-        let chain_id = statement.context.chain_id.clone();
+        let network_id = statement.context.network_id.clone();
         let context = || PrivacyVerificationContextV1 {
             activation: &activation,
             consensus_limits: &TEST_CONSENSUS_LIMITS,
-            chain_id: &chain_id,
+            network_id: &network_id,
             genesis_hash: [0xA7; 32],
             current_height: 10,
             expected_action_index: 0,
@@ -5912,12 +5964,12 @@ mod tests {
                 PrivacyVerificationErrorV1::NativePqMasp(ref detail)
                 if matches!(
                     detail.source,
-                    PrivacyPqMaspNativeFailureSourceV1::Authorization(
-                        PqMaspWireErrorV1::AuthorizationFailed
+                    PrivacyPqMaspNativeFailureSourceV1::ConsensusBinding(
+                        PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch
                     )
                 )
             ),
-            "changed genesis must fail the PQ-MASP native authorization layer: \
+            "changed genesis must fail the PQ-MASP typed network binding: \
              {changed_genesis_error:?}"
         );
 
@@ -6173,7 +6225,9 @@ mod tests {
                 &corrupt_proof,
                 fixture.verification_context(Some(&fixture.snapshot))
             ),
-            Err(PrivacyVerificationErrorV1::NativeFcmp(_))
+            Err(PrivacyVerificationErrorV1::Context(detail))
+                if detail.code
+                    == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
         ));
 
         let mut corrupt_range_proof = fixture.envelope.clone();
@@ -6389,12 +6443,13 @@ mod tests {
             );
         }
 
-        let other_chain = ChainId::from("taira-privacy-fcmp-replay");
+        let other_network = network_id(0xA8);
         let mut cross_chain = fixture.envelope.clone();
-        fcmp_statement_mut(&mut cross_chain).context.chain_id = other_chain.clone();
+        fcmp_statement_mut(&mut cross_chain).context.network_id = other_network;
         refresh_statement_digest(&mut cross_chain);
         let mut cross_chain_context = fixture.verification_context(Some(&fixture.snapshot));
-        cross_chain_context.chain_id = &other_chain;
+        cross_chain_context.network_id = &other_network;
+        cross_chain_context.genesis_hash = *other_network.as_bytes();
         assert!(matches!(
             verify_privacy_envelope_v1(&cross_chain, cross_chain_context),
             Err(PrivacyVerificationErrorV1::NativeFcmp(_))
@@ -6494,20 +6549,24 @@ mod tests {
     }
 
     #[test]
-    fn context_chain_action_and_genesis_are_fail_closed() {
-        let (envelope, activation, chain_id) = valid_envelope();
+    fn same_display_label_cannot_bridge_distinct_network_geneses() {
+        let (envelope, activation, network_id) = valid_envelope();
 
-        let other_chain = ChainId::from("wrong-chain");
-        let error =
-            verify_privacy_envelope_v1(&envelope, verification_context(&activation, &other_chain))
-                .expect_err("wrong chain");
+        // A human-readable ChainName may be identical for these deployments;
+        // it is deliberately absent from both the statement and verifier
+        // context. Only the exact genesis-derived NetworkId participates here.
+        let other_network = self::network_id(0xA8);
+        let mut other_network_context = verification_context(&activation, &other_network);
+        other_network_context.genesis_hash = *other_network.as_bytes();
+        let error = verify_privacy_envelope_v1(&envelope, other_network_context)
+            .expect_err("wrong network");
         assert!(matches!(
             error,
             PrivacyVerificationErrorV1::Context(detail)
-                if detail.code == PrivacyVerificationContextFailureCodeV1::ChainIdMismatch
+                if detail.code == PrivacyVerificationContextFailureCodeV1::NetworkIdMismatch
         ));
 
-        let mut context = verification_context(&activation, &chain_id);
+        let mut context = verification_context(&activation, &network_id);
         context.expected_action_index = 1;
         let error = verify_privacy_envelope_v1(&envelope, context).expect_err("wrong action index");
         assert!(matches!(
@@ -6516,7 +6575,7 @@ mod tests {
                 if detail.code == PrivacyVerificationContextFailureCodeV1::ActionIndexMismatch
         ));
 
-        let mut context = verification_context(&activation, &chain_id);
+        let mut context = verification_context(&activation, &network_id);
         context.genesis_hash = [0; 32];
         let error = verify_privacy_envelope_v1(&envelope, context).expect_err("zero genesis");
         assert!(matches!(
@@ -6529,7 +6588,7 @@ mod tests {
     #[test]
     fn admission_failure_precedence_is_activation_then_envelope_then_context() {
         let (envelope, activation, _) = valid_envelope();
-        let wrong_chain = ChainId::from("wrong-precedence-chain");
+        let wrong_network = network_id(0xA8);
 
         let mut malformed_envelope = envelope.clone();
         malformed_envelope.proof =
@@ -6537,7 +6596,7 @@ mod tests {
 
         let mut altered_activation = activation.clone();
         altered_activation.verifier_digest.0[0] ^= 1;
-        let mut all_invalid_context = verification_context(&altered_activation, &wrong_chain);
+        let mut all_invalid_context = verification_context(&altered_activation, &wrong_network);
         all_invalid_context.genesis_hash = [0; 32];
         all_invalid_context.expected_action_index = 1;
         assert!(matches!(
@@ -6545,7 +6604,7 @@ mod tests {
             Err(PrivacyVerificationErrorV1::CompiledActivation(_))
         ));
 
-        let mut envelope_and_context_invalid = verification_context(&activation, &wrong_chain);
+        let mut envelope_and_context_invalid = verification_context(&activation, &wrong_network);
         envelope_and_context_invalid.genesis_hash = [0; 32];
         envelope_and_context_invalid.expected_action_index = 1;
         assert!(matches!(
@@ -6553,7 +6612,7 @@ mod tests {
             Err(PrivacyVerificationErrorV1::Envelope(_))
         ));
 
-        let mut context_only_invalid = verification_context(&activation, &wrong_chain);
+        let mut context_only_invalid = verification_context(&activation, &wrong_network);
         context_only_invalid.genesis_hash = [0; 32];
         context_only_invalid.expected_action_index = 1;
         assert!(matches!(
@@ -6565,14 +6624,14 @@ mod tests {
 
     #[test]
     fn altered_activation_statement_and_proof_are_rejected() {
-        let (envelope, activation, chain_id) = valid_envelope();
+        let (envelope, activation, network_id) = valid_envelope();
 
         let mut altered_activation = activation;
         altered_activation.verifier_digest.0[0] ^= 1;
         assert!(matches!(
             verify_privacy_envelope_v1(
                 &envelope,
-                verification_context(&altered_activation, &chain_id)
+                verification_context(&altered_activation, &network_id)
             ),
             Err(PrivacyVerificationErrorV1::CompiledActivation(_))
         ));
@@ -6591,9 +6650,11 @@ mod tests {
         assert!(matches!(
             verify_privacy_envelope_v1(
                 &altered_statement,
-                verification_context(&activation, &chain_id)
+                verification_context(&activation, &network_id)
             ),
-            Err(PrivacyVerificationErrorV1::NativeVeRange(_))
+            Err(PrivacyVerificationErrorV1::Context(detail))
+                if detail.code
+                    == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
         ));
 
         let mut altered_proof = envelope.clone();
@@ -6605,12 +6666,12 @@ mod tests {
         assert!(matches!(
             verify_privacy_envelope_v1(
                 &altered_proof,
-                verification_context(&activation, &chain_id)
+                verification_context(&activation, &network_id)
             ),
             Err(PrivacyVerificationErrorV1::NativeVeRange(_))
         ));
 
-        let mut context = verification_context(&activation, &chain_id);
+        let mut context = verification_context(&activation, &network_id);
         context.genesis_hash[0] ^= 1;
         assert!(matches!(
             verify_privacy_envelope_v1(&envelope, context),
@@ -6620,7 +6681,7 @@ mod tests {
 
     #[test]
     fn proof_wire_rejects_truncation_extensions_and_single_byte_malleation() {
-        let (envelope, activation, chain_id) = valid_envelope();
+        let (envelope, activation, network_id) = valid_envelope();
         let PrivacyProofV1::VeRangeTransparentRangeV1(proof) = &envelope.proof else {
             unreachable!("VeRange fixture")
         };
@@ -6636,7 +6697,7 @@ mod tests {
             assert_rejected(
                 &candidate,
                 &activation,
-                &chain_id,
+                &network_id,
                 &format!("truncated-{length}"),
             );
         }
@@ -6650,7 +6711,7 @@ mod tests {
             assert_rejected(
                 &candidate,
                 &activation,
-                &chain_id,
+                &network_id,
                 &format!("trailing-{}", suffix.len()),
             );
         }
@@ -6664,7 +6725,7 @@ mod tests {
             assert_rejected(
                 &candidate,
                 &activation,
-                &chain_id,
+                &network_id,
                 &format!("bit-flip-{offset}"),
             );
         }
@@ -6674,19 +6735,19 @@ mod tests {
             unreachable!("VeRange fixture")
         };
         bytes.bytes.fill(0);
-        assert_rejected(&all_zero, &activation, &chain_id, "all-zero-proof");
+        assert_rejected(&all_zero, &activation, &network_id, "all-zero-proof");
     }
 
     #[test]
     fn statement_shape_order_and_public_inputs_are_cryptographically_bound() {
-        let (envelope, activation, chain_id) = valid_envelope();
+        let (envelope, activation, network_id) = valid_envelope();
 
         let mut empty = envelope.clone();
         let statement = verange_statement_mut(&mut empty);
         statement.value_commitments.clear();
         statement.aggregation_count = 0;
         refresh_statement_digest(&mut empty);
-        assert_rejected(&empty, &activation, &chain_id, "empty-batch");
+        assert_rejected(&empty, &activation, &network_id, "empty-batch");
 
         let mut count_mismatch = envelope.clone();
         verange_statement_mut(&mut count_mismatch).aggregation_count = 1;
@@ -6694,7 +6755,7 @@ mod tests {
         assert_rejected(
             &count_mismatch,
             &activation,
-            &chain_id,
+            &network_id,
             "aggregation-count-mismatch",
         );
 
@@ -6702,19 +6763,24 @@ mod tests {
         let statement = verange_statement_mut(&mut duplicate);
         statement.value_commitments[1] = statement.value_commitments[0];
         refresh_statement_digest(&mut duplicate);
-        assert_rejected(&duplicate, &activation, &chain_id, "duplicate-commitment");
+        assert_rejected(&duplicate, &activation, &network_id, "duplicate-commitment");
 
         let mut reordered = envelope.clone();
         verange_statement_mut(&mut reordered)
             .value_commitments
             .swap(0, 1);
         refresh_statement_digest(&mut reordered);
-        assert_rejected(&reordered, &activation, &chain_id, "reordered-commitments");
+        assert_rejected(
+            &reordered,
+            &activation,
+            &network_id,
+            "reordered-commitments",
+        );
 
         let mut changed_policy = envelope.clone();
         verange_statement_mut(&mut changed_policy).policy_id = PrivacyPolicyIdV1::new([0xA3; 32]);
         refresh_statement_digest(&mut changed_policy);
-        assert_rejected(&changed_policy, &activation, &chain_id, "changed-policy");
+        assert_rejected(&changed_policy, &activation, &network_id, "changed-policy");
 
         let mut changed_asset = envelope.clone();
         verange_statement_mut(&mut changed_asset).asset_definition_id =
@@ -6723,7 +6789,7 @@ mod tests {
                 Name::from_str("other_asset").expect("name"),
             );
         refresh_statement_digest(&mut changed_asset);
-        assert_rejected(&changed_asset, &activation, &chain_id, "changed-asset");
+        assert_rejected(&changed_asset, &activation, &network_id, "changed-asset");
 
         let mut changed_profile = envelope.clone();
         verange_statement_mut(&mut changed_profile).bit_length = PrivacyVeRangeBitLengthV1::Bits64;
@@ -6731,14 +6797,14 @@ mod tests {
         assert_rejected(
             &changed_profile,
             &activation,
-            &chain_id,
+            &network_id,
             "changed-bit-length",
         );
     }
 
     #[test]
     fn governance_lifecycle_and_transcript_context_cannot_be_replayed() {
-        let (envelope, activation, chain_id) = valid_envelope();
+        let (envelope, activation, network_id) = valid_envelope();
 
         let mut proposed = activation;
         proposed.lifecycle = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
@@ -6748,7 +6814,7 @@ mod tests {
         assert!(matches!(
             verify_privacy_envelope_v1(
                 &envelope,
-                verification_context(&proposed, &chain_id)
+                verification_context(&proposed, &network_id)
             ),
             Err(PrivacyVerificationErrorV1::Envelope(detail))
                 if matches!(
@@ -6765,7 +6831,7 @@ mod tests {
         assert!(matches!(
             verify_privacy_envelope_v1(
                 &envelope,
-                verification_context(&future, &chain_id)
+                verification_context(&future, &network_id)
             ),
             Err(PrivacyVerificationErrorV1::Envelope(detail))
                 if matches!(
@@ -6777,19 +6843,21 @@ mod tests {
                 )
         ));
 
-        let replay_chain = ChainId::from("taira-privacy-replay");
+        let replay_network = self::network_id(0xA8);
         let mut replayed = envelope.clone();
-        verange_statement_mut(&mut replayed).context.chain_id = replay_chain.clone();
+        verange_statement_mut(&mut replayed).context.network_id = replay_network;
         refresh_statement_digest(&mut replayed);
+        let mut replay_context = verification_context(&activation, &replay_network);
+        replay_context.genesis_hash = *replay_network.as_bytes();
         assert!(matches!(
-            verify_privacy_envelope_v1(&replayed, verification_context(&activation, &replay_chain)),
+            verify_privacy_envelope_v1(&replayed, replay_context),
             Err(PrivacyVerificationErrorV1::NativeVeRange(_))
         ));
 
         let mut replayed = envelope.clone();
         verange_statement_mut(&mut replayed).context.action_index = 1;
         refresh_statement_digest(&mut replayed);
-        let mut context = verification_context(&activation, &chain_id);
+        let mut context = verification_context(&activation, &network_id);
         context.expected_action_index = 1;
         assert!(matches!(
             verify_privacy_envelope_v1(&replayed, context),
@@ -6845,11 +6913,13 @@ mod tests {
 
     #[test]
     fn vega_runtime_dispatches_to_the_native_verifier_and_enforces_its_tighter_cap() {
-        let (envelope, activation, chain_id, issuer_record) = vega_invalid_proof_fixture();
-        let context = vega_verification_context(&activation, &chain_id, &issuer_record);
+        let (envelope, activation, network_id, issuer_record) = vega_invalid_proof_fixture();
+        let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
             verify_privacy_envelope_v1(&envelope, context),
-            Err(PrivacyVerificationErrorV1::NativeVega(_))
+            Err(PrivacyVerificationErrorV1::Context(detail))
+                if detail.code
+                    == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
         ));
 
         let mut oversized = envelope.clone();
@@ -6859,7 +6929,7 @@ mod tests {
                 MAX_VEGA_PROOF_BYTES_V1
                     + 1
             ]));
-        let context = vega_verification_context(&activation, &chain_id, &issuer_record);
+        let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
             verify_privacy_envelope_v1(&oversized, context),
             Err(PrivacyVerificationErrorV1::NativeVega(_))
@@ -6869,7 +6939,7 @@ mod tests {
             let mut malformed = envelope.clone();
             malformed.proof =
                 PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(bytes));
-            let context = vega_verification_context(&activation, &chain_id, &issuer_record);
+            let context = vega_verification_context(&activation, &network_id, &issuer_record);
             assert!(matches!(
                 verify_privacy_envelope_v1(&malformed, context),
                 Err(PrivacyVerificationErrorV1::Envelope(_))
@@ -6879,9 +6949,9 @@ mod tests {
 
     #[test]
     fn vega_rejects_missing_revoked_stale_substituted_and_corrupt_issuer_state_before_proof() {
-        let (envelope, activation, chain_id, issuer_record) = vega_invalid_proof_fixture();
+        let (envelope, activation, network_id, issuer_record) = vega_invalid_proof_fixture();
 
-        let context = verification_context(&activation, &chain_id);
+        let context = verification_context(&activation, &network_id);
         assert!(matches!(
             verify_privacy_envelope_v1(&envelope, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
@@ -6891,7 +6961,7 @@ mod tests {
         let mut unknown = envelope.clone();
         vega_statement_mut(&mut unknown).issuer_id = PrivacyIssuerIdV1::new([0x42; 32]);
         refresh_statement_digest(&mut unknown);
-        let context = verification_context(&activation, &chain_id);
+        let context = verification_context(&activation, &network_id);
         assert!(matches!(
             verify_privacy_envelope_v1(&unknown, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
@@ -6911,7 +6981,7 @@ mod tests {
             PrivacyVegaIssuerRecordLifecycleV1::Revoked,
         )
         .expect("canonical terminal Vega issuer record");
-        let context = vega_verification_context(&activation, &chain_id, &revoked);
+        let context = vega_verification_context(&activation, &network_id, &revoked);
         assert!(matches!(
             verify_privacy_envelope_v1(&envelope, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
@@ -6921,7 +6991,7 @@ mod tests {
         let mut stale_epoch = envelope.clone();
         vega_statement_mut(&mut stale_epoch).issuer_record_epoch += 1;
         refresh_statement_digest(&mut stale_epoch);
-        let context = vega_verification_context(&activation, &chain_id, &issuer_record);
+        let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
             verify_privacy_envelope_v1(&stale_epoch, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
@@ -6931,7 +7001,7 @@ mod tests {
         let mut wrong_digest = envelope.clone();
         vega_statement_mut(&mut wrong_digest).issuer_record_digest.0[0] ^= 1;
         refresh_statement_digest(&mut wrong_digest);
-        let context = vega_verification_context(&activation, &chain_id, &issuer_record);
+        let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
             verify_privacy_envelope_v1(&wrong_digest, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
@@ -6941,7 +7011,7 @@ mod tests {
         let mut wrong_key = envelope.clone();
         vega_statement_mut(&mut wrong_key).issuer_public_key.0[0] ^= 1;
         refresh_statement_digest(&mut wrong_key);
-        let context = vega_verification_context(&activation, &chain_id, &issuer_record);
+        let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
             verify_privacy_envelope_v1(&wrong_key, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
@@ -6950,7 +7020,7 @@ mod tests {
 
         let mut corrupt = issuer_record;
         corrupt.record_digest.0[0] ^= 1;
-        let context = vega_verification_context(&activation, &chain_id, &corrupt);
+        let context = vega_verification_context(&activation, &network_id, &corrupt);
         assert!(matches!(
             verify_privacy_envelope_v1(&envelope, context),
             Err(PrivacyVerificationErrorV1::VegaState(detail))
@@ -6960,13 +7030,13 @@ mod tests {
 
     #[test]
     fn vega_runtime_rejects_time_device_genesis_suite_and_governance_replay() {
-        let (envelope, activation, chain_id, issuer_record) = vega_invalid_proof_fixture();
+        let (envelope, activation, network_id, issuer_record) = vega_invalid_proof_fixture();
 
         for timestamp in [
             VEGA_TRUSTED_TIMESTAMP_MS - 86_400_000,
             VEGA_TRUSTED_TIMESTAMP_MS + 86_400_000,
         ] {
-            let mut context = vega_verification_context(&activation, &chain_id, &issuer_record);
+            let mut context = vega_verification_context(&activation, &network_id, &issuer_record);
             context.block_timestamp_ms = timestamp;
             assert!(matches!(
                 verify_privacy_envelope_v1(&envelope, context),
@@ -6979,7 +7049,7 @@ mod tests {
             .device_authentication_digest
             .0[0] ^= 1;
         refresh_statement_digest(&mut changed_device);
-        let context = vega_verification_context(&activation, &chain_id, &issuer_record);
+        let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
             verify_privacy_envelope_v1(&changed_device, context),
             Err(PrivacyVerificationErrorV1::NativeVega(_))
@@ -6991,14 +7061,15 @@ mod tests {
             .transaction_intent_digest
             .0[0] ^= 1;
         refresh_statement_digest(&mut replayed_intent);
-        let context = vega_verification_context(&activation, &chain_id, &issuer_record);
+        let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
             verify_privacy_envelope_v1(&replayed_intent, context),
             Err(PrivacyVerificationErrorV1::NativeVega(detail))
                 if detail.source == VegaMdlError::DeviceAuthenticationDigestMismatch
         ));
 
-        let mut changed_genesis = vega_verification_context(&activation, &chain_id, &issuer_record);
+        let mut changed_genesis =
+            vega_verification_context(&activation, &network_id, &issuer_record);
         changed_genesis.genesis_hash[0] ^= 1;
         assert!(matches!(
             verify_privacy_envelope_v1(&envelope, changed_genesis),
@@ -7008,7 +7079,7 @@ mod tests {
         let mut cross_suite = envelope.clone();
         cross_suite.proof =
             PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(vec![0x51]));
-        let context = vega_verification_context(&activation, &chain_id, &issuer_record);
+        let context = vega_verification_context(&activation, &network_id, &issuer_record);
         assert!(matches!(
             verify_privacy_envelope_v1(&cross_suite, context),
             Err(PrivacyVerificationErrorV1::Envelope(_))
@@ -7016,7 +7087,7 @@ mod tests {
 
         let mut altered_activation = activation;
         altered_activation.verifier_digest.0[0] ^= 1;
-        let context = vega_verification_context(&altered_activation, &chain_id, &issuer_record);
+        let context = vega_verification_context(&altered_activation, &network_id, &issuer_record);
         assert!(matches!(
             verify_privacy_envelope_v1(&envelope, context),
             Err(PrivacyVerificationErrorV1::CompiledActivation(_))
@@ -7111,7 +7182,7 @@ mod tests {
     }
 
     #[test]
-    fn jindo_transcript_rejects_intent_statement_chain_genesis_action_and_governance_replay() {
+    fn jindo_transcript_rejects_intent_statement_network_action_and_governance_replay() {
         let fixture = jindo_fixture();
 
         let mut stale_digest = fixture.envelope.clone();
@@ -7175,21 +7246,23 @@ mod tests {
             "commitment mutation",
         );
 
-        let replay_chain = ChainId::from("taira-privacy-jindo-replay");
-        let mut changed_chain = fixture.envelope.clone();
-        jindo_statement_mut(&mut changed_chain).context.chain_id = replay_chain.clone();
-        refresh_statement_digest(&mut changed_chain);
+        let replay_network = network_id(0xA8);
+        let mut changed_network = fixture.envelope.clone();
+        jindo_statement_mut(&mut changed_network).context.network_id = replay_network;
+        refresh_statement_digest(&mut changed_network);
         let mut replay_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
-        replay_context.chain_id = &replay_chain;
-        assert_native_jindo_rejected(&changed_chain, replay_context, "cross-chain replay");
+        replay_context.network_id = &replay_network;
+        replay_context.genesis_hash = *replay_network.as_bytes();
+        assert_native_jindo_rejected(&changed_network, replay_context, "cross-network replay");
 
         let mut changed_genesis_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
         changed_genesis_context.genesis_hash[0] ^= 1;
-        assert_native_jindo_rejected(
-            &fixture.envelope,
-            changed_genesis_context,
-            "cross-genesis replay",
-        );
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, changed_genesis_context),
+            Err(PrivacyVerificationErrorV1::Context(detail))
+                if detail.code
+                    == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
+        ));
 
         let mut changed_action = fixture.envelope.clone();
         jindo_statement_mut(&mut changed_action)
@@ -7348,7 +7421,9 @@ mod tests {
                 &noncanonical_residue,
                 fixture.verification_context(&TEST_CONSENSUS_LIMITS)
             ),
-            Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
+            Err(PrivacyVerificationErrorV1::Context(detail))
+                if detail.code
+                    == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
         ));
 
         let mut cross_suite = fixture.envelope.clone();
@@ -7365,7 +7440,7 @@ mod tests {
     }
 
     #[test]
-    fn bootle_lantern_statement_intent_chain_genesis_action_and_policy_are_proof_bound() {
+    fn bootle_lantern_statement_intent_network_action_and_policy_are_proof_bound() {
         let fixture = bootle_lantern_fixture();
 
         let statement_mutations: [fn(&mut IrohaBootleLanternAnoncredStatementV1); 8] = [
@@ -7391,16 +7466,17 @@ mod tests {
             ));
         }
 
-        let replay_chain = ChainId::from("taira-privacy-bootle-lantern-replay");
-        let mut changed_chain = fixture.envelope.clone();
-        bootle_lantern_statement_mut(&mut changed_chain)
+        let replay_network = network_id(0xA8);
+        let mut changed_network = fixture.envelope.clone();
+        bootle_lantern_statement_mut(&mut changed_network)
             .context
-            .chain_id = replay_chain.clone();
-        refresh_statement_digest(&mut changed_chain);
+            .network_id = replay_network;
+        refresh_statement_digest(&mut changed_network);
         let mut replay_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
-        replay_context.chain_id = &replay_chain;
+        replay_context.network_id = &replay_network;
+        replay_context.genesis_hash = *replay_network.as_bytes();
         assert!(matches!(
-            verify_privacy_envelope_v1(&changed_chain, replay_context),
+            verify_privacy_envelope_v1(&changed_network, replay_context),
             Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
         ));
 

@@ -10,8 +10,11 @@ TEST_VENV_OVERRIDE="${PRIVACY_PYTHON_SDK_TEST_VENV:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQUIREMENTS_LOCKFILE="${ROOT_DIR}/python/iroha_python/requirements-ci.lock"
 CHECKOUT_NATIVE_DIR="${ROOT_DIR}/python/iroha_python/src"
+FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
 WHEEL_PATH=""
 WHEEL_SEAL=""
+TEMPORARY_WORKSPACE_LOCK=0
 
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONNOUSERSITE=1
@@ -741,6 +744,9 @@ unset \
   PYTHONWARNINGS
 unset PYTEST_ADDOPTS PYTEST_PLUGINS
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+"${PYTHON_BIN}" -I -B \
+  "${ROOT_DIR}/scripts/check_privacy_python_witness_boundary.py" \
+  --root "${ROOT_DIR}"
 validate_repository_cargo_configuration
 
 # Maturin may invoke Cargo for both metadata and compilation. Route every such
@@ -784,6 +790,10 @@ WORKSPACE_CARGO_LOCK_STATE="$(
 SELECTED_CARGO_LOCK_SEAL="$(
   privacy_sdk_file_seal "${SELECTED_CARGO_LOCKFILE}" "${PYTHON_BIN}"
 )"
+if [[ "${SELECTED_CARGO_LOCK_SEAL%%:*}" != "${FROZEN_CARGO_LOCK_SHA256}" ]]; then
+  echo "error: privacy Python SDK Cargo.lock does not match the frozen release digest" >&2
+  exit 1
+fi
 REQUIREMENTS_LOCKFILE_SEAL="$(
   privacy_sdk_file_seal "${REQUIREMENTS_LOCKFILE}" "${PYTHON_BIN}"
 )"
@@ -934,6 +944,18 @@ assert_privacy_sdk_inputs_unchanged() {
 cleanup_privacy_sdk_cargo_wrapper() {
   local status=$?
   trap - EXIT HUP INT TERM
+  if [[ "${TEMPORARY_WORKSPACE_LOCK:-0}" == "1" ]]; then
+    if [[ -f "${WORKSPACE_CARGO_LOCKFILE:-}" && \
+      ! -L "${WORKSPACE_CARGO_LOCKFILE:-}" && \
+      "$(privacy_sdk_file_seal "${WORKSPACE_CARGO_LOCKFILE}" "${PYTHON_BIN}")" == \
+        "${FROZEN_CARGO_LOCK_SHA256}:"* ]]; then
+      rm -f -- "${WORKSPACE_CARGO_LOCKFILE}"
+      TEMPORARY_WORKSPACE_LOCK=0
+    else
+      echo "error: refusing to remove a changed temporary workspace Cargo.lock" >&2
+      status=1
+    fi
+  fi
   if ! assert_privacy_sdk_inputs_unchanged; then
     status=1
   fi
@@ -1092,6 +1114,49 @@ case "${INSTALLED_NATIVE_PATH}" in
 esac
 assert_privacy_sdk_inputs_unchanged
 
+NATIVE_ABI22_MANIFEST="${PRIVATE_CARGO_WRAPPER_DIR}/python-native-abi22.json"
+materialize_workspace_lock_for_native_evidence() {
+  [[ "${WORKSPACE_CARGO_LOCK_STATE}" == "absent" ]] || {
+    echo "error: privacy Python native evidence requires an initially absent workspace Cargo.lock" >&2
+    return 1
+  }
+  [[ ! -e "${WORKSPACE_CARGO_LOCKFILE}" && ! -L "${WORKSPACE_CARGO_LOCKFILE}" ]] || {
+    echo "error: workspace Cargo.lock appeared before native evidence collection" >&2
+    return 1
+  }
+  install -m 600 "${SELECTED_CARGO_LOCKFILE}" "${WORKSPACE_CARGO_LOCKFILE}"
+  TEMPORARY_WORKSPACE_LOCK=1
+}
+remove_workspace_lock_after_native_evidence() {
+  [[ -f "${WORKSPACE_CARGO_LOCKFILE}" && ! -L "${WORKSPACE_CARGO_LOCKFILE}" ]] || {
+    echo "error: temporary workspace Cargo.lock changed identity" >&2
+    return 1
+  }
+  [[ "$(privacy_sdk_file_seal "${WORKSPACE_CARGO_LOCKFILE}" "${PYTHON_BIN}")" == \
+    "${FROZEN_CARGO_LOCK_SHA256}:"* ]] || {
+    echo "error: temporary workspace Cargo.lock differs from the authenticated lock" >&2
+    return 1
+  }
+  rm -f -- "${WORKSPACE_CARGO_LOCKFILE}"
+  TEMPORARY_WORKSPACE_LOCK=0
+}
+
+materialize_workspace_lock_for_native_evidence
+"${VENV_DIR}/bin/python" -I -S "${ABI22_CHECKER}" record \
+  --artifact "${INSTALLED_NATIVE_PATH}" \
+  --manifest "${NATIVE_ABI22_MANIFEST}" \
+  --source-root "${ROOT_DIR}" \
+  --python "${VENV_DIR}/bin/python" \
+  --sdk python \
+  --target "${AUTHENTICATED_RUST_HOST_TRIPLE}-py312"
+"${VENV_DIR}/bin/python" -I -S "${ABI22_CHECKER}" verify \
+  --artifact "${INSTALLED_NATIVE_PATH}" \
+  --manifest "${NATIVE_ABI22_MANIFEST}" \
+  --source-root "${ROOT_DIR}" \
+  --python "${VENV_DIR}/bin/python"
+remove_workspace_lock_after_native_evidence
+assert_privacy_sdk_inputs_unchanged
+
 export IROHA_PYTHON_TEST_INSTALLED_PACKAGE=1
 export PYTHONPATH="${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"
 "${VENV_DIR}/bin/python" -I -B -m pytest -q \
@@ -1099,7 +1164,20 @@ export PYTHONPATH="${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python"
   tests/privacy_exact12_fixture_test.py \
   tests/package_import_fallback_test.py \
   tests/privacy_native_registry_test.py \
+  tests/privacy_native_integration_test.py \
+  tests/privacy_wallet_worker_controller_test.py \
   tests/privacy_zk_x509_transport_test.py \
   tests/proof_attachment_contract_test.py \
-  tests/crypto_algorithms_test.py
+  tests/crypto_algorithms_test.py \
+  "${ROOT_DIR}/scripts/tests/check_privacy_jvm_native_gate_test.py" \
+  "${ROOT_DIR}/scripts/tests/check_privacy_python_witness_boundary_test.py"
+assert_privacy_sdk_inputs_unchanged
+
+materialize_workspace_lock_for_native_evidence
+"${VENV_DIR}/bin/python" -I -S "${ABI22_CHECKER}" verify \
+  --artifact "${INSTALLED_NATIVE_PATH}" \
+  --manifest "${NATIVE_ABI22_MANIFEST}" \
+  --source-root "${ROOT_DIR}" \
+  --python "${VENV_DIR}/bin/python"
+remove_workspace_lock_after_native_evidence
 assert_privacy_sdk_inputs_unchanged

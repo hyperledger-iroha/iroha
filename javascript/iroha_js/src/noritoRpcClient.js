@@ -60,7 +60,8 @@ export class NoritoRpcClient {
   /**
    * @param {string} baseUrl Base Torii URL (e.g. http://localhost:8080).
    * @param {object} [options]
-   * @param {typeof fetch} [options.fetchImpl] Custom fetch implementation.
+   * @param {typeof fetch} [options.fetchImpl] Custom fetch implementation. It must honor
+   * `redirect: "error"` and must not retry a dispatched request body.
    * @param {Record<string, string>} [options.defaultHeaders]
    * @param {number} [options.timeoutMs]
    * @param {boolean} [options.allowInsecure] Allow insecure http/ws when credentials are present (dev only).
@@ -236,7 +237,7 @@ export class NoritoRpcClient {
         : Math.max(0, Number(options.timeoutMs));
     const response = await this._fetchWithTimeout(
       urlObj.toString(),
-      { method, headers, body },
+      { method, headers, body, redirect: "error" },
       timeout,
       options.signal,
     );

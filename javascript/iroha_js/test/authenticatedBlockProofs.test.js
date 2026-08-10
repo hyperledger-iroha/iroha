@@ -18,7 +18,7 @@ function minimallyShapedInput(overrides = {}) {
   expectedEntryHash[31] = 1;
   return {
     version: 1,
-    chainId: "authenticated-proof-test",
+    networkId: "a5".repeat(32),
     trustedContextId: context,
     expectedEntryHash,
     finalityProofNorito: Buffer.of(1),
@@ -50,7 +50,7 @@ test("browser authenticated verifier fails closed without digest-pinned Rust WAS
   );
 });
 
-test("node wrapper rejects unknown fields, wrong versions, and noncanonical chains before native load", async () => {
+test("node wrapper rejects unknown fields, wrong versions, and noncanonical networks before native load", async () => {
   await assert.rejects(
     verifyAuthenticatedBlockProofsV1(minimallyShapedInput({ surprise: true })),
     /unknown field surprise/u,
@@ -60,8 +60,12 @@ test("node wrapper rejects unknown fields, wrong versions, and noncanonical chai
     /version must be 1/u,
   );
   await assert.rejects(
-    verifyAuthenticatedBlockProofsV1(minimallyShapedInput({ chainId: " bad " })),
-    /chainId is not canonical/u,
+    verifyAuthenticatedBlockProofsV1(minimallyShapedInput({ networkId: " bad " })),
+    /networkId is not canonical/u,
+  );
+  await assert.rejects(
+    verifyAuthenticatedBlockProofsV1(minimallyShapedInput({ networkId: "a4".repeat(32) })),
+    /networkId must carry the Iroha hash marker bit/u,
   );
 });
 

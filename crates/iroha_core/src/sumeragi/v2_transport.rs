@@ -1152,13 +1152,20 @@ fn verify_signature(
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
+    use iroha_data_model::NetworkId;
     use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
     use tempfile::TempDir;
 
     use crate::sumeragi::{v2_body_store::V2BodyStore, v2_chunks::encode_payload};
 
     use super::*;
+
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
 
     struct Fixture {
         context: wire::HeightContext,
@@ -1186,7 +1193,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let context = wire::HeightContext {
-                chain_id: "sumeragi-v2-transport-test".into(),
+                network_id: test_network_id(0x91),
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 7,

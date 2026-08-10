@@ -114,8 +114,8 @@ impl Kura {
         // the canonical lock order. Track cleanup/publication itself under the
         // aggregate disk-usage mutation guard.
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let before = Self::canonical_prune_intent_artifact_inventory(&self.store_root)?
-            .tracked_bytes()?;
+        let before =
+            Self::canonical_prune_intent_artifact_inventory(&self.store_root)?.tracked_bytes()?;
         if Self::recover_canonical_prune_intent_artifacts(&self.store_root)?.is_some() {
             let after = Self::canonical_prune_intent_artifact_inventory(&self.store_root)?
                 .tracked_bytes()?;
@@ -126,8 +126,8 @@ impl Kura {
                 "another prune intent is already active".to_owned(),
             ));
         }
-        let after_recovery = Self::canonical_prune_intent_artifact_inventory(&self.store_root)?
-            .tracked_bytes()?;
+        let after_recovery =
+            Self::canonical_prune_intent_artifact_inventory(&self.store_root)?.tracked_bytes()?;
         self.update_disk_usage_delta(before, after_recovery);
         if let Err(error) = self.publish_canonical_prune_intent_exact(intent, &bytes) {
             if std::fs::symlink_metadata(Self::prune_intent_path_for(&self.store_root)).is_ok()
@@ -148,8 +148,8 @@ impl Kura {
 
     fn clear_prune_intent(&self) -> Result<()> {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let before = Self::canonical_prune_intent_artifact_inventory(&self.store_root)?
-            .tracked_bytes()?;
+        let before =
+            Self::canonical_prune_intent_artifact_inventory(&self.store_root)?.tracked_bytes()?;
         let _ = Self::recover_canonical_prune_intent_artifacts(&self.store_root)?;
         let inventory = Self::canonical_prune_intent_artifact_inventory(&self.store_root)?;
         if let Some(stable) = inventory.stable.as_ref() {
@@ -247,9 +247,7 @@ impl Kura {
         ))
     }
 
-    fn canonical_prune_intent_namespace_for(
-        store_root: &Path,
-    ) -> Result<BoundProgressNamespace> {
+    fn canonical_prune_intent_namespace_for(store_root: &Path) -> Result<BoundProgressNamespace> {
         let stable = Self::prune_intent_path_for(store_root);
         let temporary = Self::prune_intent_temp_path_for(store_root);
         let directory = Self::open_bound_progress_directory(store_root, store_root)?;
@@ -424,11 +422,7 @@ impl Kura {
             .metadata()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if !opened_before.is_file()
-            || !Self::canonical_prune_intent_metadata_unchanged(
-                &before,
-                &opened_before,
-                links,
-            )
+            || !Self::canonical_prune_intent_metadata_unchanged(&before, &opened_before, links)
         {
             return Err(Self::invalid_canonical_prune_intent_artifact(
                 path,
@@ -446,11 +440,7 @@ impl Kura {
         let after = std::fs::symlink_metadata(path)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if bytes.len() != usize::try_from(before.len()).unwrap_or(usize::MAX)
-            || !Self::canonical_prune_intent_metadata_unchanged(
-                &before,
-                &opened_after,
-                links,
-            )
+            || !Self::canonical_prune_intent_metadata_unchanged(&before, &opened_after, links)
             || !Self::canonical_prune_intent_metadata_unchanged(&opened_after, &after, links)
             || !Self::progress_mutation_namespace_unchanged(namespace)
         {
@@ -478,8 +468,7 @@ impl Kura {
         let stable_path = Self::prune_intent_path_for(store_root);
         let temporary_path = Self::prune_intent_temp_path_for(store_root);
         let stable = Self::read_canonical_prune_intent_artifact(&namespace, &stable_path)?;
-        let temporary =
-            Self::read_canonical_prune_intent_artifact(&namespace, &temporary_path)?;
+        let temporary = Self::read_canonical_prune_intent_artifact(&namespace, &temporary_path)?;
         match (&stable, &temporary) {
             (None, None) => {}
             (Some(stable), None) if stable.links == 1 => {}
@@ -492,9 +481,7 @@ impl Kura {
                         &temporary.metadata,
                     )
                     && stable.bytes == temporary.bytes
-                    && stable.intent == temporary.intent =>
-            {
-            }
+                    && stable.intent == temporary.intent => {}
             (Some(stable), Some(temporary)) => {
                 return Err(Error::PruneIntentConflict(format!(
                     "canonical prune-intent stable {} and temporary {} artifacts are not one authenticated two-link publication object",
@@ -551,13 +538,10 @@ impl Kura {
 
         #[cfg(unix)]
         {
-            let current = rustix::fs::statat(
-                &immediate.file,
-                name,
-                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-            )
-            .map_err(std::io::Error::from)
-            .map_err(|error| Error::IO(error, artifact.path.clone()))?;
+            let current =
+                rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(std::io::Error::from)
+                    .map_err(|error| Error::IO(error, artifact.path.clone()))?;
             use std::os::unix::fs::MetadataExt as _;
             if rustix::fs::FileType::from_raw_mode(current.st_mode)
                 != rustix::fs::FileType::RegularFile
@@ -819,9 +803,7 @@ impl Kura {
                 retained_is_compact = false;
             }
             retained_data_bytes = retained_data_bytes.checked_add(entry.len).ok_or_else(|| {
-                Error::PruneIntentConflict(format!(
-                    "{kind} retained payload projection overflowed"
-                ))
+                Error::PruneIntentConflict(format!("{kind} retained payload projection overflowed"))
             })?;
         }
         let data_bytes = std::fs::symlink_metadata(data_path)
@@ -891,8 +873,7 @@ impl Kura {
         )?;
         if pipeline_residue && roster_residue {
             return Err(Error::PruneIntentConflict(
-                "both sequential canonical sidecar pairs retain rewrite crash residues"
-                    .to_owned(),
+                "both sequential canonical sidecar pairs retain rewrite crash residues".to_owned(),
             ));
         }
         self.reconcile_prune_indexed_sidecar_temps(
@@ -921,11 +902,7 @@ impl Kura {
         )?;
         let sequential_peak_bytes = pipeline
             .temp_pair_bytes()
-            .and_then(|pipeline| {
-                roster
-                    .temp_pair_bytes()
-                    .map(|roster| pipeline.max(roster))
-            })
+            .and_then(|pipeline| roster.temp_pair_bytes().map(|roster| pipeline.max(roster)))
             .ok_or_else(|| {
                 Error::PruneIntentConflict(
                     "canonical sidecar rewrite peak projection overflowed".to_owned(),
@@ -990,8 +967,7 @@ impl Kura {
                     || !metadata.file_type().is_file()
                     || !Self::sidecar_is_single_link(&metadata)
                     || metadata.len()
-                        > u64::try_from(MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES)
-                            .unwrap_or(u64::MAX)
+                        > u64::try_from(MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES).unwrap_or(u64::MAX)
                 {
                     return Err(Error::PruneIntentConflict(
                         "canonical block marker is not a bounded single-link regular file"

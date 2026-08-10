@@ -20,15 +20,20 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
-import sccp_release_common as RELEASE_CRYPTO  # noqa: E402
+import sorafs_topology_qualification as TOPOLOGY  # noqa: E402
+import sorafs_l1_lane_inventory_test_support as INVENTORY_SUPPORT  # noqa: E402
 from sorafs_resilience_test_support import (  # noqa: E402
     DEFAULT_SIGNING_SEED as RESILIENCE_SIGNING_SEED,
+    public_key_from_seed as ed25519_public_key_from_seed,
     public_key_from_seed as resilience_public_key_from_seed,
     render_summary as render_resilience_summary,
     resilience_binding as build_resilience_binding,
     resilience_summary as build_resilience_summary,
+    sign as ed25519_sign,
 )
-from sorafs_rollout_runner_test_support import TopologyBoundChecker  # noqa: E402
+from sorafs_rollout_runner_test_support import (  # noqa: E402
+    TopologyBoundChecker, authenticated_topology_binding, signed_topology_cli_args,
+)
 from sorafs_production_readiness_duplicate_test_support import (  # noqa: E402
     assert_duplicate_and_unrequired_summaries_fail_closed,
     assert_duplicate_gate_summary_fails,
@@ -55,19 +60,20 @@ REFERENCE_SDK_PROVENANCE_CERTIFICATE_IDENTITY = (
     "https://github.com/hyperledger/iroha/"
     ".github/workflows/sorafs-cli-release.yml@refs/heads/main"
 )
-REFERENCE_SDK_PROVENANCE_OIDC_ISSUER = (
-    "https://token.actions.githubusercontent.com"
-)
+REFERENCE_SDK_PROVENANCE_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 REFERENCE_SDK_PROVENANCE_VERIFICATION_KEY_FINGERPRINT = hashlib.sha256(
     b"test-only-reference-sdk-provenance-verification-key"
 ).hexdigest()
 DEPLOYMENT_ID = "sorafs-mainnet-2026-06"
 ENVIRONMENT = "production"
 FOUNDATIONAL_RELEASE_SEQUENCE = 7
-FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256 = hashlib.sha256(
-    b"test-only-foundational-predecessor"
-).hexdigest()
+FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256 = hashlib.sha256(b"test-only-foundational-predecessor").hexdigest()
 FOUNDATIONAL_SIGNING_SEED = bytes.fromhex("1f" * 32)
+FOUNDATIONAL_SIGNER_SERVICE_ID = "sorafs-promotion-signer-a"
+FOUNDATIONAL_SIGNER_ADMINISTRATOR_ID = "sorafs-promotion-admin-b"
+FOUNDATIONAL_SIGNER_KEY_REVISION = 7
+FOUNDATIONAL_SIGNER_POLICY_REVISION = 11
+FOUNDATIONAL_SIGNER_POLICY_DIGEST = hashlib.sha256(b"promotion policy").hexdigest()
 TOPOLOGY_QUALIFICATION_SUMMARY = {
     "schema": "sorafs.l1.deployment_qualification.summary.v1",
     "status": "configuration-qualified",
@@ -82,9 +88,9 @@ TOPOLOGY_QUALIFICATION_SUMMARY = {
     ).hexdigest(),
     "deployment": {
         "deployment_id": DEPLOYMENT_ID,
-        "environment": ENVIRONMENT,
+        "environment": ENVIRONMENT, "network": "taira", "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0", "chain_discriminant": 369,
     },
-    "validator_count": 4,
+    "validator_count": 4, "validator_ids": ["taira-validator-1", "taira-validator-2", "taira-validator-3", "taira-validator-4"],
     "storage_provider_count": 2,
     "gateway_count": 2,
     "governance_dag_instance_count": 2,
@@ -107,7 +113,7 @@ TOPOLOGY_QUALIFICATION = {
         "canonical_manifest_sha256"
     ],
     "deployment_id": DEPLOYMENT_ID,
-    "environment": ENVIRONMENT,
+    "environment": ENVIRONMENT, "network": "taira", "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0", "chain_discriminant": 369, "validator_ids_sha256": "15e4cadecf176094a1791a33ee75ce9315e1d953018affa5df2762fcba52d6f2",
 }
 RESILIENCE_SIGNER_PUBLIC_KEY = resilience_public_key_from_seed(
     RESILIENCE_SIGNING_SEED
@@ -178,48 +184,6 @@ def test_reference_sdk_supply_chain_inventory_contracts_are_schema_closed() -> N
     )
 
 
-def ed25519_public_key_from_seed(seed: bytes) -> bytes:
-    """Derive a deterministic test-only Ed25519 public key."""
-
-    digest = hashlib.sha512(seed).digest()
-    scalar = int.from_bytes(digest[:32], "little")
-    scalar &= (1 << 254) - 8
-    scalar |= 1 << 254
-    return RELEASE_CRYPTO._ed_encode(  # noqa: SLF001 - deterministic test fixture
-        RELEASE_CRYPTO._ed_scalar_multiply(  # noqa: SLF001
-            RELEASE_CRYPTO._ED_BASE,  # noqa: SLF001
-            scalar,
-        )
-    )
-
-
-def ed25519_sign(seed: bytes, message: bytes) -> bytes:
-    """Create a deterministic test-only Ed25519 signature."""
-
-    digest = hashlib.sha512(seed).digest()
-    scalar = int.from_bytes(digest[:32], "little")
-    scalar &= (1 << 254) - 8
-    scalar |= 1 << 254
-    prefix = digest[32:]
-    public_key = ed25519_public_key_from_seed(seed)
-    nonce = int.from_bytes(hashlib.sha512(prefix + message).digest(), "little")
-    nonce %= RELEASE_CRYPTO._ED_L  # noqa: SLF001
-    encoded_r = RELEASE_CRYPTO._ed_encode(  # noqa: SLF001
-        RELEASE_CRYPTO._ed_scalar_multiply(  # noqa: SLF001
-            RELEASE_CRYPTO._ED_BASE,  # noqa: SLF001
-            nonce,
-        )
-    )
-    challenge = int.from_bytes(
-        hashlib.sha512(encoded_r + public_key + message).digest(),
-        "little",
-    ) % RELEASE_CRYPTO._ED_L  # noqa: SLF001
-    encoded_s = (
-        (nonce + challenge * scalar) % RELEASE_CRYPTO._ED_L  # noqa: SLF001
-    ).to_bytes(32, "little")
-    return encoded_r + encoded_s
-
-
 FOUNDATIONAL_SIGNER_PUBLIC_KEY = ed25519_public_key_from_seed(
     FOUNDATIONAL_SIGNING_SEED
 )
@@ -274,6 +238,7 @@ def foundational_summary(
     environment: str = ENVIRONMENT,
     lane_summary_sha256: dict[str, str] | None = None,
     resilience_qualification: dict | None = None,
+    l1_lane_evidence_inventory_sha256: str = SHA256,
 ) -> dict:
     """Return a complete signed foundational prerequisite envelope."""
 
@@ -293,8 +258,9 @@ def foundational_summary(
         "generated_at_unix": generated_at_unix,
         "release_sequence": FOUNDATIONAL_RELEASE_SEQUENCE,
         "previous_envelope_sha256": FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256,
+        "l1_lane_evidence_inventory_sha256": l1_lane_evidence_inventory_sha256,
         "topology_qualification": {
-            **TOPOLOGY_QUALIFICATION,
+            **authenticated_topology_binding(TOPOLOGY_QUALIFICATION),
             "deployment_id": deployment_id,
             "environment": environment,
         },
@@ -331,8 +297,14 @@ def foundational_summary(
             for gate_name in MODULE.DEFAULT_REQUIRED_GATES
         ],
         "signature": {
+            "administrator_id": FOUNDATIONAL_SIGNER_ADMINISTRATOR_ID,
             "algorithm": "ed25519",
+            "backend": "software",
+            "key_revision": FOUNDATIONAL_SIGNER_KEY_REVISION,
+            "policy_digest_sha256": FOUNDATIONAL_SIGNER_POLICY_DIGEST,
+            "policy_revision": FOUNDATIONAL_SIGNER_POLICY_REVISION,
             "public_key_fingerprint_sha256": "00" * 32,
+            "service_id": FOUNDATIONAL_SIGNER_SERVICE_ID,
             "signature_hex": "00" * 64,
         },
     }
@@ -366,19 +338,28 @@ def write_foundational_summary(root: Path, payload: dict | None = None) -> Path:
     """Write the signed prerequisite fixture when it is not already present."""
 
     path = root / "foundational_prerequisites.json"
+    if payload is None and path.exists():
+        return path
+    inventory, _lanes, _topology = lane_inventory_fixture(root)
+    inventory_sha256 = hashlib.sha256(inventory.read_bytes()).hexdigest()
     if payload is not None or not path.exists():
+        if payload is not None:
+            payload = copy.deepcopy(payload)
+            if payload.get("l1_lane_evidence_inventory_sha256") != inventory_sha256:
+                payload["l1_lane_evidence_inventory_sha256"] = inventory_sha256
+                resign_foundational_summary(payload)
         write_json(
             path,
             (
                 foundational_summary(
                     lane_summary_sha256=lane_summary_digests(root),
+                    l1_lane_evidence_inventory_sha256=inventory_sha256,
                 )
                 if payload is None
                 else payload
             ),
         )
     return path
-
 
 def foundational_cli_args() -> list[str]:
     """Return the reviewed trust/continuity arguments for fixture envelopes."""
@@ -401,10 +382,7 @@ def topology_only_cli_args(
     """Return the topology qualification accepted by individual lane checkers."""
 
     topology_path = write_topology_qualification(root, deployment_id, environment)
-    return [
-        "--topology-qualification-summary",
-        str(topology_path),
-    ]
+    return ["--topology-qualification-summary", str(topology_path)]
 
 
 def resilience_cli_args(
@@ -418,7 +396,7 @@ def resilience_cli_args(
 
     topology_path = write_topology_qualification(root, deployment_id, environment)
     topology_qualification, topology_errors = (
-        MODULE.load_topology_qualification_binding(
+        TOPOLOGY.load_topology_qualification_binding(
             topology_path,
             expected_deployment_id=deployment_id,
             expected_environment=environment,
@@ -453,18 +431,24 @@ def topology_cli_args(
 ) -> list[str]:
     """Return the complete topology and resilience input for aggregate cases."""
 
+    topology_path = write_topology_qualification(root, deployment_id, environment)
+    inventory, lanes, _topology = lane_inventory_fixture(
+        root, deployment_id, environment, generated_at_unix=generated_at_unix
+    )
     return [
-        *topology_only_cli_args(root, deployment_id, environment),
+        *signed_topology_cli_args(topology_path, deployment_id=deployment_id, environment=environment, now_unix=generated_at_unix + 1),
         *resilience_cli_args(
             root,
             deployment_id,
             environment,
             generated_at_unix=generated_at_unix,
         ),
+        *INVENTORY_SUPPORT.inventory_cli_args(inventory),
+        *(value for gate, path in lanes for value in ("--l1-lane-summary", f"{gate}={path}")),
     ]
 
 
-def production_validation_options(**overrides: object):
+def production_validation_options(root: Path | None = None, **overrides: object):
     """Return aggregate options including reviewed foundational trust anchors."""
 
     values = {
@@ -479,9 +463,17 @@ def production_validation_options(**overrides: object):
         "foundational_previous_envelope_sha256": (
             FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256
         ),
-        "topology_qualification": TOPOLOGY_QUALIFICATION,
+        "topology_qualification": authenticated_topology_binding(TOPOLOGY_QUALIFICATION),
         "resilience_qualification": RESILIENCE_QUALIFICATION,
     }
+    if root is not None:
+        inventory, lanes, topology = lane_inventory_fixture(root)
+        values["l1_lane_evidence_inventory"] = (
+            INVENTORY_SUPPORT.verified_inventory(
+                inventory, lanes, topology, deployment_id=DEPLOYMENT_ID,
+                environment=ENVIRONMENT, now_unix=NOW_UNIX,
+            )
+        )
     values.update(overrides)
     return MODULE.ValidationOptions(**values)
 
@@ -506,9 +498,8 @@ LANE_FIXTURE_TESTS = {
     "transparency": "check_sorafs_transparency_rollout_evidence_test.py",
 }
 
-
 def write_json(path: Path, payload: dict) -> Path:
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    path.write_bytes(INVENTORY_SUPPORT.inventory.canonical_file_bytes(payload))
     return path
 
 
@@ -521,12 +512,27 @@ def write_topology_qualification(
 
     path = root / "l1-topology-qualification.summary"
     payload = copy.deepcopy(TOPOLOGY_QUALIFICATION_SUMMARY)
-    payload["deployment"] = {
-        "deployment_id": deployment_id,
-        "environment": environment,
-    }
+    payload["deployment"] = {"deployment_id": deployment_id, "environment": environment, "network": "taira", "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0", "chain_discriminant": 369}
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+def lane_inventory_fixture(
+    root: Path,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+    *,
+    generated_at_unix: int = GENERATED_AT,
+):
+    return INVENTORY_SUPPORT.write_checker_inventory(
+        root,
+        write_topology=write_topology_qualification,
+        load_topology=TOPOLOGY.load_topology_qualification_binding,
+        payload_factory=gate_summary,
+        deployment_id=deployment_id,
+        environment=environment,
+        generated_at_unix=generated_at_unix,
+    )
 
 
 def default_gate_metadata(
@@ -1224,6 +1230,10 @@ def run_gate(root: Path, *extra: str) -> int:
     )
 
 
+def run_preflight(root: Path, args: list[str]) -> int:
+    return MODULE.main([*topology_cli_args(root), *args])
+
+
 def test_aggregate_accepts_trusted_resilience_attachment_without_new_lane(
     tmp_path: Path,
 ) -> None:
@@ -1354,10 +1364,11 @@ def run_foundational_case(
     return exit_code, json.loads(summary.read_text(encoding="utf-8"))
 
 
-def test_duplicate_required_gate_fails_before_validation(capsys) -> None:
+def test_duplicate_required_gate_fails_before_validation(tmp_path: Path, capsys) -> None:
     assert (
         MODULE.main(
             [
+                *topology_cli_args(tmp_path),
                 "--require-gate",
                 "gateway_load",
                 "--require-gate",
@@ -1374,11 +1385,11 @@ def test_duplicate_required_gate_fails_before_validation(capsys) -> None:
     assert "gateway_load" not in captured.err
 
 
-def test_unknown_required_gate_fails_before_validation(capsys) -> None:
+def test_unknown_required_gate_fails_before_validation(tmp_path: Path, capsys) -> None:
     unknown_gate = "private-key-placeholder"
 
     assert (
-        MODULE.main(["--require-gate", unknown_gate, "--now-unix", str(NOW_UNIX)])
+        MODULE.main([*topology_cli_args(tmp_path), "--require-gate", unknown_gate, "--now-unix", str(NOW_UNIX)])
         == 2
     )
 
@@ -1387,11 +1398,11 @@ def test_unknown_required_gate_fails_before_validation(capsys) -> None:
     assert unknown_gate not in captured.err
 
 
-def test_malformed_required_gate_fails_before_validation(capsys) -> None:
+def test_malformed_required_gate_fails_before_validation(tmp_path: Path, capsys) -> None:
     malformed_gate = "gateway_load,"
 
     assert (
-        MODULE.main(["--require-gate", malformed_gate, "--now-unix", str(NOW_UNIX)])
+        MODULE.main([*topology_cli_args(tmp_path), "--require-gate", malformed_gate, "--now-unix", str(NOW_UNIX)])
         == 2
     )
 
@@ -1654,21 +1665,21 @@ def normalize_deployment_context(value: object, deployment_id: str, environment:
         for item in value:
             normalize_deployment_context(item, deployment_id, environment)
 
-
 def write_normalized_complete_lane_summaries(
     fixture_root: Path,
     summary_root: Path,
 ) -> int:
-    now_values = []
+    rows = []
     for gate_name in MODULE.DEFAULT_REQUIRED_GATES:
         payload, now_unix = write_complete_lane_fixture_summary(gate_name, fixture_root)
+        rows.append((gate_name, payload, now_unix))
+    now_unix = max(row[2] for row in rows)
+    for gate_name, payload, _lane_now in rows:
         normalize_deployment_context(payload, DEPLOYMENT_ID, ENVIRONMENT)
+        INVENTORY_SUPPORT.normalize_generated_at_unix(payload, now_unix - 1)
         payload["topology_qualification"] = copy.deepcopy(TOPOLOGY_QUALIFICATION)
         write_json(summary_root / f"{gate_name}.json", payload)
-        now_values.append(now_unix)
-    assert now_values
-    return max(now_values)
-
+    return now_unix
 
 def test_payload_free_summary_metadata_fields_are_derived_from_gate_contracts() -> None:
     expected = frozenset().union(*MODULE.GATE_METADATA_FIELDS.values())
@@ -1867,6 +1878,13 @@ exec(
     globals(),
 )
 del _PRODUCTION_FOUNDATIONAL_CASES
+
+_PRODUCTION_ARTIFACT_CASES = Path(__file__).with_name("sorafs_production_artifact_cases.py")
+exec(
+    compile(_PRODUCTION_ARTIFACT_CASES.read_bytes(), str(_PRODUCTION_ARTIFACT_CASES), "exec"),
+    globals(),
+)
+del _PRODUCTION_ARTIFACT_CASES
 
 
 def test_direct_checker_requires_explicit_deployment_context(tmp_path: Path) -> None:
@@ -2167,7 +2185,7 @@ def test_summary_out_symlink_fails_before_validation(
     summary.symlink_to(target)
 
     assert (
-        MODULE.main(
+        run_preflight(tmp_path,
             [
                 "--evidence-dir",
                 str(tmp_path),
@@ -2204,7 +2222,7 @@ def test_summary_out_parent_symlink_fails_before_validation(
     parent.symlink_to(target, target_is_directory=True)
 
     assert (
-        MODULE.main(
+        run_preflight(tmp_path,
             [
                 "--evidence-dir",
                 str(tmp_path),
@@ -2241,7 +2259,7 @@ def test_summary_out_directory_fails_before_validation(
     (summary / "marker.txt").write_text("private-key-placeholder", encoding="utf-8")
 
     assert (
-        MODULE.main(
+        run_preflight(tmp_path,
             [
                 "--evidence-dir",
                 str(tmp_path),
@@ -2277,7 +2295,7 @@ def test_summary_out_parent_file_fails_before_validation(
     parent.write_text("private-key-placeholder", encoding="utf-8")
 
     assert (
-        MODULE.main(
+        run_preflight(tmp_path,
             [
                 "--evidence-dir",
                 str(tmp_path),
@@ -2311,7 +2329,7 @@ def test_summary_out_unsafe_path_fails_before_validation_without_leaking(
     write_gate(tmp_path, "gateway_load")
 
     assert (
-        MODULE.main(
+        run_preflight(tmp_path,
             [
                 "--evidence-dir",
                 str(tmp_path),
@@ -2349,7 +2367,7 @@ def test_summary_out_same_as_explicit_evidence_fails_before_validation(
     evidence = write_gate(tmp_path, "gateway_load")
 
     assert (
-        MODULE.main(
+        run_preflight(tmp_path,
             [
                 "--evidence",
                 str(evidence),
@@ -2382,7 +2400,7 @@ def test_summary_out_discovered_from_evidence_dir_fails_before_validation(
     summary = write_gate(tmp_path, "gateway_load")
 
     assert (
-        MODULE.main(
+        run_preflight(tmp_path,
             [
                 "--evidence-dir",
                 str(tmp_path),
@@ -2413,7 +2431,7 @@ def test_evidence_dir_unsafe_path_fails_before_validation_without_leaking(
     capsys,
 ) -> None:
     assert (
-        MODULE.main(
+        run_preflight(tmp_path,
             [
                 "--evidence-dir",
                 str(tmp_path / "bearer&#95;token_bundle"),
@@ -2446,7 +2464,7 @@ def test_explicit_evidence_unsafe_path_fails_before_validation_without_leaking(
     capsys,
 ) -> None:
     assert (
-        MODULE.main(
+        run_preflight(tmp_path,
             [
                 "--evidence",
                 str(tmp_path / "private%26%2395%3Bkey.json"),
@@ -3012,12 +3030,11 @@ def test_missing_required_gate_fails(tmp_path: Path) -> None:
 
 
 def test_missing_required_summary_rows_fail_closed_from_config(tmp_path: Path) -> None:
-    options = production_validation_options()
-
     for index, gate in enumerate(MODULE.GATE_SUMMARY_KINDS):
         evidence_root = tmp_path / f"{index}_{gate.name}"
         evidence_root.mkdir()
         write_foundational_summary(evidence_root)
+        options = production_validation_options(evidence_root)
         summary, build_errors = MODULE.build_summary(
             [evidence_root],
             [],
@@ -5647,7 +5664,7 @@ def test_explicit_nonproduction_environment_fails_before_validation(
     write_gate(tmp_path, "gateway_load", environment="staging")
 
     assert (
-        MODULE.main(
+        run_preflight(tmp_path,
             [
                 "--evidence-dir",
                 str(tmp_path),
@@ -5677,7 +5694,7 @@ def test_explicit_unreviewed_deployment_id_fails_before_validation(
     write_gate(tmp_path, "gateway_load", deployment_id=unreviewed_deployment)
 
     assert (
-        MODULE.main(
+        run_preflight(tmp_path,
             [
                 "--evidence-dir",
                 str(tmp_path),
@@ -5711,7 +5728,7 @@ def test_explicit_staging_deployment_id_fails_before_validation(
     write_gate(tmp_path, "gateway_load", deployment_id=staging_deployment)
 
     assert (
-        MODULE.main(
+        run_preflight(tmp_path,
             [
                 "--evidence-dir",
                 str(tmp_path),
@@ -16554,32 +16571,6 @@ def test_recognized_artifact_duplicate_paths_fail_closed_from_config(
         assert donor_path not in result_text
 
 
-def test_artifact_fingerprint_metadata_must_be_payload_free(tmp_path: Path) -> None:
-    payload = gate_summary("gateway_load")
-    first_kind = payload["required_kinds"][0]
-    payload["required"][first_kind]["artifacts"][0]["fingerprint"]["optional"] = None
-    payload["recognized_artifacts"][0]["fingerprint"]["optional"] = None
-    summary = tmp_path / "summary.json"
-    write_json(tmp_path / "gateway_load.json", payload)
-
-    assert (
-        run_gate(
-            tmp_path,
-            "--require-gate",
-            "gateway_load",
-            "--summary-out",
-            str(summary),
-        )
-        == 1
-    )
-
-    result = json.loads(summary.read_text(encoding="utf-8"))
-    assert (
-        ".fingerprint.optional must contain only payload-free canonical metadata"
-        in "\n".join(result["errors"])
-    )
-
-
 def test_aggregate_output_field_inventories_are_schema_closed() -> None:
     field_sets = {
         "PAYLOAD_FREE_ARTIFACT_FIELDS": MODULE.PAYLOAD_FREE_ARTIFACT_FIELDS,
@@ -16661,6 +16652,7 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
         {
             "schema",
             "status",
+            "signer_qualification",
             "required_gates",
             "thresholds",
             "summary_file_count",
@@ -16668,12 +16660,12 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "deployment",
             "topology_qualification",
             "resilience_qualification",
+            "l1_lane_evidence_inventory",
             "foundational_prerequisites",
             "required",
             "errors",
         }
     )
-
     assert MODULE.AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS == (
         frozenset({"schema", "present", "valid", "errors"})
     )
@@ -16691,10 +16683,17 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "environment",
             "release_sequence",
             "previous_envelope_sha256",
+            "signer_backend",
+            "signer_service_id",
+            "signer_administrator_id",
+            "signer_key_revision",
+            "signer_policy_revision",
+            "signer_policy_digest_sha256",
             "signer_public_key_fingerprint_sha256",
             "evidence_anchor_sha256",
             "prerequisite_readiness_summary_sha256",
             "lane_summary_sha256",
+            "l1_lane_evidence_inventory_sha256",
             "topology_qualification",
             "resilience_qualification",
             "path",
@@ -16711,19 +16710,19 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
     )
     assert MODULE.RESILIENCE_QUALIFICATION_AUTHENTICATION_FIELDS == frozenset(
         {
-            "kind",
-            "algorithm",
-            "public_key_fingerprint_sha256",
+            "kind", "algorithm", "backend", "service_id",
+            "administrator_id", "key_revision", "policy_revision",
+            "policy_digest_sha256", "public_key_fingerprint_sha256",
             "signature_hex",
         }
     )
     assert MODULE.RESILIENCE_QUALIFICATION_BINDING_FIELDS == frozenset(
         {
-            "schema",
-            "summary_sha256",
-            "receipt_sha256",
-            "canonical_receipt_sha256",
-            "receipt_generated_at_unix",
+            "schema", "summary_sha256", "receipt_sha256",
+            "canonical_receipt_sha256", "receipt_generated_at_unix",
+            "signer_backend", "signer_service_id",
+            "signer_administrator_id", "signer_key_revision",
+            "signer_policy_revision", "signer_policy_digest_sha256",
             "signer_public_key_fingerprint_sha256",
         }
     )
@@ -16753,7 +16752,6 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
     assert MODULE.AGGREGATE_RESILIENCE_QUALIFICATION_FIELDS == frozenset(
         {"schema", "present", "valid", "binding", "errors"}
     )
-
     assert (
         MODULE.AGGREGATE_MISSING_GATE_ROW_FIELDS
         < MODULE.AGGREGATE_REQUIRED_GATE_ROW_FIELDS
@@ -16978,7 +16976,7 @@ def test_aggregate_required_row_output_contracts_fail_closed_from_config() -> No
 def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
     write_gate(tmp_path, "gateway_load")
     write_foundational_summary(tmp_path)
-    options = production_validation_options()
+    options = production_validation_options(tmp_path)
     summary, build_errors = MODULE.build_summary(
         [tmp_path],
         [],
@@ -17257,13 +17255,13 @@ def test_aggregate_summary_output_contracts_fail_closed_from_config(
 ) -> None:
     cases = [gate.name for gate in MODULE.GATE_SUMMARY_KINDS]
     assert cases
-    options = production_validation_options()
 
     for index, gate_name in enumerate(cases):
         root = tmp_path / f"{index}_{gate_name}"
         root.mkdir()
         write_gate(root, gate_name)
         write_foundational_summary(root)
+        options = production_validation_options(root)
         summary, build_errors = MODULE.build_summary(
             [root],
             [],
@@ -17422,7 +17420,7 @@ def test_aggregate_summary_output_rejects_overcounted_ready_inventory(
 ) -> None:
     write_gate(tmp_path, "gateway_load")
     write_foundational_summary(tmp_path)
-    options = production_validation_options()
+    options = production_validation_options(tmp_path)
     summary, build_errors = MODULE.build_summary(
         [tmp_path],
         [],
@@ -17488,7 +17486,7 @@ def test_aggregate_summary_output_rejects_overcounted_ready_inventory(
 def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> None:
     write_gate(tmp_path, "gateway_load")
     write_foundational_summary(tmp_path)
-    options = production_validation_options()
+    options = production_validation_options(tmp_path)
     summary, build_errors = MODULE.build_summary(
         [tmp_path],
         [],

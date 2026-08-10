@@ -55,6 +55,7 @@ if IROHA_PYTHON_ADDRESS.exists():
 
 
 DEFAULT_CHAIN_ID = taira_constants.CHAIN_ID
+DEFAULT_NETWORK_ID = taira_constants.NETWORK_ID
 DEFAULT_CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
 DEFAULT_DOMAIN = "universal"
 DEFAULT_ALIAS_PREFIX = "taira-rollout-canary"
@@ -377,6 +378,7 @@ def load_existing_config(path: Path) -> dict[str, Any] | None:
     basic_auth = data.get("basic_auth")
     return {
         "chain": data.get("chain") or DEFAULT_CHAIN_ID,
+        "network_id": data.get("network_id") or DEFAULT_NETWORK_ID,
         "domain": normalize_domain(account.get("domain")),
         "account_id": account_id.strip() if isinstance(account_id, str) else None,
         "public_key": public_key,
@@ -658,6 +660,7 @@ def onboard_account(
     alias: str,
     account_id: str,
     *,
+    network_id: str,
     onboarding_token: str,
     permissions: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -682,7 +685,11 @@ def onboard_account(
             "account onboarding planning failed: "
             f"status={plan_status} body={plan_response!r}"
         )
-    receipt = validate_onboarding_plan_receipt(plan_response, plan_request)
+    receipt = validate_onboarding_plan_receipt(
+        plan_response,
+        plan_request,
+        expected_network_id=network_id,
+    )
 
     apply_status, apply_response = _http_json(
         "POST",
@@ -716,6 +723,8 @@ def onboard_account(
 def validate_onboarding_plan_receipt(
     payload: Any,
     expected_request: dict[str, Any],
+    *,
+    expected_network_id: str,
 ) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("account onboarding plan receipt must be an object")
@@ -726,21 +735,27 @@ def validate_onboarding_plan_receipt(
         raise RuntimeError(
             "account onboarding plan receipt request differs from the submitted intent"
         )
-    for key in (
+    expected_body_keys = {
+        "version",
+        "request",
         "authority",
-        "chain_id",
+        "network_id",
         "anchor",
         "resource",
         "acquisition",
         "quote_guard",
         "instructions",
+        "owner_auto_renew_instruction",
         "valid_until_ms",
-    ):
-        if key not in body:
-            raise RuntimeError(f"account onboarding plan receipt body is missing {key}")
-    for key in ("plan_hash", "signature"):
-        if key not in payload:
-            raise RuntimeError(f"account onboarding plan receipt is missing {key}")
+    }
+    if set(body) != expected_body_keys:
+        raise RuntimeError("account onboarding plan receipt body has invalid fields")
+    if body.get("network_id") != expected_network_id:
+        raise RuntimeError(
+            "account onboarding plan receipt network_id differs from the exact local network"
+        )
+    if set(payload) != {"body", "plan_hash", "signature"}:
+        raise RuntimeError("account onboarding plan receipt has invalid fields")
     return payload
 
 
@@ -949,6 +964,7 @@ def write_config(
     path: Path,
     *,
     chain: str,
+    network_id: str,
     torii_root: str,
     domain: str,
     account_id: str,
@@ -963,6 +979,7 @@ def write_config(
     lines = [
         "# Auto-generated runtime-only rollout canary config.",
         f'chain = "{chain}"',
+        f'network_id = "{network_id}"',
         f'torii_url = "{torii_root.rstrip("/")}/"',
     ]
 
@@ -1032,6 +1049,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"Chain id written into the generated config (default: {DEFAULT_CHAIN_ID})",
     )
     parser.add_argument(
+        "--network-id",
+        default=DEFAULT_NETWORK_ID,
+        help=(
+            "Exact genesis-header network id written into the generated config "
+            f"(default: {DEFAULT_NETWORK_ID})"
+        ),
+    )
+    parser.add_argument(
         "--chain-discriminant",
         type=int,
         default=DEFAULT_CHAIN_DISCRIMINANT,
@@ -1091,6 +1116,7 @@ def main(argv: list[str] | None = None) -> int:
         basic_auth = None
         nonce = False
         chain = args.chain_id
+        network_id = args.network_id
         chain_discriminant = args.chain_discriminant
         domain = normalize_domain(args.domain)
     else:
@@ -1103,6 +1129,7 @@ def main(argv: list[str] | None = None) -> int:
         # Reuse the generated key material, but honor the current runtime arguments so a
         # redeployed network can refresh chain/domain settings without forcing a new signer.
         chain = args.chain_id
+        network_id = args.network_id
         chain_discriminant = int(args.chain_discriminant)
         domain = normalize_domain(args.domain)
 
@@ -1124,6 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
             args.torii_root,
             alias,
             account_id,
+            network_id=network_id,
             onboarding_token=onboarding_token,
             permissions=args.permissions,
         )
@@ -1171,6 +1199,7 @@ def main(argv: list[str] | None = None) -> int:
     write_config(
         output_config,
         chain=chain,
+        network_id=network_id,
         torii_root=args.torii_root,
         domain=domain,
         account_id=account_id,

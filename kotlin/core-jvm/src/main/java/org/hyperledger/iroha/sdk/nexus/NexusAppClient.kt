@@ -10,6 +10,7 @@ import org.hyperledger.iroha.sdk.client.TransactionFinality
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
@@ -31,6 +32,7 @@ class NexusAppError(
 
 /** Static configuration for a SORA Nexus app facade instance. */
 data class NexusAppConfig @JvmOverloads constructor(
+    @JvmField val networkId: NetworkId,
     @JvmField val chainId: String,
     @JvmField val chainDiscriminant: Int,
     @JvmField val appId: String? = null,
@@ -213,7 +215,7 @@ class NexusAppClient @JvmOverloads constructor(
             normalized.destinationAccountId,
         )
         val payload = TransactionPayload(
-            chainId = config.chainId,
+            networkId = config.networkId,
             authority = authority,
             creationTimeMs = normalized.creationTimeMs ?: System.currentTimeMillis(),
             executable = Executable.instructions(listOf(instruction)),

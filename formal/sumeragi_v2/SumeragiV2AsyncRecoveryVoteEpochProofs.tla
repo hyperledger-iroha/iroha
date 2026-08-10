@@ -1055,6 +1055,157 @@ BY FS_CardinalityType, Isa
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
        AsyncOrdinaryIngressCarrierOwnershipInvariant
 
+THEOREM AsyncProducerTypedItemIsInNetworkCarrier ==
+  \A item:
+    AsyncItemTyped(item) => item \in AsyncNetworkItems
+BY ZenonT(120)
+   DEF AsyncItemTyped, AsyncNetworkItems, AsyncNetworkItem,
+       AsyncCertifiedRequestItems, AsyncCommitCertificateRequestItems,
+       AsyncBodyEnvelopeTyped,
+       AsyncCommitCertificateRequestEnvelopeTyped,
+       AsyncReplyRequestItemTyped,
+       AsyncCertifiedResponseEnvelopeTyped,
+       AsyncCommitCertificateResponseEnvelopeTyped,
+       AsyncCertifiedResponseEnvelope,
+       AsyncCommitCertificateResponseEnvelope,
+       AsyncTcEnvelopeTyped, AsyncTcRecordTyped,
+       AsyncBodyEnvelopeSet, AsyncCommitCertificateRequestEnvelopeSet,
+       TcEnvelopeSet, TcRecordSet
+
+THEOREM AdmitIngressPacketHasDueSourcePacket ==
+  \A recipient, source:
+    AdmitIngressPacket(recipient, source)
+      => DueSourcePackets(recipient, source) # {}
+BY Zenon
+   DEF AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
+       DropPolicyRejectedHiddenPacket,
+       DropExactActiveLeaderWireRetry
+
+THEOREM AsyncProducerAdmittedIngressProjectionIsFinite ==
+  AsyncTypeInvariant
+    => /\ IsFiniteSet(AsyncProducerAdmittedIngressEpisodes)
+       /\ IsFiniteSet(AsyncProducerAdmittedIngressObligations)
+       /\ IsFiniteSet(AsyncProducerAdmittedIngressOrigins)
+PROOF
+  <1>1. ASSUME AsyncTypeInvariant
+         PROVE /\ IsFiniteSet(AsyncProducerAdmittedIngressEpisodes)
+               /\ IsFiniteSet(AsyncProducerAdmittedIngressObligations)
+               /\ IsFiniteSet(AsyncProducerAdmittedIngressOrigins)
+    <2>1. IsFiniteSet(AsyncIngressSources)
+      BY <1>1, AsyncIngressSourcesAreFinite
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+             TypeInvariant
+    <2>2. IsFiniteSet(ValidatorIds)
+      BY <2>1, FS_Subset, Zenon DEF AsyncIngressSources
+    <2>3. IsFiniteSet(AsyncProducerAdmittedIngressCoordinates)
+      BY <2>1, <2>2, FS_Product, FS_Subset, Zenon
+         DEF AsyncProducerAdmittedIngressCoordinates
+    <2>4. IsFiniteSet(AsyncProducerAdmittedIngressEpisodes)
+      BY <2>3, FS_Image
+         DEF AsyncProducerAdmittedIngressEpisodes
+    <2>5. IsFiniteSet(AsyncProducerAdmittedIngressObligations)
+      BY <2>4, FS_Image
+         DEF AsyncProducerAdmittedIngressObligations
+    <2>6. IsFiniteSet(AsyncProducerAdmittedIngressOrigins)
+      BY <2>4, FS_Image
+         DEF AsyncProducerAdmittedIngressOrigins
+    <2> QED BY <2>4, <2>5, <2>6
+  <1> QED BY <1>1
+
+THEOREM AsyncProducerAdmittedIngressProjectionIsTyped ==
+  AsyncTypeInvariant
+    => /\ AsyncProducerAdmittedIngressEpisodes
+              \subseteq AsyncProducerIngressEpisodeSet
+       /\ AsyncProducerAdmittedIngressObligations
+              \subseteq AsyncProducerObligationSet
+       /\ AsyncProducerAdmittedIngressOrigins
+              \subseteq AsyncProducerIngressOriginSet
+PROOF
+  <1>1. ASSUME AsyncTypeInvariant
+         PROVE /\ AsyncProducerAdmittedIngressEpisodes
+                      \subseteq AsyncProducerIngressEpisodeSet
+               /\ AsyncProducerAdmittedIngressObligations
+                      \subseteq AsyncProducerObligationSet
+               /\ AsyncProducerAdmittedIngressOrigins
+                      \subseteq AsyncProducerIngressOriginSet
+    <2>1. AsyncPacketContentTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant
+    <2>2. \A coordinate \in AsyncProducerAdmittedIngressCoordinates:
+             LET packet ==
+                   OldestDueSourcePacket(coordinate[1], coordinate[2])
+             IN /\ AsyncPacketTyped(packet)
+                /\ packet.item \in AsyncNetworkItems
+      BY <2>1, AdmitIngressPacketHasDueSourcePacket,
+         OldestDueSourcePacketFacts,
+         AsyncProducerTypedItemIsInNetworkCarrier, Zenon
+         DEF AsyncProducerAdmittedIngressCoordinates
+    <2>3. AsyncProducerAdmittedIngressEpisodes
+             \subseteq AsyncProducerIngressEpisodeSet
+      BY <2>2, Zenon
+         DEF AsyncProducerAdmittedIngressEpisodes,
+             AsyncProducerIngressEpisodeSet,
+             AsyncProducerIngressEpisode, AsyncProducerEpisode,
+             AsyncProducerIngressRequests
+    <2>4. AsyncProducerAdmittedIngressObligations
+             \subseteq AsyncProducerObligationSet
+      BY <2>3, Zenon
+         DEF AsyncProducerAdmittedIngressObligations,
+             AsyncProducerEpisodeObligation,
+             AsyncProducerObligationSet,
+             AsyncProducerIngressEpisodeSet,
+             AsyncProducerEpisode, AsyncProducerObligation
+    <2>5. AsyncProducerAdmittedIngressOrigins
+             \subseteq AsyncProducerIngressOriginSet
+      BY <2>3, Zenon
+         DEF AsyncProducerAdmittedIngressOrigins,
+             AsyncProducerCanonicalOrigin,
+             AsyncProducerIngressOriginSet,
+             AsyncProducerIngressOwnerSet,
+             AsyncProducerIngressEpisodeSet,
+             AsyncProducerOrigin
+    <2> QED BY <2>3, <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM AsyncProducerProjectionPreservesTypeInvariant ==
+  /\ AsyncTypeInvariant
+  /\ AsyncProducerProjectionStep
+  => AsyncProducerTypeInvariant'
+BY AsyncProducerAdmittedIngressProjectionIsFinite,
+   AsyncProducerAdmittedIngressProjectionIsTyped,
+   FS_Union, ZenonT(120)
+   DEF AsyncTypeInvariant, AsyncProducerTypeInvariant,
+       AsyncProducerProjectionStep, AsyncProducerJournalClosed,
+       AsyncProducerAdmittedIngressObligations,
+       AsyncProducerAdmittedIngressOrigins,
+       AsyncProducerEpisodeObligation,
+       AsyncProducerCanonicalOrigin, AsyncProducerOrigin
+
+THEOREM AsyncProducerVarsFramePreservesTypeInvariant ==
+  /\ AsyncProducerTypeInvariant
+  /\ UNCHANGED AsyncProducerVars
+  => AsyncProducerTypeInvariant'
+BY Zenon
+   DEF AsyncProducerTypeInvariant, AsyncProducerJournalClosed,
+       AsyncProducerVars
+
+THEOREM AsyncServeProducerEpisodeTransitionPreservesTypeInvariant ==
+  /\ AsyncServeProducerEpisodeTypeInvariant
+  /\ AsyncServeProducerEpisodeTransition
+  => AsyncServeProducerEpisodeTypeInvariant'
+BY Zenon
+   DEF AsyncServeProducerEpisodeTypeInvariant,
+       AsyncServeProducerEpisodeTransition
+
+THEOREM AsyncServeProducerEpisodeFramePreservesTypeInvariant ==
+  /\ AsyncServeProducerEpisodeTypeInvariant
+  /\ UNCHANGED asyncServeProducerEpisodeDue
+  => AsyncServeProducerEpisodeTypeInvariant'
+BY Zenon DEF AsyncServeProducerEpisodeTypeInvariant
+
 
 THEOREM AsyncStrongTypeProjectsAsyncType ==
   AsyncStrongTypeInvariant => AsyncTypeInvariant

@@ -51,7 +51,9 @@ harness removes `dist/` on exit.
    Do not treat the smoke harness as an evidence or manifest generator.
 3. Bind the reviewed package inventory into the canonical aggregate release
    manifest. The protected signer produces the raw 64-byte Ed25519 signature
-   outside the repository through PKCS#11/HSM policy.
+   outside the repository through `signing_provider=authenticated_external_signer`
+   with exact `signing_backend=software`. A verified release is
+   `signer_qualification=software-key-qualified`.
 4. Verify the public tuple before upload:
 
    ```bash

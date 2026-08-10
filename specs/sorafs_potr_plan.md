@@ -39,7 +39,7 @@ summary: SF-14 signed receipt capture and exact finalized proof-outcome lookup.
 > exact replay. Focused and workspace Cargo validation remains pending.
 > Remaining SF-14 work
 > includes production forwarding/reconciliation across that boundary, genuine
-> live multi-provider rollout evidence, deployment-owned HSM/KMS adapters for
+> live multi-provider rollout evidence, independently administered external software signers for
 > the shipped role-separated runtime signer interfaces, operator provisioning
 > of the governed gateway/provider key roster and reputation-weight policy,
 > focused/workspace Rust validation, and four-peer independent
@@ -185,15 +185,15 @@ summary: SF-14 signed receipt capture and exact finalized proof-outcome lookup.
   disabled stale fields, test-marked/shared handles, and identity collisions
   are rejected. The checked-in
   [`potr_runtime_binding.toml`](sorafs/snippets/potr_runtime_binding.toml)
-  fragment shows the non-secret fields; deployment launchers keep all HSM/KMS
-  credentials outside `iroha_config`.
+  fragment shows the non-secret fields; deployment launchers keep all software
+  signing key material outside `iroha_config`.
   Torii binds `PotrStateFinalizedPolicySourceV1` to authoritative state and
   `PotrFinalizedAdmissionReaderV1` to the council-verified admission registry.
   The reader resolves the council admission before signing and
   rechecks the exact provider, policy identity/digest/sequence, finalized
   height/hash, and envelope after both signatures. A stale, revoked,
   unavailable, substituted, or mid-signature-changed policy fails closed.
-  Gateway output is verified before the provider HSM is invoked, and the
+  Gateway output is verified before the provider software signer is invoked, and the
   completed receipt is verified again against both governed keys. The generic
   Torii launcher supplies no gateway/provider signer roles and fails closed
   until the deployment injects those two independently administered providers.

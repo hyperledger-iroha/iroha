@@ -79,7 +79,7 @@ mod varint;
 ///
 /// Determinism and cross-arch stability:
 /// - The message prehash uses raw Blake2b-256 over
-///   `b"iroha:vrf:v1:input|" || chain_id || "|" || input`.
+///   `b"iroha:vrf:v1:input|" || network_id[32] || "|" || input`.
 /// - Proofs are BLS signatures produced by the canonical BLS implementation in
 ///   this crate; verification accepts the same bytes.
 /// - Outputs are computed as raw Blake2b-256 over

@@ -16,22 +16,18 @@ from ._quantity import (
 )
 from ._quantity import _normalize_u128_quantity as _normalize_u128_quantity
 from .crypto import (
+    _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
     ContractCall,
     Ed25519KeyPair,
     Instruction,
-    PrivacyBootleLanternPresentationActionBuildResultV1,
-    PrivacyJindoActionBuildResultV1,
+    NetworkId,
+    PrivacyExact12CapabilityManifestV1,
     PrivacyNativeActionBuildResultV1,
-    PrivacyVegaActionPreparationV1,
-    PrivacyVeRangeActionBuildResultV1,
-    PrivacyZkAceTransferActionBuildResultV1,
-    PrivacyZkAmsBatchAdmissionActionBuildResultV1,
-    PrivacyZkAmsProvisionAccountActionBuildResultV1,
     SignedTransactionEnvelope,
     TransactionBuilder,
     TransactionExecutableEntry,
-    _LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
     _normalize_lane_privacy_attachment,
+    _require_network_id,
     build_signed_transaction,
 )
 from .settlement import SettlementLeg, SettlementPlan
@@ -55,6 +51,7 @@ __all__ = [
 MetadataLike = Optional[Mapping[str, Any]]
 FixedBytesLike = Union[str, bytes, bytearray, memoryview]
 VerifyingKeyLike = Union[str, Mapping[str, Any]]
+_U64_MAX = (1 << 64) - 1
 _U128_MAX = (1 << 128) - 1
 ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512
 
@@ -160,17 +157,46 @@ def _require_canonical_positive_u128_literal(quantity: Any, context: str) -> str
     return quantity
 
 
+def _require_canonical_public_balance_scope(value: Any) -> str:
+    message = "public_balance_scope must be exactly 'global' or 'dataspace:<canonical positive u64>'"
+    if type(value) is not str:
+        raise TypeError(message)
+    if value == "global":
+        return value
+    prefix = "dataspace:"
+    if not value.startswith(prefix):
+        raise ValueError(message)
+    raw = value[len(prefix) :]
+    if (
+        not raw
+        or len(raw) > 20
+        or not raw.isascii()
+        or not raw.isdigit()
+        or raw.startswith("0")
+        or int(raw, 10) > _U64_MAX
+    ):
+        raise ValueError(message)
+    return value
+
+
 @dataclass(frozen=True)
 class TransactionConfig:
     """Configuration shared across transactions signed by :class:`TransactionDraft`."""
 
-    chain_id: str
+    network_id: NetworkId
     authority: str
     fee_payment: Mapping[str, Any]
     creation_time_ms: Optional[int] = None
     ttl_ms: Optional[int] = None
     nonce: Optional[int] = None
     metadata: Optional[Mapping[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "network_id",
+            _require_network_id(self.network_id, "TransactionConfig.network_id"),
+        )
 
 
 def _ensure_creation_time_ms(config: TransactionConfig) -> int:
@@ -349,7 +375,7 @@ class TransactionDraft:
 
     def __init__(self, config: TransactionConfig):
         self._config = TransactionConfig(
-            chain_id=_require_exact_non_empty_string(config.chain_id, "chain_id"),
+            network_id=_require_network_id(config.network_id),
             authority=_require_exact_non_empty_string(config.authority, "authority"),
             fee_payment=_normalize_mapping_payload(
                 config.fee_payment,
@@ -363,6 +389,9 @@ class TransactionDraft:
         self._entries: List[TransactionExecutableEntry] = []
         self._explicit_batch = False
         self._lane_privacy_attachments: List[Mapping[str, Any]] = []
+        self._privacy_capability_manifest: Optional[
+            PrivacyExact12CapabilityManifestV1
+        ] = None
 
     @property
     def config(self) -> TransactionConfig:
@@ -498,6 +527,28 @@ class TransactionDraft:
 
         self._lane_privacy_attachments.clear()
 
+    def bind_privacy_exact12_capability_manifest_v1(
+        self,
+        manifest: PrivacyExact12CapabilityManifestV1,
+    ) -> TransactionDraft:
+        """Bind one native-validated Torii manifest to the next build.
+
+        Native privacy construction remains closed until this binding exists;
+        it then requires the selected row to be active and its complete
+        compiled profile to equal the executing binary. The manifest should be
+        obtained from :meth:`ToriiClient.privacy_capabilities_v1` over an
+        authenticated transport.
+        """
+
+        if not isinstance(manifest, PrivacyExact12CapabilityManifestV1):
+            raise TypeError(
+                "manifest must be a native PrivacyExact12CapabilityManifestV1"
+            )
+        if self._privacy_capability_manifest is not None:
+            raise ValueError("transaction draft already has an Exact12 manifest binding")
+        self._privacy_capability_manifest = manifest
+        return self
+
     # ------------------------------------------------------------------
     # High-level helpers for common instruction families
     # ------------------------------------------------------------------
@@ -550,7 +601,6 @@ class TransactionDraft:
         alias: Optional[str] = None,
         scale: Optional[Union[int, str]] = None,
         mintable: Optional[str] = None,
-        confidential_policy: Optional[str] = None,
         metadata: MetadataLike = None,
     ) -> TransactionDraft:
         """Append an asset definition owned by this transaction's authority."""
@@ -598,7 +648,6 @@ class TransactionDraft:
                 scale=normalized_scale,
                 mintable=mintable,
                 balance_scope_policy=balance_scope_policy,
-                confidential_policy=confidential_policy,
                 metadata=metadata_payload,
             )
         )
@@ -608,14 +657,15 @@ class TransactionDraft:
         self,
         asset_definition_id: str,
         *,
-        mode: str = "Hybrid",
-        allow_shield: bool = True,
-        allow_unshield: bool = True,
         vk_unshield: Optional[VerifyingKeyLike] = None,
         vk_shield: Optional[VerifyingKeyLike] = None,
     ) -> TransactionDraft:
         """Append a `RegisterZkAsset` instruction."""
 
+        if vk_shield is not None and vk_unshield is None:
+            raise ValueError(
+                "vk_shield requires vk_unshield so shielded funds remain redeemable"
+            )
         definition = _require_non_empty_string(
             asset_definition_id,
             "asset_definition_id",
@@ -623,9 +673,6 @@ class TransactionDraft:
         self.add_instruction(
             Instruction.register_zk_asset(
                 definition,
-                mode=mode,
-                allow_shield=bool(allow_shield),
-                allow_unshield=bool(allow_unshield),
                 vk_unshield=vk_unshield,
                 vk_shield=vk_shield,
             )
@@ -1317,7 +1364,6 @@ class TransactionDraft:
         ttl_ms: Optional[int] = None,
         nonce: Optional[int] = None,
         metadata: Optional[Mapping[str, Any]] = None,
-        chain_id: Optional[str] = None,
         authority: Optional[str] = None,
     ) -> SignedTransactionEnvelope:
         """Sign the draft with ``private_key`` and return a :class:`SignedTransactionEnvelope`."""
@@ -1338,11 +1384,6 @@ class TransactionDraft:
         else:
             payload_instructions = list(self.instructions)
             payload_entries = None
-        effective_chain = (
-            _require_exact_non_empty_string(chain_id, "chain_id")
-            if chain_id is not None
-            else self._config.chain_id
-        )
         effective_authority = (
             _require_exact_non_empty_string(authority, "authority")
             if authority is not None
@@ -1357,7 +1398,7 @@ class TransactionDraft:
         effective_nonce = nonce if nonce is not None else self._config.nonce
         effective_metadata = metadata if metadata is not None else self._config.metadata
         return build_signed_transaction(
-            effective_chain,
+            self._config.network_id,
             effective_authority,
             private_key,
             fee_payment=self._config.fee_payment,
@@ -1370,243 +1411,6 @@ class TransactionDraft:
             lane_privacy_attachments=self._lane_privacy_attachments,
         )
 
-    def sign_privacy_zk_ace_transfer_action_v1(
-        self,
-        private_key: bytes,
-        *,
-        canonical_genesis_hash: bytes,
-        canonical_policy_archive: bytes,
-        source_account_id: str,
-        destination_account_id: str,
-        amount: str,
-        identity_root: bytes,
-        identity_blinding: bytes,
-        replay_secret: bytes,
-    ) -> PrivacyZkAceTransferActionBuildResultV1:
-        """Build and sign one native, intent-bound ZK-ACE transfer action.
-
-        The exact governed policy is supplied as a canonical typed archive.
-        Identity and replay witness material is consumed only by the native
-        prover and is not returned by the result object.
-        """
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native ZK-ACE transparent-transfer action requires an otherwise "
-                "empty transaction draft"
-            )
-        return self.to_builder().sign_privacy_zk_ace_transfer_action_v1(
-            private_key,
-            canonical_genesis_hash,
-            canonical_policy_archive,
-            _require_exact_non_empty_string(
-                source_account_id,
-                "source_account_id",
-            ),
-            _require_exact_non_empty_string(
-                destination_account_id,
-                "destination_account_id",
-            ),
-            _require_canonical_positive_u128_literal(amount, "amount"),
-            identity_root,
-            identity_blinding,
-            replay_secret,
-        )
-
-    def sign_privacy_anonymous_pgc_payment_action_v1(
-        self,
-        execution_bundle: bytes,
-        *,
-        public_action_json: bytes,
-        canonical_genesis_hash: bytes,
-    ) -> PrivacyNativeActionBuildResultV1:
-        """Build one Anonymous-PGC payment through the strict owner-bundle decoder."""
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native Anonymous-PGC action requires an otherwise empty transaction draft"
-            )
-        return self.to_builder().sign_privacy_anonymous_pgc_payment_action_v1(
-            execution_bundle,
-            public_action_json,
-            canonical_genesis_hash,
-        )
-
-    def sign_privacy_orchard_note_action_v1(
-        self,
-        execution_bundle: bytes,
-        *,
-        public_action_json: bytes,
-        canonical_genesis_hash: bytes,
-    ) -> PrivacyNativeActionBuildResultV1:
-        """Build one Orchard note action through the strict owner-bundle decoder."""
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native Orchard action requires an otherwise empty transaction draft"
-            )
-        return self.to_builder().sign_privacy_orchard_note_action_v1(
-            execution_bundle,
-            public_action_json,
-            canonical_genesis_hash,
-        )
-
-    def sign_privacy_fcmp_membership_payment_action_v1(
-        self,
-        execution_bundle: bytes,
-        *,
-        public_action_json: bytes,
-        canonical_genesis_hash: bytes,
-    ) -> PrivacyNativeActionBuildResultV1:
-        """Build one FCMP++ payment through the strict owner-bundle decoder."""
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native FCMP++ action requires an otherwise empty transaction draft"
-            )
-        return self.to_builder().sign_privacy_fcmp_membership_payment_action_v1(
-            execution_bundle,
-            public_action_json,
-            canonical_genesis_hash,
-        )
-
-    def sign_privacy_ivm_private_note_action_v1(
-        self,
-        execution_bundle: bytes,
-        *,
-        public_action_json: bytes,
-        canonical_genesis_hash: bytes,
-    ) -> PrivacyNativeActionBuildResultV1:
-        """Build one private-IVM note action through the strict owner-bundle decoder."""
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native private-IVM action requires an otherwise empty transaction draft"
-            )
-        return self.to_builder().sign_privacy_ivm_private_note_action_v1(
-            execution_bundle,
-            public_action_json,
-            canonical_genesis_hash,
-        )
-
-    def sign_privacy_pq_masp_note_action_v1(
-        self,
-        execution_bundle: bytes,
-        *,
-        public_action_json: bytes,
-        canonical_genesis_hash: bytes,
-    ) -> PrivacyNativeActionBuildResultV1:
-        """Build one PQ-MASP note action through the strict owner-bundle decoder."""
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native PQ-MASP action requires an otherwise empty transaction draft"
-            )
-        return self.to_builder().sign_privacy_pq_masp_note_action_v1(
-            execution_bundle,
-            public_action_json,
-            canonical_genesis_hash,
-        )
-
-    def sign_privacy_jindo_action_v1(
-        self,
-        private_key: bytes,
-        *,
-        canonical_genesis_hash: bytes,
-        witness_polynomials: Sequence[Sequence[bytes]],
-        evaluation_point: bytes,
-    ) -> PrivacyJindoActionBuildResultV1:
-        """Build and sign one intent-bound native Jindo component action.
-
-        This is a closed action constructor. A Jindo action cannot be combined
-        with another executable, an explicit batch, or privacy attachments.
-        The proof stays inside the returned signed transaction envelope.
-        """
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native Jindo action requires an otherwise empty transaction draft"
-            )
-        return self.to_builder().sign_privacy_jindo_action_v1(
-            private_key,
-            canonical_genesis_hash,
-            witness_polynomials,
-            evaluation_point,
-        )
-
-    def sign_privacy_verange_action_v1(
-        self,
-        private_key: bytes,
-        *,
-        canonical_genesis_hash: bytes,
-        asset_definition_id: str,
-        policy_id: bytes,
-        bit_length: int,
-        values: Sequence[int],
-        blindings: Sequence[bytes],
-    ) -> PrivacyVeRangeActionBuildResultV1:
-        """Build and sign one intent-bound native VeRange component action.
-
-        Values and blindings are private prover inputs. The result exposes only
-        their ordered P-256 commitments and public proof metadata.
-        """
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native VeRange action requires an otherwise empty transaction draft"
-            )
-        return self.to_builder().sign_privacy_verange_action_v1(
-            private_key,
-            canonical_genesis_hash,
-            asset_definition_id,
-            policy_id,
-            bit_length,
-            list(values),
-            list(blindings),
-        )
-
-    def prepare_privacy_vega_action_v1(
-        self,
-        *,
-        canonical_genesis_hash: bytes,
-        issuer_id: bytes,
-        issuer_record_epoch: int,
-        issuer_record_digest: bytes,
-        issuer_public_key: bytes,
-        presentation_year: int,
-        presentation_month: int,
-        presentation_day: int,
-        minimum_age_years: int,
-        reader_challenge: bytes,
-        session_transcript_digest: bytes,
-    ) -> PrivacyVegaActionPreparationV1:
-        """Freeze one intent-bound Vega draft and return its holder-signing data.
-
-        The returned single-use preparation exposes the canonical transaction
-        intent and final ``H_dev``. After the holder signs that exact digest,
-        call ``preparation.finalize_privacy_vega_action_v1(...)`` with the
-        transaction key and private credential witness. This two-phase API is
-        required because ``H_dev`` binds the exact frozen transaction intent.
-        """
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native Vega action requires an otherwise empty transaction draft"
-            )
-        return self.to_builder().prepare_privacy_vega_action_v1(
-            canonical_genesis_hash,
-            issuer_id,
-            issuer_record_epoch,
-            issuer_record_digest,
-            issuer_public_key,
-            presentation_year,
-            presentation_month,
-            presentation_day,
-            minimum_age_years,
-            reader_challenge,
-            session_transcript_digest,
-        )
-
     def prepare_privacy_zk_x509_identity_presentation_action_v1(
         self,
         *,
@@ -1614,10 +1418,11 @@ class TransactionDraft:
     ) -> bytes:
         """Freeze a draft X509 statement and return its transaction intent.
 
+        The draft's typed ``NetworkId`` selects the exact transaction network.
         ``canonical_statement_archive`` must contain the native typed X509
-        statement with a zero transaction-intent field.  The returned digest
-        is the exact intent that an isolated credential prover must bind into
-        the finalized statement and ``X5S1`` proof container.
+        statement with a zero transaction-intent field. The returned digest is
+        the exact intent that an isolated credential prover must bind into the
+        finalized statement and ``X5S1`` proof container.
         """
 
         if self._explicit_batch or self._entries or self._lane_privacy_attachments:
@@ -1635,7 +1440,6 @@ class TransactionDraft:
         self,
         private_key: bytes,
         *,
-        canonical_genesis_hash: bytes,
         canonical_statement_archive: bytes,
         credential_proof: bytes,
     ) -> PrivacyNativeActionBuildResultV1:
@@ -1643,7 +1447,7 @@ class TransactionDraft:
 
         The native signer accepts only a canonical, intent-bound typed
         statement and an exact ``X5S1`` credential proof whose public header is
-        bound to ``canonical_genesis_hash``.  Certificate, CRL, and witness
+        bound to the draft's exact ``NetworkId``. Certificate, CRL, and witness
         material stays in the isolated prover and never enters this draft.
         Signing fails closed until the production compiled profile has passed
         its release-readiness gates; unsigned candidate material is not enough.
@@ -1656,134 +1460,8 @@ class TransactionDraft:
             )
         return self.to_builder().sign_privacy_zk_x509_identity_presentation_action_v1(
             private_key,
-            canonical_genesis_hash,
             canonical_statement_archive,
             credential_proof,
-        )
-
-    def sign_privacy_zk_ams_batch_admission_action_v1(
-        self,
-        private_key: bytes,
-        *,
-        canonical_genesis_hash: bytes,
-        issuer_id: bytes,
-        issuer_public_key: bytes,
-        issuer_policy_record_digest: bytes,
-        registry_id: bytes,
-        registry_record_digest: bytes,
-        policy_id: bytes,
-        policy_digest: bytes,
-        account_registry_root: bytes,
-        account_registry_root_epoch: int,
-        subject_commitments: Sequence[bytes],
-        credential_nonces: Sequence[bytes],
-        seed_secrets: Sequence[bytes],
-        issuer_signatures: Sequence[bytes],
-    ) -> PrivacyZkAmsBatchAdmissionActionBuildResultV1:
-        """Build and sign one native ZK-AMS batch-admission action.
-
-        Credential nonces, seed secrets, and issuer signatures are private
-        native prover inputs. The result exposes only authenticated public
-        admission metadata and the signed transaction envelope.
-        """
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native ZK-AMS batch-admission action requires an otherwise "
-                "empty transaction draft"
-            )
-        return self.to_builder().sign_privacy_zk_ams_batch_admission_action_v1(
-            private_key,
-            canonical_genesis_hash,
-            issuer_id,
-            issuer_public_key,
-            issuer_policy_record_digest,
-            registry_id,
-            registry_record_digest,
-            policy_id,
-            policy_digest,
-            account_registry_root,
-            account_registry_root_epoch,
-            list(subject_commitments),
-            list(credential_nonces),
-            list(seed_secrets),
-            list(issuer_signatures),
-        )
-
-    def sign_privacy_zk_ams_provision_account_action_v1(
-        self,
-        private_key: bytes,
-        *,
-        canonical_genesis_hash: bytes,
-        issuer_id: bytes,
-        issuer_public_key: bytes,
-        issuer_policy_record_digest: bytes,
-        registry_id: bytes,
-        registry_record_digest: bytes,
-        policy_id: bytes,
-        policy_digest: bytes,
-        account_registry_root: bytes,
-        account_registry_root_epoch: int,
-        admitted_seed_key_ring: Sequence[bytes],
-        account_id: str,
-        seed_secret: bytes,
-    ) -> PrivacyZkAmsProvisionAccountActionBuildResultV1:
-        """Build and sign one native ZK-AMS account-provisioning action.
-
-        The signer index and key image are derived natively from ``seed_secret``;
-        callers cannot inject either value.
-        """
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native ZK-AMS account-provisioning action requires an otherwise "
-                "empty transaction draft"
-            )
-        return self.to_builder().sign_privacy_zk_ams_provision_account_action_v1(
-            private_key,
-            canonical_genesis_hash,
-            issuer_id,
-            issuer_public_key,
-            issuer_policy_record_digest,
-            registry_id,
-            registry_record_digest,
-            policy_id,
-            policy_digest,
-            account_registry_root,
-            account_registry_root_epoch,
-            list(admitted_seed_key_ring),
-            account_id,
-            seed_secret,
-        )
-
-    def sign_privacy_bootle_lantern_presentation_action_v1(
-        self,
-        private_key: bytes,
-        *,
-        canonical_genesis_hash: bytes,
-        canonical_policy_archive: bytes,
-        disclosure_indices: Sequence[int],
-        secret_polynomials: Sequence[Sequence[int]],
-        attributes: Sequence[bytes],
-    ) -> PrivacyBootleLanternPresentationActionBuildResultV1:
-        """Build and sign one native Bootle/Lantern presentation action.
-
-        Disclosed values are derived natively from the eight private attributes;
-        callers provide only the ordered disclosure indices.
-        """
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native Bootle/Lantern presentation action requires an otherwise "
-                "empty transaction draft"
-            )
-        return self.to_builder().sign_privacy_bootle_lantern_presentation_action_v1(
-            private_key,
-            canonical_genesis_hash,
-            canonical_policy_archive,
-            list(disclosure_indices),
-            [list(polynomial) for polynomial in secret_polynomials],
-            list(attributes),
         )
 
     def sign_with_keypair(
@@ -1846,6 +1524,7 @@ class TransactionDraft:
         quote = client.quote_fees(
             draft_payload,
             canonical_auth=ToriiCanonicalRequestAuth(
+                network_id=self._config.network_id.literal,
                 account_id=authority,
                 signer=keypair.sign,
             ),
@@ -1881,10 +1560,15 @@ class TransactionDraft:
         """Return a :class:`TransactionBuilder` populated with the draft state."""
 
         builder = TransactionBuilder(
-            self._config.chain_id,
+            self._config.network_id,
             self._config.authority,
             json.dumps(self._config.fee_payment, separators=(",", ":")),
         )
+        if self._privacy_capability_manifest is not None:
+            builder.bind_privacy_exact12_capability_manifest_v1(
+                self._privacy_capability_manifest
+            )
+            self._privacy_capability_manifest = None
         builder.set_creation_time_ms(_ensure_creation_time_ms(self._config))
         if self._config.ttl_ms is not None:
             builder.set_ttl_ms(int(self._config.ttl_ms))
@@ -1940,7 +1624,7 @@ class TransactionDraft:
         """
 
         manifest: dict[str, Any] = {
-            "chain_id": self._config.chain_id,
+            "network_id": self._config.network_id.literal,
             "authority": self._config.authority,
         }
         if self._explicit_batch:

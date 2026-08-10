@@ -233,21 +233,75 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
     }
 }
 
+#[cfg(test)]
+mod stock_registry_tests {
+    use super::*;
+
+    #[test]
+    fn standalone_registry_retains_exact_network_identity() {
+        let chain_id = iroha_data_model::ChainId::from("standalone-governance-test");
+        let network_id = crate::runtime_provider_registry::runtime_provider_test_network_id();
+        let registry =
+            StockGovernanceDagServiceRuntimeProviderRegistryV1::new(chain_id.clone(), network_id);
+
+        assert_eq!(registry.chain_id, chain_id);
+        assert_eq!(registry.network_id, network_id);
+    }
+
+    #[test]
+    fn reserved_musubi_attestation_slots_fail_before_broker_connection() {
+        let registry = StockRuntimeProviderBrokerRegistryV1::new();
+        for (slot, handle) in [
+            (
+                IrohaRuntimeProviderSlotV1::MusubiProviderAttestationClockSeal,
+                "sealed://musubi/provider-attestation/clock",
+            ),
+            (
+                IrohaRuntimeProviderSlotV1::MusubiProviderAttestationApprovalSigner,
+                "hsm://musubi/provider-attestation/approval",
+            ),
+            (
+                IrohaRuntimeProviderSlotV1::MusubiProviderAttestationAuthenticatedInventory,
+                "inventory://musubi/provider-attestation/coordinator",
+            ),
+        ] {
+            let bindings = IrohaRuntimeProviderBindingsV1::qualified_for_test(
+                "stock-broker-musubi-test-chain",
+                slot,
+                handle,
+                1,
+                [0xA5; 32],
+            );
+
+            assert!(matches!(
+                registry.resolve(&bindings),
+                Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
+            ));
+        }
+    }
+}
+
 /// Stock broker-backed registry for the packaged Governance DAG service.
 ///
-/// The chain identity is public and participates in the broker's exact-catalog
-/// handshake. Construction performs no I/O and stores no credential or private
-/// key material.
+/// The display chain and exact genesis-derived network identity participate in
+/// the broker handshake. Construction performs no I/O and stores no secret.
 #[derive(Clone, Debug)]
 pub struct StockGovernanceDagServiceRuntimeProviderRegistryV1 {
     chain_id: iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
 }
 
 impl StockGovernanceDagServiceRuntimeProviderRegistryV1 {
-    /// Construct a standalone-service registry for one canonical chain.
+    /// Construct a standalone-service registry for one exact network.
     #[must_use]
-    pub const fn new(chain_id: iroha_data_model::ChainId) -> Self {
-        Self { chain_id }
+    pub const fn new(
+        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
+    ) -> Self {
+        Self {
+            chain_id,
+            network_id,
+        }
     }
 }
 
@@ -263,6 +317,7 @@ impl sorafs_node::GovernanceDagServiceRuntimeProviderRegistryV1
     > {
         let bindings = IrohaRuntimeProviderBindingsV1::try_from_governance_dag_service(
             &self.chain_id,
+            self.network_id,
             service,
         )
         .map_err(map_governance_service_registry_error)?;
@@ -431,7 +486,7 @@ pub enum BootleLanternIssuanceBrokerBackendErrorV1 {
 
 /// Deployment-owned pure cryptographic boundary for brokered Bootle/Lantern issuance.
 ///
-/// Implementations hold the issuer trapdoor (or its HSM boundary) and opaque
+/// Implementations hold the issuer trapdoor (or its protected runtime boundary) and opaque
 /// authenticator. They must not hold or mutate an issuance replay store. Torii
 /// remains the sole authority for authorization registration, preflight,
 /// claim, completion, and terminal failure.
@@ -485,7 +540,7 @@ pub trait BootleLanternIssuanceBrokerBackendV1: Send + Sync {
     ///
     /// Native implementations use core's
     /// `issuer_validate_blind_issuance_request_for_issuer_encoded_v1`; a
-    /// public-only validation is not a sufficient HSM/key-bound readiness
+    /// public-only validation is not sufficient private-key/provider-bound readiness
     /// check for this operation.
     fn validate_request(
         &self,
@@ -963,6 +1018,20 @@ impl RuntimeProviderBrokerBackendsV1 {
         }
     }
 
+    pub(crate) fn contains_external_software_signer_v1(&self) -> bool {
+        self.governance_dag_signer.is_some()
+            || self.stream_token_signer.is_some()
+            || self.proof_outcome_transaction_signer.is_some()
+            || self.repair_transaction_signer.is_some()
+            || self.reserve_transaction_signer.is_some()
+            || self.orderbook_transaction_signer.is_some()
+            || self.billing_statement_signer.is_some()
+            || self.pop_credential_provider_registry.is_some()
+            || self.potr_gateway_signer.is_some()
+            || self.potr_provider_signer.is_some()
+            || self.evidence_viewer_receipt_signer.is_some()
+    }
+
     /// Attach the deployment-owned native Bootle/Lantern issuer and authenticator.
     #[must_use]
     pub fn with_bootle_lantern_issuance(
@@ -1053,7 +1122,7 @@ impl RuntimeProviderBrokerBackendsV1 {
         self
     }
 
-    /// Attach the deployment-owned Governance DAG HSM/KMS signer.
+    /// Attach the deployment-owned authenticated external Governance DAG signer.
     #[must_use]
     pub fn with_governance_dag_signer(
         mut self,
@@ -1063,7 +1132,7 @@ impl RuntimeProviderBrokerBackendsV1 {
         self
     }
 
-    /// Attach the deployment-owned Governance DAG IPFS request-auth HSM.
+    /// Attach the deployment-owned Governance DAG IPFS request authenticator.
     #[must_use]
     pub fn with_governance_dag_ipfs_authenticator(
         mut self,
@@ -1073,7 +1142,7 @@ impl RuntimeProviderBrokerBackendsV1 {
         self
     }
 
-    /// Attach the independently administered signed-head request-auth HSM.
+    /// Attach the independently administered signed-head request authenticator.
     #[must_use]
     pub fn with_governance_dag_head_authenticator(
         mut self,
@@ -1127,7 +1196,7 @@ impl RuntimeProviderBrokerBackendsV1 {
         self
     }
 
-    /// Attach the appeal-finance HSM signer and sealed monotonic checkpoint store.
+    /// Attach the appeal-finance external signer and sealed monotonic checkpoint store.
     #[must_use]
     pub fn with_appeal_finance_checkpoint(
         mut self,
@@ -1361,7 +1430,7 @@ impl RuntimeProviderBrokerBackendsV1 {
         self
     }
 
-    /// Attach the independently administered billing statement HSM/KMS signer.
+    /// Attach the independently administered external billing statement signer.
     #[must_use]
     pub fn with_billing_statement_signer(
         mut self,

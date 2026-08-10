@@ -820,6 +820,13 @@ fn test_fee_payment() -> iroha_data_model::transaction::FeePaymentIntent {
 }
 
 #[cfg(test)]
+fn overlay_test_network_id(seed: &[u8]) -> iroha_data_model::NetworkId {
+    iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(seed)),
+    )
+}
+
+#[cfg(test)]
 fn compute_program_hashes(
     meta: &ivm::ProgramMetadata,
     _header_len: usize,
@@ -1970,6 +1977,8 @@ impl TxOverlay {
                                     .map_err(ValidationFail::from)?;
                             }
                             SettlementInstructionBox::SetFxCorridorPolicy(_) => {}
+                            SettlementInstructionBox::FundFxCorridorEscrow(_)
+                            | SettlementInstructionBox::RefundFxCorridorEscrow(_) => {}
                         }
                     }
                     if let Some(reg_asset_definition) = extract_register_asset_definition(instr) {
@@ -2030,7 +2039,7 @@ impl TxOverlay {
             crate::smartcontracts::ivm::host::HostExecutionArtifacts::record_completed_axt_states(
                 state_tx,
                 self.completed_axt.clone(),
-            );
+            )?;
             for (path, value) in &self.durable_state_overlay {
                 if let Some(authorization) = self
                     .durable_state_authorizations
@@ -3890,13 +3899,6 @@ mod tests_overlay_manifest {
         }
 
         let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
-        let transaction = TransactionBuilder::new(
-            ChainId::from("snapshot-test"),
-            authority,
-            test_fee_payment(),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
-        .sign(keypair.private_key());
         let mut access_log = ivm::host::AccessLog::default();
         access_log.read_keys.insert("counter".to_owned());
         access_log
@@ -3910,6 +3912,10 @@ mod tests_overlay_manifest {
             ("sc/nested/counter", b"nested-one"),
             ("unrelated", b"stable"),
         ]);
+        let transaction =
+            TransactionBuilder::new(initial.network_id, authority, test_fee_payment())
+                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
+                .sign(keypair.private_key());
         let snapshot =
             DurableStateReadSnapshot::capture(&transaction, Some(&access_log), &initial.view())
                 .expect("non-empty VM read log creates a snapshot");
@@ -3945,13 +3951,6 @@ mod tests_overlay_manifest {
     #[test]
     fn durable_state_read_snapshot_fails_closed_for_invalid_host_key() {
         let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
-        let transaction = TransactionBuilder::new(
-            ChainId::from("snapshot-invalid"),
-            authority,
-            test_fee_payment(),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
-        .sign(keypair.private_key());
         let mut access_log = ivm::host::AccessLog::default();
         access_log
             .read_keys
@@ -3968,6 +3967,10 @@ mod tests_overlay_manifest {
                 crate::query::store::LiveQueryStore::start_test(),
             )
         };
+        let transaction =
+            TransactionBuilder::new(initial.network_id, authority, test_fee_payment())
+                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
+                .sign(keypair.private_key());
         let snapshot =
             DurableStateReadSnapshot::capture(&transaction, Some(&access_log), &initial.view())
                 .expect("invalid VM read key still creates a fail-closed snapshot");
@@ -3992,13 +3995,6 @@ mod tests_overlay_manifest {
     #[test]
     fn durable_state_read_snapshot_fails_closed_for_partial_concrete_paths() {
         let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
-        let transaction = TransactionBuilder::new(
-            ChainId::from("snapshot-partial"),
-            authority,
-            test_fee_payment(),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
-        .sign(keypair.private_key());
         let mut access_log = ivm::host::AccessLog::default();
         access_log
             .read_keys
@@ -4020,6 +4016,10 @@ mod tests_overlay_manifest {
             )
         };
         let initial = make_state(b"one");
+        let transaction =
+            TransactionBuilder::new(initial.network_id, authority, test_fee_payment())
+                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
+                .sign(keypair.private_key());
         let empty_incomplete_snapshot = DurableStateReadSnapshot::capture(
             &transaction,
             Some(&ivm::host::AccessLog::default()),
@@ -4056,7 +4056,9 @@ mod tests_overlay_manifest {
             crate::query::store::LiveQueryStore::start_test(),
         );
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             71,
             DataSpaceId::UNIVERSAL,
@@ -4149,7 +4151,9 @@ mod tests_overlay_manifest {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             72,
             DataSpaceId::UNIVERSAL,
@@ -4235,19 +4239,16 @@ mod tests_overlay_manifest {
         }
 
         let tx_metadata = Metadata::default();
-        let transaction = TransactionBuilder::new(
-            ChainId::from("hajimari-overlay"),
-            authority.clone(),
-            test_fee_payment(),
-        )
-        .with_metadata(tx_metadata)
-        .with_executable(Executable::ContractCall(ContractInvocation {
-            contract_address: contract_address.clone(),
-            expected_code_hash: code_hash,
-            entrypoint: "hajimari".to_owned(),
-            arguments: None,
-        }))
-        .sign(keypair.private_key());
+        let transaction =
+            TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+                .with_metadata(tx_metadata)
+                .with_executable(Executable::ContractCall(ContractInvocation {
+                    contract_address: contract_address.clone(),
+                    expected_code_hash: code_hash,
+                    entrypoint: "hajimari".to_owned(),
+                    arguments: None,
+                }))
+                .sign(keypair.private_key());
 
         let overlay = build_overlay_for_transaction(&transaction, &state.view())
             .expect("the exact pending hajimari call must prepare");
@@ -4395,7 +4396,7 @@ mod tests_overlay_manifest {
         metadata: Metadata,
     ) -> SignedTransaction {
         TransactionBuilder::new(
-            ChainId::from("state-free-generic-overlay"),
+            overlay_test_network_id(b"state-free-generic-overlay"),
             authority,
             test_fee_payment(),
         )
@@ -4528,16 +4529,12 @@ mod tests_overlay_manifest {
             ChainId::from("generic-overlay"),
         );
         let metadata = Metadata::default();
-        let transaction = TransactionBuilder::new(
-            ChainId::from("generic-overlay"),
-            authority,
-            test_fee_payment(),
-        )
-        .with_metadata(metadata)
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-            minimal_generic_program(),
-        )))
-        .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                minimal_generic_program(),
+            )))
+            .sign(keypair.private_key());
 
         let overlay = build_overlay_for_transaction(&transaction, &state.view())
             .expect("generic HALT overlay");
@@ -4564,16 +4561,12 @@ mod tests_overlay_manifest {
             "contract_entrypoint".parse().expect("metadata key"),
             Json::new("main"),
         );
-        let transaction = TransactionBuilder::new(
-            ChainId::from("generic-overlay-metadata"),
-            authority,
-            test_fee_payment(),
-        )
-        .with_metadata(metadata)
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-            minimal_generic_program(),
-        )))
-        .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                minimal_generic_program(),
+            )))
+            .sign(keypair.private_key());
 
         let error = build_overlay_for_transaction(&transaction, &state.view())
             .expect_err("generic program must not impersonate a contract dispatch");
@@ -4650,7 +4643,9 @@ seiyaku RebuildArguments {
                 .expect("bounded rebuild argument record");
         let (authority, _) = gen_account_in("wonderland");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,
@@ -4825,7 +4820,9 @@ seiyaku QuarantineArguments {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             95,
             DataSpaceId::UNIVERSAL,
@@ -4861,7 +4858,7 @@ seiyaku QuarantineArguments {
 
         let contract_call_metadata = Metadata::default();
         let contract_call =
-            TransactionBuilder::new(chain_id.clone(), authority.clone(), test_fee_payment())
+            TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
                 .with_metadata(contract_call_metadata)
                 .with_executable(Executable::ContractCall(ContractInvocation {
                     contract_address: contract_address.clone(),
@@ -4884,7 +4881,7 @@ seiyaku QuarantineArguments {
             "contract_address".parse().expect("metadata key"),
             Json::new(contract_address.to_string()),
         );
-        let raw_ivm = TransactionBuilder::new(chain_id, authority, test_fee_payment())
+        let raw_ivm = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(raw_metadata)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(keypair.private_key());
@@ -4971,7 +4968,6 @@ seiyaku ProtectedStateFreeOverlay {
             )
             .expect("compile protected state-free overlay fixture");
         let (authority, keypair) = gen_account_in("wonderland");
-        let chain_id = ChainId::from("protected-state-free-overlay");
         let mut metadata = Metadata::default();
         metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
@@ -4981,10 +4977,14 @@ seiyaku ProtectedStateFreeOverlay {
             "contract_payload".parse().expect("metadata key"),
             Json::from(norito::json!({ "value": "7" })),
         );
-        let transaction = TransactionBuilder::new(chain_id, authority, test_fee_payment())
-            .with_metadata(metadata)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            overlay_test_network_id(b"protected-state-free-overlay"),
+            authority,
+            test_fee_payment(),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+        .sign(keypair.private_key());
 
         ivm::reset_argument_record_decode_count();
         let error = build_overlay_for_transaction_with_accounts(&transaction, &[])
@@ -5028,7 +5028,7 @@ seiyaku PermissionlessStateFreeOverlay {
             Json::from(norito::json!({ "value": "7" })),
         );
         let transaction = TransactionBuilder::new(
-            ChainId::from("permissionless-state-free-overlay"),
+            overlay_test_network_id(b"permissionless-state-free-overlay"),
             authority,
             test_fee_payment(),
         )
@@ -5096,7 +5096,9 @@ seiyaku ProtectedParameterizedOverlay {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             93,
             DataSpaceId::UNIVERSAL,
@@ -5120,7 +5122,7 @@ seiyaku ProtectedParameterizedOverlay {
         );
 
         let metadata = Metadata::default();
-        let transaction = TransactionBuilder::new(chain_id, authority, test_fee_payment())
+        let transaction = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::ContractCall(ContractInvocation {
                 contract_address,
@@ -5158,7 +5160,9 @@ seiyaku ProtectedParameterizedOverlay {
         const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (authority, keypair) = gen_account_in("wonderland");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             92,
             DataSpaceId::UNIVERSAL,
@@ -5232,9 +5236,10 @@ seiyaku GuardedOverlay {
             )
         };
 
+        let unauthorized_state = make_state(false);
         let metadata = iroha_data_model::metadata::Metadata::default();
         let transaction = TransactionBuilder::new(
-            ChainId::from("authorization-overlay"),
+            unauthorized_state.network_id,
             authority.clone(),
             test_fee_payment(),
         )
@@ -5247,7 +5252,6 @@ seiyaku GuardedOverlay {
         }))
         .sign(keypair.private_key());
 
-        let unauthorized_state = make_state(false);
         let denied = build_overlay_for_transaction(&transaction, &unauthorized_state.view())
             .expect_err("missing named permission must reject before the VM runs");
         assert!(
@@ -5686,14 +5690,18 @@ seiyaku GuardedOverlayRebound {
         const CHILD_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (authority, _) = gen_account_in("wonderland");
         let root_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             82,
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive root contract address");
         let child_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             83,
             DataSpaceId::UNIVERSAL,
@@ -6138,7 +6146,7 @@ seiyaku GuardedOverlayRebound {
             Json::new(manifest.clone()),
         );
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            ChainId::from("chain"),
+            state.network_id,
             authority_id.clone(),
             test_fee_payment(),
         )
@@ -6483,6 +6491,8 @@ mod tests {
             manifest_view_root: vec![0x5A; 32],
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -6659,7 +6669,7 @@ mod tests {
             crate::state::State::new_with_chain(world, kura, query_handle, ChainId::from("chain"));
 
         let tx = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6764,7 +6774,7 @@ mod tests {
         let events_commitment = Hash::new(b"events");
         let gas_policy_commitment = Hash::new(b"gas-policy");
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
@@ -6868,7 +6878,9 @@ seiyaku ProtectedProvedOverlay {
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             92,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -6929,14 +6941,11 @@ seiyaku ProtectedProvedOverlay {
             "contract_alias".parse().expect("metadata key"),
             iroha_primitives::json::Json::new(contract_alias.to_string()),
         );
-        let derivation_tx = TransactionBuilder::new(
-            state.chain_id.clone(),
-            authority.clone(),
-            test_fee_payment(),
-        )
-        .with_metadata(metadata.clone())
-        .with_executable(Executable::Ivm(bytecode.clone()))
-        .sign(kp.private_key());
+        let derivation_tx =
+            TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+                .with_metadata(metadata.clone())
+                .with_executable(Executable::Ivm(bytecode.clone()))
+                .sign(kp.private_key());
         let proved =
             derive_ivm_proved_payload_from_ivm_execution(&state.view(), &derivation_tx, &vk_record)
                 .expect("derive non-empty proved overlay payload");
@@ -6971,20 +6980,16 @@ seiyaku ProtectedProvedOverlay {
         let attachments = ProofAttachmentList::try_from(vec![attachment])
             .expect("one attachment is a valid bounded proof list");
 
-        let tx = TransactionBuilder::new(
-            state.chain_id.clone(),
-            authority.clone(),
-            test_fee_payment(),
-        )
-        .with_metadata(metadata)
-        .with_executable(Executable::IvmProved(IvmProved {
-            bytecode: proved.bytecode,
-            overlay: proved.overlay.clone(),
-            events_commitment: proved.events_commitment,
-            gas_policy_commitment: proved.gas_policy_commitment,
-        }))
-        .with_attachments(attachments)
-        .sign(kp.private_key());
+        let tx = TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+            .with_metadata(metadata)
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: proved.bytecode,
+                overlay: proved.overlay.clone(),
+                events_commitment: proved.events_commitment,
+                gas_policy_commitment: proved.gas_policy_commitment,
+            }))
+            .with_attachments(attachments)
+            .sign(kp.private_key());
 
         // Proof validity is governed by the on-chain verifier record. Local backend enablement
         // controls proving/tooling availability and must not fork proof-carrying admission.
@@ -7483,14 +7488,14 @@ seiyaku ProtectedProvedOverlay {
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let chain_id = state.chain_id.clone();
+        let network_id = state.network_id;
         let build_tx = |vk_ref: VerifyingKeyId| {
             let attachment = ProofAttachment::new_ref(
                 "halo2/ipa".into(),
                 fixture.proof_box("halo2/ipa"),
                 vk_ref,
             );
-            TransactionBuilder::new(chain_id.clone(), authority.clone(), test_fee_payment())
+            TransactionBuilder::new(network_id, authority.clone(), test_fee_payment())
                 .with_metadata(metadata.clone())
                 .with_executable(Executable::IvmProved(IvmProved {
                     bytecode: bytecode.clone(),
@@ -7611,19 +7616,16 @@ seiyaku ProtectedProvedOverlay {
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let replay_tx = TransactionBuilder::new(
-            state.chain_id.clone(),
-            authority.clone(),
-            test_fee_payment(),
-        )
-        .with_metadata(metadata.clone())
-        .with_executable(Executable::IvmProved(IvmProved {
-            bytecode: bytecode.clone(),
-            overlay: overlay.clone(),
-            events_commitment: Hash::new(b"replay-events"),
-            gas_policy_commitment: Hash::new(b"replay-gas-policy"),
-        }))
-        .sign(kp.private_key());
+        let replay_tx =
+            TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+                .with_metadata(metadata.clone())
+                .with_executable(Executable::IvmProved(IvmProved {
+                    bytecode: bytecode.clone(),
+                    overlay: overlay.clone(),
+                    events_commitment: Hash::new(b"replay-events"),
+                    gas_policy_commitment: Hash::new(b"replay-gas-policy"),
+                }))
+                .sign(kp.private_key());
         let replay = replay_ivm_proved_overlay(
             &state.view(),
             &replay_tx,
@@ -7661,7 +7663,7 @@ seiyaku ProtectedProvedOverlay {
         let attachments = ProofAttachmentList::try_from(vec![attachment])
             .expect("one attachment is a valid bounded proof list");
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
@@ -7760,19 +7762,16 @@ seiyaku ProtectedProvedOverlay {
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let replay_tx = TransactionBuilder::new(
-            state.chain_id.clone(),
-            authority.clone(),
-            test_fee_payment(),
-        )
-        .with_metadata(metadata.clone())
-        .with_executable(Executable::IvmProved(IvmProved {
-            bytecode: bytecode.clone(),
-            overlay: overlay.clone(),
-            events_commitment: Hash::new(b"replay-events"),
-            gas_policy_commitment: Hash::new(b"replay-gas-policy"),
-        }))
-        .sign(kp.private_key());
+        let replay_tx =
+            TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+                .with_metadata(metadata.clone())
+                .with_executable(Executable::IvmProved(IvmProved {
+                    bytecode: bytecode.clone(),
+                    overlay: overlay.clone(),
+                    events_commitment: Hash::new(b"replay-events"),
+                    gas_policy_commitment: Hash::new(b"replay-gas-policy"),
+                }))
+                .sign(kp.private_key());
         let replay = replay_ivm_proved_overlay(
             &state.view(),
             &replay_tx,
@@ -7892,19 +7891,16 @@ seiyaku ProtectedProvedOverlay {
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let replay_tx = TransactionBuilder::new(
-            state.chain_id.clone(),
-            authority.clone(),
-            test_fee_payment(),
-        )
-        .with_metadata(metadata.clone())
-        .with_executable(Executable::IvmProved(IvmProved {
-            bytecode: bytecode.clone(),
-            overlay: overlay.clone(),
-            events_commitment: Hash::new(b"replay-events"),
-            gas_policy_commitment: Hash::new(b"replay-gas-policy"),
-        }))
-        .sign(kp.private_key());
+        let replay_tx =
+            TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+                .with_metadata(metadata.clone())
+                .with_executable(Executable::IvmProved(IvmProved {
+                    bytecode: bytecode.clone(),
+                    overlay: overlay.clone(),
+                    events_commitment: Hash::new(b"replay-events"),
+                    gas_policy_commitment: Hash::new(b"replay-gas-policy"),
+                }))
+                .sign(kp.private_key());
         let replay = replay_ivm_proved_overlay(
             &state.view(),
             &replay_tx,
@@ -7951,20 +7947,16 @@ seiyaku ProtectedProvedOverlay {
                     ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
                 let attachments = ProofAttachmentList::try_from(vec![attachment])
                     .expect("one attachment is a valid bounded proof list");
-                TransactionBuilder::new(
-                    state.chain_id.clone(),
-                    authority.clone(),
-                    test_fee_payment(),
-                )
-                .with_metadata(metadata.clone())
-                .with_executable(Executable::IvmProved(IvmProved {
-                    bytecode: bytecode.clone(),
-                    overlay: overlay.clone(),
-                    events_commitment,
-                    gas_policy_commitment,
-                }))
-                .with_attachments(attachments)
-                .sign(kp.private_key())
+                TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+                    .with_metadata(metadata.clone())
+                    .with_executable(Executable::IvmProved(IvmProved {
+                        bytecode: bytecode.clone(),
+                        overlay: overlay.clone(),
+                        events_commitment,
+                        gas_policy_commitment,
+                    }))
+                    .with_attachments(attachments)
+                    .sign(kp.private_key())
             };
 
         let invalid_envelope_cases: [(&str, fn(&mut ZkOpenVerifyEnvelope), &str); 6] = [
@@ -8159,7 +8151,7 @@ seiyaku ProtectedProvedOverlay {
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let _ = overlay_bad_hash; // mismatch is exercised via `overlay_hash` in proof public inputs.
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
@@ -8263,7 +8255,7 @@ seiyaku ProtectedProvedOverlay {
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
@@ -8368,19 +8360,16 @@ seiyaku ProtectedProvedOverlay {
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let replay_tx = TransactionBuilder::new(
-            state.chain_id.clone(),
-            authority.clone(),
-            test_fee_payment(),
-        )
-        .with_metadata(metadata.clone())
-        .with_executable(Executable::IvmProved(IvmProved {
-            bytecode: bytecode.clone(),
-            overlay: overlay.clone(),
-            events_commitment: Hash::new(b"replay-events"),
-            gas_policy_commitment: Hash::new(b"replay-gas-policy"),
-        }))
-        .sign(kp.private_key());
+        let replay_tx =
+            TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+                .with_metadata(metadata.clone())
+                .with_executable(Executable::IvmProved(IvmProved {
+                    bytecode: bytecode.clone(),
+                    overlay: overlay.clone(),
+                    events_commitment: Hash::new(b"replay-events"),
+                    gas_policy_commitment: Hash::new(b"replay-gas-policy"),
+                }))
+                .sign(kp.private_key());
         let replay = replay_ivm_proved_overlay(
             &state.view(),
             &replay_tx,
@@ -8415,7 +8404,7 @@ seiyaku ProtectedProvedOverlay {
         let attachments = ProofAttachmentList::try_from(vec![attachment])
             .expect("one attachment is a valid bounded proof list");
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
@@ -8468,14 +8457,10 @@ seiyaku ProtectedProvedOverlay {
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         bind_sample_raw_metadata(&mut metadata, &contract_address);
 
-        let tx = TransactionBuilder::new(
-            state.chain_id.clone(),
-            authority.clone(),
-            test_fee_payment(),
-        )
-        .with_metadata(metadata.clone())
-        .with_executable(Executable::Ivm(bytecode.clone()))
-        .sign(kp.private_key());
+        let tx = TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+            .with_metadata(metadata.clone())
+            .with_executable(Executable::Ivm(bytecode.clone()))
+            .sign(kp.private_key());
 
         let mut vk_record = VerifyingKeyRecord::new(
             1,
@@ -8490,16 +8475,15 @@ seiyaku ProtectedProvedOverlay {
         let proved = derive_ivm_proved_payload_from_ivm_execution(&state.view(), &tx, &vk_record)
             .expect("derive proved payload");
 
-        let tx_proved =
-            TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
-                .with_metadata(metadata)
-                .with_executable(Executable::IvmProved(IvmProved {
-                    bytecode: proved.bytecode.clone(),
-                    overlay: proved.overlay.clone(),
-                    events_commitment: proved.events_commitment,
-                    gas_policy_commitment: proved.gas_policy_commitment,
-                }))
-                .sign(kp.private_key());
+        let tx_proved = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
+            .with_metadata(metadata)
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: proved.bytecode.clone(),
+                overlay: proved.overlay.clone(),
+                events_commitment: proved.events_commitment,
+                gas_policy_commitment: proved.gas_policy_commitment,
+            }))
+            .sign(kp.private_key());
 
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let summary = ivm_cache
@@ -8602,7 +8586,9 @@ seiyaku DeriveDispatch {
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             94,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -8645,14 +8631,10 @@ seiyaku DeriveDispatch {
             iroha_primitives::json::Json::new(contract_address.to_string()),
         );
 
-        let tx = TransactionBuilder::new(
-            state.chain_id.clone(),
-            authority.clone(),
-            test_fee_payment(),
-        )
-        .with_metadata(metadata)
-        .with_executable(Executable::Ivm(bytecode.clone()))
-        .sign(kp.private_key());
+        let tx = TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(bytecode.clone()))
+            .sign(kp.private_key());
 
         let mut vk_record = VerifyingKeyRecord::new(
             1,
@@ -8685,7 +8667,7 @@ seiyaku DeriveDispatch {
             iroha_primitives::json::Json::new(contract_address.to_string()),
         );
         let restricted_tx =
-            TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+            TransactionBuilder::new(state.network_id, authority, test_fee_payment())
                 .with_metadata(restricted_metadata)
                 .with_executable(Executable::Ivm(bytecode))
                 .sign(kp.private_key());
@@ -8707,14 +8689,18 @@ seiyaku DeriveDispatch {
         let (authority, _) = gen_account_in("wonderland");
         let (other_authority, _) = gen_account_in("wonderland");
         let root_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
         )
         .expect("derive root contract address");
         let child_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             2,
             DataSpaceId::UNIVERSAL,
@@ -8870,7 +8856,9 @@ seiyaku ProtectedProved {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             93,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -8904,21 +8892,17 @@ seiyaku ProtectedProved {
             "contract_address".parse().expect("metadata key"),
             Json::new(contract_address.to_string()),
         );
-        let transaction = TransactionBuilder::new(
-            ChainId::from("protected-proved-overlay"),
-            authority,
-            test_fee_payment(),
-        )
-        .with_metadata(metadata)
-        .with_executable(Executable::IvmProved(
-            iroha_data_model::transaction::IvmProved {
-                bytecode: IvmBytecode::from_compiled(program),
-                overlay: Vec::<InstructionBox>::new().into(),
-                events_commitment: Hash::new(b"unverified-events"),
-                gas_policy_commitment: Hash::new(b"unverified-gas"),
-            },
-        ))
-        .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
+            .with_metadata(metadata)
+            .with_executable(Executable::IvmProved(
+                iroha_data_model::transaction::IvmProved {
+                    bytecode: IvmBytecode::from_compiled(program),
+                    overlay: Vec::<InstructionBox>::new().into(),
+                    events_commitment: Hash::new(b"unverified-events"),
+                    gas_policy_commitment: Hash::new(b"unverified-gas"),
+                },
+            ))
+            .sign(keypair.private_key());
 
         ivm::reset_argument_record_decode_count();
         let error = build_overlay_for_transaction(&transaction, &state.view())
@@ -9005,7 +8989,9 @@ seiyaku ProtectedProved {
             .expect("sample raw contract artifact must verify");
         let code_hash = verified.code_hash;
         let address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             authority,
             nonce,
             DataSpaceId::UNIVERSAL,
@@ -9169,7 +9155,7 @@ seiyaku ProtectedProved {
             Json::new(contract_address.to_string()),
         );
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
@@ -9221,7 +9207,9 @@ seiyaku AliasBoundArguments {
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             9,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -9284,14 +9272,11 @@ seiyaku AliasBoundArguments {
                 "contract_payload".parse().expect("metadata key"),
                 Json::from(norito::json!({ "value": "7" })),
             );
-            let tx = TransactionBuilder::new(
-                state.chain_id.clone(),
-                authority.clone(),
-                test_fee_payment(),
-            )
-            .with_metadata(metadata)
-            .with_executable(executable)
-            .sign(kp.private_key());
+            let tx =
+                TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+                    .with_metadata(metadata)
+                    .with_executable(executable)
+                    .sign(kp.private_key());
             ivm::reset_argument_record_decode_count();
             let error = build_overlay_for_transaction(&tx, &state.view())
                 .expect_err("spoofed alias must fail before VM/proof execution");
@@ -9328,14 +9313,11 @@ seiyaku AliasBoundArguments {
                 "contract_payload".parse().expect("metadata key"),
                 Json::from(norito::json!({ "value": "7" })),
             );
-            let canonical_tx = TransactionBuilder::new(
-                state.chain_id.clone(),
-                authority.clone(),
-                test_fee_payment(),
-            )
-            .with_metadata(canonical_metadata)
-            .with_executable(tx.instructions().clone())
-            .sign(kp.private_key());
+            let canonical_tx =
+                TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+                    .with_metadata(canonical_metadata)
+                    .with_executable(tx.instructions().clone())
+                    .sign(kp.private_key());
             ivm::reset_argument_record_decode_count();
             validate_contract_binding(&state.view(), &canonical_tx, &summary)
                 .expect("canonical alias must satisfy the live binding");
@@ -9397,7 +9379,9 @@ seiyaku AliasBoundArguments {
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             10,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -9446,14 +9430,11 @@ seiyaku AliasBoundArguments {
                 "contract_address".parse().expect("metadata key"),
                 Json::new(contract_address.to_string()),
             );
-            let tx = TransactionBuilder::new(
-                state.chain_id.clone(),
-                authority.clone(),
-                test_fee_payment(),
-            )
-            .with_metadata(metadata)
-            .with_executable(executable)
-            .sign(kp.private_key());
+            let tx =
+                TransactionBuilder::new(state.network_id, authority.clone(), test_fee_payment())
+                    .with_metadata(metadata)
+                    .with_executable(executable)
+                    .sign(kp.private_key());
             let error = validate_contract_binding(&state.view(), &tx, &substituted_summary)
                 .expect_err("header-substituted artifact must fail before VM/proof execution");
             assert!(
@@ -9516,6 +9497,8 @@ seiyaku AliasBoundArguments {
             manifest_view_root: vec![0x11; 32],
             expiry_slot: 40,
             max_clock_skew_ms: Some(0),
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let intent = RemoteSpendIntent {
             asset_dsid: dsid,
@@ -9617,7 +9600,7 @@ seiyaku AliasBoundArguments {
         );
 
         let metadata = iroha_data_model::metadata::Metadata::default();
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(kp.private_key());
@@ -9686,7 +9669,7 @@ seiyaku AliasBoundArguments {
             Json::new(contract_address.to_string()),
         );
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
@@ -9740,7 +9723,7 @@ seiyaku AliasBoundArguments {
             Json::new(contract_address.to_string()),
         );
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
@@ -9806,7 +9789,7 @@ seiyaku AliasBoundArguments {
             Json::new(contract_address.to_string()),
         );
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
@@ -9890,7 +9873,7 @@ seiyaku AliasBoundArguments {
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
         let metadata = iroha_data_model::metadata::Metadata::default();
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
@@ -9935,7 +9918,7 @@ seiyaku AliasBoundArguments {
         );
 
         let metadata = iroha_data_model::metadata::Metadata::default();
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+        let tx = TransactionBuilder::new(state.network_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
@@ -10024,13 +10007,16 @@ seiyaku AliasBoundArguments {
         };
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
-        let chain: ChainId = "chain".parse().expect("valid chain id");
         let metadata = Metadata::default();
         let (program, _, _) = sample_program();
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone(), test_fee_payment())
-            .with_metadata(metadata)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
-            .sign(ALICE_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            overlay_test_network_id(b"sample-smart-contract-overlay"),
+            ALICE_ID.clone(),
+            test_fee_payment(),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+        .sign(ALICE_KEYPAIR.private_key());
 
         let accounts = vec![ALICE_ID.clone()];
         let bytes: Vec<u8> = match tx.instructions() {
@@ -10977,6 +10963,9 @@ where
                 vk_id.backend, vk_id.name
             ))
         })?;
+    crate::zk::validate_and_prepare_verifying_key_record_v1(vk_id, vk_record).map_err(|err| {
+        OverlayBuildError::ZkProof(format!("invalid stored verifying-key record: {err}"))
+    })?;
 
     let execution_height = u64::try_from(state_ro.height())
         .ok()

@@ -273,8 +273,6 @@ private func mutateFirstNativeAmxQcBody(
     }
 }
 
-
-
 private final class StubGatewayFetcher: SorafsGatewayFetching, @unchecked Sendable {
     var capturedPlan: ToriiJSONValue?
     var capturedProviders: [SorafsGatewayProvider]?
@@ -573,13 +571,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     private func noncanonicalStandardBase64PadBitAlias(_ encoded: String) -> String {
-        XCTAssertTrue(encoded.hasSuffix("=="))
-        let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".utf8)
-        var bytes = Array(encoded.utf8)
-        let index = bytes.count - 3
-        let value = alphabet.firstIndex(of: bytes[index])!
-        bytes[index] = alphabet[value ^ 0x01]
-        return String(decoding: bytes, as: UTF8.self)
+        toriiClientTestNoncanonicalBase64PadBitAlias(encoded)
     }
 
     override func tearDown() {
@@ -588,29 +580,11 @@ final class ToriiClientTests: XCTestCase {
     }
 
     private func bodyData(from request: URLRequest) -> Data? {
-        if let data = request.httpBody {
-            return data
-        }
-        guard let stream = request.httpBodyStream else { return nil }
-        stream.open()
-        defer { stream.close() }
-        var buffer = [UInt8](repeating: 0, count: 1024)
-        var data = Data()
-        while stream.hasBytesAvailable {
-            let read = stream.read(&buffer, maxLength: buffer.count)
-            if read <= 0 { break }
-            data.append(buffer, count: read)
-        }
-        return data.isEmpty ? nil : data
+        toriiClientTestBodyData(from: request)
     }
 
     private func bodyJSON(from request: URLRequest) -> [String: Any] {
-        guard let data = bodyData(from: request),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let dictionary = object as? [String: Any] else {
-            return [:]
-        }
-        return dictionary
+        toriiClientTestBodyJSON(from: request)
     }
 
     private func assertDecodedPath(_ request: URLRequest, contains expected: String, line: UInt = #line) {
@@ -643,8 +617,32 @@ final class ToriiClientTests: XCTestCase {
             baseURL: baseURL,
             session: session,
             defaultHeaders: defaultHeaders,
-            localSigningContext: try! ToriiLocalSigningContext(chainId: "test-chain")
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
         )
+    }
+
+    private func canonicalUnsignedFeePayload(
+        domain: ToriiJSONValue = .object([
+            "kind": .string("network"),
+            "value": .string(TestNetworkIds.canonical.literal),
+        ])
+    ) throws -> [String: ToriiJSONValue] {
+        let feePayment = try JSONDecoder().decode(
+            ToriiJSONValue.self,
+            from: FeePaymentIntent.authority(
+                chargeLimits: [],
+                gasLimit: nil
+            ).canonicalJSONData()
+        )
+        return [
+            "domain": domain,
+            "authority": .string(authority),
+            "creation_time_ms": .number(1),
+            "instructions": .object([:]),
+            "time_to_live_ms": .number(100_000),
+            "fee_payment": feePayment,
+            "metadata": .object([:]),
+        ]
     }
 
     private func assertToriiInvalidPayload(
@@ -1434,7 +1432,7 @@ final class ToriiClientTests: XCTestCase {
         let responsePlan = try AliasTransactionPlanV1(
             body: try AliasTransactionPlanBodyV1(
                 authority: authority,
-                chainId: "test-chain",
+                networkId: TestNetworkIds.canonical,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
                     blockHash: String(repeating: "01", count: 32)
@@ -1502,7 +1500,7 @@ final class ToriiClientTests: XCTestCase {
         let renewalPlan = try AliasLifecycleTransactionPlanV1(
             body: try AliasLifecycleTransactionPlanBodyV1(
                 authority: authority,
-                chainId: "test-chain",
+                networkId: TestNetworkIds.canonical,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
                     blockHash: String(repeating: "01", count: 32)
@@ -1555,7 +1553,7 @@ final class ToriiClientTests: XCTestCase {
         let autoPlan = try AliasLifecycleTransactionPlanV1(
             body: try AliasLifecycleTransactionPlanBodyV1(
                 authority: authority,
-                chainId: "test-chain",
+                networkId: TestNetworkIds.canonical,
                 anchor: renewalPlan.body.anchor,
                 operation: .configureAutoRenew(configuration),
                 disposition: .noOp,
@@ -5842,33 +5840,49 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testCreateConnectSessionPostsPayload() async throws {
+        let networkID = TestNetworkIds.canonical
+        let appPublicKey = Data(repeating: 0x31, count: 32)
+        let nonce = Data(repeating: 0x32, count: 16)
+        let sid = try ConnectCrypto.deriveSessionID(
+            networkID: networkID,
+            appPublicKey: appPublicKey,
+            nonce: nonce
+        )
+        let sidLiteral = toriiClientTestBase64URL(sid)
+        let appPublicKeyLiteral = toriiClientTestBase64URL(appPublicKey)
+        let nonceLiteral = toriiClientTestBase64URL(nonce)
+        let connectResponse = toriiClientTestConnectSessionResponse(
+            sid: sidLiteral,
+            networkID: networkID.literal,
+            appPublicKey: appPublicKeyLiteral,
+            nonce: nonceLiteral,
+            node: "node-1"
+        )
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/connect/session")
             XCTAssertEqual(request.httpMethod, "POST")
             let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["sid"] as? String, "abc")
+            XCTAssertEqual(body["sid"] as? String, sidLiteral)
+            XCTAssertEqual(body["network_id"] as? String, networkID.literal)
+            XCTAssertEqual(body["app_pk"] as? String, appPublicKeyLiteral)
+            XCTAssertEqual(body["nonce"] as? String, nonceLiteral)
             XCTAssertEqual(body["node"] as? String, "node-1")
-            let payload: [String: Any] = [
-                "sid": "abc",
-                "wallet_uri": "wallet://demo",
-                "app_uri": "app://demo",
-                "token_app": "token-app",
-                "token_wallet": "token-wallet",
-                "token_management": "token-management",
-                "token_relay": "token-relay",
-                "custom": true
-            ]
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            let data = try JSONSerialization.data(withJSONObject: payload)
+            let data = try JSONSerialization.data(withJSONObject: connectResponse.payload)
             return (response, data)
         }
-        let response = try await makeClient().createConnectSession(sid: " abc ", node: "node-1")
-        XCTAssertEqual(response.sid, "abc")
-        XCTAssertEqual(response.tokenWallet, "token-wallet")
-        XCTAssertEqual(response.tokenManagement, "token-management")
-        XCTAssertEqual(response.tokenRelay, "token-relay")
-        XCTAssertEqual(response.extra["custom"], .bool(true))
+        let response = try await makeClient().createConnectSession(
+            networkID: networkID,
+            appPublicKey: appPublicKey,
+            nonce: nonce,
+            node: "node-1"
+        )
+        XCTAssertEqual(response.sid, sidLiteral)
+        XCTAssertEqual(response.tokenWallet, connectResponse.tokenWallet)
+        XCTAssertEqual(response.tokenManagement, connectResponse.tokenManagement)
+        XCTAssertEqual(response.tokenRelay, connectResponse.tokenRelay)
+        XCTAssertTrue(response.extra.isEmpty)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -10090,7 +10104,7 @@ final class ToriiClientTests: XCTestCase {
             version: ToriiAccountOnboardingPlanBody.version,
             request: request,
             authority: authority,
-            chainId: "00000000-0000-0000-0000-000000000000",
+            networkId: TestNetworkIds.canonical,
             anchor: try AliasPlanAnchorV1(
                 blockHeight: 1,
                 blockHash: String(repeating: "11", count: 32)
@@ -10140,7 +10154,7 @@ final class ToriiClientTests: XCTestCase {
                 for: request,
                 canonicalBodyNorito: canonicalBody,
                 expectedAuthority: receipt.body.authority,
-                expectedChainId: receipt.body.chainId
+                expectedNetworkId: receipt.body.networkId
             )
         )
 
@@ -10163,7 +10177,7 @@ final class ToriiClientTests: XCTestCase {
                 for: request,
                 canonicalBodyNorito: tamperedBody,
                 expectedAuthority: receipt.body.authority,
-                expectedChainId: receipt.body.chainId
+                expectedNetworkId: receipt.body.networkId
             )
         ) { error in
             XCTAssertEqual(
@@ -10188,7 +10202,7 @@ final class ToriiClientTests: XCTestCase {
                 for: request,
                 canonicalBodyNorito: canonicalBody,
                 expectedAuthority: receipt.body.authority,
-                expectedChainId: receipt.body.chainId
+                expectedNetworkId: receipt.body.networkId
             )
         ) { error in
             XCTAssertEqual(
@@ -10206,7 +10220,7 @@ final class ToriiClientTests: XCTestCase {
                 for: request,
                 canonicalBodyNorito: canonicalBody,
                 expectedAuthority: wrongAuthority,
-                expectedChainId: receipt.body.chainId
+                expectedNetworkId: receipt.body.networkId
             )
         ) { error in
             XCTAssertEqual(
@@ -10217,7 +10231,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testAccountOnboardingReceiptRequiresExactPinnedChainId() throws {
+    func testAccountOnboardingReceiptRequiresExactPinnedNetworkId() throws {
         let request = try ToriiAccountOnboardingPlanRequest(
             alias: "alice@universal",
             accountId: canonicalOwnerLiteral()
@@ -10231,30 +10245,13 @@ final class ToriiClientTests: XCTestCase {
                 for: request,
                 canonicalBodyNorito: canonicalBody,
                 expectedAuthority: receipt.body.authority,
-                expectedChainId: "other-chain"
+                expectedNetworkId: TestNetworkIds.other
             )
         ) { error in
             XCTAssertEqual(
                 error as? ToriiAccountOnboardingReceiptVerificationError,
-                .chainIdMismatch
+                .networkIdMismatch
             )
-        }
-
-        for invalidChainId in ["", " chain", "chain ", "chain\n"] {
-            XCTAssertThrowsError(
-                try ToriiAccountOnboardingReceiptVerifier.verify(
-                    receipt,
-                    for: request,
-                    canonicalBodyNorito: canonicalBody,
-                    expectedAuthority: receipt.body.authority,
-                    expectedChainId: invalidChainId
-                )
-            ) { error in
-                XCTAssertEqual(
-                    error as? ToriiAccountOnboardingReceiptVerificationError,
-                    .invalidChainId
-                )
-            }
         }
     }
 
@@ -10365,7 +10362,7 @@ final class ToriiClientTests: XCTestCase {
             intent,
             onboardingToken: onboardingToken,
             expectedAuthority: receipt.body.authority,
-            expectedChainId: receipt.body.chainId,
+            expectedNetworkId: receipt.body.networkId,
             bodyEncoder: encodeTestCanonicalOnboardingBody
         )
         XCTAssertEqual(planned, receipt)
@@ -10373,7 +10370,7 @@ final class ToriiClientTests: XCTestCase {
             planned,
             onboardingToken: onboardingToken,
             expectedAuthority: receipt.body.authority,
-            expectedChainId: receipt.body.chainId,
+            expectedNetworkId: receipt.body.networkId,
             bodyEncoder: encodeTestCanonicalOnboardingBody
         )
         XCTAssertEqual(applied.status, .queued)
@@ -10414,7 +10411,7 @@ final class ToriiClientTests: XCTestCase {
             receipt,
             onboardingToken: onboardingToken,
             expectedAuthority: receipt.body.authority,
-            expectedChainId: receipt.body.chainId,
+            expectedNetworkId: receipt.body.networkId,
             bodyEncoder: encodeTestCanonicalOnboardingBody
         )
         XCTAssertEqual(result.status, .unchanged)
@@ -10433,7 +10430,7 @@ final class ToriiClientTests: XCTestCase {
             accountId: canonicalOwnerLiteral()
         )
         let expectedAuthority = try canonicalOwnerLiteral()
-        let expectedChainId = "00000000-0000-0000-0000-000000000000"
+        let expectedNetworkId = TestNetworkIds.canonical
         for token in [
             "",
             String(repeating: "T", count: 31),
@@ -10446,7 +10443,7 @@ final class ToriiClientTests: XCTestCase {
                     intent,
                     onboardingToken: token,
                     expectedAuthority: expectedAuthority,
-                    expectedChainId: expectedChainId,
+                    expectedNetworkId: expectedNetworkId,
                     bodyEncoder: encodeTestCanonicalOnboardingBody
                 )
                 XCTFail("Expected malformed onboarding token to fail")
@@ -10477,24 +10474,8 @@ final class ToriiClientTests: XCTestCase {
             _ = try await makeClient().planAccountOnboarding(
                 intent,
                 onboardingToken: onboardingToken,
-                expectedAuthority: expectedAuthority,
-                expectedChainId: " chain",
-                bodyEncoder: encodeTestCanonicalOnboardingBody
-            )
-            XCTFail("Expected invalid chain pin to fail")
-        } catch {
-            XCTAssertEqual(
-                error as? ToriiAccountOnboardingReceiptVerificationError,
-                .invalidChainId
-            )
-        }
-
-        do {
-            _ = try await makeClient().planAccountOnboarding(
-                intent,
-                onboardingToken: onboardingToken,
                 expectedAuthority: "not-an-account-id",
-                expectedChainId: "chain",
+                expectedNetworkId: TestNetworkIds.canonical,
                 bodyEncoder: encodeTestCanonicalOnboardingBody
             )
             XCTFail("Expected invalid authority pin to fail")
@@ -10530,14 +10511,14 @@ final class ToriiClientTests: XCTestCase {
             accountId: canonicalOwnerLiteral()
         )
         let expectedAuthority = try canonicalOwnerLiteral()
-        let expectedChainId = "00000000-0000-0000-0000-000000000000"
+        let expectedNetworkId = TestNetworkIds.canonical
 
         do {
             _ = try await makeClient().planAccountOnboarding(
                 intent,
                 onboardingToken: onboardingToken,
                 expectedAuthority: expectedAuthority,
-                expectedChainId: expectedChainId,
+                expectedNetworkId: expectedNetworkId,
                 bodyEncoder: encodeTestCanonicalOnboardingBody
             )
             XCTFail("Expected redirect response to fail closed")
@@ -10678,7 +10659,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "scope" })?.value, "auto")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"hash":"\(Self.pipelineHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"global","resolved_from":"state"}
+            {"hash":"\(Self.pipelineHash)","status":{"kind":"Rejected","block_height":12},"scope":"global","resolved_from":"state"}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -10691,7 +10672,7 @@ final class ToriiClientTests: XCTestCase {
         let status = try await sdk.getTransactionStatus(hashHex: Self.pipelineHash)
         XCTAssertEqual(status?.hash, Self.pipelineHash)
         XCTAssertEqual(status?.status.kind, "Rejected")
-        XCTAssertEqual(status?.primaryDiagnostic?.message, "missing permission")
+        XCTAssertEqual(status?.status.blockHeight, 12)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -10867,7 +10848,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let capabilities = try await makeClient().getNodeCapabilities()
+        let capabilities = try await makeClient().getNodeCapabilities(canonicalAuth: canonicalReadAuth)
         XCTAssertEqual(capabilities.abiVersion, 1)
     }
 
@@ -10952,7 +10933,7 @@ final class ToriiClientTests: XCTestCase {
         {
           "mandatory": false,
           "cash_handoff_capability": "cash_handoff_v1",
-          "required_bridge_abi_version": 21,
+          "required_bridge_abi_version": 22,
           "max_hops": 8,
           "ready": true,
           "assets": [],
@@ -10976,7 +10957,7 @@ final class ToriiClientTests: XCTestCase {
         let status = try await makeClient().getOfflineCapability()
         XCTAssertFalse(status.mandatory)
         XCTAssertEqual(status.cashHandoffCapability, "cash_handoff_v1")
-        XCTAssertEqual(status.requiredBridgeAbiVersion, 21)
+        XCTAssertEqual(status.requiredBridgeAbiVersion, 22)
         XCTAssertEqual(status.maxHops, 8)
         XCTAssertTrue(status.ready)
         XCTAssertTrue(status.assets.isEmpty)
@@ -10986,14 +10967,14 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineCapabilityRejectsNonUniversalClaims() async throws {
         let invalidPayloads = [
-            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":20,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":9,"ready":true,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":false,"assets":[],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}"#,
-            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}"#,
+            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}"#,
         ]
 
         for payload in invalidPayloads {
@@ -11018,7 +10999,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineCapabilityRejectsDuplicateKeysAndInvalidUtf8() async throws {
         let payloads = [
-            Data(#"{"mandatory":false,"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#.utf8),
+            Data(#"{"mandatory":false,"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"#.utf8),
             Data([0xff, 0xfe, 0xfd]),
         ]
         for payload in payloads {
@@ -11646,7 +11627,7 @@ final class ToriiClientTests: XCTestCase {
         {
           "mandatory": false,
           "cash_handoff_capability": "cash_handoff_v1",
-          "required_bridge_abi_version": 21,
+          "required_bridge_abi_version": 22,
           "max_hops": 8,
           "ready": true,
           "assets": [],
@@ -11960,7 +11941,8 @@ final class ToriiClientHeaderTests: XCTestCase {
     private func canonicalVerifyingKeyTransactionPayload(
         wireName: String =
             "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
-        chainId: String = "test-chain",
+        networkId: NetworkId = TestNetworkIds.canonical,
+        domainOverride: Data? = nil,
         authority: String =
             "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         backend: String = "halo2/ipa",
@@ -12060,8 +12042,9 @@ final class ToriiClientHeaderTests: XCTestCase {
         executable.writeUInt32LE(0)
         executable.writeField(sequence.data)
 
-        var chain = CompactNoritoWriter()
-        chain.writeField(string(chainId))
+        var networkDomain = CompactNoritoWriter()
+        networkDomain.writeUInt32LE(0)
+        networkDomain.writeField(networkId.bytes)
         let authorityPayload = try! AccountAddress.parseEncoded(authority)
             .compactNoritoAccountControllerPayload()
         var feeAuthority = CompactNoritoWriter()
@@ -12072,7 +12055,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         feePayment.writeField(feeAuthority.data)
         var payload = CompactNoritoWriter()
         for field in [
-            chain.data,
+            domainOverride ?? networkDomain.data,
             authorityPayload,
             uint64(0),
             executable.data,
@@ -12099,7 +12082,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             return (response, payload)
         }
 
-        let metrics = try await makeClient().getRuntimeMetrics()
+        let metrics = try await makeClient().getRuntimeMetrics(canonicalAuth: canonicalReadAuth)
         XCTAssertEqual(metrics.abiVersion, 1)
         XCTAssertEqual(metrics.upgradeEventsTotal.proposed, 5)
         XCTAssertEqual(metrics.upgradeEventsTotal.activated, 6)
@@ -12118,7 +12101,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             return (response, payload)
         }
 
-        let snapshot = try await makeClient().getRuntimeAbiActive()
+        let snapshot = try await makeClient().getRuntimeAbiActive(canonicalAuth: canonicalReadAuth)
         XCTAssertEqual(snapshot.abiVersion, 1)
     }
 
@@ -13010,6 +12993,13 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertFalse(didDispatch)
     }
 
+    func testLocalSigningContextPinsNominalNetworkId() {
+        let context = ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
+
+        XCTAssertEqual(context.networkId, TestNetworkIds.canonical)
+        XCTAssertEqual(context.networkId.bytes, TestNetworkIds.canonical.bytes)
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testRegisterVerifyingKeyRejectsSemanticallySubstitutedDrafts() async throws {
         let request = ToriiVerifyingKeyRegisterRequest(
@@ -13041,9 +13031,9 @@ final class ToriiClientHeaderTests: XCTestCase {
                 "full requested record"
             ),
             (
-                "wrong chain",
-                canonicalVerifyingKeyTransactionPayload(chainId: "other-chain"),
-                "configured chain"
+                "wrong network",
+                canonicalVerifyingKeyTransactionPayload(networkId: TestNetworkIds.other),
+                "configured network"
             ),
             (
                 "wrong authority",
@@ -13075,6 +13065,158 @@ final class ToriiClientHeaderTests: XCTestCase {
                     return XCTFail("Expected invalidPayload error, got \(error)")
                 }
                 XCTAssertTrue(reason.contains(item.expectedReason), "\(item.label): \(reason)")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterVerifyingKeyRejectsGenesisUnknownLegacyAndUnmarkedTransactionDomains() async throws {
+        let request = ToriiVerifyingKeyRegisterRequest(
+            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "e", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: Data([0x01, 0x02, 0x03])
+        )
+        func domain(kind: UInt32, value: Data? = nil, trailing: Data = Data()) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeUInt32LE(kind)
+            if let value {
+                writer.writeField(value)
+            }
+            writer.writeBytes(trailing)
+            return writer.data
+        }
+        var unmarked = TestNetworkIds.canonical.bytes
+        unmarked[unmarked.index(before: unmarked.endIndex)] &= 0xfe
+        var legacyChain = CompactNoritoWriter()
+        legacyChain.writeField(CompactNorito.encodeString("test-chain"))
+        let cases: [(label: String, domain: Data, expectedReason: String)] = [
+            ("genesis", domain(kind: 1), "TransactionDomain::Network"),
+            ("unknown", domain(kind: 2), "TransactionDomain::Network"),
+            ("legacy chain", legacyChain.data, "TransactionDomain::Network"),
+            ("unmarked network", domain(kind: 0, value: unmarked), "invalid canonical NetworkId"),
+            (
+                "trailing network data",
+                domain(kind: 0, value: TestNetworkIds.canonical.bytes, trailing: Data([0])),
+                "exactly one NetworkId"
+            ),
+        ]
+
+        for item in cases {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (
+                    response,
+                    self.verifyingKeyDraftResponse(
+                        payload: self.canonicalVerifyingKeyTransactionPayload(
+                            domainOverride: item.domain
+                        )
+                    )
+                )
+            }
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().registerVerifyingKey(request),
+                item.label
+            ) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error, got \(error)")
+                }
+                XCTAssertTrue(reason.contains(item.expectedReason), "\(item.label): \(reason)")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testFeeQuoteSendsOnlyCanonicalNetworkTransactionDomain() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/fees/quote")
+            let body = self.bodyJSON(from: request)
+            let payload = body["payload"] as? [String: Any]
+            let domain = payload?["domain"] as? [String: Any]
+            XCTAssertEqual(domain?["kind"] as? String, "network")
+            XCTAssertEqual(
+                domain?["value"] as? String,
+                TestNetworkIds.canonical.literal
+            )
+            XCTAssertEqual(Set(domain?.keys.map { $0 } ?? []), Set(["kind", "value"]))
+            XCTAssertNil(payload?["chain"])
+            XCTAssertNil(payload?["chainId"])
+            XCTAssertNil(payload?["chain_id"])
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let responseBody = Data(
+                """
+                {
+                  "intent":{"payer":"authority","value":{"charge_limits":[]}},
+                  "observation":{"ledger_time_ms":1,"next_block_height":1,"route_dataspace_id":0},
+                  "components":[],
+                  "capacities":[],
+                  "decision":{
+                    "status":"accepted",
+                    "value":{"debit_source":{"kind":"account","value":"\(self.authority)"}}
+                  }
+                }
+                """.utf8
+            )
+            return (response, responseBody)
+        }
+
+        let quote = try await makeClient().quoteFees(
+            unsignedPayload: try canonicalUnsignedFeePayload(),
+            canonicalAuth: canonicalReadAuth
+        )
+
+        XCTAssertEqual(quote.observation.nextBlockHeight, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testFeeQuoteRejectsRetiredIdentityAliasesAndNonNetworkDomainsBeforeDispatch() async throws {
+        let invalidDomains: [(label: String, value: ToriiJSONValue)] = [
+            ("genesis", .object(["kind": .string("genesis")])),
+            ("unknown kind", .object([
+                "kind": .string("unknown"),
+                "value": .string(TestNetworkIds.canonical.literal),
+            ])),
+            ("unmarked alias", .object([
+                "kind": .string("network"),
+                "value": .string("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91148#A2F0"),
+            ])),
+            ("extra field", .object([
+                "kind": .string("network"),
+                "value": .string(TestNetworkIds.canonical.literal),
+                "chain": .string("legacy"),
+            ])),
+        ]
+
+        for item in invalidDomains {
+            await assertToriiInvalidPayload(contains: "domain") {
+                _ = try await makeClient().quoteFees(
+                    unsignedPayload: try canonicalUnsignedFeePayload(domain: item.value),
+                    canonicalAuth: canonicalReadAuth
+                )
+            }
+        }
+        for alias in ["chain", "chainId", "chain_id"] {
+            var payload = try canonicalUnsignedFeePayload()
+            payload[alias] = .string("legacy")
+            await assertToriiInvalidPayload(contains: alias) {
+                _ = try await makeClient().quoteFees(
+                    unsignedPayload: payload,
+                    canonicalAuth: canonicalReadAuth
+                )
             }
         }
     }
@@ -15851,7 +15993,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(receipt.version, 2)
         XCTAssertEqual(receipt.legs.count, 2)
         XCTAssertEqual(
-            receipt.chainIdHash,
+            receipt.networkId,
             "hash:AC23881CE29F6466B8710D9683F4F28D49E8335C63E913FACB109303298ED833#0628"
         )
         XCTAssertEqual(
@@ -16786,7 +16928,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, body)
         }
 
-        makeClient().uploadAttachment(data: Data("test".utf8), contentType: "application/json") { result in
+        makeClient().uploadAttachment(data: Data("test".utf8), contentType: "application/json", canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let meta):
                 XCTAssertEqual(meta.id, "abc")
@@ -16814,7 +16956,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, body)
         }
 
-        makeClient().listAttachments { result in
+        makeClient().listAttachments(canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let metas):
                 XCTAssertEqual(metas.count, 2)
@@ -16955,7 +17097,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, Data([0x01]))
         }
 
-        makeClient().getAttachment(id: attachmentId) { result in
+        makeClient().getAttachment(id: attachmentId, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let payload):
                 XCTAssertEqual(payload.0, Data([0x01]))
@@ -16979,7 +17121,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, Data())
         }
 
-        makeClient().deleteAttachment(id: attachmentId) { result in
+        makeClient().deleteAttachment(id: attachmentId, canonicalAuth: canonicalReadAuth) { result in
             if case let .failure(error) = result {
                 XCTFail("unexpected error: \(error)")
             }
@@ -18242,8 +18384,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertEqual(response.abiHashHex, abiHash)
                 XCTAssertEqual(response.creationTimeMs, 321)
                 XCTAssertEqual(response.txHashHex, txHash)
-                XCTAssertEqual(response.pipelineStatus?.status.rejectionReason, #"{"Validation":"missing permission"}"#)
-                XCTAssertEqual(response.pipelineStatus?.primaryDiagnostic?.decodedReason, "missing permission")
+                XCTAssertEqual(response.pipelineStatus?.status.blockHeight, 12)
                 XCTAssertEqual(response.pipelineStatus?.isRejected, true)
                 XCTAssertEqual(response.transactionTtlMs, 60_000)
                 XCTAssertEqual(response.entrypointHashHex, entrypointHash)
@@ -19291,7 +19432,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                                                     signer: "ed25519:public",
                                                                     signature: "ed25519:signature"
                                                                    ))
-        makeClient().submitGovernanceDeployContractProposal(request) { result in
+        makeClient().submitGovernanceDeployContractProposal(request, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let response):
                 XCTAssertTrue(response.ok)
@@ -19373,7 +19514,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         )
 
         await XCTAssertThrowsErrorAsync(
-            try await makeClient().submitGovernanceDeployContractProposal(request)
+            try await makeClient().submitGovernanceDeployContractProposal(request, canonicalAuth: canonicalReadAuth)
         ) { error in
             guard case let ToriiClientError.invalidPayload(reason) = error else {
                 return XCTFail("unexpected error: \(error)")
@@ -19487,407 +19628,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testSubmitGovernancePlainBallotRequiresCanonicalLosslessQuantity() throws {
-        let canonical = "18446744073709551616.25"
-        let request = ToriiGovernancePlainBallotRequest(
-            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            chainId: "chain",
-            referendumId: "ref-1",
-            owner: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            amount: canonical,
-            durationBlocks: 5,
-            direction: .aye
-        )
-        let data = try JSONEncoder().encode(request)
-        let json = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: data) as? [String: Any]
-        )
-        XCTAssertEqual(json["amount"] as? String, canonical)
-        XCTAssertEqual(json["duration_blocks"] as? String, "5")
-        XCTAssertEqual(json["direction"] as? String, "Aye")
-
-        let overflowing = String(repeating: "9", count: 155)
-        for invalid in ["+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", overflowing] {
-            let invalidRequest = ToriiGovernancePlainBallotRequest(
-                authority: request.authority,
-                chainId: request.chainId,
-                referendumId: request.referendumId,
-                owner: request.owner,
-                amount: invalid,
-                durationBlocks: request.durationBlocks,
-                direction: request.direction
-            )
-            XCTAssertThrowsError(
-                try JSONEncoder().encode(invalidRequest),
-                "noncanonical amount \(invalid) must be rejected"
-            )
-        }
-    }
-
-    func testGovernanceMutationContextsAndProofsAreExactBeforeEncoding() throws {
-        let owner = try canonicalOwnerLiteral()
-        let invalidEncoders: [() throws -> Data] = [
-            {
-                try JSONEncoder().encode(ToriiGovernanceZkBallotV1Request(
-                    authority: owner,
-                    chainId: "chain",
-                    electionId: "election-1 ",
-                    backend: "halo2/ipa",
-                    envelopeB64: "AQIDBA=="
-                ))
-            },
-            {
-                try JSONEncoder().encode(ToriiGovernanceZkBallotProofRequest(
-                    authority: owner,
-                    chainId: "chain",
-                    electionId: "election-1",
-                    ballot: .init(
-                        backend: "halo2/ipa",
-                        envelopeBytesB64: "AQIDBA== "
-                    )
-                ))
-            },
-            {
-                try JSONEncoder().encode(ToriiGovernancePlainBallotRequest(
-                    authority: owner,
-                    chainId: "chain",
-                    referendumId: "referendum 1",
-                    owner: owner,
-                    amount: "250",
-                    durationBlocks: 12,
-                    direction: .aye
-                ))
-            },
-            {
-                try JSONEncoder().encode(ToriiGovernanceZkBallotV1Request(
-                    authority: owner,
-                    chainId: "chain",
-                    electionId: "election/1",
-                    backend: "halo2/ipa",
-                    envelopeB64: "AQIDBA=="
-                ))
-            },
-            {
-                try JSONEncoder().encode(ToriiGovernanceZkBallotProofRequest(
-                    authority: owner,
-                    chainId: "chain",
-                    electionId: ".hidden",
-                    ballot: .init(
-                        backend: "halo2/ipa",
-                        envelopeBytesB64: "AQIDBA=="
-                    )
-                ))
-            },
-            {
-                try JSONEncoder().encode(ToriiGovernancePlainBallotRequest(
-                    authority: owner,
-                    chainId: "chain",
-                    referendumId: "投票",
-                    owner: owner,
-                    amount: "250",
-                    durationBlocks: 12,
-                    direction: .aye
-                ))
-            },
-        ]
-        for encode in invalidEncoders {
-            XCTAssertThrowsError(try encode())
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testInvalidGovernanceZkPublicInputsFailBeforeTransportDispatch() async throws {
-        let owner = try canonicalOwnerLiteral()
-        let request = ToriiGovernanceZkBallotV1Request(
-            authority: owner,
-            chainId: "chain",
-            electionId: "election-1",
-            backend: "halo2/ipa",
-            envelopeB64: "AQIDBA==",
-            publicInputs: .init(
-                rootHint: "not-hex",
-                owner: owner,
-                amount: "250",
-                durationBlocks: 12
-            )
-        )
-        var dispatched = false
-        StubURLProtocol.handler = { request in
-            dispatched = true
-            XCTFail("invalid governance request reached transport dispatch: \(request)")
-            return (
-                HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!,
-                Data()
-            )
-        }
-
-        await XCTAssertThrowsErrorAsync(
-            try await makeClient().submitGovernanceZkBallotV1(request)
-        ) { error in
-            guard case let ToriiClientError.invalidPayload(message) = error else {
-                return XCTFail("unexpected error: \(error)")
-            }
-            XCTAssertTrue(message.contains("root_hint"))
-        }
-        XCTAssertFalse(dispatched)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGovernanceZkBackendsRejectWhitespaceAndControlsBeforeDispatch() async throws {
-        let owner = try canonicalOwnerLiteral()
-        var dispatched = false
-        StubURLProtocol.handler = { request in
-            dispatched = true
-            XCTFail("invalid governance backend reached transport dispatch: \(request)")
-            return (
-                HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: 500,
-                    httpVersion: nil,
-                    headerFields: nil
-                )!,
-                Data()
-            )
-        }
-
-        for backend in ["", " halo2/ipa", "halo2/ipa ", "halo2 /ipa", "halo2\t/ipa", "halo2\u{0000}/ipa"] {
-            let envelope = ToriiGovernanceZkBallotV1Request(
-                authority: owner,
-                chainId: "chain",
-                electionId: "election-1",
-                backend: backend,
-                envelopeB64: "AQIDBA=="
-            )
-            await XCTAssertThrowsErrorAsync(
-                try await makeClient().submitGovernanceZkBallotV1(envelope)
-            ) { error in
-                guard case let ToriiClientError.invalidPayload(reason) = error else {
-                    return XCTFail("unexpected flat-v1 error for \(backend.debugDescription): \(error)")
-                }
-                XCTAssertTrue(reason.contains("backend"))
-            }
-
-            let proof = ToriiGovernanceZkBallotProofRequest(
-                authority: owner,
-                chainId: "chain",
-                electionId: "election-1",
-                ballot: .init(
-                    backend: backend,
-                    envelopeBytesB64: "AQIDBA=="
-                )
-            )
-            await XCTAssertThrowsErrorAsync(
-                try await makeClient().submitGovernanceZkBallotProofV1(proof)
-            ) { error in
-                guard case let ToriiClientError.invalidPayload(reason) = error else {
-                    return XCTFail("unexpected proof-v1 error for \(backend.debugDescription): \(error)")
-                }
-                XCTAssertTrue(reason.contains("backend"))
-            }
-            XCTAssertFalse(dispatched)
-        }
-    }
-
-    func testSubmitGovernanceZkBallotV1EncodesFlatTypedEnvelope() throws {
-        let expectation = expectation(description: "zk ballot v1")
-        let owner = try canonicalOwnerLiteral()
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/gov/ballots/zk-v1")
-            let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["backend"] as? String, "halo2/ipa")
-            XCTAssertEqual(body["envelope_b64"] as? String, "AQIDBA==")
-            XCTAssertNil(body["public"])
-            XCTAssertEqual(body["root_hint"] as? String, String(repeating: "11", count: 32))
-            XCTAssertEqual(body["owner"] as? String, owner)
-            XCTAssertEqual(body["amount"] as? String, "250")
-            XCTAssertEqual(body["duration_blocks"] as? Int, 12)
-            XCTAssertEqual(body["direction"] as? String, "Nay")
-            XCTAssertEqual(body["nullifier"] as? String, String(repeating: "22", count: 32))
-            return (
-                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
-                                headerFields: ["Content-Type": "application/json"])!,
-                Data("{\"ok\":true,\"accepted\":true,\"reason\":null,\"tx_instructions\":[]}".utf8)
-            )
-        }
-        let request = ToriiGovernanceZkBallotV1Request(
-            authority: owner,
-            chainId: "chain",
-            electionId: "election-1",
-            backend: "halo2/ipa",
-            envelopeB64: "AQIDBA==",
-            publicInputs: .init(
-                rootHint: "0x\(String(repeating: "11", count: 32))",
-                owner: owner,
-                amount: "250",
-                durationBlocks: 12,
-                direction: .nay,
-                nullifier: "blake2b32:\(String(repeating: "22", count: 32))"
-            )
-        )
-        makeClient().submitGovernanceZkBallotV1(request) { result in
-            if case .failure(let error) = result {
-                XCTFail("unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 1)
-    }
-
-    func testSubmitGovernanceZkBallotProofV1EncodesTypedNestedProof() throws {
-        let expectation = expectation(description: "zk ballot proof v1")
-        let owner = try canonicalOwnerLiteral()
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/gov/ballots/zk-v1/ballot-proof")
-            let body = self.bodyJSON(from: request)
-            let ballot = body["ballot"] as? [String: Any]
-            XCTAssertEqual(ballot?["backend"] as? String, "halo2/ipa")
-            XCTAssertEqual(ballot?["envelope_bytes"] as? String, "AQIDBA==")
-            XCTAssertEqual(ballot?["owner"] as? String, owner)
-            XCTAssertEqual(ballot?["amount"] as? String, "250")
-            XCTAssertEqual(ballot?["duration_blocks"] as? Int, 12)
-            XCTAssertEqual(ballot?["direction"] as? String, "Abstain")
-            XCTAssertEqual(ballot?["root_hint"] as? String, String(repeating: "33", count: 32))
-            XCTAssertEqual(ballot?["nullifier"] as? String, String(repeating: "44", count: 32))
-            return (
-                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
-                                headerFields: ["Content-Type": "application/json"])!,
-                Data("{\"ok\":true,\"accepted\":true,\"reason\":null,\"tx_instructions\":[]}".utf8)
-            )
-        }
-        let request = ToriiGovernanceZkBallotProofRequest(
-            authority: owner,
-            chainId: "chain",
-            electionId: "election-1",
-            ballot: .init(
-                backend: "halo2/ipa",
-                envelopeBytesB64: "AQIDBA==",
-                publicInputs: .init(
-                    rootHint: String(repeating: "33", count: 32),
-                    owner: owner,
-                    amount: "250",
-                    durationBlocks: 12,
-                    direction: .abstain,
-                    nullifier: String(repeating: "44", count: 32)
-                )
-            )
-        )
-        makeClient().submitGovernanceZkBallotProofV1(request) { result in
-            if case .failure(let error) = result {
-                XCTFail("unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 1)
-    }
-
-    func testSubmitGovernanceParliamentBallotUsesCanonicalPolicyJuryWireLabels() throws {
-        let expectation = expectation(description: "Parliament ballot")
-        let owner = try canonicalOwnerLiteral()
-        let proposalId = String(repeating: "a5", count: 32)
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/gov/parliament/ballots")
-            let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["authority"] as? String, owner)
-            XCTAssertEqual(body["chain_id"] as? String, "chain")
-            XCTAssertEqual(body["proposal_id"] as? String, proposalId)
-            XCTAssertEqual(body["body"] as? String, "policy-jury")
-            XCTAssertEqual(body["decision"] as? String, "approve")
-            return (
-                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
-                                headerFields: ["Content-Type": "application/json"])!,
-                Data("{\"ok\":true,\"accepted\":true,\"reason\":null,\"tx_instructions\":[]}".utf8)
-            )
-        }
-        let request = ToriiGovernanceParliamentBallotRequest(
-            authority: owner,
-            chainId: "chain",
-            proposalId: "blake2b32:\(proposalId.uppercased())",
-            body: .policyJury,
-            decision: .approve
-        )
-        makeClient().submitGovernanceParliamentBallot(request) { result in
-            if case .failure(let error) = result {
-                XCTFail("unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 1)
-    }
-
-    func testGovernanceTypedRequestBodiesCannotEmitPrivateKeyAliases() throws {
-        let owner = try canonicalOwnerLiteral()
-        let publicInputs = GovernanceZkBallotPublicInputs(
-            owner: owner,
-            amount: "250",
-            durationBlocks: 12
-        )
-        let bodies = [
-            try JSONEncoder().encode(ToriiGovernanceDeployContractProposalRequest(
-                contractAlias: "demo::universal",
-                codeHashHex: String(repeating: "11", count: 32),
-                abiHashHex: String(repeating: "22", count: 32),
-                manifestProvenance: .init(
-                    signer: "ed25519:public",
-                    signature: "ed25519:signature"
-                )
-            )),
-            try JSONEncoder().encode(ToriiGovernancePlainBallotRequest(
-                authority: owner,
-                chainId: "chain",
-                referendumId: "referendum-1",
-                owner: owner,
-                amount: "250",
-                durationBlocks: 12,
-                direction: .aye
-            )),
-            try JSONEncoder().encode(ToriiGovernanceZkBallotV1Request(
-                authority: owner,
-                chainId: "chain",
-                electionId: "election-1",
-                backend: "halo2/ipa",
-                envelopeB64: "AQIDBA==",
-                publicInputs: publicInputs
-            )),
-            try JSONEncoder().encode(ToriiGovernanceZkBallotProofRequest(
-                authority: owner,
-                chainId: "chain",
-                electionId: "election-1",
-                ballot: .init(
-                    backend: "halo2/ipa",
-                    envelopeBytesB64: "AQIDBA==",
-                    publicInputs: publicInputs
-                )
-            )),
-            try JSONEncoder().encode(ToriiGovernanceParliamentBallotRequest(
-                authority: owner,
-                chainId: "chain",
-                proposalId: String(repeating: "55", count: 32),
-                body: .policyJury,
-                decision: .approve
-            )),
-            try JSONEncoder().encode(ToriiGovernanceFinalizeRequest(
-                referendumId: String(repeating: "66", count: 32),
-                proposalId: String(repeating: "66", count: 32)
-            )),
-        ]
-        let privateAliases = [
-            "private_key", "privateKey", "private_key_hex", "privateKeyHex",
-            "private_key_bytes", "privateKeyBytes", "private_key_seed", "privateKeySeed",
-            "private_key_multihash", "privateKeyMultihash", "private_key_algorithm",
-            "privateKeyAlgorithm",
-        ]
-        for data in bodies {
-            let json = try XCTUnwrap(
-                JSONSerialization.jsonObject(with: data) as? [String: Any]
-            )
-            let wire = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
-            let text = try XCTUnwrap(String(data: wire, encoding: .utf8))
-            for alias in privateAliases {
-                XCTAssertFalse(text.contains("\"\(alias)\""), "emitted private alias \(alias)")
-            }
-        }
-    }
-
     func testGetGovernanceProposalDecodesRecord() {
         let expectation = expectation(description: "proposal lookup")
         let proposalId = String(repeating: "6", count: 64)
@@ -19906,7 +19646,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, payload)
         }
 
-        makeClient().getGovernanceProposal(idHex: proposalId) { result in
+        makeClient().getGovernanceProposal(idHex: proposalId, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let response):
                 XCTAssertTrue(response.found)
@@ -19956,10 +19696,10 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
 
         let client = makeClient()
-        let proposal = try await client.getGovernanceProposal(idHex: proposalId)
-        let referendum = try await client.getGovernanceReferendum(id: "ref.referendum~1")
-        let tally = try await client.getGovernanceTally(id: "ref_tally-2")
-        let locks = try await client.getGovernanceLocks(referendumId: "Ref3")
+        let proposal = try await client.getGovernanceProposal(idHex: proposalId, canonicalAuth: canonicalReadAuth)
+        let referendum = try await client.getGovernanceReferendum(id: "ref.referendum~1", canonicalAuth: canonicalReadAuth)
+        let tally = try await client.getGovernanceTally(id: "ref_tally-2", canonicalAuth: canonicalReadAuth)
+        let locks = try await client.getGovernanceLocks(referendumId: "Ref3", canonicalAuth: canonicalReadAuth)
 
         XCTAssertFalse(proposal.found)
         XCTAssertFalse(referendum.found)
@@ -19979,48 +19719,48 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let proposalId = String(repeating: "ab", count: 32)
         let invalidCalls: [(String, () async throws -> Void)] = [
             ("uppercase proposal", {
-                _ = try await client.getGovernanceProposal(idHex: proposalId.uppercased())
+                _ = try await client.getGovernanceProposal(idHex: proposalId.uppercased(), canonicalAuth: canonicalReadAuth)
             }),
             ("prefixed proposal", {
-                _ = try await client.getGovernanceProposal(idHex: "0x\(proposalId)")
+                _ = try await client.getGovernanceProposal(idHex: "0x\(proposalId)", canonicalAuth: canonicalReadAuth)
             }),
             ("padded proposal", {
-                _ = try await client.getGovernanceProposal(idHex: " \(proposalId)")
+                _ = try await client.getGovernanceProposal(idHex: " \(proposalId)", canonicalAuth: canonicalReadAuth)
             }),
             ("slash proposal", {
-                _ = try await client.getGovernanceProposal(idHex: "proposal/segment")
+                _ = try await client.getGovernanceProposal(idHex: "proposal/segment", canonicalAuth: canonicalReadAuth)
             }),
             ("padded referendum", {
-                _ = try await client.getGovernanceReferendum(id: " ref-1")
+                _ = try await client.getGovernanceReferendum(id: " ref-1", canonicalAuth: canonicalReadAuth)
             }),
             ("internal referendum whitespace", {
-                _ = try await client.getGovernanceReferendum(id: "ref 1")
+                _ = try await client.getGovernanceReferendum(id: "ref 1", canonicalAuth: canonicalReadAuth)
             }),
             ("slash referendum", {
-                _ = try await client.getGovernanceReferendum(id: "ref/1")
+                _ = try await client.getGovernanceReferendum(id: "ref/1", canonicalAuth: canonicalReadAuth)
             }),
             ("leading-dot referendum", {
-                _ = try await client.getGovernanceReferendum(id: ".hidden")
+                _ = try await client.getGovernanceReferendum(id: ".hidden", canonicalAuth: canonicalReadAuth)
             }),
             ("percent referendum", {
-                _ = try await client.getGovernanceReferendum(id: "ref%31")
+                _ = try await client.getGovernanceReferendum(id: "ref%31", canonicalAuth: canonicalReadAuth)
             }),
             ("unicode referendum", {
-                _ = try await client.getGovernanceReferendum(id: "投票")
+                _ = try await client.getGovernanceReferendum(id: "投票", canonicalAuth: canonicalReadAuth)
             }),
             ("tally tab", {
-                _ = try await client.getGovernanceTally(id: "ref\t1")
+                _ = try await client.getGovernanceTally(id: "ref\t1", canonicalAuth: canonicalReadAuth)
             }),
             ("overlong tally", {
                 _ = try await client.getGovernanceTally(
-                    id: String(repeating: "a", count: 129)
+                    id: String(repeating: "a", count: 129), canonicalAuth: canonicalReadAuth
                 )
             }),
             ("locks control", {
-                _ = try await client.getGovernanceLocks(referendumId: "ref\u{0000}1")
+                _ = try await client.getGovernanceLocks(referendumId: "ref\u{0000}1", canonicalAuth: canonicalReadAuth)
             }),
             ("locks unicode whitespace", {
-                _ = try await client.getGovernanceLocks(referendumId: "ref\u{2003}1")
+                _ = try await client.getGovernanceLocks(referendumId: "ref\u{2003}1", canonicalAuth: canonicalReadAuth)
             }),
         ]
         var dispatched = false
@@ -20070,7 +19810,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, payload)
         }
 
-        makeClient().getGovernanceUnlockStats(height: 120, referendumId: "ref-1") { result in
+        makeClient().getGovernanceUnlockStats(height: 120, referendumId: "ref-1", canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let stats):
                 XCTAssertEqual(stats.expiredLocksNow, 2)
@@ -20092,7 +19832,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "scope" })?.value, "auto")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"hash":"\(Self.pipelineHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"global","resolved_from":"state"}
+            {"hash":"\(Self.pipelineHash)","status":{"kind":"Rejected","block_height":12},"scope":"global","resolved_from":"state"}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -20102,9 +19842,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             case .success(let status):
                 XCTAssertEqual(status?.hash, Self.pipelineHash)
                 XCTAssertEqual(status?.status.kind, "Rejected")
-                XCTAssertEqual(status?.status.rejectionReason, #"{"Validation":"missing permission"}"#)
-                XCTAssertEqual(status?.summary, "Rejected: missing permission")
-                XCTAssertEqual(status?.primaryDiagnostic?.decodedReason, "missing permission")
+                XCTAssertEqual(status?.status.blockHeight, 12)
                 XCTAssertEqual(status?.scope, "global")
                 XCTAssertEqual(status?.resolvedFrom, "state")
                 XCTAssertEqual(status?.isRejected, true)
@@ -20493,7 +20231,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         )
 
         let committedJSON = """
-        {"hash":"\(Self.pipelineHash)","status":{"kind":"Committed"},"summary":"Committed","diagnostics":[],"scope":"global","resolved_from":"cache"}
+        {"hash":"\(Self.pipelineHash)","status":{"kind":"Committed"},"scope":"global","resolved_from":"cache"}
         """.data(using: .utf8)!
         let committed = try JSONDecoder().decode(
             ToriiPipelineTransactionStatus.self,
@@ -20505,13 +20243,34 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertFalse(PipelineTransactionState.approved.isKnownTerminalSuccess)
 
         let flatJSON = """
-        {"hash":"\(Self.pipelineHash)","resolved_from":"state","scope":"global","status":{"block_height":64,"kind":"Applied"},"summary":"Applied","diagnostics":[]}
+        {"hash":"\(Self.pipelineHash)","resolved_from":"state","scope":"global","status":{"block_height":64,"kind":"Applied"}}
         """.data(using: .utf8)!
         let flat = try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: flatJSON)
         XCTAssertEqual(flat.hash, Self.pipelineHash)
         XCTAssertEqual(flat.status.state, .applied)
         XCTAssertTrue(flat.status.state.isTerminalSuccess)
         XCTAssertTrue(flat.isApplied)
+
+        let retiredDetailJSON = """
+        {"hash":"\(Self.pipelineHash)","status":{"kind":"Rejected","rejection_reason":"secret"},"scope":"global","resolved_from":"state","summary":"secret","diagnostics":[]}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: retiredDetailJSON)
+        )
+
+        let unknownKindJSON = """
+        {"hash":"\(Self.pipelineHash)","status":{"kind":"Finalizing"},"scope":"global","resolved_from":"state"}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: unknownKindJSON)
+        )
+
+        let nullHeightJSON = """
+        {"hash":"\(Self.pipelineHash)","status":{"kind":"Applied","block_height":null},"scope":"global","resolved_from":"state"}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: nullHeightJSON)
+        )
 
         let other = PipelineTransactionState(kind: "CustomStatus")
         if case let .other(value) = other {
@@ -20664,7 +20423,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
 }
-
 
 private struct TxStatusErrorContractCase {
     let id: String

@@ -1,15 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { ToriiClient } from "../src/toriiClient.js";
+import { LocalSigningContext, ToriiClient as BaseToriiClient } from "../src/toriiClient.js";
 import { AccountAddress } from "../src/address.js";
 import {
   canonicalRequestSignatureMessage,
+  NetworkId,
   normalizeAccountId,
   signEd25519,
 } from "../src/index.js";
 
 const BASE_URL = "https://localhost:8080";
+const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
+
+class ToriiClient extends BaseToriiClient {
+  constructor(baseUrl, options = {}) {
+    super(baseUrl, { localSigningContext: LOCAL_SIGNING_CONTEXT, ...options });
+  }
+}
 const SORA_I105_DISCRIMINANT = 0x2f1;
 const SAMPLE_ACCOUNT_SIGNATORY =
   "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
@@ -558,6 +567,7 @@ test("VPN session paths normalize hex before signing and reject malformed IDs", 
     const parsed = new URL(url);
     assert.equal(parsed.pathname, `/v1/vpn/sessions/${normalizedSessionId}`);
     const message = canonicalRequestSignatureMessage({
+      networkId: NETWORK_ID,
       method: init.method,
       path: parsed.pathname,
       query: "",

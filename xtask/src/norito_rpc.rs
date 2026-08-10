@@ -3,6 +3,8 @@
 //! The implementation lives in `norito_codegen_exporter`; these adapters keep
 //! the workspace command dispatcher thin.
 
+mod alias_setup_fixture;
+
 use eyre::Result;
 pub use norito_codegen_exporter::FixtureOptions;
 use norito_codegen_exporter::{
@@ -13,12 +15,14 @@ use crate::JsonTarget;
 
 /// Verify canonical Norito RPC fixtures and optionally write a JSON report.
 pub fn run_verify(json_out: Option<JsonTarget>) -> Result<()> {
-    run_verify_impl(json_out.map(json_output))
+    let alias_setup_fixture = alias_setup_fixture::render()?;
+    run_verify_impl(&alias_setup_fixture, json_out.map(json_output))
 }
 
 /// Regenerate canonical Norito RPC fixtures using the focused exporter crate.
 pub fn generate_fixtures(options: FixtureOptions) -> Result<()> {
-    generate_fixtures_impl(options)
+    let alias_setup_fixture = alias_setup_fixture::render()?;
+    generate_fixtures_impl(options, &alias_setup_fixture)
 }
 
 fn json_output(target: JsonTarget) -> JsonOutput {
@@ -92,6 +96,32 @@ mod tests {
             assert!(
                 !production.contains(implementation_marker),
                 "{implementation_marker} belongs in the exporter implementation"
+            );
+        }
+    }
+
+    #[test]
+    fn alias_setup_owner_is_source_driven_and_has_no_identity_fallback() {
+        let source = include_str!("norito_rpc/alias_setup_fixture.rs");
+        let production = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(production, _)| production);
+        assert!(production.contains("account_onboarding_test_fixture::receipt_v1()"));
+        assert!(production.contains("AliasSetupFixtureBytes::try_new"));
+        for forbidden in [
+            "include_str!",
+            "include_bytes!",
+            "fallback",
+            ".or_else(",
+            "unwrap_or_else",
+            "ChainId",
+            "\"chain\"",
+            "\"chainId\"",
+            "\"chain_id\"",
+        ] {
+            assert!(
+                !production.contains(forbidden),
+                "production alias fixture owner must not contain `{forbidden}`"
             );
         }
     }

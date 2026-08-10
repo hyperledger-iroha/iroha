@@ -76,6 +76,9 @@ class ConnectSessionInfo:
     """Session tokens returned by ``POST /v1/connect/session``."""
 
     sid: str
+    network_id: str
+    app_pk: str
+    nonce: str
     wallet_uri: str
     app_uri: str
     token_app: str

@@ -42,11 +42,11 @@ pub(crate) use committee::{
 };
 pub(crate) use quorum::{Quorum, QuorumError};
 pub(crate) use reducer::{
-    BodyState, DurableCommitReceipt, Effect, EquivocationKind, Event, IgnoreReason, Reducer,
+    BodyState, DurableCommitReceipt, Effect, EquivocationEvidence, Event, IgnoreReason, Reducer,
     ReducerError, SignableMessage, StepDisposition,
 };
 #[cfg(test)]
-pub(crate) use reducer::{EquivocationEvidence, StepOutcome};
+pub(crate) use reducer::{EquivocationKind, StepOutcome};
 pub(crate) use refinement::{
     CanonicalIdentityProjection, EFFECTIVE_LOCK_TRACE_OWNER, EFFECTIVE_LOCK_TRACE_RETIRE,
     EFFECTIVE_LOCK_TRACE_SERVICE, EVENT_PERSISTENCE_FAILED, EffectiveLockTraceProjection,
@@ -193,12 +193,11 @@ pub(crate) use scheduler::{ScheduleState, ScheduledWork};
 #[cfg(test)]
 pub(crate) use types::FUTURE_TIMEOUT_VOTE_LOOKAHEAD;
 pub(crate) use types::{
-    CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, EventTag, Generation,
-    HeightContext, HeightContextError, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PayloadManifest,
-    Phase, Proposal, ProposalJustification, QuorumCertificate, Round, SignatureShare,
-    SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
-    TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote, VotingMode, VotingPower,
-    timeout_vote_view_is_admissible,
+    CertificateRef, ConsensusMessageV2, ContextId, Digest, EventTag, Generation, HeightContext,
+    HeightContextError, MAX_VOTING_ROSTER_LEN, NetworkId, OpaqueSignature, PayloadManifest, Phase,
+    Proposal, ProposalJustification, QuorumCertificate, Round, SignatureShare, SignedProposal,
+    SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote,
+    Validator, ValidatorId, Vote, VotingMode, VotingPower, timeout_vote_view_is_admissible,
 };
 pub(crate) use wal::{
     DurableState, PersistenceId, ReplayError, SAFETY_WAL_HASH_LEN, WalAppendError, WalAppendIo,

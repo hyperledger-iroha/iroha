@@ -18,6 +18,7 @@ public final class ConfidentialAssetToriiClient {
 
   private final HttpTransportExecutor executor;
   private final URI baseUri;
+  private final LocalSigningContext localSigningContext;
   private final Duration timeout;
   private final Map<String, String> defaultHeaders;
   private final List<ClientObserver> observers;
@@ -25,6 +26,11 @@ public final class ConfidentialAssetToriiClient {
   private ConfidentialAssetToriiClient(final Builder builder) {
     this.executor = Objects.requireNonNull(builder.executor, "executor");
     this.baseUri = Objects.requireNonNull(builder.baseUri, "baseUri");
+    if (builder.localSigningContext == null) {
+      throw new IllegalStateException(
+          "localSigningContext must be configured before building a confidential asset client");
+    }
+    this.localSigningContext = builder.localSigningContext;
     this.timeout = builder.timeout;
     this.defaultHeaders =
         java.util.Collections.unmodifiableMap(new LinkedHashMap<>(builder.defaultHeaders));
@@ -35,20 +41,28 @@ public final class ConfidentialAssetToriiClient {
     return new Builder();
   }
 
-  public CompletableFuture<ZkRootsResponse> getZkAssetRoots(final ZkRootsRequest request) {
-    return executePost(ZK_ROOTS_PATH, Objects.requireNonNull(request, "request").toJsonBytes(), ZkRootsResponse::parse);
+  public CompletableFuture<ZkRootsResponse> getZkAssetRoots(
+      final ZkRootsRequest request, final ToriiCanonicalRequestAuth canonicalAuth) {
+    return executePost(
+        ZK_ROOTS_PATH,
+        Objects.requireNonNull(request, "request").toJsonBytes(),
+        Objects.requireNonNull(canonicalAuth, "canonicalAuth"),
+        ZkRootsResponse::parse);
   }
 
   public CompletableFuture<ZkMerklePathResponse> getZkAssetMerklePaths(
-      final ZkMerklePathRequest request) {
+      final ZkMerklePathRequest request, final ToriiCanonicalRequestAuth canonicalAuth) {
     return executePost(
         ZK_MERKLE_PATH_PATH,
         Objects.requireNonNull(request, "request").toJsonBytes(),
+        Objects.requireNonNull(canonicalAuth, "canonicalAuth"),
         ZkMerklePathResponse::parse);
   }
 
-  public CompletableFuture<byte[]> getLatestZkAssetRoot(final String assetId) {
-    return getZkAssetRoots(new ZkRootsRequest(assetId, 1)).thenApply(ZkRootsResponse::latestRootBytes);
+  public CompletableFuture<byte[]> getLatestZkAssetRoot(
+      final String assetId, final ToriiCanonicalRequestAuth canonicalAuth) {
+    return getZkAssetRoots(new ZkRootsRequest(assetId, 1), canonicalAuth)
+        .thenApply(ZkRootsResponse::latestRootBytes);
   }
 
   public HttpTransportExecutor executor() {
@@ -56,15 +70,23 @@ public final class ConfidentialAssetToriiClient {
   }
 
   private <T> CompletableFuture<T> executePost(
-      final String path, final byte[] body, final ResponseParser<T> parser) {
-    final TransportRequest request = buildPostRequest(path, body);
+      final String path,
+      final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final ResponseParser<T> parser) {
+    final TransportRequest request = buildPostRequest(path, body, canonicalAuth);
     notifyRequest(request);
     return executeHttpRequest(request, parser);
   }
 
-  private TransportRequest buildPostRequest(final String path, final byte[] body) {
+  private TransportRequest buildPostRequest(
+      final String path,
+      final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     final URI target = resolvePath(path);
     final Map<String, String> headers = mergeHeaders();
+    requireCanonicalHeadersUnset(headers);
+    headers.putAll(buildCanonicalHeaders(target, body, canonicalAuth));
     TransportSecurity.requireHttpRequestAllowed(
         "ConfidentialAssetToriiClient", baseUri, target, headers, body);
     final TransportRequest.Builder builder =
@@ -75,6 +97,41 @@ public final class ConfidentialAssetToriiClient {
             .setTimeout(timeout);
     headers.forEach(builder::addHeader);
     return builder.build();
+  }
+
+  private Map<String, String> buildCanonicalHeaders(
+      final URI target,
+      final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    final Long timestampMs = canonicalAuth.timestampMs();
+    final String nonce = canonicalAuth.nonce();
+    if ((timestampMs == null) != (nonce == null)) {
+      throw new IllegalArgumentException("timestampMs and nonce must be provided together");
+    }
+    if (timestampMs == null) {
+      return CanonicalRequestSigner.buildHeaders(
+          localSigningContext.networkId(), "POST", target, body, canonicalAuth);
+    }
+    return CanonicalRequestSigner.buildHeaders(
+        localSigningContext.networkId(),
+        "POST",
+        target,
+        body,
+        canonicalAuth,
+        timestampMs.longValue(),
+        nonce);
+  }
+
+  private static void requireCanonicalHeadersUnset(final Map<String, String> headers) {
+    for (final String candidate : headers.keySet()) {
+      if (candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_ACCOUNT)
+          || candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_SIGNATURE)
+          || candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_TIMESTAMP_MS)
+          || candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_NONCE)) {
+        throw new IllegalArgumentException(
+            "canonical request headers must be supplied only through canonicalAuth");
+      }
+    }
   }
 
   private Map<String, String> mergeHeaders() {
@@ -246,6 +303,7 @@ public final class ConfidentialAssetToriiClient {
   public static final class Builder {
     private HttpTransportExecutor executor = PlatformHttpTransportExecutor.createDefault();
     private URI baseUri = URI.create("http://localhost:8080");
+    private LocalSigningContext localSigningContext;
     private Duration timeout = Duration.ofSeconds(15);
     private final Map<String, String> defaultHeaders = new LinkedHashMap<>();
     private final List<ClientObserver> observers = new ArrayList<>();
@@ -259,6 +317,11 @@ public final class ConfidentialAssetToriiClient {
 
     public Builder baseUri(final URI baseUri) {
       this.baseUri = Objects.requireNonNull(baseUri, "baseUri");
+      return this;
+    }
+
+    public Builder localSigningContext(final LocalSigningContext localSigningContext) {
+      this.localSigningContext = Objects.requireNonNull(localSigningContext, "localSigningContext");
       return this;
     }
 

@@ -30,7 +30,7 @@ use iroha_core::zk::kagemusha_v2::{
     verify_candidate_recursive_step_two_receipt_v4,
 };
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     asset::AssetDefinitionId,
     offline::{
         KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5,
@@ -99,7 +99,7 @@ Usage:
     <binary_path-from-sealed-kagemusha-candidate-build.json> \\
     generate-candidate \\
     --out-dir <new-directory> \\
-    --chain-id <chain> --asset-definition-id <asset> --asset-scale <u32> \\
+    --network-id <canonical-network-id> --asset-definition-id <asset> --asset-scale <u32> \\
     --generation <id> --parameter-generation <id> \\
     --source-commit <40-lower-hex> --source-tree-sha256 <64-lower-hex> \\
     --activation-height <u64> --withdrawal-height <u64> \\
@@ -169,7 +169,7 @@ const GENERATE_OPTIONS: &[&str] = &[
     "staging-id",
     "staging-name",
     "output-parent-fd",
-    "chain-id",
+    "network-id",
     "asset-definition-id",
     "asset-scale",
     "generation",
@@ -457,7 +457,7 @@ struct ProfileMetadata {
 }
 
 struct BundleMetadata {
-    chain_id: ChainId,
+    network_id: NetworkId,
     asset: AssetDefinitionId,
     asset_scale: u32,
     generation: String,
@@ -1043,13 +1043,9 @@ fn prepare_bundle_metadata(
     vesta_proving_key_output: &mut (dyn Write + Send),
     pallas_proving_key_output: &mut (dyn Write + Send),
 ) -> Result<PreparedBundle, Box<dyn Error>> {
-    let chain_id: ChainId = required(options, "chain-id").parse()?;
-    if chain_id.as_str().is_empty()
-        || chain_id.as_str().len() > 128
-        || chain_id.as_str().trim() != chain_id.as_str()
-        || chain_id.as_str().chars().any(char::is_control)
-    {
-        return Err("--chain-id must be exact non-empty text of at most 128 bytes".into());
+    let network_id: NetworkId = required(options, "network-id").parse()?;
+    if network_id.as_bytes() == &[0; 32] {
+        return Err("--network-id must be a non-zero canonical NetworkId".into());
     }
     let asset: AssetDefinitionId = required(options, "asset-definition-id").parse()?;
     let asset_scale = parse_u32(options, "asset-scale")?;
@@ -1212,7 +1208,7 @@ fn prepare_bundle_metadata(
     ];
     let metadata =
         BundleMetadata {
-            chain_id,
+            network_id,
             asset,
             asset_scale,
             generation,
@@ -2113,7 +2109,7 @@ fn verify_staged_candidate_for_publication(
     roster
         .validate()
         .map_err(|error| format!("invalid staged V4 top-up finality roster: {error}"))?;
-    if roster.chain_id != manifest.chain_id
+    if roster.network_id != manifest.network_id
         || !roster_generation_binding_is_exact(
             &roster.artifact_generation,
             &roster_descriptor.artifact_generation,
@@ -2510,7 +2506,7 @@ fn validate_candidate(
         roster
             .validate()
             .map_err(|error| format!("invalid V4 candidate top-up finality roster: {error}"))?;
-        if roster.chain_id != manifest.chain_id
+        if roster.network_id != manifest.network_id
             || !roster_generation_binding_is_exact(
                 &roster.artifact_generation,
                 &roster_descriptor.artifact_generation,
@@ -3147,7 +3143,7 @@ fn prepare_topup_finality_roster(
             .iter()
             .map(|window| window.validator_set.len()),
     )?;
-    if roster.chain_id != metadata.chain_id
+    if roster.network_id != metadata.network_id
         || !roster_generation_matches_release(&roster.artifact_generation, &metadata.generation)
     {
         return Err("top-up finality roster chain or generation mismatch".into());
@@ -3254,7 +3250,7 @@ fn write_candidate(
             .reviewed_source_closure_descriptor_sha256,
         generation_memory_limit_bytes: metadata.generation_memory_limit_bytes,
         generation_memory_enforcement_profile: metadata.generation_memory_enforcement_profile,
-        chain_id: metadata.chain_id,
+        network_id: metadata.network_id,
         asset: metadata.asset,
         asset_scale: metadata.asset_scale,
         activation_height: metadata.activation_height,

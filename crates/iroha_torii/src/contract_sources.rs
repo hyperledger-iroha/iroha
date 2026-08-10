@@ -1380,11 +1380,10 @@ mod tests {
             query,
         ));
 
-        let chain: dm::ChainId = "test-chain".parse().expect("chain");
         let authority_key = checked_contract_sources_key_fixture(Algorithm::Ed25519);
         let authority = dm::AccountId::new(authority_key.public_key().clone());
         let mut builder = dm::TransactionBuilder::new(
-            chain,
+            *state.network_id_ref(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -1492,9 +1491,9 @@ mod tests {
         ));
 
         let code = crate::test_utils::minimal_ivm_program(1);
-        let chain_id = state.view().chain_id().clone();
+        let network_id = *state.network_id_ref();
         let contract_address =
-            dm::ContractAddress::derive(&chain_id, &authority, 0, dm::DataSpaceId::UNIVERSAL)
+            dm::ContractAddress::derive(&network_id, &authority, 0, dm::DataSpaceId::UNIVERSAL)
                 .expect("contract address");
         let code_hash = install_contract_instance(
             state.as_ref(),

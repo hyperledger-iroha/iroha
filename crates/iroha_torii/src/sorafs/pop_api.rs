@@ -36,9 +36,9 @@ use sorafs_node::pop_credentials::{
     PopCredentialApiV1, PopCredentialService, PopCredentialServiceError,
     PopCredentialServicePolicyV1, PopEnrollmentRecipientV1, PopEnrollmentStateV1,
     PopEnrollmentStatusV1, PopFinalizedCursorV1, PopFinalizedRegistryProjectionV1,
-    PopFinalizedRegistryReader, PopIssuanceDraftV1, PopIssuerHsm, PopOutboxSubmitOutcomeV1,
-    PopRecipientOpenErrorV1, PopRegistrySubmitter, PopRequestAuthorityV1, PopWalletKeyWrapper,
-    PopWalletRecipientV1, PopWalletVault,
+    PopFinalizedRegistryReader, PopIssuanceDraftV1, PopIssuerSigner, PopIssuerSigningPurposeV1,
+    PopOutboxSubmitOutcomeV1, PopRecipientOpenErrorV1, PopRegistrySubmitter, PopRequestAuthorityV1,
+    PopWalletKeyWrapper, PopWalletRecipientV1, PopWalletVault,
 };
 use tokio::sync::Mutex;
 
@@ -184,7 +184,7 @@ impl From<&iroha_config::parameters::actual::SorafsPopCredentialService>
                 version: POP_CREDENTIAL_SERVICE_POLICY_VERSION_V1,
                 issuer_policy_digest: value.issuer_policy_digest,
                 issuer_id: value.issuer_id.clone(),
-                issuer_hsm_key_id: value.issuer_hsm_key_id.clone(),
+                issuer_signer_handle: value.issuer_signer_handle.clone(),
                 issuer_public_key: value.issuer_public_key,
                 enrollment_recipient_key_id: value.enrollment_recipient_key_id.clone(),
                 approval_quorum: value.approval_quorum,
@@ -238,7 +238,7 @@ fn validate_pop_runtime_provider_handle(
 pub struct PopCredentialRuntimeProviderBindingsV1 {
     issuer_policy_digest: [u8; 32],
     issuer_id: String,
-    issuer_hsm_key_id: String,
+    issuer_signer_handle: String,
     issuer_public_key: [u8; 32],
     enrollment_recipient_key_id: String,
     enrollment_recipient_public_key_digest: [u8; 32],
@@ -255,7 +255,7 @@ impl PopCredentialRuntimeProviderBindingsV1 {
     pub fn try_new(
         issuer_policy_digest: [u8; 32],
         issuer_id: String,
-        issuer_hsm_key_id: String,
+        issuer_signer_handle: String,
         issuer_public_key: [u8; 32],
         enrollment_recipient_key_id: String,
         enrollment_recipient_public_key_digest: [u8; 32],
@@ -275,7 +275,7 @@ impl PopCredentialRuntimeProviderBindingsV1 {
         {
             return Err(PopCredentialServiceError::InvalidInput { field: "issuer_id" });
         }
-        validate_pop_runtime_provider_handle(&issuer_hsm_key_id, "issuer_hsm_key_id")?;
+        validate_pop_runtime_provider_handle(&issuer_signer_handle, "issuer_signer_handle")?;
         validate_pop_runtime_provider_handle(
             &enrollment_recipient_key_id,
             "enrollment_recipient_key_id",
@@ -302,7 +302,7 @@ impl PopCredentialRuntimeProviderBindingsV1 {
         Ok(Self {
             issuer_policy_digest,
             issuer_id,
-            issuer_hsm_key_id,
+            issuer_signer_handle,
             issuer_public_key,
             enrollment_recipient_key_id,
             enrollment_recipient_public_key_digest,
@@ -318,7 +318,7 @@ impl PopCredentialRuntimeProviderBindingsV1 {
         Self::try_new(
             config.service_policy.issuer_policy_digest,
             config.service_policy.issuer_id.clone(),
-            config.service_policy.issuer_hsm_key_id.clone(),
+            config.service_policy.issuer_signer_handle.clone(),
             config.service_policy.issuer_public_key,
             config.service_policy.enrollment_recipient_key_id.clone(),
             config.enrollment_recipient_public_key_digest,
@@ -340,10 +340,10 @@ impl PopCredentialRuntimeProviderBindingsV1 {
         &self.issuer_id
     }
 
-    /// Exact non-secret HSM key handle.
+    /// Exact non-secret external signer handle.
     #[must_use]
-    pub fn issuer_hsm_key_id(&self) -> &str {
-        &self.issuer_hsm_key_id
+    pub fn issuer_signer_handle(&self) -> &str {
+        &self.issuer_signer_handle
     }
 
     /// Exact governed issuer public key.
@@ -420,7 +420,7 @@ pub enum PopCredentialRuntimeProviderRegistryErrorV1 {
 
 /// Deployment-owned factory for all PoP private runtime dependencies.
 ///
-/// Implementations must change `qualification` whenever any HSM, KMS,
+/// Implementations must change `qualification` whenever any signer, KMS,
 /// authentication, enrollment-recipient, wallet, witness, finalized-query, or
 /// transaction adapter identity/policy changes. `resolve` receives only public
 /// bindings and must never persist or log private material.
@@ -589,8 +589,8 @@ pub trait PopWalletWitnessProviderV1: Send + Sync + fmt::Debug {
 pub struct PopCredentialRuntimeProvidersV1 {
     /// Protected enrollment-recipient open capability.
     pub enrollment_recipient: Arc<dyn PopEnrollmentRecipientV1>,
-    /// HSM/PKCS#11 issuer signer.
-    pub issuer_hsm: Arc<dyn PopIssuerHsm>,
+    /// Authenticated external issuer signer.
+    pub issuer_signer: Arc<dyn PopIssuerSigner>,
     /// Action- and request-bound API authenticator.
     pub authenticator: Arc<dyn PopCredentialApiAuthenticator>,
     /// Idempotent ledger transaction submitter.
@@ -618,30 +618,30 @@ impl fmt::Debug for PopCredentialRuntimeProvidersV1 {
 const POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1: &str = "PoP runtime provider unavailable";
 
 #[derive(Clone)]
-struct QualifiedPopIssuerHsmV1 {
-    inner: Arc<dyn PopIssuerHsm>,
+struct QualifiedPopIssuerSignerV1 {
+    inner: Arc<dyn PopIssuerSigner>,
     key_id: String,
     public_key: [u8; 32],
     registry: QualifiedPopCredentialRuntimeProviderRegistryV1,
 }
 
-impl fmt::Debug for QualifiedPopIssuerHsmV1 {
+impl fmt::Debug for QualifiedPopIssuerSignerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("QualifiedPopIssuerHsmV1")
+            .debug_struct("QualifiedPopIssuerSignerV1")
             .field("key_id", &self.key_id)
             .field("private_provider", &"[REDACTED]")
             .finish()
     }
 }
 
-impl QualifiedPopIssuerHsmV1 {
+impl QualifiedPopIssuerSignerV1 {
     fn identity_matches(&self) -> bool {
         self.inner.key_id() == self.key_id && self.inner.public_key() == self.public_key
     }
 }
 
-impl PopIssuerHsm for QualifiedPopIssuerHsmV1 {
+impl PopIssuerSigner for QualifiedPopIssuerSignerV1 {
     fn key_id(&self) -> &str {
         &self.key_id
     }
@@ -650,14 +650,18 @@ impl PopIssuerHsm for QualifiedPopIssuerHsmV1 {
         self.public_key
     }
 
-    fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], String> {
+    fn sign_digest(
+        &self,
+        purpose: PopIssuerSigningPurposeV1,
+        digest: [u8; 32],
+    ) -> Result<[u8; 64], String> {
         self.registry
             .assert_qualification()
             .map_err(|_| POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())?;
         if !self.identity_matches() {
             return Err(POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned());
         }
-        let result = self.inner.sign_digest(digest);
+        let result = self.inner.sign_digest(purpose, digest);
         if !self.identity_matches() {
             return Err(POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned());
         }
@@ -1037,7 +1041,7 @@ impl fmt::Debug for PopCredentialToriiRuntimeV1 {
 impl PopCredentialToriiRuntimeV1 {
     /// Construct the runtime through an explicit deployment provider registry.
     ///
-    /// Registry identity, revision, policy digest, resolved public HSM
+    /// Registry identity, revision, policy digest, resolved public signer
     /// identity, both recipient protected-key identities, and wallet wrapper
     /// identity are checked before issuer or wallet state is opened.
     pub fn open(
@@ -1050,8 +1054,11 @@ impl PopCredentialToriiRuntimeV1 {
         let bindings = PopCredentialRuntimeProviderBindingsV1::from_config(&config)?;
         let providers = provider_registry.resolve(&bindings)?;
         provider_registry.assert_qualification()?;
-        validate_pop_runtime_provider_handle(providers.issuer_hsm.key_id(), "issuer_hsm_key_id")
-            .map_err(|_| PopCredentialServiceError::RuntimeProviderRegistryMismatch)?;
+        validate_pop_runtime_provider_handle(
+            providers.issuer_signer.key_id(),
+            "issuer_signer_handle",
+        )
+        .map_err(|_| PopCredentialServiceError::RuntimeProviderRegistryMismatch)?;
         validate_pop_runtime_provider_handle(
             providers.enrollment_recipient.key_id(),
             "enrollment_recipient_key_id",
@@ -1067,10 +1074,10 @@ impl PopCredentialToriiRuntimeV1 {
             "wallet_wrapping_key_id",
         )
         .map_err(|_| PopCredentialServiceError::RuntimeProviderRegistryMismatch)?;
-        if providers.issuer_hsm.key_id() != config.service_policy.issuer_hsm_key_id
-            || providers.issuer_hsm.public_key() != config.service_policy.issuer_public_key
+        if providers.issuer_signer.key_id() != config.service_policy.issuer_signer_handle
+            || providers.issuer_signer.public_key() != config.service_policy.issuer_public_key
         {
-            return Err(PopCredentialServiceError::HsmPolicyMismatch);
+            return Err(PopCredentialServiceError::SignerPolicyMismatch);
         }
         if providers.enrollment_recipient.key_id()
             != config.service_policy.enrollment_recipient_key_id
@@ -1085,9 +1092,9 @@ impl PopCredentialToriiRuntimeV1 {
         if providers.wallet_key_wrapper.active_key_id() != config.wallet_wrapping_key_id {
             return Err(PopCredentialServiceError::RuntimeProviderRegistryMismatch);
         }
-        let issuer_hsm: Arc<dyn PopIssuerHsm> = Arc::new(QualifiedPopIssuerHsmV1 {
-            inner: providers.issuer_hsm,
-            key_id: config.service_policy.issuer_hsm_key_id.clone(),
+        let issuer_signer: Arc<dyn PopIssuerSigner> = Arc::new(QualifiedPopIssuerSignerV1 {
+            inner: providers.issuer_signer,
+            key_id: config.service_policy.issuer_signer_handle.clone(),
             public_key: config.service_policy.issuer_public_key,
             registry: provider_registry.clone(),
         });
@@ -1146,7 +1153,7 @@ impl PopCredentialToriiRuntimeV1 {
             &config.issuer_state_dir,
             config.service_policy.clone(),
             enrollment_recipient,
-            issuer_hsm,
+            issuer_signer,
         )?;
         if service.policy() != &config.service_policy {
             return Err(PopCredentialServiceError::WrongPolicy);
@@ -1617,10 +1624,16 @@ pub struct PopVerifyMembershipRequestV1 {
     pub verifier_context: String,
 }
 
-#[derive(Clone, Copy, Debug, Default, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
+#[derive(Clone, Copy, Debug, Default, NoritoSerialize, NoritoDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Strict empty-object request used by bounded worker and projection endpoints.
-pub struct PopEmptyRequestV1 {}
+pub struct PopEmptyRequestV1;
+
+impl norito::json::FastJsonWrite for PopEmptyRequestV1 {
+    fn write_json(&self, out: &mut String) {
+        out.push_str("{}");
+    }
+}
 
 impl norito::json::JsonDeserialize for PopEmptyRequestV1 {
     fn json_deserialize(
@@ -1632,7 +1645,7 @@ impl norito::json::JsonDeserialize for PopEmptyRequestV1 {
                 "empty PoP request rejects unknown fields".to_owned(),
             ));
         }
-        Ok(Self {})
+        Ok(Self)
     }
 }
 
@@ -2060,8 +2073,8 @@ fn error_response(error: PopCredentialServiceError) -> Response {
         | PopCredentialServiceError::CheckpointDurabilityUncertain
         | PopCredentialServiceError::PoisonedCheckpoint
         | PopCredentialServiceError::RegistryUnavailable
-        | PopCredentialServiceError::HsmUnavailable
-        | PopCredentialServiceError::HsmPolicyMismatch
+        | PopCredentialServiceError::SignerUnavailable
+        | PopCredentialServiceError::SignerPolicyMismatch
         | PopCredentialServiceError::KeyWrapping
         | PopCredentialServiceError::RuntimeProviderUnavailable
         | PopCredentialServiceError::RuntimeProviderRegistryMissing
@@ -2177,7 +2190,7 @@ pub(crate) async fn handle_post_pop_approval(
     }
 }
 
-/// Trigger server-resolved, HSM-backed issuance.
+/// Trigger server-resolved, external-signer-backed issuance.
 pub(crate) async fn handle_post_pop_issue(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
@@ -2521,23 +2534,23 @@ mod tests {
         }
     }
 
-    struct TestRuntimeHsm {
+    struct TestRuntimeSigner {
         key_id: String,
         keypair: KeyPair,
         drift_revision: Option<Arc<AtomicU64>>,
     }
 
-    impl fmt::Debug for TestRuntimeHsm {
+    impl fmt::Debug for TestRuntimeSigner {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
-                .debug_struct("TestRuntimeHsm")
+                .debug_struct("TestRuntimeSigner")
                 .field("key_id", &self.key_id)
                 .field("private_key", &"[REDACTED]")
                 .finish()
         }
     }
 
-    impl PopIssuerHsm for TestRuntimeHsm {
+    impl PopIssuerSigner for TestRuntimeSigner {
         fn key_id(&self) -> &str {
             &self.key_id
         }
@@ -2551,12 +2564,16 @@ mod tests {
                 .expect("Ed25519 public key width")
         }
 
-        fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], String> {
+        fn sign_digest(
+            &self,
+            _purpose: PopIssuerSigningPurposeV1,
+            digest: [u8; 32],
+        ) -> Result<[u8; 64], String> {
             let signature: [u8; 64] = Signature::try_new(self.keypair.private_key(), &digest)
-                .map_err(|_| "HSM signing failed".to_owned())?
+                .map_err(|_| "external signer failed".to_owned())?
                 .payload()
                 .try_into()
-                .map_err(|_| "HSM signature width changed".to_owned())?;
+                .map_err(|_| "external signer signature width changed".to_owned())?;
             if let Some(revision) = &self.drift_revision {
                 revision.fetch_add(1, Ordering::SeqCst);
             }
@@ -2982,7 +2999,7 @@ mod tests {
         let bindings = PopCredentialRuntimeProviderBindingsV1::try_new(
             [0x41; 32],
             "pop-issuer-runtime-primary".to_owned(),
-            "pkcs11:pop/issuer:primary".to_owned(),
+            "software://sorafs/pop-credentials/primary".to_owned(),
             issuer_public_key,
             "kms:pop/enrollment:primary".to_owned(),
             [0x42; 32],
@@ -2993,7 +3010,10 @@ mod tests {
         .expect("canonical exact bindings");
         assert_eq!(bindings.issuer_policy_digest(), [0x41; 32]);
         assert_eq!(bindings.issuer_id(), "pop-issuer-runtime-primary");
-        assert_eq!(bindings.issuer_hsm_key_id(), "pkcs11:pop/issuer:primary");
+        assert_eq!(
+            bindings.issuer_signer_handle(),
+            "software://sorafs/pop-credentials/primary"
+        );
         assert_eq!(bindings.issuer_public_key(), issuer_public_key);
         assert_eq!(
             bindings.enrollment_recipient_key_id(),
@@ -3012,7 +3032,7 @@ mod tests {
 
         let assert_rejected = |issuer_policy_digest,
                                issuer_id: &str,
-                               issuer_hsm_key_id: &str,
+                               issuer_signer_handle: &str,
                                issuer_public_key,
                                enrollment_recipient_key_id: &str,
                                enrollment_recipient_public_key_digest,
@@ -3024,7 +3044,7 @@ mod tests {
                 PopCredentialRuntimeProviderBindingsV1::try_new(
                     issuer_policy_digest,
                     issuer_id.to_owned(),
-                    issuer_hsm_key_id.to_owned(),
+                    issuer_signer_handle.to_owned(),
                     issuer_public_key,
                     enrollment_recipient_key_id.to_owned(),
                     enrollment_recipient_public_key_digest,
@@ -3038,7 +3058,7 @@ mod tests {
         assert_rejected(
             [0; 32],
             "pop-issuer-runtime-primary",
-            "pkcs11:pop/issuer:primary",
+            "software://sorafs/pop-credentials/primary",
             issuer_public_key,
             "kms:pop/enrollment:primary",
             [0x42; 32],
@@ -3055,7 +3075,7 @@ mod tests {
             assert_rejected(
                 [0x41; 32],
                 issuer_id,
-                "pkcs11:pop/issuer:primary",
+                "software://sorafs/pop-credentials/primary",
                 issuer_public_key,
                 "kms:pop/enrollment:primary",
                 [0x42; 32],
@@ -3069,7 +3089,7 @@ mod tests {
         assert_rejected(
             [0x41; 32],
             &oversized_issuer,
-            "pkcs11:pop/issuer:primary",
+            "software://sorafs/pop-credentials/primary",
             issuer_public_key,
             "kms:pop/enrollment:primary",
             [0x42; 32],
@@ -3078,21 +3098,21 @@ mod tests {
             "kms:pop/wallet:primary",
             "issuer_id",
         );
-        for (issuer_hsm_key_id, enrollment_key_id, wallet_key_id, field) in [
+        for (issuer_signer_handle, enrollment_key_id, wallet_key_id, field) in [
             (
-                "pkcs11:pop/test",
+                "software://sorafs/pop-credentials/test",
                 "kms:pop/enrollment:primary",
                 "kms:pop/wallet:primary",
-                "issuer_hsm_key_id",
+                "issuer_signer_handle",
             ),
             (
-                "pkcs11:pop/issuer:primary",
+                "software://sorafs/pop-credentials/primary",
                 "kms://pop/mock/enrollment",
                 "kms:pop/wallet:primary",
                 "enrollment_recipient_key_id",
             ),
             (
-                "pkcs11:pop/issuer:primary",
+                "software://sorafs/pop-credentials/primary",
                 "kms:pop/enrollment:primary",
                 "kms://pop/fake/wallet",
                 "wallet_wrapping_key_id",
@@ -3101,7 +3121,7 @@ mod tests {
             assert_rejected(
                 [0x41; 32],
                 "pop-issuer-runtime-primary",
-                issuer_hsm_key_id,
+                issuer_signer_handle,
                 issuer_public_key,
                 enrollment_key_id,
                 [0x42; 32],
@@ -3114,7 +3134,7 @@ mod tests {
         assert_rejected(
             [0x41; 32],
             "pop-issuer-runtime-primary",
-            "pkcs11:pop/issuer:primary",
+            "software://sorafs/pop-credentials/primary",
             issuer_public_key,
             "kms:pop/enrollment:primary",
             [0x42; 32],
@@ -3126,7 +3146,7 @@ mod tests {
         assert_rejected(
             [0x41; 32],
             "pop-issuer-runtime-primary",
-            "pkcs11:pop/issuer:primary",
+            "software://sorafs/pop-credentials/primary",
             [0; 32],
             "kms:pop/enrollment:primary",
             [0x42; 32],
@@ -3138,7 +3158,7 @@ mod tests {
         assert_rejected(
             [0x41; 32],
             "pop-issuer-runtime-primary",
-            "pkcs11:pop/issuer:primary",
+            "software://sorafs/pop-credentials/primary",
             issuer_public_key,
             "kms:pop/enrollment:primary",
             [0; 32],
@@ -3150,7 +3170,7 @@ mod tests {
         assert_rejected(
             [0x41; 32],
             "pop-issuer-runtime-primary",
-            "pkcs11:pop/issuer:primary",
+            "software://sorafs/pop-credentials/primary",
             issuer_public_key,
             "kms:pop/enrollment:primary",
             [0x42; 32],
@@ -3191,8 +3211,8 @@ mod tests {
         let root = root
             .canonicalize()
             .expect("canonical runtime fixture root without symlink ancestors");
-        let hsm = Arc::new(TestRuntimeHsm {
-            key_id: "pkcs11:pop/issuer:primary".to_owned(),
+        let signer = Arc::new(TestRuntimeSigner {
+            key_id: "software://sorafs/pop-credentials/primary".to_owned(),
             keypair: ed25519(0x41),
             drift_revision: None,
         });
@@ -3207,8 +3227,8 @@ mod tests {
                 version: POP_CREDENTIAL_SERVICE_POLICY_VERSION_V1,
                 issuer_policy_digest: [0x51; 32],
                 issuer_id: "pop-issuer-runtime-primary".to_owned(),
-                issuer_hsm_key_id: hsm.key_id.clone(),
-                issuer_public_key: hsm.public_key(),
+                issuer_signer_handle: signer.key_id.clone(),
+                issuer_public_key: signer.public_key(),
                 enrollment_recipient_key_id: "kms:pop/enrollment:primary".to_owned(),
                 approval_quorum: 2,
                 approval_signers: vec![
@@ -3258,7 +3278,7 @@ mod tests {
                 secret: enrollment_recipient.secret().clone(),
                 public_key_digest: config.enrollment_recipient_public_key_digest,
             }),
-            issuer_hsm: hsm,
+            issuer_signer: signer,
             authenticator: Arc::new(FixedAuthenticator {
                 principal_digest: [0x71; 32],
                 expires_at_epoch: 1_000,
@@ -3339,8 +3359,8 @@ mod tests {
         );
         assert_eq!(observed.issuer_id(), config.service_policy.issuer_id);
         assert_eq!(
-            observed.issuer_hsm_key_id(),
-            config.service_policy.issuer_hsm_key_id
+            observed.issuer_signer_handle(),
+            config.service_policy.issuer_signer_handle
         );
         assert_eq!(
             observed.issuer_public_key(),
@@ -3733,7 +3753,7 @@ mod tests {
     }
 
     #[test]
-    fn qualified_hsm_and_kms_discard_results_when_policy_drifts_during_call() {
+    fn qualified_signer_and_kms_discard_results_when_policy_drifts_during_call() {
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let (config, registry, _) = runtime_fixture(
             temporary.path(),
@@ -3745,18 +3765,18 @@ mod tests {
             Some(as_runtime_registry(&registry)),
         )
         .expect("exact provider registry must qualify");
-        let hsm = QualifiedPopIssuerHsmV1 {
-            inner: Arc::new(TestRuntimeHsm {
-                key_id: config.service_policy.issuer_hsm_key_id.clone(),
+        let signer = QualifiedPopIssuerSignerV1 {
+            inner: Arc::new(TestRuntimeSigner {
+                key_id: config.service_policy.issuer_signer_handle.clone(),
                 keypair: ed25519(0x41),
                 drift_revision: Some(Arc::clone(&registry.revision)),
             }),
-            key_id: config.service_policy.issuer_hsm_key_id.clone(),
+            key_id: config.service_policy.issuer_signer_handle.clone(),
             public_key: config.service_policy.issuer_public_key,
             registry: qualified_registry,
         };
         assert_eq!(
-            hsm.sign_digest([0x91; 32]),
+            signer.sign_digest(PopIssuerSigningPurposeV1::Credential, [0x91; 32]),
             Err(POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())
         );
 
@@ -3955,7 +3975,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_startup_rejects_substituted_hsm_enrollment_and_wallet_identities_before_state() {
+    fn runtime_startup_rejects_substituted_signer_enrollment_and_wallet_identities_before_state() {
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let (mut config, registry, _) = runtime_fixture(
             temporary.path(),
@@ -3966,7 +3986,7 @@ mod tests {
         assert_startup_failure_before_state(
             config,
             Some(as_runtime_registry(&registry)),
-            PopCredentialServiceError::HsmPolicyMismatch,
+            PopCredentialServiceError::SignerPolicyMismatch,
         );
 
         let temporary = tempfile::tempdir().expect("temporary runtime root");
@@ -4125,14 +4145,27 @@ mod tests {
     fn empty_request_accepts_only_an_empty_object() {
         assert!(norito::json::from_json::<PopEmptyRequestV1>("{}").is_ok());
         assert!(norito::json::from_json::<PopEmptyRequestV1>("{ }").is_ok());
+        assert_eq!(
+            norito::json::to_json(&PopEmptyRequestV1).expect("encode empty request JSON"),
+            "{}"
+        );
         for malformed in [r#"{"unexpected":true}"#, "[]", "null", ""] {
             assert!(norito::json::from_json::<PopEmptyRequestV1>(malformed).is_err());
         }
 
-        let encoded = norito::to_bytes(&PopEmptyRequestV1 {}).expect("encode empty request");
+        let encoded = norito::to_bytes(&PopEmptyRequestV1).expect("encode empty request");
+        assert_eq!(encoded.len(), norito::core::Header::SIZE);
+        let decoded = norito::decode_from_bytes::<PopEmptyRequestV1>(&encoded)
+            .expect("native Norito must preserve the exact empty request shape");
+        assert_eq!(
+            norito::to_bytes(&decoded).expect("re-encode empty request"),
+            encoded
+        );
+        let mut trailing = encoded;
+        trailing.push(0);
         assert!(
-            norito::decode_from_bytes::<PopEmptyRequestV1>(&encoded).is_ok(),
-            "native Norito must preserve the exact empty request shape"
+            norito::decode_from_bytes::<PopEmptyRequestV1>(&trailing).is_err(),
+            "native Norito must reject trailing bytes"
         );
     }
 

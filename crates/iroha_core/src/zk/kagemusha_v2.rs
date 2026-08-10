@@ -66,8 +66,8 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V5: usize =
         + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_ACCUMULATOR_LIMBS_V5;
 
 pub(crate) const S_VERSION: usize = 0;
-pub(crate) const S_CHAIN_TAG: usize = S_VERSION + 1;
-pub(crate) const S_ASSET_TAG: usize = S_CHAIN_TAG + 8;
+pub(crate) const S_NETWORK_TAG: usize = S_VERSION + 1;
+pub(crate) const S_ASSET_TAG: usize = S_NETWORK_TAG + 8;
 pub(crate) const S_ASSET_SCALE: usize = S_ASSET_TAG + 8;
 pub(crate) const S_FINAL_ROOT: usize = S_ASSET_SCALE + 1;
 pub(crate) const S_NEXT_ZERO_LEAF_INDEX: usize = S_FINAL_ROOT + 8;
@@ -97,7 +97,7 @@ const _: [(); KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5] = [(); S_END];
 /// limb and zero padding are part of the circuit relation.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V5: &[(&str, usize, usize)] = &[
     ("layout_version", S_VERSION, 1),
-    ("chain_tag", S_CHAIN_TAG, 8),
+    ("network_tag", S_NETWORK_TAG, 8),
     ("asset_tag", S_ASSET_TAG, 8),
     ("asset_scale", S_ASSET_SCALE, 1),
     ("final_root", S_FINAL_ROOT, 8),
@@ -134,7 +134,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_V5: &[(&str, usize, usiz
 /// is authenticated by the manifest hash, and verifier-key text is authenticated
 /// by its canonical identity.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_COVERAGE_V5: &[(&str, &str)] = &[
-    ("statement.chain_id", "chain_tag"),
+    ("statement.network_id", "network_tag"),
     ("statement.asset", "asset_tag"),
     ("statement.asset_scale", "asset_scale"),
     ("statement.final_root", "final_root"),
@@ -244,16 +244,16 @@ pub(crate) const I_TRANSFER_NULLIFIER_1: usize = I_TRANSFER_NULLIFIER_0 + 1;
 pub(crate) const I_TRANSFER_OUTPUT_0: usize = I_TRANSFER_NULLIFIER_1 + 1;
 pub(crate) const I_TRANSFER_OUTPUT_1: usize = I_TRANSFER_OUTPUT_0 + 1;
 pub(crate) const I_ASSET_TAG: usize = I_TRANSFER_OUTPUT_1 + 1;
-pub(crate) const I_CHAIN_TAG: usize = I_ASSET_TAG + 1;
-pub(crate) const I_STATEMENT_DIGEST: usize = I_CHAIN_TAG + 1;
+pub(crate) const I_NETWORK_TAG: usize = I_ASSET_TAG + 1;
+pub(crate) const I_STATEMENT_DIGEST: usize = I_NETWORK_TAG + 1;
 pub(crate) const I_SPLIT_DIGEST: usize = I_STATEMENT_DIGEST + 4;
 pub(crate) const I_RECIPIENT_REQUEST_DIGEST: usize = I_SPLIT_DIGEST + 4;
 pub(crate) const I_OPERATION_ID: usize = I_RECIPIENT_REQUEST_DIGEST + 4;
 pub(crate) const I_PARENT_BUNDLE_DIGEST: usize = I_OPERATION_ID + 4;
 pub(crate) const I_BRANCH_LINEAGE_ROOT: usize = I_PARENT_BUNDLE_DIGEST + 4;
 pub(crate) const I_PARENT_BRANCH_LINEAGE_ROOT: usize = I_BRANCH_LINEAGE_ROOT + 4;
-pub(crate) const I_CHAIN_ID_DIGEST: usize = I_PARENT_BRANCH_LINEAGE_ROOT + 4;
-pub(crate) const I_ASSET_ID_DIGEST: usize = I_CHAIN_ID_DIGEST + 4;
+pub(crate) const I_NETWORK_ID_DIGEST: usize = I_PARENT_BRANCH_LINEAGE_ROOT + 4;
+pub(crate) const I_ASSET_ID_DIGEST: usize = I_NETWORK_ID_DIGEST + 4;
 pub(crate) const I_TOPUP_OPERATION_ID: usize = I_ASSET_ID_DIGEST + 4;
 pub(crate) const I_ARTIFACT_MANIFEST_SHA256: usize = I_TOPUP_OPERATION_ID + 4;
 pub(crate) const I_CURRENT_HOP_DOMAIN_TAG: usize = I_ARTIFACT_MANIFEST_SHA256 + 4;
@@ -1091,9 +1091,9 @@ impl KagemushaRecursiveSpendStateVectorV5 {
         let mut limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
         limbs[S_VERSION] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
 
-        let chain_tag =
-            super::confidential_v2::derive_confidential_chain_tag_v3(statement.chain_id.as_str())?;
-        write_exact_u32_limbs(&mut limbs[S_CHAIN_TAG..S_CHAIN_TAG + 8], &chain_tag);
+        let network_tag =
+            super::confidential_v2::derive_confidential_network_tag_v3(&statement.network_id)?;
+        write_exact_u32_limbs(&mut limbs[S_NETWORK_TAG..S_NETWORK_TAG + 8], &network_tag);
         let asset_tag =
             super::confidential_v2::derive_confidential_asset_tag_v3(&statement.asset.to_string())?;
         write_exact_u32_limbs(&mut limbs[S_ASSET_TAG..S_ASSET_TAG + 8], &asset_tag);
@@ -1174,7 +1174,7 @@ impl KagemushaRecursiveSpendStateVectorV5 {
 }
 
 struct KagemushaParentStateOpeningV5<'a> {
-    chain_id: &'a iroha_data_model::ChainId,
+    network_id: &'a iroha_data_model::NetworkId,
     asset: &'a iroha_data_model::asset::AssetDefinitionId,
     asset_scale: u32,
     final_root: [u8; 32],
@@ -1193,9 +1193,8 @@ fn kagemusha_parent_state_opening_v5(
 ) -> Result<Vec<u32>, String> {
     let mut limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
     limbs[S_VERSION] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
-    let chain_tag =
-        super::confidential_v2::derive_confidential_chain_tag_v3(parts.chain_id.as_str())?;
-    write_exact_u32_limbs(&mut limbs[S_CHAIN_TAG..S_CHAIN_TAG + 8], &chain_tag);
+    let network_tag = super::confidential_v2::derive_confidential_network_tag_v3(parts.network_id)?;
+    write_exact_u32_limbs(&mut limbs[S_NETWORK_TAG..S_NETWORK_TAG + 8], &network_tag);
     let asset_tag =
         super::confidential_v2::derive_confidential_asset_tag_v3(&parts.asset.to_string())?;
     write_exact_u32_limbs(&mut limbs[S_ASSET_TAG..S_ASSET_TAG + 8], &asset_tag);
@@ -1354,7 +1353,7 @@ pub fn kagemusha_recursive_spend_append_statement_v4(
         parent_max_peer_hop_count,
     };
     let statement = KagemushaRecursiveSpendPublicStatementV4 {
-        chain_id: split.chain_id.clone(),
+        network_id: split.network_id,
         asset: split.asset.clone(),
         asset_scale: split.asset_scale,
         final_root,
@@ -1811,8 +1810,8 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             asset_tag: super::confidential_v2::derive_confidential_asset_tag_v3(
                 &anchor.asset.definition().to_string(),
             )?,
-            chain_tag: super::confidential_v2::derive_confidential_chain_tag_v3(
-                anchor.chain_id.as_str(),
+            network_tag: super::confidential_v2::derive_confidential_network_tag_v3(
+                &anchor.network_id,
             )?,
             payer_tag: super::confidential_v2::derive_kagemusha_topup_payer_tag_v3(
                 &anchor.payer.to_string(),
@@ -1828,7 +1827,7 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             output_membership,
         )?;
         let secure = super::confidential_v2::prepare_kagemusha_step_topup_witness_v3(
-            &anchor.chain_id,
+            &anchor.network_id,
             &anchor.asset.definition().to_string(),
             &anchor.payer.to_string(),
             anchor.topup_operation_id,
@@ -1882,7 +1881,7 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             output_membership,
         )?;
         let secure = super::confidential_v2::prepare_kagemusha_step_transfer_witness_v3_with_paths(
-            &split.chain_id,
+            &split.network_id,
             &split.asset.to_string(),
             spend_key,
             input_paths,
@@ -1907,7 +1906,7 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             .iter()
             .map(|input| {
                 kagemusha_parent_state_opening_v5(KagemushaParentStateOpeningV5 {
-                    chain_id: &split.chain_id,
+                    network_id: &split.network_id,
                     asset: &split.asset,
                     asset_scale: split.asset_scale,
                     final_root: input.input_root,
@@ -1958,7 +1957,7 @@ impl KagemushaPastaCycleOpaqueProverV4 {
         )?;
         let secure =
             super::confidential_v2::prepare_kagemusha_step_unshield_change_witness_v4_with_paths(
-                &redemption.chain_id,
+                &redemption.network_id,
                 &redemption.asset.to_string(),
                 spend_key,
                 input_paths,
@@ -1981,7 +1980,7 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             .ok_or_else(|| "Kagemusha V5 redemption change omits its output leaf".to_owned())?;
         let parent_state_openings = vec![kagemusha_parent_state_opening_v5(
             KagemushaParentStateOpeningV5 {
-                chain_id: &redemption.chain_id,
+                network_id: &redemption.network_id,
                 asset: &redemption.asset,
                 asset_scale: redemption.input_note.amount.scale,
                 final_root: redemption.input_root,
@@ -2338,7 +2337,7 @@ mod tests {
 
     fn init_statement() -> KagemushaRecursiveSpendPublicStatementV4 {
         use iroha_data_model::{
-            ChainId,
+            NetworkId,
             asset::AssetDefinitionId,
             domain::DomainId,
             offline::{
@@ -2350,7 +2349,11 @@ mod tests {
             },
         };
 
-        let chain_id = ChainId::from("kagemusha-v4-statement-binding");
+        let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"kagemusha-v4-statement-binding-network"),
+        ));
         let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("asset domain"),
             "rose".parse().expect("asset name"),
@@ -2361,7 +2364,7 @@ mod tests {
         };
         let manifest_sha256 = [0x44; 32];
         KagemushaRecursiveSpendPublicStatementV4 {
-            chain_id: chain_id.clone(),
+            network_id,
             asset: asset.clone(),
             asset_scale: 9,
             final_root: scalar_bytes(12),
@@ -2370,7 +2373,7 @@ mod tests {
             proof_step_count: 1,
             peer_hop_count: 0,
             current_note: KagemushaSpendableNoteDescriptorV2 {
-                chain_id,
+                network_id,
                 asset,
                 note_commitment: scalar_bytes(31),
                 spend_nullifier: scalar_bytes(32),
@@ -2645,7 +2648,7 @@ mod tests {
 
         for &index in &[
             S_VERSION,
-            S_CHAIN_TAG,
+            S_NETWORK_TAG,
             S_ASSET_TAG,
             S_ASSET_SCALE,
             S_FINAL_ROOT,

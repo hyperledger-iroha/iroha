@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -13,6 +12,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Type, Union
 from urllib.parse import ParseResult, parse_qs, urlencode, urlparse
 
 from ._native import load_crypto_extension
+from .crypto import NetworkId, _require_network_id
 
 __all__ = [
     "ConnectUri",
@@ -47,6 +47,7 @@ __all__ = [
     "decode_connect_frame",
     "derive_connect_direction_keys",
     "build_connect_approve_preimage",
+    "verify_connect_approval_signature",
     "generate_connect_keypair",
     "generate_connect_sid",
     "ConnectSessionPreview",
@@ -59,7 +60,6 @@ __all__ = [
     "open_connect_payload",
 ]
 
-_SID_PREFIX = b"iroha-connect|sid|"
 _SID_LENGTH = 32
 _NONCE_LENGTH = 16
 _CONNECT_URI_VERSION = "1"
@@ -83,7 +83,9 @@ class ConnectUri:
     """Structured representation of an `iroha://connect` URI."""
 
     sid: str
-    chain_id: str
+    network_id: NetworkId
+    app_public_key: bytes
+    nonce: bytes
     node: Optional[str] = None
     version: int = 1
 
@@ -91,15 +93,22 @@ class ConnectUri:
 def build_connect_uri(data: ConnectUri) -> str:
     """Return a canonical `iroha://connect?...` URI."""
 
-    if not data.sid:
-        raise ValueError("sid is required")
-    if not data.chain_id:
-        raise ValueError("chain_id is required")
+    network_id = _require_network_id(data.network_id, "network_id")
+    app_public_key = _ensure_bytes(data.app_public_key, size=32, field="app_public_key")
+    nonce = _ensure_bytes(data.nonce, size=16, field="nonce")
+    _validate_connect_identity(
+        network_id=network_id,
+        sid=data.sid,
+        app_public_key=app_public_key,
+        nonce=nonce,
+    )
     if data.version < 1:
         raise ValueError("version must be >= 1")
     query_items = {
         "sid": data.sid,
-        "chain_id": data.chain_id,
+        "network_id": network_id.literal,
+        "app_pk": _to_base64url(app_public_key),
+        "nonce": _to_base64url(nonce),
         "v": str(data.version),
     }
     if data.node:
@@ -121,16 +130,46 @@ def parse_connect_uri(uri: str) -> ConnectUri:
     host_is_connect = parsed.netloc == "connect" and parsed.path in {"", "/"}
     if not (path_is_connect or host_is_connect):
         raise ValueError("URI path must be '/connect'")
-    params = parse_qs(parsed.query, strict_parsing=True)
+    params = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+    retired = {"chain", "chain_id", "chainId", "genesis_hash", "genesisHash"}.intersection(
+        params
+    )
+    if retired:
+        raise ValueError("chain identity aliases are retired; provide exact network_id")
+    allowed = {"sid", "network_id", "app_pk", "nonce", "node", "v", "role", "token", "relay"}
+    unsupported = set(params).difference(allowed)
+    if unsupported:
+        raise ValueError(f"unsupported Connect URI parameters: {sorted(unsupported)}")
     sid = _require(_get_single(params, "sid"), "sid")
-    chain_id = _require(_get_single(params, "chain_id"), "chain_id")
+    network_id = NetworkId.parse(_require(_get_single(params, "network_id"), "network_id"))
+    app_public_key = _decode_canonical_base64url(
+        _require(_get_single(params, "app_pk"), "app_pk"), 32, "app_pk"
+    )
+    nonce = _decode_canonical_base64url(
+        _require(_get_single(params, "nonce"), "nonce"), 16, "nonce"
+    )
+    _validate_connect_identity(
+        network_id=network_id,
+        sid=sid,
+        app_public_key=app_public_key,
+        nonce=nonce,
+    )
     version_str = _require(_get_single(params, "v", default="1"), "v")
     try:
         version = int(version_str)
     except ValueError as exc:
         raise ValueError("version must be an integer") from exc
+    if version < 1:
+        raise ValueError("version must be >= 1")
     node = _get_single(params, "node", default=None)
-    return ConnectUri(sid=sid, chain_id=chain_id, node=node, version=version)
+    return ConnectUri(
+        sid=sid,
+        network_id=network_id,
+        app_public_key=app_public_key,
+        nonce=nonce,
+        node=node,
+        version=version,
+    )
 
 
 _MISSING = object()
@@ -175,17 +214,6 @@ def _require_codec_module() -> Any:
             "native Connect codec unavailable; install the extension before using Connect"
         ) from exc
     return _CODEC_MODULE
-
-
-def _register_session_sequence(
-    sid: bytes,
-    direction: ConnectDirection,
-    sequence: int,
-) -> None:
-    codec = _require_codec_module()
-    register = getattr(codec, "register_session_sequence", None)
-    if callable(register):
-        register(bytes(sid), direction.value, int(sequence))
 
 
 def _ensure_bytes(payload: _BytesLike, *, size: Optional[int], field: str) -> bytes:
@@ -234,6 +262,20 @@ class ConnectKeyPair:
     private_key: bytes
     public_key: bytes
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "private_key",
+            _ensure_bytes(self.private_key, size=32, field="private_key"),
+        )
+        object.__setattr__(
+            self,
+            "public_key",
+            _ensure_bytes(self.public_key, size=32, field="public_key"),
+        )
+        if not any(self.private_key) or not any(self.public_key):
+            raise ValueError("Connect key material must not be all zero")
+
 
 @dataclass(frozen=True)
 class ConnectSid:
@@ -248,7 +290,7 @@ class ConnectSid:
 class ConnectSessionPreview:
     """Pre-registration preview bundle used by dashboards and wallets."""
 
-    chain_id: str
+    network_id: NetworkId
     node: Optional[str]
     sid_bytes: bytes
     sid_base64url: str
@@ -282,12 +324,62 @@ class ConnectSessionInfo:
     """Response payload returned by `ToriiClient.create_connect_session`."""
 
     sid: str
+    network_id: NetworkId
+    app_public_key: bytes
+    nonce: bytes
     app_uri: str
     app_token: str
     wallet_token: str
     management_token: str
     relay_token: str
     expires_at: Optional[datetime] = None
+
+    def __post_init__(self) -> None:
+        network_id = _require_network_id(self.network_id, "network_id")
+        app_public_key = _ensure_bytes(
+            self.app_public_key, size=32, field="app_public_key"
+        )
+        nonce = _ensure_bytes(self.nonce, size=16, field="nonce")
+        _validate_connect_identity(
+            network_id=network_id,
+            sid=self.sid,
+            app_public_key=app_public_key,
+            nonce=nonce,
+        )
+        app_uri = _require_exact_non_empty_string(self.app_uri, "app_uri")
+        app_token = _require_exact_non_empty_string(self.app_token, "app_token")
+        wallet_token = _require_exact_non_empty_string(self.wallet_token, "wallet_token")
+        management_token = _require_exact_non_empty_string(
+            self.management_token, "management_token"
+        )
+        relay_token = _require_exact_non_empty_string(self.relay_token, "relay_token")
+        parsed_uri = parse_connect_uri(app_uri)
+        if (
+            parsed_uri.sid != self.sid
+            or parsed_uri.network_id != network_id
+            or parsed_uri.app_public_key != app_public_key
+            or parsed_uri.nonce != nonce
+        ):
+            raise ValueError("app_uri substituted canonical Connect session identity")
+        uri_params = parse_qs(
+            urlparse(app_uri).query,
+            keep_blank_values=True,
+            strict_parsing=True,
+        )
+        if _get_single(uri_params, "role") != "app":
+            raise ValueError("app_uri role must be exactly 'app'")
+        if _get_single(uri_params, "token") != app_token:
+            raise ValueError("app_uri token does not match token_app")
+        if _get_single(uri_params, "relay") != relay_token:
+            raise ValueError("app_uri relay token does not match token_relay")
+        object.__setattr__(self, "network_id", network_id)
+        object.__setattr__(self, "app_public_key", app_public_key)
+        object.__setattr__(self, "nonce", nonce)
+        object.__setattr__(self, "app_uri", app_uri)
+        object.__setattr__(self, "app_token", app_token)
+        object.__setattr__(self, "wallet_token", wallet_token)
+        object.__setattr__(self, "management_token", management_token)
+        object.__setattr__(self, "relay_token", relay_token)
 
     @classmethod
     def from_mapping(
@@ -297,16 +389,24 @@ class ConnectSessionInfo:
         session_ttl_ms: Optional[int] = None,
     ) -> "ConnectSessionInfo":
         try:
+            def required_string(key: str) -> str:
+                return _require_exact_non_empty_string(payload[key], key)
+
             expires_at = None
             if session_ttl_ms is not None and session_ttl_ms > 0:
                 expires_at = datetime.utcnow() + timedelta(milliseconds=session_ttl_ms)
             return cls(
-                sid=str(payload["sid"]),
-                app_uri=str(payload["app_uri"]),
-                app_token=str(payload["token_app"]),
-                wallet_token=str(payload["token_wallet"]),
-                management_token=str(payload["token_management"]),
-                relay_token=str(payload["token_relay"]),
+                sid=required_string("sid"),
+                network_id=NetworkId.parse(required_string("network_id")),
+                app_public_key=_decode_canonical_base64url(
+                    required_string("app_pk"), 32, "app_pk"
+                ),
+                nonce=_decode_canonical_base64url(required_string("nonce"), 16, "nonce"),
+                app_uri=required_string("app_uri"),
+                app_token=required_string("token_app"),
+                wallet_token=required_string("token_wallet"),
+                management_token=required_string("token_management"),
+                relay_token=required_string("token_relay"),
                 expires_at=expires_at,
             )
         except KeyError as exc:  # pragma: no cover - defensive
@@ -317,6 +417,9 @@ class ConnectSessionInfo:
 
         return {
             "sid": self.sid,
+            "network_id": self.network_id.literal,
+            "app_pk": _to_base64url(self.app_public_key),
+            "nonce": _to_base64url(self.nonce),
             "app_uri": self.app_uri,
             "token_app": self.app_token,
             "token_wallet": self.wallet_token,
@@ -324,6 +427,80 @@ class ConnectSessionInfo:
             "token_relay": self.relay_token,
             "expires_at": self.expires_at.isoformat(timespec="seconds") if self.expires_at else None,
         }
+
+
+def _normalize_connect_session_request(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """Validate and normalize the exact `/v1/connect/session` request body."""
+
+    if not isinstance(payload, Mapping):
+        raise TypeError("Connect session request must be a mapping")
+    body = dict(payload)
+    retired = {"chain", "chain_id", "chainId", "genesis_hash", "genesisHash"}.intersection(
+        body
+    )
+    if retired:
+        raise ValueError("chain identity aliases are retired; provide exact network_id")
+    required = {"sid", "network_id", "app_pk", "nonce"}
+    missing = required.difference(body)
+    if missing:
+        raise ValueError(f"Connect session request missing required fields: {sorted(missing)}")
+    unsupported = set(body).difference(required | {"node"})
+    if unsupported:
+        raise ValueError(f"Connect session request has unsupported fields: {sorted(unsupported)}")
+    sid = _require_exact_non_empty_string(body["sid"], "sid")
+    network_literal = _require_exact_non_empty_string(body["network_id"], "network_id")
+    network_id = NetworkId.parse(network_literal)
+    app_public_key = _decode_canonical_base64url(
+        _require_exact_non_empty_string(body["app_pk"], "app_pk"), 32, "app_pk"
+    )
+    nonce = _decode_canonical_base64url(
+        _require_exact_non_empty_string(body["nonce"], "nonce"), 16, "nonce"
+    )
+    _validate_connect_identity(
+        network_id=network_id,
+        sid=sid,
+        app_public_key=app_public_key,
+        nonce=nonce,
+    )
+    normalized: Dict[str, Any] = {
+        "sid": sid,
+        "network_id": network_literal,
+        "app_pk": _to_base64url(app_public_key),
+        "nonce": _to_base64url(nonce),
+    }
+    if "node" in body:
+        normalized["node"] = _require_exact_non_empty_string(body["node"], "node")
+    return normalized
+
+
+def _ensure_connect_session_matches_request(
+    session: ConnectSessionInfo,
+    request: Mapping[str, Any],
+) -> None:
+    """Reject a Torii response that substitutes the requested session identity."""
+
+    body = _normalize_connect_session_request(request)
+    if (
+        session.sid != body["sid"]
+        or session.network_id.literal != body["network_id"]
+        or _to_base64url(session.app_public_key) != body["app_pk"]
+        or _to_base64url(session.nonce) != body["nonce"]
+    ):
+        raise ValueError("Torii Connect session response substituted request identity")
+
+
+def _connect_session_info_from_response(
+    response: Any,
+    request: Mapping[str, Any],
+    session_ttl_ms: Optional[int],
+) -> ConnectSessionInfo:
+    """Parse a session response and retain its exact request identity binding."""
+
+    if not isinstance(response, Mapping):
+        raise ValueError("connect session response is missing or malformed")
+    info = ConnectSessionInfo.from_mapping(response, session_ttl_ms=session_ttl_ms)
+    _ensure_connect_session_matches_request(info, request)
+    return info
 
 
 @dataclass
@@ -446,7 +623,7 @@ class _ConnectControlBase(ABC):
 @dataclass
 class ConnectControlOpen(_ConnectControlBase):
     app_public_key: bytes
-    chain_id: str
+    network_id: NetworkId
     permissions: Optional[ConnectPermissions] = None
     metadata: Optional[ConnectAppMetadata] = None
 
@@ -454,20 +631,22 @@ class ConnectControlOpen(_ConnectControlBase):
         self,
         *,
         app_public_key: _BytesLike,
-        chain_id: str,
+        network_id: NetworkId,
         permissions: Optional[ConnectPermissions] = None,
         metadata: Optional[ConnectAppMetadata] = None,
     ) -> None:
         super().__init__(variant="Open")
         self.app_public_key = _ensure_bytes(app_public_key, size=32, field="app_public_key")
-        self.chain_id = chain_id
+        if not any(self.app_public_key):
+            raise ValueError("app_public_key must not be all zero")
+        self.network_id = _require_network_id(network_id, "network_id")
         self.permissions = permissions
         self.metadata = metadata
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "app_public_key": self.app_public_key,
-            "chain_id": self.chain_id,
+            "network_id": self.network_id,
             "permissions": self.permissions.to_dict() if self.permissions else None,
             "metadata": self.metadata.to_dict() if self.metadata else None,
         }
@@ -486,7 +665,7 @@ class ConnectControlOpen(_ConnectControlBase):
         )
         return cls(
             app_public_key=payload["app_public_key"],
-            chain_id=payload["chain_id"],
+            network_id=payload["network_id"],
             permissions=permissions,
             metadata=metadata,
         )
@@ -515,6 +694,8 @@ class ConnectControlApprove(_ConnectControlBase):
         self.wallet_public_key = _ensure_bytes(
             wallet_public_key, size=32, field="wallet_public_key"
         )
+        if not any(self.wallet_public_key):
+            raise ValueError("wallet_public_key must not be all zero")
         self.account_id = account_id
         self.signature = _ensure_bytes(signature, size=64, field="signature")
         self.algorithm = _normalize_connect_wallet_signature_algorithm(algorithm)
@@ -672,8 +853,12 @@ class ConnectFrame:
         self.sid = _ensure_bytes(self.sid, size=32, field="sid")
         self.direction = ConnectDirection.normalize(self.direction)
         self.sequence = int(self.sequence)
+        if self.sequence < 1:
+            raise ValueError("Connect frame sequence must be at least 1")
         if (self.control is None) == (self.ciphertext is None):
             raise ValueError("provide exactly one of `control` or `ciphertext` for a frame")
+        if self.ciphertext is not None and self.ciphertext.direction != self.direction:
+            raise ValueError("ciphertext direction must match frame direction")
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -952,25 +1137,79 @@ def derive_connect_direction_keys(
 
 def build_connect_approve_preimage(
     *,
+    network_id: NetworkId,
     sid: _BytesLike,
     app_public_key: _BytesLike,
+    nonce: _BytesLike,
     wallet_public_key: _BytesLike,
     account_id: str,
     permissions: Optional[ConnectPermissions] = None,
     proof: Optional[ConnectSignInProof] = None,
+    relay_token: str,
 ) -> bytes:
     """Return the canonical byte preimage wallets must sign for approval frames."""
 
     codec = _require_codec_module()
+    network_id = _require_network_id(network_id, "network_id")
+    relay_token = _require_non_empty_string(relay_token, "relay_token")
+    sid_bytes = _ensure_bytes(sid, size=32, field="sid")
+    app_public_key_bytes = _ensure_bytes(
+        app_public_key, size=32, field="app_public_key"
+    )
+    nonce_bytes = _ensure_bytes(nonce, size=16, field="nonce")
+    _validate_connect_identity(
+        network_id=network_id,
+        sid=_to_base64url(sid_bytes),
+        app_public_key=app_public_key_bytes,
+        nonce=nonce_bytes,
+    )
+    relay_auth = bytes(codec.connect_relay_auth_hash(sid_bytes, relay_token))
     payload = codec.build_connect_approve_preimage(
-        _ensure_bytes(sid, size=32, field="sid"),
-        _ensure_bytes(app_public_key, size=32, field="app_public_key"),
+        network_id,
+        sid_bytes,
+        app_public_key_bytes,
+        nonce_bytes,
         _ensure_bytes(wallet_public_key, size=32, field="wallet_public_key"),
         account_id,
         permissions.to_dict() if permissions else None,
         proof.to_dict() if proof else None,
+        relay_auth,
     )
     return bytes(payload)
+
+
+def verify_connect_approval_signature(
+    *,
+    network_id: NetworkId,
+    sid: _BytesLike,
+    app_public_key: _BytesLike,
+    nonce: _BytesLike,
+    wallet_public_key: _BytesLike,
+    account_id: str,
+    permissions: Optional[ConnectPermissions],
+    proof: Optional[ConnectSignInProof],
+    relay_token: str,
+    algorithm: str,
+    signature: _BytesLike,
+) -> bool:
+    """Verify an approval against its exact session, account, and relay binding."""
+
+    normalized_algorithm = _normalize_connect_wallet_signature_algorithm(algorithm)
+    return bool(
+        _require_codec_module().verify_connect_approval_signature(
+            _require_network_id(network_id, "network_id"),
+            _ensure_bytes(sid, size=32, field="sid"),
+            _ensure_bytes(app_public_key, size=32, field="app_public_key"),
+            _ensure_bytes(nonce, size=16, field="nonce"),
+            _ensure_bytes(wallet_public_key, size=32, field="wallet_public_key"),
+            _require_exact_non_empty_string(account_id, "account_id"),
+            permissions.to_dict() if permissions else None,
+            proof.to_dict() if proof else None,
+            _require_exact_non_empty_string(relay_token, "relay_token"),
+            normalized_algorithm,
+            _ensure_bytes(signature, size=64, field="signature"),
+        )
+    )
 
 def seal_connect_payload(
     key: _BytesLike,
@@ -1019,6 +1258,18 @@ class ConnectSessionKeys:
 
     app_to_wallet: bytes
     wallet_to_app: bytes
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "app_to_wallet",
+            _ensure_bytes(self.app_to_wallet, size=32, field="app_to_wallet"),
+        )
+        object.__setattr__(
+            self,
+            "wallet_to_app",
+            _ensure_bytes(self.wallet_to_app, size=32, field="wallet_to_app"),
+        )
 
     @classmethod
     def derive(
@@ -1093,8 +1344,8 @@ class ConnectSessionState:
             value = holder.get(key, default)
             if not isinstance(value, int):
                 raise TypeError(f"ConnectSessionState field `{key}` must be an integer")
-            if value < 0:
-                raise ValueError(f"ConnectSessionState field `{key}` must be non-negative")
+            if value < 1:
+                raise ValueError(f"ConnectSessionState field `{key}` must be at least 1")
             return value
 
         def _coerce_optional_int(holder: Mapping[str, Any], key: str) -> Optional[int]:
@@ -1103,8 +1354,8 @@ class ConnectSessionState:
                 return None
             if not isinstance(value, int):
                 raise TypeError(f"ConnectSessionState field `{key}` must be an integer or null")
-            if value < 0:
-                raise ValueError(f"ConnectSessionState field `{key}` must be non-negative when present")
+            if value < 1:
+                raise ValueError(f"ConnectSessionState field `{key}` must be at least 1 when present")
             return value
 
         return cls(
@@ -1137,6 +1388,10 @@ class ConnectSession:
     ) -> None:
         self._sid = _ensure_bytes(sid, size=32, field="sid")
         self._keys = keys
+        if not isinstance(keys, ConnectSessionKeys):
+            raise TypeError("keys must be ConnectSessionKeys")
+        if app_initial_sequence < 1 or wallet_initial_sequence < 1:
+            raise ValueError("Connect initial sequences must be at least 1")
         self._next_sequence: Dict[ConnectDirection, int] = {
             ConnectDirection.APP_TO_WALLET: int(app_initial_sequence),
             ConnectDirection.WALLET_TO_APP: int(wallet_initial_sequence),
@@ -1158,7 +1413,6 @@ class ConnectSession:
         payload: ConnectCiphertextPayload,
     ) -> ConnectFrame:
         seq = self._next_sequence[direction]
-        _register_session_sequence(self._sid, direction, seq)
         frame = seal_connect_payload(
             self._key_for(direction),
             self._sid,
@@ -1185,11 +1439,18 @@ class ConnectSession:
         frame_obj = frame if isinstance(frame, ConnectFrame) else ConnectFrame.from_bytes(frame)
         if frame_obj.control is not None:
             raise ValueError("expected ciphertext frame")
+        if frame_obj.sid != self._sid:
+            raise ValueError("Connect frame sid does not match this exact session")
         key = self._key_for(frame_obj.direction)
-        envelope = open_connect_payload(key, frame_obj)
         last_seq = self._last_received[frame_obj.direction]
-        if last_seq is not None and envelope.sequence <= last_seq:
-            raise ValueError("connect sequence must be strictly increasing")
+        expected_seq = 1 if last_seq is None else last_seq + 1
+        if frame_obj.sequence != expected_seq:
+            raise ValueError(
+                f"Connect frame sequence must be exactly {expected_seq} for this direction"
+            )
+        envelope = open_connect_payload(key, frame_obj)
+        if envelope.sequence != frame_obj.sequence:
+            raise ValueError("Connect envelope sequence does not match its frame")
         self._last_received[frame_obj.direction] = envelope.sequence
         return envelope
 
@@ -1241,24 +1502,25 @@ class ConnectSession:
 
 def generate_connect_sid(
     *,
-    chain_id: str,
+    network_id: NetworkId,
     app_public_key: _BytesLike,
     nonce: Optional[_BytesLike] = None,
 ) -> ConnectSid:
     """Derive a deterministic Connect session identifier."""
 
-    normalized_chain = _require_non_empty_string(chain_id, "chain_id")
+    network_id = _require_network_id(network_id, "network_id")
     public_key = _ensure_bytes(app_public_key, size=32, field="app_public_key")
+    if not any(public_key):
+        raise ValueError("app_public_key must not be all zero")
     if nonce is None:
         nonce_bytes = os.urandom(_NONCE_LENGTH)
     else:
         nonce_bytes = _ensure_bytes(nonce, size=_NONCE_LENGTH, field="nonce")
-    hasher = hashlib.blake2b(digest_size=64)
-    hasher.update(_SID_PREFIX)
-    hasher.update(normalized_chain.encode("utf-8"))
-    hasher.update(public_key)
-    hasher.update(nonce_bytes)
-    digest = hasher.digest()[:_SID_LENGTH]
+    if not any(nonce_bytes):
+        raise ValueError("nonce must not be all zero")
+    digest = bytes(
+        _require_codec_module().derive_connect_sid(network_id, public_key, nonce_bytes)
+    )
     sid_base64url = _to_base64url(digest)
     return ConnectSid(
         sid_bytes=bytes(digest),
@@ -1269,25 +1531,31 @@ def generate_connect_sid(
 
 def create_connect_session_preview(
     *,
-    chain_id: str,
+    network_id: NetworkId,
     node: Optional[str] = None,
     nonce: Optional[_BytesLike] = None,
     app_key_pair: Optional[ConnectKeyPair] = None,
 ) -> ConnectSessionPreview:
     """Generate deterministic URIs, SID material, and keypairs for Connect previews."""
 
-    normalized_chain = _require_non_empty_string(chain_id, "chain_id")
+    network_id = _require_network_id(network_id, "network_id")
     normalized_node = _normalize_optional_string(node, "node")
     key_pair = app_key_pair or generate_connect_keypair()
+    if connect_public_key_from_private(key_pair.private_key) != key_pair.public_key:
+        raise ValueError("app_key_pair public key does not match its private key")
     sid = generate_connect_sid(
-        chain_id=normalized_chain,
+        network_id=network_id,
         app_public_key=key_pair.public_key,
         nonce=nonce,
     )
-    wallet_uri = _build_preview_uri("connect", sid.sid_base64url, normalized_chain, normalized_node)
-    app_uri = _build_preview_uri("connect/app", sid.sid_base64url, normalized_chain, normalized_node)
+    wallet_uri = _build_preview_uri(
+        "connect", sid.sid_base64url, network_id, key_pair.public_key, sid.nonce, normalized_node
+    )
+    app_uri = _build_preview_uri(
+        "connect/app", sid.sid_base64url, network_id, key_pair.public_key, sid.nonce, normalized_node
+    )
     return ConnectSessionPreview(
-        chain_id=normalized_chain,
+        network_id=network_id,
         node=normalized_node,
         sid_bytes=sid.sid_bytes,
         sid_base64url=sid.sid_base64url,
@@ -1301,7 +1569,7 @@ def create_connect_session_preview(
 def bootstrap_connect_preview_session(
     torii_client: Any,
     *,
-    chain_id: str,
+    network_id: NetworkId,
     node: Optional[str] = None,
     nonce: Optional[_BytesLike] = None,
     app_key_pair: Optional[ConnectKeyPair] = None,
@@ -1313,14 +1581,19 @@ def bootstrap_connect_preview_session(
     if not hasattr(torii_client, "create_connect_session"):
         raise TypeError("torii_client must expose create_connect_session()")
     preview = create_connect_session_preview(
-        chain_id=chain_id,
+        network_id=network_id,
         node=node,
         nonce=nonce,
         app_key_pair=app_key_pair,
     )
     if not register:
         return ConnectPreviewBootstrapResult(preview=preview, session=None, tokens=None)
-    payload: Dict[str, Any] = {"sid": preview.sid_base64url}
+    payload: Dict[str, Any] = {
+        "sid": preview.sid_base64url,
+        "network_id": preview.network_id.literal,
+        "app_pk": _to_base64url(preview.app_key_pair.public_key),
+        "nonce": _to_base64url(preview.nonce),
+    }
     if session_options is not None:
         if not isinstance(session_options, Mapping):
             raise TypeError("session_options must be a mapping when provided")
@@ -1333,7 +1606,20 @@ def bootstrap_connect_preview_session(
                 raise ValueError(f"unsupported session option {key!r}")
     if "node" not in payload and preview.node:
         payload["node"] = preview.node
-    session = torii_client.create_connect_session(payload)
+    response = torii_client.create_connect_session(payload)
+    if isinstance(response, ConnectSessionInfo):
+        session = response
+    elif isinstance(response, Mapping):
+        session = ConnectSessionInfo.from_mapping(response)
+    else:
+        raise ValueError("Torii Connect session response is missing or malformed")
+    if (
+        session.sid != preview.sid_base64url
+        or session.network_id != preview.network_id
+        or session.app_public_key != preview.app_key_pair.public_key
+        or session.nonce != preview.nonce
+    ):
+        raise ValueError("Torii Connect session response substituted canonical session identity")
     wallet_token = _read_session_token(session, "wallet_token")
     app_token = _read_session_token(session, "app_token")
     management_token = _read_session_token(session, "management_token")
@@ -1350,12 +1636,16 @@ def bootstrap_connect_preview_session(
 def _build_preview_uri(
     suffix: str,
     sid_base64url: str,
-    chain_id: str,
+    network_id: NetworkId,
+    app_public_key: bytes,
+    nonce: bytes,
     node: Optional[str],
 ) -> str:
     params = {
         "sid": sid_base64url,
-        "chain_id": chain_id,
+        "network_id": network_id.literal,
+        "app_pk": _to_base64url(app_public_key),
+        "nonce": _to_base64url(nonce),
         "v": _CONNECT_URI_VERSION,
     }
     if node:
@@ -1370,6 +1660,14 @@ def _require_non_empty_string(value: str, field: str) -> str:
     if not normalized:
         raise ValueError(f"{field} must not be empty")
     return normalized
+
+
+def _require_exact_non_empty_string(value: Any, field: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string")
+    if not value or value != value.strip():
+        raise ValueError(f"{field} must be a non-empty exact string")
+    return value
 
 
 def _normalize_optional_string(value: Optional[str], field: str) -> Optional[str]:
@@ -1392,6 +1690,39 @@ def _from_base64url(value: str) -> bytes:
     if remainder:
         normalized = normalized + "=" * (4 - remainder)
     return base64.urlsafe_b64decode(normalized.encode("ascii"))
+
+
+def _decode_canonical_base64url(value: str, size: int, field: str) -> bytes:
+    decoded = _from_base64url(value)
+    if len(decoded) != size or _to_base64url(decoded) != value:
+        raise ValueError(f"{field} must be canonical base64url for exactly {size} bytes")
+    return decoded
+
+
+def _validate_connect_identity(
+    *,
+    network_id: NetworkId,
+    sid: str,
+    app_public_key: bytes,
+    nonce: bytes,
+) -> None:
+    sid_literal = _require_exact_non_empty_string(sid, "sid")
+    sid_bytes = _decode_canonical_base64url(sid_literal, _SID_LENGTH, "sid")
+    app_public_key = _ensure_bytes(
+        app_public_key, size=32, field="app_public_key"
+    )
+    nonce = _ensure_bytes(nonce, size=_NONCE_LENGTH, field="nonce")
+    if not any(app_public_key):
+        raise ValueError("app_public_key must not be all zero")
+    if not any(nonce):
+        raise ValueError("nonce must not be all zero")
+    expected = generate_connect_sid(
+        network_id=_require_network_id(network_id, "network_id"),
+        app_public_key=app_public_key,
+        nonce=nonce,
+    ).sid_bytes
+    if sid_bytes != expected:
+        raise ValueError("sid does not match exact network_id, app_pk, and nonce")
 
 
 def _read_session_token(obj: Any, primary: str) -> str:

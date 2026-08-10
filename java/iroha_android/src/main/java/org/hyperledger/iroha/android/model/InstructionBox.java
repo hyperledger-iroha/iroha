@@ -7,6 +7,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.model.instructions.InstructionKind;
+import org.hyperledger.iroha.android.privacy.PrivacyProtocolIdV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityAdmissionV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityTupleAdmissionV1;
 
 /**
  * Typed representation of an instruction scheduled for execution within a transaction.
@@ -20,11 +23,24 @@ public final class InstructionBox {
 
   private static final String ARG_WIRE_NAME = "wire_name";
   private static final String ARG_PAYLOAD_BASE64 = "payload_base64";
+  private static final String PRIVACY_SUBMIT_PROOF_WIRE_ID_V1 =
+      "iroha.privacy.submit_proof.v1";
 
   private final InstructionPayload payload;
+  private final PrivacyExact12CapabilityTupleAdmissionV1 privacyAdmission;
+  private final PrivacyProtocolIdV1 privacyProtocolId;
 
   private InstructionBox(final InstructionPayload payload) {
+    this(payload, null, null);
+  }
+
+  private InstructionBox(
+      final InstructionPayload payload,
+      final PrivacyExact12CapabilityTupleAdmissionV1 privacyAdmission,
+      final PrivacyProtocolIdV1 privacyProtocolId) {
     this.payload = Objects.requireNonNull(payload, "payload");
+    this.privacyAdmission = privacyAdmission;
+    this.privacyProtocolId = privacyProtocolId;
   }
 
   /** Instruction display name (matches `InstructionType` tag). */
@@ -82,6 +98,44 @@ public final class InstructionBox {
    */
   public static InstructionBox fromWirePayload(final String wireName, final byte[] payloadBytes) {
     return new InstructionBox(new WireInstructionPayload(wireName, payloadBytes));
+  }
+
+  /**
+   * Builds a retained Exact12 submit-proof instruction after native committed-policy checks.
+   */
+  public static InstructionBox fromPrivacyExact12WirePayload(
+      final PrivacyExact12CapabilityTupleAdmissionV1 admission,
+      final PrivacyProtocolIdV1 protocolId,
+      final byte[] payloadBytes) {
+    final org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1 sdkProtocolId =
+        sdkProtocolId(protocolId);
+    PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
+        admission, sdkProtocolId, payloadBytes);
+    return new InstructionBox(
+        new WireInstructionPayload(PRIVACY_SUBMIT_PROOF_WIRE_ID_V1, payloadBytes),
+        admission,
+        protocolId);
+  }
+
+  /** Fail closed when an unadmitted retained Exact12 instruction reaches the encoder. */
+  public void requirePrivacyExact12ConstructionAdmission() {
+    if (!(payload instanceof WirePayload wire)
+        || !PRIVACY_SUBMIT_PROOF_WIRE_ID_V1.equals(wire.wireName())) {
+      return;
+    }
+    if (privacyAdmission == null || privacyProtocolId == null) {
+      throw new IllegalStateException(
+          "Exact12 submit-proof construction requires committed native admission");
+    }
+    PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
+        privacyAdmission, sdkProtocolId(privacyProtocolId), wire.payloadBytes());
+  }
+
+  private static org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1 sdkProtocolId(
+      final PrivacyProtocolIdV1 protocolId) {
+    Objects.requireNonNull(protocolId, "protocolId");
+    return org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1.fromCanonicalLabel(
+        protocolId.canonicalLabel());
   }
 
   /**

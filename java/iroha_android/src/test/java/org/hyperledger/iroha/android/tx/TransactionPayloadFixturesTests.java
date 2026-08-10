@@ -11,6 +11,8 @@ import org.junit.Test;
 public final class TransactionPayloadFixturesTests {
 
   private static final String SAMPLE_AUTHORITY = TestAccountIds.ed25519Authority(0x2E);
+  private static final String TEST_NETWORK_ID =
+      "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
 
   @Test
   public void toPayloadRejectsMissingWireInstructionFields() {
@@ -24,7 +26,7 @@ public final class TransactionPayloadFixturesTests {
     executable.put("Instructions", instructions);
 
     final Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("chain", "00000002");
+    payload.put("network_id", TEST_NETWORK_ID);
     payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 1_735_000_000_000L);
     payload.put("time_to_live_ms", 100_000L);
@@ -40,7 +42,7 @@ public final class TransactionPayloadFixturesTests {
 
     final Map<String, Object> fixture = new LinkedHashMap<>();
     fixture.put("name", "missing-wire-fields");
-    fixture.put("chain", "00000002");
+    fixture.put("network_id", TEST_NETWORK_ID);
     fixture.put("authority", SAMPLE_AUTHORITY);
     fixture.put("creation_time_ms", 1_735_000_000_000L);
     fixture.put("time_to_live_ms", 100_000L);

@@ -2,6 +2,7 @@
 
 import {
   AccountAddress,
+  NetworkId,
   ToriiClient,
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
@@ -75,7 +76,9 @@ function normalizeBinding(raw) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const toriiUrl = requireValue(args, "--torii", process.env.TORII_URL ?? "http://localhost:8080");
-  const chainId = requireValue(args, "--chain-id", process.env.CHAIN_ID ?? "dev-chain");
+  const networkId = NetworkId.parse(
+    requireValue(args, "--network-id", process.env.NETWORK_ID),
+  );
   const bindingRaw = requireValue(args, "--binding", process.env.BINDING_HASH);
   const amount = requireValue(args, "--amount", process.env.SEND_AMOUNT ?? "10");
   const sessionAccount = requireValue(
@@ -119,7 +122,7 @@ async function main() {
   const tx = await quoteAndSignTransaction(
     client,
     {
-      chainId,
+      networkId,
       authority: sponsorId,
       instructions,
       feePayment: { payer: "authority", chargeLimits: [] },

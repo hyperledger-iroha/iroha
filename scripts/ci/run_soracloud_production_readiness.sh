@@ -302,9 +302,9 @@ run_focused_gates() {
   run_step "torii public runtime route pressure" \
     "env -u LOG_FORMAT cargo test -p iroha_torii --lib --features app_api,telemetry soracloud_public_runtime_rate_and_inflight_limits_fail_closed -- --nocapture"
   run_step "runtime stub production rejection" \
-    "env -u LOG_FORMAT cargo test -p irohad --bin irohad stub_runtime_ -- --nocapture"
+    "env -u LOG_FORMAT cargo test -p irohad --bin iroha3d stub_runtime_ -- --nocapture"
   run_step "embedded runtime manager posture" \
-    "env -u LOG_FORMAT cargo test -p irohad --features embedded-soracloud-runtime --bin irohad manager_config_ -- --nocapture"
+    "env -u LOG_FORMAT cargo test -p irohad --features embedded-soracloud-runtime --bin iroha3d manager_config_ -- --nocapture"
 }
 
 run_portable_gate() {

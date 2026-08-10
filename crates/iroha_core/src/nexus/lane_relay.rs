@@ -341,13 +341,16 @@ mod tests {
         },
     };
 
-    use iroha_crypto::{Hash as UntypedHash, HashOf};
+    use iroha_crypto::{Hash as UntypedHash, HashOf, MerkleProof};
     use iroha_data_model::{
         block::{
             BlockHeader,
-            consensus::{CertPhase, LaneBlockCommitment, LaneSettlementReceipt, Qc, QcAggregate},
+            consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         },
-        nexus::{DataSpaceId, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope},
+        nexus::{
+            DataSpaceId, LaneFastpqProofMaterial, LaneFinalityAuthorityV1, LaneId,
+            LaneRelayEnvelope,
+        },
     };
 
     use super::{
@@ -521,7 +524,7 @@ mod tests {
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         };
-        let envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+        let envelope = LaneRelayEnvelope::new(header, None, settlement, 0)
             .expect("valid envelope")
             .with_lane_block_descriptor_hash(Some(UntypedHash::new(
                 b"lane-relay-broadcaster-test-descriptor",
@@ -537,30 +540,14 @@ mod tests {
         }))
     }
 
-    fn attach_qc(envelope: &mut LaneRelayEnvelope) {
-        envelope.qc = Some(Qc {
-            phase: CertPhase::Commit,
-            subject_block_hash: envelope.block_header.hash(),
-            parent_state_root: UntypedHash::prehashed([0x11; UntypedHash::LENGTH]),
-            post_state_root: UntypedHash::prehashed([0x12; UntypedHash::LENGTH]),
-            height: envelope.block_header.height().get(),
-            view: 0,
-            epoch: 0,
-            chain_order_hash: UntypedHash::prehashed([0x13; UntypedHash::LENGTH]),
-            rechain_seq: 0,
-            mode_tag: envelope
-                .lane_finality_qc_mode_tag("test-mode")
-                .expect("complete test finality statement"),
-            highest_qc: None,
-            validator_set_hash: HashOf::from_untyped_unchecked(UntypedHash::prehashed(
+    fn attach_authority_ref(envelope: &mut LaneRelayEnvelope) {
+        envelope.finality_authority = Some(LaneFinalityAuthorityV1 {
+            version: 1,
+            global_block_height: envelope.block_header.height().get(),
+            finality_artifact_hash: HashOf::from_untyped_unchecked(UntypedHash::prehashed(
                 [0x14; UntypedHash::LENGTH],
             )),
-            validator_set_hash_version: 1,
-            validator_set: Vec::new(),
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0b0000_0111],
-                bls_aggregate_signature: vec![0xAA; 96],
-            },
+            statement_proof: MerkleProof::from_audit_path(0, Vec::new()),
         });
     }
 
@@ -573,7 +560,7 @@ mod tests {
         let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
 
         let mut envelope = sample_envelope(1, 3);
-        attach_qc(&mut envelope);
+        attach_authority_ref(&mut envelope);
         broadcaster
             .broadcast(vec![envelope.clone(), envelope.clone()])
             .expect("mock actor accepts relay");
@@ -625,22 +612,22 @@ mod tests {
         let sent = network.sent();
         assert_eq!(sent.len(), 1);
         assert!(sent[0].fastpq_proof.is_none());
-        assert!(sent[0].qc.is_none());
+        assert!(sent[0].finality_authority.is_none());
         let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot[0].fastpq_proof.is_none());
-        assert!(snapshot[0].qc.is_none());
+        assert!(snapshot[0].finality_authority.is_none());
     }
 
     #[test]
-    fn broadcaster_broadcasts_qc_backed_pending_then_upgrades_verified_relay() {
+    fn broadcaster_broadcasts_finality_backed_pending_then_upgrades_verified_relay() {
         let _guard = crate::sumeragi::status::lane_relay_test_guard();
         crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
         let network = MockNetwork::default();
         let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
 
         let mut envelope = sample_envelope(3, 5);
-        attach_qc(&mut envelope);
+        attach_authority_ref(&mut envelope);
         let mut missing_proof = envelope.clone();
         missing_proof.fastpq_proof = None;
 
@@ -651,11 +638,11 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].block_height, 3);
         assert!(sent[0].fastpq_proof.is_none());
-        assert!(sent[0].qc.is_some());
+        assert!(sent[0].finality_authority.is_some());
         let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot[0].fastpq_proof.is_none());
-        assert!(snapshot[0].qc.is_some());
+        assert!(snapshot[0].finality_authority.is_some());
 
         broadcaster
             .broadcast(vec![envelope])

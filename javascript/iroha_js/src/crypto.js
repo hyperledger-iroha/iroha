@@ -17,6 +17,7 @@ import { verifyEd25519Strict } from "./ed25519Strict.js";
 import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
 import { getNativeBinding } from "./native.js";
+import { networkIdBytes } from "./networkId.js";
 
 const ED25519_SEED_LENGTH = 32;
 const ED25519_PUBLIC_KEY_LENGTH = 32;
@@ -34,7 +35,7 @@ const RECOVERY_ENTROPY_LENGTH_TO_WORD_COUNT = new Map([
 export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 21;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 22;
 export const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES = 256 * 1024;
 export const PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1 = Object.freeze({
   VALID: 0,
@@ -769,7 +770,7 @@ export function deriveConfidentialNoteV2(input) {
 
 /**
  * Derive a confidential v2 nullifier from note material.
- * @param {{chainId: string, assetDefinitionId: string, spendKey: ArrayBufferView | ArrayBuffer | Buffer, rhoHex?: string, rho?: ArrayBufferView | ArrayBuffer | Buffer}} input
+ * @param {{networkId: import("./networkId.js").NetworkId, assetDefinitionId: string, spendKey: ArrayBufferView | ArrayBuffer | Buffer, rhoHex?: string, rho?: ArrayBufferView | ArrayBuffer | Buffer}} input
  * @returns {{nullifier: Buffer, nullifierHex: string}}
  */
 export function deriveConfidentialNullifierV2(input) {
@@ -777,7 +778,9 @@ export function deriveConfidentialNullifierV2(input) {
     resolveNativeBinding(),
     "deriveConfidentialNullifierV2",
   );
-  const chainId = normalizeConfidentialV2ExactString(input?.chainId, "chainId");
+  const networkId = Buffer.from(
+    networkIdBytes(input?.networkId, "networkId"),
+  );
   const assetDefinitionId = normalizeConfidentialV2ExactString(
     input?.assetDefinitionId,
     "assetDefinitionId",
@@ -789,7 +792,7 @@ export function deriveConfidentialNullifierV2(input) {
   const rhoHex = normalizeFixed32HexInput(input?.rhoHex ?? input?.rho, "rho");
   const nullifier = Buffer.from(
     native.deriveConfidentialNullifierV2(
-      chainId,
+      networkId,
       assetDefinitionId,
       spendKey,
       rhoHex,

@@ -4,6 +4,7 @@ use std::{collections::BTreeSet, error::Error, fs, path::Path};
 
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleTree, Signature};
 use iroha_data_model::{
+    NetworkId,
     block::{
         Header as BlockHeader,
         consensus::{
@@ -52,7 +53,7 @@ struct FixtureContext {
     validator_set_hash: HashOf<Vec<PeerId>>,
     round: ConsensusRound,
     epoch: u64,
-    chain_id_hash: Hash,
+    network_id: NetworkId,
     plan_digest: Hash,
     coordinator_lane_id: LaneId,
     coordinator_dataspace_id: DataSpaceId,
@@ -101,7 +102,10 @@ fn fixture_context() -> Result<FixtureContext, Box<dyn Error>> {
             view: 6,
         },
         epoch: 3,
-        chain_id_hash: Hash::new(b"native-amx-v2-grouped-fixture-chain"),
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            // Stable synthetic genesis-header hash seed used by the checked-in fixture.
+            Hash::new(b"native-amx-v2-grouped-fixture-chain"),
+        )),
         plan_digest: Hash::new(b"native-amx-v2-grouped-fixture-plan"),
         coordinator_lane_id: LaneId::new(7),
         coordinator_dataspace_id: DataSpaceId::new(11),
@@ -261,7 +265,7 @@ fn body(
     Ok(NativeAmxAttestationBodyV2 {
         round: context.round,
         epoch: context.epoch,
-        chain_id_hash: context.chain_id_hash,
+        network_id: context.network_id,
         source_id: context.sources[source_index],
         tx_entrypoint_hash: context.entrypoints[source_index],
         plan_digest: context.plan_digest,
@@ -450,7 +454,7 @@ fn receipt(
     Ok(NativeAmxReceipt {
         version: 2,
         source_id: context.sources[source_index],
-        chain_id_hash: context.chain_id_hash,
+        network_id: context.network_id,
         plan_digest: context.plan_digest,
         lane_id: context.coordinator_lane_id,
         dataspace_id: context.coordinator_dataspace_id,

@@ -23,6 +23,7 @@ import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.MAX_CONTRACT_ARGUMENT_RECORD_BYTES
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.instructions.LanePrivacyMerkleWitness
@@ -47,7 +48,7 @@ internal class TransactionPayloadAdapter private constructor(
             require(!value.executable.requiresTransactionGasLimit() || value.feePayment.gasLimit != null) {
                 "feePayment.gasLimit is required for IVM and contract-call executables"
             }
-            encodeSizedField(encoder, CHAIN_ID_ADAPTER, value.chainId)
+            encodeSizedField(encoder, TRANSACTION_DOMAIN_ADAPTER, value.networkId)
             encodeSizedField(encoder, ACCOUNT_ID_ADAPTER, value.authority)
             encodeSizedField(encoder, UINT64_ADAPTER, value.creationTimeMs)
             encodeSizedField(encoder, EXECUTABLE_ADAPTER, value.executable)
@@ -65,7 +66,7 @@ internal class TransactionPayloadAdapter private constructor(
 
     override fun decode(decoder: NoritoDecoder): TransactionPayload =
         withChainContext(chainDiscriminant) {
-            val chainId = decodeSizedField(decoder, CHAIN_ID_ADAPTER)
+            val networkId = decodeSizedField(decoder, TRANSACTION_DOMAIN_ADAPTER)
             val authority = decodeAuthorityField(decoder)
             val creationTimeMs = decodeSizedField(decoder, UINT64_ADAPTER)
             val executable = decodeSizedField(decoder, EXECUTABLE_ADAPTER)
@@ -80,7 +81,7 @@ internal class TransactionPayloadAdapter private constructor(
                 decodeSizedField(decoder, ATTACHMENTS_OPTION_ADAPTER)
 
             TransactionPayload(
-                chainId = chainId,
+                networkId = networkId,
                 authority = authority,
                 creationTimeMs = creationTimeMs,
                 executable = executable,
@@ -539,6 +540,7 @@ internal class TransactionPayloadAdapter private constructor(
 
     private class InstructionAdapter : TypeAdapter<InstructionBox> {
         override fun encode(encoder: NoritoEncoder, value: InstructionBox) {
+            value.requirePrivacyExact12ConstructionAdmission()
             val payload = value.payload
             if (payload is WirePayload) {
                 require(isWirePayloadCandidate(payload.wireName, payload.payloadBytes)) {
@@ -831,17 +833,22 @@ internal class TransactionPayloadAdapter private constructor(
         }
     }
 
-    private class ChainIdAdapter : TypeAdapter<String> {
-        override fun encode(encoder: NoritoEncoder, value: String) {
-            encodeSizedField(encoder, STRING_ADAPTER, value)
+    private class TransactionDomainAdapter : TypeAdapter<NetworkId> {
+        override fun encode(encoder: NoritoEncoder, value: NetworkId) {
+            ENUM_TAG_ADAPTER.encode(encoder, TRANSACTION_DOMAIN_NETWORK_TAG)
+            encodeSizedField(encoder, HASH_ADAPTER, value.bytes())
         }
 
-        override fun decode(decoder: NoritoDecoder): String {
-            val payload = decoder.readBytes(decoder.remaining())
-            val sized = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
-            val value = decodeSizedField(sized, STRING_ADAPTER)
-            require(sized.remaining() == 0) { "Trailing bytes after ChainId payload" }
-            return value
+        override fun decode(decoder: NoritoDecoder): NetworkId {
+            val tag = ENUM_TAG_ADAPTER.decode(decoder)
+            require(tag == TRANSACTION_DOMAIN_NETWORK_TAG) {
+                if (tag == TRANSACTION_DOMAIN_GENESIS_TAG) {
+                    "Genesis-only transaction domains are not accepted by the SDK"
+                } else {
+                    "Unknown TransactionDomain discriminant: $tag"
+                }
+            }
+            return NetworkId.fromBytes(decodeSizedField(decoder, HASH_ADAPTER))
         }
     }
 
@@ -900,13 +907,13 @@ internal class TransactionPayloadAdapter private constructor(
     private class MetadataEntryAdapter : TypeAdapter<MetadataEntry> {
         override fun encode(encoder: NoritoEncoder, value: MetadataEntry) {
             encodeSizedField(encoder, STRING_ADAPTER, value.key)
-            encodeSizedField(encoder, JSON_VALUE_ADAPTER, value.value.rawJson)
+            encodeSizedField(encoder, JSON_VALUE_ADAPTER, value.value.canonicalJson)
         }
 
         override fun decode(decoder: NoritoDecoder): MetadataEntry {
             val key = decodeSizedField(decoder, STRING_ADAPTER)
             val raw = decodeSizedField(decoder, JSON_VALUE_ADAPTER)
-            return MetadataEntry(key, JsonValue.raw(raw))
+            return MetadataEntry(key, JsonValue.fromCanonicalWire(raw))
         }
     }
 
@@ -970,7 +977,7 @@ internal class TransactionPayloadAdapter private constructor(
 
         private val STRING_ADAPTER: TypeAdapter<String> = NoritoAdapters.stringAdapter()
         private val ACCOUNT_ID_ADAPTER: TypeAdapter<String> = AccountIdAdapter()
-        private val CHAIN_ID_ADAPTER: TypeAdapter<String> = ChainIdAdapter()
+        private val TRANSACTION_DOMAIN_ADAPTER: TypeAdapter<NetworkId> = TransactionDomainAdapter()
         private val JSON_VALUE_ADAPTER: TypeAdapter<String> = JsonValueFieldAdapter()
         private val UINT64_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(64)
         private val UINT32_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(32)
@@ -1011,6 +1018,8 @@ internal class TransactionPayloadAdapter private constructor(
         private val BATCH_ADAPTER: TypeAdapter<List<ExecutableBatchItem>> =
             NoritoAdapters.sequence(BATCH_ITEM_ADAPTER)
         private val ENUM_TAG_ADAPTER: TypeAdapter<Long> = NoritoAdapters.uint(32)
+        private const val TRANSACTION_DOMAIN_NETWORK_TAG = 0L
+        private const val TRANSACTION_DOMAIN_GENESIS_TAG = 1L
         private const val EXECUTABLE_INSTRUCTIONS_TAG = 0L
         private const val EXECUTABLE_CONTRACT_CALL_TAG = 1L
         private const val EXECUTABLE_IVM_TAG = 2L

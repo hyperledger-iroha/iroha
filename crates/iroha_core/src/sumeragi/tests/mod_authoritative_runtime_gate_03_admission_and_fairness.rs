@@ -659,7 +659,11 @@ fn authenticated_lane_drain_votes_enter_the_bounded_live_relay_queue() {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"live-drain-ingress-chain"),
+                network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                        Hash::new(b"live-drain-ingress-genesis"),
+                    ),
+                ),
                 lane_id: LaneId::new(7),
                 dataspace_id: DataSpaceId::new(9),
                 lane_incarnation: Hash::new(b"live-drain-ingress-incarnation"),
@@ -1200,7 +1204,7 @@ fn kura_replica_advert_requires_exact_signed_direct_keeper_ownership() {
     let keeper = PeerId::new(keeper_key.public_key().clone());
     let mut advert = super::message::KuraReplicaAdvertV1 {
         version: super::message::KURA_REPLICA_ADVERT_VERSION_V1,
-        chain_id: ChainId::from("fair-ingress-kura-advert"),
+        network_id: crate::sumeragi::synthetic_network_id("fair-ingress-kura-advert"),
         height: 13,
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replica-block")),
         executed_block_wire_len: 4096,

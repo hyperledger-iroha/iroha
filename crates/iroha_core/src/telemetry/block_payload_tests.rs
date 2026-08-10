@@ -68,7 +68,11 @@
         );
         let envelope = AutonomousLanePayloadEnvelopeV1 {
             version: AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
-            chain_id_hash: Hash::new(b"telemetry-autonomous-chain"),
+            network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                    Hash::new(b"telemetry-autonomous-genesis"),
+                ),
+            ),
             epoch: 4,
             lane_id: LaneId::new(3),
             dataspace_id: DataSpaceId::new(10),
@@ -165,21 +169,25 @@
         use std::num::NonZeroU64;
 
         use iroha_data_model::{
-            ChainId,
             block::{BlockHeader, BlockSignature},
             transaction::signed::SignedTransaction,
         };
 
         fn dummy_transaction() -> SignedTransaction {
-            let chain_id: ChainId = "test-chain".parse().expect("chain id");
             let key_pair = checked_keypair();
             let authority = AccountId::new(key_pair.public_key().clone());
-            TransactionBuilder::new(
-                chain_id,
+            let network_id =
+                NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                    Hash::new(b"telemetry-block-payload-test-network"),
+                ));
+            let transaction = TransactionBuilder::new(
+                network_id,
                 authority,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-            .sign(key_pair.private_key())
+            .sign(key_pair.private_key());
+            assert_eq!(transaction.network_id(), Some(&network_id));
+            transaction
         }
 
         let header = BlockHeader::new(

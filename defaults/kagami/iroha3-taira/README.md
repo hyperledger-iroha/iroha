@@ -24,7 +24,10 @@ Files:
 - config.toml and config-peer-*.toml — compatibility names for the generated validator configs
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 - sorafs_sites.json — empty version-1 named-host binding document loaded, validated, and cached at Torii startup
-- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
+- docker-compose.yml — full validator committee mounting the shared genesis, per-peer configs, and the host `/run/secrets/iroha` directory read-only
+
+Runtime keys:
+- Validator, SoraNet transport, and streaming signing keys are not embedded. Provision every per-peer file named by the configs under `/run/secrets/iroha` before starting the committee. Startup fails closed when a required file is absent.
 
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-taira

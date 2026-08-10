@@ -703,7 +703,12 @@ Before that transaction can exist, authenticated restart must replay a
 terminalized Validate transition and reconstruct its exact successor, and the
 rejected-report branch must reserve or prove Consensus capacity before the
 Validate record is claimed; a claimed record cannot use record-level Capacity
-as a settlement wait.
+as a settlement wait. A durable Validate row is live, terminal `Advanced`, or
+typed `Cancelled` by explicit old-height retirement; generic Completed,
+Rejected, and Failed tombstones are rejected by the shared payload/terminal
+validator. Only `Advanced` requires semantic replay coverage. Validation
+success versus deterministic rejection is reauthenticated from the exact
+body-store outcome, not encoded as an unauthenticated tombstone discriminator.
 
 The corresponding ordinal-free successor projection accepts only
 `ValidateBody -> Apply` under the same tag, subject, causal lifecycle key, and

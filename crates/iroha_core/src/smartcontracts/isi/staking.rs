@@ -5379,6 +5379,7 @@ mod tests {
         let delegator_balance = Quantity::from(10_000_u64);
         crate::smartcontracts::isi::asset::isi::debit_numeric_asset_balance_for_test(
             &mut stx.world,
+            &stx.network_id,
             &delegator_asset,
             &delegator_balance,
         )

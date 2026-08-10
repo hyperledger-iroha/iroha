@@ -18,8 +18,8 @@ import org.bouncycastle.crypto.params.HKDFParameters
 import org.bouncycastle.crypto.params.KeyParameter
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.instructions.ConfidentialEncryptedPayload
-import org.hyperledger.iroha.sdk.crypto.Blake3
 
 private val U128_MAX: BigInteger = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE)
 
@@ -29,18 +29,18 @@ class ConfidentialNoteOpening(
     spendKey: ByteArray,
     ownerTag: ByteArray,
     asset: String,
-    chainId: String,
+    networkId: NetworkId,
     amount: String,
 ) {
-    private val rhoBytes = fixedBytes(rho, 32, "rho")
-    private val spendKeyBytes = copyNonEmpty(spendKey, "spendKey")
+    private val rhoBytes = fixedNonZeroBytes(rho, 32, "rho")
+    private val spendKeyBytes = fixedNonZeroBytes(spendKey, 32, "spendKey")
     private val ownerTagBytes = fixedScalar(ownerTag, "ownerTag")
 
     @JvmField
     val asset: String = canonicalText(asset, "asset")
 
     @JvmField
-    val chainId: String = canonicalText(chainId, "chainId")
+    val networkId: NetworkId = networkId
 
     @JvmField
     val amount: String = canonicalU128(amount, "amount")
@@ -59,7 +59,7 @@ class ConfidentialNoteOpening(
             rho: ByteArray,
             spendKey: ByteArray,
             asset: String,
-            chainId: String,
+            networkId: NetworkId,
             amount: String,
         ): ConfidentialNoteOpening =
             ConfidentialNoteOpening(
@@ -67,7 +67,7 @@ class ConfidentialNoteOpening(
                 spendKey,
                 ConfidentialOwnerTag.deriveFromSpendKey(spendKey),
                 asset,
-                chainId,
+                networkId,
                 amount,
             )
 
@@ -77,7 +77,7 @@ class ConfidentialNoteOpening(
             spendKey: ByteArray,
             diversifier: ByteArray,
             asset: String,
-            chainId: String,
+            networkId: NetworkId,
             amount: String,
         ): ConfidentialNoteOpening =
             ConfidentialNoteOpening(
@@ -85,86 +85,63 @@ class ConfidentialNoteOpening(
                 spendKey,
                 ConfidentialOwnerTag.deriveFromSpendKeyWithDiversifier(spendKey, diversifier),
                 asset,
-                chainId,
+                networkId,
                 amount,
             )
     }
 }
 
-/** Owner-tag derivation matching `derive_confidential_owner_tag_v2` in Rust. */
+/** Owner-tag derivation owned by the canonical native Rust V3 implementation. */
 object ConfidentialOwnerTag {
     @JvmStatic
-    fun defaultDiversifier(): ByteArray = scalarToLittleEndian(BigInteger.ONE)
+    fun defaultDiversifier(): ByteArray = PrivacyNativeBridge.defaultConfidentialDiversifierV3()
 
     @JvmStatic
     fun deriveDiversifier(seed: ByteArray): ByteArray =
-        scalarToLittleEndian(hashToScalar("iroha.confidential.v2.diversifier", listOf(seed.copyOf())))
+        PrivacyNativeBridge.deriveConfidentialDiversifierV3(seed)
 
     @JvmStatic
     fun deriveFromSpendKey(spendKey: ByteArray): ByteArray =
         deriveFromSpendKeyWithDiversifier(spendKey, defaultDiversifier())
 
     @JvmStatic
-    fun deriveFromSpendKeyWithDiversifier(spendKey: ByteArray, diversifier: ByteArray): ByteArray {
-        val spendScalar = hashToScalar("iroha.confidential.v2.spend_scalar", listOf(copyNonEmpty(spendKey, "spendKey")))
-        val diversifierScalar = littleEndianScalar(diversifier, "diversifier")
-        return scalarToLittleEndian(poseidonPair(spendScalar, diversifierScalar))
-    }
+    fun deriveFromSpendKeyWithDiversifier(spendKey: ByteArray, diversifier: ByteArray): ByteArray =
+        PrivacyNativeBridge.deriveConfidentialOwnerTagV3(spendKey, diversifier)
 }
 
-/** Commitment derivation matching `derive_confidential_note_v2` in Rust. */
+/** Commitment derivation owned by the canonical native Rust V3 implementation. */
 object ConfidentialNoteCommitment {
     @JvmStatic
-    fun deriveFromOpening(opening: ConfidentialNoteOpening): ByteArray {
-        val amount = scalarFromU128(opening.amount)
-        val rho = hashToScalar("iroha.confidential.v2.note_rho", listOf(opening.rho))
-        val ownerTag = littleEndianScalar(opening.ownerTag, "ownerTag")
-        val assetTag = littleEndianScalar(ConfidentialNoteTags.deriveAssetTag(opening.asset), "assetTag")
-        return scalarToLittleEndian(
-            poseidonPair(
-                amount,
-                poseidonPair(rho, poseidonPair(ownerTag, assetTag)),
-            ),
+    fun deriveFromOpening(opening: ConfidentialNoteOpening): ByteArray =
+        PrivacyNativeBridge.deriveConfidentialNoteCommitmentV3(
+            opening.asset,
+            opening.amount,
+            opening.rho,
+            opening.ownerTag,
         )
-    }
 }
 
-/** Nullifier derivation matching `derive_confidential_nullifier_v2` in Rust. */
+/** Nullifier derivation owned by the canonical native Rust V3 implementation. */
 object ConfidentialNoteNullifier {
     @JvmStatic
-    fun deriveFromOpening(opening: ConfidentialNoteOpening): ByteArray {
-        val spendScalar = hashToScalar("iroha.confidential.v2.spend_scalar", listOf(opening.spendKey))
-        val rho = hashToScalar("iroha.confidential.v2.note_rho", listOf(opening.rho))
-        val assetTag = littleEndianScalar(ConfidentialNoteTags.deriveAssetTag(opening.asset), "assetTag")
-        val chainTag = littleEndianScalar(ConfidentialNoteTags.deriveChainTag(opening.chainId), "chainTag")
-        return scalarToLittleEndian(
-            poseidonPair(
-                spendScalar,
-                poseidonPair(rho, poseidonPair(assetTag, chainTag)),
-            ),
+    fun deriveFromOpening(opening: ConfidentialNoteOpening): ByteArray =
+        PrivacyNativeBridge.deriveConfidentialNullifierV3(
+            opening.networkId,
+            opening.asset,
+            opening.spendKey,
+            opening.rho,
         )
-    }
 }
 
-/** Asset and chain tags used by the confidential-v2 note derivation. */
+/** Rust-owned asset and exact-network tags used by confidential V3 derivation. */
 object ConfidentialNoteTags {
     @JvmStatic
     fun deriveAssetTag(asset: String): ByteArray =
-        scalarToLittleEndian(
-            hashToScalar(
-                "iroha.confidential.v2.asset_tag",
-                listOf(canonicalText(asset, "asset").toByteArray(StandardCharsets.UTF_8)),
-            ),
-        )
+        PrivacyNativeBridge.deriveConfidentialAssetTagV3(asset)
 
     @JvmStatic
-    fun deriveChainTag(chainId: String): ByteArray =
-        scalarToLittleEndian(
-            hashToScalar(
-                "iroha.confidential.v2.chain_tag",
-                listOf(canonicalText(chainId, "chainId").toByteArray(StandardCharsets.UTF_8)),
-            ),
-        )
+    fun deriveNetworkTag(networkId: NetworkId): ByteArray =
+        PrivacyNativeBridge.deriveConfidentialNetworkTagV3(networkId)
 }
 
 /** Encrypts confidential-v2 note openings into `ConfidentialEncryptedPayload` envelopes. */
@@ -247,22 +224,14 @@ object ConfidentialNoteDecryption {
         encryptedPayload: ConfidentialEncryptedPayload,
         recipientPrivateKey: ByteArray,
         spendKey: ByteArray,
-    ): ConfidentialNoteOpening =
-        decryptNote(encryptedPayload, recipientPrivateKey, spendKey, null)
-
-    @JvmStatic
-    fun decryptNote(
-        encryptedPayload: ConfidentialEncryptedPayload,
-        recipientPrivateKey: ByteArray,
-        spendKey: ByteArray,
-        expectedChainId: String?,
+        expectedNetworkId: NetworkId,
     ): ConfidentialNoteOpening =
         decryptNoteWithOwnerTag(
             encryptedPayload,
             recipientPrivateKey,
             spendKey,
             ConfidentialOwnerTag.deriveFromSpendKey(spendKey),
-            expectedChainId,
+            expectedNetworkId,
         )
 
     @JvmStatic
@@ -271,16 +240,7 @@ object ConfidentialNoteDecryption {
         recipientPrivateKey: ByteArray,
         spendKey: ByteArray,
         expectedOwnerTag: ByteArray,
-    ): ConfidentialNoteOpening =
-        decryptNoteWithOwnerTag(encryptedPayload, recipientPrivateKey, spendKey, expectedOwnerTag, null)
-
-    @JvmStatic
-    fun decryptNoteWithOwnerTag(
-        encryptedPayload: ConfidentialEncryptedPayload,
-        recipientPrivateKey: ByteArray,
-        spendKey: ByteArray,
-        expectedOwnerTag: ByteArray,
-        expectedChainId: String?,
+        expectedNetworkId: NetworkId,
     ): ConfidentialNoteOpening {
         require(encryptedPayload.version == ConfidentialEncryptedPayload.VERSION_V1) {
             "encryptedPayload version must be ${ConfidentialEncryptedPayload.VERSION_V1}"
@@ -307,10 +267,8 @@ object ConfidentialNoteDecryption {
             )
             plaintext = plaintextBytes
             val decoded = decodePlaintext(plaintextBytes)
-            if (expectedChainId != null) {
-                require(decoded.chainId == canonicalText(expectedChainId, "expectedChainId")) {
-                    "confidential note chainId does not match expectedChainId"
-                }
+            require(decoded.networkId == expectedNetworkId) {
+                "confidential note NetworkId does not match expectedNetworkId"
             }
             require(decoded.ownerTag.contentEquals(expectedOwnerTagBytes)) {
                 "confidential note ownerTag does not match expectedOwnerTag"
@@ -320,7 +278,7 @@ object ConfidentialNoteDecryption {
                 spendKey,
                 decoded.ownerTag,
                 decoded.asset,
-                decoded.chainId,
+                decoded.networkId,
                 decoded.amount,
             )
         } finally {
@@ -335,7 +293,7 @@ private data class DecodedPlaintext(
     val rho: ByteArray,
     val ownerTag: ByteArray,
     val asset: String,
-    val chainId: String,
+    val networkId: NetworkId,
     val amount: String,
 )
 
@@ -349,10 +307,8 @@ private val NOTE_AAD_PREFIX = "iroha:confidential-note:v1".toByteArray(StandardC
 
 private fun encodePlaintext(opening: ConfidentialNoteOpening): ByteArray {
     val assetBytes = opening.asset.toByteArray(StandardCharsets.UTF_8)
-    val chainIdBytes = opening.chainId.toByteArray(StandardCharsets.UTF_8)
     val amountBytes = opening.amount.toByteArray(StandardCharsets.US_ASCII)
     require(assetBytes.size <= NOTE_TEXT_MAX_BYTES) { "asset is too large" }
-    require(chainIdBytes.size <= NOTE_TEXT_MAX_BYTES) { "chainId is too large" }
     require(amountBytes.size <= NOTE_TEXT_MAX_BYTES) { "amount is too large" }
     val out = ByteArrayOutputStream()
     out.write(NOTE_PLAINTEXT_VERSION_V1)
@@ -360,8 +316,7 @@ private fun encodePlaintext(opening: ConfidentialNoteOpening): ByteArray {
     out.write(opening.ownerTag)
     writeVarint(assetBytes.size, out)
     out.write(assetBytes)
-    writeVarint(chainIdBytes.size, out)
-    out.write(chainIdBytes)
+    out.write(opening.networkId.bytes())
     writeVarint(amountBytes.size, out)
     out.write(amountBytes)
     return out.toByteArray()
@@ -384,12 +339,9 @@ private fun decodePlaintext(bytes: ByteArray): DecodedPlaintext {
     require(bytes.size >= offset + assetLen) { "asset is truncated" }
     val asset = canonicalText(decodeUtf8(bytes, offset, assetLen, "asset"), "asset")
     offset += assetLen
-    val (chainLen, chainLenBytes) = readVarint(bytes, offset)
-    offset += chainLenBytes
-    require(chainLen in 1..NOTE_TEXT_MAX_BYTES) { "chainId length is invalid" }
-    require(bytes.size >= offset + chainLen) { "chainId is truncated" }
-    val chainId = canonicalText(decodeUtf8(bytes, offset, chainLen, "chainId"), "chainId")
-    offset += chainLen
+    require(bytes.size >= offset + NetworkId.BYTE_LENGTH) { "networkId is truncated" }
+    val networkId = NetworkId.fromBytes(bytes.copyOfRange(offset, offset + NetworkId.BYTE_LENGTH))
+    offset += NetworkId.BYTE_LENGTH
     val (amountLen, amountLenBytes) = readVarint(bytes, offset)
     offset += amountLenBytes
     require(amountLen in 1..NOTE_TEXT_MAX_BYTES) { "amount length is invalid" }
@@ -397,7 +349,7 @@ private fun decodePlaintext(bytes: ByteArray): DecodedPlaintext {
     val amount = canonicalU128(String(bytes, offset, amountLen, StandardCharsets.US_ASCII), "amount")
     offset += amountLen
     require(offset == bytes.size) { "confidential note plaintext has trailing bytes" }
-    return DecodedPlaintext(rho, ownerTag, asset, chainId, amount)
+    return DecodedPlaintext(rho, ownerTag, asset, networkId, amount)
 }
 
 private fun derivePayloadKey(
@@ -580,53 +532,9 @@ private fun decodeUtf8(bytes: ByteArray, offset: Int, len: Int, name: String): S
 
 private val PASTA_MODULUS =
     BigInteger("40000000000000000000000000000000224698fc094cf91b992d30ed00000001", 16)
-private val TWO = BigInteger.valueOf(2)
-private val THREE = BigInteger.valueOf(3)
-private val SEVEN = BigInteger.valueOf(7)
-private val THIRTEEN = BigInteger.valueOf(13)
-
-private fun poseidonPair(lhs: BigInteger, rhs: BigInteger): BigInteger {
-    val left = lhs.add(SEVEN).mod(PASTA_MODULUS)
-    val right = rhs.add(THIRTEEN).mod(PASTA_MODULUS)
-    return TWO.multiply(pow5(left)).add(THREE.multiply(pow5(right))).mod(PASTA_MODULUS)
-}
-
-private fun pow5(value: BigInteger): BigInteger {
-    val square = value.multiply(value).mod(PASTA_MODULUS)
-    val fourth = square.multiply(square).mod(PASTA_MODULUS)
-    return fourth.multiply(value).mod(PASTA_MODULUS)
-}
-
-private fun hashToScalar(label: String, parts: List<ByteArray>): BigInteger {
-    val labelBytes = label.toByteArray(StandardCharsets.UTF_8)
-    var counter = 0L
-    while (true) {
-        val buffer = ByteArrayOutputStream()
-        buffer.write(labelBytes)
-        buffer.write(leU64(counter))
-        for (part in parts) {
-            buffer.write(leU64(part.size.toLong()))
-            buffer.write(part)
-        }
-        val candidate = scalarFromLittleEndianOrNull(Blake3.hash(buffer.toByteArray()))
-        if (candidate != null) return candidate
-        counter += 1
-    }
-}
-
-private fun leU64(value: Long): ByteArray {
-    val out = ByteArray(8)
-    for (i in out.indices) {
-        out[i] = (value ushr (8 * i)).toByte()
-    }
-    return out
-}
-
-private fun scalarFromU128(amount: String): BigInteger = BigInteger(canonicalU128(amount, "amount"))
-
 private fun fixedScalar(value: ByteArray, name: String): ByteArray {
     val bytes = fixedBytes(value, 32, name)
-    littleEndianScalar(bytes, name)
+    require(littleEndianScalar(bytes, name).signum() > 0) { "$name must be non-zero" }
     return bytes
 }
 
@@ -641,22 +549,12 @@ private fun scalarFromLittleEndianOrNull(bytes: ByteArray): BigInteger? {
     return if (value < PASTA_MODULUS) value else null
 }
 
-private fun scalarToLittleEndian(value: BigInteger): ByteArray {
-    val bigEndian = value.mod(PASTA_MODULUS).toByteArray().dropWhile { it == 0.toByte() }.toByteArray()
-    require(bigEndian.size <= 32) { "scalar encoding overflow" }
-    val out = ByteArray(32)
-    for (i in bigEndian.indices) {
-        out[i] = bigEndian[bigEndian.size - 1 - i]
-    }
-    return out
-}
-
 private fun canonicalU128(value: String, name: String): String {
     val text = canonicalText(value, name)
     require(text.all { it in '0'..'9' }) { "$name must be an unsigned decimal integer" }
     require(text == "0" || !text.startsWith("0")) { "$name must be canonical decimal without leading zeroes" }
     val parsed = BigInteger(text)
-    require(parsed.signum() >= 0 && parsed <= U128_MAX) { "$name must fit in u128" }
+    require(parsed.signum() > 0 && parsed <= U128_MAX) { "$name must be a positive u128" }
     return text
 }
 
@@ -677,9 +575,4 @@ private fun fixedNonZeroBytes(value: ByteArray, expected: Int, name: String): By
     val bytes = fixedBytes(value, expected, name)
     require(bytes.any { it.toInt() != 0 }) { "$name must not be all zero" }
     return bytes
-}
-
-private fun copyNonEmpty(value: ByteArray, name: String): ByteArray {
-    require(value.isNotEmpty()) { "$name must not be empty" }
-    return value.copyOf()
 }

@@ -183,6 +183,62 @@ fn privacy_compiled_profile_catalog_is_the_exact_closed_registry() {
     );
 }
 
+fn bind_test_network_privacy_capability(
+    builder: &mut TransactionBuilder,
+    protocol_id: PrivacyProtocolIdV1,
+) {
+    builder.privacy_capability_manifest = Some(
+        crate::privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1::test_binding_for_protocol(
+            protocol_id,
+        ),
+    );
+}
+
+#[test]
+fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple() {
+    ensure_python();
+    let authority = canonical_i105_from_seed(0x51);
+    let new_builder = || {
+        TransactionBuilder::new(
+            &python_test_network_id(),
+            &authority,
+            authority_fee_payment_json(),
+        )
+        .expect("builder constructs")
+    };
+
+    let missing = new_builder()
+        .require_empty_privacy_action_builder_v1(
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            "Vega",
+        )
+        .err()
+        .expect("local catalog must not invent network availability");
+    assert!(
+        missing
+            .to_string()
+            .contains("requires a validated Torii Exact12")
+    );
+
+    let mut wrong_protocol = new_builder();
+    bind_test_network_privacy_capability(
+        &mut wrong_protocol,
+        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+    );
+    let mismatch = wrong_protocol
+        .require_empty_privacy_action_builder_v1(
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            "Vega",
+        )
+        .err()
+        .expect("another active protocol row must not authorize Vega");
+    assert!(
+        mismatch
+            .to_string()
+            .contains("is not available in the committed")
+    );
+}
+
 fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
     PyProviderMetadata {
         provider_id: Some(provider_id.to_string()),
@@ -456,7 +512,7 @@ fn decode_transaction_receipt_json_roundtrip() {
 
 #[test]
 fn privacy_bridge_abi_version_python_function_matches_first_release() {
-    assert_eq!(privacy_bridge_abi_version_py(), 21);
+    assert_eq!(privacy_bridge_abi_version_py(), 22);
 }
 
 #[test]
@@ -509,226 +565,6 @@ fn privacy_compiled_profile_catalog_python_validator_calls_the_exact_local_bound
 }
 
 #[test]
-fn jindo_python_result_separates_classification_from_ledger_effect() {
-    assert_eq!(
-        JINDO_ACTION_EXECUTION_CLASSIFICATION_V1,
-        "action_verification_and_finality_only"
-    );
-    assert_eq!(jindo_action_ledger_effect_v1(), None);
-}
-
-#[test]
-fn jindo_python_owned_witness_buffers_are_explicitly_erased() {
-    let mut witness = ZeroizingJindoWitnessBytes(vec![
-        vec![vec![0xA5; 32], vec![0x5A; 32]],
-        vec![vec![0x3C; 32]],
-    ]);
-    witness.erase();
-    assert!(witness.0.iter().flatten().flatten().all(|byte| *byte == 0));
-}
-
-#[test]
-fn zk_ace_python_result_and_witness_boundary_is_exact() {
-    assert_eq!(
-        ZK_ACE_ACTION_EXECUTION_CLASSIFICATION_V1,
-        "authorization_action"
-    );
-    assert_eq!(
-        ZK_ACE_TRANSFER_LEDGER_EFFECT_V1,
-        "zk_ace_transparent_transfer"
-    );
-
-    let mut witness = ZeroizingZkAceWitnessBytes {
-        identity_root: vec![0x11; 32],
-        identity_blinding: vec![0x22; 32],
-        replay_secret: vec![0x33; 32],
-    };
-    witness.erase();
-    assert!(witness.identity_root.iter().all(|byte| *byte == 0));
-    assert!(witness.identity_blinding.iter().all(|byte| *byte == 0));
-    assert!(witness.replay_secret.iter().all(|byte| *byte == 0));
-}
-
-#[test]
-fn zk_ace_python_policy_archive_is_canonical_and_self_authenticating() {
-    use iroha_data_model::privacy::{
-        PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyPolicyIdV1, PrivacyZkAcePolicyLifecycleV1,
-        PrivacyZkAcePolicyRecordDigestV1,
-    };
-
-    let source = sample_account(0x51);
-    let witness = ZkAcePrivacyWitnessV1::try_new([0x11; 32], [0x22; 32], [0x33; 32])
-        .expect("valid ZK-ACE policy witness");
-    let policy = PrivacyZkAcePolicyRecordV1::new(
-        PrivacyPolicyIdV1::new([0x41; 32]),
-        witness.identity_commitment_v1(),
-        PrivacyPolicyDigestV1::new([0x42; 32]),
-        PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1,
-        AssetDefinitionId::from_str("7MBRDd8cGFBZkFGdDMwV7S6FPwbw")
-            .expect("fixture asset definition"),
-        vec![source],
-        PrivacyZkAcePolicyLifecycleV1::Active,
-    )
-    .expect("valid canonical ZK-ACE policy");
-    let archive = norito::encode_canonical(&policy).expect("canonical policy archive");
-    assert_eq!(
-        python_zk_ace_policy_v1(&archive).expect("canonical policy accepted"),
-        policy
-    );
-
-    for malformed in [
-        Vec::new(),
-        vec![0xA5],
-        vec![0xA5; ZK_ACE_POLICY_ARCHIVE_MAX_BYTES_V1 + 1],
-    ] {
-        assert!(python_zk_ace_policy_v1(&malformed).is_err());
-    }
-
-    let mut trailing = archive.clone();
-    trailing.push(0);
-    assert!(
-        python_zk_ace_policy_v1(&trailing).is_err(),
-        "trailing archive bytes must not be accepted"
-    );
-
-    let mut digest_tampered = policy;
-    digest_tampered.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0x7F; 32]);
-    let digest_tampered_archive =
-        norito::encode_canonical(&digest_tampered).expect("encode tampered policy");
-    assert!(
-        python_zk_ace_policy_v1(&digest_tampered_archive).is_err(),
-        "a canonical wire with a substituted self-digest must fail"
-    );
-}
-
-#[test]
-fn zk_ace_python_builder_rejects_secret_shapes_before_proving() {
-    use iroha_data_model::privacy::{
-        PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyPolicyIdV1, PrivacyZkAcePolicyLifecycleV1,
-    };
-
-    ensure_python();
-    let authority = canonical_i105_from_seed(0x51);
-    let destination = canonical_i105_from_seed(0x52);
-    let source = parse_account_id(&authority).expect("authority account parses");
-    let witness = ZkAcePrivacyWitnessV1::try_new([0x11; 32], [0x22; 32], [0x33; 32])
-        .expect("valid ZK-ACE policy witness");
-    let policy = PrivacyZkAcePolicyRecordV1::new(
-        PrivacyPolicyIdV1::new([0x41; 32]),
-        witness.identity_commitment_v1(),
-        PrivacyPolicyDigestV1::new([0x42; 32]),
-        PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1,
-        AssetDefinitionId::from_str("7MBRDd8cGFBZkFGdDMwV7S6FPwbw")
-            .expect("fixture asset definition"),
-        vec![source],
-        PrivacyZkAcePolicyLifecycleV1::Active,
-    )
-    .expect("valid canonical ZK-ACE policy");
-    let policy_archive = norito::encode_canonical(&policy).expect("canonical policy archive");
-
-    Python::attach(|py| {
-        for (identity_root, identity_blinding, replay_secret, expected) in [
-            (
-                vec![0x11; 31],
-                vec![0x22; 32],
-                vec![0x33; 32],
-                "identity_root must be exactly 32 bytes",
-            ),
-            (
-                vec![0x11; 32],
-                vec![0x22; 33],
-                vec![0x33; 32],
-                "identity_blinding must be exactly 32 bytes",
-            ),
-            (
-                vec![0x11; 32],
-                vec![0x22; 32],
-                vec![0x33; 0],
-                "replay_secret must be exactly 32 bytes",
-            ),
-            (
-                vec![0; 32],
-                vec![0x22; 32],
-                vec![0x33; 32],
-                "identity root witness must be non-zero",
-            ),
-        ] {
-            let mut builder =
-                TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
-                    .expect("builder constructs");
-            let error = builder
-                .sign_privacy_zk_ace_transfer_action_v1(
-                    py,
-                    &[0x51; 32],
-                    &[0xA5; 32],
-                    &policy_archive,
-                    &authority,
-                    &destination,
-                    "1",
-                    identity_root,
-                    identity_blinding,
-                    replay_secret,
-                )
-                .err()
-                .expect("invalid witness must fail before proof construction");
-            assert!(
-                error.to_string().contains(expected),
-                "expected {expected:?}, got {error}"
-            );
-        }
-    });
-}
-
-#[test]
-fn component_python_results_separate_classification_from_ledger_effect() {
-    assert_eq!(
-        VERANGE_ACTION_EXECUTION_CLASSIFICATION_V1,
-        "action_verification_and_finality_only"
-    );
-    assert_eq!(
-        VEGA_ACTION_EXECUTION_CLASSIFICATION_V1,
-        "action_verification_and_finality_only"
-    );
-}
-
-#[test]
-fn component_python_owned_witness_buffers_are_explicitly_erased() {
-    let mut verange = ZeroizingVeRangeWitnessBytes {
-        values: vec![7, u64::MAX],
-        blindings: vec![vec![0xA5; 32], vec![0x5A; 32]],
-    };
-    verange.erase();
-    assert!(verange.values.iter().all(|value| *value == 0));
-    assert!(verange.blindings.iter().flatten().all(|byte| *byte == 0));
-
-    let mut vega = ZeroizingVegaWitnessBytes {
-        issuer_authentication_sig_structure: vec![0x11; 67],
-        mobile_security_object_payload: vec![0x22; 91],
-        birth_date_issuer_signed_item: vec![0x33; 41],
-        issuer_signature: vec![0x44; 64],
-        device_signature: vec![0x55; 64],
-    };
-    vega.erase();
-    assert!(
-        vega.issuer_authentication_sig_structure
-            .iter()
-            .all(|byte| *byte == 0)
-    );
-    assert!(
-        vega.mobile_security_object_payload
-            .iter()
-            .all(|byte| *byte == 0)
-    );
-    assert!(
-        vega.birth_date_issuer_signed_item
-            .iter()
-            .all(|byte| *byte == 0)
-    );
-    assert!(vega.issuer_signature.iter().all(|byte| *byte == 0));
-    assert!(vega.device_signature.iter().all(|byte| *byte == 0));
-}
-
-#[test]
 fn component_python_nonzero_digest_boundary_rejects_ambiguous_encodings() {
     assert!(python_nonzero_privacy_digest_v1(&[0x11; 32], "digest").is_ok());
     assert!(python_nonzero_privacy_digest_v1(&[0x11; 31], "digest").is_err());
@@ -738,6 +574,8 @@ fn component_python_nonzero_digest_boundary_rejects_ambiguous_encodings() {
 
 #[test]
 fn vega_python_device_digest_binds_intent_and_session() {
+    use iroha_core::privacy_engines::verange::{VeRangeBitLengthV1, VeRangeParametersV1};
+
     let profile =
         python_compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0, "Vega")
             .expect("compiled Vega profile");
@@ -746,7 +584,7 @@ fn vega_python_device_digest_binds_intent_and_session() {
         .value_generator()
         .as_bytes();
     let context = |intent: [u8; 32]| PrivacyStatementContextV1 {
-        chain_id: parse_chain_id("test-chain").expect("chain id"),
+        network_id: python_test_network_id().inner,
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(intent),
         parameter_id: profile.parameter_id,
@@ -839,188 +677,6 @@ fn vega_python_device_digest_binds_intent_and_session() {
 }
 
 #[test]
-fn vega_python_preparation_freezes_nonzero_intent_and_is_single_use() {
-    ensure_python();
-    let authority = canonical_i105_from_seed(0x51);
-    let issuer_public_key = *VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits32)
-        .expect("P-256 parameters")
-        .value_generator()
-        .as_bytes();
-    Python::attach(|py| {
-        let builder =
-            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
-                .expect("builder constructs");
-        let mut preparation = builder
-            .prepare_privacy_vega_action_v1(
-                &[0xA5; 32],
-                &[0xA1; 32],
-                1,
-                &[0xA2; 32],
-                &issuer_public_key,
-                2026,
-                7,
-                28,
-                18,
-                &[0xB4; 32],
-                &[0xC3; 32],
-            )
-            .expect("valid Vega preparation");
-        let prepared = preparation
-            .inner
-            .as_ref()
-            .expect("preparation remains available");
-        assert_ne!(
-            prepared
-                .statement
-                .context
-                .transaction_intent_digest
-                .as_bytes(),
-            &[0; 32]
-        );
-        assert_ne!(
-            prepared.statement.device_authentication_digest.as_bytes(),
-            &[0; 32]
-        );
-
-        assert!(
-            preparation
-                .finalize_privacy_vega_action_v1(
-                    py,
-                    &[0],
-                    0,
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                )
-                .is_err()
-        );
-        assert!(preparation.consumed());
-        let replay = preparation
-            .finalize_privacy_vega_action_v1(
-                py,
-                &[0],
-                0,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            )
-            .err()
-            .expect("consumed preparation must reject replay");
-        assert!(replay.to_string().contains("already been consumed"));
-    });
-}
-
-#[test]
-fn component_python_builders_reject_adversarial_shapes_before_proving() {
-    ensure_python();
-    let authority = canonical_i105_from_seed(0x51);
-    Python::attach(|py| {
-        let new_builder = || {
-            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
-                .expect("builder constructs")
-        };
-        let mut empty = new_builder();
-        assert!(
-            empty
-                .sign_privacy_verange_action_v1(
-                    py,
-                    &[0; 32],
-                    &[0xA5; 32],
-                    "asset#domain",
-                    &[0x11; 32],
-                    64,
-                    Vec::new(),
-                    Vec::new(),
-                )
-                .err()
-                .expect("empty VeRange witness must reject")
-                .to_string()
-                .contains("between 1 and 8")
-        );
-        let mut mismatched = new_builder();
-        assert!(
-            mismatched
-                .sign_privacy_verange_action_v1(
-                    py,
-                    &[0; 32],
-                    &[0xA5; 32],
-                    "asset#domain",
-                    &[0x11; 32],
-                    64,
-                    vec![1],
-                    Vec::new(),
-                )
-                .err()
-                .expect("mismatched VeRange witness must reject")
-                .to_string()
-                .contains("matching lengths")
-        );
-        let mut wrong_width = new_builder();
-        assert!(
-            wrong_width
-                .sign_privacy_verange_action_v1(
-                    py,
-                    &[0; 32],
-                    &[0xA5; 32],
-                    "asset#domain",
-                    &[0x11; 32],
-                    48,
-                    vec![1],
-                    vec![vec![1; 32]],
-                )
-                .err()
-                .expect("unsupported VeRange width must reject")
-                .to_string()
-                .contains("exactly 32 or 64")
-        );
-        let mut out_of_range = new_builder();
-        assert!(
-            out_of_range
-                .sign_privacy_verange_action_v1(
-                    py,
-                    &[0; 32],
-                    &[0xA5; 32],
-                    "asset#domain",
-                    &[0x11; 32],
-                    32,
-                    vec![u64::from(u32::MAX) + 1],
-                    vec![vec![1; 32]],
-                )
-                .err()
-                .expect("out-of-range VeRange value must reject")
-                .to_string()
-                .contains("[0, 2^32)")
-        );
-
-        let mut mixed = new_builder();
-        mixed
-            .add_instruction(&batch_test_instruction("forged prefix"))
-            .expect("instruction");
-        assert!(
-            mixed
-                .sign_privacy_verange_action_v1(
-                    py,
-                    &[0; 32],
-                    &[0xA5; 32],
-                    "asset#domain",
-                    &[0x11; 32],
-                    64,
-                    vec![1],
-                    vec![vec![1; 32]],
-                )
-                .err()
-                .expect("mixed action builder must reject")
-                .to_string()
-                .contains("otherwise empty")
-        );
-    });
-}
-
-#[test]
 fn component_python_inspectors_reject_empty_and_malformed_signed_wire() {
     ensure_python();
     Python::attach(|py| {
@@ -1065,201 +721,10 @@ fn x509_statement_archive_boundary_is_nonempty_fixed_capacity_and_canonical() {
 }
 
 #[test]
-fn wave2_python_results_keep_exact_action_and_ledger_semantics() {
-    assert_eq!(
-        ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1,
-        "admission_action"
-    );
-    assert_eq!(
-        ZK_AMS_BATCH_ADMISSION_LEDGER_EFFECT_V1,
-        "zk_ams_batch_admission"
-    );
-    assert_eq!(
-        ZK_AMS_PROVISION_ACCOUNT_LEDGER_EFFECT_V1,
-        "zk_ams_provision_account"
-    );
-    assert_eq!(
-        BOOTLE_LANTERN_ACTION_EXECUTION_CLASSIFICATION_V1,
-        "presentation_action"
-    );
+fn x509_python_result_keeps_exact_action_and_ledger_semantics() {
     assert_eq!(
         ZK_X509_ACTION_EXECUTION_CLASSIFICATION_V1,
         "presentation_action"
     );
     assert_eq!(ZK_X509_LEDGER_EFFECT_V1, "zk_x509_certificate_nullifier");
-}
-
-#[test]
-fn wave2_python_owned_witness_buffers_are_explicitly_erased() {
-    let mut batch = ZeroizingZkAmsBatchWitnessBytes {
-        subject_commitments: vec![vec![0x11; 32]],
-        credential_nonces: vec![vec![0x22; 32]],
-        seed_secrets: vec![vec![0x33; 32]],
-        issuer_signatures: vec![vec![0x44; 64]],
-    };
-    batch.erase();
-    assert!(
-        batch
-            .subject_commitments
-            .iter()
-            .chain(&batch.credential_nonces)
-            .chain(&batch.seed_secrets)
-            .chain(&batch.issuer_signatures)
-            .flatten()
-            .all(|byte| *byte == 0)
-    );
-
-    let mut provision = ZeroizingZkAmsProvisionWitnessBytes(vec![0x55; 32]);
-    provision.erase();
-    assert!(provision.0.iter().all(|byte| *byte == 0));
-
-    let mut bootle = ZeroizingBootleLanternWitnessBytes {
-        secret_polynomials: vec![vec![7; 64]; BOOTLE_LANTERN_SECRET_POLYNOMIALS_V1],
-        attributes: vec![vec![0x66; 8]; BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1],
-    };
-    bootle.erase();
-    assert!(
-        bootle
-            .secret_polynomials
-            .iter()
-            .flatten()
-            .all(|coefficient| *coefficient == 0)
-    );
-    assert!(bootle.attributes.iter().flatten().all(|byte| *byte == 0));
-}
-
-#[test]
-fn zk_ams_python_governance_rejects_substituted_artifact_digests() {
-    let issuer_id = PrivacyIssuerIdV1::new([0x11; 32]);
-    let issuer_public_key = PrivacyP256PointV1::new(
-        *VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits32)
-            .expect("P-256 parameters")
-            .value_generator()
-            .as_bytes(),
-    );
-    let registry_id = PrivacyZkAmsRegistryIdV1::new([0x22; 32]);
-    let policy_id = PrivacyPolicyIdV1::new([0x33; 32]);
-    let policy_digest = PrivacyPolicyDigestV1::new([0x44; 32]);
-    let root = PrivacyRootV1::new([0x55; 32]);
-    let issuer_record = zk_ams_issuer_policy_record_digest_v1(
-        issuer_id,
-        policy_id,
-        issuer_public_key,
-        policy_digest,
-    );
-    let registry_record = zk_ams_registry_record_digest_v1(
-        issuer_id,
-        registry_id,
-        policy_id,
-        issuer_record,
-        policy_digest,
-        root,
-        7,
-    );
-    let parse = |issuer_record_bytes: &[u8], registry_record_bytes: &[u8], epoch| {
-        python_zk_ams_governance_v1(
-            issuer_id.as_bytes(),
-            issuer_public_key.as_bytes(),
-            issuer_record_bytes,
-            registry_id.as_bytes(),
-            registry_record_bytes,
-            policy_id.as_bytes(),
-            policy_digest.as_bytes(),
-            root.as_bytes(),
-            epoch,
-        )
-    };
-    assert!(parse(issuer_record.as_bytes(), registry_record.as_bytes(), 7).is_ok());
-
-    let mut substituted_issuer = *issuer_record.as_bytes();
-    substituted_issuer[0] ^= 1;
-    assert!(parse(&substituted_issuer, registry_record.as_bytes(), 7).is_err());
-    let mut substituted_registry = *registry_record.as_bytes();
-    substituted_registry[0] ^= 1;
-    assert!(parse(issuer_record.as_bytes(), &substituted_registry, 7).is_err());
-    assert!(parse(issuer_record.as_bytes(), registry_record.as_bytes(), 0).is_err());
-    assert!(parse(issuer_record.as_bytes(), registry_record.as_bytes(), 8).is_err());
-}
-
-#[test]
-fn bootle_python_polynomial_boundary_is_exact_and_erases_rejected_rows() {
-    let mut valid = vec![vec![0_u16; BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1]; 8];
-    assert!(python_bootle_lantern_polynomials_v1::<8>(&mut valid, "polynomials").is_ok());
-    assert!(valid.iter().flatten().all(|coefficient| *coefficient == 0));
-
-    let mut noncanonical = vec![vec![0_u16; BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1]; 8];
-    noncanonical[3][9] = 12_289;
-    assert!(python_bootle_lantern_polynomials_v1::<8>(&mut noncanonical, "polynomials").is_err());
-    assert!(noncanonical[3].iter().all(|coefficient| *coefficient == 0));
-
-    let mut wrong_count = vec![vec![0_u16; BOOTLE_LANTERN_POLYNOMIAL_COEFFICIENTS_V1]; 7];
-    assert!(python_bootle_lantern_polynomials_v1::<8>(&mut wrong_count, "polynomials").is_err());
-}
-
-#[test]
-fn jindo_python_builder_binds_native_and_submitted_encoding_metrics() {
-    ensure_python();
-    let signing = SigningKey::from_bytes(&[0x31; 32]);
-    let private_key = parse_private_key(signing.as_bytes()).expect("ed25519 private key parses");
-    let authority = AccountId::new(PublicKey::from(private_key))
-        .canonical_i105()
-        .expect("canonical I105 authority");
-    let mut coefficient = vec![0_u8; 32];
-    coefficient[0] = 7;
-    let mut evaluation_point = [0_u8; 32];
-    evaluation_point[0] = 3;
-
-    Python::attach(|py| {
-        let mut builder =
-            TransactionBuilder::new("test-chain", &authority, authority_fee_payment_json())
-                .expect("builder constructs");
-        let result = builder
-            .sign_privacy_jindo_action_v1(
-                py,
-                signing.as_bytes(),
-                &[0xA7; 32],
-                vec![vec![coefficient]],
-                &evaluation_point,
-            )
-            .expect("native Jindo action builds");
-        let envelope = result.envelope.bind(py);
-        let adaptive = envelope
-            .getattr("signed_transaction")
-            .expect("adaptive encoding getter")
-            .extract::<Vec<u8>>()
-            .expect("adaptive encoding bytes");
-        let submitted_versioned = envelope
-            .getattr("signed_transaction_versioned")
-            .expect("versioned encoding getter")
-            .extract::<Vec<u8>>()
-            .expect("versioned encoding bytes");
-
-        assert_eq!(
-            result.adaptive_signed_transaction_bytes,
-            u32::try_from(adaptive.len()).expect("bounded adaptive encoding")
-        );
-        assert!(!submitted_versioned.is_empty());
-        assert_eq!(
-            canonical_signed_transaction_hash_v1(&submitted_versioned)
-                .expect("submitted encoding authenticates"),
-            <[u8; 32]>::try_from(
-                result
-                    .envelope
-                    .bind(py)
-                    .getattr("hash")
-                    .expect("hash getter")
-                    .extract::<Vec<u8>>()
-                    .expect("hash bytes"),
-            )
-            .expect("hash is exactly 32 bytes")
-        );
-        assert!(result.statement_bytes > 0);
-        assert!(result.proof_bytes > 0);
-        assert!(result.encoded_proof_envelope_bytes >= result.proof_bytes);
-        assert_eq!(
-            result.execution_classification(),
-            "action_verification_and_finality_only"
-        );
-        assert_eq!(result.ledger_effect(), None);
-    });
 }

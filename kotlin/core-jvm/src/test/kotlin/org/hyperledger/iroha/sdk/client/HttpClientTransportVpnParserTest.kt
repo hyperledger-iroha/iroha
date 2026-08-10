@@ -11,6 +11,7 @@ import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
+import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 
 /**
  * Strict VPN response-schema and successful-status contract coverage.
@@ -258,7 +259,10 @@ class HttpClientTransportVpnParserTest {
         val meteringKey = validEd25519PublicKeyHex
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
         val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_050L, "vpn-status-nonce")
-        val config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build()
+        val config = ClientConfig.builder()
+            .setBaseUri(URI.create("https://torii.example"))
+            .setLocalSigningContext(LocalSigningContext(TestNetworkIds.canonical()))
+            .build()
 
         fun assertRejected(status: Int, body: String, call: (HttpClientTransport) -> Unit) {
             val transport = HttpClientTransport.withExecutor(

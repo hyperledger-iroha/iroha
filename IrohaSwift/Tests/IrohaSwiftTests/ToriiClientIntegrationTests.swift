@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import XCTest
 @testable import IrohaSwift
 
@@ -25,12 +26,16 @@ final class ToriiClientIntegrationTests: XCTestCase {
     func testAttachmentLifecycleAgainstMock() throws {
         guard let mock else { return }
         let session = URLSession(configuration: .ephemeral)
-        let client = ToriiClient(baseURL: mock.baseURL, session: session)
+        let seed = Data(repeating: 0x41, count: 32)
+        let accountId = try Keypair(privateKeyBytes: seed).accountId(networkPrefix: AccountId.defaultNetworkPrefix)
+        let canonicalAuth = ToriiCanonicalRequestAuth(accountId: accountId, privateKey: seed)
+        let client = ToriiClient(baseURL: mock.baseURL, session: session,
+                                 localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical))
         let payload = Data("{\"hello\":\"swift\"}".utf8)
 
         var attachmentId: String?
         let uploadExpectation = expectation(description: "upload")
-        client.uploadAttachment(data: payload, contentType: "application/json") { result in
+        client.uploadAttachment(data: payload, contentType: "application/json", canonicalAuth: canonicalAuth) { result in
             switch result {
             case .success(let meta):
                 attachmentId = meta.id
@@ -47,7 +52,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
         }
 
         let listExpectation = expectation(description: "list")
-        client.listAttachments { result in
+        client.listAttachments(canonicalAuth: canonicalAuth) { result in
             switch result {
             case .success(let metas):
                 XCTAssertTrue(metas.contains(where: { $0.id == id }))
@@ -59,7 +64,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
         wait(for: [listExpectation], timeout: 5)
 
         let getExpectation = expectation(description: "get")
-        client.getAttachment(id: id) { result in
+        client.getAttachment(id: id, canonicalAuth: canonicalAuth) { result in
             switch result {
             case .success(let (data, contentType)):
                 XCTAssertEqual(data, payload)
@@ -72,7 +77,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
         wait(for: [getExpectation], timeout: 5)
 
         let deleteExpectation = expectation(description: "delete")
-        client.deleteAttachment(id: id) { result in
+        client.deleteAttachment(id: id, canonicalAuth: canonicalAuth) { result in
             if case let .failure(error) = result {
                 XCTFail("delete failed: \(error)")
             }
@@ -81,7 +86,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
         wait(for: [deleteExpectation], timeout: 5)
 
         let listAfterExpectation = expectation(description: "list after")
-        client.listAttachments { result in
+        client.listAttachments(canonicalAuth: canonicalAuth) { result in
             switch result {
             case .success(let metas):
                 XCTAssertFalse(metas.contains(where: { $0.id == id }))
@@ -422,7 +427,14 @@ final class ToriiClientIntegrationTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitDaBlobPostsPayloadAndParsesReceipt() async throws {
         let digest = Data(repeating: 0xAB, count: 32)
+        let privateKeyBytes = Data(repeating: 0x11, count: 32)
+        let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: privateKeyBytes)
+        let owner = try AccountAddress.fromAccount(
+            publicKey: privateKey.publicKey.rawRepresentation
+        ).toI105(networkPrefix: AccountId.defaultNetworkPrefix)
         var submission = ToriiDaBlobSubmission(
+            networkId: TestNetworkIds.canonical,
+            owner: owner,
             payload: Data("payload".utf8),
             laneId: 9,
             epoch: 4,
@@ -431,7 +443,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
                 ToriiDaMetadataEntry(key: "da.stream", value: Data("demo".utf8))
             ],
             clientBlobId: digest,
-            privateKeyHex: String(repeating: "11", count: 32)
+            privateKeyHex: privateKeyBytes.upperHexString()
         )
         submission.codec = "application/octet-stream"
 
@@ -440,6 +452,8 @@ final class ToriiClientIntegrationTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/da/ingest")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = tcBodyJSON(from: request)
+            XCTAssertEqual(body["network_id"] as? String, TestNetworkIds.canonical.literal)
+            XCTAssertEqual(body["owner"] as? String, owner)
             XCTAssertEqual(body["lane_id"] as? Int, 9)
             XCTAssertEqual(body["epoch"] as? Int, 4)
             XCTAssertEqual(body["sequence"] as? Int, 2)

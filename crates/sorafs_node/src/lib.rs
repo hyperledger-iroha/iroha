@@ -27,6 +27,9 @@ pub mod pop_credentials;
 pub mod por;
 pub mod potr;
 pub mod proof_outcome_forwarder;
+pub mod provider_attestation_clock;
+pub mod provider_attestation_journal;
+pub mod provider_attestation_journal_file_store;
 pub mod provider_ingest_outbox;
 pub mod provider_ingest_runtime;
 mod reconciliation;
@@ -39,31 +42,7 @@ pub mod scheduler;
 pub mod store;
 pub mod telemetry;
 mod transparency;
-pub use governance::{
-    FencedTransparencyAuthoritativeHeadReaderV1, GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1,
-    GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_BYTES_V1,
-    GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_VALUE_BYTES_V1,
-    GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADERS_V1, GOVERNANCE_DAG_REQUEST_AUTH_MAX_URL_BYTES_V1,
-    GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,
-    GOVERNANCE_DAG_REQUEST_AUTH_SELECTED_HEADER_NAMES_V1, GOVERNANCE_DAG_REQUEST_AUTH_VERSION_V1,
-    GovernanceDagAuthenticationScope, GovernanceDagCanonicalRequestHeaderV1,
-    GovernanceDagCanonicalRequestV1, GovernanceDagHttpRequestReceiverV1,
-    GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagRequestAuthenticationErrorV1,
-    GovernanceDagRequestAuthenticationPolicyV1, GovernanceDagRequestAuthenticationReplayCacheV1,
-    GovernanceDagRequestAuthenticationReplayStoreV1, GovernanceDagRequestAuthenticator,
-    GovernanceDagRequestIngressBindingV1, GovernanceDagRequestIngressEnforcementV1,
-    GovernanceDagRequestIngressQualificationErrorV1, GovernanceDagRequestIngressQualificationV1,
-    GovernanceDagRequestReplayPostureV1, GovernanceDagRuntimeProviderQualificationV1,
-    GovernanceDagRuntimeSigner, GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
-    GovernanceDagSealedStateSlot, GovernanceDagVerifiedHttpRequestV1,
-    QualifiedFencedTransparencyHeadReaderV1, QualifiedFencedTransparencyPublisherV1,
-    canonicalize_governance_dag_outbound_http_request_v1,
-    governance_dag_request_authentication_headers_v1,
-    governance_dag_request_ingress_endpoint_binding_v1,
-    governance_dag_sealed_state_payload_max_bytes_v1, governance_dag_sealed_state_revision,
-    parse_governance_dag_request_authentication_headers_v1,
-    verify_governance_dag_request_authentication_v1,
-};
+include!("lib/governance_public_exports.rs");
 use governance::{
     FilesystemGovernancePublisher, GovernanceFilesystemRootGuard,
     GovernanceRuntimeDagCheckpointStore, GovernanceRuntimeDagSigner,
@@ -140,38 +119,98 @@ pub use proof_outcome_forwarder::{
     ProofOutcomeEnqueueResultV1, ProofOutcomeOutbox, ProofOutcomeOutboxError,
     ProofOutcomeOutboxPolicyV1, ProofOutcomePendingDeliveryV1, potr_proof_outcome_operation_id_v1,
 };
-pub use provider_ingest_outbox::{
-    FinalizedProviderIngestAuthorizationV1, PROVIDER_INGEST_OUTBOX_FILE_V1,
-    PROVIDER_INGEST_STATUS_PAGE_MAX_V1, ProviderIngestCancellationReasonV1,
-    ProviderIngestCheckpointExternalErrorV1, ProviderIngestCheckpointProviderBindingV1,
-    ProviderIngestCheckpointProviderQualificationV1, ProviderIngestCheckpointRuntimeV1,
-    ProviderIngestClaimOwnerV1, ProviderIngestCompletionSigningClaimV1,
-    ProviderIngestCompletionSigningContextV1, ProviderIngestCompletionStateV1,
-    ProviderIngestCompletionSubmissionV1, ProviderIngestDeadLetterReasonV1,
-    ProviderIngestDeliveryStateV1, ProviderIngestEnqueueResultV1, ProviderIngestFailureClassV1,
-    ProviderIngestFinalizedCancellationV1, ProviderIngestFinalizedCompletionV1,
-    ProviderIngestFinalizedCursorV1, ProviderIngestOutbox, ProviderIngestOutboxCountsV1,
-    ProviderIngestOutboxError, ProviderIngestOutboxPolicyV1, ProviderIngestRetryOutcomeV1,
-    ProviderIngestSealedCheckpointRecordV1, ProviderIngestSourceClaimV1,
-    ProviderIngestStatusPageV1, ProviderIngestStatusV1,
+pub use provider_attestation_clock::{
+    MUSUBI_PROVIDER_ATTESTATION_CLOCK_SEAL_TIMEOUT_MS_V1, MusubiProviderAttestationClockErrorV1,
+    MusubiProviderAttestationClockScopeV1, MusubiProviderAttestationClockSealBindingV1,
+    MusubiProviderAttestationClockSealErrorV1, MusubiProviderAttestationClockSealQualificationV1,
+    MusubiProviderAttestationClockSealRecordV1, MusubiProviderAttestationClockSealV1,
+    MusubiProviderAttestationJournalCheckpointHeadRecordV1,
+    MusubiProviderAttestationJournalCheckpointHeadV1,
+    MusubiProviderAttestationJournalCheckpointScopeV1,
+    MusubiProviderAttestationJournalCheckpointSealErrorV1,
+    MusubiProviderAttestationSealedUnixClockV1,
+    musubi_provider_attestation_journal_checkpoint_blob_revision_v1,
 };
+pub use provider_attestation_journal::{
+    MUSUBI_PROVIDER_ATTESTATION_EXTERNAL_TIMEOUT_MAX_MS_V1,
+    MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1,
+    MUSUBI_PROVIDER_ATTESTATION_JOURNAL_MAX_ENTRIES_V1,
+    MUSUBI_PROVIDER_ATTESTATION_READY_PAGE_MAX_V1, MusubiProviderAttestationApprovalClaimV1,
+    MusubiProviderAttestationApprovalErrorV1, MusubiProviderAttestationApprovalIdV1,
+    MusubiProviderAttestationApprovalIntentV1, MusubiProviderAttestationApprovalStoreOutcomeV1,
+    MusubiProviderAttestationClaimOwnerV1, MusubiProviderAttestationDeadLetterReasonV1,
+    MusubiProviderAttestationDeliveryOutcomeV1, MusubiProviderAttestationEnqueueOutcomeV1,
+    MusubiProviderAttestationFailureClassV1, MusubiProviderAttestationHandoffClaimV1,
+    MusubiProviderAttestationInventoryBindingErrorV1, MusubiProviderAttestationInventoryErrorV1,
+    MusubiProviderAttestationInventoryHandoffIdV1, MusubiProviderAttestationInventoryItemV1,
+    MusubiProviderAttestationInventoryQualificationV1,
+    MusubiProviderAttestationInventoryReadbackV1, MusubiProviderAttestationInventoryReaderV1,
+    MusubiProviderAttestationInventoryReceiptV1, MusubiProviderAttestationInventoryRuntimeErrorV1,
+    MusubiProviderAttestationInventoryRuntimeV1, MusubiProviderAttestationInventoryScopeV1,
+    MusubiProviderAttestationInventorySinkV1, MusubiProviderAttestationInventoryV1,
+    MusubiProviderAttestationJournalErrorV1, MusubiProviderAttestationJournalPolicyV1,
+    MusubiProviderAttestationJournalRuntimeV1, MusubiProviderAttestationJournalScanKeyV1,
+    MusubiProviderAttestationJournalStageV1, MusubiProviderAttestationJournalStatusV1,
+    MusubiProviderAttestationRetryOutcomeV1, MusubiProviderAttestationSignerBindingErrorV1,
+    MusubiProviderAttestationSignerErrorV1, MusubiProviderAttestationSignerQualificationV1,
+    MusubiProviderAttestationSignerV1, approve_musubi_provider_attestation_v1,
+    musubi_provider_attestation_approval_id_v1,
+    musubi_provider_attestation_controller_policy_digest_v1,
+    musubi_provider_attestation_inventory_handoff_id_v1,
+    validate_musubi_provider_attestation_inventory_binding_v1,
+};
+pub use provider_attestation_journal_file_store::{
+    MusubiProviderAttestationJournalFileBindingV1, MusubiProviderAttestationJournalFileStoreV1,
+};
+pub use provider_ingest_outbox::{
+    FinalizedProviderIngestAuthorizationV1, FinalizedProviderIngestMusubiContextV1,
+    PROVIDER_INGEST_OUTBOX_FILE_V1, PROVIDER_INGEST_STATUS_PAGE_MAX_V1,
+    ProviderIngestCancellationReasonV1, ProviderIngestCheckpointExternalErrorV1,
+    ProviderIngestCheckpointProviderBindingV1, ProviderIngestCheckpointProviderQualificationV1,
+    ProviderIngestCheckpointRuntimeV1, ProviderIngestClaimOwnerV1,
+    ProviderIngestCompletionSigningClaimV1, ProviderIngestCompletionSigningContextV1,
+    ProviderIngestCompletionStateV1, ProviderIngestCompletionSubmissionV1,
+    ProviderIngestDeadLetterReasonV1, ProviderIngestDeliveryStateV1, ProviderIngestEnqueueResultV1,
+    ProviderIngestFailureClassV1, ProviderIngestFinalizedCancellationV1,
+    ProviderIngestFinalizedCompletionV1, ProviderIngestFinalizedCursorV1, ProviderIngestOutbox,
+    ProviderIngestOutboxCountsV1, ProviderIngestOutboxError, ProviderIngestOutboxPolicyV1,
+    ProviderIngestRetryOutcomeV1, ProviderIngestSealedCheckpointRecordV1,
+    ProviderIngestSourceClaimV1, ProviderIngestStatusPageV1, ProviderIngestStatusV1,
+};
+use provider_ingest_runtime::CompletedMusubiStoreInstanceV1;
 pub use provider_ingest_runtime::{
+    PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1,
     ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClockV1,
-    ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
-    ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerBindingErrorV1,
-    ProviderIngestCompletionSignerBindingV1, ProviderIngestCompletionSignerErrorV1,
-    ProviderIngestCompletionSignerQualificationV1,
+    ProviderIngestCompletedMusubiAttestationDriveErrorV1,
+    ProviderIngestCompletedMusubiAttestationDriveOutcomeV1,
+    ProviderIngestCompletedMusubiAttestationDriverV1,
+    ProviderIngestCompletedMusubiCaptureCoordinatorV1,
+    ProviderIngestCompletedMusubiCaptureRequestV1,
+    ProviderIngestCompletedMusubiCaptureSourcePageV1,
+    ProviderIngestCompletedMusubiCaptureSourceRowV1,
+    ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
+    ProviderIngestCompletedMusubiSignedCaptureLedgerV1,
+    ProviderIngestCompletedMusubiSignedCapturePageV1, ProviderIngestCompletionPayloadBuilderV1,
+    ProviderIngestCompletionPayloadErrorV1, ProviderIngestCompletionPayloadRequestV1,
+    ProviderIngestCompletionSignerBindingErrorV1, ProviderIngestCompletionSignerBindingV1,
+    ProviderIngestCompletionSignerErrorV1, ProviderIngestCompletionSignerQualificationV1,
     ProviderIngestCompletionSignerResolutionContextV1,
     ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
     ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
-    ProviderIngestFinalizedAssignmentV1, ProviderIngestFinalizedLedgerErrorV1,
-    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
+    ProviderIngestFinalizedAssignmentV1, ProviderIngestFinalizedClaimFactoryV1,
+    ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1,
+    ProviderIngestFinalizedMusubiArchiveClaimV1, ProviderIngestFinalizedMusubiCompletionClaimV1,
+    ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
     ProviderIngestIngressPrepareErrorV1, ProviderIngestLocalStorageErrorV1,
-    ProviderIngestLocalStorageV1, ProviderIngestRuntimeErrorV1, ProviderIngestRuntimePolicyV1,
-    ProviderIngestRuntimeProviderQualificationV1, ProviderIngestRuntimeV1,
-    ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1,
-    ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
-    ProviderIngestTransactionObservationV1,
+    ProviderIngestLocalStorageV1, ProviderIngestLocalStoredV1,
+    ProviderIngestMusubiArchiveFetchBindingV1,
+    ProviderIngestMusubiAttestationApprovalRequestErrorV1,
+    ProviderIngestMusubiAttestationApprovalRequestV1, ProviderIngestRuntimeErrorV1,
+    ProviderIngestRuntimePolicyV1, ProviderIngestRuntimeProviderQualificationV1,
+    ProviderIngestRuntimeV1, ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1,
+    ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
+    ProviderIngestTransactionObservationV1, ProviderIngestVerifiedMusubiBundleReceiptV1,
+    provider_ingest_completed_musubi_capture_transcript_digest_v1,
 };
 use repair_ledger_projection::RepairLedgerTaskProjectionV1;
 /// Outcome returned when recording a PoR verdict.
@@ -374,7 +413,7 @@ use config::{GcConfig, RepairConfig, StorageConfig};
 #[cfg(test)]
 use iroha_data_model::sorafs::pin_registry::{PinManifestFinalizedRecordV1, PinStatus};
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::AccountId,
     da::ingest::DaStripeLayout,
     sorafs::{
@@ -508,8 +547,8 @@ use crate::{
     potr::PotrTracker,
     scheduler::{SchedulerAdmissionError, StorageSchedulerConfig, StorageSchedulersRuntime},
     store::{
-        ChunkFileRecord, ChunkRefcountEntry, ChunkRoleMetadata, StorageBackend, StorageError,
-        StoredManifest,
+        AdmittedPayloadReadLeaseV1, ChunkFileRecord, ChunkRefcountEntry, ChunkRoleMetadata,
+        StorageBackend, StorageError, StoredManifest,
     },
     telemetry::{TelemetryAccumulator, TelemetryError},
 };
@@ -3658,6 +3697,7 @@ pub struct NodeHandle {
     orderbook_transaction_forwarder: OrderbookTransactionForwarder,
     reserve_transaction_forwarder: ReserveTransactionForwarder,
     provider_ingest_outbox: Option<ProviderIngestOutbox>,
+    completed_musubi_store_instance: Option<CompletedMusubiStoreInstanceV1>,
     por_finalized_replay_archive: Option<OpaquePorFinalizedReplayArchive>,
     por_history: Arc<RwLock<HashMap<PorHistoryKey, PorHistoryEntry>>>,
     storage: Option<Arc<StorageBackend>>,
@@ -4936,6 +4976,23 @@ pub enum NodeStorageError {
     Scheduler(#[from] SchedulerAdmissionError),
 }
 
+/// Redacted errors returned by admitted-payload verification lease acquisition.
+///
+/// This boundary deliberately never returns backend errors because those diagnostics can contain
+/// provider-local filesystem paths. Detailed failures are retained only in provider logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum AdmittedPayloadReadLeaseErrorV1 {
+    /// The embedded SoraFS storage subsystem is disabled.
+    #[error("SoraFS storage is disabled for this node")]
+    Disabled,
+    /// No currently admitted payload has the requested canonical manifest digest.
+    #[error("the requested storage-admitted SoraFS payload is unavailable")]
+    NotAdmitted,
+    /// Fail-closed storage state prevented safe lifecycle-lease acquisition.
+    #[error("storage-admitted SoraFS payload verification is temporarily unavailable")]
+    StorageUnavailable,
+}
+
 /// Errors raised by provider-internal finalized-ledger storage ingest.
 #[derive(Debug, Error)]
 pub enum FinalizedProviderIngestError {
@@ -4951,6 +5008,9 @@ pub enum FinalizedProviderIngestError {
     /// Supervised runtime construction failed.
     #[error(transparent)]
     Runtime(#[from] ProviderIngestRuntimeErrorV1),
+    /// The one completed-Musubi capture tenure for this store was already reserved.
+    #[error("completed-Musubi capture coordinator tenure is already taken")]
+    CompletedMusubiCaptureCoordinatorTaken,
     /// Finalized pin, provider assignment, manifest, or CAR plan disagree.
     #[error("finalized-ledger provider ingest binding mismatch: {0}")]
     BindingMismatch(&'static str),
@@ -6285,6 +6345,9 @@ impl NodeHandle {
             native_repair_singleflight::NativeRepairSingleflightV1::new(
                 repair_config.worker_concurrency(),
             );
+        let completed_musubi_store_instance = (storage.is_some()
+            && provider_ingest_outbox.is_some())
+        .then(CompletedMusubiStoreInstanceV1::new);
         let mut node = Self {
             config,
             repair_config,
@@ -6301,6 +6364,7 @@ impl NodeHandle {
             orderbook_transaction_forwarder,
             reserve_transaction_forwarder,
             provider_ingest_outbox,
+            completed_musubi_store_instance,
             por_finalized_replay_archive,
             por_history: Arc::new(RwLock::new(HashMap::new())),
             storage,
@@ -16226,6 +16290,59 @@ impl NodeHandle {
             .map_err(Into::into)
     }
 
+    /// Reserve this store incarnation's completed-Musubi capture coordinator.
+    ///
+    /// The reservation is shared by every clone of this handle and is never
+    /// reset, including when the returned coordinator is dropped or its lazy
+    /// signed-reader binding is temporarily unavailable. A separately
+    /// constructed handle owns a distinct reservation. This call retains the
+    /// exact erased reader without consulting it, allowing height-zero daemon
+    /// startup to await genesis before the private coordinator binds a capture
+    /// session.
+    ///
+    /// The returned opaque coordinator intentionally has no public operational
+    /// surface: it cannot expose scanner pages, finalized claims, approval
+    /// requests, or any signing, journal, inventory, transaction, or registry
+    /// effect.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when provider ingest is disabled, another caller
+    /// already consumed the tenure, the configured provider/network
+    /// identity is invalid, or the page bound is outside the hard finalized
+    /// limit. Once an enabled store's reservation is attempted, every failure
+    /// is non-resetting so a different reader cannot be substituted.
+    #[doc(hidden)]
+    pub fn take_provider_ingest_completed_musubi_capture_coordinator(
+        &self,
+        network_id: NetworkId,
+        max_page_rows: usize,
+        ledger: Arc<dyn ProviderIngestCompletedMusubiSignedCaptureLedgerV1>,
+    ) -> Result<ProviderIngestCompletedMusubiCaptureCoordinatorV1, FinalizedProviderIngestError>
+    {
+        let completed_musubi_store_instance = self
+            .completed_musubi_store_instance
+            .clone()
+            .ok_or(FinalizedProviderIngestError::Disabled)?;
+        if !completed_musubi_store_instance.try_take_capture_coordinator() {
+            return Err(FinalizedProviderIngestError::CompletedMusubiCaptureCoordinatorTaken);
+        }
+        let provider_id =
+            self.config
+                .provider_id()
+                .ok_or(FinalizedProviderIngestError::BindingMismatch(
+                    "provider identity is not configured",
+                ))?;
+        ProviderIngestCompletedMusubiCaptureCoordinatorV1::new_pending(
+            completed_musubi_store_instance,
+            *provider_id.as_bytes(),
+            network_id,
+            max_page_rows,
+            ledger,
+        )
+        .map_err(Into::into)
+    }
+
     /// Construct the supervised finalized-ledger provider-ingest runtime.
     ///
     /// The configured provider identity and node-owned durable outbox cannot be
@@ -16243,7 +16360,7 @@ impl NodeHandle {
         Clock,
     >(
         &self,
-        chain_id: ChainId,
+        network_id: NetworkId,
         claim_owner: ProviderIngestClaimOwnerV1,
         policy: ProviderIngestRuntimePolicyV1,
         ledger: Arc<Ledger>,
@@ -16283,7 +16400,7 @@ impl NodeHandle {
             .ok_or(FinalizedProviderIngestError::Disabled)?;
         ProviderIngestRuntimeV1::new(
             *provider_id.as_bytes(),
-            chain_id,
+            network_id,
             claim_owner,
             policy,
             outbox,
@@ -16434,6 +16551,106 @@ impl NodeHandle {
                 Ok(manifest_id)
             }
             Err(err) => Err(NodeStorageError::from(err)),
+        }
+    }
+
+    /// Reverify one completed-Musubi capture under this handle's exact storage instance.
+    ///
+    /// Generic finalized-ledger claims carry no capture-store authority and
+    /// are rejected before a lifecycle lease or payload reader is opened. A
+    /// marker-bound claim can be verified only by the `NodeHandle` instance
+    /// (or one of its clones) that constructed its private capture scanner.
+    ///
+    /// # Errors
+    ///
+    /// Returns a permanent error for an unbound or foreign-instance claim and
+    /// a retryable error when admitted storage is temporarily unavailable.
+    #[doc(hidden)]
+    pub fn verify_provider_ingest_completed_musubi_capture_bundle(
+        &self,
+        plan: &CarBuildPlan,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+        completed_claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
+    ) -> Result<ProviderIngestMusubiAttestationApprovalRequestV1, ProviderIngestLocalStorageErrorV1>
+    {
+        let Some(completed_musubi_store_instance) = self.completed_musubi_store_instance.as_ref()
+        else {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        };
+        if !completed_claim.matches_completed_musubi_store_instance(completed_musubi_store_instance)
+        {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        }
+        match self.with_admitted_payload_read_lease(&authorization.manifest_digest(), |lease| {
+            lease.verify_completed_musubi_bundle(
+                completed_musubi_store_instance,
+                plan,
+                authorization,
+                completed_claim,
+            )
+        }) {
+            Ok(Ok(request))
+                if request
+                    .matches_completed_musubi_store_instance(completed_musubi_store_instance) =>
+            {
+                Ok(request)
+            }
+            Ok(Ok(_)) | Ok(Err(ProviderIngestLocalStorageErrorV1::Permanent)) => {
+                Err(ProviderIngestLocalStorageErrorV1::Permanent)
+            }
+            Ok(Err(ProviderIngestLocalStorageErrorV1::Retryable)) => {
+                Err(ProviderIngestLocalStorageErrorV1::Retryable)
+            }
+            Err(AdmittedPayloadReadLeaseErrorV1::Disabled) => {
+                Err(ProviderIngestLocalStorageErrorV1::Permanent)
+            }
+            Err(
+                AdmittedPayloadReadLeaseErrorV1::NotAdmitted
+                | AdmittedPayloadReadLeaseErrorV1::StorageUnavailable,
+            ) => Err(ProviderIngestLocalStorageErrorV1::Retryable),
+        }
+    }
+
+    /// Run trusted local verification against opaque fresh readers for one admitted payload.
+    ///
+    /// `manifest_digest` is resolved only through the authoritative storage index. While `work`
+    /// runs, the manifest lifecycle lease prevents concurrent eviction. Each of up to three calls
+    /// to [`AdmittedPayloadReadLeaseV1::open_reader`] returns an independent forward-only reader at
+    /// byte zero. Every verified chunk read is admitted and accounted through the local fetch
+    /// scheduler, and neither the lease nor its readers expose filesystem paths or can escape the
+    /// callback lifetime.
+    ///
+    /// This boundary is intended for trusted, read-only local verification. To preserve the
+    /// storage lock hierarchy, `work` must use only the supplied lease and readers; it must not
+    /// re-enter any other [`NodeHandle`] storage method before returning.
+    ///
+    /// # Errors
+    ///
+    /// Returns a path-free [`AdmittedPayloadReadLeaseErrorV1`]. Detailed backend diagnostics are
+    /// logged locally and are never exposed to the callback caller.
+    pub fn with_admitted_payload_read_lease<T>(
+        &self,
+        manifest_digest: &[u8; 32],
+        work: impl for<'lease> FnOnce(&AdmittedPayloadReadLeaseV1<'lease>) -> T,
+    ) -> Result<T, AdmittedPayloadReadLeaseErrorV1> {
+        let Some(storage) = self.storage.as_deref() else {
+            return Err(AdmittedPayloadReadLeaseErrorV1::Disabled);
+        };
+        match storage.with_admitted_payload_read_lease_by_digest(
+            manifest_digest,
+            &self.schedulers,
+            work,
+        ) {
+            Ok(Some(result)) => Ok(result),
+            Ok(None) => Err(AdmittedPayloadReadLeaseErrorV1::NotAdmitted),
+            Err(error) => {
+                iroha_logger::warn!(
+                    %error,
+                    manifest_digest = %hex::encode(manifest_digest),
+                    "failed to acquire storage-admitted payload verification lease"
+                );
+                Err(AdmittedPayloadReadLeaseErrorV1::StorageUnavailable)
+            }
         }
     }
 
@@ -16869,6 +17086,7 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::{
+        io::Read as _,
         str::FromStr,
         sync::{
             Arc, Barrier, Mutex,
@@ -16877,9 +17095,12 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature, SignatureOf};
+    use iroha_crypto::{
+        Algorithm, Hash, HashOf, KeyPair, Signature as IrohaSignature, SignatureOf,
+    };
     use iroha_data_model::{
         ChainId,
+        block::BlockHeader,
         isi::{InstructionBox, sorafs::CompleteReplicationOrder},
         metadata::Metadata,
         name::Name,
@@ -16956,6 +17177,14 @@ mod tests {
         sample_verdict as por_sample_verdict,
     };
     use crate::repair_ledger_projection::RepairLedgerTaskProjectionBuilderV1;
+
+    fn transaction_network_id(seed: u8) -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([seed; iroha_crypto::Hash::LENGTH]),
+        ))
+    }
 
     #[test]
     fn finalized_capacity_projection_has_no_production_local_mutation_entrypoints() {
@@ -17807,6 +18036,7 @@ mod tests {
             order_id: ReplicationOrderId::new(order_id),
             manifest_digest: ManifestDigest::new(manifest_digest),
             manifest_root_cid,
+            musubi_archive: None,
             issued_by: authority.clone(),
             issued_epoch: order_body.issued_at,
             deadline_epoch: order_body.deadline_at,
@@ -17868,11 +18098,47 @@ mod tests {
 
     #[test]
     fn provider_ingest_outbox_is_not_opened_when_runtime_policy_is_absent() {
+        struct DisabledCaptureLedger;
+
+        impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for DisabledCaptureLedger {
+            fn capture_verifier_binding(
+                &self,
+            ) -> Result<
+                ProviderIngestCompletedMusubiCaptureVerifierBindingV1,
+                ProviderIngestFinalizedLedgerErrorV1,
+            > {
+                Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable)
+            }
+
+            fn read_signed_completed_musubi_capture_page(
+                &self,
+                _request: ProviderIngestCompletedMusubiCaptureRequestV1,
+            ) -> ProviderIngestFutureV1<
+                '_,
+                Result<
+                    ProviderIngestCompletedMusubiSignedCapturePageV1,
+                    ProviderIngestFinalizedLedgerErrorV1,
+                >,
+            > {
+                Box::pin(async { Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable) })
+            }
+        }
+
         let (config, _temp_dir) = storage_config_with_temp_dir();
         assert!(config.provider_ingest_outbox_policy().is_none());
         let handle = NodeHandle::try_new(config).expect("open storage without provider ingest");
         assert!(matches!(
             handle.finalized_provider_ingest_status_page(None, 1),
+            Err(FinalizedProviderIngestError::Disabled)
+        ));
+        assert!(matches!(
+            handle.take_provider_ingest_completed_musubi_capture_coordinator(
+                NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                    Hash::prehashed([0x4B; 32]),
+                )),
+                1,
+                Arc::new(DisabledCaptureLedger),
+            ),
             Err(FinalizedProviderIngestError::Disabled)
         ));
     }
@@ -18015,8 +18281,13 @@ mod tests {
             fixture.order.issued_by.clone(),
             completion_signer_policy,
         );
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x91; iroha_crypto::Hash::LENGTH]),
+        ));
         let mut completion_builder = TransactionBuilder::new(
-            ChainId::from("provider-ingest-node-test"),
+            network_id,
             fixture.order.issued_by.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -18048,7 +18319,8 @@ mod tests {
                 inserted.job_id(),
                 ProviderIngestCompletionSigningContextV1 {
                     baseline_finalized_cursor: fixture.ingest_cursor,
-                    chain_id: completion_payload.chain.clone(),
+                    chain_id: ChainId::from("provider-ingest-node-test"),
+                    network_id,
                     provider_owner: completion_payload.authority.clone(),
                     signer_policy: completion_signer_policy,
                     assignment_revision: fixture.order.assignment_revision,
@@ -18098,6 +18370,7 @@ mod tests {
             &page.rows[0].state,
             ProviderIngestDeliveryStateV1::LocalStored {
                 manifest_id: stored_manifest_id,
+                musubi_bundle: None,
                 completion: ProviderIngestCompletionStateV1::Ready {
                     attempts: 1,
                     next_attempt_at_ms,
@@ -18282,7 +18555,7 @@ mod tests {
         };
         let policy_digest = policy.digest().expect("digest orderbook policy");
         let context = OrderbookTransactionContextV1 {
-            chain_id: ChainId::from("orderbook-forwarder-restart-test"),
+            network_id: transaction_network_id(0x65),
             policy_record: OrderbookAdmissionPolicyRecord {
                 policy,
                 policy_digest,
@@ -18416,6 +18689,7 @@ mod tests {
         };
         let policy_digest = policy.digest().expect("digest reserve policy");
         let context = ReserveTransactionContextV1 {
+            network_id: transaction_network_id(0x78),
             chain_id: ChainId::from("reserve-forwarder-restart-test"),
             policy_record: ReserveAuthorityPolicyRecordV1 {
                 policy,

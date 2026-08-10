@@ -139,7 +139,9 @@ fn xor_asset_definition_id() -> AssetDefinitionId {
 
 fn payout_contract_address() -> ContractAddress {
     ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &account(1).0,
         42,
         DataSpaceId::UNIVERSAL,
@@ -149,7 +151,9 @@ fn payout_contract_address() -> ContractAddress {
 
 fn pool_contract_address() -> ContractAddress {
     ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &account(2).0,
         43,
         DataSpaceId::UNIVERSAL,
@@ -384,7 +388,7 @@ fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransacti
     let crypto = state.crypto.read().clone();
     AcceptedTransaction::accept(
         tx,
-        &state.chain_id,
+        state.network_id_ref(),
         max_clock_drift,
         tx_params,
         crypto.as_ref(),
@@ -392,7 +396,7 @@ fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransacti
     .expect("transaction admission should pass stateless checks")
 }
 
-fn commit_empty_genesis_like_block(state: &State) -> [u8; 32] {
+fn commit_empty_genesis_like_block(state: &State) {
     let block_signer = key_pair(240);
     let new_block = BlockBuilder::new(Vec::new())
         .chain(0, None)
@@ -402,24 +406,20 @@ fn commit_empty_genesis_like_block(state: &State) -> [u8; 32] {
     let valid_block =
         ValidBlock::validate_unchecked(new_block.into(), &mut state_block).unpack(|_| {});
     let committed_block = valid_block.commit_unchecked().unpack(|_| {});
-    let genesis_hash = committed_block.as_ref().hash();
     let _events = state_block.apply_without_execution(&committed_block, Vec::new());
     state_block.commit().expect("commit initial block hash");
-    *genesis_hash.as_ref()
 }
 
 fn validation_fee_policy(
     state: &State,
     fee_asset: AssetDefinitionId,
     treasury: AccountId,
-    genesis_hash: [u8; 32],
 ) -> ValidationFeePolicyV1 {
     let payout_binding = payout_binding(&fee_asset);
     assert_eq!(treasury, payout_binding.treasury_account_id);
     ValidationFeePolicyV1 {
         schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-        chain_id: state.chain_id.clone(),
-        genesis_hash,
+        network_id: *state.network_id_ref(),
         policy_version: 1,
         previous_policy_hash: None,
         ds_asset_id: fee_asset,
@@ -1228,7 +1228,7 @@ fn signed_transfer_with_principal_and_fee_instruction(
         );
     }
     TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         user.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1252,7 +1252,7 @@ fn signed_ivm_proved_overlay(
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
     TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         user.clone(),
         FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1_000)),
     )
@@ -1278,7 +1278,7 @@ fn signed_transfer_with_explicit_fee_asset_instruction(
     metadata: Metadata,
 ) -> SignedTransaction {
     TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         user.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1310,7 +1310,7 @@ fn signed_transfer_with_explicit_fee_source_instruction(
     metadata: Metadata,
 ) -> SignedTransaction {
     TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         user.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1377,7 +1377,7 @@ fn signed_batch_transfer_with_entries(
 ) -> SignedTransaction {
     let batch = TransferAssetBatch::new(entries);
     TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         user.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1408,7 +1408,7 @@ fn accept_transaction_error(state: &State, tx: SignedTransaction) -> String {
     let crypto = state.crypto.read().clone();
     match AcceptedTransaction::accept(
         tx,
-        &state.chain_id,
+        state.network_id_ref(),
         max_clock_drift,
         tx_params,
         crypto.as_ref(),
@@ -1428,8 +1428,8 @@ fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
 #[test]
 fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    let genesis_hash = commit_empty_genesis_like_block(&state);
-    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury, genesis_hash);
+    commit_empty_genesis_like_block(&state);
+    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
     install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
 
     let missing_fee_error = validate_in_block(
@@ -1469,8 +1469,8 @@ fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
 #[test]
 fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() {
     let (state, user, _, _, treasury, fee_asset) = test_state();
-    let genesis_hash = commit_empty_genesis_like_block(&state);
-    let policy = validation_fee_policy(&state, fee_asset, treasury, genesis_hash);
+    commit_empty_genesis_like_block(&state);
+    let policy = validation_fee_policy(&state, fee_asset, treasury);
     let custom = policy_registry(&policy).into_custom_parameter();
     let mut block = state.block(block_header(
         TEST_POLICY_ENACTMENT_HEIGHT,
@@ -1490,8 +1490,8 @@ fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() 
 #[test]
 fn active_registry_rejects_stored_governance_enactment_height_mismatch() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    let genesis_hash = commit_empty_genesis_like_block(&state);
-    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury, genesis_hash);
+    commit_empty_genesis_like_block(&state);
+    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
     install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
     let proposal_id = policy_proposal(&policy).fingerprint();
 
@@ -1541,8 +1541,8 @@ fn active_registry_rejects_stored_governance_enactment_height_mismatch() {
 #[test]
 fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    let genesis_hash = commit_empty_genesis_like_block(&state);
-    let policy = validation_fee_policy(&state, fee_asset, treasury.clone(), genesis_hash);
+    commit_empty_genesis_like_block(&state);
+    let policy = validation_fee_policy(&state, fee_asset, treasury.clone());
     install_validation_fee_policy(&state, &user, &user_key_pair, policy);
 
     let wrapper_permission: iroha_data_model::permission::Permission =
@@ -1603,8 +1603,8 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
 #[test]
 fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    let genesis_hash = commit_empty_genesis_like_block(&state);
-    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone(), genesis_hash);
+    commit_empty_genesis_like_block(&state);
+    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
     install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
 
     let principal = || {
@@ -1659,8 +1659,8 @@ fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
 #[test]
 fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    let genesis_hash = commit_empty_genesis_like_block(&state);
-    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone(), genesis_hash);
+    commit_empty_genesis_like_block(&state);
+    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
     install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
 
     let recipient_asset = AssetId::new(fee_asset.clone(), recipient.clone());
@@ -1729,7 +1729,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     drop(view);
 
     let fee_then_overdrawn_principal_tx = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         user.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1843,8 +1843,8 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
 #[test]
 fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    let genesis_hash = commit_empty_genesis_like_block(&state);
-    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury, genesis_hash);
+    commit_empty_genesis_like_block(&state);
+    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
     install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
 
     let mut exact_fee_tx = signed_transfer(

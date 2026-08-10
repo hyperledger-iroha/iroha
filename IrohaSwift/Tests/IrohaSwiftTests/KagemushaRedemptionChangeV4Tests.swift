@@ -117,7 +117,7 @@ final class KagemushaRedemptionChangeV4Tests: XCTestCase {
                 changeAmount: changeAmount
             )
         XCTAssertEqual(decoded, preparation)
-        XCTAssertEqual(decoded.output.chainID, "swift-redemption-change-v4")
+        XCTAssertEqual(decoded.output.networkID, TestNetworkIds.canonical)
         XCTAssertEqual(decoded.output.assetDefinitionID, summary.assetDefinitionID)
         XCTAssertEqual(decoded.output.amount, changeAmount)
         XCTAssertEqual(
@@ -132,7 +132,7 @@ final class KagemushaRedemptionChangeV4Tests: XCTestCase {
         XCTAssertNotEqual(decoded.opening.rho, inputOpening.rho)
         XCTAssertEqual(
             decoded.opening.diversifier,
-            ConfidentialOwnerTag.defaultDiversifier()
+            try ConfidentialOwnerTag.defaultDiversifier()
         )
 
         var extended = archive
@@ -311,10 +311,10 @@ final class KagemushaRedemptionChangeV4Tests: XCTestCase {
         let opening = try KagemushaNoteOpening(
             spendKey: inputOpening.spendKey,
             rho: fixed32(0x71),
-            diversifier: ConfidentialOwnerTag.defaultDiversifier()
+            diversifier: try ConfidentialOwnerTag.defaultDiversifier()
         )
         let output = try KagemushaSpendableNoteDescriptor(
-            chainID: "swift-redemption-change-v4",
+            networkID: TestNetworkIds.canonical,
             assetDefinitionID: summary.assetDefinitionID,
             noteCommitment: fixed32(0x73),
             spendNullifier: fixed32(0x74),

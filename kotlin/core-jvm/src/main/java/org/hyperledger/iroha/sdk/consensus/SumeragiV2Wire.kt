@@ -7,6 +7,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 
 /** Canonical bare-Norito models for the Sumeragi v2 consensus wire protocol. */
@@ -74,21 +75,6 @@ object SumeragiV2Wire {
             other is PeerIdPayload && value.contentEquals(other.value)
 
         override fun hashCode(): Int = value.contentHashCode()
-    }
-
-    /** Canonical Norito representation of an Iroha chain identifier. */
-    class ChainId(@JvmField val value: String) : WireValue() {
-        init {
-            requireWellFormedUtf16(value, "chain ID")
-        }
-
-        override fun encode(): ByteArray = struct(string(value))
-
-        companion object {
-            internal fun decode(bytes: ByteArray): ChainId = decodeStruct(bytes) { reader ->
-                ChainId(reader.field("chain_id.value") { it.stringOnly("chain_id.value") })
-            }
-        }
     }
 
     /** Typed identifier of a frozen height context. */
@@ -954,7 +940,7 @@ object SumeragiV2Wire {
     /** Signed request for the durable CommitQC of one exact height context. */
     class CommitCertificateRequest(
         @JvmField val protocolVersion: Int,
-        @JvmField val chainId: ChainId,
+        @JvmField val networkId: NetworkId,
         @JvmField val contextId: HeightContextId,
         @JvmField val height: Long,
         @JvmField val requester: PeerIdPayload,
@@ -963,12 +949,12 @@ object SumeragiV2Wire {
         private val signatureValue = signature.copyOf()
 
         constructor(
-            chainId: ChainId,
+            networkId: NetworkId,
             contextId: HeightContextId,
             height: Long,
             requester: PeerIdPayload,
             signature: ByteArray,
-        ) : this(PROTOCOL_VERSION, chainId, contextId, height, requester, signature)
+        ) : this(PROTOCOL_VERSION, networkId, contextId, height, requester, signature)
 
         init {
             require(protocolVersion == PROTOCOL_VERSION) {
@@ -981,7 +967,7 @@ object SumeragiV2Wire {
 
         override fun encode(): ByteArray = struct(
             u16(protocolVersion),
-            chainId.encode(),
+            networkId.bytes(),
             contextId.encode(),
             u64(height),
             requester.bytes(),
@@ -992,7 +978,7 @@ object SumeragiV2Wire {
         fun signaturePreimage(): ByteArray =
             COMMIT_CERTIFICATE_REQUEST_DOMAIN + struct(
                 u16(protocolVersion),
-                chainId.encode(),
+                networkId.bytes(),
                 contextId.encode(),
                 u64(height),
                 requester.bytes(),
@@ -1012,8 +998,8 @@ object SumeragiV2Wire {
                         reader.field("commit_request.protocol_version") {
                             it.u16Only("commit_request.protocol_version")
                         },
-                        reader.field("commit_request.chain_id") {
-                            ChainId.decode(it.remainingBytes())
+                        reader.field("commit_request.network_id") {
+                            NetworkId.fromBytes(it.hashOnly("commit_request.network_id"))
                         },
                         reader.field("commit_request.context_id") {
                             HeightContextId.decode(it.remainingBytes())

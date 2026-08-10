@@ -1,4 +1,4 @@
-//! Public-surface checks for deployment-owned daemon provider registries.
+//! Public-surface checks for deployment-owned daemon providers and publication factories.
 
 use std::sync::Arc;
 
@@ -10,10 +10,48 @@ use irohad::{
     RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerExecutableArgsV1,
     RuntimeProviderBrokerExecutableErrorV1, RuntimeProviderBrokerExecutableV1,
     RuntimeProviderBrokerReadinessErrorV1, load_runtime_provider_broker_catalog_file_v1,
+    musubi_publication_service::{
+        MusubiPublicationPrivateDeploymentV1, MusubiPublicationPrivateIngressFutureV1,
+        MusubiPublicationPrivateServiceContextV1, MusubiPublicationPrivateServiceFactoryErrorV1,
+        MusubiPublicationPrivateServiceFactoryV1, MusubiPublicationPrivateServiceRunnerV1,
+    },
     serve_runtime_provider_broker_with_fallible_readiness_v1,
 };
 
 struct DeploymentRegistry;
+
+struct ExternalMusubiPublicationFactory;
+
+struct ExternalMusubiPublicationRunner;
+
+impl MusubiPublicationPrivateServiceRunnerV1 for ExternalMusubiPublicationRunner {
+    fn serve(
+        self: Box<Self>,
+        shutdown: iroha_futures::supervisor::ShutdownSignal,
+    ) -> MusubiPublicationPrivateIngressFutureV1 {
+        Box::pin(async move {
+            shutdown.receive().await;
+            Ok(())
+        })
+    }
+}
+
+impl MusubiPublicationPrivateServiceFactoryV1 for ExternalMusubiPublicationFactory {
+    fn build(
+        self: Box<Self>,
+        context: MusubiPublicationPrivateServiceContextV1,
+    ) -> Result<MusubiPublicationPrivateDeploymentV1, MusubiPublicationPrivateServiceFactoryErrorV1>
+    {
+        let _chain_id = context.chain_id();
+        let _genesis_hash = context.genesis_block_hash();
+        let _state = context.state();
+        let _queue = context.queue();
+        let _sorafs_node = context.sorafs_node();
+        Ok(MusubiPublicationPrivateDeploymentV1::new(Box::new(
+            ExternalMusubiPublicationRunner,
+        )))
+    }
+}
 
 struct DeploymentBrokerBackendRegistry;
 
@@ -122,6 +160,26 @@ fn external_crate_can_implement_registry_and_name_standard_launcher() {
 }
 
 #[test]
+fn external_crate_can_implement_factory_and_name_publication_launchers() {
+    let standalone_launcher: fn(
+        BuildLine,
+        Box<dyn MusubiPublicationPrivateServiceFactoryV1>,
+    ) -> ReportResult<(), MainError> = irohad::run_with_musubi_publication;
+    let combined_launcher: fn(
+        BuildLine,
+        &dyn IrohaRuntimeProviderRegistryV1,
+        Box<dyn MusubiPublicationPrivateServiceFactoryV1>,
+    ) -> ReportResult<(), MainError> =
+        irohad::run_with_runtime_provider_registry_and_musubi_publication;
+    let factory: Box<dyn MusubiPublicationPrivateServiceFactoryV1> =
+        Box::new(ExternalMusubiPublicationFactory);
+
+    let _ = standalone_launcher;
+    let _ = combined_launcher;
+    drop(factory);
+}
+
+#[test]
 fn external_crate_can_implement_and_name_broker_backend_launcher() {
     let registry: &dyn RuntimeProviderBrokerBackendRegistryV1 = &DeploymentBrokerBackendRegistry;
     let _ = registry;
@@ -167,6 +225,7 @@ fn external_crate_can_name_standard_broker_executable_shell() {
 fn external_crate_can_name_standalone_governance_view_projection() {
     let projection: fn(
         &iroha_data_model::ChainId,
+        iroha_data_model::NetworkId,
         &iroha_config::parameters::actual::SorafsGovernanceDagServiceView,
     ) -> Result<
         IrohaRuntimeProviderBindingsV1,
@@ -194,13 +253,14 @@ fn external_crate_can_name_secret_free_broker_catalog_handoff() {
 
 #[test]
 fn checked_in_binaries_are_explicitly_adapter_disabled() {
-    let source = include_str!("../src/bin/irohad.rs");
+    let source = include_str!("../src/bin/iroha3d.rs");
     let compact: String = source
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect();
     assert!(compact.contains("irohad::main_entry("));
     assert!(!compact.contains("run_with_runtime_provider_registry"));
+    assert!(!compact.contains("run_with_musubi_publication"));
 }
 
 #[test]

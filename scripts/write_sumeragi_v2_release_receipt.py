@@ -110,10 +110,10 @@ _PREBUILT_MANIFEST_NAME = ".sumeragi-v2-prebuilt-binaries.tsv"
 _PREBUILT_INVOCATION_RE = re.compile(r"invocation\.[A-Za-z0-9]+")
 _PREBUILT_TRIPLE_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_.]+)+")
 _PREBUILT_BINARY_SPECS = (
-    ("irohad", "release/irohad"),
+    ("irohad", "release/iroha3d"),
     (
         "irohad_message_control",
-        "message-control/release/irohad",
+        "message-control/release/iroha3d",
     ),
     ("iroha", "release/iroha"),
     ("kagami", "release/kagami"),
@@ -146,7 +146,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "c9c49999950dfd6e7c74869bec49f42222fee2a9d3ad4f24d913cedc5012fa9d"
+    "1ea8ffd9e9659c7ba1dc09349e269db9a13dc14af9b8d6a0802e754e7b542de1"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -391,7 +391,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 857
+_PRODUCTION_TEST_COUNT = 861
 _G_UNIT_TEST_COUNT = 524
 _G_UNIT_GROUPS = (
     (
@@ -459,11 +459,7 @@ _G_UNIT_GROUPS = (
     ),
 )
 _PRODUCTION_MODULES = (
-    (
-        "production-kura-progress-durability",
-        "kura::tests",
-        14,
-    ),
+    ("production-kura-progress-durability", "kura::tests", 17),
     (
         "production-kura-lane-geometry",
         "kura::lane_geometry::tests",
@@ -480,6 +476,7 @@ _PRODUCTION_MODULES = (
         43,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
+    ("production-state-governance-unlock-audit", "state::tests", 1),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
     (
         "production-v2-core-network-simulation",
@@ -623,6 +620,7 @@ _TAIRA_CONTRACT_TESTS = (
     "taira_public_localnet::release_execution_profile_rejects_cargo_profile_mismatch",
     "taira_public_localnet::release_execution_profile_rejects_non_exact_offline_values",
     "taira_public_localnet::simulation_summary_json_records_release_profile_and_status_evidence",
+    "taira_public_localnet::strict_restart::taira_localnet_restart_catchup_behavior",
 )
 _RUST_SDK_DIAGNOSTICS_TESTS = (
     "client::tests::get_sumeragi_status_prefers_norito_and_handles_json",
@@ -704,6 +702,7 @@ def _canonical_production_tests(
                     "offline::",
                     "zk::",
                     "merge_sidecar::",
+                    "state::",
                     "kura::",
                     "nexus::",
                     "peer::",
@@ -818,7 +817,7 @@ def _production_module_command(module: str) -> str:
         "tests::relay_fairness",
     }:
         return (
-            "cargo test --locked --offline -p irohad --bin irohad "
+            "cargo test --locked --offline -p irohad --bin iroha3d "
             "--features test-network-message-control "
             f"{module} -- --test-threads=1"
         )
@@ -1057,7 +1056,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                362,
+                363,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_receipt_test.py "
@@ -1078,7 +1077,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                5218,
+                5227,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
@@ -1104,7 +1103,8 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
                 "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::"
                 "test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal "
                 "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
-                "test_inflight_layout_contract_rejects_membership_only_lane_authorship",
+                "test_inflight_layout_contract_rejects_membership_only_lane_authorship "
+                + _WIRE_RELEASE_INVARIANT_PYTEST_NODES,
             ),
             (
                 "preflight-formal-launcher",
@@ -1116,7 +1116,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-taira-soak",
                 "pytest",
-                42,
+                43,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/taira_v2_soak_test.py::"
@@ -1616,7 +1616,6 @@ def _signature_archives(
         raise ReceiptError(
             "sealed release root must be the exact bootstrap release-runner source"
         )
-
     archives = {
         label: _read_signature_archive(
             path,
@@ -4754,7 +4753,7 @@ def _prebuilt_binary_bundle(
     )
     _prebuilt_directory_inventory(
         bundle_dir / "release",
-        {"irohad", "iroha", "kagami"},
+        {"iroha3d", "iroha", "kagami"},
         "prebuilt release directory",
     )
     _prebuilt_directory_inventory(
@@ -4764,7 +4763,7 @@ def _prebuilt_binary_bundle(
     )
     _prebuilt_directory_inventory(
         bundle_dir / "message-control" / "release",
-        {"irohad"},
+        {"iroha3d"},
         "prebuilt message-control release directory",
     )
 
@@ -5351,9 +5350,9 @@ def _seed_run_logs(
     run_logs = []
     cargo_target_dir = cargo_target_root
     program_target_dir = prebuilt_bundle_dir
-    irohad = program_target_dir / "release" / "irohad"
+    irohad = program_target_dir / "release" / "iroha3d"
     message_control_irohad = (
-        program_target_dir / "message-control" / "release" / "irohad"
+        program_target_dir / "message-control" / "release" / "iroha3d"
     )
     iroha = program_target_dir / "release" / "iroha"
     kagami = program_target_dir / "release" / "kagami"
@@ -7328,7 +7327,7 @@ def _snapshot_receipt_inputs(
     )
     _prebuilt_directory_inventory(
         prebuilt_root / "release",
-        {"irohad", "iroha", "kagami"},
+        {"iroha3d", "iroha", "kagami"},
         "aggregate prebuilt release directory",
     )
     _prebuilt_directory_inventory(
@@ -7338,7 +7337,7 @@ def _snapshot_receipt_inputs(
     )
     _prebuilt_directory_inventory(
         prebuilt_root / "message-control" / "release",
-        {"irohad"},
+        {"iroha3d"},
         "aggregate prebuilt message-control release directory",
     )
 

@@ -1185,16 +1185,13 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
     // Use `new_for_testing` to provide a telemetry instance when required
     let state = State::new_for_testing(World::default(), kura, query_handle);
 
-    fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
+    fn dummy_accepted_transaction(network_id: NetworkId) -> AcceptedTransaction<'static> {
         use std::{borrow::Cow, time::Duration};
 
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid chain id");
         let keypair = KeyPair::random();
         let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -1208,7 +1205,7 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
     // Create a header for a block to stage registrations
     let latest = state.view().latest_block();
     let priv_key = iroha_crypto::KeyPair::random().private_key().clone();
-    let header = BlockBuilder::new(vec![dummy_accepted_transaction()])
+    let header = BlockBuilder::new(vec![dummy_accepted_transaction(*state.network_id_ref())])
         .chain(0, latest.as_deref())
         .sign(&priv_key)
         .unpack(|_| {})

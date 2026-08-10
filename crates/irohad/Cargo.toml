@@ -28,6 +28,7 @@ daemon = [
     "iroha_core/node",
     "iroha_torii/node-api",
     "iroha_crypto/consensus",
+    "iroha_crypto/pqc",
     "iroha_data_model/json",
     "ivm/runtime",
     "norito/node-codec",
@@ -71,8 +72,8 @@ schema-endpoint = ["iroha_torii/schema"]
 # Enable profiling endpoint
 profiling-endpoint = ["iroha_torii/profiling"]
 [[bin]]
-name = "irohad"
-path = "src/bin/irohad.rs"
+name = "iroha3d"
+path = "src/bin/iroha3d.rs"
 required-features = ["daemon"]
 
 [[bin]]
@@ -88,6 +89,11 @@ required-features = ["dev-tools", "zk-stark"]
 [[bin]]
 name = "taira_bootle_lantern_broker"
 path = "src/bin/taira_bootle_lantern_broker.rs"
+required-features = ["daemon"]
+
+[[bin]]
+name = "sorafs_external_software_signer"
+path = "src/bin/sorafs_external_software_signer.rs"
 required-features = ["daemon"]
 
 [badges]
@@ -125,7 +131,7 @@ clap = { workspace = true, features = ["derive", "env", "string"] }
 eyre = { workspace = true }
 error-stack = { workspace = true, features = ["eyre"] }
 tracing = { workspace = true }
-tokio = { workspace = true, features = ["macros", "signal"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 supports-color = { workspace = true }
 toml = { workspace = true }
 norito = { workspace = true, default-features = false }

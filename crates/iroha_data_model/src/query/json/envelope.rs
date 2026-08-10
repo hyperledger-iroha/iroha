@@ -18,8 +18,8 @@ use thiserror::Error;
 use crate::{
     name::Name,
     query::{
-        QueryBox, QueryOutputBatchBox, QueryRequest, QueryRequestWithAuthority, QueryWithFilter,
-        QueryWithParams, SingularQueryBox,
+        QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithFilter, QueryWithParams,
+        SingularQueryBox,
         dsl::{CompoundPredicate, HasProjection, PredicateMarker, SelectorMarker, SelectorTuple},
         json::predicate::{PredicateJson, PredicateParseError},
         parameters::{FetchSize, Pagination, QueryParams, Sorting},
@@ -1248,15 +1248,16 @@ fn params_optional_string(
 }
 
 impl QueryEnvelopeJson {
-    /// Convert the envelope into a [`QueryRequest`] ready for signing with the
-    /// provided authority.
+    /// Convert the envelope into a raw [`QueryRequest`].
+    ///
+    /// Network identity, authority, creation time, lifetime, nonce, and
+    /// signature belong to the online client boundary. Keeping those fields
+    /// out of this JSON conversion prevents callers from accidentally signing
+    /// replayable requests with fabricated defaults.
     ///
     /// # Errors
     /// Returns an error when the envelope payload cannot be converted into a query.
-    pub fn into_signed_request(
-        self,
-        authority: crate::account::AccountId,
-    ) -> Result<QueryRequestWithAuthority, QueryJsonError> {
+    pub fn into_request(self) -> Result<QueryRequest, QueryJsonError> {
         let request = match self {
             QueryEnvelopeJson::Singular(s) => QueryRequest::Singular(s.into_box()?),
             QueryEnvelopeJson::Iterable(i) => {
@@ -1264,7 +1265,7 @@ impl QueryEnvelopeJson {
                 QueryRequest::Start(iterable.into_query_with_params()?)
             }
         };
-        Ok(QueryRequestWithAuthority { authority, request })
+        Ok(request)
     }
 }
 
@@ -1357,16 +1358,12 @@ fn value_type_name(value: &Value) -> &'static str {
 }
 
 impl IterableQueryJson {
-    /// Build a [`QueryRequestWithAuthority`] from this JSON definition.
+    /// Build a raw [`QueryRequest`] from this JSON definition.
     ///
     /// # Errors
     /// Returns an error when pagination or predicate parameters are invalid.
-    pub fn into_request(
-        self,
-        authority: crate::account::AccountId,
-    ) -> Result<QueryRequestWithAuthority, QueryJsonError> {
-        let request = QueryRequest::Start(self.into_query_with_params()?);
-        Ok(QueryRequestWithAuthority { authority, request })
+    pub fn into_request(self) -> Result<QueryRequest, QueryJsonError> {
+        Ok(QueryRequest::Start(self.into_query_with_params()?))
     }
 }
 

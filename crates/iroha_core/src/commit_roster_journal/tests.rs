@@ -16,7 +16,6 @@
     fn sample_cert(view: u64) -> (Qc, ValidatorSetCheckpoint) {
         cert_with_height(2, view)
     }
-
     fn checked_random_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("generate checked commit roster journal BLS fixture keypair")

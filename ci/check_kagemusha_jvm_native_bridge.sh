@@ -7,11 +7,11 @@ export PATH
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 SOURCE_SEAL="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
-ABI21_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi21_artifact.py"
+ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 LOCALNET_DEPLOYER="$ROOT_DIR/scripts/deploy_localnet.sh"
 PINNED_TOOLCHAIN="1.93.1"
-REQUIRED_NATIVE_ASSERTION="The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library"
+REQUIRED_NATIVE_ASSERTION="The release JNI gate requires a freshly built connect_norito_bridge ABI 22 library"
 LOCALNET_TEST_CLASS="org.hyperledger.iroha.sdk.client.ZkAssetShieldLocalnetTest"
 
 fail() {
@@ -29,7 +29,7 @@ fi
 
 for required_file in \
   "$SOURCE_SEAL" \
-  "$ABI21_ARTIFACT_CHECKER" \
+  "$ABI22_ARTIFACT_CHECKER" \
   "$HERMETIC_RUNNER" \
   "$LOCALNET_DEPLOYER" \
   "$ROOT_DIR/rust-toolchain.toml" \
@@ -600,7 +600,7 @@ run_expected_missing_native_failure \
 HOST_TRIPLE="$("$RUSTC_BINARY" --version --verbose | sed -n 's/^host: //p')"
 [[ "$HOST_TRIPLE" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "rustc returned a non-canonical host triple"
 CARGO_PATH="${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:/usr/bin:/bin"
-printf '[kagemusha-jvm-native] building fresh host ABI-21 bridge for %s\n' "$HOST_TRIPLE" >&2
+printf '[kagemusha-jvm-native] building fresh host ABI-22 bridge for %s\n' "$HOST_TRIPLE" >&2
 "$PYTHON_BINARY" -I -S "$HERMETIC_RUNNER" \
   --profile host-cargo \
   --set "CARGO=$CARGO_BINARY" \
@@ -628,14 +628,14 @@ esac
 [[ -f "$NATIVE_LIBRARY" && ! -L "$NATIVE_LIBRARY" ]] \
   || fail "fresh host bridge library is missing: $NATIVE_LIBRARY"
 NATIVE_LIBRARY_DIR="${NATIVE_LIBRARY%/*}"
-NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi21.json"
-"$PYTHON_BINARY" -I -S "$ABI21_ARTIFACT_CHECKER" record \
+NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi22.json"
+"$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" record \
   --artifact "$NATIVE_LIBRARY" \
   --manifest "$NATIVE_EVIDENCE" \
   --source-root "$ROOT_DIR" \
   --sdk c-jni \
   --target "$HOST_TRIPLE"
-"$PYTHON_BINARY" -I -S "$ABI21_ARTIFACT_CHECKER" verify \
+"$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" verify \
   --artifact "$NATIVE_LIBRARY" \
   --manifest "$NATIVE_EVIDENCE" \
   --source-root "$ROOT_DIR"
@@ -705,12 +705,12 @@ printf '[kagemusha-jvm-native] building fresh four-peer localnet tools for %s\n'
   --set "TMPDIR=$MOBILE_TMPDIR" \
   -- "$CARGO_BINARY" build --locked --offline --target "$HOST_TRIPLE" \
     -p iroha_kagami -p irohad -p iroha_cli \
-    --bin kagami --bin irohad --bin iroha
+    --bin kagami --bin iroha3d --bin iroha
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
 
 LOCALNET_BIN_DIR="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug"
 KAGAMI_BINARY="$LOCALNET_BIN_DIR/kagami"
-IROHAD_BINARY="$LOCALNET_BIN_DIR/irohad"
+IROHAD_BINARY="$LOCALNET_BIN_DIR/iroha3d"
 IROHA_CLI_BINARY="$LOCALNET_BIN_DIR/iroha"
 for localnet_binary in "$KAGAMI_BINARY" "$IROHAD_BINARY" "$IROHA_CLI_BINARY"; do
   [[ -f "$localnet_binary" && ! -L "$localnet_binary" && -x "$localnet_binary" ]] \
@@ -916,19 +916,19 @@ if aggregate["skipped"] != 0:
 if aggregate["failures"] != 0 or aggregate["errors"] != 0:
     raise SystemExit(f"complete Kotlin release suite contains failed outcomes: {aggregate}")
 
-native_bytes = regular_bytes(native_manifest_path, "native ABI-21 evidence", 64 * 1024)
+native_bytes = regular_bytes(native_manifest_path, "native ABI-22 evidence", 64 * 1024)
 try:
     native = json.loads(native_bytes)
 except (UnicodeDecodeError, json.JSONDecodeError) as error:
-    raise SystemExit(f"native ABI-21 evidence is invalid: {error}") from error
+    raise SystemExit(f"native ABI-22 evidence is invalid: {error}") from error
 if (
     type(native) is not dict
     or native.get("sdk") != "c-jni"
     or native.get("target") != host_target
-    or native.get("bridge_abi_version") != 21
+    or native.get("bridge_abi_version") != 22
     or native.get("source_tree_clean") is not True
 ):
-    raise SystemExit("native ABI-21 evidence does not match the exercised JNI artifact")
+    raise SystemExit("native ABI-22 evidence does not match the exercised JNI artifact")
 
 if evidence_dir is not None:
     metadata = evidence_dir.lstat()
@@ -968,7 +968,7 @@ if evidence_dir is not None:
         + "\n"
     ).encode("utf-8")
     write_exclusive("zk-asset-shield-localnet.junit.xml", target_bytes)
-    write_exclusive("c-jni-native-abi21.json", native_bytes)
+    write_exclusive("c-jni-native-abi22.json", native_bytes)
     write_exclusive("zk-asset-shield-localnet-summary.json", summary_bytes)
 PY
 

@@ -4,34 +4,26 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-/** Typed builder for the {@code RetirePinManifest} instruction (SoraFS manifest lifecycle). */
+/**
+ * Typed builder for the {@code RetirePinManifest} instruction (SoraFS manifest lifecycle).
+ * The recorded retirement epoch comes exclusively from the block consensus timestamp.
+ */
 public final class RetirePinManifestInstruction implements InstructionTemplate {
 
   public static final String ACTION = "RetirePinManifest";
 
   private final String digestHex;
-  private final long retiredEpoch;
   private final String reason;
   private final Map<String, String> arguments;
 
   private RetirePinManifestInstruction(final Builder builder) {
-    this(builder, builder.canonicalArguments());
-  }
-
-  private RetirePinManifestInstruction(
-      final Builder builder, final Map<String, String> argumentOrder) {
     this.digestHex = builder.digestHex;
-    this.retiredEpoch = builder.retiredEpoch;
     this.reason = builder.reason;
-    this.arguments = Map.copyOf(argumentOrder);
+    this.arguments = Map.copyOf(builder.canonicalArguments());
   }
 
   public String digestHex() {
     return digestHex;
-  }
-
-  public long retiredEpoch() {
-    return retiredEpoch;
   }
 
   public String reason() {
@@ -53,15 +45,21 @@ public final class RetirePinManifestInstruction implements InstructionTemplate {
   }
 
   public static RetirePinManifestInstruction fromArguments(final Map<String, String> arguments) {
-    final Builder builder =
-        builder()
-            .setDigestHex(require(arguments, "digest_hex"))
-            .setRetiredEpoch(requireLong(arguments, "retired_epoch"));
+    Objects.requireNonNull(arguments, "arguments");
+    if (!ACTION.equals(arguments.get("action"))) {
+      throw new IllegalArgumentException("Instruction argument 'action' must be " + ACTION);
+    }
+    for (final String key : arguments.keySet()) {
+      if (!key.equals("action") && !key.equals("digest_hex") && !key.equals("reason")) {
+        throw new IllegalArgumentException("Unsupported RetirePinManifest argument: " + key);
+      }
+    }
+    final Builder builder = builder().setDigestHex(require(arguments, "digest_hex"));
     final String reason = arguments.get("reason");
     if (reason != null && !reason.isBlank()) {
       builder.setReason(reason);
     }
-    return new RetirePinManifestInstruction(builder, new LinkedHashMap<>(arguments));
+    return builder.build();
   }
 
   private static String require(final Map<String, String> arguments, final String key) {
@@ -72,16 +70,6 @@ public final class RetirePinManifestInstruction implements InstructionTemplate {
     return value;
   }
 
-  private static long requireLong(final Map<String, String> arguments, final String key) {
-    final String value = require(arguments, key);
-    try {
-      return Long.parseLong(value);
-    } catch (final NumberFormatException ex) {
-      throw new IllegalArgumentException(
-          "Instruction argument '" + key + "' must be a number: " + value, ex);
-    }
-  }
-
   @Override
   public boolean equals(final Object obj) {
     if (this == obj) {
@@ -90,33 +78,23 @@ public final class RetirePinManifestInstruction implements InstructionTemplate {
     if (!(obj instanceof RetirePinManifestInstruction other)) {
       return false;
     }
-    return retiredEpoch == other.retiredEpoch
-        && Objects.equals(digestHex, other.digestHex)
+    return Objects.equals(digestHex, other.digestHex)
         && Objects.equals(reason, other.reason);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(digestHex, retiredEpoch, reason);
+    return Objects.hash(digestHex, reason);
   }
 
   public static final class Builder {
     private String digestHex;
-    private Long retiredEpoch;
     private String reason;
 
     private Builder() {}
 
     public Builder setDigestHex(final String digestHex) {
       this.digestHex = Objects.requireNonNull(digestHex, "digestHex");
-      return this;
-    }
-
-    public Builder setRetiredEpoch(final long retiredEpoch) {
-      if (retiredEpoch < 0) {
-        throw new IllegalArgumentException("retiredEpoch must be non-negative");
-      }
-      this.retiredEpoch = retiredEpoch;
       return this;
     }
 
@@ -129,9 +107,6 @@ public final class RetirePinManifestInstruction implements InstructionTemplate {
       if (digestHex == null || digestHex.isBlank()) {
         throw new IllegalStateException("digestHex must be set");
       }
-      if (retiredEpoch == null) {
-        throw new IllegalStateException("retiredEpoch must be set");
-      }
       return new RetirePinManifestInstruction(this);
     }
 
@@ -139,7 +114,6 @@ public final class RetirePinManifestInstruction implements InstructionTemplate {
       final Map<String, String> args = new LinkedHashMap<>();
       args.put("action", ACTION);
       args.put("digest_hex", digestHex);
-      args.put("retired_epoch", Long.toString(retiredEpoch));
       if (reason != null && !reason.isBlank()) {
         args.put("reason", reason);
       }

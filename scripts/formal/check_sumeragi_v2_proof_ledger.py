@@ -603,7 +603,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "commit_body_pipeline_candidate_terminal",
-                "6c3a0f89f597d11398309326f54fc7eb986b31f98d7d8f809f3c5605b94e5538",
+                "0499de4c948e93a0d1b61a4ffefacc1a1ff0df2d8b9de34a18f4e5a6d6da7b2e",
                 (("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),),
             ),
             (
@@ -10855,10 +10855,10 @@ def _async_candidate_producer_continuation_contract_errors(
         ),
         "AsyncCandidateProducerContinuationFrozenLeaderWireCandidates": (
             "{AsyncLeaderWireRuntimeCandidate(record.item): record \\in "
-            "asyncLeaderWireLifecycles, /\\ record.recipient = node "
-            "/\\ record.schedulerOrdinal < targetOrdinal /\\ "
-            "AsyncLeaderWireLifecycleActive(record) /\\ "
-            "record.physicalAdmissionOrdinal < physicalCut}"
+            "{owned \\in asyncLeaderWireLifecycles: /\\ owned.recipient = node "
+            "/\\ owned.schedulerOrdinal < targetOrdinal /\\ "
+            "AsyncLeaderWireLifecycleActive(owned) /\\ "
+            "owned.physicalAdmissionOrdinal < physicalCut}}"
         ),
         "AsyncCandidateProducerContinuationFrozenCandidateOwners": (
             "AsyncCandidateProducerContinuationFrozenCausalCandidates( "
@@ -10873,16 +10873,16 @@ def _async_candidate_producer_continuation_contract_errors(
             "targetOrdinal))"
         ),
         "AsyncCandidateProducerContinuationFrozenCandidateTokens": (
-            '{<<"Candidate", candidate, token>>: candidate \\in '
-            "AsyncCandidateProducerContinuationFrozenCandidateOwners( node, "
-            "targetOrdinal), token \\in "
-            "1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}"
+            'UNION {{<<"Candidate", candidate, token>>: token \\in '
+            "1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}: "
+            "candidate \\in AsyncCandidateProducerContinuationFrozenCandidateOwners( "
+            "node, targetOrdinal)}"
         ),
         "AsyncCandidateProducerContinuationFrozenStatusTokens": (
-            '{<<"Continuation", record.identity, token>>: record \\in '
-            "AsyncCandidateProducerContinuationFrozenRecords( node, "
-            "targetOrdinal), token \\in "
-            "1..AsyncCandidateProducerContinuationStatusRank(record.status)}"
+            'UNION {{<<"Continuation", record.identity, token>>: token \\in '
+            "1..AsyncCandidateProducerContinuationStatusRank(record.status)}: "
+            "record \\in AsyncCandidateProducerContinuationFrozenRecords( node, "
+            "targetOrdinal)}"
         ),
         "AsyncCandidateProducerContinuationFrozenPrefixDescentProperty": (
             "specification => \\A node \\in AsyncVotersAt(initialContext), "
@@ -18891,7 +18891,7 @@ def _candidate_producer_lifecycle_coverage_contract_errors(
             ),
         ): (
             "AsyncCandidateProducerContinuationResetPreservesExactReservation",
-            "AsyncCandidateProducerContinuationStatusIsMonotone",
+            "AsyncCandidateProducerContinuationStatusTransitionIsMonotone",
             "AsyncCandidateProducerContinuationLifecycleCoverageInvariant",
             "AsyncCandidateProducerContinuationLifecycleCoverageInvariantIn",
             "AsyncCandidateProducerContinuationLifecycleCoveredIn",
@@ -19157,11 +19157,11 @@ def _nested_filtered_projection_contract_errors(
                       scheduledCandidate.node \in Responsive}}
             """,
             "ExactDecisionTargetNeutralLiveServeIdentitySet": r"""
-              {ExactDecisionTargetNeutralServeOwnerIdentity(node, job):
-                 node \in Responsive,
-                 job \in
-                   {serveJob \in SequenceSet(asyncIoQueues[node]):
-                      serveJob.class = "Serve"}}
+              UNION {{ExactDecisionTargetNeutralServeOwnerIdentity(node, job):
+                   job \in
+                     {serveJob \in SequenceSet(asyncIoQueues[node]):
+                        serveJob.class = "Serve"}}:
+                node \in Responsive}
             """,
             "ExactDecisionTargetNeutralServeEpisodeUniverse": r"""
               ExactDecisionTargetNeutralRetainedServeIdentitySet
@@ -19219,45 +19219,45 @@ def _nested_filtered_projection_contract_errors(
                                target, leaderContext, leader, leaderView)}}
             """,
             "AdequateLeaderFixedProducerSubjectReplacementOwners": r"""
-              {AdequateLeaderFixedSubjectReplacementOwnerIdentity(
-                 target, leaderContext, leader, leaderView,
-                 record.node, record.causalOrigin, record.ordinal,
-                 lifecycle.physicalAdmissionOrdinal):
-                 record
-                   \in {producerRecord \in AsyncCandidateProducerContinuations:
-                          producerRecord.status \in {"Reserved", "Materialized"}},
-                 lifecycle
-                   \in {wireLifecycle \in asyncLeaderWireLifecycles:
-                          /\ wireLifecycle.recipient = record.node
-                          /\ wireLifecycle.causalOrigin = record.causalOrigin
-                          /\ wireLifecycle.schedulerOrdinal = record.ordinal
-                          /\ AdequateLeaderFixedSubjectReplacementOrigin(
-                               record.causalOrigin,
-                               target, leaderContext, leader, leaderView)}}
+              UNION {{AdequateLeaderFixedSubjectReplacementOwnerIdentity(
+                   target, leaderContext, leader, leaderView,
+                   record.node, record.causalOrigin, record.ordinal,
+                   lifecycle.physicalAdmissionOrdinal):
+                   lifecycle
+                     \in {wireLifecycle \in asyncLeaderWireLifecycles:
+                            /\ wireLifecycle.recipient = record.node
+                            /\ wireLifecycle.causalOrigin = record.causalOrigin
+                            /\ wireLifecycle.schedulerOrdinal = record.ordinal
+                            /\ AdequateLeaderFixedSubjectReplacementOrigin(
+                                 record.causalOrigin,
+                                 target, leaderContext, leader, leaderView)}}:
+                record
+                  \in {producerRecord \in AsyncCandidateProducerContinuations:
+                         producerRecord.status \in {"Reserved", "Materialized"}}}
             """,
             "AdequateLeaderFixedDiscoveredPipelineOriginPairs": r"""
-              {<<node, origin>>:
-                 node \in AdequateLeaderFrozenResponsiveRoster(leaderContext),
-                 origin
-                   \in
-                     {pipelineOrigin \in
-                        AsyncCandidateLifecycleOrdinaryOriginsForNodeIn(
-                          asyncControlServiceState, node):
-                        AdequateLeaderFixedOriginIsExactPipelineEpisode(
-                          pipelineOrigin, leaderContext,
-                          leader, leaderView, subject)}}
+              UNION {{<<node, origin>>:
+                   origin
+                     \in
+                       {pipelineOrigin \in
+                          AsyncCandidateLifecycleOrdinaryOriginsForNodeIn(
+                            asyncControlServiceState, node):
+                          AdequateLeaderFixedOriginIsExactPipelineEpisode(
+                            pipelineOrigin, leaderContext,
+                            leader, leaderView, subject)}}:
+                node \in AdequateLeaderFrozenResponsiveRoster(leaderContext)}
             """,
             "AdequateLeaderFixedLivePipelineOriginPairs": r"""
-              {<<node, origin>>:
-                 node \in AdequateLeaderFrozenResponsiveRoster(leaderContext),
-                 origin
-                   \in
-                     {pipelineOrigin \in
-                        AsyncCandidateLifecycleActiveOriginsForNodeIn(
-                          asyncControlServiceState, node):
-                        AdequateLeaderFixedOriginIsExactPipelineEpisode(
-                          pipelineOrigin, leaderContext,
-                          leader, leaderView, subject)}}
+              UNION {{<<node, origin>>:
+                   origin
+                     \in
+                       {pipelineOrigin \in
+                          AsyncCandidateLifecycleActiveOriginsForNodeIn(
+                            asyncControlServiceState, node):
+                          AdequateLeaderFixedOriginIsExactPipelineEpisode(
+                            pipelineOrigin, leaderContext,
+                            leader, leaderView, subject)}}:
+                node \in AdequateLeaderFrozenResponsiveRoster(leaderContext)}
             """,
         },
         "SumeragiV2AdequateLeaderCorridorEntryContinuationProofs.tla": {
@@ -19275,17 +19275,14 @@ def _nested_filtered_projection_contract_errors(
                           TimeoutTcReducerCandidateOwner(
                             stageOwner[2], target, tc, tc.view)
                    [] stageOwner[1] = 4 ->
-                          TimeoutTcIngressOwner(
-                            stageOwner[2], target, tc, tc.view)
+                          TimeoutTcIngressOwner(stageOwner[2], target, tc, tc.view)
                    [] stageOwner[1] = 5 ->
-                          TimeoutTcPacketOwner(
-                            stageOwner[2], target, tc, tc.view)
+                          TimeoutTcPacketOwner(stageOwner[2], target, tc, tc.view)
                    [] stageOwner[1] = 6 ->
                           TimeoutTcRetainedControlOwner(
                             stageOwner[2], target, tc, tc.view)
                    [] stageOwner[1] = 7 ->
-                          TimeoutTcInstallWalOwner(
-                            stageOwner[2], tc, tc.view)}
+                          TimeoutTcInstallWalOwner(stageOwner[2], tc, tc.view)}
             """,
         },
     }
@@ -19360,7 +19357,7 @@ def _lexicographic_rank_shape_contract_errors(formal_dir: Path) -> list[str]:
                 "leaderContext, leader, leaderView, subject), "
                 "<<AdequateLeaderFixedPreCandidateReservedLiveSlotDebt( "
                 "token, leaderContext, leader, leaderView, subject), "
-                "<<entryDebt, AdequateLeaderFixedEntryServiceSlack( "
+                "<<entryDebt, AdequateLeaderFixedEntryServiceSlack("
                 "owner, packet, leader)"
                 + ">>" * 3
             ),
@@ -19593,13 +19590,10 @@ def _non_vacuous_async_quantifier_contract_errors(
         exact_fairness_statements = (
             (
                 "ExactDecisionRequestClockPrefixFairOwnerUsesExistingFairness",
-                "\\A initialContext, snapshot: "
-                "(/\\ snapshot.node \\in AsyncVotersAt(initialContext) "
-                "/\\ ExactDecisionRequestClockPrefixFairOwner(snapshot) "
-                "\\in AsyncCausalEpisodeFairOwnerKinds) "
-                "=> (AsyncSpecAt(initialContext) "
-                "=> WF_AsyncAllVars( "
-                "ExactDecisionRequestClockPrefixFairAction(snapshot)))",
+                "\\A initialContext: \\A node \\in AsyncVotersAt(initialContext): "
+                "\\A fairOwner \\in AsyncCausalEpisodeFairOwnerKinds: "
+                "AsyncSpecAt(initialContext) => WF_AsyncAllVars( "
+                "AsyncCausalEpisodeFairAction(node, fairOwner))",
             ),
             (
                 "ExactDecisionRequestLifecycleConcreteOwnerUsesAsyncFairness",
@@ -19631,16 +19625,14 @@ def _non_vacuous_async_quantifier_contract_errors(
             )
             if extracted is None:
                 errors.append(
-                    f"{exact_decision_path}: missing exact parenthesized "
-                    f"fairness implication theorem {symbol}"
+                    f"{exact_decision_path}: missing exact reviewed fairness implication theorem {symbol}"
                 )
                 continue
             body, line = extracted
             statement = _tla_statement_without_proof(body)
             if statement != exact_statement:
                 errors.append(
-                    f"{exact_decision_path}:{line}: {symbol} must retain its "
-                    "exact parenthesized antecedent/consequent fairness "
+                    f"{exact_decision_path}:{line}: {symbol} must retain the exact reviewed fairness "
                     f"implication; found {statement!r}"
                 )
 
@@ -21800,19 +21792,21 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"currentGeneration + 1 ELSE currentGeneration"
               ),
               "FrozenInstallProposalSuccessor": (
-                r'AsyncCandidateWithIdentityAndOrigin( "Normal", "AssembleBody", '
-                r"command.node, installedContext.height, command.view + 1, "
+                r'AsyncCandidateCausalSuccessorWithIdentityAndOrigin( '
+                r'"Normal", "AssembleBody", command, command.node, '
+                r"installedContext.height, command.view + 1, "
                 r"subject, NoAsyncItem, installedContext, command.view + 1, "
                 r"NextCandidateGeneration(priorGeneration), command.evidence, "
-                r"subject, subject, subject, command.causalOrigin)"
+                r"subject, subject, subject)"
               ),
               "FrozenNormalBeginPrepareCandidate": (
-                r'AsyncCandidateWithIdentityAndOrigin( "Normal", "BeginPrepare", '
-                r"parent.node, blockHeight, parent.view, parent.subject, "
+                r'AsyncCandidateCausalSuccessorWithIdentityAndOrigin( '
+                r'"Normal", "BeginPrepare", parent, parent.node, '
+                r"blockHeight, parent.view, parent.subject, "
                 r"NoAsyncItem, parent.consumerContext, parent.consumerView, "
                 r"parent.consumerGeneration, parent.evidence, "
                 r"parent.bodyIdentity, parent.manifestIdentity, "
-                r"parent.commitmentIdentity, parent.causalOrigin)"
+                r"parent.commitmentIdentity)"
               ),
               "NormalProposalPrepareNoItemCandidate": (
                 r'/\ candidate.item = NoAsyncItem '
@@ -23795,11 +23789,16 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             _require_rust_token_sequence(
                 reducer_path,
                 reducer_items["on_retransmit_elapsed"],
-                "if let Some(locked) = self.durable.locked().cloned() "
-                "&& self.body_state(locked.round(), locked.subject()) "
-                "== BodyState::Missing { "
-                "effects.push(self.ensure_body_fetch(&locked)); "
-                "return StepOutcome::applied(effects); }",
+                "if let Some(locked) = self.durable.locked().cloned() { "
+                "let effect = match self.body_state(locked.round(), locked.subject()) { "
+                "BodyState::Missing => Some(self.ensure_body_fetch(&locked)), "
+                "BodyState::Available => Some(Effect::StoreBody { tag: self.current_tag(), "
+                "round: locked.round(), subject: locked.subject(), }), "
+                "BodyState::Durable => Some(Effect::ValidateBody { tag: self.current_tag(), "
+                "round: locked.round(), subject: locked.subject(), }), "
+                "BodyState::Validated | BodyState::Invalid => None, }; "
+                "if let Some(effect) = effect { effects.push(effect); "
+                "return Ok(StepOutcome::applied(effects)); } }",
                 "retransmit must derive FetchBody from the exact durable lock",
                 errors,
             )
@@ -24658,12 +24657,13 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "PersistDecisionRecoverySuccessor": (
                 "LET request == PersistDecisionRequest(command) "
-                "qc == request.qc IN AsyncCandidateAtConsumerWithOrigin( "
-                '"Completion", PersistDecisionRecoveryKind(command), '
-                "request.node, qc.context.height, "
-                "qc.view, qc.subject, NoAsyncItem, command.consumerView, "
-                "command.consumerGeneration, qc, qc.subject, qc.subject, "
-                "qc.subject, command.causalOrigin)"
+                "qc == request.qc kind == PersistDecisionRecoveryKind(command) "
+                "IN AsyncCandidateCausalSuccessorWithIdentityAndOrigin( "
+                '"Completion", kind, command, request.node, '
+                "qc.context.height, qc.view, qc.subject, NoAsyncItem, context, "
+                "command.consumerView, command.consumerGeneration, qc, "
+                "qc.subject, qc.subject, "
+                "qc.subject)"
             ),
         }
         for symbol, exact_body in exact_persist_decision_operators.items():
@@ -24730,7 +24730,8 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "PersistDecisionBody",
         "PersistDecisionValidationHeld",
         "PersistDecisionRequest",
-        "AsyncCandidateAtConsumerWithOrigin",
+        "AsyncCandidateCausalSuccessorWithIdentityAndOrigin",
+        "AsyncCandidateSuccessorProposalRound",
         "AsyncCandidateWithIdentityAndOrigin",
         "CandidateConsumerCurrent",
         "PersistDecisionRequests",
@@ -49374,7 +49375,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "replayed_proposal_sign": (
         "760229a1544f797631e86183706e70f32ac34534c03fd30d2db445f4e37e7db5"
     ),
-    "run_inner": "712b12510c4adeee710d44dec94f811344b4e86ac0f3a4fb0184285f68c76032",
+    "run_inner": "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe",
     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
         "ffb3b7abab788acdf238fdec096ed6fb55f9843f4df66b42965d9ea3a1bcd2ab"
     ),
@@ -51905,19 +51906,19 @@ asyncServeProducerEpisodeDue' =
         "AsyncCandidateLifecycleDurableOwnerTokensForNodeAfter": (
             "{AsyncCandidateLifecycleDurableOwnerToken( \"RestartReplay\", "
             "node, index, FreshRestartCandidateSequence( RestartReplay(node))'"
-            "[index].causalOrigin): /\\ index \\in "
-            "1..Len(FreshRestartCandidateSequence(RestartReplay(node))') "
-            "/\\ FreshRestartCandidateSequence( RestartReplay(node))'"
-            "[index].causalOrigin \\notin "
-            "AsyncScheduledCandidateOriginsForNodeAfter(node)} "
+            "[index].causalOrigin): index \\in {candidateIndex \\in "
+            "1..Len(FreshRestartCandidateSequence(RestartReplay(node))'): "
+            "FreshRestartCandidateSequence( RestartReplay(node))'"
+            "[candidateIndex].causalOrigin \\notin "
+            "AsyncScheduledCandidateOriginsForNodeAfter(node)}} "
             "\\cup {AsyncCandidateLifecycleDurableOwnerToken( "
             "\"HistoricalRetransmit\", node, index, "
             "HistoricalLockedRetransmitSuccessors(node)'[index].causalOrigin): "
-            "/\\ index \\in "
-            "1..Len(HistoricalLockedRetransmitSuccessors(node)') "
-            "/\\ HistoricalLockedRetransmitSuccessors(node)'"
-            "[index].causalOrigin \\notin "
-            "AsyncScheduledCandidateOriginsForNodeAfter(node)}"
+            "index \\in {candidateIndex \\in "
+            "1..Len(HistoricalLockedRetransmitSuccessors(node)'): "
+            "HistoricalLockedRetransmitSuccessors(node)'[ "
+            "candidateIndex].causalOrigin \\notin "
+            "AsyncScheduledCandidateOriginsForNodeAfter(node)}}"
         ),
         "AsyncCandidateLifecycleReviewedSemanticOwnerTokensIn": (
             "AsyncCandidateLifecyclePhysicalOwnerTokensForNodeAfter(node) "
@@ -51931,9 +51932,9 @@ asyncServeProducerEpisodeDue' =
             "AsyncCandidateLifecycleDurableOwnerTokensForNodeAfter(node)"
         ),
         "AsyncCandidateLifecycleActiveOriginsForNodeIn": (
-            "{record.origin: record \\in "
-            "AsyncCandidateLifecycleRecordsForNodeIn(state, node), "
-            "record.slot \\in AsyncCandidateLifecycleActiveSlots}"
+            "{record.origin: record \\in {candidateRecord \\in "
+            "AsyncCandidateLifecycleRecordsForNodeIn(state, node): "
+            "candidateRecord.slot \\in AsyncCandidateLifecycleActiveSlots}}"
         ),
         "AsyncCandidateLifecycleLiveActiveOriginCarrierIn": (
             "AsyncCandidateLifecycleActiveOriginsForNodeIn(state, node) "
@@ -52572,6 +52573,7 @@ asyncServeProducerEpisodeDue' =
         ),
         "AsyncCandidateServiceMarker": (
             "[identity |-> AsyncCandidateServiceIdentity(candidate), "
+            "causalOrigin |-> candidate.causalOrigin, "
             "node |-> candidate.node, context |-> candidate.consumerContext, "
             "height |-> candidate.height, view |-> candidate.view, "
             "episodeView |-> episodeView, generation |-> episodeGeneration, "
@@ -52586,6 +52588,7 @@ asyncServeProducerEpisodeDue' =
         ),
         "AsyncCandidateServiceTombstone": (
             "[identity |-> AsyncCandidateServiceIdentity(candidate), "
+            "causalOrigin |-> candidate.causalOrigin, "
             "node |-> candidate.node, context |-> candidate.consumerContext, "
             "height |-> candidate.height, view |-> candidate.view, "
             "episodeView |-> episodeView, subject |-> candidate.subject, "
@@ -52652,7 +52655,7 @@ asyncServeProducerEpisodeDue' =
             "\\E lifecycle \\in state.candidateLifecycleAdmissions: "
             "/\\ lifecycle.node = terminal.node "
             "/\\ lifecycle.origin = "
-            "terminal.identity.payload.causalOrigin "
+            "terminal.causalOrigin "
             "/\\ lifecycle.slot \\in AsyncCandidateLifecycleServicedSlots "
             "/\\ \\A left, right \\in state.candidateServiceMarkers "
             "\\cup state.candidateTerminalTombstones: "
@@ -53842,8 +53845,8 @@ asyncServeProducerEpisodeDue' =
                 "Cardinality(IngressContinuationProtectedSourcesFor(lanes, recipient))"
             ),
             "IngressProtectedSlotCountAfterAdmission": (
-                "IngressProtectedSlotCountFor(IngressLanesAfterAdmission(item), "
-                "item.envelope.recipient)"
+                "IngressProtectedSlotCountAfterAdmissionVia("
+                "item, item.source)"
             ),
             "AsyncIngressCapacityTypeInvariant": (
                 "\\A recipient \\in ValidatorIds: "
@@ -53855,7 +53858,7 @@ asyncServeProducerEpisodeDue' =
                 "<= AsyncIngressCapacity"
             ),
             "IngressUsableCapacityAfterAdmission": (
-                "AsyncIngressCapacity - IngressProtectedSlotCountAfterAdmission(item)"
+                "IngressUsableCapacityAfterAdmissionVia(item, item.source)"
             ),
             "AsyncValidTimeoutVoteWireByteBound": "4 * 1024",
             "AsyncTimeoutVoteByteReserve": "64 * 1024",
@@ -54527,8 +54530,7 @@ asyncServeProducerEpisodeDue' =
                 "/\\ \\E lifecycle \\in "
                 "state.candidateLifecycleAdmissions: "
                 "/\\ lifecycle.node = serviced.node "
-                "/\\ lifecycle.origin = "
-                "serviced.identity.payload.causalOrigin "
+                "/\\ lifecycle.origin = serviced.causalOrigin "
                 "/\\ IF lifecycle.origin.phase = \"BeginTimeout\" "
                 "THEN lifecycle.slot = AsyncCandidateLifecycleClockSlot "
                 "ELSE IF lifecycle.retired THEN lifecycle.slot \\in "
@@ -54541,8 +54543,7 @@ asyncServeProducerEpisodeDue' =
                 "/\\ ((left.node = right.node /\\ left.ordinal = "
                 "right.ordinal) => left = right) "
                 "/\\ ((left.node = right.node "
-                "/\\ left.identity.payload.causalOrigin = "
-                "right.identity.payload.causalOrigin "
+                "/\\ left.causalOrigin = right.causalOrigin "
                 "/\\ AsyncCandidateServiceStageForKind(left.phase) = "
                 "AsyncCandidateServiceStageForKind(right.phase)) "
                 "=> left = right)"
@@ -54605,7 +54606,7 @@ asyncServeProducerEpisodeDue' =
                 "candidate \\in QueuedCandidates \\cup DeferredCandidates "
                 "\\cup CausalCandidates \\cup TrackedWorkCandidates: "
                 "/\\ serviced.node = candidate.node "
-                "/\\ serviced.identity.payload.causalOrigin = "
+                "/\\ serviced.causalOrigin = "
                 "candidate.causalOrigin /\\ serviced.phase = "
                 "candidate.kind => serviced.identity = "
                 "AsyncCandidateServiceIdentity(candidate)"
@@ -54908,32 +54909,32 @@ asyncServeProducerEpisodeDue' =
                   candidateRecord.slot \in AsyncCandidateLifecycleActiveSlots}}
         """,
         "AsyncLeaderWireIngressCarrierCoordinates": r"""
-          {<<source, index>>:
-             source \in AsyncIngressSources,
+          UNION {{<<source, index>>:
              index \in
                {laneIndex \in 1..Len(IngressLane(record.recipient, source)):
                   AsyncLeaderWireAdmissionMatchesRecord(
-                    IngressLane(record.recipient, source)[laneIndex], record)}}
+                    IngressLane(record.recipient, source)[laneIndex], record)}}:
+            source \in AsyncIngressSources}
         """,
         "AsyncOrdinaryIngressCarrierCoordinates": r"""
-          {<<source, index>>:
-             source \in AsyncIngressSources,
+          UNION {{<<source, index>>:
              index \in
                {laneIndex \in 1..Len(IngressLane(carrier.node, source)):
                   ExactAsyncCandidateIdentity(
                     DeliveryCandidate(
                       IngressLane(carrier.node, source)[laneIndex]))
-                    = carrier.carrierIdentity}}
+                    = carrier.carrierIdentity}}:
+            source \in AsyncIngressSources}
         """,
         "AsyncLeaderWireIngressCarrierCoordinatesAfter": r"""
-          {<<source, index>>:
-             source \in AsyncIngressSources,
+          UNION {{<<source, index>>:
              index \in
                {laneIndex \in
                   1..Len(asyncIngressLanes'[record.recipient][source]):
                   AsyncLeaderWireAdmissionMatchesRecord(
                     asyncIngressLanes'[record.recipient][source][laneIndex],
-                    record)}}
+                    record)}}:
+            source \in AsyncIngressSources}
         """,
     }
     for symbol, expected_body in async_filtered_projections.items():
@@ -60014,7 +60015,7 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
     durable_kernel = _require_rust_item(
         binding_path,
         binding_source,
-        "queue_plan_synced_request_id_from_chain_digest",
+        "queue_plan_synced_request_id_from_network_digest",
         errors,
     )
     _require_rust_item_context(
@@ -60029,25 +60030,25 @@ def _queue_plan_semantic_request_production_source_fidelity_errors(
         binding_path,
         durable_kernel,
         """
-pub fn queue_plan_synced_request_id_from_chain_digest(
-    chain_id_digest: Hash,
+pub fn queue_plan_synced_request_id_from_network_digest(
+    network_id_digest: Hash,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Hash {
     Hash::new(
         norito::encode_canonical(&(
             QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5,
-            chain_id_digest,
+            network_id_digest,
             entrypoint_hash,
         ))
         .expect("deterministic QueuePlanSynced request identity must encode"),
     )
 }
 """,
-        "the QueuePlan semantic-request kernel must retain its exact nonconstant chain-digest and entrypoint projection",
+        "the QueuePlan semantic-request kernel must retain its exact nonconstant network-digest and entrypoint projection",
         errors,
     )
 
-    chain_wrapper = _require_rust_item(
+    network_wrapper = _require_rust_item(
         binding_path,
         binding_source,
         "queue_plan_synced_request_id",
@@ -60055,27 +60056,27 @@ pub fn queue_plan_synced_request_id_from_chain_digest(
     )
     _require_rust_item_context(
         binding_path,
-        chain_wrapper,
+        network_wrapper,
         (),
-        "the raw-chain QueuePlan semantic-request wrapper",
+        "the exact-network QueuePlan semantic-request wrapper",
         errors,
         expected_attributes=("#[must_use]",),
     )
     _require_exact_rust_tokens(
         binding_path,
-        chain_wrapper,
+        network_wrapper,
         """
 pub fn queue_plan_synced_request_id(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Hash {
-    queue_plan_synced_request_id_from_chain_digest(
-        queue_plan_admission_chain_id_digest(chain_id),
+    queue_plan_synced_request_id_from_network_digest(
+        queue_plan_admission_network_id_digest(network_id),
         entrypoint_hash,
     )
 }
 """,
-        "the raw-chain QueuePlan request wrapper must delegate the exact durable projection once",
+        "the exact-network QueuePlan request wrapper must delegate the exact durable projection once",
         errors,
     )
 
@@ -60099,7 +60100,7 @@ pub fn queue_plan_synced_request_id(
         binding_items["new"],
         """
 pub fn new(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     transaction: &TransactionEntrypoint,
     routing_plan: &crate::queue::RoutingPlan,
     admission_context: crate::queue::QueuePlanAdmissionContextV2,
@@ -60113,12 +60114,12 @@ pub fn new(
         binding_path,
         binding_items["new"],
         """
-let chain_id_digest = queue_plan_admission_chain_id_digest(chain_id);
+let network_id_digest = queue_plan_admission_network_id_digest(network_id);
 let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
     version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
-    chain_id_digest,
-    request_id: queue_plan_synced_request_id_from_chain_digest(
-        chain_id_digest,
+    network_id_digest,
+    request_id: queue_plan_synced_request_id_from_network_digest(
+        network_id_digest,
         transaction.hash(),
     ),
 };
@@ -60140,8 +60141,8 @@ binding.validate_structure()?;
         binding_items["validate_structure"],
         """
 if self.request_id
-    != queue_plan_synced_request_id_from_chain_digest(
-        self.chain_id_digest,
+    != queue_plan_synced_request_id_from_network_digest(
+        self.network_id_digest,
         self.entrypoint_hash.clone(),
     )
 {
@@ -60159,7 +60160,7 @@ if self.request_id
         binding_items["validate_for_request"],
         """
 if self.request_id
-    != queue_plan_synced_request_id(chain_id, transaction.hash())
+    != queue_plan_synced_request_id(network_id, transaction.hash())
 {
     return Err(
         "QueuePlan admission binding has a noncanonical semantic request identity"
@@ -60175,7 +60176,7 @@ self.validate_for_transaction_and_plan(transaction, routing_plan)
     certificate_validator = _require_rust_item(
         binding_path,
         binding_source,
-        "validate_queue_plan_admission_certificate_for_chain_digest_v2",
+        "validate_queue_plan_admission_certificate_for_network_digest_v2",
         errors,
     )
     _require_rust_token_sequence(
@@ -60200,7 +60201,7 @@ certificate.binding.validate_structure()?;
         """
 if let Some(binding) = expected_admission_binding
     && let Err(reason) =
-        binding.validate_for_request(state.chain_id_ref(), tx.entrypoint(), &routing_plan)
+        binding.validate_for_request(state.network_id_ref(), tx.entrypoint(), &routing_plan)
 {
     return Err(Failure {
         tx: tx.into(),
@@ -60248,7 +60249,10 @@ fn queue_plan_synced_proxy_request_id_for_entrypoint(
     app: &AppState,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Hash {
-    iroha_core::torii_proxy::queue_plan_synced_request_id(app.chain_id.as_ref(), entrypoint_hash)
+    iroha_core::torii_proxy::queue_plan_synced_request_id(
+        app.state.network_id_ref(),
+        entrypoint_hash,
+    )
 }
 """,
         "Torii must delegate QueuePlan semantic identity to the shared core kernel without a local projection",
@@ -60280,7 +60284,7 @@ let request_id =
         torii_execute,
         """
 match QueuePlanAdmissionBindingV2::new(
-    app.chain_id.as_ref(),
+    app.state.network_id_ref(),
     &transaction,
     &routing_plan,
     context,
@@ -60295,7 +60299,7 @@ match QueuePlanAdmissionBindingV2::new(
         torii_execute,
         """
 if let Err(error) =
-    binding.validate_for_request(app.chain_id.as_ref(), &transaction, &routing_plan)
+    binding.validate_for_request(app.state.network_id_ref(), &transaction, &routing_plan)
 """,
         "Torii QueuePlan execution must validate the shared semantic identity before dispatch",
         errors,
@@ -68288,7 +68292,7 @@ self.finality_artifact_hash == HashOf::new(artifact)
     && self.predecessor_context_hash == HashOf::new(&artifact.height_context)
     && self.predecessor_context_id == artifact.context_id()
     && self.predecessor_height == artifact.height
-    && self.predecessor_chain_id == artifact.height_context.chain_id
+    && self.predecessor_network_id == artifact.height_context.network_id
     && self.finality_commit_qc == artifact.commit_qc
 """,
         "durable exact-output handoff receipt must bind the full predecessor context and exact finality artifact",
@@ -68301,7 +68305,7 @@ self.finality_artifact_hash == HashOf::new(artifact)
         ),
         """
 self.predecessor_height.checked_add(1) == Some(successor.height)
-    && self.predecessor_chain_id == successor.chain_id
+    && self.predecessor_network_id == successor.network_id
     && successor.parent_commit_qc.as_ref() == Some(&self.finality_commit_qc)
     && self.finality_commit_qc.round.context_id == self.predecessor_context_id
     && self.finality_commit_qc.round.height == self.predecessor_height
@@ -69856,7 +69860,7 @@ let source = kura
     .ok_or_else(|| {
         "durable CommitQC response lost its Kura finality source".to_owned()
     })?;
-if &source.height_context.chain_id != source_chain_id
+if &source.height_context.network_id != source_network_id
     || source.context_id() != *source_context_id
     || response.certificate != source.commit_qc
     || &response.responder != claimed_responder
@@ -70030,7 +70034,7 @@ let handoff = DurableExactOutputHandoffReceipt {
     predecessor_context_hash: HashOf::new(&self.context),
     predecessor_context_id: self.context.id(),
     predecessor_height: self.context.height,
-    predecessor_chain_id: self.context.chain_id.clone(),
+    predecessor_network_id: self.context.network_id,
     finality_artifact_hash: HashOf::new(artifact),
     finality_commit_qc: artifact.commit_qc.clone(),
 };
@@ -70084,7 +70088,7 @@ rollover_claim.validate_fanout(&messages, &peers)?;
 durable_history_source_covers(
     &messages,
     &rollover_claim,
-    &self.context.chain_id,
+    &self.context.network_id,
     self.context.height,
     self.kura.as_ref(),
 )?;
@@ -70233,7 +70237,7 @@ let autonomous_payload = self
         self.kura.read_autonomous_lane_block_artifact(
             descriptor.lane_id,
             descriptor.lane_block_height,
-            chain_id_hash,
+            network_id,
             self.context.epoch,
         )
     })

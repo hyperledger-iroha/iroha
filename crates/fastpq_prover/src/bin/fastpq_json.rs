@@ -127,9 +127,15 @@ struct ProofRequest {
     batch_base64: String,
     #[norito(default)]
     effect_binding: Option<EffectBindingRequest>,
-    /// Norito-encoded lane envelope carrying a real statement-bound finality QC.
+    /// Norito-encoded lane envelope carrying a compact global-finality reference.
     #[norito(default)]
     finalized_relay_envelope_hex: String,
+    /// CommitQC parent state root accompanying an offline relay proof request.
+    #[norito(default)]
+    relay_parent_state_root: String,
+    /// CommitQC post state root accompanying an offline relay proof request.
+    #[norito(default)]
+    relay_post_state_root: String,
 }
 
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize)]
@@ -634,9 +640,8 @@ fn build_relay_artifacts(
         .map_err(|err| format!("failed to decode finalized lane relay envelope: {err}"))?;
     base.verify()
         .map_err(|err| format!("finalized lane relay envelope is invalid: {err}"))?;
-    if base.qc.is_none() {
-        return Err("finalized lane relay envelope is missing its QC".to_string());
-    }
+    base.validate_finality_authority_ref()
+        .map_err(|err| format!("finalized lane relay authority is invalid: {err}"))?;
     if base.lane_id.as_u32() != request.source_lane_id
         || base.dataspace_id.as_u64() != request.source_dsid
         || base.block_height != request.relay_block_height
@@ -675,10 +680,9 @@ fn build_lane_relay_proof_blob(
     envelope: &LaneRelayEnvelope,
     manifest_root: [u8; 32],
 ) -> Result<ProofBlob, String> {
-    let qc = envelope
-        .qc
-        .as_ref()
-        .ok_or_else(|| "lane relay proof requires a finalized QC".to_string())?;
+    let parent_state_root =
+        hex_digest32(&request.relay_parent_state_root, "relay_parent_state_root")?;
+    let post_state_root = hex_digest32(&request.relay_post_state_root, "relay_post_state_root")?;
     let lane_finality_statement_hash = envelope
         .lane_finality_statement_hash()
         .map_err(|err| format!("lane relay finality statement failed: {err}"))?;
@@ -731,8 +735,8 @@ fn build_lane_relay_proof_blob(
         PublicInputs {
             dsid: dsid_bytes(request.source_dsid),
             slot: envelope.block_header.height().get(),
-            old_root: qc.parent_state_root.into(),
-            new_root: qc.post_state_root.into(),
+            old_root: parent_state_root,
+            new_root: post_state_root,
             perm_root: digest32_with_domain(
                 b"fastpq-json:lane-relay-perm-root:v1",
                 &[&manifest_root],
@@ -983,6 +987,8 @@ mod tests {
             batch_base64: batch_base64.into(),
             effect_binding: None,
             finalized_relay_envelope_hex: String::new(),
+            relay_parent_state_root: String::new(),
+            relay_post_state_root: String::new(),
         }
     }
 

@@ -91,7 +91,8 @@ public final class SccpClientExactTests {
               .encodeTransaction(
                   TransactionPayload.builder()
                       .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
-                      .setChainId(TAIRA_CHAIN_ID)
+                      .setNetworkId(
+                          org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
                       .setAuthority(AUTHORITY)
                       .setCreationTimeMs(7)
                       .setInstructions(Collections.emptyList())
@@ -107,7 +108,8 @@ public final class SccpClientExactTests {
               .encodeTransaction(
                   TransactionPayload.builder()
                       .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 9L))
-                      .setChainId(TAIRA_CHAIN_ID)
+                      .setNetworkId(
+                          org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
                       .setAuthority(AUTHORITY)
                       .setCreationTimeMs(7)
                       .setInstructions(Collections.emptyList())
@@ -201,7 +203,8 @@ public final class SccpClientExactTests {
     final byte[] encoded =
         codec.encodeTransaction(
             TransactionPayload.builder()
-                .setChainId(TAIRA_CHAIN_ID)
+                .setNetworkId(
+                    org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
                 .setAuthority(AUTHORITY)
                 .setCreationTimeMs(7L)
                 .setInstructions(Collections.emptyList())
@@ -254,7 +257,8 @@ public final class SccpClientExactTests {
       final byte[] mutationBytes =
           codec.encodeTransaction(
               TransactionPayload.builder()
-                  .setChainId(TAIRA_CHAIN_ID)
+                  .setNetworkId(
+                      org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
                   .setAuthority(AUTHORITY)
                   .setCreationTimeMs(7L)
                   .setInstructions(Collections.emptyList())
@@ -378,7 +382,8 @@ public final class SccpClientExactTests {
           new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
               .encodeTransaction(
                   TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
-                      .setChainId(TAIRA_CHAIN_ID)
+                      .setNetworkId(
+                          org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
                       .setAuthority(AUTHORITY)
                       .setCreationTimeMs(7)
                       .setInstructions(Collections.emptyList())
@@ -465,7 +470,8 @@ public final class SccpClientExactTests {
                   new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
                       .encodeTransaction(
                           TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
-                              .setChainId(TAIRA_CHAIN_ID)
+                              .setNetworkId(
+                                  org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
                               .setAuthority(AUTHORITY)
                               .setCreationTimeMs(7)
                               .setInstructions(Collections.emptyList())
@@ -493,7 +499,8 @@ public final class SccpClientExactTests {
                   new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
                       .encodeTransaction(
                           TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
-                              .setChainId(TAIRA_CHAIN_ID)
+                              .setNetworkId(
+                                  org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
                               .setAuthority(OTHER_AUTHORITY)
                               .setCreationTimeMs(7)
                               .setInstructions(Collections.emptyList())
@@ -1340,7 +1347,8 @@ public final class SccpClientExactTests {
             .encodeTransaction(
                 TransactionPayload.builder()
                     .setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
-                    .setChainId(TAIRA_CHAIN_ID)
+                    .setNetworkId(
+                        org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
                     .setAuthority(AUTHORITY)
                     .setCreationTimeMs(10)
                     .setInstructions(Collections.emptyList())
@@ -1572,7 +1580,7 @@ public final class SccpClientExactTests {
     destination.put("deployment", deployment);
     final Map<String, Object> settlement = map();
     settlement.put("asset_definition_id", "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
-    settlement.put("custody_account_id", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
+    settlement.put("custody_owner", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
     settlement.put("payload_amount_scale", 9);
     final Map<String, Object> route = map();
     route.put("lane_id", lane());

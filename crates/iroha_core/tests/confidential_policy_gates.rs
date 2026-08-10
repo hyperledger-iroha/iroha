@@ -8,7 +8,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
+    state::{State, StateTransaction, World, WorldReadOnly},
     tx::ValidationFail,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -19,9 +19,8 @@ use iroha_data_model::{
         definition::{AssetConfidentialPolicy, ConfidentialPolicyMode},
     },
     isi::{
-        InstructionBox, Mint, Register, Transfer,
-        error::InstructionExecutionError,
-        zk::{RegisterZkAsset, ZkAssetMode},
+        InstructionBox, Mint, Register, Transfer, error::InstructionExecutionError,
+        zk::RegisterZkAsset,
     },
     prelude::*,
 };
@@ -69,6 +68,20 @@ fn init_state() -> (
     (state, header, owner, domain_id, asset_def_id)
 }
 
+fn set_confidential_policy_mode(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    asset_definition_id: &AssetDefinitionId,
+    mode: ConfidentialPolicyMode,
+) {
+    let asset_definition = state_transaction
+        .world
+        .asset_definition_mut(asset_definition_id)
+        .expect("asset definition exists");
+    let mut policy = *asset_definition.confidential_policy();
+    policy.mode = mode;
+    asset_definition.set_confidential_policy(policy);
+}
+
 #[test]
 fn transparent_mint_rejected_for_shielded_only_policy() {
     let (state, header, owner, domain_id, asset_def_id) = init_state();
@@ -96,14 +109,7 @@ fn transparent_mint_rejected_for_shielded_only_policy() {
 
     // Register the first-release hybrid ledger, then emulate a completed
     // governance transition to ShieldedOnly.
-    let reg = RegisterZkAsset::new(
-        asset_def_id.clone(),
-        ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-    );
+    let reg = RegisterZkAsset::new(asset_def_id.clone(), None, None);
     stx.world
         .executor()
         .clone()
@@ -169,14 +175,7 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
     }
 
     // Start in convertible mode so transparent mint succeeds.
-    let reg = RegisterZkAsset::new(
-        asset_def_id.clone(),
-        ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-    );
+    let reg = RegisterZkAsset::new(asset_def_id.clone(), None, None);
     stx.world
         .executor()
         .clone()
@@ -250,19 +249,13 @@ fn schedule_shielded_only_requires_window() {
             .execute_instruction(&mut stx, &owner, instr)
             .expect("setup instruction should succeed");
     }
-    let reg = RegisterZkAsset::new(
-        asset_def_id.clone(),
-        ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-    );
+    let reg = RegisterZkAsset::new(asset_def_id.clone(), None, None);
     stx.world
         .executor()
         .clone()
         .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
-        .expect("register convertible zk asset");
+        .expect("register confidential asset state");
+    set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block.commit().expect("commit setup block");
 
@@ -292,7 +285,7 @@ fn schedule_shielded_only_requires_window() {
 }
 
 #[test]
-fn shielded_transition_aborts_when_transparent_supply_non_zero() {
+fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non_zero() {
     let (state, header, owner, domain_id, asset_def_id) = init_state();
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -317,19 +310,13 @@ fn shielded_transition_aborts_when_transparent_supply_non_zero() {
             .expect("setup instruction should succeed");
     }
 
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-    );
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
     stx.world
         .executor()
         .clone()
         .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
-        .expect("register convertible asset");
+        .expect("register confidential asset state");
+    set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
 
     let asset_id = AssetId::new(asset_def_id.clone(), owner.clone());
     stx.world
@@ -363,6 +350,24 @@ fn shielded_transition_aborts_when_transparent_supply_non_zero() {
     schedule
         .execute(&owner, &mut stx2)
         .expect("schedule transition");
+    // Model a transition whose conversion window opened from TransparentOnly:
+    // the active mode is already Convertible, while the audit record retains
+    // the pre-window mode. Aborting finalization must never strand commitments
+    // by restoring that earlier transparent mode.
+    let mut policy = *stx2
+        .world
+        .asset_definition(&asset_def_id)
+        .expect("asset definition exists")
+        .confidential_policy();
+    let mut pending = policy
+        .pending_transition
+        .expect("scheduled transition is present");
+    pending.previous_mode = ConfidentialPolicyMode::TransparentOnly;
+    policy.pending_transition = Some(pending);
+    stx2.world
+        .asset_definition_mut(&asset_def_id)
+        .expect("asset definition exists")
+        .set_confidential_policy(policy);
     stx2.apply();
     block2.commit().expect("commit scheduling block");
 
@@ -426,19 +431,13 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
             .expect("setup instruction should succeed");
     }
 
-    let reg = RegisterZkAsset::new(
-        asset_def_id.clone(),
-        ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-    );
+    let reg = RegisterZkAsset::new(asset_def_id.clone(), None, None);
     stx.world
         .executor()
         .clone()
         .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
-        .expect("register convertible asset");
+        .expect("register confidential asset state");
+    set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block.commit().expect("commit setup block");
 

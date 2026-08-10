@@ -67,6 +67,7 @@ async fn webhooks_endpoints_exposed() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -84,6 +85,7 @@ async fn webhooks_endpoints_exposed() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -179,6 +181,7 @@ async fn webhooks_endpoints_disabled_by_default() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -196,6 +199,7 @@ async fn webhooks_endpoints_disabled_by_default() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,

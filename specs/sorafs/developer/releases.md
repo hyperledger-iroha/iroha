@@ -23,9 +23,10 @@ artefacts:
 - Verify that the remediation checklist in the memo is closed; unresolved items block the release.
 - Prepare to upload parity harness logs (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   alongside the aggregate release-manifest verification receipt.
-- Confirm the protected signing job has an external Ed25519/HSM adapter, the
-  governed raw public key and reviewed fingerprint, and the exact
-  `sorafs-validate` path plus reviewed SHA256.
+- Confirm the protected signing job uses
+  `signing_provider=authenticated_external_signer` with exact
+  `signing_backend=software`, the governed raw Ed25519 public key and reviewed
+  fingerprint, and the exact `sorafs-validate` path plus reviewed SHA256.
 
 Include these artefacts when notifying governance and publishing the release.
 
@@ -110,18 +111,20 @@ scripts/release_sorafs_cli.sh \
 Tips:
 
 - Keep the canonical release manifest and public verification artifacts in the
-  evidence packet. Private keys, HSM credentials, and signer sessions remain
+  evidence packet. Private keys, external-signer credentials, and signer sessions remain
   runtime-only.
 - Base CI automation on `.github/workflows/sorafs-cli-release.yml`; it runs the
   release gate and deterministic candidate packaging, then publishes the
   run-bound unsigned foundational manifest. Download and sign those exact bytes
-  outside GitHub with the governed Ed25519 HSM. Provision only the raw signature,
-  raw public key, reviewed signer fingerprint, pinned native verifier path, and
-  reviewed verifier SHA256 on the protected `sorafs-release-auth` runner; approve
-  the `sorafs-release-authentication` environment only after that handoff. The
-  workflow verifies and archives the public tuple and receipt before provenance
-  or the promoted artifact can run. No private key or HSM signing operation
-  enters GitHub Actions.
+  outside GitHub with the independently administered external software Ed25519
+  signer. Provision only the raw signature, raw public key, reviewed signer
+  fingerprint, pinned native verifier path, and reviewed verifier SHA256 on the
+  protected `sorafs-release-auth` runner; approve the
+  `sorafs-release-authentication` environment only after that handoff. The
+  workflow verifies and archives the public tuple and
+  `signer_qualification=software-key-qualified` receipt before provenance or the
+  promoted artifact can run. No private key or software-signing operation enters
+  GitHub Actions.
 
 The protected environment must define
 `SORAFS_RELEASE_SIGNATURE_PATH`, `SORAFS_RELEASE_PUBLIC_KEY_PATH`,

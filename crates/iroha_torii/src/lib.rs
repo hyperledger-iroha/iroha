@@ -167,8 +167,10 @@ pub use json_utils::{json_array, json_entry, json_object, json_value};
 
 pub use crate::app_auth::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, HEADER_WITNESS, Method,
-    Uri, canonical_request_hash, canonical_request_message, canonical_request_signature_message,
-    canonical_request_witness_message, signature_header_value, witness_header_value,
+    Uri, canonical_network_request_hash, canonical_network_request_message,
+    canonical_network_request_signature_message, canonical_request_hash, canonical_request_message,
+    canonical_request_signature_message, canonical_request_witness_message, signature_header_value,
+    witness_header_value,
 };
 
 pub mod openapi;
@@ -196,10 +198,7 @@ use axum::{
     Router,
     body::{Body, Bytes},
     debug_handler,
-    extract::{
-        DefaultBodyLimit, Extension, Query, State, WebSocketUpgrade,
-        connect_info::IntoMakeServiceWithConnectInfo,
-    },
+    extract::{DefaultBodyLimit, Extension, Query, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, Method as HttpMethod, Request, StatusCode, header::HeaderName},
     middleware::Next,
     response::{IntoResponse, Json, Response},
@@ -225,7 +224,10 @@ use iroha_config::{
     base::{WithOrigin, util::Bytes as ConfigBytes},
     client_api::ConfigUpdateDTO,
     parameters::{
-        actual::{NoritoRpcStage, NoritoRpcTransport, TelemetryProfile, Torii as Config},
+        actual::{
+            NoritoRpcStage, NoritoRpcTransport, TelemetryProfile, Torii as Config,
+            ToriiHttpTransport,
+        },
         defaults,
     },
 };
@@ -267,8 +269,8 @@ use iroha_core::{
         ToriiProxyTransactionAdmissionV2, ToriiReadEndpointV1, ToriiReadFanoutMergeV1,
         ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1, ToriiRouteHintV1,
         ToriiRoutingPlanHintV1, queue_plan_admission_attestation_signing_bytes_v2,
-        queue_plan_admission_chain_id_digest,
-        validate_queue_plan_admission_certificate_for_chain_digest_v2,
+        queue_plan_admission_network_id_digest,
+        validate_queue_plan_admission_certificate_for_network_digest_v2,
     },
     tx::{
         AcceptTransactionFail, DecodedVersionedSignedTransaction, SignatureRejectionCode,
@@ -281,6 +283,7 @@ use iroha_crypto::{
     ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, SignatureOf,
     blake2::{Blake2b512, digest::Digest},
 };
+use iroha_data_model::NetworkId;
 use iroha_data_model::alias::{AliasRecord, AliasTarget};
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
@@ -312,7 +315,7 @@ use iroha_data_model::{
     },
     isi::{
         offline::RegisterOfflineDeviceAttestation,
-        settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSource},
+        settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry},
     },
     name::Name,
     nexus::{DataSpaceId, FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId, LaneId},
@@ -323,7 +326,7 @@ use iroha_data_model::{
     rwa::RwaId,
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{
-        SignedTransaction, TransactionPayload, TransactionSubmissionReceipt,
+        SignedTransaction, TransactionDomain, TransactionPayload, TransactionSubmissionReceipt,
         TransactionSubmissionReceiptPayload,
         signed::{TransactionEntrypoint, TransactionResult},
     },
@@ -333,7 +336,9 @@ use iroha_executor_data_model::permission::account::{
 };
 #[cfg(feature = "app_api")]
 use iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorProgram;
-use iroha_executor_data_model::permission::query::CanReadRestrictedDataspace;
+use iroha_executor_data_model::permission::query::{
+    CanReadAllLedgerData, CanReadRestrictedDataspace,
+};
 use iroha_futures::supervisor::ShutdownSignal;
 #[cfg(feature = "app_api")]
 use iroha_primitives::soradns::hosts::taira_mon_pretty_gateway_suffix;
@@ -342,8 +347,9 @@ use iroha_torii_shared::{
     AccountReadResponse, AxtErrorDetails, ErrorDetails, ErrorEnvelope, FeeErrorDetails,
     FeeQuoteCapacity, FeeQuoteComponent, FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest,
     FeeQuoteResponse, FeeSponsorProgramByIdRequest, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
-    PipelineTransactionStatus, PipelineTransactionStatusResponse, QueueErrorSnapshot,
-    TriggerCompletionListResponse, TriggerCompletionRecord, TriggerCompletionSummary,
+    PipelineTransactionDetailsResponse, PipelineTransactionStatus,
+    PipelineTransactionStatusResponse, QueueErrorSnapshot, TriggerCompletionListResponse,
+    TriggerCompletionRecord, TriggerCompletionSummary,
     route_catalog::{self, RouteCatalog},
     uri,
 };
@@ -361,14 +367,15 @@ use norito::json::{JsonDeserialize, JsonSerialize};
 use sorafs_manifest::provider_advert::CapabilityType;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{
-    net::TcpListener,
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::{TcpListener, TcpStream},
     sync::{RwLock, watch},
+    task::{JoinError, JoinSet},
+    time::Sleep,
 };
 use tower::ServiceExt as _;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use utils::extractors::JsonOrNoritoVersioned;
-
-// Bring connect-info make service into scope for axum 0.8 serve path
 
 const TORII_TCP_LISTEN_BACKLOG: i32 = 1024;
 
@@ -418,13 +425,515 @@ async fn bind_torii_tcp_listener(address: SocketAddr) -> std::io::Result<TcpList
     }
 }
 
+#[derive(Debug)]
+struct SocketAdmissionState {
+    active: usize,
+    active_by_ip: HashMap<IpAddr, usize>,
+}
+
+/// Listener-level connection admission enforced before any HTTP parsing.
+#[derive(Debug)]
+struct SocketAdmission {
+    max_connections: usize,
+    max_connections_per_ip: usize,
+    state: parking_lot::Mutex<SocketAdmissionState>,
+}
+
+impl SocketAdmission {
+    fn new(max_connections: NonZeroUsize, max_connections_per_ip: NonZeroUsize) -> Arc<Self> {
+        Arc::new(Self {
+            max_connections: max_connections.get(),
+            max_connections_per_ip: max_connections_per_ip.get(),
+            state: parking_lot::Mutex::new(SocketAdmissionState {
+                active: 0,
+                active_by_ip: HashMap::new(),
+            }),
+        })
+    }
+
+    fn try_acquire(self: &Arc<Self>, remote_ip: IpAddr) -> Option<SocketPermit> {
+        let remote_ip = canonical_socket_ip(remote_ip);
+        let mut state = self.state.lock();
+        let active_for_ip = state.active_by_ip.get(&remote_ip).copied().unwrap_or(0);
+        if state.active >= self.max_connections || active_for_ip >= self.max_connections_per_ip {
+            return None;
+        }
+
+        state.active = state
+            .active
+            .checked_add(1)
+            .expect("Torii active socket count overflow");
+        state.active_by_ip.insert(
+            remote_ip,
+            active_for_ip
+                .checked_add(1)
+                .expect("Torii per-IP socket count overflow"),
+        );
+        drop(state);
+
+        Some(SocketPermit {
+            admission: Arc::clone(self),
+            remote_ip,
+        })
+    }
+}
+
+fn canonical_socket_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(ip) => IpAddr::V4(ip),
+        IpAddr::V6(ip) => ip.to_ipv4_mapped().map_or(IpAddr::V6(ip), IpAddr::V4),
+    }
+}
+
+#[derive(Debug)]
+struct SocketPermit {
+    admission: Arc<SocketAdmission>,
+    remote_ip: IpAddr,
+}
+
+impl Drop for SocketPermit {
+    fn drop(&mut self) {
+        let mut state = self.admission.state.lock();
+        state.active = state
+            .active
+            .checked_sub(1)
+            .expect("Torii socket permit released more than once");
+        let active_for_ip = state
+            .active_by_ip
+            .get_mut(&self.remote_ip)
+            .expect("Torii socket permit source IP missing from admission state");
+        *active_for_ip = active_for_ip
+            .checked_sub(1)
+            .expect("Torii per-IP socket permit released more than once");
+        if *active_for_ip == 0 {
+            state.active_by_ip.remove(&self.remote_ip);
+        }
+    }
+}
+
+/// Safe Tokio-to-Hyper I/O adapter used by both accepted and proxied sockets.
+struct HyperTokioIo<T>(T);
+
+impl<T> hyper::rt::Read for HyperTokioIo<T>
+where
+    T: AsyncRead + Unpin,
+{
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        mut buf: hyper::rt::ReadBufCursor<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let mut scratch = [0_u8; 8 * 1024];
+        let read_len = scratch.len().min(buf.remaining());
+        let mut tokio_buf = ReadBuf::new(&mut scratch[..read_len]);
+        match AsyncRead::poll_read(std::pin::Pin::new(&mut self.0), cx, &mut tokio_buf) {
+            std::task::Poll::Ready(Ok(())) => buf.put_slice(tokio_buf.filled()),
+            other => return other,
+        }
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl<T> hyper::rt::Write for HyperTokioIo<T>
+where
+    T: AsyncWrite + Unpin,
+{
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        AsyncWrite::poll_write(std::pin::Pin::new(&mut self.0), cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        AsyncWrite::poll_flush(std::pin::Pin::new(&mut self.0), cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        AsyncWrite::poll_shutdown(std::pin::Pin::new(&mut self.0), cx)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        AsyncWrite::is_write_vectored(&self.0)
+    }
+
+    fn poll_write_vectored(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        AsyncWrite::poll_write_vectored(std::pin::Pin::new(&mut self.0), cx, bufs)
+    }
+}
+
+struct ToriiTokioSleep(std::pin::Pin<Box<Sleep>>);
+
+impl core::future::Future for ToriiTokioSleep {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        self.0.as_mut().poll(cx)
+    }
+}
+
+impl hyper::rt::Sleep for ToriiTokioSleep {}
+
+#[derive(Clone, Copy, Debug)]
+struct ToriiTokioTimer;
+
+impl hyper::rt::Timer for ToriiTokioTimer {
+    fn sleep(&self, duration: Duration) -> std::pin::Pin<Box<dyn hyper::rt::Sleep>> {
+        Box::pin(ToriiTokioSleep(Box::pin(tokio::time::sleep(duration))))
+    }
+
+    fn sleep_until(&self, deadline: Instant) -> std::pin::Pin<Box<dyn hyper::rt::Sleep>> {
+        Box::pin(ToriiTokioSleep(Box::pin(tokio::time::sleep_until(
+            deadline.into(),
+        ))))
+    }
+
+    fn now(&self) -> Instant {
+        tokio::time::Instant::now().into()
+    }
+}
+
+/// Tokio I/O wrapper that terminates a connection when socket writes stop making progress.
+struct WriteTimeoutIo<T, L = ()> {
+    inner: T,
+    write_timeout: Duration,
+    pending_write_timeout: Option<std::pin::Pin<Box<Sleep>>>,
+    _lease: L,
+}
+
+impl<T> WriteTimeoutIo<T> {
+    #[cfg(test)]
+    fn new(inner: T, write_timeout: Duration) -> Self {
+        Self::with_lease(inner, write_timeout, ())
+    }
+}
+
+impl<T, L> WriteTimeoutIo<T, L> {
+    fn with_lease(inner: T, write_timeout: Duration, lease: L) -> Self {
+        Self {
+            inner,
+            write_timeout,
+            pending_write_timeout: None,
+            _lease: lease,
+        }
+    }
+
+    fn clear_write_timeout(&mut self) {
+        self.pending_write_timeout = None;
+    }
+
+    fn poll_write_timeout(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let timeout = self
+            .pending_write_timeout
+            .get_or_insert_with(|| Box::pin(tokio::time::sleep(self.write_timeout)));
+        if core::future::Future::poll(timeout.as_mut(), cx).is_ready() {
+            return std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Torii socket write made no progress before the configured deadline",
+            )));
+        }
+        std::task::Poll::Pending
+    }
+}
+
+impl<T, L> AsyncRead for WriteTimeoutIo<T, L>
+where
+    T: AsyncRead + Unpin,
+    L: Unpin,
+{
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        std::pin::Pin::new(&mut this.inner).poll_read(cx, buf)
+    }
+}
+
+impl<T, L> AsyncWrite for WriteTimeoutIo<T, L>
+where
+    T: AsyncWrite + Unpin,
+    L: Unpin,
+{
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_write(cx, buf) {
+            std::task::Poll::Ready(result) => {
+                this.clear_write_timeout();
+                std::task::Poll::Ready(result)
+            }
+            std::task::Poll::Pending => match this.poll_write_timeout(cx) {
+                std::task::Poll::Ready(Err(error)) => std::task::Poll::Ready(Err(error)),
+                std::task::Poll::Ready(Ok(())) | std::task::Poll::Pending => {
+                    std::task::Poll::Pending
+                }
+            },
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_flush(cx) {
+            std::task::Poll::Ready(result) => {
+                this.clear_write_timeout();
+                std::task::Poll::Ready(result)
+            }
+            std::task::Poll::Pending => this.poll_write_timeout(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_shutdown(cx) {
+            std::task::Poll::Ready(result) => {
+                this.clear_write_timeout();
+                std::task::Poll::Ready(result)
+            }
+            std::task::Poll::Pending => this.poll_write_timeout(cx),
+        }
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_write_vectored(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_write_vectored(cx, bufs) {
+            std::task::Poll::Ready(result) => {
+                this.clear_write_timeout();
+                std::task::Poll::Ready(result)
+            }
+            std::task::Poll::Pending => match this.poll_write_timeout(cx) {
+                std::task::Poll::Ready(Err(error)) => std::task::Poll::Ready(Err(error)),
+                std::task::Poll::Ready(Ok(())) | std::task::Poll::Pending => {
+                    std::task::Poll::Pending
+                }
+            },
+        }
+    }
+}
+
+fn validate_http_transport_config(config: ToriiHttpTransport) -> std::io::Result<usize> {
+    if config.max_connections_per_ip > config.max_connections {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Torii max_connections_per_ip exceeds max_connections",
+        ));
+    }
+    if config.header_read_timeout.is_zero() || config.write_timeout.is_zero() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Torii HTTP timeouts must be non-zero",
+        ));
+    }
+    if config.max_headers.get() > 1024 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Torii max_headers exceeds 1024",
+        ));
+    }
+    let max_header_bytes = usize::try_from(config.max_header_bytes.get()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Torii max_header_bytes does not fit this platform",
+        )
+    })?;
+    if !(8 * 1024..=1024 * 1024).contains(&max_header_bytes) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Torii max_header_bytes is outside 8192..=1048576",
+        ));
+    }
+    Ok(max_header_bytes)
+}
+
+async fn serve_torii_http_connection(
+    stream: TcpStream,
+    remote: std::net::SocketAddr,
+    permit: SocketPermit,
+    router: Router,
+    config: ToriiHttpTransport,
+    shutdown_signal: ShutdownSignal,
+    max_header_bytes: usize,
+) -> Result<(), hyper::Error> {
+    let io = HyperTokioIo(WriteTimeoutIo::with_lease(
+        stream,
+        config.write_timeout,
+        permit,
+    ));
+    let service = hyper::service::service_fn(move |request: Request<hyper::body::Incoming>| {
+        let router = router.clone();
+        async move {
+            let mut request = request.map(Body::new);
+            request
+                .extensions_mut()
+                .insert(axum::extract::ConnectInfo(remote));
+            router.oneshot(request).await
+        }
+    });
+
+    let mut http = hyper::server::conn::http1::Builder::new();
+    http.timer(ToriiTokioTimer)
+        .header_read_timeout(config.header_read_timeout)
+        .max_headers(config.max_headers.get())
+        .max_buf_size(max_header_bytes);
+    let connection = http.serve_connection(io, service).with_upgrades();
+    tokio::pin!(connection);
+
+    tokio::select! {
+        result = connection.as_mut() => result,
+        () = shutdown_signal.receive() => {
+            connection.as_mut().graceful_shutdown();
+            connection.await
+        }
+    }
+}
+
+fn observe_torii_connection_completion(
+    completion: Result<(std::net::SocketAddr, Result<(), hyper::Error>), JoinError>,
+) -> std::io::Result<()> {
+    match completion {
+        Ok((remote, Ok(()))) => {
+            iroha_logger::trace!(%remote, "Torii HTTP connection closed");
+            Ok(())
+        }
+        Ok((remote, Err(error))) => {
+            // Malformed, timed-out, and reset connections are isolated to the
+            // attacker-controlled socket and must not terminate the listener.
+            iroha_logger::debug!(%remote, ?error, "Torii HTTP connection terminated");
+            Ok(())
+        }
+        Err(error) => Err(std::io::Error::other(format!(
+            "Torii HTTP connection task failed: {error}"
+        ))),
+    }
+}
+
+async fn serve_torii_http(
+    listener: TcpListener,
+    router: Router,
+    config: ToriiHttpTransport,
+    shutdown_signal: ShutdownSignal,
+) -> std::io::Result<()> {
+    let max_header_bytes = validate_http_transport_config(config)?;
+    let admission = SocketAdmission::new(config.max_connections, config.max_connections_per_ip);
+    let mut connections = JoinSet::new();
+
+    enum ServerEvent {
+        Shutdown,
+        Accepted(std::io::Result<(TcpStream, std::net::SocketAddr)>),
+        ConnectionFinished(
+            Option<Result<(std::net::SocketAddr, Result<(), hyper::Error>), JoinError>>,
+        ),
+    }
+
+    loop {
+        let has_connections = !connections.is_empty();
+        let event = tokio::select! {
+            biased;
+            () = shutdown_signal.receive() => ServerEvent::Shutdown,
+            completion = connections.join_next(), if has_connections => {
+                ServerEvent::ConnectionFinished(completion)
+            }
+            accepted = listener.accept() => ServerEvent::Accepted(accepted),
+        };
+
+        match event {
+            ServerEvent::Shutdown => break,
+            ServerEvent::ConnectionFinished(Some(completion)) => {
+                observe_torii_connection_completion(completion)?;
+            }
+            ServerEvent::ConnectionFinished(None) => {}
+            ServerEvent::Accepted(Ok((stream, remote))) => {
+                let Some(permit) = admission.try_acquire(remote.ip()) else {
+                    iroha_logger::debug!(%remote, "Torii rejected TCP connection at listener capacity");
+                    drop(stream);
+                    continue;
+                };
+                let router = router.clone();
+                let connection_shutdown = shutdown_signal.clone();
+                connections.spawn(async move {
+                    let result = serve_torii_http_connection(
+                        stream,
+                        remote,
+                        permit,
+                        router,
+                        config,
+                        connection_shutdown,
+                        max_header_bytes,
+                    )
+                    .await;
+                    (remote, result)
+                });
+            }
+            ServerEvent::Accepted(Err(error)) => {
+                iroha_logger::warn!(?error, "Torii TCP accept failed; retrying");
+                tokio::select! {
+                    () = shutdown_signal.receive() => break,
+                    () = tokio::time::sleep(Duration::from_secs(1)) => {}
+                }
+            }
+        }
+    }
+
+    drop(listener);
+    while let Some(completion) = connections.join_next().await {
+        observe_torii_connection_completion(completion)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tcp_listener_bind_tests {
-    use std::net::{Ipv4Addr, SocketAddr as StdSocketAddr, SocketAddrV4};
+    use std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr, SocketAddrV4},
+        num::NonZeroUsize,
+        time::Duration,
+    };
 
+    use axum::{Router, routing::get};
+    use iroha_config::parameters::actual::ToriiHttpTransport;
+    use iroha_futures::supervisor::ShutdownSignal;
     use iroha_primitives::addr::SocketAddr;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
 
-    use super::bind_torii_tcp_listener;
+    use super::{SocketAdmission, WriteTimeoutIo, bind_torii_tcp_listener, serve_torii_http};
 
     #[tokio::test(flavor = "current_thread")]
     async fn torii_reusable_tcp_listener_binds_loopback() {
@@ -458,6 +967,110 @@ mod tcp_listener_bind_tests {
 
         assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
     }
+
+    #[test]
+    fn socket_admission_enforces_global_and_canonical_source_limits() {
+        let admission = SocketAdmission::new(
+            NonZeroUsize::new(2).expect("non-zero global limit"),
+            NonZeroUsize::new(1).expect("non-zero per-IP limit"),
+        );
+        let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let mapped_loopback = IpAddr::V6(Ipv4Addr::LOCALHOST.to_ipv6_mapped());
+        let other = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1));
+
+        let loopback_permit = admission
+            .try_acquire(loopback)
+            .expect("first source socket is admitted");
+        assert!(
+            admission.try_acquire(mapped_loopback).is_none(),
+            "IPv4-mapped IPv6 must share the IPv4 source limit"
+        );
+        let other_permit = admission
+            .try_acquire(other)
+            .expect("second source socket is admitted");
+        assert!(
+            admission
+                .try_acquire(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 2)))
+                .is_none(),
+            "global socket limit must apply across source IPs"
+        );
+
+        drop(loopback_permit);
+        let replacement = admission
+            .try_acquire(mapped_loopback)
+            .expect("dropping a permit immediately releases both counters");
+        drop(replacement);
+        drop(other_permit);
+
+        let state = admission.state.lock();
+        assert_eq!(state.active, 0);
+        assert!(state.active_by_ip.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stalled_socket_write_hits_progress_deadline() {
+        let (writer, _unread_peer) = tokio::io::duplex(1);
+        let mut writer = WriteTimeoutIo::new(writer, Duration::from_millis(20));
+
+        let error = writer
+            .write_all(&[0xA5, 0x5A])
+            .await
+            .expect_err("an unread full socket must hit the write-progress deadline");
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn partial_http_head_is_closed_at_listener_deadline() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("test listener should bind");
+        let address = listener.local_addr().expect("test listener address");
+        let mut config = ToriiHttpTransport::default();
+        config.header_read_timeout = Duration::from_millis(25);
+        config.write_timeout = Duration::from_millis(100);
+        let shutdown = ShutdownSignal::new();
+        let server_shutdown = shutdown.clone();
+        let server = tokio::spawn(async move {
+            serve_torii_http(
+                listener,
+                Router::new().route("/", get(|| async { "ok" })),
+                config,
+                server_shutdown,
+            )
+            .await
+        });
+
+        let mut client = TcpStream::connect(address)
+            .await
+            .expect("test client should connect");
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost:")
+            .await
+            .expect("partial request head should reach Torii");
+        let mut response = Vec::new();
+        let read_result =
+            tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut response))
+                .await
+                .expect("partial request head must not retain a socket past its deadline");
+        if let Err(error) = read_result {
+            assert!(
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::BrokenPipe
+                ),
+                "unexpected read failure after header timeout: {error}"
+            );
+        }
+
+        shutdown.send();
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("Torii test server should stop")
+            .expect("Torii test task should not panic")
+            .expect("Torii test server should exit cleanly");
+    }
 }
 use crate::iso20022_bridge::{
     Iso20022BridgeRuntime, IsoMessageState, IsoMessageStatus, Pacs002Status,
@@ -487,6 +1100,8 @@ pub use utils::{
 #[cfg(feature = "app_api")]
 mod account_literal;
 mod app_auth;
+include!("runtime_governance_auth.rs");
+include!("zk_compute_auth.rs");
 mod block;
 mod bounded_replay_cache;
 #[cfg(feature = "connect")]
@@ -519,10 +1134,22 @@ mod runtime;
 mod sns;
 #[cfg(feature = "app_api")]
 mod soracloud;
+mod soranet_privacy_ingress;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 mod telemetry;
 #[cfg(feature = "app_api")]
 pub mod test_utils;
+
+#[cfg(feature = "telemetry")]
+use soranet_privacy_ingress::{
+    SORANET_PRIVACY_INGEST_MAX_BODY_BYTES, handler_post_soranet_privacy_event,
+    handler_post_soranet_privacy_share,
+};
+#[cfg(all(test, feature = "telemetry"))]
+use soranet_privacy_ingress::{
+    test_handler_post_soranet_privacy_event_with_ingress,
+    test_handler_post_soranet_privacy_share_with_ingress,
+};
 
 // Re-export selected API for integration tests and external consumers
 // Governance selection
@@ -539,7 +1166,6 @@ pub use gov::{
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
 pub use limits::RateLimiter as BenchRateLimiter;
-pub use routing::QueryOptions;
 pub use routing::event_to_json_value;
 #[cfg(feature = "zk-proof-tags")]
 pub use routing::handle_get_proof_tags;
@@ -579,6 +1205,7 @@ pub use routing::{
     handle_v1_asset_holders_query as handle_v1_asset_holders_query_for_bench,
     handle_v1_contracts_activity_get as handle_v1_contracts_activity_get_for_bench,
 };
+pub use routing::{QueryOptions, SignedQueryAdmission};
 #[cfg(feature = "telemetry")]
 pub use routing::{
     RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
@@ -1970,11 +2597,59 @@ fn local_read_fanout_coordinator_enabled() -> bool {
         })
 }
 
+#[cfg(test)]
+pub(crate) fn signed_query_test_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xA5; Hash::LENGTH],
+        )),
+    )
+}
+
+#[cfg(test)]
+fn signed_query_test_admission() -> Arc<routing::SignedQueryAdmission> {
+    Arc::new(
+        routing::SignedQueryAdmission::new(
+            signed_query_test_network_id(),
+            Duration::from_secs(1),
+            Duration::from_secs(120),
+            NonZeroUsize::new(1_024).expect("nonzero signed-query test replay capacity"),
+        )
+        .expect("valid signed-query test admission"),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn authorize_query_for_test(
+    request: iroha_data_model::query::QueryRequest,
+    authority: iroha_data_model::account::AccountId,
+) -> iroha_data_model::query::QueryRequestWithAuthority {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
+    let creation_time_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("test clock follows Unix epoch")
+        .as_millis()
+        .try_into()
+        .expect("test query creation time fits u64");
+    let mut nonce = [0_u8; 32];
+    nonce[24..].copy_from_slice(&NEXT_NONCE.fetch_add(1, Ordering::Relaxed).to_be_bytes());
+    request.with_authority(
+        signed_query_test_network_id(),
+        authority,
+        creation_time_ms,
+        NonZeroU64::new(100_000).expect("nonzero signed-query test TTL"),
+        nonce,
+    )
+}
+
 #[allow(clippy::struct_excessive_bools)]
 struct AppState {
     events: EventsSender,
     kura: Arc<Kura>,
     chain_id: Arc<ChainId>,
+    signed_query_admission: Arc<routing::SignedQueryAdmission>,
     #[cfg(feature = "app_api")]
     transaction_max_content_len: usize,
     transaction_ingress_compute_inflight: Arc<tokio::sync::Semaphore>,
@@ -2057,6 +2732,8 @@ struct AppState {
     zk_ivm_prove_inflight_total: usize,
     zk_ivm_prove_job_ttl_ms: u64,
     zk_ivm_prove_job_max_entries: usize,
+    zk_ivm_prove_job_max_entries_per_owner: usize,
+    zk_ivm_prove_job_max_retained_bytes_per_owner: usize,
     ivm_tooling_timeout: Duration,
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
     peer_telemetry: Arc<telemetry::peers::PeerTelemetryService>,
@@ -3000,8 +3677,7 @@ impl ConnScheme {
     }
 }
 
-/// Held admission permit and telemetry accounting for one active request or
-/// upgraded connection.
+/// Held admission permit and telemetry accounting for one active request or upgraded connection.
 pub(crate) struct PreAuthRequestGuard {
     permit: limits::PreAuthPermit,
     telemetry: routing::MaybeTelemetry,
@@ -3018,7 +3694,6 @@ impl Drop for PreAuthRequestGuard {
 
 /// Single-owner handoff for extending a pre-authentication permit beyond the
 /// HTTP upgrade response and into the upgraded WebSocket task.
-///
 /// The middleware owns the guard initially. Ordinary responses keep it in the
 /// response body, while a WebSocket handler takes it immediately before
 /// calling `on_upgrade`. Taking the guard more than once returns `None`, so a
@@ -5109,13 +5784,13 @@ fn validate_sccp_submit_content_type(
 }
 
 /// Authenticate, rate-limit, and resource-bound SCCP submissions before JSON extraction.
-///
 /// This middleware intentionally owns the sole network-body read for these two proof-bearing
-/// endpoints. Authentication, exact JSON media type, rate, declared-length, and body-buffer
-/// admission failures therefore never poll the request body. Admitted reads have both an absolute
-/// byte cap and deadline; only a completed body can reserve general/heavy query execution. Accepted
-/// chunked bodies remain bounded without `Content-Length`, and declared lengths must match the bytes
-/// restored for the downstream JSON extractor.
+/// endpoints. The listener credential, exact JSON media type, rate, declared-length, and body-buffer
+/// admission checks run before polling the request body. Admitted reads have an absolute byte cap
+/// and deadline, then authenticate the exact bytes with a one-shot, network-bound account
+/// signature before JSON extraction or general/heavy query admission; accepted chunked bodies
+/// remain bounded without `Content-Length`, and declared lengths must match the bytes restored for
+/// the downstream JSON extractor.
 #[cfg(feature = "app_api")]
 async fn enforce_sccp_submit_ingress(
     State(ingress): State<SccpSubmitIngressState>,
@@ -5264,6 +5939,34 @@ async fn enforce_sccp_submit_ingress(
             .into_response());
     }
 
+    let network_id = app.signed_query_admission.network_id();
+    let verified = match crate::app_auth::verify_canonical_network_request(
+        &app.state,
+        &network_id,
+        &parts.headers,
+        &parts.method,
+        &parts.uri,
+        body.as_ref(),
+        None,
+    ) {
+        Ok(Some(verified)) => verified,
+        Ok(None) => {
+            app.telemetry
+                .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
+            return Ok(Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+                "canonical account request authentication is required for SCCP submission"
+                    .to_owned(),
+            ))
+            .into_response());
+        }
+        Err(error) => {
+            app.telemetry
+                .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
+            return Ok(error.into_response());
+        }
+    };
+    parts.extensions.insert(verified);
+
     let admission = match acquire_query_admission(app.as_ref(), true).await {
         Ok(admission) => Arc::new(SccpSubmitAdmission::new(
             admission.with_body_permit(body_permit),
@@ -5288,10 +5991,6 @@ async fn enforce_soracloud_signed_mutation_request(
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     let path = req.uri().path().to_owned();
-    if !soracloud::requires_signed_mutation_request(req.method(), &path) {
-        return Ok(next.run(req).await);
-    }
-
     let response_format =
         match utils::negotiate_response_format(req.headers().get(axum::http::header::ACCEPT)) {
             Ok(format) => format,
@@ -5325,8 +6024,9 @@ async fn enforce_soracloud_signed_mutation_request(
             ));
         }
     };
-    let verified = match crate::app_auth::verify_canonical_request(
+    let verified = match crate::app_auth::verify_canonical_network_request(
         &app.state,
+        app.state.network_id_ref(),
         &parts.headers,
         &parts.method,
         &parts.uri,
@@ -5336,7 +6036,7 @@ async fn enforce_soracloud_signed_mutation_request(
         Ok(Some(verified)) => verified,
         Ok(None) => {
             return Ok(Error::Query(iroha_data_model::ValidationFail::NotPermitted(
-                "signed account headers are required for Soracloud mutation endpoints".to_owned(),
+                "signed account headers are required for SoraCloud command endpoints".to_owned(),
             ))
             .into_response());
         }
@@ -5387,102 +6087,8 @@ async fn enforce_soracloud_signed_mutation_request(
 }
 
 #[cfg(all(test, feature = "app_api"))]
-mod soracloud_signed_mutation_middleware_tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-
-    use axum::{
-        Router,
-        body::Body,
-        http::{Request, StatusCode, header},
-        response::Response,
-        routing::{get, post},
-    };
-    use tower::ServiceExt as _;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn unrelated_native_route_bypasses_soracloud_media_negotiation() {
-        let handler_calls = Arc::new(AtomicUsize::new(0));
-        let calls = Arc::clone(&handler_calls);
-        let router = Router::new()
-            .route(
-                route_catalog::application_api::EXPLORER_BLOCKS_STREAM_GET.path(),
-                get(move || {
-                    let calls = Arc::clone(&calls);
-                    async move {
-                        calls.fetch_add(1, Ordering::SeqCst);
-                        Response::builder()
-                            .status(StatusCode::OK)
-                            .header(header::CONTENT_TYPE, "text/event-stream")
-                            .body(Body::from("event: ready\ndata: {}\n\n"))
-                            .expect("SSE response")
-                    }
-                }),
-            )
-            .layer(axum::middleware::from_fn_with_state(
-                crate::mk_app_state_for_tests(),
-                enforce_soracloud_signed_mutation_request,
-            ));
-
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .uri(route_catalog::application_api::EXPLORER_BLOCKS_STREAM_GET.path())
-                    .header(header::ACCEPT, "text/event-stream")
-                    .body(Body::empty())
-                    .expect("SSE request"),
-            )
-            .await
-            .expect("SSE response");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(header::CONTENT_TYPE),
-            Some(&HeaderValue::from_static("text/event-stream"))
-        );
-        assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn soracloud_mutation_still_enforces_typed_accept() {
-        let handler_calls = Arc::new(AtomicUsize::new(0));
-        let calls = Arc::clone(&handler_calls);
-        let router = Router::new()
-            .route(
-                route_catalog::application_api::SORACLOUD_DEPLOY_POST.path(),
-                post(move || {
-                    let calls = Arc::clone(&calls);
-                    async move {
-                        calls.fetch_add(1, Ordering::SeqCst);
-                        StatusCode::NO_CONTENT
-                    }
-                }),
-            )
-            .layer(axum::middleware::from_fn_with_state(
-                crate::mk_app_state_for_tests(),
-                enforce_soracloud_signed_mutation_request,
-            ));
-
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .method(axum::http::Method::POST)
-                    .uri(route_catalog::application_api::SORACLOUD_DEPLOY_POST.path())
-                    .header(header::ACCEPT, "text/event-stream")
-                    .body(Body::empty())
-                    .expect("SoraCloud request"),
-            )
-            .await
-            .expect("SoraCloud response");
-
-        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
-        assert_eq!(handler_calls.load(Ordering::SeqCst), 0);
-    }
-}
+#[path = "tests/soracloud_signed_mutation_middleware.rs"]
+mod soracloud_signed_mutation_middleware_tests;
 
 #[cfg(feature = "app_api")]
 fn soracloud_signed_mutation_body_limit(app: &AppState, path: &str) -> usize {
@@ -6105,8 +6711,8 @@ fn axt_error_details_is_empty(details: &AxtErrorDetails) -> bool {
         && details.snapshot_version.is_none()
         && details.dataspace.is_none()
         && details.lane.is_none()
-        && details.next_min_handle_era.is_none()
-        && details.next_min_sub_nonce.is_none()
+        && details.active_handle_era.is_none()
+        && details.next_handle_counter.is_none()
 }
 
 fn sanitize_fee_error_details(details: &mut FeeErrorDetails) -> bool {
@@ -6225,8 +6831,8 @@ fn canonical_error_response(
             "x-iroha-axt-snapshot-version",
             "x-iroha-axt-dataspace",
             "x-iroha-axt-lane",
-            "x-iroha-axt-next-handle-era",
-            "x-iroha-axt-next-sub-nonce",
+            "x-iroha-axt-active-handle-era",
+            "x-iroha-axt-next-handle-counter",
             "x-iroha-queue-depth",
             "x-iroha-queue-capacity",
             "x-iroha-queue-state",
@@ -6325,7 +6931,6 @@ fn canonical_error_response(
 }
 
 /// Explicit marker for a reviewed protocol-native error response.
-///
 /// Adding a variant requires an exact route, status, media-type, and public
 /// error-header entry in [`reviewed_protocol_native_error_code`]. Unmarked
 /// failures always use [`ErrorEnvelope`], including failures from other
@@ -6820,7 +7425,8 @@ mod matched_route_metadata_tests {
         http::{Request, StatusCode, header},
     };
     use iroha_torii_shared::route_catalog::{
-        ApiSurface, EnabledFeatures, HttpMethod, Listener, RouteDescriptor, RouteProjections,
+        AdmissionPolicy, ApiSurface, EnabledFeatures, HttpMethod, Listener, RouteDescriptor,
+        RouteEffect, RouteProjections,
     };
     use tower::ServiceExt as _;
 
@@ -6832,6 +7438,8 @@ mod matched_route_metadata_tests {
         "/v1/tests/items/{item_id}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true);
@@ -6841,6 +7449,8 @@ mod matched_route_metadata_tests {
         "/v1/tests/cors-items/{item_id}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_implicit_head(true)
     .with_cors_options(true);
@@ -9165,107 +9775,6 @@ fn loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
     axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
 }
 
-const SORANET_PRIVACY_TOKEN_HEADER: &str = "x-soranet-privacy-token";
-
-fn privacy_token(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(SORANET_PRIVACY_TOKEN_HEADER)
-        .or_else(|| headers.get("x-api-token"))
-        .and_then(|value| value.to_str().ok())
-}
-
-fn privacy_reject(
-    status: StatusCode,
-    code: &'static str,
-    message: impl Into<String>,
-) -> AxResponse {
-    let payload = ErrorEnvelope::new(code, message.into());
-    (status, utils::NoritoBody(payload)).into_response()
-}
-
-async fn enforce_soranet_privacy_ingest(
-    app: &SharedAppState,
-    headers: &HeaderMap,
-    remote: Option<IpAddr>,
-    endpoint: &'static str,
-) -> Result<(), AxResponse> {
-    let ingest_cfg = &app.soranet_privacy_ingest;
-    #[cfg(not(feature = "telemetry"))]
-    let _ = endpoint;
-    if !ingest_cfg.enabled {
-        #[cfg(feature = "telemetry")]
-        app.telemetry
-            .record_soranet_privacy_ingest_reject(endpoint, "disabled")
-            .await;
-        return Err(privacy_reject(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "soranet_privacy_disabled",
-            "soranet privacy ingestion is disabled",
-        ));
-    }
-
-    if app.soranet_privacy_allow_nets.is_empty()
-        || !limits::is_allowed_by_cidr(headers, remote, &app.soranet_privacy_allow_nets)
-    {
-        #[cfg(feature = "telemetry")]
-        app.telemetry
-            .record_soranet_privacy_ingest_reject(endpoint, "namespace_blocked")
-            .await;
-        return Err(privacy_reject(
-            StatusCode::FORBIDDEN,
-            "soranet_privacy_namespace_blocked",
-            "submitter not in allowed namespace",
-        ));
-    }
-
-    let token = privacy_token(headers);
-    if ingest_cfg.require_token {
-        let Some(token_val) = token else {
-            #[cfg(feature = "telemetry")]
-            app.telemetry
-                .record_soranet_privacy_ingest_reject(endpoint, "missing_token")
-                .await;
-            return Err(privacy_reject(
-                StatusCode::UNAUTHORIZED,
-                "soranet_privacy_token_required",
-                "missing SoraNet privacy token",
-            ));
-        };
-        if !app.soranet_privacy_tokens.contains(token_val) {
-            #[cfg(feature = "telemetry")]
-            app.telemetry
-                .record_soranet_privacy_ingest_reject(endpoint, "invalid_token")
-                .await;
-            return Err(privacy_reject(
-                StatusCode::UNAUTHORIZED,
-                "soranet_privacy_token_invalid",
-                "token not authorised for SoraNet privacy ingest",
-            ));
-        }
-    }
-
-    let rate_key = token
-        .map(ToOwned::to_owned)
-        .or_else(|| remote.map(|ip| ip.to_string()))
-        .unwrap_or_else(|| "anonymous".to_string());
-    let enforce_rate = ingest_cfg.rate_per_sec.is_some();
-    if !limits::allow_conditionally(&app.soranet_privacy_rate_limiter, &rate_key, enforce_rate)
-        .await
-    {
-        #[cfg(feature = "telemetry")]
-        app.telemetry
-            .record_soranet_privacy_ingest_reject(endpoint, "rate_limited")
-            .await;
-        return Err(privacy_reject(
-            StatusCode::TOO_MANY_REQUESTS,
-            "soranet_privacy_rate_limited",
-            "soranet privacy ingest is rate limited",
-        ));
-    }
-
-    Ok(())
-}
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 fn push_error_response(
     status: StatusCode,
@@ -9436,7 +9945,15 @@ fn push_authenticate_device_request(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, AxResponse> {
-    match crate::app_auth::verify_canonical_request(&app.state, headers, method, uri, body, None) {
+    match crate::app_auth::verify_canonical_network_request(
+        &app.state,
+        app.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        body,
+        None,
+    ) {
         Ok(Some(verified)) => Ok(verified),
         Ok(None) => Err(push_error_response(
             StatusCode::UNAUTHORIZED,
@@ -9576,6 +10093,56 @@ async fn collect_proof_body_with_deadline(
         }
     };
     Ok(axum::http::Request::from_parts(parts, Body::from(bytes)))
+}
+
+#[derive(Clone)]
+struct CanonicalAccountBodyAuthState {
+    app: SharedAppState,
+    max_body_bytes: usize,
+}
+
+async fn enforce_canonical_account_body_authentication(
+    State(state): State<CanonicalAccountBodyAuthState>,
+    request: axum::http::Request<Body>,
+    next: Next,
+) -> Response {
+    let (mut parts, body) = request.into_parts();
+    let body = match axum::body::to_bytes(body, state.max_body_bytes).await {
+        Ok(body) => body,
+        Err(error) => {
+            iroha_logger::warn!(%error, "canonical account request body exceeded its route limit");
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request body exceeds the route limit",
+            )
+                .into_response();
+        }
+    };
+    let network_id = state.app.signed_query_admission.network_id();
+    let verified = match crate::app_auth::verify_canonical_network_request(
+        &state.app.state,
+        &network_id,
+        &parts.headers,
+        &parts.method,
+        &parts.uri,
+        body.as_ref(),
+        None,
+    ) {
+        Ok(Some(verified)) => verified,
+        Ok(None) => {
+            return Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+                "canonical account request authentication is required".to_owned(),
+            ))
+            .into_response();
+        }
+        Err(error) => return error.into_response(),
+    };
+    parts.extensions.insert(verified);
+    let mut response = next
+        .run(axum::http::Request::from_parts(parts, Body::from(body)))
+        .await;
+    install_canonical_account_private_cache_headers(&mut response);
+    response
 }
 
 async fn proof_body_admission_middleware(
@@ -9770,6 +10337,17 @@ async fn proof_cached_json_response_with_egress(
     Ok(response)
 }
 
+fn install_canonical_account_private_cache_headers(response: &mut Response) {
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::VARY,
+        HeaderValue::from_static(crate::content::CANONICAL_CONTENT_AUTH_VARY),
+    );
+}
+
 // -------------- Governance handlers (AppState-based) --------------
 use axum::{extract::Path as AxPath, response::Response as AxResponse};
 
@@ -9778,8 +10356,7 @@ use crate::NoritoQuery as AxQuery;
 #[cfg(feature = "app_api")]
 async fn handler_gov_contract_get(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
+    Extension(_verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     contract_address: AxPath<String>,
@@ -9793,15 +10370,6 @@ async fn handler_gov_contract_get(
         false,
     )
     .await?;
-    require_signed_account_request(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        &[],
-        "contract_code_auth_required",
-        "signed account headers are required to read contract artifacts",
-    )?;
     crate::gov::handle_gov_contract_get(app.state.clone(), contract_address).await
 }
 
@@ -9820,6 +10388,7 @@ async fn handler_gov_enact(
 #[cfg(feature = "app_api")]
 async fn handler_ministry_agenda_proposal_draft(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::MinistryAgendaProposalDraftDto>,
@@ -9832,8 +10401,12 @@ async fn handler_ministry_agenda_proposal_draft(
         "v1/ministry/agenda/proposals/draft",
     )
     .await?;
+    require_runtime_governance_canonical_account_literal(
+        &body.authority,
+        &verified.account,
+        "ministry agenda draft",
+    )?;
     match crate::gov::handle_ministry_agenda_proposal_draft(
-        app.chain_id.clone(),
         app.state.clone(),
         app.telemetry.clone(),
         body,
@@ -9899,11 +10472,13 @@ async fn handler_gov_capabilities(
 #[cfg(feature = "app_api")]
 async fn handler_gov_citizen_draft(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::CitizenDraftRequestV1>,
 ) -> Result<JsonBody<crate::gov::CitizenDraftResponseV1>, Error> {
     check_access(&app, &headers, Some(remote.ip()), "v1/gov/citizens/draft").await?;
+    require_runtime_governance_account(&body.owner, &verified.account, "citizen draft")?;
     crate::gov::handle_gov_citizen_draft(app.state.clone(), body).await
 }
 
@@ -9996,7 +10571,7 @@ async fn handler_gov_propose_sccp_route_governance(
         "v1/gov/proposals/sccp-route-governance",
     )
     .await?;
-    crate::gov::handle_gov_propose_sccp_route_governance(body).await
+    crate::gov::handle_gov_propose_sccp_route_governance(app.state.clone(), body).await
 }
 
 #[cfg(feature = "app_api")]
@@ -10011,7 +10586,6 @@ async fn handler_gov_protected_set(
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/gov/protected").await?;
     crate::gov::handle_gov_protected_set(
-        app.chain_id.clone(),
         app.state.clone(),
         app.telemetry.clone(),
         crate::utils::extractors::NoritoJson(body),
@@ -11350,7 +11924,8 @@ async fn handler_proofs_query(
 
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let signed = crate::routing::signed_find_proof_by_id(&dto)?;
-        let verified = routing::verify_signed_query_request(signed)?;
+        let verified =
+            routing::verify_signed_query_request(signed, app.signed_query_admission.as_ref())?;
         let query_response =
             execute_admitted_signed_query_with_opts(&app, verified, QueryOptions::default())
                 .await?;
@@ -11362,7 +11937,8 @@ async fn handler_proofs_query(
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/proofs/query", enforce).await?;
 
     let signed = crate::routing::signed_find_proof_by_id(&dto)?;
-    let verified = routing::verify_signed_query_request(signed)?;
+    let verified =
+        routing::verify_signed_query_request(signed, app.signed_query_admission.as_ref())?;
     let query_response =
         execute_admitted_signed_query_with_opts(&app, verified, QueryOptions::default()).await?;
     Ok(crate::utils::respond_with_format(query_response, format))
@@ -12012,7 +12588,6 @@ async fn handler_space_directory_manifest_publish(
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_post_space_directory_manifest_publish(
-            app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
             request,
@@ -12033,7 +12608,6 @@ async fn handler_space_directory_manifest_publish(
     .await?;
 
     crate::routing::handle_post_space_directory_manifest_publish(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         request,
@@ -12053,7 +12627,6 @@ async fn handler_space_directory_manifest_revoke(
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_post_space_directory_manifest_revoke(
-            app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
             request,
@@ -12074,7 +12647,6 @@ async fn handler_space_directory_manifest_revoke(
     .await?;
 
     crate::routing::handle_post_space_directory_manifest_revoke(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         request,
@@ -12311,10 +12883,10 @@ async fn handler_offline_recipient_lineage(
         });
     }
     let selector = &request.selector;
-    if selector.chain_id != *app.chain_id {
+    if selector.network_id != *app.state.network_id_ref() {
         return Err(Error::AppQueryValidation {
-            code: "offline_receiver_lineage_chain_mismatch",
-            message: "The receiver-lineage selector targets a different chain.".to_owned(),
+            code: "offline_receiver_lineage_network_mismatch",
+            message: "The receiver-lineage selector targets a different network.".to_owned(),
         });
     }
     if selector.receiver_device_id.is_empty()
@@ -12485,7 +13057,7 @@ mod universal_offline_capability_tests {
         let capability = universal_offline_capability_status();
         assert!(!capability.mandatory);
         assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
-        assert_eq!(capability.required_bridge_abi_version, 21);
+        assert_eq!(capability.required_bridge_abi_version, 22);
         assert_eq!(capability.max_hops, 8);
         assert!(capability.ready);
         assert!(capability.assets.is_empty());
@@ -14759,7 +15331,6 @@ async fn handler_subscription_plans_create(
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_post_v1_subscription_plan(
-            app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
             crate::utils::extractors::NoritoJson(req),
@@ -14779,7 +15350,6 @@ async fn handler_subscription_plans_create(
     .await?;
 
     routing::handle_post_v1_subscription_plan(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         crate::utils::extractors::NoritoJson(req),
@@ -15036,7 +15606,6 @@ async fn handler_subscription_usage(
     let subscription_id = parse_nft_id(&subscription_raw)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_post_v1_subscription_usage(
-            app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
             subscription_id,
@@ -15057,7 +15626,6 @@ async fn handler_subscription_usage(
     .await?;
 
     routing::handle_post_v1_subscription_usage(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         subscription_id,
@@ -15177,6 +15745,7 @@ async fn handler_webhooks_delete(
 #[cfg(feature = "app_api")]
 async fn handler_gov_ballot_zk_v1(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::JsonOnly(value): crate::utils::extractors::JsonOnly<
@@ -15207,8 +15776,8 @@ async fn handler_gov_ballot_zk_v1(
         ))
     })?;
     crate::gov::handle_gov_ballot_zk_v1(
-        app.chain_id.clone(),
         app.state.clone(),
+        &verified.account,
         app.telemetry.clone(),
         crate::utils::extractors::NoritoJsonWithBytes {
             value: dto,
@@ -15221,6 +15790,7 @@ async fn handler_gov_ballot_zk_v1(
 #[cfg(feature = "app_api")]
 async fn handler_gov_ballot_zk_v1_ballot_proof(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::JsonOnly(value): crate::utils::extractors::JsonOnly<
@@ -15252,8 +15822,8 @@ async fn handler_gov_ballot_zk_v1_ballot_proof(
             ))
         })?;
     crate::gov::handle_gov_ballot_zk_v1_ballotproof(
-        app.chain_id.clone(),
         app.state.clone(),
+        &verified.account,
         app.telemetry.clone(),
         crate::utils::extractors::NoritoJsonWithBytes {
             value: dto,
@@ -15266,6 +15836,7 @@ async fn handler_gov_ballot_zk_v1_ballot_proof(
 #[cfg(feature = "app_api")]
 async fn handler_gov_ballot_plain(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::PlainBallotDto>,
@@ -15280,8 +15851,8 @@ async fn handler_gov_ballot_plain(
     )
     .await?;
     crate::gov::handle_gov_ballot_plain_with_policy(
-        app.chain_id.clone(),
         app.state.clone(),
+        &verified.account,
         body,
         app.telemetry.clone(),
     )
@@ -15291,6 +15862,7 @@ async fn handler_gov_ballot_plain(
 #[cfg(feature = "app_api")]
 async fn handler_gov_parliament_ballot(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::ParliamentBallotDto>,
@@ -15305,8 +15877,8 @@ async fn handler_gov_parliament_ballot(
     )
     .await?;
     crate::gov::handle_gov_parliament_ballot(
-        app.chain_id.clone(),
         app.state.clone(),
+        &verified.account,
         app.telemetry.clone(),
         body,
     )
@@ -16451,6 +17023,7 @@ impl Drop for ZkIvmProveJobReservation {
 
 #[derive(Clone)]
 struct ZkIvmProveJobState {
+    owner: AccountId,
     created_ms: u64,
     last_access_ms: u64,
     status: ZkIvmProveJobStatus,
@@ -16493,7 +17066,7 @@ fn zk_ivm_prove_gc_jobs_at(
     jobs: &DashMap<String, ZkIvmProveJobState>,
     now_ms: u64,
     ttl_ms: u64,
-    max_entries: usize,
+    _max_entries: usize,
 ) {
     if ttl_ms > 0 {
         let expire_before = now_ms.saturating_sub(ttl_ms);
@@ -16501,11 +17074,14 @@ fn zk_ivm_prove_gc_jobs_at(
             .iter()
             .filter_map(|entry| {
                 let state = entry.value();
-                (state.created_ms < expire_before).then(|| entry.key().clone())
+                (state.created_ms < expire_before)
+                    .then(|| (entry.key().clone(), Arc::clone(&state.retention)))
             })
             .collect::<Vec<_>>();
-        for key in expired {
-            if let Some((_key, state)) = jobs.remove(&key) {
+        for (key, retention) in expired {
+            if let Some((_key, state)) = jobs.remove_if(&key, |_, state| {
+                Arc::ptr_eq(&state.retention, &retention) && state.created_ms < expire_before
+            }) {
                 // Best-effort cancellation. Proving (spawn_blocking) is not preemptible, but
                 // cancellation frees capacity permits once the async wrapper exits.
                 let _ = state.cancel.send(true);
@@ -16513,30 +17089,14 @@ fn zk_ivm_prove_gc_jobs_at(
         }
     }
 
-    if max_entries > 0 {
-        let len = jobs.len();
-        if len > max_entries {
-            let mut by_age = jobs
-                .iter()
-                .filter_map(|entry| {
-                    let state = entry.value();
-                    matches!(
-                        state.status,
-                        ZkIvmProveJobStatus::Done | ZkIvmProveJobStatus::Error
-                    )
-                    .then(|| (entry.key().clone(), state.last_access_ms))
-                })
-                .collect::<Vec<_>>();
-            by_age.sort_by_key(|(_, last_access_ms)| *last_access_ms);
-            for (key, _) in by_age.into_iter().take(len.saturating_sub(max_entries)) {
-                jobs.remove(&key);
-            }
-        }
-    }
+    // Count and memory admission are enforced synchronously when an owner creates a job.
+    // GC only expires entries by policy; it must never choose another tenant's completed result
+    // merely because a global count was crossed concurrently.
 }
 
 fn zk_ivm_prove_evict_terminal_lru(
     jobs: &DashMap<String, ZkIvmProveJobState>,
+    owner: &AccountId,
     exclude_job_id: Option<&str>,
 ) -> bool {
     let oldest = jobs
@@ -16546,15 +17106,59 @@ fn zk_ivm_prove_evict_terminal_lru(
             (matches!(
                 state.status,
                 ZkIvmProveJobStatus::Done | ZkIvmProveJobStatus::Error
-            ) && exclude_job_id != Some(entry.key().as_str()))
-            .then(|| (entry.key().clone(), state.last_access_ms))
+            ) && &state.owner == owner
+                && exclude_job_id != Some(entry.key().as_str()))
+            .then(|| {
+                (
+                    entry.key().clone(),
+                    state.last_access_ms,
+                    Arc::clone(&state.retention),
+                )
+            })
         })
-        .min_by_key(|(_, last_access_ms)| *last_access_ms);
-    oldest.and_then(|(key, _)| jobs.remove(&key)).is_some()
+        .min_by_key(|(_, last_access_ms, _)| *last_access_ms);
+    oldest
+        .and_then(|(key, _, retention)| {
+            jobs.remove_if(&key, |_, state| {
+                &state.owner == owner
+                    && matches!(
+                        state.status,
+                        ZkIvmProveJobStatus::Done | ZkIvmProveJobStatus::Error
+                    )
+                    && Arc::ptr_eq(&state.retention, &retention)
+            })
+        })
+        .is_some()
+}
+
+fn zk_ivm_prove_owner_usage(
+    jobs: &DashMap<String, ZkIvmProveJobState>,
+    owner: &AccountId,
+) -> (usize, usize) {
+    jobs.iter()
+        .filter(|entry| &entry.value().owner == owner)
+        .fold((0_usize, 0_usize), |(count, bytes), entry| {
+            (
+                count.saturating_add(1),
+                bytes.saturating_add(entry.value().retention.retained_bytes()),
+            )
+        })
+}
+
+fn zk_ivm_prove_owner_bytes_admit(
+    current_bytes: usize,
+    additional_bytes: usize,
+    max_bytes: usize,
+) -> bool {
+    max_bytes == 0
+        || current_bytes
+            .checked_add(additional_bytes)
+            .is_some_and(|next| next <= max_bytes)
 }
 
 fn zk_ivm_prove_insert_pending(
     app: &AppState,
+    owner: AccountId,
     job_id: String,
     created_ms: u64,
     response_body: Bytes,
@@ -16568,29 +17172,47 @@ fn zk_ivm_prove_insert_pending(
         .admission
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if app.zk_ivm_prove_job_max_entries > 0 {
-        while app.zk_ivm_prove_jobs.len() >= app.zk_ivm_prove_job_max_entries {
-            if !zk_ivm_prove_evict_terminal_lru(app.zk_ivm_prove_jobs.as_ref(), None) {
+    loop {
+        let (owner_count, owner_bytes) =
+            zk_ivm_prove_owner_usage(app.zk_ivm_prove_jobs.as_ref(), &owner);
+        let owner_count_full = app.zk_ivm_prove_job_max_entries_per_owner > 0
+            && owner_count >= app.zk_ivm_prove_job_max_entries_per_owner;
+        let global_count_full = app.zk_ivm_prove_job_max_entries > 0
+            && app.zk_ivm_prove_jobs.len() >= app.zk_ivm_prove_job_max_entries;
+        let owner_bytes_full = !zk_ivm_prove_owner_bytes_admit(
+            owner_bytes,
+            retained_bytes,
+            app.zk_ivm_prove_job_max_retained_bytes_per_owner,
+        );
+        if owner_count_full || global_count_full || owner_bytes_full {
+            if !zk_ivm_prove_evict_terminal_lru(app.zk_ivm_prove_jobs.as_ref(), &owner, None) {
                 return None;
             }
+            continue;
         }
-    }
-    loop {
         if let Some(reservation) = app.zk_ivm_prove_job_budget.try_reserve(retained_bytes) {
-            app.zk_ivm_prove_jobs.insert(
-                job_id,
-                ZkIvmProveJobState {
-                    created_ms,
-                    last_access_ms: created_ms,
-                    status: ZkIvmProveJobStatus::Pending,
-                    response_body,
-                    retention: Arc::clone(&reservation),
-                    cancel,
-                },
-            );
-            return Some(reservation);
+            match app.zk_ivm_prove_jobs.entry(job_id) {
+                DashEntry::Vacant(entry) => {
+                    entry.insert(ZkIvmProveJobState {
+                        owner,
+                        created_ms,
+                        last_access_ms: created_ms,
+                        status: ZkIvmProveJobStatus::Pending,
+                        response_body,
+                        retention: Arc::clone(&reservation),
+                        cancel,
+                    });
+                    return Some(reservation);
+                }
+                DashEntry::Occupied(_) => {
+                    // A random identifier collision must never replace another
+                    // account's retained result. Release the reservation and
+                    // force the caller to retry with a newly generated request.
+                    return None;
+                }
+            }
         }
-        if !zk_ivm_prove_evict_terminal_lru(app.zk_ivm_prove_jobs.as_ref(), None) {
+        if !zk_ivm_prove_evict_terminal_lru(app.zk_ivm_prove_jobs.as_ref(), &owner, None) {
             return None;
         }
     }
@@ -16909,26 +17531,43 @@ fn zk_ivm_prove_terminal_body(
 
 fn zk_ivm_prove_store_terminal(
     jobs: &DashMap<String, ZkIvmProveJobState>,
+    budget: &ZkIvmProveJobBudget,
+    owner_max_bytes: usize,
     job_id: &str,
+    expected_reservation: &Arc<ZkIvmProveJobReservation>,
     status: ZkIvmProveJobStatus,
     body: Bytes,
 ) {
-    let Some(mut entry) = jobs.get_mut(job_id) else {
+    let _admission = budget
+        .admission
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(owner) = jobs.get(job_id).and_then(|entry| {
+        Arc::ptr_eq(&entry.retention, expected_reservation).then(|| entry.owner.clone())
+    }) else {
         return;
     };
-    if !entry.retention.try_resize(body.len()) {
+
+    loop {
+        let (_, owner_bytes) = zk_ivm_prove_owner_usage(jobs, &owner);
+        let Some(mut entry) = jobs.get_mut(job_id) else {
+            return;
+        };
+        if !Arc::ptr_eq(&entry.retention, expected_reservation) {
+            return;
+        }
+        let owner_bytes_without_job = owner_bytes.saturating_sub(entry.retention.retained_bytes());
+        if zk_ivm_prove_owner_bytes_admit(owner_bytes_without_job, body.len(), owner_max_bytes)
+            && entry.retention.try_resize(body.len())
+        {
+            entry.status = status;
+            entry.response_body = body;
+            entry.last_access_ms = zk_ivm_prove_now_ms();
+            return;
+        }
         drop(entry);
-        while zk_ivm_prove_evict_terminal_lru(jobs, Some(job_id)) {
-            let Some(mut retry_entry) = jobs.get_mut(job_id) else {
-                return;
-            };
-            if retry_entry.retention.try_resize(body.len()) {
-                retry_entry.status = status;
-                retry_entry.response_body = body;
-                retry_entry.last_access_ms = zk_ivm_prove_now_ms();
-                return;
-            }
-            drop(retry_entry);
+        if zk_ivm_prove_evict_terminal_lru(jobs, &owner, Some(job_id)) {
+            continue;
         }
 
         let discarded = zk_ivm_prove_job_response_body(
@@ -16940,6 +17579,9 @@ fn zk_ivm_prove_store_terminal(
         )
         .expect("bounded IVM prove capacity error must serialize");
         if let Some(mut retry_entry) = jobs.get_mut(job_id) {
+            if !Arc::ptr_eq(&retry_entry.retention, expected_reservation) {
+                return;
+            }
             // Pending reservations have a fixed floor larger than this bounded
             // fallback, so this transition always releases memory.
             if retry_entry.retention.try_resize(discarded.len()) {
@@ -16950,9 +17592,6 @@ fn zk_ivm_prove_store_terminal(
         }
         return;
     }
-    entry.status = status;
-    entry.response_body = body;
-    entry.last_access_ms = zk_ivm_prove_now_ms();
 }
 
 type ZkIvmProveOutcome = Result<
@@ -17182,6 +17821,7 @@ fn validate_zk_ivm_fee_payment(
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_derive(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
@@ -17207,6 +17847,7 @@ async fn handler_zk_ivm_derive(
                 )),
             ))
         })?;
+    require_zk_ivm_derive_authority(&req.authority, &verified)?;
     validate_zk_ivm_fee_payment(&req.fee_payment, &req.metadata)?;
 
     let backend = req.vk_ref.backend.as_str();
@@ -17308,7 +17949,7 @@ async fn handler_zk_ivm_derive(
         )
     };
 
-    let chain_id = app.chain_id.as_ref().clone();
+    let network_id = *app.state.network_id_ref();
     let state = Arc::clone(&app.state);
     let authority = req.authority;
     let fee_payment = req.fee_payment;
@@ -17320,7 +17961,7 @@ async fn handler_zk_ivm_derive(
         let _tooling_permit = tooling_permit;
         let synthetic_signer = zk_ivm_synthetic_signer()?;
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
-            chain_id,
+            network_id,
             authority.clone(),
             fee_payment,
         )
@@ -17383,6 +18024,8 @@ async fn handler_zk_ivm_derive(
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
@@ -17397,9 +18040,18 @@ async fn handler_zk_ivm_prove(
         true,
     )
     .await?;
-    zk_ivm_prove_gc_jobs(&app);
     enforce_proof_body_limit(&app, body.len(), "v1/zk/ivm/prove")?;
     require_proof_json_content_type(&headers, "v1/zk/ivm/prove")?;
+    let owner = require_signed_account_request(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "zk_ivm_prove_auth_required",
+        "signed account headers are required to create an IVM prove job",
+    )?;
+    zk_ivm_prove_gc_jobs(&app);
 
     let mut req: ZkIvmProveRequestDto = norito::json::from_slice(body.as_ref()).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -17408,6 +18060,13 @@ async fn handler_zk_ivm_prove(
             )),
         ))
     })?;
+    if req.authority != owner {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "signed account must match the IVM prove request authority".to_owned(),
+            ),
+        ));
+    }
     validate_zk_ivm_fee_payment(&req.fee_payment, &req.metadata)?;
 
     let backend = req.vk_ref.backend.as_str();
@@ -17537,6 +18196,7 @@ async fn handler_zk_ivm_prove(
         .max(ZK_IVM_PROVE_JOB_MIN_PENDING_RESERVATION_BYTES);
     let retention = zk_ivm_prove_insert_pending(
         &app,
+        owner,
         job_id.clone(),
         created_ms,
         pending_body,
@@ -17557,7 +18217,7 @@ async fn handler_zk_ivm_prove(
 
     let backend = vk_ref.backend.clone();
     let keys_dir = app.zk_prover_keys_dir.clone();
-    let chain_id = app.chain_id.as_ref().clone();
+    let network_id = *app.state.network_id_ref();
     let state = Arc::clone(&app.state);
     let job_id_for_task = job_id.clone();
     let telemetry = app.telemetry.clone();
@@ -17566,6 +18226,8 @@ async fn handler_zk_ivm_prove(
     let inflight = app.zk_ivm_prove_inflight.clone();
     let inflight_total = app.zk_ivm_prove_inflight_total;
     let jobs = app.zk_ivm_prove_jobs.clone();
+    let job_budget = Arc::clone(&app.zk_ivm_prove_job_budget);
+    let owner_max_bytes = app.zk_ivm_prove_job_max_retained_bytes_per_owner;
     tokio::spawn(async move {
         // Keep the pending request reservation alive even if a client deletes
         // the status entry while non-preemptible proving work is still running.
@@ -17721,7 +18383,7 @@ async fn handler_zk_ivm_prove(
                 let code_hash = ivm::contract_code_hash(bytecode.as_ref());
                 let synthetic_signer = zk_ivm_synthetic_signer()?;
                 let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
-                    chain_id,
+                    network_id,
                     authority.clone(),
                     fee_payment,
                 )
@@ -17823,7 +18485,15 @@ async fn handler_zk_ivm_prove(
             let (status, response_body) = outcome.unwrap_or_else(|error| {
                 zk_ivm_prove_terminal_body(job_id_for_task.clone(), Err(error))
             });
-            zk_ivm_prove_store_terminal(&jobs, &job_id_for_task, status, response_body);
+            zk_ivm_prove_store_terminal(
+                &jobs,
+                job_budget.as_ref(),
+                owner_max_bytes,
+                &job_id_for_task,
+                &retention_for_task,
+                status,
+                response_body,
+            );
         }
 
         drop(slot_permit);
@@ -17837,10 +18507,12 @@ async fn handler_zk_ivm_prove(
         );
     });
 
-    Ok(crate::utils::respond_with_format(
+    let mut response = crate::utils::respond_with_format(
         ZkIvmProveJobCreatedDto { job_id },
         crate::utils::ResponseFormat::Json,
-    ))
+    );
+    install_canonical_account_private_cache_headers(&mut response);
+    Ok(response)
 }
 
 fn validate_zk_ivm_prove_job_id(job_id: &str) -> Result<(), Error> {
@@ -17861,6 +18533,8 @@ fn validate_zk_ivm_prove_job_id(job_id: &str) -> Result<(), Error> {
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove_get(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     job_id: axum::extract::Path<String>,
@@ -17875,22 +18549,37 @@ async fn handler_zk_ivm_prove_get(
         true,
     )
     .await?;
+    let owner = require_signed_account_request(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        "zk_ivm_prove_auth_required",
+        "signed account headers are required to read an IVM prove job",
+    )?;
     zk_ivm_prove_gc_jobs(&app);
 
     let job_id = job_id.0;
     validate_zk_ivm_prove_job_id(&job_id)?;
-    let Some(entry) = app.zk_ivm_prove_jobs.get(&job_id) else {
-        return Ok((
+    let Some(entry) = app
+        .zk_ivm_prove_jobs
+        .get(&job_id)
+        .filter(|entry| &entry.value().owner == &owner)
+    else {
+        let mut response = (
             StatusCode::NOT_FOUND,
             "prove job not found; submit a new job via POST /v1/zk/ivm/prove",
         )
-            .into_response());
+            .into_response();
+        install_canonical_account_private_cache_headers(&mut response);
+        return Ok(response);
     };
 
     let body = entry.response_body.clone();
     drop(entry);
 
-    let response = proof_cached_json_response_with_egress(
+    let mut response = proof_cached_json_response_with_egress(
         &app,
         &headers,
         Some(remote_ip),
@@ -17899,9 +18588,12 @@ async fn handler_zk_ivm_prove_get(
         true,
     )
     .await?;
+    install_canonical_account_private_cache_headers(&mut response);
     // A throttled poll must not pin a large terminal response in the LRU.
     if let Some(mut entry) = app.zk_ivm_prove_jobs.get_mut(&job_id) {
-        entry.last_access_ms = zk_ivm_prove_now_ms();
+        if &entry.value().owner == &owner {
+            entry.last_access_ms = zk_ivm_prove_now_ms();
+        }
     }
     Ok(response)
 }
@@ -17909,6 +18601,8 @@ async fn handler_zk_ivm_prove_get(
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove_delete(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     job_id: axum::extract::Path<String>,
@@ -17923,37 +18617,41 @@ async fn handler_zk_ivm_prove_delete(
         true,
     )
     .await?;
+    let owner = require_signed_account_request(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        "zk_ivm_prove_auth_required",
+        "signed account headers are required to delete an IVM prove job",
+    )?;
     zk_ivm_prove_gc_jobs(&app);
 
     let job_id = job_id.0;
     validate_zk_ivm_prove_job_id(&job_id)?;
-    if let Some((_key, state)) = app.zk_ivm_prove_jobs.remove(&job_id) {
-        let _ = state.cancel.send(true);
-    }
-    Ok(crate::utils::respond_with_format(
+    let Some((_key, state)) = app
+        .zk_ivm_prove_jobs
+        .remove_if(&job_id, |_, state| &state.owner == &owner)
+    else {
+        let mut response = (StatusCode::NOT_FOUND, "prove job not found").into_response();
+        install_canonical_account_private_cache_headers(&mut response);
+        return Ok(response);
+    };
+    let _ = state.cancel.send(true);
+    let mut response = crate::utils::respond_with_format(
         ZkIvmProveJobCreatedDto { job_id },
         crate::utils::ResponseFormat::Json,
-    ))
+    );
+    install_canonical_account_private_cache_headers(&mut response);
+    Ok(response)
 }
 
 #[cfg(feature = "app_api")]
 fn zk_attachments_tenant(
-    app: &SharedAppState,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
-    headers: &axum::http::HeaderMap,
-    body: &[u8],
-) -> Result<crate::zk_attachments::AttachmentTenant, Error> {
-    match crate::app_auth::verify_canonical_request(&app.state, headers, method, uri, body, None)? {
-        Some(verified) => Ok(crate::zk_attachments::AttachmentTenant::from_account(
-            &verified.account,
-        )),
-        None => Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted(
-                "signed account headers are required".to_owned(),
-            ),
-        )),
-    }
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+) -> crate::zk_attachments::AttachmentTenant {
+    crate::zk_attachments::AttachmentTenant::from_account(&verified.account)
 }
 
 #[cfg(feature = "app_api")]
@@ -17975,52 +18673,48 @@ async fn handler_zk_attachments_disabled() -> Response {
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachments_create(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/attachments", true).await?;
-    let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, body.as_ref())?;
+    let tenant = zk_attachments_tenant(&verified);
     Ok(crate::zk_attachments::handle_post_attachment(tenant, headers, body).await)
 }
 
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachments_list(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/attachments", true).await?;
-    let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, &[])?;
+    let tenant = zk_attachments_tenant(&verified);
     Ok(crate::zk_attachments::handle_list_attachments(tenant).await)
 }
 
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachments_filtered(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(q): AxQuery<crate::zk_attachments::AttachmentListQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/attachments", true).await?;
-    let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, &[])?;
+    let tenant = zk_attachments_tenant(&verified);
     Ok(crate::zk_attachments::handle_list_attachments_filtered(tenant, AxQuery(q)).await)
 }
 
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachments_count(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(q): AxQuery<crate::zk_attachments::AttachmentListQuery>,
@@ -18034,15 +18728,14 @@ async fn handler_zk_attachments_count(
         true,
     )
     .await?;
-    let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, &[])?;
+    let tenant = zk_attachments_tenant(&verified);
     Ok(crate::zk_attachments::handle_count_attachments(tenant, AxQuery(q)).await)
 }
 
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachment_get(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: axum::extract::Path<String>,
@@ -18056,15 +18749,14 @@ async fn handler_zk_attachment_get(
         true,
     )
     .await?;
-    let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, &[])?;
+    let tenant = zk_attachments_tenant(&verified);
     Ok(crate::zk_attachments::handle_get_attachment(tenant, id).await)
 }
 
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachment_delete(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: axum::extract::Path<String>,
@@ -18078,7 +18770,7 @@ async fn handler_zk_attachment_delete(
         true,
     )
     .await?;
-    let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, &[])?;
+    let tenant = zk_attachments_tenant(&verified);
     Ok(crate::zk_attachments::handle_delete_attachment(tenant, id).await)
 }
 
@@ -20806,8 +21498,14 @@ fn torii_visibility_account_from_headers(
     _endpoint: &'static str,
 ) -> Result<ToriiAccountReadVisibility, Error> {
     if torii_signed_visibility_headers_present(headers) {
-        return crate::app_auth::verify_canonical_request(
-            &app.state, headers, method, uri, body, None,
+        return crate::app_auth::verify_canonical_network_request(
+            &app.state,
+            app.state.network_id_ref(),
+            headers,
+            method,
+            uri,
+            body,
+            None,
         )
         .map(|verified| {
             verified.map_or(ToriiAccountReadVisibility::None, |request| {
@@ -21482,7 +22180,10 @@ fn queue_plan_synced_proxy_request_id_for_entrypoint(
     app: &AppState,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Hash {
-    iroha_core::torii_proxy::queue_plan_synced_request_id(app.chain_id.as_ref(), entrypoint_hash)
+    iroha_core::torii_proxy::queue_plan_synced_request_id(
+        app.state.network_id_ref(),
+        entrypoint_hash,
+    )
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -23137,6 +23838,7 @@ fn canonicalize_query_batch_box(
 fn decode_verified_proxy_signed_query(
     query_bytes: &[u8],
     request_kind: &'static str,
+    admission: &routing::SignedQueryAdmission,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority, Response> {
     let query =
         <SignedQuery as iroha_version::codec::DecodeVersioned>::decode_all_versioned(query_bytes)
@@ -23147,7 +23849,7 @@ fn decode_verified_proxy_signed_query(
                 format!("failed to decode exact {request_kind} signed query: {error}"),
             )
         })?;
-    routing::verify_signed_query_request(query).map_err(IntoResponse::into_response)
+    routing::verify_signed_query_request(query, admission).map_err(IntoResponse::into_response)
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -23253,6 +23955,10 @@ async fn execute_torii_verified_query_exhaustive_locally(
     admit_signed_query_authority(app.as_ref(), &authority)
         .await
         .map_err(IntoResponse::into_response)?;
+    let network_id = request.network_id;
+    let creation_time_ms = request.creation_time_ms;
+    let time_to_live_ms = request.time_to_live_ms;
+    let nonce = request.nonce;
     let mut current_request = request;
     let mut accumulated_batch: Option<iroha_data_model::query::QueryOutputBatchBox> = None;
 
@@ -23299,7 +24005,11 @@ async fn execute_torii_verified_query_exhaustive_locally(
 
                 if let Some(cursor) = continue_cursor {
                     current_request = iroha_data_model::query::QueryRequestWithAuthority {
+                        network_id,
                         authority: authority.clone(),
+                        creation_time_ms,
+                        time_to_live_ms,
+                        nonce,
                         request: iroha_data_model::query::QueryRequest::Continue(cursor),
                     };
                     continue;
@@ -23593,7 +24303,11 @@ async fn execute_torii_signed_query_fanout_proxy_request(
     query_bytes: Vec<u8>,
     response_format: ToriiProxyResponseFormatV1,
 ) -> Response {
-    let request = match decode_verified_proxy_signed_query(&query_bytes, "Nexus fanout") {
+    let request = match decode_verified_proxy_signed_query(
+        &query_bytes,
+        "Nexus fanout",
+        app.signed_query_admission.as_ref(),
+    ) {
         Ok(request) => request,
         Err(response) => return response,
     };
@@ -25798,8 +26512,8 @@ fn validate_queue_plan_synced_acceptance(
             "QueuePlanSynced certificate binding differs from the exact proxy request".to_owned(),
         );
     }
-    let validated = validate_queue_plan_admission_certificate_for_chain_digest_v2(
-        expected.admission_binding.chain_id_digest,
+    let validated = validate_queue_plan_admission_certificate_for_network_digest_v2(
+        expected.admission_binding.network_id_digest,
         certificate,
         QueuePlanAdmissionCertificateStrengthV2::Partial,
     )?;
@@ -25995,6 +26709,16 @@ fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV4) -> &'static 
         ToriiProxyRequestKindV4::ReadFanout(_) => "read_fanout",
         ToriiProxyRequestKindV4::HostedHttp(_) => "hosted_http",
     }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_proxy_request_carries_one_shot_signed_query(request: &ToriiProxyRequestKindV4) -> bool {
+    matches!(
+        request,
+        ToriiProxyRequestKindV4::SignedQuery { .. }
+            | ToriiProxyRequestKindV4::SignedQueryRouteScan { .. }
+            | ToriiProxyRequestKindV4::SignedQueryFanout { .. }
+    )
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -26302,6 +27026,7 @@ async fn execute_torii_proxy_request_via_http_bridge(
         .expect("internal Torii proxy path must be a valid URI");
     let mut headers = operator_signatures::signed_torii_proxy_request_headers(
         &app.torii_proxy_bridge_signer,
+        app.state.network_id_ref(),
         &target_peer_id,
         &crate::Method::POST,
         &uri,
@@ -26341,16 +27066,15 @@ async fn execute_torii_proxy_request_via_http_bridge(
     );
 
     let queue_plan_synced = queue_plan_synced_entrypoint_hash(&request.request).is_some();
-    let mut client_builder = reqwest::Client::builder();
-    if queue_plan_synced {
-        client_builder = client_builder.redirect(reqwest::redirect::Policy::none());
-    }
-    let client = client_builder.build().map_err(|error| {
-        ToriiProxyAttemptError::before_dispatch(format!(
-            "failed to build Torii proxy HTTP client for request `{}` to peer `{target_peer_id}`: {error}",
-            request.request_id
-        ))
-    })?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| {
+            ToriiProxyAttemptError::before_dispatch(format!(
+                "failed to build Torii proxy HTTP client for request `{}` to peer `{target_peer_id}`: {error}",
+                request.request_id
+            ))
+        })?;
     let response = client
         .post(request_url.clone())
         .headers(headers)
@@ -26385,8 +27109,16 @@ async fn execute_torii_proxy_request_locally(
     let max_body_bytes = torii_proxy_response_body_limit(app.as_ref(), &request.request);
     let strict_queue_plan_synced = queue_plan_synced_entrypoint_hash(&request.request).is_some();
     let request_id = request.request_id.clone();
-    let response =
-        execute_incoming_torii_proxy_request(app, request, Some(local_peer_id.clone())).await;
+    // Local delivery may execute a Nexus fanout whose remote legs re-enter the
+    // ordinary proxy candidate pipeline. Hop history and candidate filtering
+    // bound that recursion at runtime; erase this one recursive future edge so
+    // the compiler does not need to construct an infinitely sized future.
+    let response = Box::pin(execute_incoming_torii_proxy_request(
+        app,
+        request,
+        Some(local_peer_id.clone()),
+    ))
+    .await;
     let snapshot = response_to_torii_proxy_snapshot(response, max_body_bytes).await;
     if strict_queue_plan_synced {
         validate_queue_plan_synced_snapshot_bounds(&snapshot).map_err(|error| {
@@ -26660,6 +27392,76 @@ where
         }
     };
     let queue_plan_synced = queue_plan_synced_expectation.is_some();
+
+    if torii_proxy_request_carries_one_shot_signed_query(&request.request) {
+        let mut last_pre_dispatch_error = None;
+        for candidate in candidate_peers {
+            let peer_id = candidate.peer_id().clone();
+            let transport = candidate.transport_label();
+            match execute(candidate, request.clone()).await {
+                Ok(snapshot) => {
+                    // A complete response, including an explicit rejection, proves that this
+                    // exact nonce-bearing request reached an authority. Return it verbatim:
+                    // retrying the body would violate one-shot admission semantics.
+                    let mut response = torii_proxy_snapshot_to_response(snapshot);
+                    insert_route_transport_header(&mut response, transport);
+                    complete_request(request_id).await;
+                    return response;
+                }
+                Err(ToriiProxyAttemptError::DefinitelyNotDispatched(reason)) => {
+                    iroha_logger::warn!(
+                        peer_id = %peer_id,
+                        transport,
+                        reason,
+                        "signed-query proxy attempt failed before dispatch; trying the next authority"
+                    );
+                    last_pre_dispatch_error = Some(reason);
+                }
+                Err(ToriiProxyAttemptError::DispatchedWithoutResponse(reason)) => {
+                    iroha_logger::warn!(
+                        peer_id = %peer_id,
+                        transport,
+                        reason,
+                        "signed-query proxy dispatch outcome is unknown; refusing to resend the exact request"
+                    );
+                    let mut response = torii_proxy_error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "signed_query_outcome_unknown",
+                        format!(
+                            "signed query may have reached authority `{peer_id}` via {transport}; \
+                             the exact nonce-bearing request was not retried: {reason}"
+                        ),
+                    );
+                    insert_route_transport_header(&mut response, transport);
+                    complete_request(request_id).await;
+                    return response;
+                }
+            }
+        }
+
+        complete_request(request_id).await;
+        return torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            last_pre_dispatch_error.map_or_else(
+                || {
+                    format!(
+                        "no authoritative peers are available for one-shot signed query lane {} dataspace {}",
+                        routing_decision.lane_id.as_u32(),
+                        routing_decision.dataspace_id.as_u64()
+                    )
+                },
+                |reason| {
+                    format!(
+                        "every signed-query authority failed before dispatch for lane {} dataspace {}: {reason}",
+                        routing_decision.lane_id.as_u32(),
+                        routing_decision.dataspace_id.as_u64()
+                    )
+                },
+            ),
+        );
+    }
+
     let mut durable_attestations = BTreeMap::<u16, QueuePlanAdmissionAttestationV2>::new();
     let mut last_retryable: Option<Response> = None;
     let mut queue_plan_synced_failure: Option<(u8, usize, Response)> = None;
@@ -27015,8 +27817,8 @@ fn validate_queue_plan_admission_publication(
         ));
     }
     let certificate = decode_queue_plan_synced_certificate(&publication.certificate)?;
-    let validated = validate_queue_plan_admission_certificate_for_chain_digest_v2(
-        queue_plan_admission_chain_id_digest(app.chain_id.as_ref()),
+    let validated = validate_queue_plan_admission_certificate_for_network_digest_v2(
+        queue_plan_admission_network_id_digest(app.state.network_id_ref()),
         certificate,
         QueuePlanAdmissionCertificateStrengthV2::Quorum,
     )?;
@@ -27170,8 +27972,8 @@ async fn persist_and_wait_for_queue_plan_admission(
             );
         }
     };
-    if let Err(error) = validate_queue_plan_admission_certificate_for_chain_digest_v2(
-        expected_binding.chain_id_digest,
+    if let Err(error) = validate_queue_plan_admission_certificate_for_network_digest_v2(
+        expected_binding.network_id_digest,
         certificate,
         QueuePlanAdmissionCertificateStrengthV2::Quorum,
     ) {
@@ -27440,7 +28242,7 @@ async fn execute_torii_transaction_via_proxy(
         };
         let enqueue_timestamp_ms = app.queue.queue_plan_admission_timestamp_ms();
         match QueuePlanAdmissionBindingV2::new(
-            app.chain_id.as_ref(),
+            app.state.network_id_ref(),
             &transaction,
             &routing_plan,
             context,
@@ -27457,7 +28259,7 @@ async fn execute_torii_transaction_via_proxy(
         }
     };
     if let Err(error) =
-        binding.validate_for_request(app.chain_id.as_ref(), &transaction, &routing_plan)
+        binding.validate_for_request(app.state.network_id_ref(), &transaction, &routing_plan)
     {
         return torii_proxy_error_response(
             StatusCode::CONFLICT,
@@ -30776,7 +31578,6 @@ async fn execute_incoming_torii_proxy_request(
                 }
             };
             match routing::accept_transaction_for_ingress(
-                app.chain_id.clone(),
                 app.state.clone(),
                 transaction,
                 &app.telemetry,
@@ -30817,11 +31618,11 @@ async fn execute_incoming_torii_proxy_request(
                                     return torii_proxy_error_response(
                                         StatusCode::BAD_REQUEST,
                                         "invalid_proxy_request",
-                                        "QueuePlanSynced request ID is not the deterministic chain/entrypoint identity",
+                                        "QueuePlanSynced request ID is not the deterministic network/entrypoint identity",
                                     );
                                 }
                                 if let Err(error) = admission_binding.validate_for_request(
-                                    app.chain_id.as_ref(),
+                                    app.state.network_id_ref(),
                                     accepted_tx.entrypoint(),
                                     &routing_plan,
                                 ) {
@@ -30995,7 +31796,11 @@ async fn execute_incoming_torii_proxy_request(
             query_bytes,
             expected_route,
             response_format,
-        } => match decode_verified_proxy_signed_query(&query_bytes, "proxied") {
+        } => match decode_verified_proxy_signed_query(
+            &query_bytes,
+            "proxied",
+            app.signed_query_admission.as_ref(),
+        ) {
             Ok(verified_query) => {
                 let scope = signed_query_scope_for_app(app.as_ref(), &verified_query);
                 match torii_authorized_signed_query_routes(app.as_ref(), &verified_query, &scope) {
@@ -31051,7 +31856,11 @@ async fn execute_incoming_torii_proxy_request(
             query_bytes,
             expected_route,
             response_format,
-        } => match decode_verified_proxy_signed_query(&query_bytes, "proxied route-scan") {
+        } => match decode_verified_proxy_signed_query(
+            &query_bytes,
+            "proxied route-scan",
+            app.signed_query_admission.as_ref(),
+        ) {
             Ok(request) => {
                 if let Err(response) =
                     reject_proxy_client_continuation(&request, "signed route scan")
@@ -31783,64 +32592,6 @@ struct ResolvedHostedHttpTarget {
 }
 
 #[cfg(feature = "app_api")]
-struct HyperTokioTcpStream(tokio::net::TcpStream);
-
-#[cfg(feature = "app_api")]
-impl hyper::rt::Read for HyperTokioTcpStream {
-    fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        mut buf: hyper::rt::ReadBufCursor<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        let mut scratch = [0u8; 8192];
-        let read_len = scratch.len().min(buf.remaining());
-        let mut tokio_buf = tokio::io::ReadBuf::new(&mut scratch[..read_len]);
-        match tokio::io::AsyncRead::poll_read(std::pin::Pin::new(&mut self.0), cx, &mut tokio_buf) {
-            std::task::Poll::Ready(Ok(())) => buf.put_slice(tokio_buf.filled()),
-            other => return other,
-        }
-        std::task::Poll::Ready(Ok(()))
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl hyper::rt::Write for HyperTokioTcpStream {
-    fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        tokio::io::AsyncWrite::poll_write(std::pin::Pin::new(&mut self.0), cx, buf)
-    }
-
-    fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        tokio::io::AsyncWrite::poll_flush(std::pin::Pin::new(&mut self.0), cx)
-    }
-
-    fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        tokio::io::AsyncWrite::poll_shutdown(std::pin::Pin::new(&mut self.0), cx)
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        tokio::io::AsyncWrite::is_write_vectored(&self.0)
-    }
-
-    fn poll_write_vectored(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        bufs: &[std::io::IoSlice<'_>],
-    ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        tokio::io::AsyncWrite::poll_write_vectored(std::pin::Pin::new(&mut self.0), cx, bufs)
-    }
-}
-
-#[cfg(feature = "app_api")]
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn ensure_local_hosted_http_snapshot_origin(
     app: &AppState,
@@ -32258,18 +33009,17 @@ async fn proxy_soracloud_public_hosted_http_locally(
                 ),
             )
         })?;
-    let (mut sender, connection) =
-        hyper::client::conn::http1::handshake(HyperTokioTcpStream(stream))
-            .await
-            .map_err(|error| {
-                SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Unavailable,
-                    format!(
-                        "hosted Soracloud service `{}` revision `{}` proxy failed: {error}",
-                        route_match.service_name, route_match.service_version
-                    ),
-                )
-            })?;
+    let (mut sender, connection) = hyper::client::conn::http1::handshake(HyperTokioIo(stream))
+        .await
+        .map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "hosted Soracloud service `{}` revision `{}` proxy failed: {error}",
+                    route_match.service_name, route_match.service_version
+                ),
+            )
+        })?;
     tokio::spawn(async move {
         let _ = connection.await;
     });
@@ -33061,40 +33811,6 @@ async fn handler_soracloud_status(
     ]);
 
     Ok(crate::utils::respond_value_with_format(payload, format))
-}
-
-#[cfg(feature = "telemetry")]
-async fn handler_post_soranet_privacy_event(
-    State(app): State<SharedAppState>,
-    headers: HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: crate::NoritoJson<RecordSoranetPrivacyEventDto>,
-) -> Result<AxResponse, Error> {
-    if let Err(resp) =
-        enforce_soranet_privacy_ingest(&app, &headers, Some(remote.ip()), "event").await
-    {
-        return Ok(resp);
-    }
-    routing::handle_post_soranet_privacy_event(app.telemetry.clone(), request)
-        .await
-        .map(IntoResponse::into_response)
-}
-
-#[cfg(feature = "telemetry")]
-async fn handler_post_soranet_privacy_share(
-    State(app): State<SharedAppState>,
-    headers: HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: crate::NoritoJson<RecordSoranetPrivacyShareDto>,
-) -> Result<AxResponse, Error> {
-    if let Err(resp) =
-        enforce_soranet_privacy_ingest(&app, &headers, Some(remote.ip()), "share").await
-    {
-        return Ok(resp);
-    }
-    routing::handle_post_soranet_privacy_share(app.telemetry.clone(), request)
-        .await
-        .map(IntoResponse::into_response)
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -35126,12 +35842,12 @@ async fn handler_debug_axt_cache(
                 encode_json(&hint.target_lane.as_u32())?,
             );
             map.insert(
-                "next_min_handle_era".to_string(),
-                encode_json(&hint.next_min_handle_era)?,
+                "active_handle_era".to_string(),
+                encode_json(&hint.active_handle_era)?,
             );
             map.insert(
-                "next_min_sub_nonce".to_string(),
-                encode_json(&hint.next_min_sub_nonce)?,
+                "next_handle_counter".to_string(),
+                encode_json(&hint.next_handle_counter)?,
             );
             map.insert(
                 "reason".to_string(),
@@ -36300,7 +37016,6 @@ async fn handler_post_contract_alias_set(
     )
     .await?;
     match crate::routing::handle_post_contract_alias_set(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         request,
@@ -36365,7 +37080,6 @@ async fn handler_post_contract_call(
     )
     .await?;
     match crate::routing::handle_post_contract_call(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -36740,7 +37454,6 @@ async fn handler_post_contract_call_multisig_propose(
         )));
     }
     match crate::routing::handle_post_contract_call_multisig_propose(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -36784,7 +37497,6 @@ async fn handler_post_contract_call_multisig_approve(
         )));
     }
     match crate::routing::handle_post_contract_call_multisig_approve(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -36881,7 +37593,6 @@ async fn handler_post_multisig_propose(
         )));
     }
     match crate::routing::handle_post_multisig_propose(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -36925,7 +37636,6 @@ async fn handler_post_multisig_approve(
         )));
     }
     match crate::routing::handle_post_multisig_approve(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -36969,7 +37679,6 @@ async fn handler_post_multisig_cancel(
         )));
     }
     match crate::routing::handle_post_multisig_cancel(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -37139,7 +37848,6 @@ async fn handler_post_account_recovery_policy_set(
     )
     .await?;
     match crate::routing::handle_post_account_recovery_policy_set(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -37173,7 +37881,6 @@ async fn handler_post_account_recovery_propose(
     )
     .await?;
     match crate::routing::handle_post_account_recovery_propose(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -37207,7 +37914,6 @@ async fn handler_post_account_recovery_approve(
     )
     .await?;
     match crate::routing::handle_post_account_recovery_approve(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -37241,7 +37947,6 @@ async fn handler_post_account_recovery_finalize(
     )
     .await?;
     match crate::routing::handle_post_account_recovery_finalize(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -37354,7 +38059,6 @@ async fn handler_post_sorafs_register_manifest(
         )));
     }
     match crate::routing::handle_post_sorafs_register_manifest(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -37400,7 +38104,6 @@ async fn handler_post_sorafs_capacity_declare(
         )));
     }
     match crate::routing::handle_post_sorafs_register_capacity_declaration(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -37445,7 +38148,6 @@ async fn handler_post_sorafs_capacity_telemetry(
         )));
     }
     match crate::routing::handle_post_sorafs_record_capacity_telemetry(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         app.telemetry.clone(),
@@ -37654,6 +38356,15 @@ async fn handler_post_sorafs_por_vrf(
                 .into_response();
         }
     };
+    if submission.network_id != *app.state.network_id_ref().as_bytes() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            JsonBody(norito::json!({
+                "error": "sorafs_por_vrf_wrong_network",
+            })),
+        )
+            .into_response();
+    }
     let Some(runtime) = app.por_runtime.clone() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -37744,7 +38455,8 @@ async fn handler_post_sorafs_por_vrf(
                 sorafs::VrfError::Persistence(_) => StatusCode::SERVICE_UNAVAILABLE,
                 sorafs::VrfError::UnadmittedProvider => StatusCode::FORBIDDEN,
                 sorafs::VrfError::InvalidSignature(_) => StatusCode::UNAUTHORIZED,
-                sorafs::VrfError::InvalidSubmission(_)
+                sorafs::VrfError::WrongNetwork
+                | sorafs::VrfError::InvalidSubmission(_)
                 | sorafs::VrfError::UnknownManifest
                 | sorafs::VrfError::InvalidProof
                 | sorafs::VrfError::InvalidTimestamp
@@ -37933,6 +38645,7 @@ async fn handler_iso_pacs008(
             &world,
             now_ms,
             Arc::as_ref(&app.chain_id),
+            app.state.network_id_ref(),
             &app.telemetry,
         ) {
             Ok(result) => result,
@@ -37962,13 +38675,8 @@ async fn handler_iso_pacs008(
     let tx_hash = transaction.hash();
     let tx_hash_str = format!("{}", tx_hash);
 
-    if let Err(err) = routing::handle_transaction(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        transaction,
-    )
-    .await
+    if let Err(err) =
+        routing::handle_transaction(app.queue.clone(), app.state.clone(), transaction).await
     {
         let (detail, reason_code) = match &err {
             Error::PushIntoQueue { source, .. } => {
@@ -38118,6 +38826,7 @@ async fn handler_iso_pacs009(
             &world,
             now_ms,
             Arc::as_ref(&app.chain_id),
+            app.state.network_id_ref(),
             &app.telemetry,
         ) {
             Ok(result) => result,
@@ -38147,13 +38856,8 @@ async fn handler_iso_pacs009(
     let tx_hash = transaction.hash();
     let tx_hash_str = format!("{}", tx_hash);
 
-    if let Err(err) = routing::handle_transaction(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        transaction,
-    )
-    .await
+    if let Err(err) =
+        routing::handle_transaction(app.queue.clone(), app.state.clone(), transaction).await
     {
         let (detail, reason_code) = match &err {
             Error::PushIntoQueue { source, .. } => {
@@ -39375,17 +40079,19 @@ fn iso_profile_from_request<'a>(
     headers: &HeaderMap,
     query: &HashMap<String, String>,
 ) -> Result<&'a iroha_core::iso_bridge::profiles::TradfiRailProfile, Error> {
-    let header_profile = headers
-        .get("x-iroha-iso-profile")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let query_profile = query
+    if headers.contains_key("x-iroha-iso-profile") {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "X-Iroha-Iso-Profile is retired; select the profile with the signed `profile` query parameter"
+                    .into(),
+            ),
+        ));
+    }
+    let selected = query
         .get("profile")
         .map(String::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let selected = header_profile.or(query_profile);
     runtime.resolve_profile(selected).ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::NotPermitted(
             format!(
@@ -39517,7 +40223,6 @@ async fn handler_post_vk_register(
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_post_vk_register(
-            app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
             request,
@@ -39539,14 +40244,9 @@ async fn handler_post_vk_register(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    crate::routing::handle_post_vk_register(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        request,
-    )
-    .await
-    .map(IntoResponse::into_response)
+    crate::routing::handle_post_vk_register(app.queue.clone(), app.state.clone(), request)
+        .await
+        .map(IntoResponse::into_response)
 }
 
 #[cfg(feature = "app_api")]
@@ -39559,7 +40259,6 @@ async fn handler_post_vk_update(
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return crate::routing::handle_post_vk_update(
-            app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
             request,
@@ -39581,14 +40280,9 @@ async fn handler_post_vk_update(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    crate::routing::handle_post_vk_update(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        request,
-    )
-    .await
-    .map(IntoResponse::into_response)
+    crate::routing::handle_post_vk_update(app.queue.clone(), app.state.clone(), request)
+        .await
+        .map(IntoResponse::into_response)
 }
 
 async fn handler_post_transaction(
@@ -39698,7 +40392,6 @@ async fn submit_signed_transaction_for_ingress_globally_synced(
     }
     let compute_permit =
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
-    let chain_id = app.chain_id.clone();
     let state = app.state.clone();
     let telemetry = app.telemetry.clone();
     let (accepted_tx, compute_permit) = run_transaction_ingress_compute_job(
@@ -39725,7 +40418,6 @@ async fn submit_signed_transaction_for_ingress_globally_synced(
                 });
             }
             let accepted_tx = routing::accept_decoded_signed_transaction_for_ingress(
-                chain_id,
                 state,
                 transaction,
                 &telemetry,
@@ -39814,13 +40506,12 @@ async fn handler_post_transaction_entrypoint(
     }
     let compute_permit =
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
-    let chain_id = app.chain_id.clone();
     let state = app.state.clone();
     let telemetry = app.telemetry.clone();
     let (accepted_tx, compute_permit) = run_transaction_ingress_compute_job(
         compute_permit,
         "transaction_entrypoint_admission_worker_failed",
-        move || routing::accept_transaction_for_ingress(chain_id, state, transaction, &telemetry),
+        move || routing::accept_transaction_for_ingress(state, transaction, &telemetry),
     )
     .await?;
     drop(compute_permit);
@@ -40152,12 +40843,11 @@ mod transaction_ingress_decode_tests {
     }
 
     fn signed_transaction_for_test_with_message(message: &str) -> SignedTransaction {
-        let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
         let keypair =
             checked_transaction_batch_test_keypair(0xa1, iroha_crypto::Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         TransactionBuilder::new(
-            chain,
+            signed_query_test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -40166,13 +40856,13 @@ mod transaction_ingress_decode_tests {
     }
 
     fn signed_transaction_for_test_with_keypair(
-        chain: ChainId,
+        network_id: NetworkId,
         keypair: &KeyPair,
         message: &str,
     ) -> SignedTransaction {
         let authority = AccountId::new(keypair.public_key().clone());
         TransactionBuilder::new(
-            chain,
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -40364,16 +41054,19 @@ mod transaction_ingress_decode_tests {
 
     #[test]
     fn transaction_batch_ed25519_precheck_accepts_repeated_authority_batch() {
-        let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
+        let network_id = signed_query_test_network_id();
         let keypair =
             checked_transaction_batch_test_keypair(0xa2, iroha_crypto::Algorithm::Ed25519);
         let tx1 = signed_transaction_for_test_with_keypair(
-            chain.clone(),
+            network_id,
             &keypair,
             "ed25519-precheck-repeat-1",
         );
-        let tx2 =
-            signed_transaction_for_test_with_keypair(chain, &keypair, "ed25519-precheck-repeat-2");
+        let tx2 = signed_transaction_for_test_with_keypair(
+            network_id,
+            &keypair,
+            "ed25519-precheck-repeat-2",
+        );
         let decoded = decode_transaction_batch_payloads(vec![
             versioned_signed_transaction(&tx1),
             versioned_signed_transaction(&tx2),
@@ -40436,12 +41129,11 @@ mod transaction_ingress_decode_tests {
 
     #[test]
     fn transaction_batch_non_ed25519_bypasses_ed25519_precheck() {
-        let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
         let keypair =
             checked_transaction_batch_test_keypair(0xa3, iroha_crypto::Algorithm::Secp256k1);
         let authority = AccountId::new(keypair.public_key().clone());
         let signed = TransactionBuilder::new(
-            chain,
+            signed_query_test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -40463,12 +41155,12 @@ mod transaction_ingress_decode_tests {
         let keypair =
             checked_transaction_batch_test_keypair(0xa4, iroha_crypto::Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
-        let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
+        let network_id = signed_query_test_network_id();
         let decoded = decode_transaction_batch_payloads(
             (0..3)
                 .map(|index| {
                     let signed = TransactionBuilder::new(
-                        chain.clone(),
+                        network_id,
                         authority.clone(),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -40503,23 +41195,23 @@ mod transaction_ingress_decode_tests {
             checked_transaction_batch_test_keypair(0xa6, iroha_crypto::Algorithm::Ed25519);
         let authority_a = AccountId::new(keypair_a.public_key().clone());
         let authority_b = AccountId::new(keypair_b.public_key().clone());
-        let chain: ChainId = "torii-batch-decode".parse().expect("chain id");
+        let network_id = signed_query_test_network_id();
         let signed_a1 = TransactionBuilder::new(
-            chain.clone(),
+            network_id,
             authority_a.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, "authority-a-1".to_owned())])
         .sign(keypair_a.private_key());
         let signed_b = TransactionBuilder::new(
-            chain.clone(),
+            network_id,
             authority_b.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, "authority-b".to_owned())])
         .sign(keypair_b.private_key());
         let signed_a2 = TransactionBuilder::new(
-            chain,
+            network_id,
             authority_a.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -40566,7 +41258,8 @@ async fn handler_signed_query(
     }
 
     let query_bytes = iroha_version::codec::EncodeVersioned::encode_versioned(&query_request);
-    let verified_query = routing::verify_signed_query_request(query_request)?;
+    let verified_query =
+        routing::verify_signed_query_request(query_request, app.signed_query_admission.as_ref())?;
     let query_scope = signed_query_scope_for_app(app.as_ref(), &verified_query);
     let authorized_routes =
         match torii_authorized_signed_query_routes(app.as_ref(), &verified_query, &query_scope) {
@@ -40747,10 +41440,8 @@ async fn handler_connect_session(
             ))
         })?;
 
-    let missing_sid = req.sid.is_none();
-    let chain_id = app.chain_id.clone();
-    let JsonBody(response) = routing::handle_connect_session(chain_id, NoritoJson(req)).await?;
-    assert!(!missing_sid, "connect session handler missing sid");
+    let network_id = *app.state.network_id_ref();
+    let JsonBody(response) = routing::handle_connect_session(network_id, NoritoJson(req)).await?;
 
     let malformed = |msg: String| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -40764,11 +41455,23 @@ async fn handler_connect_session(
     let sid: crate::connect::Sid = sid_bytes
         .try_into()
         .map_err(|_| malformed("connect session sid had wrong length".into()))?;
+    let app_pk: [u8; 32] = B64
+        .decode(response.app_pk.as_bytes())
+        .map_err(|err| malformed(format!("connect session app key decode failed: {err}")))?
+        .try_into()
+        .map_err(|_| malformed("connect session app key had wrong length".into()))?;
+    let nonce: [u8; 16] = B64
+        .decode(response.nonce.as_bytes())
+        .map_err(|err| malformed(format!("connect session nonce decode failed: {err}")))?
+        .try_into()
+        .map_err(|_| malformed("connect session nonce had wrong length".into()))?;
 
     app.connect_bus
         .clone()
         .register_tokens(
             sid,
+            app_pk,
+            nonce,
             response.token_app.clone(),
             response.token_wallet.clone(),
             response.token_management.clone(),
@@ -40781,6 +41484,9 @@ async fn handler_connect_session(
             }
             crate::connect::RegisterSessionError::Capacity => {
                 malformed("connect session capacity reached; try again later".to_string())
+            }
+            crate::connect::RegisterSessionError::InvalidIdentity => {
+                malformed("connect session identity was not canonically bound".to_string())
             }
         })?;
 
@@ -41245,7 +41951,15 @@ fn require_signed_account_request(
     error_code: &'static str,
     error_message: &'static str,
 ) -> Result<AccountId, Error> {
-    match crate::app_auth::verify_canonical_request(&app.state, headers, method, uri, body, None)? {
+    match crate::app_auth::verify_canonical_network_request(
+        &app.state,
+        app.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        body,
+        None,
+    )? {
         Some(verified) => Ok(verified.account),
         None => Err(Error::AppUnauthorized {
             code: error_code,
@@ -41764,7 +42478,7 @@ async fn handler_alias_setup_plan(
         })
         .collect();
     let canonical_unsigned_payload = TransactionPayload {
-        chain: app.chain_id.as_ref().clone(),
+        domain: TransactionDomain::Network(*app.state.network_id_ref()),
         authority: authority.clone(),
         creation_time_ms: now_ms,
         instructions: transaction_instructions.into(),
@@ -41785,7 +42499,7 @@ async fn handler_alias_setup_plan(
     let plan = AliasTransactionPlanV1::new(AliasTransactionPlanBodyV1 {
         version: AliasTransactionPlanBodyV1::VERSION,
         authority,
-        chain_id: app.chain_id.as_ref().clone(),
+        network_id: *app.state.network_id_ref(),
         anchor: AliasPlanAnchorV1 {
             block_height: u64::try_from(state_view.height()).unwrap_or(u64::MAX),
             block_hash: Hash::from(latest_block_hash),
@@ -41941,7 +42655,7 @@ async fn handler_alias_lease_renew_plan(
     let plan = AliasLifecycleTransactionPlanV1::new(AliasLifecycleTransactionPlanBodyV1 {
         version: AliasLifecycleTransactionPlanBodyV1::VERSION,
         authority,
-        chain_id: app.chain_id.as_ref().clone(),
+        network_id: *app.state.network_id_ref(),
         anchor: AliasPlanAnchorV1 {
             block_height: u64::try_from(state_view.height()).unwrap_or(u64::MAX),
             block_hash: Hash::from(latest_block_hash),
@@ -42061,7 +42775,7 @@ async fn handler_alias_auto_renew_plan(
     let plan = AliasLifecycleTransactionPlanV1::new(AliasLifecycleTransactionPlanBodyV1 {
         version: AliasLifecycleTransactionPlanBodyV1::VERSION,
         authority,
-        chain_id: app.chain_id.as_ref().clone(),
+        network_id: *app.state.network_id_ref(),
         anchor: AliasPlanAnchorV1 {
             block_height: u64::try_from(state_view.height()).unwrap_or(u64::MAX),
             block_hash: Hash::from(latest_block_hash),
@@ -42436,16 +43150,6 @@ fn recipient_lookup_configured_policy(app: &AppState) -> Result<FxCorridorPolicy
             "recipient_lookup_policy_unavailable",
             format!(
                 "configured recipient lookup policy `{}` is disabled",
-                app.recipient_lookup.policy_id
-            ),
-        ));
-    }
-    if !matches!(&policy.source, FxCorridorSource::TransactionAuthority) {
-        return Err(torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "recipient_lookup_policy_unavailable",
-            format!(
-                "configured recipient lookup policy `{}` must use transaction_authority source mode",
                 app.recipient_lookup.policy_id
             ),
         ));
@@ -42962,7 +43666,7 @@ pub(crate) fn quote_internal_fee_payment(
     payload: &TransactionPayload,
 ) -> Result<iroha_data_model::transaction::FeePaymentIntent, Error> {
     quote_internal_fee_payment_from_parts(
-        app.chain_id.as_ref(),
+        app.state.network_id_ref(),
         app.queue.as_ref(),
         app.state.as_ref(),
         payload,
@@ -42971,7 +43675,7 @@ pub(crate) fn quote_internal_fee_payment(
 
 #[cfg(feature = "app_api")]
 pub(crate) fn quote_internal_fee_payment_from_parts(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     queue: &Queue,
     state: &CoreState,
     payload: &TransactionPayload,
@@ -42984,7 +43688,7 @@ pub(crate) fn quote_internal_fee_payment_from_parts(
             )),
         ))
     };
-    if payload.chain != *chain_id
+    if payload.domain != TransactionDomain::Network(*network_id)
         || payload.fee_payment.validate().is_err()
         || ["fee_sponsor", "gas_limit", "gas_asset_id"]
             .into_iter()
@@ -42992,7 +43696,7 @@ pub(crate) fn quote_internal_fee_payment_from_parts(
     {
         return Err(rejected(
             FeeRejectionCode::InvalidFeeIntent,
-            "payload chain, fee payment, or metadata is invalid",
+            "payload network, fee payment, or metadata is invalid",
         ));
     }
     let route = fee_quote_routing_decision_from_parts(queue, state, payload)
@@ -43059,7 +43763,9 @@ async fn handler_fee_quote(
         }
     };
 
-    if request.payload.chain != *app.chain_id || request.payload.authority != *caller {
+    if request.payload.domain != TransactionDomain::Network(*app.state.network_id_ref())
+        || request.payload.authority != *caller
+    {
         return Ok(fee_quote_rejection_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             FeeRejectionCode::InvalidFeeIntent,
@@ -45853,11 +46559,8 @@ mod appeal_finance_runtime_signer_tests {
             });
         let signer = SoraFsAppealFinanceQualifiedSignerV1::try_new(&binding, signer)
             .expect("initial signer qualification");
-        let chain_id: ChainId = "appeal-finance-qualification-drift"
-            .parse()
-            .expect("chain id");
         let payload = TransactionBuilder::new(
-            chain_id,
+            signed_query_test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -46729,6 +47432,7 @@ mod musubi_search_initialization_tests {
 /// Main network handler and the only entrypoint of the Iroha.
 pub struct Torii {
     chain_id: Arc<ChainId>,
+    signed_query_admission: Arc<routing::SignedQueryAdmission>,
     kiso: KisoHandle,
     queue: Arc<Queue>,
     pipeline_status_cache: Arc<PipelineStatusCache>,
@@ -46808,9 +47512,12 @@ pub struct Torii {
     zk_ivm_prove_job_ttl_ms: u64,
     zk_ivm_prove_job_max_entries: usize,
     zk_ivm_prove_job_max_retained_bytes: usize,
+    zk_ivm_prove_job_max_entries_per_owner: usize,
+    zk_ivm_prove_job_max_retained_bytes_per_owner: usize,
     content_config: iroha_config::parameters::actual::Content,
     preauth_gate: Arc<limits::PreAuthGate>,
     fee_policy: FeePolicy,
+    http_transport: ToriiHttpTransport,
     norito_rpc: iroha_config::parameters::actual::NoritoRpcTransport,
     mcp: iroha_config::parameters::actual::ToriiMcp,
     cors: iroha_config::parameters::actual::ToriiCors,
@@ -48671,15 +49378,19 @@ impl Torii {
         );
         builder.route(
             &route_catalog::telemetry::DEBUG_WITNESS,
-            catalog_get(handler_debug_witness).authenticated_operator(app_state),
+            catalog_get(handler_debug_witness).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::telemetry::SORANET_PRIVACY_EVENT,
-            catalog_post(handler_post_soranet_privacy_event),
+            catalog_post(handler_post_soranet_privacy_event)
+                .layer(DefaultBodyLimit::max(SORANET_PRIVACY_INGEST_MAX_BODY_BYTES))
+                .authenticated_soranet_privacy_collector(app_state.clone(), "event"),
         );
         builder.route(
             &route_catalog::telemetry::SORANET_PRIVACY_SHARE,
-            catalog_post(handler_post_soranet_privacy_share),
+            catalog_post(handler_post_soranet_privacy_share)
+                .layer(DefaultBodyLimit::max(SORANET_PRIVACY_INGEST_MAX_BODY_BYTES))
+                .authenticated_soranet_privacy_collector(app_state, "share"),
         );
         #[cfg(feature = "app_api")]
         {
@@ -48729,10 +49440,7 @@ impl Torii {
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             if let Err(err) = Self::sample_pin_registry_metrics(&state, &telemetry) {
-                iroha_logger::error!(
-                    ?err,
-                    "failed to collect initial SoraFS pin registry metrics snapshot"
-                );
+                iroha_logger::error!(?err, "failed to read initial SoraFS pin resource summary");
             }
 
             loop {
@@ -48740,7 +49448,7 @@ impl Torii {
                     _ = shutdown_signal.receive() => break,
                     _ = ticker.tick() => {
                         if let Err(err) = Self::sample_pin_registry_metrics(&state, &telemetry) {
-                            iroha_logger::error!(?err, "failed to collect SoraFS pin registry metrics snapshot");
+                            iroha_logger::error!(?err, "failed to read SoraFS pin resource summary");
                         }
                     }
                 }
@@ -48752,10 +49460,36 @@ impl Torii {
     fn sample_pin_registry_metrics(
         state: &Arc<CoreState>,
         telemetry: &routing::MaybeTelemetry,
-    ) -> Result<(), crate::sorafs::registry::PinRegistryError> {
+    ) -> Result<(), String> {
+        const PIN_GLOBAL_USAGE_STATE_KEY_V1: &str = "sorafs_pin_accounting_v1/global";
+        const PIN_GLOBAL_USAGE_MAX_BYTES_V1: usize = 128;
+
+        let key = iroha_data_model::state_path::StatePath::from_str(PIN_GLOBAL_USAGE_STATE_KEY_V1)
+            .map_err(|error| format!("invalid pin resource summary state path: {error:?}"))?;
         let world = state.world_view();
-        let snapshot = crate::sorafs::registry::collect_pin_registry(&world)?;
-        crate::sorafs::registry::record_pin_registry_metrics(telemetry, &snapshot);
+        let usage = match world.smart_contract_state().get(&key) {
+            None => iroha_data_model::sorafs::pin_registry::PinResourceUsage::default(),
+            Some(bytes) => {
+                if bytes.len() > PIN_GLOBAL_USAGE_MAX_BYTES_V1 {
+                    return Err(format!(
+                        "pin resource summary exceeds {PIN_GLOBAL_USAGE_MAX_BYTES_V1} bytes"
+                    ));
+                }
+                let usage = norito::decode_from_bytes::<
+                    iroha_data_model::sorafs::pin_registry::PinResourceUsage,
+                >(bytes)
+                .map_err(|error| format!("failed to decode pin resource summary: {error}"))?;
+                let canonical = norito::to_bytes(&usage)
+                    .map_err(|error| format!("failed to encode pin resource summary: {error}"))?;
+                if canonical.as_slice() != bytes.as_slice() {
+                    return Err("pin resource summary is not canonical Norito".to_owned());
+                }
+                usage
+            }
+        };
+        telemetry.with_metrics(|metrics| {
+            metrics.record_sorafs_pin_resource_usage(usage.manifest_count, usage.content_bytes);
+        });
         Ok(())
     }
 
@@ -49217,12 +49951,10 @@ impl Torii {
     #[cfg(feature = "profiling")]
     #[allow(clippy::unused_self)]
     fn add_profiling_routes(&self, builder: &mut RouterBuilder) {
-        // Profiling endpoints are feature-gated and used for local
-        // debugging/perf runs. Keep them reachable without operator auth so
-        // localnet harnesses can reliably collect profiles.
+        let app_state = builder.state().clone();
         builder.route(
             &route_catalog::diagnostic::PROFILE,
-            catalog_get(handler_profile).unauthenticated(),
+            catalog_get(handler_profile).authenticated_operator(app_state),
         );
     }
 
@@ -49244,111 +49976,123 @@ impl Torii {
         let app_state = builder.state().clone();
         builder.route(
             &route_catalog::pipeline::TRANSACTION,
-            catalog_post(handler_post_transaction).layer(DefaultBodyLimit::max(body_limit)),
+            catalog_post(handler_post_transaction)
+                .layer(DefaultBodyLimit::max(body_limit))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::pipeline::TRANSACTION_ENTRYPOINT,
             catalog_post(handler_post_transaction_entrypoint)
-                .layer(DefaultBodyLimit::max(body_limit)),
+                .layer(DefaultBodyLimit::max(body_limit))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::pipeline::TRANSACTIONS_BATCH,
-            catalog_post(handler_post_transactions_batch).layer(DefaultBodyLimit::max(body_limit)),
+            catalog_post(handler_post_transactions_batch)
+                .layer(DefaultBodyLimit::max(body_limit))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
 
         builder.route(
             &route_catalog::iso20022::PACS008_SUBMIT,
             catalog_post(handler_iso_pacs008)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::PACS009_SUBMIT,
             catalog_post(handler_iso_pacs009)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::PACS002_SUBMIT,
             catalog_post(handler_iso_pacs002_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::PACS004_SUBMIT,
             catalog_post(handler_iso_pacs004_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::CAMT056_SUBMIT,
             catalog_post(handler_iso_camt056_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::SESE023_SUBMIT,
             catalog_post(handler_iso_sese023_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::SESE024_SUBMIT,
             catalog_post(handler_iso_sese024_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::SESE025_SUBMIT,
             catalog_post(handler_iso_sese025_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::COLR012_SUBMIT,
             catalog_post(handler_iso_colr012_submit)
                 .layer(DefaultBodyLimit::max(iso_body_limit))
-                .authenticated_required_api_token(app_state.clone()),
+                .authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE,
-            catalog_get(handler_iso_status).authenticated_required_api_token(app_state.clone()),
+            catalog_get(handler_iso_status).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::AUDIT_MESSAGES,
-            catalog_get(handler_iso_audit_messages)
-                .authenticated_required_api_token(app_state.clone()),
+            catalog_get(handler_iso_audit_messages).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_PACS002,
-            catalog_get(handler_iso_pacs002).authenticated_required_api_token(app_state.clone()),
+            catalog_get(handler_iso_pacs002).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_PACS004,
-            catalog_get(handler_iso_pacs004).authenticated_required_api_token(app_state.clone()),
+            catalog_get(handler_iso_pacs004).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_CAMT029,
-            catalog_get(handler_iso_camt029).authenticated_required_api_token(app_state.clone()),
+            catalog_get(handler_iso_camt029).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_SESE024,
-            catalog_get(handler_iso_sese024).authenticated_required_api_token(app_state.clone()),
+            catalog_get(handler_iso_sese024).authenticated_operator(app_state.clone()),
         );
         builder.route(
             &route_catalog::iso20022::MESSAGE_SESE025,
-            catalog_get(handler_iso_sese025).authenticated_required_api_token(app_state),
+            catalog_get(handler_iso_sese025).authenticated_operator(app_state),
         );
     }
 
     /// Data-availability ingest endpoints.
     #[allow(clippy::unused_self)]
     fn add_da_routes(&self, builder: &mut RouterBuilder) {
+        let app_state = builder.state().clone();
         #[cfg(feature = "app_api")]
         {
+            let body_limit: usize = self
+                .transaction_max_content_len
+                .get()
+                .try_into()
+                .expect("DA body limit should fit usize");
             builder.route(
                 &route_catalog::data_availability::INGEST,
-                catalog_post(da::handler_post_da_ingest),
+                catalog_post(da::handler_post_da_ingest)
+                    .layer(DefaultBodyLimit::max(body_limit))
+                    .authenticated_canonical_account_body(app_state.clone(), body_limit),
             );
             builder.route(
                 &route_catalog::data_availability::MANIFEST,
@@ -49371,15 +50115,25 @@ impl Torii {
         );
         builder.route(
             &route_catalog::data_availability::COMMITMENTS_PROVE,
-            catalog_post(da::commitments::handler_prove_commitment).layer(DefaultBodyLimit::max(
-                da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
-            )),
+            catalog_post(da::commitments::handler_prove_commitment)
+                .layer(DefaultBodyLimit::max(
+                    da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
+                ))
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
+                ),
         );
         builder.route(
             &route_catalog::data_availability::COMMITMENTS_VERIFY,
-            catalog_post(da::commitments::handler_verify_commitment).layer(DefaultBodyLimit::max(
-                da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
-            )),
+            catalog_post(da::commitments::handler_verify_commitment)
+                .layer(DefaultBodyLimit::max(
+                    da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
+                ))
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    da::commitments::DA_COMMITMENT_REQUEST_MAX_BYTES,
+                ),
         );
         builder.route(
             &route_catalog::data_availability::PIN_INTENTS,
@@ -49389,15 +50143,25 @@ impl Torii {
         );
         builder.route(
             &route_catalog::data_availability::PIN_INTENTS_PROVE,
-            catalog_post(da::pin_intents::handler_prove_pin_intent).layer(DefaultBodyLimit::max(
-                da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
-            )),
+            catalog_post(da::pin_intents::handler_prove_pin_intent)
+                .layer(DefaultBodyLimit::max(
+                    da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
+                ))
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
+                ),
         );
         builder.route(
             &route_catalog::data_availability::PIN_INTENTS_VERIFY,
-            catalog_post(da::pin_intents::handler_verify_pin_intent).layer(DefaultBodyLimit::max(
-                da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
-            )),
+            catalog_post(da::pin_intents::handler_verify_pin_intent)
+                .layer(DefaultBodyLimit::max(
+                    da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
+                ))
+                .authenticated_canonical_account_body(
+                    app_state,
+                    da::pin_intents::DA_PIN_INTENT_REQUEST_MAX_BYTES,
+                ),
         );
     }
 
@@ -49576,7 +50340,12 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
-            catalog_post(handler_post_contract_alias_set).layer(contracts_body_limit.clone()),
+            catalog_post(handler_post_contract_alias_set)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
@@ -49593,20 +50362,38 @@ impl Torii {
         builder.route(
             &route_catalog::contracts_and_verification_keys::ASSETS_TRANSFER_POST,
             catalog_post(handler_post_asset_transfer)
-                .layer(DefaultBodyLimit::max(ASSET_TRANSFER_MAX_BODY_BYTES)),
+                .layer(DefaultBodyLimit::max(ASSET_TRANSFER_MAX_BODY_BYTES))
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    ASSET_TRANSFER_MAX_BODY_BYTES,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_POST,
-            catalog_post(handler_post_contract_call).layer(contracts_body_limit.clone()),
+            catalog_post(handler_post_contract_call)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_BATCH_PREPARE_POST,
             catalog_post(handler_post_contract_call_batch_prepare)
-                .layer(contracts_body_limit.clone()),
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_SIMULATE_POST,
-            catalog_post(handler_post_contract_call_simulate).layer(contracts_body_limit.clone()),
+            catalog_post(handler_post_contract_call_simulate)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
@@ -49615,7 +50402,8 @@ impl Torii {
                 .layer(axum::middleware::from_fn_with_state(
                     bridge_submit_state.clone(),
                     enforce_sccp_submit_ingress,
-                )),
+                ))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::BRIDGE_MESSAGES_POST,
@@ -49624,25 +50412,44 @@ impl Torii {
                 .layer(axum::middleware::from_fn_with_state(
                     bridge_submit_state,
                     enforce_sccp_submit_ingress,
-                )),
+                ))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_VIEW_POST,
-            catalog_post(handler_post_contract_view).layer(contracts_body_limit.clone()),
+            catalog_post(handler_post_contract_view)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_VIEW_BATCH_POST,
-            catalog_post(handler_post_contract_view_batch).layer(contracts_body_limit.clone()),
+            catalog_post(handler_post_contract_view_batch)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_MULTISIG_PROPOSE_POST,
             catalog_post(handler_post_contract_call_multisig_propose)
-                .layer(contracts_body_limit.clone()),
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_MULTISIG_APPROVE_POST,
             catalog_post(handler_post_contract_call_multisig_approve)
-                .layer(contracts_body_limit.clone()),
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_STATE_GET,
@@ -49658,15 +50465,30 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSE_POST,
-            catalog_post(handler_post_multisig_propose),
+            catalog_post(handler_post_multisig_propose)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVE_POST,
-            catalog_post(handler_post_multisig_approve),
+            catalog_post(handler_post_multisig_approve)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_CANCEL_POST,
-            catalog_post(handler_post_multisig_cancel),
+            catalog_post(handler_post_multisig_cancel)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_SPEC_POST,
@@ -49688,44 +50510,87 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_POLICY_SET_POST,
-            catalog_post(handler_post_account_recovery_policy_set),
+            catalog_post(handler_post_account_recovery_policy_set)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_PROPOSE_POST,
-            catalog_post(handler_post_account_recovery_propose),
+            catalog_post(handler_post_account_recovery_propose)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_APPROVE_POST,
-            catalog_post(handler_post_account_recovery_approve),
+            catalog_post(handler_post_account_recovery_approve)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_FINALIZE_POST,
-            catalog_post(handler_post_account_recovery_finalize),
+            catalog_post(handler_post_account_recovery_finalize)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::ACCOUNT_RECOVERY_STATUS_POST,
             catalog_post(handler_post_account_recovery_status)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES))
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    MULTISIG_READ_MAX_BODY_BYTES,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
-            catalog_post(handler_post_asset_transfer_control_get),
+            catalog_post(handler_post_asset_transfer_control_get)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::ZK_VK_REGISTER_POST,
-            catalog_post(handler_post_vk_register),
+            catalog_post(handler_post_vk_register)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::ZK_VK_UPDATE_POST,
-            catalog_post(handler_post_vk_update),
+            catalog_post(handler_post_vk_update)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_CAPACITY_DECLARE_POST,
-            catalog_post(handler_post_sorafs_capacity_declare),
+            catalog_post(handler_post_sorafs_capacity_declare)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_CAPACITY_TELEMETRY_POST,
-            catalog_post(handler_post_sorafs_capacity_telemetry),
+            catalog_post(handler_post_sorafs_capacity_telemetry)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_CAPACITY_POR_PROOF_POST,
@@ -49758,24 +50623,32 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_POR_VRF_POST,
-            catalog_post(handler_post_sorafs_por_vrf).layer(DefaultBodyLimit::max(
-                sorafs_manifest::por::PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1,
-            )),
+            catalog_post(handler_post_sorafs_por_vrf)
+                .layer(DefaultBodyLimit::max(
+                    sorafs_manifest::por::PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1,
+                ))
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    sorafs_manifest::por::PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1,
+                ),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_ORDERS_POST,
             catalog_post(sorafs::api::handle_post_sorafs_orderbook_order)
-                .layer(DefaultBodyLimit::max(orderbook_transaction_body_limit)),
+                .layer(DefaultBodyLimit::max(orderbook_transaction_body_limit))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_CANCEL_POST,
             catalog_post(sorafs::api::handle_post_sorafs_orderbook_cancel)
-                .layer(DefaultBodyLimit::max(orderbook_transaction_body_limit)),
+                .layer(DefaultBodyLimit::max(orderbook_transaction_body_limit))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_RECEIPTS_POST,
             catalog_post(sorafs::api::handle_post_sorafs_orderbook_receipt)
-                .layer(DefaultBodyLimit::max(orderbook_transaction_body_limit)),
+                .layer(DefaultBodyLimit::max(orderbook_transaction_body_limit))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_ORDERBOOK_RECEIPTS_GET,
@@ -49831,11 +50704,15 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_TOP_UP_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up),
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_WITHDRAW_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_withdrawal),
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_withdrawal)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_GET,
@@ -49849,19 +50726,27 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_DECISION_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_movement_decision),
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_movement_decision)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_DRAW_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_credit_draw),
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_credit_draw)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_REPAY_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_credit_repay),
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_credit_repay)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_appeal),
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_appeal)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_GET,
@@ -49875,7 +50760,9 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_DECISION_POST,
-            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_appeal_decision),
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_appeal_decision)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_GET,
@@ -49966,28 +50853,41 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit),
+            catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_CONFIRM_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_confirm),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_CONFIRM_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_confirm)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_SETTLE_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_settle),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_SETTLE_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_settle)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_SUBMIT_SETTLEMENT_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_submit_settlement),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_SUBMIT_SETTLEMENT_POST,
+            catalog_post(
+                sorafs::api::handle_post_sorafs_appeal_finance_deposit_submit_settlement,
+            )
+            .layer(contracts_body_limit.clone())
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_RECONCILE_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_reconcile),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_RECONCILE_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_appeal_finance_deposit_reconcile)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_BY_ESCROW_ID_HEX_GET,
-        catalog_get(sorafs::api::handle_get_sorafs_appeal_finance_deposit),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_FINANCE_DEPOSITS_BY_ESCROW_ID_HEX_GET,
+            catalog_get(sorafs::api::handle_get_sorafs_appeal_finance_deposit)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST,
             catalog_post(sorafs::api::handle_post_sorafs_moderation_dead_letter_prepare)
@@ -50006,7 +50906,9 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_announce),
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_announce)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_GET,
@@ -50022,39 +50924,57 @@ impl Torii {
     );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ELIGIBILITY_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_eligibility),
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_eligibility)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_SORTITION_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_sortition),
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_sortition)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ASSIGNMENTS_ACCEPT_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_assignment_accept),
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_assignment_accept)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ACTIVATE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_activate),
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_activate)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_COMMITS_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_commit),
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_commit)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_CHALLENGES_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_challenge),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_CHALLENGES_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_challenge)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_CHALLENGES_RESOLVE_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_challenge_resolution),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_CHALLENGES_RESOLVE_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_challenge_resolution)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
+        );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_REVEALS_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_reveal),
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_reveal)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_TALLY_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_tally),
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_tally)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_EVENTS_GET,
@@ -50065,17 +50985,27 @@ impl Torii {
             catalog_get(sorafs::api::handle_get_sorafs_moderation_model_registry),
         );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_MODEL_REGISTRY_REPRO_MANIFESTS_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_moderation_model_registry_repro_manifest),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_MODEL_REGISTRY_REPRO_MANIFESTS_POST,
+            catalog_post(
+                sorafs::api::handle_post_sorafs_moderation_model_registry_repro_manifest,
+            )
+            .layer(contracts_body_limit.clone())
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_MODEL_REGISTRY_CORPORA_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_moderation_model_registry_corpus_manifest),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_MODEL_REGISTRY_CORPORA_POST,
+            catalog_post(
+                sorafs::api::handle_post_sorafs_moderation_model_registry_corpus_manifest,
+            )
+            .layer(contracts_body_limit.clone())
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_SCREENING_RESULTS_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_moderation_screening_result),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_SCREENING_RESULTS_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_screening_result)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
         &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_SCREENING_RESULTS_GET,
         catalog_get(sorafs::api::handle_get_sorafs_moderation_screening_results),
@@ -50085,29 +51015,39 @@ impl Torii {
             catalog_get(sorafs::api::handle_get_sorafs_moderation_quarantine),
         );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_REVIEW_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_review),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_REVIEW_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_review)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_RELEASE_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_release),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_RELEASE_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_release)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_HANDOFF_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_appeal_handoff),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_HANDOFF_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_appeal_handoff)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OPERATOR_PANEL_GET,
-        catalog_get(sorafs::api::handle_get_sorafs_moderation_quarantine_operator_panel),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OPERATOR_PANEL_GET,
+            catalog_get(sorafs::api::handle_get_sorafs_moderation_quarantine_operator_panel)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_object),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_object)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_GET,
-        catalog_get(sorafs::api::handle_get_sorafs_moderation_quarantine_object),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_GET,
+            catalog_get(sorafs::api::handle_get_sorafs_moderation_quarantine_object)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
             &route_catalog::contracts_and_verification_keys::EVIDENCE_SESSION_CHALLENGE_POST,
             catalog_post(sorafs::evidence_viewer_api::handle_post_evidence_session_challenge)
@@ -50193,31 +51133,45 @@ impl Torii {
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_REPORT_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_report),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_report)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_SLASH_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_slash),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_slash)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_CLAIM_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_claim),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_claim)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_HEARTBEAT_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_heartbeat),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_heartbeat)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_COMPLETE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_complete),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_complete)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_FAIL_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_fail),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_fail)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_APPEAL_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_repair_appeal),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_appeal)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_STATUS_GET,
@@ -50260,17 +51214,24 @@ impl Torii {
             catalog_get(handler_get_contract_code),
         );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BY_CODE_HASH_CONTRACT_VIEW_GET,
-        catalog_get(handler_get_contract_code_view),
-    );
+            &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BY_CODE_HASH_CONTRACT_VIEW_GET,
+            catalog_get(handler_get_contract_code_view)
+                .authenticated_canonical_account_body(app_state.clone(), 0),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_POST,
-        catalog_post(handler_post_contract_verified_source_job),
-    );
+            &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_POST,
+            catalog_post(handler_post_contract_verified_source_job)
+                .layer(contracts_body_limit.clone())
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_BY_JOB_ID_GET,
-        catalog_get(handler_get_contract_verified_source_job),
-    );
+            &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BY_CODE_HASH_VERIFIED_SOURCE_JOBS_BY_JOB_ID_GET,
+            catalog_get(handler_get_contract_verified_source_job)
+                .authenticated_canonical_account_body(app_state, 0),
+        );
     }
 
     /// P2P fallback, event SSE, subscription WS, and block stream WS
@@ -50353,6 +51314,11 @@ impl Torii {
             catalog_get(handler_pipeline_transaction_status),
         );
         builder.route(
+            &route_catalog::pipeline::TRANSACTION_DETAILS,
+            catalog_post(handler_pipeline_transaction_details)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
+        );
+        builder.route(
             &route_catalog::pipeline::PREFLIGHT,
             catalog_get(handler_pipeline_preflight),
         );
@@ -50379,7 +51345,8 @@ impl Torii {
         let _ = self;
         builder.route(
             &route_catalog::pipeline::QUERY,
-            catalog_post(handler_signed_query),
+            catalog_post(handler_signed_query)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
     }
 
@@ -50406,27 +51373,33 @@ impl Torii {
         );
         builder.route(
             &route_catalog::mcp_transport::JSON_RPC,
-            catalog_post(handler_mcp_jsonrpc),
+            catalog_post(handler_mcp_jsonrpc)
+                .authenticated_in_handler(HandlerAuthentication::NestedRouteAuthentication),
         );
     }
 
     /// Iroha Connect routes (feature-gated)
     #[cfg(feature = "connect")]
     fn add_connect_routes(&self, builder: &mut RouterBuilder) {
-        let _ = self;
+        const CONNECT_SESSION_BODY_MAX_BYTES: usize = 64 * 1024;
+        let app_state = builder.state().clone();
         builder.route(
             &route_catalog::connect::SESSION_CREATE,
-            catalog_post(handler_connect_session),
+            catalog_post(handler_connect_session)
+                .layer(DefaultBodyLimit::max(CONNECT_SESSION_BODY_MAX_BYTES))
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    CONNECT_SESSION_BODY_MAX_BYTES,
+                ),
         );
         builder.route(
             &route_catalog::connect::SESSION_DELETE,
             catalog_delete(handler_connect_session_delete)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+                .authenticated_canonical_account_body(app_state.clone(), 0),
         );
         builder.route(
             &route_catalog::connect::WEBSOCKET,
-            catalog_get(handler_connect_ws)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+            catalog_get(handler_connect_ws).authenticated_canonical_account_body(app_state, 0),
         );
         builder.route(
             &route_catalog::connect::STATUS,
@@ -50467,12 +51440,14 @@ impl Torii {
         builder.route(
             &route_catalog::offline::TOP_UP,
             catalog_post(handler_offline_top_up)
-                .layer(DefaultBodyLimit::max(offline_top_up_body_limit_bytes)),
+                .layer(DefaultBodyLimit::max(offline_top_up_body_limit_bytes))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::offline::REDEEM,
             catalog_post(handler_offline_redeem)
-                .layer(DefaultBodyLimit::max(offline_redeem_body_limit_bytes)),
+                .layer(DefaultBodyLimit::max(offline_redeem_body_limit_bytes))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
             &route_catalog::offline::OPERATION,
@@ -50492,7 +51467,11 @@ impl Torii {
         );
         builder.route(
             &route_catalog::application_api::APP_API_CID_BY_CID_BY_PATH_POST,
-            catalog_post(app_api::handle_post_app_api_cid_path),
+            catalog_post(app_api::handle_post_app_api_cid_path)
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::application_api::APP_API_ACTIVE_BY_PATH_GET,
@@ -50500,7 +51479,11 @@ impl Torii {
         );
         builder.route(
             &route_catalog::application_api::APP_API_ACTIVE_BY_PATH_POST,
-            catalog_post(app_api::handle_post_app_api_active_path),
+            catalog_post(app_api::handle_post_app_api_active_path)
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::application_api::API_CID_BY_CID_GET,
@@ -50512,7 +51495,11 @@ impl Torii {
         );
         builder.route(
             &route_catalog::application_api::API_CID_BY_CID_BY_PATH_POST,
-            catalog_post(app_api::handle_post_app_api_cid_path),
+            catalog_post(app_api::handle_post_app_api_cid_path)
+                .authenticated_canonical_account_body(
+                    app_state.clone(),
+                    transaction_max_content_len,
+                ),
         );
         builder.route(
             &route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_GET,
@@ -50770,22 +51757,19 @@ impl Torii {
             &route_catalog::application_api::SORACLOUD_SERVICES_BY_SERVICE_NAME_REVISIONS_BY_SERVICE_VERSION_PUBLIC_DISCOVERY_GET,
             catalog_get(soracloud::handle_service_revision_public_discovery),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_DEPLOY_POST,
-            catalog_post(soracloud::handle_deploy),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_UPGRADE_POST,
-            catalog_post(soracloud::handle_upgrade),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_APPS_DEPLOY_POST,
-            catalog_post(soracloud::handle_app_deploy),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_APPS_UPGRADE_POST,
-            catalog_post(soracloud::handle_app_upgrade),
-        );
+        macro_rules! mount_soracloud_command {
+            ($route:ident, $handler:ident) => {
+                builder.route(
+                    &route_catalog::application_api::$route,
+                    catalog_post(soracloud::$handler)
+                        .authenticated_soracloud_command(app_state.clone()),
+                );
+            };
+        }
+        mount_soracloud_command!(SORACLOUD_DEPLOY_POST, handle_deploy);
+        mount_soracloud_command!(SORACLOUD_UPGRADE_POST, handle_upgrade);
+        mount_soracloud_command!(SORACLOUD_APPS_DEPLOY_POST, handle_app_deploy);
+        mount_soracloud_command!(SORACLOUD_APPS_UPGRADE_POST, handle_app_upgrade);
         builder.route(
             &route_catalog::application_api::SORACLOUD_APPS_STATUS_GET,
             catalog_get(soracloud::handle_app_status),
@@ -50794,105 +51778,75 @@ impl Torii {
             &route_catalog::application_api::SORACLOUD_APPS_BY_APP_NAME_STATUS_GET,
             catalog_get(soracloud::handle_named_app_status),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_ROLLBACK_POST,
-            catalog_post(soracloud::handle_rollback),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_ROLLOUT_POST,
-            catalog_post(soracloud::handle_rollout),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_STATE_MUTATE_POST,
-            catalog_post(soracloud::handle_state_mutation),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_SERVICE_CONFIG_SET_POST,
-            catalog_post(soracloud::handle_service_config_set),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_SERVICE_CONFIG_DELETE_POST,
-            catalog_post(soracloud::handle_service_config_delete),
+        mount_soracloud_command!(SORACLOUD_ROLLBACK_POST, handle_rollback);
+        mount_soracloud_command!(SORACLOUD_ROLLOUT_POST, handle_rollout);
+        mount_soracloud_command!(SORACLOUD_STATE_MUTATE_POST, handle_state_mutation);
+        mount_soracloud_command!(SORACLOUD_SERVICE_CONFIG_SET_POST, handle_service_config_set);
+        mount_soracloud_command!(
+            SORACLOUD_SERVICE_CONFIG_DELETE_POST,
+            handle_service_config_delete
         );
         builder.route(
             &route_catalog::application_api::SORACLOUD_SERVICE_CONFIG_STATUS_GET,
             catalog_get(soracloud::handle_service_config_status),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_SERVICE_SECRET_SET_POST,
-            catalog_post(soracloud::handle_service_secret_set),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_SERVICE_SECRET_DELETE_POST,
-            catalog_post(soracloud::handle_service_secret_delete),
+        mount_soracloud_command!(SORACLOUD_SERVICE_SECRET_SET_POST, handle_service_secret_set);
+        mount_soracloud_command!(
+            SORACLOUD_SERVICE_SECRET_DELETE_POST,
+            handle_service_secret_delete
         );
         builder.route(
             &route_catalog::application_api::SORACLOUD_SERVICE_SECRET_STATUS_GET,
             catalog_get(soracloud::handle_service_secret_status),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_FHE_JOB_RUN_POST,
-            catalog_post(soracloud::handle_fhe_job_run),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_DECRYPT_REQUEST_POST,
-            catalog_post(soracloud::handle_decryption_request),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_HEALTH_ACCESS_REQUEST_POST,
-            catalog_post(soracloud::handle_health_access_request),
+        mount_soracloud_command!(SORACLOUD_FHE_JOB_RUN_POST, handle_fhe_job_run);
+        mount_soracloud_command!(SORACLOUD_DECRYPT_REQUEST_POST, handle_decryption_request);
+        mount_soracloud_command!(
+            SORACLOUD_HEALTH_ACCESS_REQUEST_POST,
+            handle_health_access_request
         );
         builder.route(
             &route_catalog::application_api::SORACLOUD_HEALTH_COMPLIANCE_REPORT_GET,
             catalog_get(soracloud::handle_health_compliance_report),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_CIPHERTEXT_QUERY_POST,
-            catalog_post(soracloud::handle_ciphertext_query),
+        mount_soracloud_command!(SORACLOUD_CIPHERTEXT_QUERY_POST, handle_ciphertext_query);
+        mount_soracloud_command!(SORACLOUD_TRAINING_JOB_START_POST, handle_training_job_start);
+        mount_soracloud_command!(
+            SORACLOUD_TRAINING_JOB_CHECKPOINT_POST,
+            handle_training_job_checkpoint
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_TRAINING_JOB_START_POST,
-            catalog_post(soracloud::handle_training_job_start),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_TRAINING_JOB_CHECKPOINT_POST,
-            catalog_post(soracloud::handle_training_job_checkpoint),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_TRAINING_JOB_RETRY_POST,
-            catalog_post(soracloud::handle_training_job_retry),
-        );
+        mount_soracloud_command!(SORACLOUD_TRAINING_JOB_RETRY_POST, handle_training_job_retry);
         builder.route(
             &route_catalog::application_api::SORACLOUD_TRAINING_JOB_STATUS_GET,
             catalog_get(soracloud::handle_training_job_status),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_MODEL_WEIGHT_REGISTER_POST,
-            catalog_post(soracloud::handle_model_weight_register),
+        mount_soracloud_command!(
+            SORACLOUD_MODEL_WEIGHT_REGISTER_POST,
+            handle_model_weight_register
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_MODEL_WEIGHT_PROMOTE_POST,
-            catalog_post(soracloud::handle_model_weight_promote),
+        mount_soracloud_command!(
+            SORACLOUD_MODEL_WEIGHT_PROMOTE_POST,
+            handle_model_weight_promote
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_MODEL_WEIGHT_ROLLBACK_POST,
-            catalog_post(soracloud::handle_model_weight_rollback),
+        mount_soracloud_command!(
+            SORACLOUD_MODEL_WEIGHT_ROLLBACK_POST,
+            handle_model_weight_rollback
         );
         builder.route(
             &route_catalog::application_api::SORACLOUD_MODEL_WEIGHT_STATUS_GET,
             catalog_get(soracloud::handle_model_weight_status),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_MODEL_ARTIFACT_REGISTER_POST,
-            catalog_post(soracloud::handle_model_artifact_register),
+        mount_soracloud_command!(
+            SORACLOUD_MODEL_ARTIFACT_REGISTER_POST,
+            handle_model_artifact_register
         );
         builder.route(
             &route_catalog::application_api::SORACLOUD_MODEL_ARTIFACT_STATUS_GET,
             catalog_get(soracloud::handle_model_artifact_status),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_MODEL_UPLOAD_REGISTER_POST,
-            catalog_post(soracloud::handle_uploaded_model_register),
+        mount_soracloud_command!(
+            SORACLOUD_MODEL_UPLOAD_REGISTER_POST,
+            handle_uploaded_model_register
         );
         builder.route(
             &route_catalog::application_api::SORACLOUD_MODEL_UPLOAD_ENCRYPTION_RECIPIENT_GET,
@@ -50902,97 +51856,67 @@ impl Torii {
             &route_catalog::application_api::SORACLOUD_MODEL_UPLOAD_STATUS_GET,
             catalog_get(soracloud::handle_uploaded_model_status),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_MODEL_UPLOAD_PRIVATE_EXECUTE_POST,
-            catalog_post(soracloud::handle_uploaded_model_private_execute),
+        mount_soracloud_command!(
+            SORACLOUD_MODEL_UPLOAD_PRIVATE_EXECUTE_POST,
+            handle_uploaded_model_private_execute
         );
         builder.route(
             &route_catalog::application_api::SORACLOUD_MODEL_UPLOAD_PRIVATE_RECEIPTS_GET,
             catalog_get(soracloud::handle_uploaded_model_private_receipts),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_HF_DEPLOY_POST,
-            catalog_post(soracloud::handle_hf_deploy),
-        );
+        mount_soracloud_command!(SORACLOUD_HF_DEPLOY_POST, handle_hf_deploy);
         builder.route(
             &route_catalog::application_api::SORACLOUD_HF_STATUS_GET,
             catalog_get(soracloud::handle_hf_status),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_HF_LEASE_LEAVE_POST,
-            catalog_post(soracloud::handle_hf_lease_leave),
+        mount_soracloud_command!(SORACLOUD_HF_LEASE_LEAVE_POST, handle_hf_lease_leave);
+        mount_soracloud_command!(SORACLOUD_HF_LEASE_RENEW_POST, handle_hf_lease_renew);
+        mount_soracloud_command!(
+            SORACLOUD_MODEL_HOST_ADVERTISE_POST,
+            handle_model_host_advertise
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_HF_LEASE_RENEW_POST,
-            catalog_post(soracloud::handle_hf_lease_renew),
+        mount_soracloud_command!(
+            SORACLOUD_MODEL_HOST_HEARTBEAT_POST,
+            handle_model_host_heartbeat
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_MODEL_HOST_ADVERTISE_POST,
-            catalog_post(soracloud::handle_model_host_advertise),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_MODEL_HOST_HEARTBEAT_POST,
-            catalog_post(soracloud::handle_model_host_heartbeat),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_MODEL_HOST_WITHDRAW_POST,
-            catalog_post(soracloud::handle_model_host_withdraw),
+        mount_soracloud_command!(
+            SORACLOUD_MODEL_HOST_WITHDRAW_POST,
+            handle_model_host_withdraw
         );
         builder.route(
             &route_catalog::application_api::SORACLOUD_MODEL_HOST_STATUS_GET,
             catalog_get(soracloud::handle_model_host_status),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_AGENT_DEPLOY_POST,
-            catalog_post(soracloud::handle_agent_deploy),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_AGENT_LEASE_RENEW_POST,
-            catalog_post(soracloud::handle_agent_lease_renew),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_AGENT_RESTART_POST,
-            catalog_post(soracloud::handle_agent_restart),
-        );
+        mount_soracloud_command!(SORACLOUD_AGENT_DEPLOY_POST, handle_agent_deploy);
+        mount_soracloud_command!(SORACLOUD_AGENT_LEASE_RENEW_POST, handle_agent_lease_renew);
+        mount_soracloud_command!(SORACLOUD_AGENT_RESTART_POST, handle_agent_restart);
         builder.route(
             &route_catalog::application_api::SORACLOUD_AGENT_STATUS_GET,
             catalog_get(soracloud::handle_agent_status),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_AGENT_WALLET_SPEND_POST,
-            catalog_post(soracloud::handle_agent_wallet_spend),
+        mount_soracloud_command!(SORACLOUD_AGENT_WALLET_SPEND_POST, handle_agent_wallet_spend);
+        mount_soracloud_command!(
+            SORACLOUD_AGENT_WALLET_APPROVE_POST,
+            handle_agent_wallet_approve
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_AGENT_WALLET_APPROVE_POST,
-            catalog_post(soracloud::handle_agent_wallet_approve),
+        mount_soracloud_command!(
+            SORACLOUD_AGENT_POLICY_REVOKE_POST,
+            handle_agent_policy_revoke
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_AGENT_POLICY_REVOKE_POST,
-            catalog_post(soracloud::handle_agent_policy_revoke),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_AGENT_MESSAGE_SEND_POST,
-            catalog_post(soracloud::handle_agent_message_send),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_AGENT_MESSAGE_ACK_POST,
-            catalog_post(soracloud::handle_agent_message_ack),
-        );
+        mount_soracloud_command!(SORACLOUD_AGENT_MESSAGE_SEND_POST, handle_agent_message_send);
+        mount_soracloud_command!(SORACLOUD_AGENT_MESSAGE_ACK_POST, handle_agent_message_ack);
         builder.route(
             &route_catalog::application_api::SORACLOUD_AGENT_MAILBOX_STATUS_GET,
             catalog_get(soracloud::handle_agent_mailbox_status),
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_AGENT_AUTONOMY_ALLOW_POST,
-            catalog_post(soracloud::handle_agent_autonomy_allow),
+        mount_soracloud_command!(
+            SORACLOUD_AGENT_AUTONOMY_ALLOW_POST,
+            handle_agent_autonomy_allow
         );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_AGENT_AUTONOMY_RUN_POST,
-            catalog_post(soracloud::handle_agent_autonomy_run),
-        );
-        builder.route(
-            &route_catalog::application_api::SORACLOUD_AGENT_AUTONOMY_RUN_FINALIZE_POST,
-            catalog_post(soracloud::handle_agent_autonomy_run_finalize),
+        mount_soracloud_command!(SORACLOUD_AGENT_AUTONOMY_RUN_POST, handle_agent_autonomy_run);
+        mount_soracloud_command!(
+            SORACLOUD_AGENT_AUTONOMY_RUN_FINALIZE_POST,
+            handle_agent_autonomy_run_finalize
         );
         builder.route(
             &route_catalog::application_api::SORACLOUD_AGENT_AUTONOMY_STATUS_GET,
@@ -51595,7 +52519,12 @@ impl Torii {
         );
         capacity_get!(PIN_REGISTRY, sorafs::api::handle_get_sorafs_pin_registry);
         capacity_get!(PIN_MANIFEST, sorafs::api::handle_get_sorafs_pin_manifest);
-        capacity_post!(PIN_REGISTER, handler_post_sorafs_register_manifest);
+        builder.route(
+            &route_catalog::sorafs::PIN_REGISTER,
+            catalog_post(handler_post_sorafs_register_manifest)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
+        );
         capacity_get!(ALIASES, sorafs::api::handle_get_sorafs_aliases);
         capacity_get!(
             REPLICATION,
@@ -51780,9 +52709,16 @@ impl Torii {
     }
 
     fn add_cataloged_runtime_governance_routes(&self, builder: &mut RouterBuilder) {
+        #[cfg(not(feature = "app_api"))]
         let _ = self;
         use route_catalog::runtime_governance as routes;
         let app_state = builder.state().clone();
+        #[cfg(feature = "app_api")]
+        let runtime_governance_body_limit: usize = self
+            .transaction_max_content_len
+            .get()
+            .try_into()
+            .expect("transaction content limit should fit usize");
         let proof_body_limit =
             usize::try_from(app_state.proof_limits.max_body_bytes).unwrap_or(usize::MAX);
 
@@ -51796,36 +52732,47 @@ impl Torii {
                 builder.route(&routes::$descriptor, catalog_post($handler));
             };
         }
-        macro_rules! mount_proof_post {
+        macro_rules! mount_account_get {
             ($descriptor:ident, $handler:expr) => {
                 builder.route(
                     &routes::$descriptor,
-                    catalog_post($handler)
-                        .layer(DefaultBodyLimit::max(proof_body_limit))
-                        .layer(axum::middleware::from_fn_with_state(
-                            app_state.clone(),
-                            proof_body_admission_middleware,
-                        )),
+                    catalog_get($handler)
+                        .authenticated_canonical_account_body(app_state.clone(), 0),
                 );
             };
         }
-        macro_rules! mount_delete {
+        macro_rules! mount_account_post {
             ($descriptor:ident, $handler:expr) => {
-                builder.route(&routes::$descriptor, catalog_delete($handler));
+                builder.route(
+                    &routes::$descriptor,
+                    catalog_post($handler).authenticated_canonical_account_body(
+                        app_state.clone(),
+                        runtime_governance_body_limit,
+                    ),
+                );
             };
         }
+        macro_rules! mount_account_proof_post {
+            ($descriptor:ident, $handler:expr) => {
+                builder.route(
+                    &routes::$descriptor,
+                    catalog_post($handler).authenticated_canonical_account_proof_body(
+                        app_state.clone(),
+                        proof_body_limit,
+                    ),
+                );
+            };
+        }
+        mount_account_proof_post!(ZK_ROOTS, handler_zk_roots);
+        mount_account_proof_post!(ZK_MERKLE_PATH, handler_zk_merkle_path);
+        mount_account_proof_post!(ZK_VOTE_TALLY, handler_zk_vote_tally);
+        mount_authenticated_zk_compute_routes!(builder, app_state, proof_body_limit);
 
-        mount_proof_post!(ZK_ROOTS, handler_zk_roots);
-        mount_proof_post!(ZK_MERKLE_PATH, handler_zk_merkle_path);
-        mount_proof_post!(ZK_VOTE_TALLY, handler_zk_vote_tally);
-        #[cfg(feature = "zk-verify-batch")]
-        mount_proof_post!(ZK_VERIFY_BATCH, handler_zk_verify_batch);
-
-        mount_get!(RUNTIME_ABI_ACTIVE, handler_runtime_abi_active);
+        mount_account_get!(RUNTIME_ABI_ACTIVE, handler_runtime_abi_active);
         mount_get!(RUNTIME_ABI_HASH, handler_runtime_abi_hash);
-        mount_get!(RUNTIME_METRICS, handler_runtime_metrics);
-        mount_get!(NODE_CAPABILITIES, handler_node_capabilities);
-        mount_get!(PRIVACY_CAPABILITIES, handler_privacy_capabilities);
+        mount_account_get!(RUNTIME_METRICS, handler_runtime_metrics);
+        mount_account_get!(NODE_CAPABILITIES, handler_node_capabilities);
+        mount_account_get!(PRIVACY_CAPABILITIES, handler_privacy_capabilities);
         builder.route(
             &routes::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
             catalog_post(handler_post_bootle_lantern_issuance_authorize)
@@ -51840,7 +52787,7 @@ impl Torii {
                 ))
                 .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
         );
-        mount_get!(
+        mount_account_get!(
             NODE_PROJECTION_CHECKPOINT,
             handler_node_query_projection_checkpoint
         );
@@ -51865,23 +52812,69 @@ impl Torii {
 
         #[cfg(feature = "app_api")]
         {
-            mount_proof_post!(ZK_IVM_DERIVE, handler_zk_ivm_derive);
-            mount_proof_post!(ZK_IVM_PROVE, handler_zk_ivm_prove);
-            mount_get!(ZK_IVM_PROVE_GET, handler_zk_ivm_prove_get);
-            mount_delete!(ZK_IVM_PROVE_DELETE, handler_zk_ivm_prove_delete);
+            builder.route(
+                &routes::ZK_IVM_PROVE,
+                catalog_post(handler_zk_ivm_prove)
+                    .layer(DefaultBodyLimit::max(proof_body_limit))
+                    .layer(axum::middleware::from_fn_with_state(
+                        app_state.clone(),
+                        proof_body_admission_middleware,
+                    ))
+                    .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+            );
+            builder.route(
+                &routes::ZK_IVM_PROVE_GET,
+                catalog_get(handler_zk_ivm_prove_get)
+                    .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+            );
+            builder.route(
+                &routes::ZK_IVM_PROVE_DELETE,
+                catalog_delete(handler_zk_ivm_prove_delete)
+                    .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+            );
 
+            let attachment_body_limit = crate::zk_attachments::max_bytes_cfg();
+            macro_rules! mount_attachment_get {
+                ($descriptor:ident, $handler:expr) => {
+                    builder.route(
+                        &routes::$descriptor,
+                        catalog_get($handler)
+                            .authenticated_canonical_account_body(app_state.clone(), 0),
+                    );
+                };
+            }
+            macro_rules! mount_attachment_post {
+                ($handler:expr) => {
+                    builder.route(
+                        &routes::ZK_ATTACHMENTS_POST,
+                        catalog_post($handler).authenticated_canonical_account_body(
+                            app_state.clone(),
+                            attachment_body_limit,
+                        ),
+                    );
+                };
+            }
+            macro_rules! mount_attachment_delete {
+                ($handler:expr) => {
+                    builder.route(
+                        &routes::ZK_ATTACHMENT_DELETE,
+                        catalog_delete($handler)
+                            .authenticated_canonical_account_body(app_state.clone(), 0),
+                    );
+                };
+            }
             if builder.state().zk_attachments_enabled {
-                mount_get!(ZK_ATTACHMENTS_GET, handler_zk_attachments_filtered);
-                mount_post!(ZK_ATTACHMENTS_POST, handler_zk_attachments_create);
-                mount_get!(ZK_ATTACHMENT_GET, handler_zk_attachment_get);
-                mount_delete!(ZK_ATTACHMENT_DELETE, handler_zk_attachment_delete);
-                mount_get!(ZK_ATTACHMENTS_COUNT, handler_zk_attachments_count);
+                mount_attachment_get!(ZK_ATTACHMENTS_GET, handler_zk_attachments_filtered);
+                mount_attachment_post!(handler_zk_attachments_create);
+                mount_attachment_get!(ZK_ATTACHMENT_GET, handler_zk_attachment_get);
+                mount_attachment_delete!(handler_zk_attachment_delete);
+                mount_attachment_get!(ZK_ATTACHMENTS_COUNT, handler_zk_attachments_count);
             } else {
-                mount_get!(ZK_ATTACHMENTS_GET, handler_zk_attachments_disabled);
-                mount_post!(ZK_ATTACHMENTS_POST, handler_zk_attachments_disabled);
-                mount_get!(ZK_ATTACHMENT_GET, handler_zk_attachments_disabled);
-                mount_delete!(ZK_ATTACHMENT_DELETE, handler_zk_attachments_disabled);
-                mount_get!(ZK_ATTACHMENTS_COUNT, handler_zk_attachments_disabled);
+                mount_attachment_get!(ZK_ATTACHMENTS_GET, handler_zk_attachments_disabled);
+                mount_attachment_post!(handler_zk_attachments_disabled);
+                mount_attachment_get!(ZK_ATTACHMENT_GET, handler_zk_attachments_disabled);
+                mount_attachment_delete!(handler_zk_attachments_disabled);
+                mount_attachment_get!(ZK_ATTACHMENTS_COUNT, handler_zk_attachments_disabled);
             }
 
             builder.route(
@@ -51905,67 +52898,80 @@ impl Torii {
                     .authenticated_operator(app_state.clone()),
             );
 
-            mount_post!(
+            mount_account_post!(
                 MINISTRY_AGENDA_DRAFT,
                 handler_ministry_agenda_proposal_draft
             );
-            mount_get!(MINISTRY_AGENDA_GET, handler_ministry_agenda_proposal_get);
-            mount_post!(GOV_PROPOSE_DEPLOY, handler_gov_propose_deploy);
-            mount_post!(GOV_PROPOSE_SCCP, handler_gov_propose_sccp_route_governance);
-            mount_get!(GOV_CAPABILITIES, handler_gov_capabilities);
-            mount_post!(GOV_CITIZEN_DRAFT, handler_gov_citizen_draft);
-            mount_post!(
+            mount_account_get!(MINISTRY_AGENDA_GET, handler_ministry_agenda_proposal_get);
+            mount_account_post!(GOV_PROPOSE_DEPLOY, handler_gov_propose_deploy);
+            mount_account_post!(GOV_PROPOSE_SCCP, handler_gov_propose_sccp_route_governance);
+            mount_account_get!(GOV_CAPABILITIES, handler_gov_capabilities);
+            mount_account_post!(GOV_CITIZEN_DRAFT, handler_gov_citizen_draft);
+            mount_account_post!(
                 VALIDATION_FEE_CURRENT_POLICY_PROOF,
                 validation_fee_api::handler_current_policy_proof
             );
-            mount_get!(
+            mount_account_get!(
                 VALIDATION_FEE_PROPOSALS,
                 validation_fee_api::handler_proposals
             );
-            mount_get!(
+            mount_account_get!(
                 VALIDATION_FEE_PROPOSAL_DETAIL,
                 validation_fee_api::handler_proposal_detail
             );
-            mount_post!(
+            mount_account_post!(
                 VALIDATION_FEE_PROPOSAL_DRAFT,
                 validation_fee_api::handler_proposal_draft
             );
-            mount_post!(
+            mount_account_post!(
                 VALIDATION_FEE_PLAIN_BALLOT_DRAFT,
                 validation_fee_api::handler_plain_ballot_draft
             );
-            mount_get!(GOV_PROPOSAL_GET, handler_gov_proposal_get);
-            mount_get!(GOV_LOCKS_GET, handler_gov_locks_get);
-            mount_get!(GOV_REFERENDUM_GET, handler_gov_referendum_get);
-            mount_get!(GOV_TALLY_GET, handler_gov_tally_get);
-            mount_post!(GOV_BALLOT_ZK_V1, handler_gov_ballot_zk_v1);
-            mount_post!(
-                GOV_BALLOT_ZK_V1_PROOF,
-                handler_gov_ballot_zk_v1_ballot_proof
+            mount_account_get!(GOV_PROPOSAL_GET, handler_gov_proposal_get);
+            mount_account_get!(GOV_LOCKS_GET, handler_gov_locks_get);
+            mount_account_get!(GOV_REFERENDUM_GET, handler_gov_referendum_get);
+            mount_account_get!(GOV_TALLY_GET, handler_gov_tally_get);
+            builder.route(
+                &routes::GOV_BALLOT_ZK_V1,
+                catalog_post(handler_gov_ballot_zk_v1)
+                    .layer(DefaultBodyLimit::max(proof_body_limit))
+                    .authenticated_canonical_account_body(app_state.clone(), proof_body_limit),
             );
-            mount_post!(GOV_BALLOT_PLAIN, handler_gov_ballot_plain);
-            mount_post!(GOV_PARLIAMENT_BALLOT, handler_gov_parliament_ballot);
+            builder.route(
+                &routes::GOV_BALLOT_ZK_V1_PROOF,
+                catalog_post(handler_gov_ballot_zk_v1_ballot_proof)
+                    .layer(DefaultBodyLimit::max(proof_body_limit))
+                    .authenticated_canonical_account_body(app_state.clone(), proof_body_limit),
+            );
+            builder.route(
+                &routes::GOV_BALLOT_PLAIN,
+                catalog_post(handler_gov_ballot_plain)
+                    .layer(DefaultBodyLimit::max(proof_body_limit))
+                    .authenticated_canonical_account_body(app_state.clone(), proof_body_limit),
+            );
+            builder.route(
+                &routes::GOV_PARLIAMENT_BALLOT,
+                catalog_post(handler_gov_parliament_ballot)
+                    .layer(DefaultBodyLimit::max(proof_body_limit))
+                    .authenticated_canonical_account_body(app_state.clone(), proof_body_limit),
+            );
             mount_post!(GOV_FINALIZE, handler_gov_finalize);
             builder.route(
                 &routes::GOV_PROTECTED_POST,
                 catalog_post(handler_gov_protected_set).authenticated_operator(app_state.clone()),
             );
-            mount_get!(GOV_PROTECTED_GET, handler_gov_protected_get);
+            mount_account_get!(GOV_PROTECTED_GET, handler_gov_protected_get);
             builder.route(
                 &routes::GOV_STREAM,
                 catalog_get(handler_gov_stream)
                     .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
             );
-            mount_get!(GOV_UNLOCK_STATS, handler_gov_unlock_stats);
-            builder.route(
-                &routes::GOV_CONTRACT_GET,
-                catalog_get(handler_gov_contract_get)
-                    .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
-            );
-            mount_post!(GOV_ENACT, handler_gov_enact);
-            mount_get!(GOV_COUNCIL_CURRENT, handler_gov_council_current);
-            mount_get!(GOV_CITIZENS_COUNT, handler_gov_citizen_count);
-            mount_get!(GOV_CITIZEN_STATUS, handler_gov_citizen_status);
+            mount_account_get!(GOV_UNLOCK_STATS, handler_gov_unlock_stats);
+            mount_account_get!(GOV_CONTRACT_GET, handler_gov_contract_get);
+            mount_account_post!(GOV_ENACT, handler_gov_enact);
+            mount_account_get!(GOV_COUNCIL_CURRENT, handler_gov_council_current);
+            mount_account_get!(GOV_CITIZENS_COUNT, handler_gov_citizen_count);
+            mount_account_get!(GOV_CITIZEN_STATUS, handler_gov_citizen_status);
         }
     }
 
@@ -51979,6 +52985,7 @@ impl Torii {
     /// Construct `Torii` with runtime telemetry configuration.
     pub fn new(
         chain_id: ChainId,
+        network_id: NetworkId,
         kiso: KisoHandle,
         config: Config,
         queue: Arc<Queue>,
@@ -52003,6 +53010,7 @@ impl Torii {
         };
         Self::new_with_handle(
             chain_id,
+            network_id,
             kiso,
             config,
             queue,
@@ -52023,6 +53031,7 @@ impl Torii {
     /// Construct `Torii` when telemetry support is disabled.
     pub fn new(
         chain_id: ChainId,
+        network_id: NetworkId,
         kiso: KisoHandle,
         config: Config,
         queue: Arc<Queue>,
@@ -52035,6 +53044,7 @@ impl Torii {
     ) -> Self {
         Self::new_with_handle(
             chain_id,
+            network_id,
             kiso,
             config,
             queue,
@@ -52060,6 +53070,7 @@ impl Torii {
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_handle(
         chain_id: ChainId,
+        network_id: NetworkId,
         kiso: KisoHandle,
         config: Config,
         queue: Arc<Queue>,
@@ -52072,6 +53083,10 @@ impl Torii {
         sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
         runtime_deps: impl Into<ToriiRuntimeDeps>,
     ) -> Self {
+        assert_eq!(
+            state.network_id, network_id,
+            "Torii network id must match the genesis-derived Core state identity"
+        );
         let runtime_deps = runtime_deps.into();
         #[cfg(feature = "app_api")]
         let mut runtime_deps = runtime_deps;
@@ -52081,7 +53096,7 @@ impl Torii {
         );
         #[cfg(feature = "app_api")]
         sorafs::stream_token_runtime::preflight_admission_capture(
-            &chain_id,
+            &network_id,
             &config,
             &runtime_deps,
         )
@@ -52252,6 +53267,15 @@ impl Torii {
             &config.app_api,
         ))
         .expect("validated Torii app-auth replay window");
+        let signed_query_admission = Arc::new(
+            routing::SignedQueryAdmission::new(
+                network_id,
+                config.app_api.request_signature_max_clock_skew,
+                config.app_api.request_signature_nonce_ttl,
+                config.app_api.request_signature_replay_cache_capacity,
+            )
+            .expect("validated Torii signed-query replay window"),
+        );
         #[cfg(feature = "app_api")]
         crate::data_dir::set_base_dir(config.data_dir.clone());
         #[cfg(feature = "push")]
@@ -52552,6 +53576,7 @@ impl Torii {
             operator_signatures::OperatorSignatures::new(
                 config.operator_signatures.clone(),
                 da_receipt_signer.public_key().clone(),
+                network_id,
                 config.max_content_len.get(),
                 telemetry.clone(),
             )
@@ -53036,16 +54061,13 @@ impl Torii {
                         panel_notification_archive_new_key_possession_signature: config
                             .panel_notification_archive_new_key_possession_signature,
                     };
-                    let adapter_chain_id = Arc::new(chain_id.clone());
                     let fee_quoter =
                         Arc::new(sorafs::moderation_runtime::ToriiModerationFeeQuoterV1::new(
-                            Arc::clone(&adapter_chain_id),
                             Arc::clone(&queue),
                             Arc::clone(&state),
                         ));
                     let ingress = Arc::new(
                         sorafs::moderation_runtime::ToriiModerationStrictTransactionIngressV1::new(
-                            Arc::clone(&adapter_chain_id),
                             Arc::clone(&queue),
                             Arc::clone(&state),
                             telemetry.clone(),
@@ -53054,7 +54076,7 @@ impl Torii {
                     );
                     let submitter = Arc::new(
                         sorafs::moderation_runtime::ModerationTransactionSubmitterAdapterV1::try_new(
-                            adapter_chain_id.as_ref().clone(),
+                            *state.network_id_ref(),
                             &config.transaction_signer_handle,
                             transaction_signer_qualification,
                             transaction_signer,
@@ -53146,7 +54168,7 @@ impl Torii {
             }
             (Some(_), None) => {
                 panic!(
-                    "torii.sorafs.storage.pop_credentials is enabled but runtime-only enrollment/HSM/KMS/authentication dependencies were not injected"
+                    "torii.sorafs.storage.pop_credentials is enabled but runtime-only enrollment/external-software-signer/KMS/authentication dependencies were not injected"
                 )
             }
             (None, Some(_)) => {
@@ -53201,7 +54223,7 @@ impl Torii {
         );
         #[cfg(feature = "app_api")]
         let (por_coordinator, por_runtime) =
-            build_por_components(&config, &chain_id, &sorafs_node, sorafs_admission.clone());
+            build_por_components(&config, &network_id, &sorafs_node, sorafs_admission.clone());
         #[cfg(feature = "app_api")]
         let gc_runtime = build_gc_runtime(&sorafs_node, state.clone());
         #[cfg(feature = "app_api")]
@@ -53346,6 +54368,7 @@ impl Torii {
         )));
         Self {
             chain_id: Arc::new(chain_id),
+            signed_query_admission,
             kiso,
             queue,
             pipeline_status_cache,
@@ -53435,8 +54458,14 @@ impl Torii {
             )
             .unwrap_or(usize::MAX)
             .max(1),
+            zk_ivm_prove_job_max_entries_per_owner: config.zk_ivm_prove_job_max_entries_per_owner,
+            zk_ivm_prove_job_max_retained_bytes_per_owner: usize::try_from(
+                config.zk_ivm_prove_job_max_retained_bytes_per_owner.get(),
+            )
+            .unwrap_or(usize::MAX),
             preauth_gate,
             fee_policy,
+            http_transport: config.transport.http,
             norito_rpc: config.transport.norito_rpc.clone(),
             mcp: config.mcp,
             cors: config.cors,
@@ -53475,7 +54504,7 @@ impl Torii {
             recipient_lookup_rate_limiter,
             da_ingest: config.da_ingest.clone(),
             #[cfg(feature = "connect")]
-            connect_bus: connect::Bus::from_config(&config.connect),
+            connect_bus: connect::Bus::from_config(&config.connect, network_id),
             #[cfg(feature = "connect")]
             connect_enabled: config.connect.enabled,
             #[cfg(feature = "push")]
@@ -53780,6 +54809,7 @@ impl Torii {
         let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
             collect_peer_urls(&self.online_peers, &self.peer_telemetry_urls),
             self.peer_geo.clone(),
+            *self.state.network_id_ref(),
             Some(self.da_receipt_signer.clone()),
         );
 
@@ -53824,6 +54854,7 @@ impl Torii {
             events: self.events.clone(),
             kura: self.kura.clone(),
             chain_id: self.chain_id.clone(),
+            signed_query_admission: self.signed_query_admission.clone(),
             #[cfg(feature = "app_api")]
             transaction_max_content_len: self
                 .transaction_max_content_len
@@ -53915,6 +54946,9 @@ impl Torii {
             zk_ivm_prove_inflight_total,
             zk_ivm_prove_job_ttl_ms: self.zk_ivm_prove_job_ttl_ms,
             zk_ivm_prove_job_max_entries: self.zk_ivm_prove_job_max_entries,
+            zk_ivm_prove_job_max_entries_per_owner: self.zk_ivm_prove_job_max_entries_per_owner,
+            zk_ivm_prove_job_max_retained_bytes_per_owner: self
+                .zk_ivm_prove_job_max_retained_bytes_per_owner,
             ivm_tooling_timeout: self.ivm_tooling_timeout,
             #[cfg(all(feature = "app_api", feature = "telemetry"))]
             peer_telemetry,
@@ -54202,14 +55236,9 @@ impl Torii {
             .layer(axum::middleware::from_fn(enforce_route_timeout));
         #[cfg(feature = "app_api")]
         {
-            // Route-specific command guards stay inside the global pre-auth
-            // and API-token gates. They may inspect or buffer request bodies,
-            // so unauthenticated or over-capacity callers must never reach
-            // them.
-            router = router.layer(axum::middleware::from_fn_with_state(
-                app_state.clone(),
-                enforce_soracloud_signed_mutation_request,
-            ));
+            // Offline command admission inspects request bodies inside the
+            // listener-wide credential gates. SoraCloud commands use sealed
+            // route-local authentication installed during catalog mounting.
             router = router.layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 enforce_offline_command_prebody_admission,
@@ -54257,7 +55286,7 @@ impl Torii {
         // descriptor explicitly excluded from the mounted projection.
         let router = router.layer(axum::middleware::from_fn(enforce_cataloged_cors_preflight));
 
-        // This boundary catches failures from CORS, signed-mutation guards,
+        // This boundary catches failures from CORS, route-local command guards,
         // authentication, rate/size limits, timeout, and handlers.
         let router = router.layer(axum::middleware::from_fn(catch_handler_panics));
 
@@ -54589,14 +55618,15 @@ impl Torii {
         }
         #[cfg(not(feature = "app_api"))]
         drop(app_state);
-        let make = api_router.into_make_service_with_connect_info::<std::net::SocketAddr>();
 
         iroha_logger::info!(addr = %torii_address, "Torii bound and listening");
 
-        let graceful_shutdown_signal = shutdown_signal.clone();
-        let server = axum::serve(listener, make).with_graceful_shutdown(async move {
-            graceful_shutdown_signal.receive().await;
-        });
+        let server = serve_torii_http(
+            listener,
+            api_router,
+            self.http_transport,
+            shutdown_signal.clone(),
+        );
         #[cfg(feature = "app_api")]
         let server_result = supervise_evidence_viewer_compaction_worker(
             shutdown_signal,
@@ -54644,7 +55674,7 @@ async fn handler_mcp_capabilities(
     )
 }
 
-/// POST /v1/mcp — execute native MCP JSON-RPC requests.
+/// POST /v1/mcp — dispatch bounded MCP JSON-RPC calls through exact cataloged routes.
 async fn handler_mcp_jsonrpc(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -54652,13 +55682,12 @@ async fn handler_mcp_jsonrpc(
     request: axum::http::Request<Body>,
 ) -> Response {
     if !app.mcp.enabled {
-        return utils::respond_with_status_and_format(
+        return mcp::private_no_store_response(utils::respond_with_status_and_format(
             StatusCode::SERVICE_UNAVAILABLE,
             ErrorEnvelope::new("mcp_disabled", "MCP is disabled by node configuration"),
             ResponseFormat::Json,
-        );
+        ));
     }
-
     let remote_ip = remote.ip();
     let rate_key = limits::key_from_headers(
         &headers,
@@ -54667,35 +55696,32 @@ async fn handler_mcp_jsonrpc(
         app.require_api_token,
     );
     if !app.mcp_rate_limiter.allow(&rate_key).await {
-        return (
+        return mcp::private_no_store_response((
             StatusCode::TOO_MANY_REQUESTS,
             JsonBody(mcp::jsonrpc_rate_limited()),
-        )
-            .into_response();
+        ));
     }
-
     let request_bytes =
         match axum::body::to_bytes(request.into_body(), app.mcp.max_request_bytes).await {
             Ok(bytes) => bytes,
             Err(_) => {
                 let (status, payload) = mcp::oversized_payload_response(app.mcp.max_request_bytes);
-                return (status, JsonBody(payload)).into_response();
+                return mcp::private_no_store_response((status, JsonBody(payload)));
             }
         };
 
     let payload = match norito::json::from_slice::<norito::json::Value>(&request_bytes) {
         Ok(payload) => payload,
         Err(err) => {
-            return (
+            return mcp::private_no_store_response((
                 StatusCode::BAD_REQUEST,
                 JsonBody(mcp::invalid_json_payload(&err)),
-            )
-                .into_response();
+            ));
         }
     };
 
     if mcp::is_initialized_notification(&payload) {
-        return StatusCode::ACCEPTED.into_response();
+        return mcp::private_no_store_response(StatusCode::ACCEPTED);
     }
 
     let response_payload = if let Some(batch) = payload.as_array() {
@@ -54714,7 +55740,7 @@ async fn handler_mcp_jsonrpc(
         mcp::handle_jsonrpc_request(app, &headers, payload).await
     };
 
-    (StatusCode::OK, JsonBody(response_payload)).into_response()
+    mcp::private_no_store_response((StatusCode::OK, JsonBody(response_payload)))
 }
 
 #[cfg(feature = "app_api")]
@@ -55147,7 +56173,7 @@ mod gateway_runtime_config_tests {
         ) -> Result<sorafs::gateway::AcmeClientIdentityV1, sorafs::gateway::AcmeClientProbeError>
         {
             Ok(sorafs::gateway::AcmeClientIdentityV1 {
-                provider_handle: "hsm://gateway/acme/primary".into(),
+                provider_handle: "runtime://sorafs/gateway-acme/primary".into(),
                 revision: 17,
                 policy_digest: [0x51; 32],
                 test_marked: false,
@@ -55259,7 +56285,7 @@ mod gateway_runtime_config_tests {
     fn acme_provider_binding()
     -> iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
         iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
-            provider_handle: "hsm://gateway/acme/primary".into(),
+            provider_handle: "runtime://sorafs/gateway-acme/primary".into(),
             revision: 17,
             policy_digest: [0x51; 32],
         }
@@ -55699,7 +56725,7 @@ fn assert_por_runtime_ready(config: &iroha_config::parameters::actual::SorafsPor
 #[cfg(feature = "app_api")]
 fn build_por_components(
     config: &Config,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     sorafs_node: &sorafs_node::NodeHandle,
     admission: Option<Arc<sorafs::AdmissionRegistry>>,
 ) -> (
@@ -55775,7 +56801,7 @@ fn build_por_components(
     let vrf_provider = Arc::new(
         sorafs::VerifiedVrfProvider::with_persistence(
             admission,
-            chain_id.as_str().as_bytes().to_vec(),
+            *network_id,
             por_cfg.vrf_state_path.clone(),
             por_cfg.vrf_max_entries,
             por_cfg.vrf_retention_epochs,
@@ -56131,8 +57157,8 @@ impl IntoResponse for Error {
                     snapshot_version: ctx.snapshot_version,
                     dataspace: ctx.dataspace.map(|dsid| dsid.as_u64()),
                     lane: ctx.lane.map(|lane| lane.as_u32()),
-                    next_min_handle_era: ctx.next_min_handle_era,
-                    next_min_sub_nonce: ctx.next_min_sub_nonce,
+                    active_handle_era: ctx.active_handle_era,
+                    next_handle_counter: ctx.next_handle_counter,
                 });
                 let mut envelope = public_validation_fail_envelope(&err, status);
                 if !details.is_empty() {
@@ -56167,18 +57193,18 @@ impl IntoResponse for Error {
                             headers.insert(HeaderName::from_static("x-iroha-axt-lane"), value);
                         }
                     }
-                    if let Some(hint) = ctx.next_min_handle_era {
+                    if let Some(hint) = ctx.active_handle_era {
                         if let Ok(value) = HeaderValue::from_str(&hint.to_string()) {
                             headers.insert(
-                                HeaderName::from_static("x-iroha-axt-next-handle-era"),
+                                HeaderName::from_static("x-iroha-axt-active-handle-era"),
                                 value,
                             );
                         }
                     }
-                    if let Some(hint) = ctx.next_min_sub_nonce {
+                    if let Some(hint) = ctx.next_handle_counter {
                         if let Ok(value) = HeaderValue::from_str(&hint.to_string()) {
                             headers.insert(
-                                HeaderName::from_static("x-iroha-axt-next-sub-nonce"),
+                                HeaderName::from_static("x-iroha-axt-next-handle-counter"),
                                 value,
                             );
                         }
@@ -56904,62 +57930,7 @@ impl OnlinePeersProvider {
 
 // Textual inclusion keeps every `tests` item at its original module path.
 include!("tests/lib_tests.rs");
-#[test]
-fn conn_scheme_detects_norito_rpc() {
-    let request = axum::http::Request::builder()
-        .method(axum::http::Method::POST)
-        .header(
-            axum::http::header::CONTENT_TYPE,
-            crate::utils::NORITO_MIME_TYPE,
-        )
-        .body(())
-        .unwrap();
-    assert!(matches!(
-        ConnScheme::from_request(&request),
-        ConnScheme::NoritoRpc
-    ));
-}
-
-#[test]
-fn conn_scheme_marks_transaction_path_as_norito_rpc() {
-    let request = axum::http::Request::builder()
-        .method(axum::http::Method::POST)
-        .uri(iroha_torii_shared::uri::TRANSACTION)
-        .body(())
-        .unwrap();
-    assert!(matches!(
-        ConnScheme::from_request(&request),
-        ConnScheme::NoritoRpc
-    ));
-}
-
-#[test]
-fn conn_scheme_labels_use_norito_rpc_name() {
-    assert_eq!(ConnScheme::NoritoRpc.label(), "norito_rpc");
-}
-
-#[test]
-fn conn_scheme_defaults_to_http_for_json() {
-    let request = axum::http::Request::builder()
-        .method(axum::http::Method::POST)
-        .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .body(())
-        .unwrap();
-    assert!(matches!(
-        ConnScheme::from_request(&request),
-        ConnScheme::Http
-    ));
-}
-
-#[test]
-fn conn_scheme_flags_websocket_upgrade() {
-    let request = axum::http::Request::builder()
-        .method(axum::http::Method::GET)
-        .header(axum::http::header::UPGRADE, "websocket")
-        .body(())
-        .unwrap();
-    assert!(matches!(ConnScheme::from_request(&request), ConnScheme::Ws));
-}
+include!("tests/lib_conn_scheme.rs");
 
 // Textual inclusion keeps the telemetry test-module namespace unchanged.
 include!("tests/lib_peer_telemetry.rs");

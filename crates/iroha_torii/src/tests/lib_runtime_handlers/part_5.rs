@@ -107,7 +107,7 @@ async fn pipeline_status_handler_returns_queued() {
     let authority = AccountId::new(keypair.public_key().clone());
     let tx = checked_torii_test_transaction(
         TransactionBuilder::new(
-            (*app.chain_id).clone(),
+            *app.state.network_id_ref(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -124,7 +124,7 @@ async fn pipeline_status_handler_returns_queued() {
     let crypto_cfg = app.state.crypto();
     let accepted = AcceptedTransaction::accept(
         tx.clone(),
-        app.chain_id.as_ref(),
+        app.state.network_id_ref(),
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
@@ -190,7 +190,7 @@ async fn pipeline_status_handler_returns_typed_norito_when_requested() {
     let authority = AccountId::new(keypair.public_key().clone());
     let tx = checked_torii_test_transaction(
         TransactionBuilder::new(
-            (*app.chain_id).clone(),
+            *app.state.network_id_ref(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -207,7 +207,7 @@ async fn pipeline_status_handler_returns_typed_norito_when_requested() {
     let crypto_cfg = app.state.crypto();
     let accepted = AcceptedTransaction::accept(
         tx.clone(),
-        app.chain_id.as_ref(),
+        app.state.network_id_ref(),
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
@@ -404,7 +404,7 @@ async fn pipeline_status_local_read_keeps_live_pending_queued_cache() {
     );
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1651,7 +1651,7 @@ async fn pipeline_status_handler_rejects_inconsistent_committed_membership() {
 }
 
 #[tokio::test]
-async fn pipeline_status_hydrates_reconstructed_trigger_completion_for_entrypoint_hash() {
+async fn public_pipeline_status_never_hydrates_trigger_completion_details() {
     let app = mk_app_state_for_tests();
     let sample = make_persisted_data_trigger_completion_block(1, None);
     let header = sample.block.header();
@@ -1682,16 +1682,281 @@ async fn pipeline_status_hydrates_reconstructed_trigger_completion_for_entrypoin
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .expect("body");
-    let payload: PipelineTransactionStatusResponse =
-        norito::json::from_slice(&bytes).expect("json");
+    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
 
-    assert_eq!(payload.status.kind, "Applied");
-    assert_eq!(payload.trigger_completions.len(), 1);
-    let completion = payload.trigger_completions.first().expect("completion");
-    assert_eq!(completion.trigger_id, sample.trigger_id.to_string());
     assert_eq!(
-        completion.trigger_execution_hash,
-        sample.entrypoint_hash.to_string()
+        payload
+            .get("status")
+            .and_then(|status| status.get("kind"))
+            .and_then(norito::json::Value::as_str),
+        Some("Applied")
+    );
+    assert!(payload.get("trigger_completions").is_none());
+    assert!(payload.get("batch_transfer_outcomes").is_none());
+    let encoded = norito::json::to_json(&payload).expect("public status JSON");
+    assert!(!encoded.contains(&sample.trigger_id.to_string()));
+}
+
+fn transaction_details_test_world(accounts: &[AccountId]) -> World {
+    let owner = accounts.first().expect("at least one test account");
+    let domain = Domain::new(
+        DomainId::try_new("wonderland", "universal").expect("transaction-details test domain"),
+    )
+    .build(owner);
+    let accounts = accounts
+        .iter()
+        .cloned()
+        .map(|account_id| Account::new(account_id).build(owner));
+    World::with([domain], accounts, [])
+}
+
+fn store_and_index_transaction_details_block(
+    app: &SharedAppState,
+    block: SignedBlock,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> HashOf<SignedTransaction> {
+    let header = block.header();
+    let height = NonZeroUsize::new(
+        usize::try_from(header.height().get()).expect("transaction-details height fits usize"),
+    )
+    .expect("transaction-details height is nonzero");
+    let signed_hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint_hash));
+    let block_hash = store_block(app, block);
+    record_committed_block_hash_for_test(app, header.clone(), block_hash);
+    let mut state_block = app.state.block(header);
+    state_block
+        .transactions
+        .insert_block([signed_hash].into_iter().collect(), height);
+    state_block
+        .commit()
+        .expect("commit transaction-details membership index");
+    signed_hash
+}
+
+fn signed_transaction_details_query(
+    key_pair: &KeyPair,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> SignedQuery {
+    authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Start(
+            build_exact_transaction_details_query_for_test(entrypoint_hash),
+        ),
+        AccountId::new(key_pair.public_key().clone()),
+    )
+    .sign(key_pair)
+}
+
+#[tokio::test]
+async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other_accounts() {
+    use iroha_data_model::events::data::prelude::{
+        AssetBatchTransferLegStatus, AssetBatchTransferOutcome,
+    };
+
+    let sender_key =
+        checked_torii_test_ed25519_keypair(0x24, "derive transaction-details sender key");
+    let recipient_key =
+        checked_torii_test_ed25519_keypair(0x35, "derive transaction-details recipient key");
+    let unrelated_key =
+        checked_torii_test_ed25519_keypair(0x36, "derive transaction-details unrelated key");
+    let sender = AccountId::new(sender_key.public_key().clone());
+    let recipient = AccountId::new(recipient_key.public_key().clone());
+    let unrelated = AccountId::new(unrelated_key.public_key().clone());
+    let app = mk_app_state_for_tests_with_world(transaction_details_test_world(&[
+        sender.clone(),
+        recipient.clone(),
+        unrelated,
+    ]));
+    let (mut block, entrypoint_hash) = make_signed_block(1, None);
+    let outcome = AssetBatchTransferOutcome {
+        leg_index: 0,
+        leg_id: "private-receipt".to_owned(),
+        asset: AssetId::new(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").expect("asset domain"),
+                Name::from_str("rose").expect("asset name"),
+            ),
+            sender.clone(),
+        ),
+        destination: recipient.clone(),
+        amount: Quantity::from(7_u32),
+        status: AssetBatchTransferLegStatus::Applied,
+    };
+    block
+        .set_batch_transfer_outcomes(std::collections::BTreeMap::from([(
+            entrypoint_hash,
+            vec![outcome.clone()],
+        )]))
+        .expect("attach batch receipt to transaction-details fixture");
+    let signed_hash = store_and_index_transaction_details_block(&app, block, entrypoint_hash);
+
+    let public = super::handler_pipeline_transaction_status(
+        State(app.clone()),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        None,
+        crate::NoritoStringQuery(PipelineStatusQuery {
+            hash: Some(signed_hash.to_string()),
+            scope: Some("local".to_owned()),
+        }),
+    )
+    .await
+    .expect("public status projection");
+    let public_body = axum::body::to_bytes(public.into_body(), usize::MAX)
+        .await
+        .expect("public status body");
+    let public_json: norito::json::Value =
+        norito::json::from_slice(&public_body).expect("public status JSON");
+    assert!(public_json.get("batch_transfer_outcomes").is_none());
+    assert!(public_json.get("transaction").is_none());
+    let public_text = norito::json::to_json(&public_json).expect("render public status JSON");
+    assert!(!public_text.contains("private-receipt"));
+    assert!(!public_text.contains(&recipient.to_string()));
+
+    for (label, key_pair) in [("sender", &sender_key), ("recipient", &recipient_key)] {
+        let response = super::handler_pipeline_transaction_details(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            versioned_query_for_test(signed_transaction_details_query(key_pair, entrypoint_hash)),
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!("{label} should read involved transaction details: {error}")
+        });
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("transaction-details response body");
+        let details: iroha_torii_shared::PipelineTransactionDetailsResponse =
+            norito::json::from_slice(&body).expect("typed transaction-details JSON");
+        assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
+        assert_eq!(
+            details.transaction.result().batch_transfer_outcomes(),
+            &[outcome.clone()]
+        );
+    }
+
+    let error = match super::handler_pipeline_transaction_details(
+        State(app),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        None,
+        versioned_query_for_test(signed_transaction_details_query(
+            &unrelated_key,
+            entrypoint_hash,
+        )),
+    )
+    .await
+    {
+        Ok(_) => panic!("an uninvolved account must not read transaction details"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        super::Error::Query(ValidationFail::NotPermitted(_))
+    ));
+}
+
+#[tokio::test]
+async fn transaction_details_allows_operator_and_rejects_wrong_network_and_replay() {
+    let sender_key =
+        checked_torii_test_ed25519_keypair(0x24, "derive operator fixture transaction sender");
+    let operator_key =
+        checked_torii_test_ed25519_keypair(0x37, "derive transaction-details operator key");
+    let sender = AccountId::new(sender_key.public_key().clone());
+    let operator = AccountId::new(operator_key.public_key().clone());
+    let app = mk_app_state_for_tests_with_world(transaction_details_test_world(&[
+        sender,
+        operator.clone(),
+    ]));
+    let (block, entrypoint_hash) = make_signed_block(1, None);
+    store_and_index_transaction_details_block(&app, block, entrypoint_hash);
+    grant_account_permission_for_test(&app, &operator, CanReadAllLedgerData.into());
+
+    let signed = signed_transaction_details_query(&operator_key, entrypoint_hash);
+    let signed_bytes = norito::to_bytes(&signed).expect("encode replayable signed-query fixture");
+    let first: SignedQuery =
+        norito::decode_from_bytes(&signed_bytes).expect("decode first signed-query fixture");
+    let replayed: SignedQuery =
+        norito::decode_from_bytes(&signed_bytes).expect("decode replayed signed-query fixture");
+    let response = super::handler_pipeline_transaction_details(
+        State(app.clone()),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        None,
+        versioned_query_for_test(first),
+    )
+    .await
+    .expect("operator capability should authorize transaction details");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let replay = match super::handler_pipeline_transaction_details(
+        State(app.clone()),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        None,
+        versioned_query_for_test(replayed),
+    )
+    .await
+    {
+        Ok(_) => panic!("the same signed-query nonce must be one-shot"),
+        Err(error) => error,
+    };
+    assert!(format!("{replay:?}").contains("nonce already used"));
+
+    let mut wrong_network = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Start(
+            build_exact_transaction_details_query_for_test(entrypoint_hash),
+        ),
+        operator,
+    );
+    wrong_network.network_id = NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x38; Hash::LENGTH])),
+    );
+    let wrong_network = wrong_network.sign(&operator_key);
+    let error = match super::handler_pipeline_transaction_details(
+        State(app),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        None,
+        versioned_query_for_test(wrong_network),
+    )
+    .await
+    {
+        Ok(_) => panic!("a transaction-details query cannot cross network lineages"),
+        Err(error) => error,
+    };
+    assert!(format!("{error:?}").contains("different network genesis"));
+}
+
+#[test]
+fn transaction_details_rejects_unsigned_and_broadened_queries() {
+    let key_pair = checked_torii_test_ed25519_keypair(0x39, "derive transaction-details shape key");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+        b"transaction-details-shape",
+    ));
+    let unsigned = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Start(
+            build_exact_transaction_details_query_for_test(entrypoint_hash),
+        ),
+        authority.clone(),
+    );
+    let bytes = norito::to_bytes(&unsigned).expect("encode unsigned query request");
+    assert!(
+        norito::decode_from_bytes::<SignedQuery>(&bytes).is_err(),
+        "the signed-query endpoint must not decode an unsigned request as an admission witness",
+    );
+
+    let broadened = authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Start(build_find_transactions_query_for_test()),
+        authority,
+    );
+    assert!(
+        exact_transaction_details_query_hash(&broadened).is_err(),
+        "unbounded transaction history must not qualify as an exact details query",
     );
 }
 
@@ -1854,7 +2119,7 @@ async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
 }
 
 #[tokio::test]
-async fn pipeline_status_handler_encodes_rejection_as_base64() {
+async fn public_pipeline_status_does_not_expose_rejection_details() {
     let app = mk_app_state_for_tests();
     let (block, _) = make_signed_block(1, None);
     let tx_hash = block.external_transactions().next().expect("tx").hash();
@@ -1881,17 +2146,25 @@ async fn pipeline_status_handler_encodes_rejection_as_base64() {
         .await
         .expect("body");
     let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
-    let rejection_payload = payload
-        .get("status")
-        .and_then(|status| status.get("rejection_reason"))
-        .cloned()
-        .expect("rejection content");
-    let expected = norito::json::to_value(&reason).expect("rejection json");
-    assert_eq!(rejection_payload, expected);
+    assert_eq!(
+        payload
+            .get("status")
+            .and_then(|status| status.get("kind"))
+            .and_then(norito::json::Value::as_str),
+        Some("Rejected")
+    );
+    assert!(
+        payload
+            .get("status")
+            .and_then(|status| status.get("rejection_reason"))
+            .is_none()
+    );
+    let encoded = norito::json::to_json(&payload).expect("public status JSON");
+    assert!(!encoded.contains(&reason.to_string()));
 }
 
 fn sample_commit_qc(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     block_hash: HashOf<BlockHeader>,
     post_state_root: iroha_crypto::Hash,
     height: u64,
@@ -1918,7 +2191,7 @@ fn sample_commit_qc(
         signer: 0,
         bls_sig: Vec::new(),
     };
-    let preimage = vote_preimage(chain_id, PERMISSIONED_TAG, &vote);
+    let preimage = vote_preimage(network_id, PERMISSIONED_TAG, &vote);
     let signature =
         checked_torii_test_signature(&keypair, &preimage, "sign Torii commit-QC fixture vote");
     let sig_bytes = signature.payload().to_vec();
@@ -1956,7 +2229,9 @@ fn sample_commit_qc(
 }
 
 fn record_commit_cert(height: u64) -> Qc {
-    let chain_id: ChainId = "chain".parse().expect("chain id");
+    let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0x42; Hash::LENGTH],
+    )));
     let keypair = checked_torii_test_keypair_from_seed_byte(
         0x30,
         Algorithm::BlsNormal,
@@ -1980,7 +2255,7 @@ fn record_commit_cert(height: u64) -> Qc {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    let preimage = vote_preimage(&chain_id, PERMISSIONED_TAG, &vote);
+    let preimage = vote_preimage(&network_id, PERMISSIONED_TAG, &vote);
     let signature = checked_torii_test_signature(
         &keypair,
         &preimage,
@@ -2261,7 +2536,14 @@ async fn ledger_state_proof_returns_commit_qc() {
     let block_hash = block.hash();
     store_block(&app, block);
 
-    let (qc, _) = sample_commit_qc(app.state.chain_id_ref(), block_hash, expected_root, 1, 2, 0);
+    let (qc, _) = sample_commit_qc(
+        app.state.network_id_ref(),
+        block_hash,
+        expected_root,
+        1,
+        2,
+        0,
+    );
     let mut app = app;
     let app_mut = Arc::get_mut(&mut app).expect("unique app state for test");
     Arc::get_mut(&mut app_mut.state)
@@ -2340,7 +2622,14 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
     let block_hash = block.hash();
     store_block(&app, block);
 
-    let (qc, _) = sample_commit_qc(app.state.chain_id_ref(), block_hash, expected_root, 1, 2, 0);
+    let (qc, _) = sample_commit_qc(
+        app.state.network_id_ref(),
+        block_hash,
+        expected_root,
+        1,
+        2,
+        0,
+    );
     let mut app = Arc::into_inner(app).unwrap_or_else(|| panic!("unique app state for test"));
     let mut state =
         Arc::into_inner(app.state).unwrap_or_else(|| panic!("unique core state for test"));
@@ -2655,298 +2944,4 @@ fn block_proof_errors_distinguish_absence_from_persisted_corruption() {
     }
 }
 
-fn app_with_indexed_sccp_message_for_test(
-    persist_finality: bool,
-) -> (SharedAppState, [u8; 32], V2FinalityArtifact) {
-    const HEIGHT: u64 = 1;
-    let keypair =
-        checked_torii_test_ed25519_keypair(0x31, "derive indexed Torii SCCP-message fixture key");
-    let chain: ChainId = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
-        .parse()
-        .expect("SCCP Taira finality chain id");
-    let app = mk_app_state_for_tests_with_chain_id(chain.clone());
-    let authority = AccountId::new(keypair.public_key().clone());
-    let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-        version: 1,
-        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-        dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-        nonce: 7,
-        route_revision: 1,
-        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-        asset_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-        asset_id: iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes().to_vec(),
-        amount: 123,
-        sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-        sender: b"alice".to_vec(),
-        recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
-        recipient: vec![0x91; 20],
-        route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-        route_id: iroha_sccp::SCCP_TAIRA_ETH_XOR_ROUTE_ID_V1
-            .as_bytes()
-            .to_vec(),
-    });
-    let context = iroha_data_model::bridge::SccpOutboundMessageContextV1::new(
-        iroha_data_model::bridge::SccpLaneIdV1 {
-            source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-            target: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
-        },
-        [0xd1; 32],
-        [0xc1; 32],
-    )
-    .expect("well-formed SCCP context");
-    let record = iroha_data_model::isi::bridge::RecordSccpMessage::new(
-        context,
-        iroha_sccp::canonical_sccp_payload_bytes(&payload)
-            .expect("valid SCCP indexed-message fixture payload encodes"),
-    );
-    let tx = checked_torii_test_transaction(
-        TransactionBuilder::new(
-            chain,
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([record]),
-        &keypair,
-        "sign indexed Torii SCCP-message fixture transaction",
-    );
-    let entry_hash = tx.hash_as_entrypoint();
-    let header = BlockHeader::new(
-        std::num::NonZeroU64::new(HEIGHT).expect("nonzero height"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
-    let signature = checked_torii_test_block_signature(
-        0,
-        &keypair,
-        &header,
-        "sign indexed Torii SCCP-message fixture block",
-    );
-    let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &[entry_hash],
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        )
-        .expect("test block entrypoint hash should match payload");
-    let legacy_post_state_root = block
-        .header()
-        .result_merkle_root()
-        .map(|hash| iroha_crypto::Hash::prehashed(*hash.as_ref()))
-        .expect("SCCP fixture result root");
-    let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
-    assert_eq!(messages.len(), 1);
-    let message = &messages[0];
-    let commitment_root = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
-        .expect("SCCP commitment root");
-    block.set_sccp_commitment_root(Some(commitment_root));
-    let block_hash = block.hash();
-    let message_id = message.commitment.message_id;
-    let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(context.lane, message_id)
-        .expect("valid outbound key");
-    let durable = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
-        destination_binding_hash: context.destination_binding_hash,
-        route_configuration_hash: context.route_configuration_hash,
-        payload_hash: message.commitment.payload_hash,
-        payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&message.payload)
-            .expect("canonical indexed Torii SCCP-message payload"),
-        recorded_at_height: HEIGHT,
-        commitment_index: 0,
-    };
-    app.state
-        .insert_sccp_outbound_message_for_testing(key, durable)
-        .expect("insert indexed outbound record");
-    let mut validator_keys = (1_u8..=4)
-        .map(|seed| {
-            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                .expect("derive deterministic SCCP finality validator")
-        })
-        .collect::<Vec<_>>();
-    validator_keys.sort_by(|left, right| {
-        PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
-    });
-    let roster = validator_keys
-        .iter()
-        .zip([1_u64; 4])
-        .map(|(key, power)| ValidatorPower {
-            validator: PeerId::new(key.public_key().clone()),
-            power,
-        })
-        .collect::<Vec<_>>();
-    let context = HeightContext {
-        chain_id: app.state.chain_id_ref().clone(),
-        protocol_version: PROTOCOL_VERSION,
-        height: HEIGHT,
-        epoch: 0,
-        epoch_end_height: 10,
-        next_epoch_snapshot: None,
-        mode: ConsensusMode::Npos,
-        parent_commit_qc: None,
-        snapshot_bootstrap: None,
-        quorum: DualQuorum::from_roster(&roster).expect("valid SCCP finality roster"),
-        roster,
-        nexus_amx_context_hash: Hash::new(b"Torii SCCP exact-v2 finality context"),
-        execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-        da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 1024,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 4096,
-            max_chunk_count: 8,
-        },
-        leader_seed: [0x42; 32],
-    };
-    let subject = BlockSubject {
-        parent_block_hash: block.header().prev_block_hash(),
-        block_hash,
-        payload_hash: block
-            .canonical_proposal_wire_hash()
-            .expect("hash exact SCCP fixture proposal wire"),
-    };
-    let round = ConsensusRound {
-        context_id: context.id(),
-        height: HEIGHT,
-        view: block.header().view_change_index(),
-    };
-    let mut commit_qc = QuorumCertificate {
-        round,
-        proposal_round: round,
-        phase: GlobalPhase::Commit,
-        subject,
-        execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"Torii SCCP exact-v2 parent state"),
-            Hash::new(b"Torii SCCP exact-v2 post state"),
-            Hash::new(b"Torii SCCP exact-v2 ordinary writes"),
-            u64::try_from(block.encode_wire().expect("exact block wire").len())
-                .expect("exact block wire length fits u64"),
-            block
-                .executed_block_wire_hash()
-                .expect("hash exact SCCP fixture block wire"),
-        ),
-        signers: vec![0, 1, 2],
-        aggregate_signature: vec![1],
-    };
-    let preimage = commit_qc
-        .signer_preimage(&context, 0)
-        .expect("valid SCCP finality signer");
-    let signatures = commit_qc
-        .signers
-        .iter()
-        .map(|index| {
-            Signature::try_new(
-                validator_keys[usize::try_from(*index).expect("fixture signer index")]
-                    .private_key(),
-                &preimage,
-            )
-            .expect("sign exact SCCP Commit vote")
-            .payload()
-            .to_vec()
-        })
-        .collect::<Vec<_>>();
-    commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
-        &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-    )
-    .expect("aggregate exact SCCP Commit votes");
-    let validator_set_pops = validator_keys
-        .iter()
-        .map(|key| {
-            iroha_crypto::bls_normal_pop_prove(key.private_key())
-                .expect("derive SCCP finality validator PoP")
-        })
-        .collect();
-    let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
-    artifact
-        .validate_for_header(&block.header())
-        .expect("SCCP finality fixture binds the exact block header");
-    artifact
-        .verify()
-        .expect("SCCP finality fixture is cryptographically valid");
-
-    // Seed the retired QC model as an adversarial control. Proof routes
-    // must still require the exact durable v2 artifact below; a valid
-    // legacy QC in world state is not an alternative finality source.
-    let (legacy_qc, legacy_validator_pop) = sample_commit_qc(
-        app.state.chain_id_ref(),
-        block_hash,
-        legacy_post_state_root,
-        HEIGHT,
-        HEIGHT.saturating_add(1),
-        0,
-    );
-
-    let stored_block_hash = store_block(&app, block);
-    assert_eq!(stored_block_hash, artifact.block_hash);
-    if persist_finality {
-        let receipt = app
-            .kura
-            .store_v2_finality_artifact(&artifact)
-            .expect("persist exact SCCP v2 finality artifact");
-        assert_eq!(receipt.height(), artifact.height);
-        assert_eq!(receipt.block_hash(), artifact.block_hash);
-        assert_eq!(receipt.context_id(), artifact.context_id());
-        assert_eq!(receipt.subject(), artifact.subject);
-        assert_eq!(receipt.certificate(), artifact.commit_qc.as_ref());
-        assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
-    }
-    let mut app = app;
-    let app_mut = Arc::get_mut(&mut app).expect("unique app state for SCCP fixture");
-    let state = Arc::get_mut(&mut app_mut.state).expect("unique core state for SCCP fixture");
-    state.world.register_validator_pop_for_testing(
-        legacy_qc.validator_set[0].public_key().clone(),
-        legacy_validator_pop,
-    );
-    state.insert_commit_qc_for_testing(block_hash, legacy_qc);
-    assert!(
-        state.world_view().commit_qcs().get(&block_hash).is_some(),
-        "SCCP adversarial fixture retains a valid legacy QC"
-    );
-    (app, message_id, artifact)
-}
-
-#[tokio::test]
-async fn sccp_bundle_endpoint_uses_exact_v2_artifact_and_authoritative_index() {
-    let (app, message_id, expected_artifact) = app_with_indexed_sccp_message_for_test(true);
-    let message_id_hex = hex::encode(message_id);
-    let bundle_response = routing::handle_v1_sccp_message_bundle(
-        Arc::clone(&app.state),
-        message_id_hex.clone(),
-        utils::ResponseFormat::Json,
-        acquire_query_admission(app.as_ref(), true)
-            .await
-            .expect("acquire bundle test admission"),
-    )
-    .await
-    .expect("indexed bundle response");
-    let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
-        .await
-        .expect("bundle body");
-    let bundle = norito::json::from_slice::<iroha_sccp::TairaSccpMessageProofV1>(&bundle_bytes)
-        .expect("typed bundle JSON");
-    assert_eq!(bundle.commitment.message_id, message_id);
-    assert!(iroha_sccp::verify_message_bundle_structure(&bundle));
-    let verified_finality =
-        iroha_sccp::verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(
-            &bundle,
-        )
-        .expect("bundle carries a cryptographically self-consistent exact-v2 proof");
-    assert_eq!(verified_finality.finality_artifact, expected_artifact);
-
-    let request_error = routing::handle_v1_sccp_proof_request(
-        Arc::clone(&app.state),
-        message_id_hex,
-        utils::ResponseFormat::Json,
-        acquire_query_admission(app.as_ref(), true)
-            .await
-            .expect("acquire proof-request test admission"),
-    )
-    .await
-    .expect_err("proof request must require its historical governed route");
-    let Error::Query(ValidationFail::InternalError(message)) = request_error else {
-        panic!("unexpected missing-route error: {request_error}");
-    };
-    assert!(message.contains("retained destination binding"));
-}
+include!("part_5b_sccp_bundle.rs");

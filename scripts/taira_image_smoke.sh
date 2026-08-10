@@ -6,7 +6,7 @@ usage() {
 Usage: scripts/taira_image_smoke.sh [--image IMAGE] [--work-dir DIR] [--timeout SECONDS]
 
 Build-time smoke for the Taira validator image. The image must contain both
-`irohad` and `kagami`.
+`iroha3d` and `kagami`.
 EOF
 }
 

@@ -27,8 +27,8 @@ public struct KagemushaRecursiveSpendArtifactBindingV4: Equatable, Hashable, Sen
 
 /// Wallet-safe public projection of one validated ABI-21 recursive bundle.
 ///
-/// The frozen summary wire intentionally omits the chain ID. Callers must not
-/// use this projection to authenticate a chain independently of the native
+/// The frozen summary wire intentionally omits the NetworkId. Callers must not
+/// use this projection to authenticate a network independently of the native
 /// bridge that validated the opaque bundle.
 public struct KagemushaRecursiveSpendBundleSummaryV4: Equatable, Sendable {
     public let assetDefinitionID: String
@@ -66,7 +66,7 @@ public struct KagemushaRecursiveSpendBundleV4: Equatable, Sendable {
         self.noritoArchive = Data(noritoArchive)
     }
 
-    /// Ask the ABI-21 bridge to validate the opaque proof carrier and return
+    /// Ask the ABI-22 bridge to validate the opaque proof carrier and return
     /// only its wallet-safe public projection.
     public func projectedSummary() throws -> KagemushaRecursiveSpendBundleSummaryV4 {
         guard let archive = try NoritoNativeBridge.shared
@@ -134,6 +134,7 @@ public struct KagemushaRecursiveSpendPeerPaymentV4: Equatable, Sendable {
 /// Finalized top-up receipt whose public statement selects an ABI-21 release.
 public struct KagemushaRecursiveSpendTopUpAnchorV4: Equatable, Sendable {
     public let version: UInt16
+    public let networkID: NetworkId
     public let topUpOperationID: Data
     public let artifactBinding: KagemushaRecursiveSpendArtifactBindingV4
     public let finalizedHeight: UInt64
@@ -152,6 +153,7 @@ public struct KagemushaRecursiveSpendTopUpAnchorV4: Equatable, Sendable {
     }
 
     init(
+        networkID: NetworkId,
         topUpOperationID: Data,
         artifactBinding: KagemushaRecursiveSpendArtifactBindingV4,
         finalizedHeight: UInt64,
@@ -160,6 +162,7 @@ public struct KagemushaRecursiveSpendTopUpAnchorV4: Equatable, Sendable {
         noritoArchive: Data
     ) {
         version = KagemushaRecursiveSpend.wireVersionV4
+        self.networkID = networkID
         self.topUpOperationID = Data(topUpOperationID)
         self.artifactBinding = artifactBinding
         self.finalizedHeight = finalizedHeight
@@ -274,7 +277,7 @@ public struct KagemushaRecursiveSpendTopUpProvenanceV4: Equatable, Sendable {
 /// never be persisted or sent to Torii.
 public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
     public let version: UInt16
-    public let chainID: String
+    public let networkID: NetworkId
     public let assetID: String
     public let amount: KagemushaScaledAmount
     public let payer: String
@@ -287,7 +290,7 @@ public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
     public let artifactBinding: KagemushaRecursiveSpendArtifactBindingV4
 
     public init(
-        chainID: String,
+        networkID: NetworkId,
         assetID: String,
         amount: KagemushaScaledAmount,
         payer: String,
@@ -307,7 +310,6 @@ public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
               zeroPath.root.contains(where: { $0 != 0 }) else {
             throw KagemushaRecursiveSpendError.invalidField("topUpShieldBuildRequestV4")
         }
-        try KagemushaRecursiveSpend.requirePortableText(chainID, field: "chainID")
         try KagemushaRecursiveSpend.requirePortableText(payer, field: "payer")
         try KagemushaRecursiveSpend.requirePortableText(
             shieldVerifierID,
@@ -322,7 +324,7 @@ public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
             field: "shieldVerifierCommitment"
         )
         version = KagemushaRecursiveSpend.localWitnessVersionV4
-        self.chainID = chainID
+        self.networkID = networkID
         self.assetID = canonicalAssetID
         self.amount = amount
         self.payer = payer
@@ -475,7 +477,7 @@ public struct KagemushaOutputMembershipLeafPathsV4: Equatable, Sendable {
     }
 }
 
-/// Exact output-update witness decoded only by the ABI-21 bridge.
+/// Exact output-update witness decoded only by the ABI-22 bridge.
 public struct KagemushaOutputMembershipPathsV4: Equatable, Sendable {
     public let initialRoot: Data
     public let finalRoot: Data
@@ -768,7 +770,7 @@ public struct KagemushaRecursiveSpendRedemptionChangePreparationV4:
     public let opening: KagemushaNoteOpening
     /// Complete descriptor returned by the native bridge. Swift rechecks every
     /// binding exposed by `KagemushaRecursiveSpendBundleSummaryV4`; because the
-    /// frozen summary omits chain ID, `output.chainID` remains native-authenticated
+    /// frozen summary omits network ID, `output.networkID` remains native-authenticated
     /// rather than independently authenticated by this Swift result decoder.
     public let output: KagemushaSpendableNoteDescriptor
     /// Exact public unshield amount: input amount minus the private change output.
@@ -784,7 +786,7 @@ public struct KagemushaRecursiveSpendRedemptionChangePreparationV4:
         guard opening.spendKey == inputOpening.spendKey,
               opening.rho != inputOpening.rho,
               opening.rho != opening.diversifier,
-              opening.diversifier == ConfidentialOwnerTag.defaultDiversifier(),
+              opening.diversifier == (try ConfidentialOwnerTag.defaultDiversifier()),
               output.assetDefinitionID == inputSummary.assetDefinitionID,
               output.amount == changeAmount,
               output.noteCommitment != inputSummary.noteCommitment,
@@ -864,7 +866,7 @@ public struct KagemushaRecursiveSpendPeerSplitChangePreparationV4: Equatable, Se
         let total = try KagemushaScaledAmount.sum(inputSummaries.map(\.amount))
         let conserved = try recipientRequest.payload.amount.adding(changeAmount)
         guard total == conserved,
-              output.chainID == recipientRequest.payload.chainID,
+              output.networkID == recipientRequest.payload.networkID,
               output.assetDefinitionID == recipientRequest.payload.assetDefinitionID,
               output.amount == changeAmount,
               inputSummaries.allSatisfy({ $0.assetDefinitionID == output.assetDefinitionID }),
@@ -878,7 +880,7 @@ public struct KagemushaRecursiveSpendPeerSplitChangePreparationV4: Equatable, Se
                   $0.spendKey == opening.spendKey || $0.rho == opening.rho
               }),
               opening.rho != opening.diversifier,
-              opening.diversifier == ConfidentialOwnerTag.defaultDiversifier() else {
+              opening.diversifier == (try ConfidentialOwnerTag.defaultDiversifier()) else {
             throw KagemushaRecursiveSpendError.invalidArchive(
                 "peerSplitChangePrepareResultV4.binding"
             )
@@ -889,7 +891,7 @@ public struct KagemushaRecursiveSpendPeerSplitChangePreparationV4: Equatable, Se
     }
 }
 
-/// Secret-bearing ABI-21 append input. It encodes the flat V4 bridge carrier,
+/// Secret-bearing ABI-22 append input. It encodes the flat V4 bridge carrier,
 /// not a version wrapper around the frozen request.
 public struct KagemushaRecursiveSpendAppendLocalRequestV4: Equatable, Sendable {
     public let previousInputs: [KagemushaRecursiveSpendAppendInputV4]

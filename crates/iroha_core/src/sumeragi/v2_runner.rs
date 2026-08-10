@@ -907,7 +907,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     .roster
                     .iter()
                     .map(|validator| validator.validator.clone()),
-                &context.chain_id,
+                &context.network_id,
                 context.da_layout,
             )
             .map_err(ingress_capacity_error)?;
@@ -946,7 +946,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         )?;
         let new_block_sync_server = block_sync_server
             .is_none()
-            .then(|| V2BlockSyncServer::new(context.chain_id.clone(), certified_request_capacity))
+            .then(|| V2BlockSyncServer::new(context.network_id, certified_request_capacity))
             .transpose()?;
         let mut block_sync = V2BlockSyncDiscovery::new(
             context.clone(),
@@ -993,7 +993,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             Arc::clone(&kura),
             provider_ingest_finalized_archive.clone(),
             reputation_finalized_archive.clone(),
-            context.chain_id.clone(),
             block_cadence,
             genesis_account.clone(),
             events_sender.clone(),
@@ -5011,19 +5010,14 @@ fn claim_runner_lifecycle_process_generation(
 ) -> Result<Option<AutonomousLifecycleProcessGenerationClaim>, V2RunnerError> {
     match role {
         NodeRole::Observer => Ok(None),
-        NodeRole::Validator => {
-            let lifecycle_chain_id = context.chain_id.clone().into_inner();
-            kura.claim_autonomous_lifecycle_process_generation(
-                Hash::new(lifecycle_chain_id.as_bytes()),
-                local_peer,
-            )
+        NodeRole::Validator => kura
+            .claim_autonomous_lifecycle_process_generation(context.network_id, local_peer)
             .map(Some)
             .map_err(|error| {
                 V2RunnerError::Service(format!(
                     "failed to claim the durable autonomous lifecycle process generation: {error}"
                 ))
-            })
-        }
+            }),
     }
 }
 

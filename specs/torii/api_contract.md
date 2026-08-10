@@ -203,6 +203,16 @@ extractor or handler runs. After a valid singleton token, Torii applies
 route-level access/rate policy, then exact `Content-Type` validation, then
 command-header validation, and only then decodes the body.
 
+Every typed `POST /v1/soracloud/*` operation has its own sealed route-local
+canonical-account boundary. Torii bounds the exact body and authenticates its
+method, path, exact runtime `NetworkId`, freshness nonce, and account signer
+before a typed extractor or SoraCloud handler runs; the same verified principal
+then feeds the account/origin rate and in-flight gates. The route catalog marks
+the ciphertext query as a bounded read, private uploaded-model execution as
+expensive compute, and all retained or ledger-changing commands as mutations.
+This rule does not apply to the separately cataloged public-runtime gateway
+exceptions below.
+
 Those admission and authentication failures also take precedence over strict
 `Accept` coalescing and negotiation. A syntactically valid supported `Accept`
 preference is honored for the primary rejection; malformed, non-ASCII, or
@@ -226,7 +236,7 @@ authentication and network policy rather than by claiming a separate socket.
 | `GET /metrics` | diagnostic, restricted on the public listener | Prometheus text | CIDR/API-token policy | scraper protocol; never an SDK or MCP tool |
 | `GET /debug/pprof/profile` | diagnostic, restricted on the public listener | profiler bytes | CIDR/API-token policy | diagnostic artifact |
 | `GET /openapi`, `GET /openapi.json`, `GET /v1/schema` | protocol documentation | JSON document | deployment policy | schema/document endpoints are JSON-only |
-| `GET /v1/mcp`, `POST /v1/mcp` | protocol | capability document / MCP JSON-RPC | MCP/auth policy | tool transport, not ordinary generated REST operations |
+| `GET /v1/mcp`, `POST /v1/mcp` | protocol | capability document / MCP JSON-RPC | GET is public; POST is a bounded nested-route boundary which preserves the selected catalog route's exact authentication and admission | tool transport, not ordinary generated REST operations |
 | `GET /v1/ledger/block/{height}` and `GET /v1/ledger/block/{height}/proof/{entry_hash}` | public, OpenAPI and SDK | exact `application/x-norito` cryptographic carrier | listener policy | the executed `SignedBlockWire` and `BlockProofs` bytes must not be projected through a separately evolving JSON shape; the block carrier is finalized-state-bound and limited to 32 MiB |
 | `POST /v1/operator/auth/{registration,login}/{options,verify}` | operator, OpenAPI only | WebAuthn JSON | mTLS plus handler-enforced bootstrap/session, rate-limit, lockout, and WebAuthn challenge policy | credential exchange cannot require an already-established operator request signature; it never enters SDK or MCP projections |
 | `GET /v1/content/{bundle}/{*path}` and hosted-site reads | protocol | manifest-selected content type, ranges | content policy | raw/static content delivery; an empty wildcard is not a bundle-root alias |
@@ -285,9 +295,14 @@ signed.
 The catalog is the canonical route superset, but consumers receive explicit
 projections rather than identical sets. Each descriptor identifies its public,
 operator, diagnostic, or protocol surface; listener; feature gate; OpenAPI and
-SDK exposure; and explicit MCP allowlisting. Metrics, diagnostics, streams, and
-privileged commands therefore do not become SDK operations or MCP tools merely
-because they are mounted. The mounted projection is evaluated for the active
+SDK exposure; explicit MCP allowlisting; closed `RouteEffect` classification;
+and closed `AdmissionPolicy` principal requirement. Effect and admission have
+no unspecified/default form. Catalog validation rejects public mutation,
+public expensive compute, public long-lived streams, operator surfaces without
+operator admission, and principal admission without the corresponding sealed
+authentication boundary. Metrics, diagnostics, streams, and privileged
+commands therefore do not become SDK operations or MCP tools merely because
+they are mounted. The mounted projection is evaluated for the active
 build, while the SDK projection is the canonical supported-build superset.
 OpenAPI-derived MCP generation is fail-closed: an operation is emitted only
 when its exact HTTP method/path pair is enabled in the catalog's MCP projection
@@ -300,10 +315,30 @@ not hidden aliases. Listener metadata records the intended exposure boundary,
 while the current single-listener implementation continues to enforce operator
 and diagnostic restrictions through authentication and ingress policy.
 
+## Transaction status privacy
+
+`GET /v1/pipeline/transactions/status` is intentionally a public, status-only
+projection. Its closed response contains the transaction hash, status kind,
+optional block height, requested scope, and resolution source. It never returns
+rejection reasons or diagnostics, trigger completions, batch-transfer receipts,
+account identities, amounts, or instruction payloads, and the handler does not
+perform a second Kura lookup to hydrate those details.
+
+Exact committed details use `POST /v1/pipeline/transactions/details`. The body
+is a canonical `SignedQuery` containing `FindTransactions` with exactly one
+`entrypoint_hash` equality predicate and default query parameters and selector.
+Torii validates the exact genesis-derived `NetworkId`, lifetime, signature, and
+one-shot nonce before any state or Kura access. It then admits only the
+transaction authority, a source or destination account named by a committed
+batch receipt, or an account holding the exact `CanReadAllLedgerData` operator
+capability. Unsigned, wrong-network, replayed, broadened, and projected requests
+fail closed; there is no legacy detail field on the public status DTO.
+
 ## HTTP observability
 
 Every matched request carries the catalog's stable route ID, Axum route
-template, API surface, listener, and tooling projections in request extensions.
+template, API surface, listener, route effect, admission policy, and tooling
+projections in request extensions.
 The same metadata is copied to the response for outer middleware. Neither logs
 nor metric labels fall back to the raw request URI; concrete identifiers,
 cursor values, and query strings therefore cannot create label cardinality or

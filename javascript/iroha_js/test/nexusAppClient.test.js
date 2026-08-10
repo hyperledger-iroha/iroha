@@ -7,6 +7,7 @@ import {
   NexusAppError,
   nexusPayloadHashHex,
 } from "../src/nexusApp.js";
+import { NetworkId } from "../src/networkId.js";
 import {
   browserSignedTransactionHashHex,
   finalizeBrowserSignedTransaction,
@@ -18,6 +19,8 @@ const fixture = JSON.parse(
     "utf8",
   ),
 );
+const fixtureNetworkId = NetworkId.parse(fixture.transfer_input.network_id);
+const foreignNetworkId = NetworkId.fromBytes(Buffer.alloc(32, 0x55));
 const fixturePayloadBytes = Buffer.from(fixture.expected.payload_bytes_hex, "hex");
 const fixturePublicKey = Buffer.from(
   fixture.connect.approval_frame.signing_public_key_hex,
@@ -29,6 +32,7 @@ const fixtureWalletSignature = Buffer.from(
 );
 const fixtureFinalized = finalizeBrowserSignedTransaction(
   {
+    networkId: fixtureNetworkId,
     payloadBytes: fixturePayloadBytes,
     payloadHashHex: fixture.expected.payload_hash_hex,
     authority: fixture.transfer_input.authority,
@@ -98,6 +102,7 @@ function fixtureFeePayment() {
 
 function fixtureSignable(overrides = {}) {
   return {
+    networkId: fixtureNetworkId,
     payloadBytes: Buffer.from(fixturePayloadBytes),
     payloadHashHex: fixture.expected.payload_hash_hex,
     authority: fixture.transfer_input.authority,
@@ -109,7 +114,7 @@ function fixtureSignable(overrides = {}) {
 
 function draftClient(transactionCodec) {
   return new NexusAppClient({
-    chainId: "test-chain",
+    networkId: fixtureNetworkId,
     authority: "approved-account-i105",
     signingPublicKey: fixturePublicKey,
     transactionCodec,
@@ -179,12 +184,12 @@ test("NexusAppError keeps retry classification and context immutable", () => {
 test("NexusAppClient builds a signable transfer draft", () => {
   const payloadBytes = Buffer.from("canonical-transfer-payload");
   const client = new NexusAppClient({
-    chainId: "test-chain",
+    networkId: fixtureNetworkId,
     authority: "account-i105",
     signingPublicKey: Buffer.alloc(32, 1),
     transactionCodec: {
       buildTransferPayload(input) {
-        assert.equal(input.chainId, "test-chain");
+        assert.equal(input.networkId, fixtureNetworkId);
         assert.equal(input.authority, "account-i105");
         assert.equal(input.quantity, "12.5");
         assert.equal(input.destinationAccountId, "destination-i105");
@@ -200,6 +205,7 @@ test("NexusAppClient builds a signable transfer draft", () => {
     feePayment: fixtureFeePayment(),
   });
 
+  assert.equal(draft.signable.networkId, fixtureNetworkId);
   assert.deepEqual(draft.signable.payloadBytes, payloadBytes);
   assert.equal(
     draft.signable.payloadHashHex,
@@ -210,7 +216,7 @@ test("NexusAppClient builds a signable transfer draft", () => {
 test("NexusAppClient validates quantities before invoking custom transaction codecs", () => {
   let codecCalls = 0;
   const client = new NexusAppClient({
-    chainId: "test-chain",
+    networkId: fixtureNetworkId,
     authority: "account-i105",
     signingPublicKey: Buffer.alloc(32, 1),
     transactionCodec: {
@@ -273,7 +279,7 @@ test("NexusAppClient snapshots extension owners and invokes capabilities intrins
     },
   });
   codecClient = new NexusAppClient({
-    chainId: fixture.transfer_input.chain_id,
+    networkId: fixtureNetworkId,
     authority: fixture.transfer_input.authority,
     signingPublicKey: fixturePublicKey,
     transactionCodec,
@@ -295,7 +301,7 @@ test("NexusAppClient payload hashing matches the shared Nexus fixture", () => {
   );
 
   const client = new NexusAppClient({
-    chainId: fixture.transfer_input.chain_id,
+    networkId: fixtureNetworkId,
     authority: fixture.transfer_input.authority,
     signingPublicKey: fixture.connect.approval_frame.signing_public_key_hex,
     transactionCodec: {
@@ -334,7 +340,7 @@ test("NexusAppClient payload hashing matches the shared Nexus fixture", () => {
 
 test("NexusAppClient default browser codec reproduces the shared Nexus fixture", () => {
   const client = new NexusAppClient({
-    chainId: fixture.transfer_input.chain_id,
+    networkId: fixtureNetworkId,
     authority: fixture.transfer_input.authority,
     signingPublicKey: fixture.connect.approval_frame.signing_public_key_hex,
   });
@@ -512,6 +518,7 @@ test("NexusAppClient runs connect approval, wallet signature, finalize, submit, 
 
   const client = new NexusAppClient({
     chainId: "test-chain",
+    networkId: fixtureNetworkId,
     signingPublicKey: fixturePublicKey,
     connectTransport: {
       startConnect(options) {
@@ -714,6 +721,7 @@ test("NexusAppClient keeps browser approval proofs strict and transport-local", 
 test("NexusAppClient accepts raw wallet signature byte inputs", async () => {
   const payloadBytes = fixturePayloadBytes;
   const signable = {
+    networkId: fixtureNetworkId,
     payloadBytes,
     payloadHashHex: nexusPayloadHashHex(payloadBytes),
     authority: fixture.transfer_input.authority,
@@ -793,6 +801,11 @@ test("NexusAppClient validates and detaches canonical signables before every sig
   malformedPayload[0] ^= 0xff;
   const destinationAccount = fixture.transfer_input.destination_account_id;
   for (const [label, candidate, candidateSession] of [
+    [
+      "foreign NetworkId",
+      fixtureSignable({ networkId: foreignNetworkId }),
+      session,
+    ],
     [
       "wrong hash",
       fixtureSignable({ payloadHashHex: "d".repeat(64) }),
@@ -1024,7 +1037,7 @@ test("NexusAppClient rejects conflicting Connect approval and transfer alias fam
 
   let codecCalls = 0;
   const draft = new NexusAppClient({
-    chainId: fixture.transfer_input.chain_id,
+    networkId: fixtureNetworkId,
     authority: fixture.transfer_input.authority,
     signingPublicKey: fixturePublicKey,
     transactionCodec: {
@@ -1310,6 +1323,7 @@ test("NexusAppClient rejects non-Ed25519 wallet signatures", async () => {
       () =>
         client.finalizeAndSubmit(
           {
+            networkId: fixtureNetworkId,
             payloadBytes: Buffer.from("payload"),
             payloadHashHex: nexusPayloadHashHex(Buffer.from("payload")),
             authority: "account-i105",
@@ -1329,6 +1343,7 @@ test("NexusAppClient rejects non-Ed25519 wallet signatures", async () => {
       () =>
         client.finalizeAndSubmit(
           {
+            networkId: fixtureNetworkId,
             payloadBytes: Buffer.from("payload"),
             payloadHashHex: nexusPayloadHashHex(Buffer.from("payload")),
             authority: "account-i105",
@@ -1352,7 +1367,7 @@ test("NexusAppClient accepts exact numeric and string Ed25519 signature algorith
   const finalized = [];
   const submitted = [];
   const client = new NexusAppClient({
-    chainId: "test-chain",
+    networkId: fixtureNetworkId,
     authority: fixture.transfer_input.authority,
     signingPublicKey: fixturePublicKey,
     transactionCodec: {
@@ -1374,6 +1389,7 @@ test("NexusAppClient accepts exact numeric and string Ed25519 signature algorith
 
   const receipt = await client.finalizeAndSubmit(
     {
+      networkId: fixtureNetworkId,
       payloadBytes: payload,
       payloadHashHex: nexusPayloadHashHex(payload),
       authority: fixture.transfer_input.authority,
@@ -1423,7 +1439,7 @@ test("NexusAppClient rejects missing approval account and missing signing key", 
 test("NexusAppClient rejects authority mismatch before wallet signature request", async () => {
   let requested = false;
   const client = new NexusAppClient({
-    chainId: "test-chain",
+    networkId: fixtureNetworkId,
     signingPublicKey: Buffer.alloc(32, 1),
     connectTransport: {
       requestSignature() {
@@ -1468,7 +1484,7 @@ test("NexusAppClient accepts shared approvedAccount session field", async () => 
   let requestedAuthority = null;
 
   const client = new NexusAppClient({
-    chainId: "test-chain",
+    networkId: fixtureNetworkId,
     transactionCodec: {
       buildTransferPayload(input) {
         requestedAuthority = input.authority;
@@ -1527,6 +1543,7 @@ test("NexusAppClient rejects invalid signature lengths", async () => {
     () =>
       client.finalizeAndSubmit(
         {
+          networkId: fixtureNetworkId,
           payloadBytes: Buffer.from("payload"),
           payloadHashHex: nexusPayloadHashHex(Buffer.from("payload")),
           authority: "account-i105",
@@ -1544,6 +1561,7 @@ test("NexusAppClient rejects invalid signature lengths", async () => {
     () =>
       client.finalizeAndSubmit(
         {
+          networkId: fixtureNetworkId,
           payloadBytes: fixturePayloadBytes,
           payloadHashHex: nexusPayloadHashHex(fixturePayloadBytes),
           authority: fixture.transfer_input.authority,
@@ -1560,6 +1578,7 @@ test("NexusAppClient rejects invalid signature lengths", async () => {
 
 test("NexusAppClient rejects Torii hash mismatches and maps submit/status failures", async () => {
   const signable = {
+    networkId: fixtureNetworkId,
     payloadBytes: fixturePayloadBytes,
     payloadHashHex: nexusPayloadHashHex(fixturePayloadBytes),
     authority: fixture.transfer_input.authority,

@@ -28,7 +28,7 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
 WORKDIR /iroha
 COPY . .
 RUN cargo build \
-    --bin irohad \
+    --bin iroha3d \
     --bin sorafs_governance_dag \
     --bin iroha \
     --bin kagami \
@@ -68,7 +68,7 @@ RUN <<EOT
   chown $USER:$USER $CONFIG_DIR
 EOT
 
-COPY --from=builder $TARGET_DIR/irohad $BIN_PATH
+COPY --from=builder $TARGET_DIR/iroha3d $BIN_PATH
 COPY --from=builder $TARGET_DIR/sorafs_governance_dag $BIN_PATH
 COPY --from=builder $TARGET_DIR/iroha $BIN_PATH
 COPY --from=builder $TARGET_DIR/kagami $BIN_PATH
@@ -76,4 +76,4 @@ COPY --from=builder $TARGET_DIR/attachment_sanitizer $BIN_PATH
 COPY defaults/genesis.json $CONFIG_DIR
 COPY defaults/client.toml $CONFIG_DIR
 USER $USER
-CMD ["irohad"]
+CMD ["iroha3d"]

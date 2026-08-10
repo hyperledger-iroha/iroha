@@ -86,4 +86,141 @@ final class ConnectCryptoTests: XCTestCase {
             "65de07a9c6110f16b6b7c64e63c71437d88d122344e1a67d2c932a16187cce2f"
         )
     }
+
+    func testSessionIDBindsExactNetworkAppKeyAndNonce() throws {
+        let appPublicKey = Data((1...32).map(UInt8.init))
+        let nonce = Data((65...80).map(UInt8.init))
+        let sid = try ConnectCrypto.deriveSessionID(
+            networkID: TestNetworkIds.canonical,
+            appPublicKey: appPublicKey,
+            nonce: nonce
+        )
+
+        XCTAssertNotEqual(
+            sid,
+            try ConnectCrypto.deriveSessionID(
+                networkID: TestNetworkIds.other,
+                appPublicKey: appPublicKey,
+                nonce: nonce
+            )
+        )
+        var otherAppKey = appPublicKey
+        otherAppKey[0] ^= 1
+        XCTAssertNotEqual(
+            sid,
+            try ConnectCrypto.deriveSessionID(
+                networkID: TestNetworkIds.canonical,
+                appPublicKey: otherAppKey,
+                nonce: nonce
+            )
+        )
+        XCTAssertThrowsError(
+            try ConnectCrypto.deriveSessionID(
+                networkID: TestNetworkIds.canonical,
+                appPublicKey: Data(repeating: 0, count: 32),
+                nonce: nonce
+            )
+        )
+        XCTAssertThrowsError(
+            try ConnectCrypto.deriveSessionID(
+                networkID: TestNetworkIds.canonical,
+                appPublicKey: appPublicKey,
+                nonce: Data(repeating: 0, count: 16)
+            )
+        )
+    }
+
+    func testApprovalSignatureRejectsNetworkAccountRelayAndSignatureSubstitution() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x42, count: 32))
+        let accountID = try AccountId.makeI105(publicKey: signingKey.publicKey())
+        let sessionID = Data((1...32).map(UInt8.init))
+        let appPublicKey = Data((33...64).map(UInt8.init))
+        let walletPublicKey = Data((65...96).map(UInt8.init))
+        let relayAuth = try ConnectCrypto.relayAuthHash(
+            sessionID: sessionID,
+            relayToken: "relay-token"
+        )
+        let preimage = try ConnectCrypto.buildApprovalPreimage(
+            networkID: TestNetworkIds.canonical,
+            sessionID: sessionID,
+            appPublicKey: appPublicKey,
+            walletPublicKey: walletPublicKey,
+            accountID: accountID,
+            permissions: nil,
+            proof: nil,
+            relayAuthHash: relayAuth
+        )
+        let signature = try signingKey.sign(preimage)
+        let walletSignature = ConnectWalletSignature(
+            algorithm: "ed25519",
+            signature: signature
+        )
+
+        XCTAssertNoThrow(try ConnectCrypto.verifyApprovalSignature(
+            networkID: TestNetworkIds.canonical,
+            sessionID: sessionID,
+            appPublicKey: appPublicKey,
+            walletPublicKey: walletPublicKey,
+            accountID: accountID,
+            permissions: nil,
+            proof: nil,
+            relayAuthHash: relayAuth,
+            walletSignature: walletSignature
+        ))
+
+        func verify(networkID: NetworkId = TestNetworkIds.canonical,
+                    accountID: String,
+                    relayAuth: Data,
+                    signature: Data,
+                    algorithm: String = "ed25519") throws {
+            try ConnectCrypto.verifyApprovalSignature(
+                networkID: networkID,
+                sessionID: sessionID,
+                appPublicKey: appPublicKey,
+                walletPublicKey: walletPublicKey,
+                accountID: accountID,
+                permissions: nil,
+                proof: nil,
+                relayAuthHash: relayAuth,
+                walletSignature: ConnectWalletSignature(
+                    algorithm: algorithm,
+                    signature: signature
+                )
+            )
+        }
+
+        XCTAssertThrowsError(try verify(
+            networkID: TestNetworkIds.other,
+            accountID: accountID,
+            relayAuth: relayAuth,
+            signature: signature
+        ))
+        let otherKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x43, count: 32))
+        XCTAssertThrowsError(try verify(
+            accountID: AccountId.makeI105(publicKey: otherKey.publicKey()),
+            relayAuth: relayAuth,
+            signature: signature
+        ))
+        XCTAssertThrowsError(try verify(
+            accountID: accountID,
+            relayAuth: ConnectCrypto.relayAuthHash(
+                sessionID: sessionID,
+                relayToken: "other-relay"
+            ),
+            signature: signature
+        ))
+        var forged = signature
+        forged[0] ^= 1
+        XCTAssertThrowsError(try verify(
+            accountID: accountID,
+            relayAuth: relayAuth,
+            signature: forged
+        ))
+        XCTAssertThrowsError(try verify(
+            accountID: accountID,
+            relayAuth: relayAuth,
+            signature: signature,
+            algorithm: "Ed25519"
+        ))
+    }
 }

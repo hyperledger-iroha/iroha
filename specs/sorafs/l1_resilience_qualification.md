@@ -9,12 +9,13 @@ summary: Payload-free holistic resilience and disaster-recovery attachment for t
 resilience receipt for the already-qualified four-validator production
 topology. This receipt is a qualification attachment, not a readiness lane or
 a new foundational prerequisite ID. It changes neither the canonical 17-lane
-inventory nor the fixed nine-ID external-HSM envelope.
+inventory nor the fixed nine-ID external-software-signer envelope.
 
 The checker requires exactly one receipt, one artifact root, and the exact
 summary emitted by `check_sorafs_l1_deployment_qualification.py`. The receipt
-and every artifact repeat the deployment identifier, environment, and all five
-topology-binding fields. A different topology-summary file, even if it
+and every artifact repeat the deployment identifier, environment, exact Taira
+network, chain ID, numeric chain discriminator, and all nine topology-binding
+fields. A different topology-summary file, even if it
 describes equivalent JSON, therefore fails the digest binding.
 
 ## Closed requirement inventory
@@ -55,39 +56,43 @@ All artifacts use
 - the production deployment and topology binding;
 - capture time, `result=passed`, and a positive observation count;
 - `payload_included=false`; and
-- for `identical_post_recovery_peer_state` only, four unique validator IDs
-  carrying the same finalized-state SHA-256.
+- for `identical_post_recovery_peer_state` only, the canonical ordered
+  `taira-validator-1` through `taira-validator-4` identities carrying the same
+  finalized-state SHA-256.
 
 Private evidence, transaction bodies, credentials, tokens, keys, PII, and log
 payloads stay outside the receipt and summary.
 
-## Local versus externally authenticated receipts
+## Required external software authentication
 
-A local capture uses this exact authentication object:
+Qualifying receipts use this schema-closed authentication object:
 
 ```json
 {
-  "kind": "local",
-  "algorithm": null,
-  "public_key_fingerprint_sha256": null,
-  "signature_hex": null
+  "kind": "external-ed25519",
+  "algorithm": "ed25519",
+  "backend": "software",
+  "service_id": "<isolated-signer-service>",
+  "administrator_id": "<independent-administrator>",
+  "key_revision": 1,
+  "policy_revision": 1,
+  "policy_digest_sha256": "<nonzero-lowercase-sha256>",
+  "public_key_fingerprint_sha256": "<trusted-key-sha256>",
+  "signature_hex": "<64-byte-lowercase-ed25519-signature>"
 }
 ```
 
-Successful local validation emits `status=configuration-qualified`,
-`live_evidence_recognized=false`, `externally_authenticated=false`,
-`promotion_eligible=false`, and `readiness_lane_count_delta=0`. It must never
-be represented as genuine deployment evidence.
+The service and administrator identifiers must be canonical, production-marked,
+and distinct. Key and policy revisions are positive, and the policy digest is
+nonzero. Local, HSM, test-marked, incomplete, or substituted authentication is
+rejected; there is no configuration-qualified compatibility mode.
 
-An operator may instead provide `kind=external-ed25519`, `algorithm=ed25519`,
-the trusted public-key fingerprint, and an exact 64-byte lowercase-hex
-signature. The signature covers the domain
+The signature covers the domain
 `iroha:sorafs:l1-resilience-qualification:v1\0` followed by canonical JSON of
 the receipt with `authentication.signature_hex` omitted. The checker verifies
 it only against the separate operator-supplied `--trusted-public-key-hex`.
-Private signing material is never accepted. Only that trusted-signature path
-can emit `status=evidence-qualified` and make the attachment eligible for
-promotion review.
+Private signing material is never accepted. Only this trusted external
+software-signature path can emit `status=evidence-qualified`.
 
 ## Promotion consumption
 
@@ -104,15 +109,17 @@ The foundational `prepare` and `finalize` commands reopen and authenticate the
 same summary. They place its exact summary digest, receipt digests, receipt
 timestamp, and resilience signer fingerprint in a
 `resilience_qualification` binding beside `topology_qualification`. The
-existing foundational HSM signature therefore covers the binding without
+binding also carries the software backend, service and administrator
+identities, key and policy revisions, and policy digest. The existing
+foundational external software signature therefore covers the binding without
 inventing a tenth prerequisite ID. The aggregate requires exact equality
 between that signed binding and its separately reviewed resilience input.
-Missing, local-only, stale, tampered, wrong-key, wrong-deployment, or
+Missing, non-software, locally signed, stale, tampered, wrong-key, wrong-deployment, or
 wrong-topology summaries block both foundational preparation and promotion.
 
 The production runner snapshots resilience as a separate replay input:
-topology + resilience + foundation + 17 lane summaries equals 20 immutable
-inputs. It still emits `summary_file_count=17` and
+topology summary + signed topology envelope + resilience + foundation + 17
+lane summaries equals 21 immutable inputs. It still emits `summary_file_count=17` and
 `recognized_summary_count=17`; the resilience attachment is neither passed
 through `--evidence` nor entered in the lane registry.
 
@@ -127,9 +134,8 @@ python3 scripts/check_sorafs_l1_resilience_qualification.py \
   @scripts/examples/sorafs_l1_resilience_qualification.args.example
 ```
 
-For an externally authenticated receipt, append
-`--trusted-public-key-hex <operator-trusted-raw-ed25519-public-key>`. The
-example intentionally omits this argument and cannot claim live qualification.
-After genuine external authentication, pass the resulting summary and the
+The response file requires
+`--trusted-public-key-hex <operator-trusted-raw-ed25519-public-key>`; replace
+its placeholder before use. After genuine external authentication, pass the resulting summary and the
 same reviewed public key to foundational `prepare`, foundational `finalize`,
 and the production-readiness runner through their dedicated resilience flags.

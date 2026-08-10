@@ -1111,6 +1111,7 @@ test("ToriiBrowserClient posts selector-explicit multisig proposal reads", async
   assert.equal(calls[0].url, "https://torii.example/v1/multisig/proposals/query");
   assert.notEqual(calls[0].url, "https://torii.example/v1/multisig/proposals/list");
   assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.redirect, "error");
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     multisig_account_alias: "cbdc@banka",
     status: ["COLLECTING_SIGNATURES"],
@@ -1120,6 +1121,7 @@ test("ToriiBrowserClient posts selector-explicit multisig proposal reads", async
   assert.equal(calls[1].url, "https://torii.example/v1/multisig/proposals/resolve");
   assert.notEqual(calls[1].url, "https://torii.example/v1/multisig/proposals/get");
   assert.equal(calls[1].init.method, "POST");
+  assert.equal(calls[1].init.redirect, "error");
   assert.deepEqual(JSON.parse(calls[1].init.body), {
     multisig_account_alias: "cbdc@banka",
     instructions_hash: "a".repeat(64),
@@ -1233,13 +1235,20 @@ test("ToriiBrowserClient validates distinct entrypoint and signed-wire receipt h
     "x-iroha-transaction-hash": hashLiteral(entrypointHash),
     "x-iroha-signed-transaction-hash": hashLiteral(signedTransactionHash),
   };
+  let acceptedInit;
   const acceptedClient = new ToriiBrowserClient("https://torii.example", {
-    fetchImpl: async () =>
-      jsonResponse({ accepted: true }, { status: 202, headers: correctHeaders }),
+    fetchImpl: async (_url, init) => {
+      acceptedInit = init;
+      return jsonResponse(
+        { accepted: true },
+        { status: 202, headers: correctHeaders },
+      );
+    },
   });
   assert.deepEqual(await acceptedClient.submitTransaction(signedTransaction), {
     accepted: true,
   });
+  assert.equal(acceptedInit.redirect, "error");
 
   const forgedHash = "01".repeat(32);
   for (const [label, override, expectedHeader] of [
@@ -1279,20 +1288,73 @@ test("ToriiBrowserClient validates distinct entrypoint and signed-wire receipt h
   }
 });
 
+for (const redirectStatus of [307, 308]) {
+  test(`ToriiBrowserClient rejects transaction ${redirectStatus} without redirecting`, async () => {
+    const signedTransaction = compactHashSignedTransactionFixture();
+    let attempts = 0;
+    const client = new ToriiBrowserClient("https://torii.example", {
+      fetchImpl: async (_url, init) => {
+        attempts += 1;
+        assert.equal(init.redirect, "error");
+        return jsonResponse(
+          { redirect: true },
+          {
+            status: redirectStatus,
+            headers: { location: "https://redirect.example/replayed" },
+          },
+        );
+      },
+    });
+
+    await assert.rejects(
+      () => client.submitTransaction(signedTransaction),
+      (error) =>
+        error instanceof ToriiBrowserHttpError &&
+        error.status === redirectStatus,
+    );
+    assert.equal(attempts, 1);
+  });
+}
+
+test("ToriiBrowserClient rejects redirects for caller-supplied nonce headers", async () => {
+  let attempts = 0;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async (_url, init) => {
+      attempts += 1;
+      assert.equal(init.redirect, "error");
+      return jsonResponse(
+        { redirect: true },
+        {
+          status: 307,
+          headers: { location: "https://redirect.example/replayed-query" },
+        },
+      );
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      client._json("POST", "/query", {
+        body: { query: "signed" },
+        headers: { "X-Iroha-Nonce": "caller-generated-nonce" },
+      }),
+    (error) => error instanceof ToriiBrowserHttpError && error.status === 307,
+  );
+  assert.equal(attempts, 1);
+});
+
 test("ToriiBrowserClient waits for exact global persisted Applied finality", async () => {
   const hash = "ab".repeat(32);
   const payloads = [
     {
       hash,
       status: { kind: "Applied", block_height: 17 },
-      summary: "Applied",
       scope: "global",
       resolved_from: "cache",
     },
     {
       hash,
       status: { kind: "Applied", block_height: 17 },
-      summary: "Applied",
       scope: "global",
       resolved_from: "state",
     },
@@ -1327,7 +1389,6 @@ test("ToriiBrowserClient rejects malformed Applied envelopes", async () => {
       {
         hash: "ef".repeat(32),
         status: { kind: "Applied", block_height: 1 },
-        summary: "Applied",
         scope: "global",
         resolved_from: "state",
       },
@@ -1337,7 +1398,6 @@ test("ToriiBrowserClient rejects malformed Applied envelopes", async () => {
       {
         hash,
         status: { kind: "Applied", block_height: 0 },
-        summary: "Applied",
         scope: "global",
         resolved_from: "state",
       },
@@ -1354,14 +1414,13 @@ test("ToriiBrowserClient rejects malformed Applied envelopes", async () => {
   }
 });
 
-test("ToriiBrowserClient does not treat nested Committed markers as finality", async () => {
+test("ToriiBrowserClient rejects retired nested status details", async () => {
   const hash = "12".repeat(32);
   const client = new ToriiBrowserClient("https://torii.example", {
     fetchImpl: async () =>
       jsonResponse({
         hash,
         status: { kind: "Queued", content: { Committed: true } },
-        summary: "Queued",
         scope: "global",
         resolved_from: "queue",
       }),
@@ -1369,7 +1428,7 @@ test("ToriiBrowserClient does not treat nested Committed markers as finality", a
 
   await assert.rejects(
     client.waitForTransactionStatus(hash, { intervalMs: 0, maxAttempts: 1 }),
-    /did not reach persisted Applied status/u,
+    /retired or unsupported fields: content/u,
   );
 });
 

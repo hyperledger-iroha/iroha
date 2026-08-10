@@ -1386,8 +1386,10 @@ pub fn verify_orchard_bundle_v1(
 pub(crate) mod tests {
     use std::sync::OnceLock;
 
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
+        block::BlockHeader,
         privacy::{
             PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
             PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
@@ -1408,9 +1410,11 @@ pub(crate) mod tests {
     }
 
     fn consensus_binding(seed: u8) -> PrivacyNativeConsensusBindingV1 {
+        let genesis_hash = [seed.wrapping_add(6); 32];
         let context = PrivacyStatementContextV1 {
-            chain_id: ChainId::try_from(format!("orchard-native-test-{seed}"))
-                .expect("canonical Orchard test chain id"),
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(genesis_hash)),
+            ),
             action_index: 0,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([seed; 32]),
             parameter_id: PrivacyParameterIdV1::new([seed.wrapping_add(1); 32]),
@@ -1421,12 +1425,8 @@ pub(crate) mod tests {
             ),
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new([seed.wrapping_add(5); 32]),
         };
-        PrivacyNativeConsensusBindingV1::new(
-            &context,
-            [seed.wrapping_add(6); 32],
-            &consensus_limits(),
-        )
-        .expect("canonical Orchard test binding")
+        PrivacyNativeConsensusBindingV1::new(&context, genesis_hash, &consensus_limits())
+            .expect("canonical Orchard test binding")
     }
 
     pub(crate) fn build_fixture(
@@ -2432,7 +2432,11 @@ pub(crate) mod tests {
     fn every_signed_public_component_and_authorization_rejects_mutation() {
         let (public, proof) = fixture();
         let mutations: [fn(&mut OrchardBundlePublicV1); 18] = [
-            |value| value.consensus_binding.chain_id = ChainId::from("orchard-substitute-chain"),
+            |value| {
+                value.consensus_binding.network_id = NetworkId::from_genesis_hash(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x90; 32])),
+                )
+            },
             |value| value.consensus_binding.genesis_hash[0] ^= 1,
             |value| value.consensus_binding.action_index ^= 1,
             |value| {

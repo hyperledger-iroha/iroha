@@ -19,8 +19,8 @@ pub use receipt::{
 pub use signed::{
     AuthorityFeePayment, DEFAULT_TRANSACTION_TIME_TO_LIVE, ExecutionStep, FeeChargeKind,
     FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError, SignedTransaction, SponsorFeePayment,
-    TransactionBuilder, TransactionEntrypoint, TransactionPayload, TransactionResult,
-    TransactionResultInner, TransactionSignature,
+    TransactionBuilder, TransactionDomain, TransactionEntrypoint, TransactionPayload,
+    TransactionResult, TransactionResultInner, TransactionSignature,
 };
 
 pub use crate::trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntrypoint};
@@ -31,9 +31,9 @@ pub mod prelude {
         AuthorityFeePayment, DataTriggerSequence, DataTriggerStep, Executable, ExecutableBatchItem,
         ExecutionStep, FeeChargeKind, FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError,
         IvmBytecode, IvmProved, SignedTransaction, SponsorFeePayment, TX_SUBMISSION_RECEIPT_DOMAIN,
-        TimeTriggerEntrypoint, TransactionBuilder, TransactionEntrypoint, TransactionGasLimitError,
-        TransactionPayload, TransactionResult, TransactionResultInner, TransactionSignature,
-        TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload, error::prelude::*,
-        parse_transaction_gas_limit, require_transaction_gas_limit,
+        TimeTriggerEntrypoint, TransactionBuilder, TransactionDomain, TransactionEntrypoint,
+        TransactionGasLimitError, TransactionPayload, TransactionResult, TransactionResultInner,
+        TransactionSignature, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
+        error::prelude::*, parse_transaction_gas_limit, require_transaction_gas_limit,
     };
 }

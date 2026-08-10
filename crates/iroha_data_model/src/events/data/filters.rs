@@ -2318,6 +2318,7 @@ mod tests {
                     request_hash: Hash::new(b"oracle-filter-request"),
                     outcome: FeedEventOutcome::Missing,
                 },
+                recorded_at_ms: 1,
                 evidence_hashes: Vec::new(),
             },
         ));

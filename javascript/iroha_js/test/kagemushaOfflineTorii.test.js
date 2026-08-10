@@ -29,7 +29,7 @@ function universalCapability(overrides = {}) {
   return {
     mandatory: false,
     cash_handoff_capability: "cash_handoff_v1",
-    required_bridge_abi_version: 21,
+    required_bridge_abi_version: 22,
     max_hops: 8,
     ready: true,
     assets: [],
@@ -59,13 +59,13 @@ function operationReference(kind) {
   };
 }
 
-test("Kagemusha JavaScript surface is transport-only ABI-21/V4", () => {
-  assert.equal(KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 21);
+test("Kagemusha JavaScript surface is transport-only ABI-22/V4", () => {
+  assert.equal(KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 22);
   assert.equal(KAGEMUSHA_CASH_HANDOFF_CAPABILITY, "cash_handoff_v1");
   assert.equal(KAGEMUSHA_MANIFEST_VERSION, 4);
   assert.equal(KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES, 512 * 1024);
   assert.equal(KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES, 48 * 1024 * 1024);
-  assert.equal(distSdk.KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 21);
+  assert.equal(distSdk.KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 22);
   assert.equal(typeof sdk.ToriiClient.prototype.getOfflineCapability, "function");
   assert.equal(typeof distSdk.ToriiClient.prototype.getOfflineCapability, "function");
   for (const Client of [ToriiClient, ToriiBrowserClient]) {
@@ -86,7 +86,7 @@ test("Kagemusha JavaScript surface is transport-only ABI-21/V4", () => {
 
   assert.throws(
     () => normalizeOfflineStatus(universalCapability({ required_bridge_abi_version: 19 })),
-    /required_bridge_abi_version must be 21/u,
+    /required_bridge_abi_version must be 22/u,
   );
   assert.throws(
     () => normalizeKagemushaTopUpRequestV4({ ...requestV4(), version: 3 }),

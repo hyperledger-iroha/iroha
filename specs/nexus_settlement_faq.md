@@ -32,7 +32,7 @@ settlement routing, XOR conversion, telemetry, and audit evidence. Refer to
     flows.
 - Inspect `specs/nexus_lanes.md` for lane classes and
   `specs/project_tracker/nexus_config_deltas/*.md` for the latest catalog
-  approvals. `irohad --sora --config … --trace-config` prints the effective
+  approvals. `iroha3d --sora --config … --trace-config` prints the effective
   catalog at runtime for audits.
 
 ### How does the Settlement Router determine conversion rates?

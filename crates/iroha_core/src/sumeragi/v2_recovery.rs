@@ -570,7 +570,7 @@ pub fn authenticate_v2_snapshot_startup(
 /// # Errors
 ///
 /// Returns an error when the immutable boundary record, first full artifact, Kura anchor, or live
-/// chain identity disagree.
+/// network identity disagree.
 pub fn authenticated_v2_snapshot_startup_mode(
     kura: &Kura,
     state: &State,
@@ -588,7 +588,7 @@ fn authenticate_persisted_snapshot_boundary(
 ) -> Result<VerifiedHeightContext, V2StartupReplayError> {
     let verified = VerifiedHeightContext::snapshot_bootstrap(record)
         .map_err(|error| snapshot_bootstrap_error(error.to_string()))?;
-    if record.context.chain_id != *state.chain_id_ref() {
+    if record.context.network_id != *state.network_id_ref() {
         return Err(snapshot_bootstrap_error(
             "retained snapshot bootstrap lineage belongs to another chain",
         ));
@@ -744,11 +744,11 @@ fn authenticate_snapshot_bootstrap_record(
             anchor.snapshot_height
         )));
     }
-    if record.context.chain_id != *state.chain_id_ref() {
+    if record.context.network_id != *state.network_id_ref() {
         return Err(snapshot_bootstrap_error(format!(
-            "snapshot bootstrap chain id {} differs from live chain id {}",
-            record.context.chain_id,
-            state.chain_id_ref()
+            "snapshot bootstrap network id {} differs from live network id {}",
+            record.context.network_id,
+            state.network_id_ref()
         )));
     }
     let anchor_index = NonZeroUsize::new(plan.audited_bootstrap_prefix_height())
@@ -1621,7 +1621,7 @@ fn verify_persisted_height(
                 actual: kura_anchor,
             });
         }
-        if bootstrap.context.chain_id != *state.chain_id_ref() {
+        if bootstrap.context.network_id != *state.network_id_ref() {
             return Err(V2RecoveryError::SnapshotBootstrapContextMismatch(height));
         }
 
@@ -1973,11 +1973,11 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let chain_id = ChainId::from("sumeragi-v2-recovery-test");
+        let network_id = crate::sumeragi::synthetic_network_id("sumeragi-v2-recovery-test");
         let policy_kura = Kura::blank_kura_for_testing();
-        let policy_state = state_for(&policy_kura, chain_id.clone());
+        let policy_state = state_for(&policy_kura, network_id);
         let context = wire::HeightContext {
-            chain_id,
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -2014,16 +2014,21 @@ mod tests {
         )
     }
 
-    fn state_for(kura: &Arc<Kura>, chain_id: ChainId) -> State {
-        State::new_with_chain_for_testing(
+    fn state_for(kura: &Arc<Kura>, network_id: iroha_data_model::NetworkId) -> State {
+        State::new_with_chain_and_network_id_for_testing(
             World::new(),
             Arc::clone(kura),
             LiveQueryStore::start_test(),
-            chain_id,
+            ChainId::from("sumeragi-v2-recovery-display-name"),
+            network_id,
         )
     }
 
-    fn state_with_consensus_keys(kura: &Arc<Kura>, chain_id: ChainId, keys: &[KeyPair]) -> State {
+    fn state_with_consensus_keys(
+        kura: &Arc<Kura>,
+        network_id: iroha_data_model::NetworkId,
+        keys: &[KeyPair],
+    ) -> State {
         let mut world = World::new();
         for (index, key) in keys.iter().enumerate() {
             let id = ConsensusKeyId::new(ConsensusKeyRole::Validator, format!("validator{index}"));
@@ -2045,11 +2050,12 @@ mod tests {
                 .consensus_keys_by_pk
                 .insert(record.public_key.to_string(), vec![id]);
         }
-        State::new_with_chain_for_testing(
+        State::new_with_chain_and_network_id_for_testing(
             world,
             Arc::clone(kura),
             LiveQueryStore::start_test(),
-            chain_id,
+            ChainId::from("sumeragi-v2-recovery-display-name"),
+            network_id,
         )
     }
 
@@ -2089,7 +2095,7 @@ mod tests {
         let transaction_key =
             KeyPair::try_from_seed(vec![0xD3; 32], Algorithm::Ed25519).expect("transaction key");
         let transaction = TransactionBuilder::new(
-            context.chain_id.clone(),
+            context.network_id,
             AccountId::new(transaction_key.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2312,7 +2318,7 @@ mod tests {
         let (genesis_context, keys) = verified_context();
         let kura = Kura::blank_kura_for_testing();
         let mut state =
-            state_with_consensus_keys(&kura, genesis_context.context().chain_id.clone(), &keys);
+            state_with_consensus_keys(&kura, genesis_context.context().network_id, &keys);
         let mut parent = None;
         for height in 1..=anchor_height {
             let block = dummy_block(&keys[0], height, parent);
@@ -2541,7 +2547,7 @@ mod tests {
         let (genesis_context, keys) = verified_context();
         let kura = Kura::blank_kura_for_testing();
         let mut state =
-            state_with_consensus_keys(&kura, genesis_context.context().chain_id.clone(), &keys);
+            state_with_consensus_keys(&kura, genesis_context.context().network_id, &keys);
         let mut parent = None;
         for height in 1..=3 {
             let block = dummy_block(&keys[0], height, parent);
@@ -2688,8 +2694,7 @@ mod tests {
     fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
         let (verified, current_keys) = verified_context();
         let kura = Kura::blank_kura_for_testing();
-        let state =
-            state_with_consensus_keys(&kura, verified.context().chain_id.clone(), &current_keys);
+        let state = state_with_consensus_keys(&kura, verified.context().network_id, &current_keys);
         let mut transitioned_keys = (21_u8..=24)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -2752,7 +2757,7 @@ mod tests {
         let attacker_quorum =
             wire::DualQuorum::from_roster(&attacker_roster).expect("attacker quorum");
         let child_context = wire::HeightContext {
-            chain_id: parent_context.chain_id.clone(),
+            network_id: parent_context.network_id,
             protocol_version: parent_context.protocol_version,
             height: 2,
             epoch: 1,
@@ -3090,7 +3095,7 @@ mod tests {
         let (genesis_context, keys) = verified_context();
         let kura = Kura::blank_kura_for_testing();
         let mut state =
-            state_with_consensus_keys(&kura, genesis_context.context().chain_id.clone(), &keys);
+            state_with_consensus_keys(&kura, genesis_context.context().network_id, &keys);
         let mut parent = None;
         for height in 1..=3 {
             let block = dummy_block(&keys[0], height, parent);
@@ -3133,7 +3138,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing_with_blocks_in_memory(
             NonZeroUsize::new(1).expect("non-zero body retention"),
         );
-        let state = state_with_consensus_keys(&kura, verified.context().chain_id.clone(), &keys);
+        let state = state_with_consensus_keys(&kura, verified.context().network_id, &keys);
         let store =
             V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
         store
@@ -3277,7 +3282,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_for(&kura, context.chain_id.clone());
+        let state = state_for(&kura, context.network_id);
         let block = dummy_block(&keys[0], 1, None);
         kura.store_block(block.clone())
             .expect("persist canonical block");
@@ -3310,7 +3315,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let mut state = state_for(&kura, context.chain_id.clone());
+        let mut state = state_for(&kura, context.network_id);
         state.pipeline.overlay_max_bytes = state.pipeline.overlay_max_bytes.saturating_add(1);
         let block = dummy_block(&keys[0], 1, None);
         kura.store_block(block).expect("persist canonical block");
@@ -3330,7 +3335,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let mut state = state_for(&kura, context.chain_id.clone());
+        let mut state = state_for(&kura, context.network_id);
         let mut nexus = state.nexus_snapshot();
         nexus.autoscale.cooldown_blocks = NonZeroU16::new(
             nexus
@@ -3362,7 +3367,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_for(&kura, context.chain_id.clone());
+        let state = state_for(&kura, context.network_id);
         let block = dummy_block(&keys[0], 1, None);
         kura.store_block(block.clone())
             .expect("persist canonical block");
@@ -3400,7 +3405,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_for(&kura, context.chain_id.clone());
+        let state = state_for(&kura, context.network_id);
         let signed_block = lane_owned_block_for_recovery(&state, &context, &keys);
         let block = ValidBlock::committed_from_replay_signed_block(signed_block);
         kura.store_block(block.clone())
@@ -3464,7 +3469,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_for(&kura, context.chain_id.clone());
+        let state = state_for(&kura, context.network_id);
         let block = dummy_block(&keys[0], 1, None);
         kura.store_block(block.clone())
             .expect("persist canonical block");
@@ -3486,7 +3491,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_for(&kura, context.chain_id.clone());
+        let state = state_for(&kura, context.network_id);
         let block = dummy_block(&keys[0], 1, None);
         kura.store_block(block.clone())
             .expect("persist canonical block");
@@ -3508,7 +3513,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_for(&kura, context.chain_id.clone());
+        let state = state_for(&kura, context.network_id);
         let block = dummy_block(&keys[0], 1, None);
         kura.store_block(block.clone())
             .expect("persist canonical block");
@@ -3544,7 +3549,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_for(&kura, context.chain_id);
+        let state = state_for(&kura, context.network_id);
         kura.store_block(dummy_block(&keys[0], 1, None))
             .expect("persist canonical block");
 
@@ -3559,7 +3564,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_for(&kura, context.chain_id);
+        let state = state_for(&kura, context.network_id);
         let state_block = dummy_block_with_time(&keys[0], 1, None, 1);
         let kura_block = dummy_block_with_time(&keys[0], 1, None, 2);
         assert_ne!(state_block.as_ref().hash(), kura_block.as_ref().hash());
@@ -3578,7 +3583,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_for(&kura, context.chain_id.clone());
+        let state = state_for(&kura, context.network_id);
         let first = dummy_block(&keys[0], 1, None);
         kura.store_block(first.clone())
             .expect("persist first canonical block");
@@ -3611,7 +3616,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_with_consensus_keys(&kura, context.chain_id.clone(), &keys);
+        let state = state_with_consensus_keys(&kura, context.network_id, &keys);
         let block = dummy_block(&keys[0], 1, None);
         kura.store_block(block.clone())
             .expect("persist audited canonical block");
@@ -3683,7 +3688,7 @@ mod tests {
             let (verified, keys) = verified_context();
             let context = verified.context().clone();
             let kura = Kura::blank_kura_for_testing();
-            let state = state_with_consensus_keys(&kura, context.chain_id.clone(), &keys);
+            let state = state_with_consensus_keys(&kura, context.network_id, &keys);
             let block = dummy_block(&keys[0], 1, None);
             kura.store_block(block.clone())
                 .expect("persist replacement fixture block");
@@ -3804,7 +3809,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_for(&kura, context.chain_id);
+        let state = state_for(&kura, context.network_id);
         let first = dummy_block(&keys[0], 1, None);
         kura.store_block(first.clone())
             .expect("persist first canonical block");
@@ -3832,7 +3837,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_for(&kura, context.chain_id);
+        let state = state_for(&kura, context.network_id);
         let block = dummy_block(&keys[0], 1, None);
         kura.store_block(block.clone())
             .expect("persist canonical block");
@@ -3921,7 +3926,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_for(&kura, context.chain_id);
+        let state = state_for(&kura, context.network_id);
         let block = dummy_block(&keys[0], 1, None);
         kura.store_block(block.clone())
             .expect("persist canonical block");
@@ -3955,7 +3960,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_with_consensus_keys(&kura, context.chain_id.clone(), &keys);
+        let state = state_with_consensus_keys(&kura, context.network_id, &keys);
         let block = dummy_block(&keys[0], 1, None);
         kura.store_block(block.clone())
             .expect("persist canonical block");
@@ -4013,7 +4018,7 @@ mod tests {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();
         let kura = Kura::blank_kura_for_testing();
-        let state = state_with_consensus_keys(&kura, context.chain_id.clone(), &keys);
+        let state = state_with_consensus_keys(&kura, context.network_id, &keys);
         let block = dummy_block(&keys[0], 1, None);
         kura.store_block(block.clone())
             .expect("persist canonical predecessor block");

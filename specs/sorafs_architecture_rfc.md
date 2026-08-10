@@ -304,9 +304,27 @@ map to an active registry entry. Admission proceeds as follows:
 caller-provided summaries. Consensus decodes it under explicit resource limits,
 revalidates the root/chunk-plan/CAR commitments, immutable chunker geometry, pin policy,
 metadata, aliases, and any embedded signatures, then derives the manifest
-digest and distinct content root CID before fees or state mutation. Direct ISI
-submission therefore has the same authority checks as Torii ingress and cannot
-substitute a manifest digest, chunk-plan digest, root, profile, length, or policy summary.
+digest and distinct content root CID before fees or state mutation. It also
+derives `submitted_epoch` from the executing block timestamp, charges checked
+global/per-account retained-record counts and live-content byte summaries,
+bounds retained lineage depth/fanout, and
+writes authenticated expiry and lifecycle-status indexes. Direct ISI submission
+therefore has the same consensus checks as Torii ingress and cannot substitute
+a manifest digest, chunk-plan digest, root, profile, length, policy summary, or
+lifecycle epoch. Registration is a paid public operation for an authenticated
+account; only alias attachment uses `CanBindSorafsAlias`.
+
+`ApprovePinManifest` and `RetirePinManifest` likewise carry no client event
+epoch. Approval time is consensus-derived and governance authority comes from
+the verified threshold envelope, which any authenticated account may relay;
+retirement time is consensus-derived and only the recorded submitter may
+retire. Automatic expiry walks the authenticated ordered retention index at
+consensus time and releases live-content bytes transactionally while retaining
+the record-count and lineage-fanout charges for lifecycle evidence that remains
+in state. Finalized listing
+uses `PinManifestPageV1`, an exclusive digest-keyset page with row and encoded
+byte ceilings plus O(1) `charged_usage`; one exact bounded record is available
+through the digest query.
 
 Admission and renewal events surface through the governance API, and CI ensures
 that admission envelopes ship alongside the public chunker fixtures so SDK
@@ -570,4 +588,7 @@ Operational expectations:
   aligned as hosted rollout evidence lands.
 - Keep the CLI and SDK examples aligned with the canonical V1 payload and
   multi-provider retrieval contract.
-- Keep Torii's required canonical `manifest_payload` admission, structured error labels, and SDK request builders aligned with `specs/sorafs/pin_registry_validation_plan.md`; reject retired duplicate summary fields.
+- Keep Torii's exact-network signed-transaction admission, sole canonical
+  `RegisterPinManifest.manifest_payload`, structured error labels, and SDK
+  transaction builders aligned with `specs/sorafs/pin_registry_validation_plan.md`;
+  reject retired JSON DTO, duplicate summary, and lifecycle-epoch fields.

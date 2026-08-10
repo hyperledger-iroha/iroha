@@ -6,6 +6,7 @@ import java.util.Collections
 import java.util.LinkedHashMap
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /** Strict Norito-JSON codec for the first-release Musubi read surface. */
 internal object MusubiJsonV1 {
@@ -43,11 +44,8 @@ internal object MusubiJsonV1 {
         val root = exactObject(
             parse(payload, "Musubi exact-release response"),
             "response",
-            setOf(
-                "chain_id", "genesis_hash", "snapshot", "home_release", "universal_release",
-            ),
+            setOf("network_id", "snapshot", "home_release", "universal_release"),
         )
-        val genesisHash = fixedBytes(root["genesis_hash"], "response.genesis_hash")
         val snapshot = parseSnapshot(root["snapshot"], "response.snapshot")
         val homeRelease = parseReleaseRecord(root["home_release"], "response.home_release")
         val universalRelease = parseResolverRow(
@@ -55,8 +53,7 @@ internal object MusubiJsonV1 {
             "response.universal_release",
         )
         return MusubiExactReleaseSnapshotV1(
-            string(root["chain_id"], "response.chain_id"),
-            genesisHash,
+            NetworkId.parse(string(root["network_id"], "response.network_id")),
             snapshot,
             homeRelease,
             universalRelease,
@@ -66,7 +63,7 @@ internal object MusubiJsonV1 {
     internal fun validateExactReleaseSnapshot(
         home: Map<String, Any?>,
         universal: Map<String, Any?>,
-        genesisHash: ByteArray,
+        networkId: NetworkId,
         snapshot: MusubiRegistrySnapshotV1,
     ) {
         val manifest = objectMap(home["manifest"], "response.home_release.manifest")
@@ -160,7 +157,7 @@ internal object MusubiJsonV1 {
                 takedownHeight <= snapshot.finalizedHeight &&
                 storageFinalizedHeight <= snapshot.finalizedHeight &&
                 (snapshot.finalizedHeight != BigInteger.ONE ||
-                    genesisHash.contentEquals(snapshot.finalizedBlockHash())) &&
+                    networkId.bytes().contentEquals(snapshot.finalizedBlockHash())) &&
                 (storageFinalizedHeight != snapshot.finalizedHeight ||
                     storageFinalizedHash.contentEquals(snapshot.finalizedBlockHash())),
         ) {
@@ -180,7 +177,7 @@ internal object MusubiJsonV1 {
         val root = exactObject(
             parse(payload, "Musubi resolver-index response"),
             "response",
-            setOf("query", "chain_id", "genesis_hash", "items", "next_cursor", "snapshot"),
+            setOf("query", "network_id", "items", "next_cursor", "snapshot"),
         )
         val snapshot = parseSnapshot(root["snapshot"], "response.snapshot")
         val cursor = root["next_cursor"]?.let { parseCursor(it, "response.next_cursor") }
@@ -190,8 +187,7 @@ internal object MusubiJsonV1 {
         return MusubiResolverIndexPageV1(
             decodeQuery("/v1/musubi/queries/resolver-index", root["query"])
                 as MusubiResolverIndexQueryV1,
-            string(root["chain_id"], "response.chain_id"),
-            fixedBytes(root["genesis_hash"], "response.genesis_hash"),
+            NetworkId.parse(string(root["network_id"], "response.network_id")),
             items,
             cursor,
             snapshot,
@@ -232,7 +228,7 @@ internal object MusubiJsonV1 {
         val root = exactObject(
             parse(payload, "Musubi archive-locations response"),
             "response",
-            setOf("chain_id", "genesis_hash", "archive", "items", "next_cursor", "snapshot"),
+            setOf("network_id", "archive", "items", "next_cursor", "snapshot"),
         )
         val snapshot = parseSnapshot(root["snapshot"], "response.snapshot")
         val cursor = root["next_cursor"]?.let { parseCursor(it, "response.next_cursor") }
@@ -240,8 +236,7 @@ internal object MusubiJsonV1 {
             parseArchiveLocation(item, "response.items[$index]")
         }
         return MusubiArchiveLocationPageV1(
-            string(root["chain_id"], "response.chain_id"),
-            fixedBytes(root["genesis_hash"], "response.genesis_hash"),
+            NetworkId.parse(string(root["network_id"], "response.network_id")),
             parseArchiveRecord(root["archive"], "response.archive"),
             items,
             cursor,
@@ -253,14 +248,13 @@ internal object MusubiJsonV1 {
         val root = exactObject(
             parse(payload, "Musubi archive-retention response"),
             "response",
-            setOf("chain_id", "genesis_hash", "items", "finalized_time_ms", "snapshot"),
+            setOf("network_id", "items", "finalized_time_ms", "snapshot"),
         )
         val items = list(root["items"], "response.items").mapIndexed { index, item ->
             parseArchiveRetentionDecision(item, "response.items[$index]")
         }
         return MusubiArchiveRetentionPageV1(
-            string(root["chain_id"], "response.chain_id"),
-            fixedBytes(root["genesis_hash"], "response.genesis_hash"),
+            NetworkId.parse(string(root["network_id"], "response.network_id")),
             items,
             u64(root["finalized_time_ms"], "response.finalized_time_ms"),
             parseSnapshot(root["snapshot"], "response.snapshot"),
@@ -290,7 +284,7 @@ internal object MusubiJsonV1 {
             parse(payload, "Musubi ordered-prefix response"),
             "response",
             setOf(
-                "query", "chain_id", "genesis_hash", "namespace_binding", "items",
+                "query", "network_id", "namespace_binding", "items",
                 "next_cursor", "snapshot",
             ),
         )
@@ -302,8 +296,7 @@ internal object MusubiJsonV1 {
         return MusubiOrderedPrefixPageV1(
             decodeQuery("/v1/musubi/queries/ordered-prefix", root["query"])
                 as MusubiOrderedPrefixQueryV1,
-            string(root["chain_id"], "response.chain_id"),
-            fixedBytes(root["genesis_hash"], "response.genesis_hash"),
+            NetworkId.parse(string(root["network_id"], "response.network_id")),
             parseNamespaceBinding(root["namespace_binding"], "response.namespace_binding"),
             items,
             cursor,
@@ -1148,14 +1141,15 @@ internal object MusubiJsonV1 {
             payload["binding"],
             "$field.payload.binding",
             setOf(
-                "chain_id", "genesis_block_hash", "publisher", "ingress_broker",
+                "network_id", "publisher", "ingress_broker",
                 "seed_provider", "semantic_release_manifest_digest", "archive_id",
                 "car_body_digest", "car_body_length", "nonce",
             ),
         )
         val typedBinding = MusubiSeedIngressReceiptBindingV1(
-            string(binding["chain_id"], "$field.payload.binding.chain_id"),
-            fixedBytes(binding["genesis_block_hash"], "$field.payload.binding.genesis_block_hash"),
+            NetworkId.parse(
+                string(binding["network_id"], "$field.payload.binding.network_id"),
+            ),
             string(binding["publisher"], "$field.payload.binding.publisher"),
             string(binding["ingress_broker"], "$field.payload.binding.ingress_broker"),
             newtypeText(binding["seed_provider"], "$field.payload.binding.seed_provider"),
@@ -1243,7 +1237,7 @@ internal object MusubiJsonV1 {
             payload["binding"],
             "$field.payload.binding",
             setOf(
-                "chain_id", "genesis_block_hash", "provider_id", "completed_by",
+                "network_id", "provider_id", "completed_by",
                 "completion_authority", "replication_order", "assignment_revision",
                 "completion_epoch", "finalized_anchor", "archive_id", "bundle_digest",
                 "descriptor_digest", "semantic_release_manifest_digest",
@@ -1266,10 +1260,8 @@ internal object MusubiJsonV1 {
             setOf("height", "block_hash"),
         )
         val typedBinding = MusubiProviderBundleVerificationBindingV1(
-            string(binding["chain_id"], "$field.payload.binding.chain_id"),
-            fixedBytes(
-                binding["genesis_block_hash"],
-                "$field.payload.binding.genesis_block_hash",
+            NetworkId.parse(
+                string(binding["network_id"], "$field.payload.binding.network_id"),
             ),
             newtypeText(binding["provider_id"], "$field.payload.binding.provider_id"),
             string(binding["completed_by"], "$field.payload.binding.completed_by"),

@@ -54,11 +54,15 @@ def _attestation(
         "authority_root": str(roots["authority"]),
         "authority_uid": os.getuid(),
         "controller_gid": os.getegid(),
+        "controller_digest": "d" * 64,
         "controller_root": str(controller.CONTROLLER_ROOT),
         "handoff_root": str(handoff_root),
         "invoking_gid": os.getgid(),
         "invoking_uid": os.getuid(),
+        "host_id": "test-host-v1",
+        "installation_id": "test-installation-v1",
         "role": role,
+        "source_commit": "a" * 40,
         "runtime_gid": os.getgid(),
         "runtime_root": str(roots["runtime"]),
         "runtime_uid": os.getuid(),
@@ -94,6 +98,8 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
         controller.LINUX_FILES + controller.MACOS_FILES
     )
     assert "scripts/snapshot_taira_public_privacy_inputs.py" in controller.LINUX_FILES
+    assert "scripts/build_privacy_v1_boi_handoff.py" in controller.LINUX_FILES
+    assert "scripts/check_native_sdk_abi22_artifact.py" in controller.LINUX_FILES
     for relative in set(controller.LINUX_FILES + controller.MACOS_FILES):
         assert (ROOT / relative).is_file(), relative
         assert controller._validate_relative(relative) == relative
@@ -105,6 +111,118 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
     )
     assert "seal" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
     assert "cleanup" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
+    assert controller.ROLE_OPERATIONS["linux-boi-qualification"] == (
+        "linux",
+        {"admit", "assemble-boi"},
+    )
+    assert "--external-signer" not in controller.OPERATION_FLAGS["assemble-boi"]
+    assert "--signing-public-key" not in controller.OPERATION_FLAGS["assemble-boi"]
+    assert "--qualification-external-signer" in controller.OPERATION_FLAGS[
+        "assemble-boi"
+    ]
+    assert "--trusted-qualification-external-signer-sha256" in (
+        controller.REQUIRED_FLAGS[("assemble-boi", None)]
+    )
+    assert controller.EXECUTABLE_DIGEST_FLAGS[
+        "--qualification-external-signer"
+    ] == "--trusted-qualification-external-signer-sha256"
+    assert "--qualification-signing-public-key" in controller.OPERATION_FLAGS[
+        "assemble-boi"
+    ]
+    assert "--trusted-qualification-signing-fingerprint" in (
+        controller.REQUIRED_FLAGS[("assemble-boi", None)]
+    )
+    assert controller.TRUSTED_LITERAL_FLAGS["assemble-boi"] == {
+        "--trusted-signing-fingerprint",
+        "--trusted-qualification-signing-fingerprint",
+    }
+    assert "--candidate-replay-ledger" not in controller.OPERATION_FLAGS["assemble-boi"]
+    assert controller.IMMUTABLE_HANDOFF_OUTPUT_PREFIXES["assemble-boi"] == (
+        "boi-qualified-"
+    )
+    assert "--boi-qualified-handoff-root" in controller.OPERATION_FLAGS[
+        "deploy-reset"
+    ]
+    assert "--boi-qualified-handoff-root" in controller.REQUIRED_FLAGS[
+        ("deploy-reset", None)
+    ]
+    assert "--trusted-boi-qualification-public-key" in controller.REQUIRED_FLAGS[
+        ("deploy-reset", None)
+    ]
+    assert "--expected-boi-qualification-controller-digest" in (
+        controller.REQUIRED_FLAGS[("deploy-reset", None)]
+    )
+    assert "--trusted-signing-fingerprint" in controller.TRUSTED_LITERAL_FLAGS[
+        "deploy-reset"
+    ]
+    assert controller.REQUIRED_FLAGS[("assemble-boi", None)] == (
+        controller.OPERATION_FLAGS["assemble-boi"]
+    )
+    assert controller.BOI_QUALIFICATION_ISOLATION_CONTRACT in (
+        controller.BOI_QUALIFICATION_ISSUANCE_BARRIER
+    )
+    assert controller.BOI_QUALIFICATION_RUN_BINDING_CONTRACT in (
+        controller.BOI_QUALIFICATION_ISSUANCE_BARRIER
+    )
+    assert controller.COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT in (
+        controller.BOI_QUALIFICATION_ISSUANCE_BARRIER
+    )
+    assert controller.DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT in (
+        controller.DEPLOY_ISSUANCE_BARRIER
+    )
+    assert controller.COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT in (
+        controller.DEPLOY_ISSUANCE_BARRIER
+    )
+
+
+def test_boi_signing_roles_and_source_commit_are_attested_not_caller_selected() -> None:
+    release = "1" * 64
+    qualification = "2" * 64
+    controller._require_distinct_release_and_qualification_signers(
+        [
+            {
+                "operation": "assemble-boi",
+                "flag": "--trusted-signing-fingerprint",
+                "value": release,
+            },
+            {
+                "operation": "assemble-boi",
+                "flag": "--trusted-qualification-signing-fingerprint",
+                "value": qualification,
+            },
+        ]
+    )
+    with pytest.raises(controller.ControllerSealError, match="must be distinct"):
+        controller._require_distinct_release_and_qualification_signers(
+            [
+                {
+                    "operation": "deploy-reset",
+                    "flag": "--trusted-signing-fingerprint",
+                    "value": release,
+                },
+                {
+                    "operation": "deploy-reset",
+                    "flag": "--trusted-boi-qualification-signing-fingerprint",
+                    "value": release,
+                },
+            ]
+        )
+
+    attestation = {"source_commit": "a" * 40}
+    controller._require_attested_source_commit(
+        "assemble-boi",
+        {"--expected-source-commit": ["a" * 40]},
+        attestation,
+    )
+    controller._require_attested_source_commit(
+        "admit", {"--output": ["/fresh"]}, attestation
+    )
+    with pytest.raises(controller.ControllerSealError, match="installed attestation"):
+        controller._require_attested_source_commit(
+            "assemble-boi",
+            {"--expected-source-commit": ["b" * 40]},
+            attestation,
+        )
 
 
 def test_controller_digest_is_domain_separated() -> None:
@@ -136,18 +254,18 @@ def test_handoff_is_copied_to_fresh_stage_before_source_can_change(tmp_path: Pat
     source = tmp_path / "source"
     staging = tmp_path / "staging"
     staging.mkdir(mode=0o711)
-    _write_handoff(source, {"bin/irohad": b"reviewed-validator"})
+    _write_handoff(source, {"bin/iroha3d": b"reviewed-validator"})
 
     result = controller.inspect_handoff(
         source, "test-handoff", staging, os.geteuid(), "run-one"
     )
     staged = Path(str(result["staged_root"]))
-    original = staged / "bin/irohad"
+    original = staged / "bin/iroha3d"
     assert original.read_bytes() == b"reviewed-validator"
 
     replacement = source / "replacement"
     replacement.write_bytes(b"post-inspection replacement")
-    os.replace(replacement, source / "bin/irohad")
+    os.replace(replacement, source / "bin/iroha3d")
     assert original.read_bytes() == b"reviewed-validator"
     assert stat_mode(original) == 0o444
 
@@ -173,12 +291,12 @@ def test_handoff_rejects_intermediate_symlink_before_opening_payload(tmp_path: P
     source.mkdir(mode=0o700)
     outside.mkdir(mode=0o700)
     staging.mkdir(mode=0o711)
-    (outside / "irohad").write_bytes(b"outside")
+    (outside / "iroha3d").write_bytes(b"outside")
     (source / "bin").symlink_to(outside, target_is_directory=True)
     manifest = {
         "files": [
             {
-                "path": "bin/irohad",
+                "path": "bin/iroha3d",
                 "sha256": hashlib.sha256(b"outside").hexdigest(),
                 "size": 7,
             }
@@ -250,7 +368,7 @@ def test_post_helper_revalidation_detects_persistent_same_uid_replacement(
     source = tmp_path / "source"
     staging = tmp_path / "staging"
     staging.mkdir(mode=0o711)
-    _write_handoff(source, {"bin/irohad": b"reviewed-validator"})
+    _write_handoff(source, {"bin/iroha3d": b"reviewed-validator"})
     result = controller.inspect_handoff(
         source, "test-handoff", staging, os.geteuid(), "persistent-attacker"
     )
@@ -266,8 +384,8 @@ def test_post_helper_revalidation_detects_persistent_same_uid_replacement(
     # are root-owned, so this chmod is unavailable there; if ownership or mode
     # regresses, the mandatory post-helper replay still fails closed.
     stage.chmod(0o700)
-    (stage / "bin/irohad").chmod(0o600)
-    (stage / "bin/irohad").write_bytes(b"post-helper replacement")
+    (stage / "bin/iroha3d").chmod(0o600)
+    (stage / "bin/iroha3d").write_bytes(b"post-helper replacement")
     with pytest.raises(controller.ControllerSealError, match="replaced"):
         controller._revalidate_staged_roots(
             staging,
@@ -328,6 +446,104 @@ def test_authority_dispatch_has_fixed_cwd_environment_and_descriptor_policy(
         str(controller.CONTROLLER_ROOT / controller.BASH_OPERATIONS["check-public"]),
         "--help",
     ]
+
+
+def test_privacy_rollout_dispatch_injects_only_the_sealed_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_dispatch(relative, args, run_as, external_tool_identity=None):
+        captured.update(
+            relative=relative,
+            args=list(args),
+            run_as=run_as,
+            external_tool_identity=external_tool_identity,
+        )
+        return 0
+
+    monkeypatch.setattr(
+        controller,
+        "_require_authenticated_rollout_observation_authority",
+        lambda: None,
+    )
+    monkeypatch.setattr(controller, "_dispatch_installed_python", fake_dispatch)
+    result = "/authority/privacy-rollout-observation.json"
+    assert controller._dispatch(
+        "verify-privacy-rollout", ["--result", result], (501, 20)
+    ) == 0
+    assert captured["relative"] == "scripts/taira_privacy_rollout_contract.py"
+    assert captured["args"] == [
+        "verify-result",
+        "--plan",
+        str(
+            controller.CONTROLLER_ROOT
+            / "configs/soranexus/taira/privacy_rollout_plan_v1.json"
+        ),
+        "--result",
+        result,
+    ]
+
+
+def test_deploy_canary_inputs_are_mandatory_owner_private_and_unskippable(
+    tmp_path: Path,
+) -> None:
+    handoff = tmp_path / "handoff"
+    trusted = tmp_path / "trusted"
+    handoff.mkdir(mode=0o711)
+    trusted.mkdir(mode=0o700)
+    attestation = _attestation(handoff, trusted, "macos-deploy")
+    staging = Path(str(attestation["staging_root"]))
+    authority = Path(str(attestation["authority_root"]))
+    write_config = staging / "dedicated-canary.toml"
+    observation = authority / "privacy-rollout-observation.json"
+    write_config.write_bytes(b"chain = \"taira\"\n")
+    observation.write_bytes(b"{}\n")
+    write_config.chmod(0o400)
+    observation.chmod(0o400)
+    attestation["trusted_inputs"] = [
+        {
+            "flag": "--write-config",
+            "operation": "check-public",
+            "path": str(write_config),
+        },
+        {
+            "flag": "--result",
+            "operation": "verify-privacy-rollout",
+            "path": str(observation),
+        },
+    ]
+    public_args = [
+        "--public-root",
+        "https://taira.example",
+        *[
+            value
+            for index in range(1, 5)
+            for value in (
+                "--validator-root",
+                f"taira-validator-{index}=https://validator-{index}.example",
+            )
+        ],
+        "--require-all-validators",
+        "--expected-git-sha",
+        "a" * 40,
+        "--expected-dpn-validator-release-commit",
+        "b" * 40,
+        "--write-config",
+        str(write_config),
+    ]
+
+    controller._validate_operation_args("check-public", public_args, attestation)
+    controller._validate_operation_args(
+        "verify-privacy-rollout", ["--result", str(observation)], attestation
+    )
+    with pytest.raises(controller.ControllerSealError, match="not allow-listed"):
+        controller._validate_operation_args(
+            "check-public", [*public_args[:-2], "--skip-write-canary"], attestation
+        )
+    write_config.chmod(0o600)
+    with pytest.raises(controller.ControllerSealError, match="mode-0400"):
+        controller._validate_operation_args("check-public", public_args, attestation)
 
 
 def test_privilege_drop_clears_groups_and_uses_exact_attested_ids(
@@ -448,6 +664,13 @@ def test_immutable_composite_output_keeps_controller_identity_contract(
         attestation,
         "runtime",
     )
+    boi_output = {Path("/handoff/boi-qualified-1-1")}
+    controller._validate_successful_operation_outputs(
+        "assemble-boi",
+        boi_output,
+        attestation,
+        "authority",
+    )
     controller._validate_successful_operation_outputs(
         "extract-privacy",
         {Path("/runtime/extract")},
@@ -463,6 +686,7 @@ def test_immutable_composite_output_keeps_controller_identity_contract(
 
     assert calls == [
         (output, 0, 7),
+        (boi_output, 0, 7),
         ({Path("/runtime/extract")}, 41, 42),
     ]
 
@@ -1290,7 +1514,7 @@ def test_publisher_operation_rejects_internal_trust_and_secret_injection(
     (
         ("--repository", "registry.example/other", "differs from sealed trust"),
         ("--suffix", "production", "differs from sealed trust"),
-        ("--expected-source-commit", "A" * 40, "commit field"),
+        ("--expected-source-commit", "A" * 40, "installed attestation"),
         (
             "--expected-dpn-validator-release-commit",
             "short",
@@ -1344,6 +1568,159 @@ def test_publisher_operation_rejects_noncanonical_candidate_root(
         controller._validate_operation_args(
             "publish-rollout", args, attestation
         )
+
+
+def test_boi_composite_refuses_before_scratch_dispatch_or_candidate_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handoff = tmp_path / "handoff"
+    trusted = tmp_path / "trusted"
+    handoff.mkdir(mode=0o711)
+    trusted.mkdir(mode=0o700)
+    attestation = _attestation(handoff, trusted, "linux-boi-qualification")
+    final = handoff / "boi-qualified-123-1"
+    args = [
+        "--artifact-handoff-root", "/frozen/artifacts",
+        "--candidate-archive", "/frozen/candidate.tar.gz",
+        "--candidate-authority-dir", "/frozen/authority",
+        "--expected-source-commit", "1" * 40,
+        "--expected-dpn-validator-release-commit", "2" * 40,
+        "--expected-cargo-lock-sha256", "3" * 64,
+        "--expected-workspace-source-manifest-sha256", "4" * 64,
+        "--expected-receipt-id", "5" * 64,
+        "--trusted-signing-fingerprint", "6" * 64,
+        "--release-manifest-verifier", "/trusted/verifier",
+        "--trusted-release-manifest-verifier-sha256", "7" * 64,
+        "--output", str(final),
+    ]
+    forbidden_calls: list[str] = []
+
+    def forbidden(name: str):
+        def call(*_args, **_kwargs):
+            forbidden_calls.append(name)
+            raise AssertionError(f"BOI barrier reached forbidden operation: {name}")
+
+        return call
+
+    monkeypatch.setattr(controller.tempfile, "mkdtemp", forbidden("mkdtemp"))
+    monkeypatch.setattr(controller, "_dispatch", forbidden("dispatch"))
+    monkeypatch.setattr(controller, "inspect_handoff", forbidden("inspect"))
+
+    with pytest.raises(
+        controller.ControllerSealError,
+        match="missing preprovisioned iroha.taira.boi-native-isolation-broker.v1",
+    ) as error:
+        controller._dispatch_boi_composite(args, attestation)
+
+    assert controller.BOI_QUALIFICATION_RUN_BINDING_CONTRACT in str(error.value)
+    assert forbidden_calls == []
+    assert not final.exists()
+
+
+@pytest.mark.parametrize(
+    ("operation", "platform_name", "role", "apply", "contracts"),
+    (
+        (
+            "assemble-boi",
+            "linux",
+            "linux-boi-qualification",
+            False,
+            (
+                controller.BOI_QUALIFICATION_ISOLATION_CONTRACT,
+                controller.BOI_QUALIFICATION_RUN_BINDING_CONTRACT,
+                controller.COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT,
+            ),
+        ),
+        (
+            "deploy-reset",
+            "macos",
+            "macos-deploy",
+            False,
+            (
+                controller.DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT,
+                controller.COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT,
+            ),
+        ),
+        (
+            "deploy-reset",
+            "macos",
+            "macos-deploy",
+            True,
+            (
+                controller.DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT,
+                controller.COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT,
+            ),
+        ),
+    ),
+)
+def test_installed_issuance_barriers_precede_attestation_paths_and_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    operation: str,
+    platform_name: str,
+    role: str,
+    apply: bool,
+    contracts: tuple[str, ...],
+) -> None:
+    calls: list[str] = []
+
+    def forbidden(name: str):
+        def call(*_args, **_kwargs):
+            calls.append(name)
+            raise AssertionError(
+                f"installed issuance barrier reached forbidden operation: {name}"
+            )
+
+        return call
+
+    for name in (
+        "_attest",
+        "_validate_operation_args",
+        "_dispatch",
+        "_dispatch_boi_composite",
+        "_revalidate_staged_roots",
+        "_revalidate_bound_roots",
+    ):
+        monkeypatch.setattr(controller, name, forbidden(name))
+    monkeypatch.setattr(controller.os, "geteuid", forbidden("geteuid"))
+    state = tmp_path / "release-state"
+    state.write_bytes(b"unchanged\n")
+    argv = [
+        "run",
+        "--expected-launcher-sha256",
+        "a" * 64,
+        "--expected-controller-digest",
+        "b" * 64,
+        "--expected-version",
+        "1",
+        "--expected-host-id",
+        "host-v1",
+        "--expected-installation-id",
+        "installation-v1",
+        "--expected-uid",
+        "0",
+        "--source-commit",
+        "c" * 40,
+        "--platform",
+        platform_name,
+        "--role",
+        role,
+        operation,
+        "--",
+        "--bundle",
+        str(state),
+    ]
+    if apply:
+        argv.append("--apply")
+
+    assert controller.main(argv) == 1
+
+    error = capsys.readouterr().err
+    for contract_name in contracts:
+        assert contract_name in error
+    assert calls == []
+    assert state.read_bytes() == b"unchanged\n"
 
 
 def _configure_publisher_composite_attestation(
@@ -1425,6 +1802,11 @@ def test_publication_composite_injects_only_sealed_authority_dependencies(
         calls.append((relative, values, run_as, None))
         return 0
 
+    monkeypatch.setattr(
+        controller,
+        "_require_authenticated_rollout_observation_authority",
+        lambda: None,
+    )
     monkeypatch.setattr(controller, "_dispatch", fake_dispatch)
     monkeypatch.setattr(controller, "_dispatch_installed_python", fake_close)
     monkeypatch.setattr(
@@ -1505,6 +1887,11 @@ def test_publication_composite_cleans_private_scratch_and_partial_final(
         final.mkdir(mode=0o555)
         return 1
 
+    monkeypatch.setattr(
+        controller,
+        "_require_authenticated_rollout_observation_authority",
+        lambda: None,
+    )
     monkeypatch.setattr(controller, "_dispatch", fake_dispatch)
     monkeypatch.setattr(controller, "_dispatch_installed_python", fake_close)
     monkeypatch.setattr(
@@ -1564,6 +1951,19 @@ def test_capture_composite_replaces_output_and_never_accepts_receipt_bytes(
     runtime.mkdir(mode=0o700)
     identity = tmp_path / "taira-source-identity-v1.json"
     identity.write_bytes(b"identity")
+    inputs = {
+        name: tmp_path / name
+        for name in (
+            "exact12.tsv",
+            "iroha-core-tests",
+            "iroha3d",
+            "linux.tar.gz",
+            "network-functional",
+            "privacy-exact12-action-driver",
+        )
+    }
+    for path in inputs.values():
+        path.write_bytes(b"input")
     final_output = handoff / "qualification-receipt-123-1"
     attestation = {
         "controller_gid": os.getegid(),
@@ -1587,9 +1987,19 @@ def test_capture_composite_replaces_output_and_never_accepts_receipt_bytes(
 
     def fake_close(relative: str, args, run_as) -> int:
         values = list(args)
+        if relative == controller.PRIVACY_CAPTURE_HELPER:
+            output = Path(values[values.index("--output-directory") + 1])
+            output.mkdir(mode=0o700)
+            (output / "evidence.json").write_bytes(b"evidence")
+            calls.append((relative, values, run_as))
+            return 0
         output = Path(values[values.index("--output") + 1])
         receipt = Path(values[values.index("--receipt") + 1])
         assert receipt.parent.name == "runtime-work"
+        privacy = Path(
+            values[values.index("--privacy-protocol-evidence-dir") + 1]
+        )
+        assert privacy.parent == receipt.parent
         output.mkdir(mode=0o700)
         (output / "handoff-inventory-v1.json").write_bytes(b"closed")
         calls.append((relative, values, run_as))
@@ -1601,6 +2011,20 @@ def test_capture_composite_replaces_output_and_never_accepts_receipt_bytes(
         [
             "--source-identity",
             str(identity),
+            "--validator-binary",
+            str(inputs["iroha3d"]),
+            "--privacy-action-driver",
+            str(inputs["privacy-exact12-action-driver"]),
+            "--privacy-network-driver",
+            str(inputs["network-functional"]),
+            "--privacy-jindo-driver",
+            str(inputs["iroha-core-tests"]),
+            "--linux-archive",
+            str(inputs["linux.tar.gz"]),
+            "--exact12-matrix",
+            str(inputs["exact12.tsv"]),
+            "--artifact-handoff-sha256",
+            "a" * 64,
             "--output",
             str(final_output),
         ],
@@ -1608,10 +2032,12 @@ def test_capture_composite_replaces_output_and_never_accepts_receipt_bytes(
     )
     assert result == 0
     assert final_output.is_dir()
-    assert calls[0][0] == "capture-four-peer"
+    assert calls[0][0] == controller.PRIVACY_CAPTURE_HELPER
     assert calls[0][2] == (os.geteuid(), os.getegid())
-    assert calls[1][0] == controller.QUALIFICATION_CLOSE_HELPER
-    assert calls[1][2] is None
+    assert calls[1][0] == "capture-four-peer"
+    assert calls[1][2] == (os.geteuid(), os.getegid())
+    assert calls[2][0] == controller.QUALIFICATION_CLOSE_HELPER
+    assert calls[2][2] is None
     assert not any(path.name.startswith(".qualification-capture-") for path in handoff.iterdir())
 
 
@@ -1762,7 +2188,7 @@ def test_staged_handoff_rejects_mode_only_mutation(tmp_path: Path) -> None:
     source = tmp_path / "source"
     staging = tmp_path / "staging"
     staging.mkdir(mode=0o711)
-    _write_handoff(source, {"bin/irohad": b"reviewed-validator"})
+    _write_handoff(source, {"bin/iroha3d": b"reviewed-validator"})
     result = controller.inspect_handoff(
         source,
         "test-handoff",
@@ -1771,7 +2197,7 @@ def test_staged_handoff_rejects_mode_only_mutation(tmp_path: Path) -> None:
         "mode-only",
     )
     stage = Path(str(result["staged_root"]))
-    (stage / "bin/irohad").chmod(0o644)
+    (stage / "bin/iroha3d").chmod(0o644)
     with pytest.raises(controller.ControllerSealError):
         controller._revalidate_staged_roots(
             staging,

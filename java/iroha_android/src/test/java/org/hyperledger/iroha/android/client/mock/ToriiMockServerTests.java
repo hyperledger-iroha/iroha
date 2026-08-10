@@ -127,9 +127,7 @@ public final class ToriiMockServerTests {
         + hash
         + "\",\"status\":{\"kind\":\""
         + kind
-        + "\"},\"summary\":\""
-        + kind
-        + "\",\"diagnostics\":[],\"scope\":\"global\",\"resolved_from\":\"cache\"}";
+        + "\"},\"scope\":\"global\",\"resolved_from\":\"cache\"}";
   }
 
   private static HttpResponseData sendRequest(

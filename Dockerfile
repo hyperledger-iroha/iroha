@@ -23,7 +23,7 @@ ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
 ARG CARGO_BUILD_JOBS=""
-ARG BINARIES="irohad sorafs_governance_dag iroha kagami attachment_sanitizer"
+ARG BINARIES="iroha3d sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
 ARG USE_PREBUILT="0"
 ARG IROHA_GIT_COMMIT_HASH=""
 ARG VALIDATOR_LOCK_SHA256=""
@@ -180,7 +180,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
                 --x509-resource-norito /app/fixtures/privacy/zk_x509_native_resource_v1.norito \
                 --x509-resource-json /app/fixtures/privacy/zk_x509_native_resource_v1.json \
                 --cargo-lock /outprovenance/Cargo.lock \
-                --validator-binary /outbin/irohad \
+                --validator-binary /outbin/iroha3d \
                 --command-manifest-norito-out /outprovenance/privacy-native/command-manifest-v1.norito \
                 --command-manifest-json-out /outprovenance/privacy-native/command-manifest-v1.json \
                 --stage-artifacts-norito-out /outprovenance/privacy-native/stage-artifacts-v1.norito \
@@ -216,7 +216,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
                 --x509-resource-norito /outprovenance/privacy-native/zk-x509-resource-v1.norito \
                 --x509-resource-json /outprovenance/privacy-native/zk-x509-resource-v1.json \
                 --cargo-lock /outprovenance/Cargo.lock \
-                --validator-binary /outbin/irohad \
+                --validator-binary /outbin/iroha3d \
                 --command-manifest-norito /outprovenance/privacy-native/command-manifest-v1.norito \
                 --command-manifest-json /outprovenance/privacy-native/command-manifest-v1.json \
                 --stage-artifacts-norito /outprovenance/privacy-native/stage-artifacts-v1.norito \
@@ -303,9 +303,18 @@ COPY --from=builder /outbin/ $BIN_PATH
 COPY --from=builder /outprovenance/ $APP_DIR/provenance/
 COPY --from=builder /app/scripts/docker_entrypoint.sh $BIN_PATH
 COPY --from=builder /app/configs/soranexus/taira $APP_DIR/configs/soranexus/taira
+COPY --from=builder /app/configs/sorafs/external_software_signer $APP_DIR/install/sorafs/external_software_signer
+COPY --from=builder /app/configs/sorafs/runtime_provider_broker $APP_DIR/install/sorafs/runtime_provider_broker
 COPY --from=builder /app/codec/rans/tables $APP_DIR/codec/rans/tables
 COPY --from=builder /app/defaults /tmp/defaults
 RUN set -eu; \
+  test -x "${BIN_PATH}/sorafs_external_software_signer"; \
+  mkdir -p /usr/local/libexec; \
+  cp "${BIN_PATH}/sorafs_external_software_signer" /usr/local/libexec/iroha-runtime-provider-broker-v1; \
+  chmod 0555 /usr/local/libexec/iroha-runtime-provider-broker-v1; \
+  cmp "${BIN_PATH}/sorafs_external_software_signer" /usr/local/libexec/iroha-runtime-provider-broker-v1; \
+  "${BIN_PATH}/sorafs_external_software_signer" --help >/dev/null; \
+  /usr/local/libexec/iroha-runtime-provider-broker-v1 --help >/dev/null; \
   case "${CONFIG_PROFILE}" in \
     single) \
       cp /tmp/defaults/genesis.json "${CONFIG_DIR}/genesis.json"; \
@@ -338,7 +347,7 @@ RUN set -eu; \
       --x509-resource-norito /opt/iroha/provenance/privacy-native/zk-x509-resource-v1.norito \
       --x509-resource-json /opt/iroha/provenance/privacy-native/zk-x509-resource-v1.json \
       --cargo-lock /opt/iroha/provenance/Cargo.lock \
-      --validator-binary /usr/local/bin/irohad \
+      --validator-binary /usr/local/bin/iroha3d \
       --command-manifest-norito /opt/iroha/provenance/privacy-native/command-manifest-v1.norito \
       --command-manifest-json /opt/iroha/provenance/privacy-native/command-manifest-v1.json \
       --stage-artifacts-norito /opt/iroha/provenance/privacy-native/stage-artifacts-v1.norito \

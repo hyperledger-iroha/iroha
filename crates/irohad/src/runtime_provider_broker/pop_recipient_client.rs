@@ -19,7 +19,7 @@ fn pop_exact_bindings_match(
 ) -> bool {
     supplied.issuer_policy_digest() == exact.issuer_policy_digest
         && supplied.issuer_id() == exact.issuer_id
-        && supplied.issuer_hsm_key_id() == exact.issuer_hsm_key_id
+        && supplied.issuer_signer_handle() == exact.issuer_signer_handle
         && supplied.issuer_public_key() == exact.issuer_public_key
         && supplied.enrollment_recipient_key_id() == exact.enrollment_recipient_key_id
         && supplied.enrollment_recipient_public_key_digest()

@@ -14,24 +14,6 @@ public enum ZkAssetMerklePathError: Error, Equatable, LocalizedError {
     }
 }
 
-public protocol ZkAssetMerkleHasher: Sendable {
-    func hashPair(left: Data, right: Data) throws -> Data
-}
-
-public struct PastaPoseidonNodeHasher: ZkAssetMerkleHasher, Sendable {
-    public init() {}
-
-    public func hashPair(left: Data, right: Data) throws -> Data {
-        guard let lhs = PastaFp.fromCanonicalBytes(left) else {
-            throw ZkAssetMerklePathError.invalidField("left")
-        }
-        guard let rhs = PastaFp.fromCanonicalBytes(right) else {
-            throw ZkAssetMerklePathError.invalidField("right")
-        }
-        return ConfidentialNoteCrypto.poseidonPair(lhs, rhs).canonicalBytes()
-    }
-}
-
 public protocol ZkAssetMerklePathProvider {
     func getMerklePathForCommitment(asset: String, commitment: Data) async throws -> ZkAssetMerklePath
     func getMerklePaths(asset: String, commitments: [Data]) async throws -> [ZkAssetMerklePath]
@@ -43,20 +25,24 @@ public struct LocalZkAssetMerklePathProvider: ZkAssetMerklePathProvider {
 
     private let roots: [Data]
     private let commitments: [Data]
-    private let hasher: ZkAssetMerkleHasher
 
     public init(
         rootHistory: [Data],
-        commitmentHistory: [Data],
-        hasher: ZkAssetMerkleHasher = PastaPoseidonNodeHasher()
+        commitmentHistory: [Data]
     ) throws {
         self.roots = try rootHistory.enumerated().map { index, root in
             try Self.fixed32(root, field: "rootHistory[\(index)]")
         }
         self.commitments = try commitmentHistory.enumerated().map { index, commitment in
-            try Self.fixed32(commitment, field: "commitmentHistory[\(index)]")
+            let commitment = try Self.fixed32(
+                commitment,
+                field: "commitmentHistory[\(index)]"
+            )
+            guard commitment.contains(where: { $0 != 0 }) else {
+                throw ZkAssetMerklePathError.invalidField("commitmentHistory[\(index)]")
+            }
+            return commitment
         }
-        self.hasher = hasher
         guard commitmentHistory.count <= Self.confidentialTreeCapacityV2 else {
             throw ZkAssetMerklePathError.invalidField("commitmentHistory")
         }
@@ -100,44 +86,18 @@ public struct LocalZkAssetMerklePathProvider: ZkAssetMerklePathProvider {
     }
 
     private func computePath(leafIndex: Int) throws -> ZkAssetMerklePath {
-        var layer = commitments.map { Data($0) }
-        layer.reserveCapacity(Self.confidentialTreeCapacityV2)
-        while layer.count < Self.confidentialTreeCapacityV2 {
-            layer.append(Data(repeating: 0, count: 32))
-        }
-
-        var siblings: [Data] = []
-        siblings.reserveCapacity(Self.confidentialTreeDepthV2)
-        var directions = Data()
-        directions.reserveCapacity(Self.confidentialTreeDepthV2)
-        var currentIndex = leafIndex
-        for _ in 0..<Self.confidentialTreeDepthV2 {
-            let isRight = currentIndex % 2 == 1
-            let siblingIndex = isRight ? currentIndex - 1 : currentIndex + 1
-            directions.append(isRight ? 1 : 0)
-            siblings.append(layer[siblingIndex])
-
-            var next: [Data] = []
-            next.reserveCapacity(layer.count / 2)
-            var index = 0
-            while index < layer.count {
-                next.append(try hasher.hashPair(left: layer[index], right: layer[index + 1]))
-                index += 2
-            }
-            layer = next
-            currentIndex /= 2
-        }
-
-        guard let root = layer.first, layer.count == 1 else {
-            throw ZkAssetMerklePathError.verificationFailed("root")
-        }
+        let native = try ConfidentialNoteNativeDerivation.deriveMerklePathV3(
+            commitments: commitments,
+            leafIndex: UInt64(leafIndex)
+        )
+        let root = native.root
         if let latest = roots.last, latest != root {
             throw ZkAssetMerklePathError.verificationFailed("rootHistory")
         }
         return try ZkAssetMerklePath(
             leafIndex: UInt64(leafIndex),
-            siblings: siblings,
-            directions: directions,
+            siblings: native.siblings,
+            directions: native.directions,
             rootAtHeight: root,
             heightOrIndex: UInt64(commitments.count)
         )
@@ -212,8 +172,7 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
 
     public func verify(
         commitment: Data,
-        expectedRoot: Data,
-        hasher: ZkAssetMerkleHasher = PastaPoseidonNodeHasher()
+        expectedRoot: Data
     ) throws -> Bool {
         guard commitment.count == 32 else {
             throw ZkAssetMerklePathError.invalidField("commitment")
@@ -224,28 +183,28 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
         guard rootAtHeight == expectedRoot else {
             return false
         }
-        return try root(replacingLeafWith: commitment, hasher: hasher) == expectedRoot
+        return try ConfidentialNoteNativeDerivation.verifyMerklePathV3(
+            commitment: commitment,
+            leafIndex: leafIndex,
+            siblings: siblings,
+            directions: directions,
+            root: expectedRoot
+        )
     }
 
     /// Recompute the path root after replacing its leaf with one exact
     /// commitment. Kagemusha uses the authoritative next-zero path to derive
     /// the post-transfer root for a newly appended output.
     public func root(
-        replacingLeafWith commitment: Data,
-        hasher: ZkAssetMerkleHasher = PastaPoseidonNodeHasher()
+        replacingLeafWith commitment: Data
     ) throws -> Data {
-        guard commitment.count == 32 else {
-            throw ZkAssetMerklePathError.invalidField("commitment")
-        }
-        var current = Data(commitment)
-        for index in siblings.indices {
-            if directions[index] == 0 {
-                current = try hasher.hashPair(left: current, right: siblings[index])
-            } else {
-                current = try hasher.hashPair(left: siblings[index], right: current)
-            }
-        }
-        return current
+        try ConfidentialNoteNativeDerivation.advanceMerklePathV3(
+            leafIndex: leafIndex,
+            siblings: siblings,
+            directions: directions,
+            root: rootAtHeight,
+            commitment: commitment
+        ).finalRoot
     }
 
     /// Derive the padded-zero path immediately after inserting `commitment`
@@ -255,71 +214,32 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
     /// current contract permits one real input and binds the second slot to zero.
     public func nextZeroPathAfterInsertion(
         commitment: Data,
-        expectedRoot: Data,
-        hasher: ZkAssetMerkleHasher = PastaPoseidonNodeHasher()
+        expectedRoot: Data
     ) throws -> ZkAssetMerklePath {
         let depth = siblings.count
+        let advanced = try ConfidentialNoteNativeDerivation.advanceMerklePathV3(
+            leafIndex: leafIndex,
+            siblings: siblings,
+            directions: directions,
+            root: rootAtHeight,
+            commitment: commitment
+        )
         guard depth == LocalZkAssetMerklePathProvider.confidentialTreeDepthV2,
               commitment.count == 32,
               expectedRoot.count == 32,
               leafIndex + 1
                 < UInt64(LocalZkAssetMerklePathProvider.confidentialTreeCapacityV2),
-              try root(replacingLeafWith: commitment, hasher: hasher) == expectedRoot else {
+              advanced.finalRoot == expectedRoot else {
             throw ZkAssetMerklePathError.verificationFailed("postInsertionRoot")
         }
-
-        var previousNode = Data(commitment)
-        var previousWitnessNodes: [Data] = []
-        previousWitnessNodes.reserveCapacity(depth)
-        for level in 0..<depth {
-            previousNode = directions[level] == 0
-                ? try hasher.hashPair(left: previousNode, right: siblings[level])
-                : try hasher.hashPair(left: siblings[level], right: previousNode)
-            previousWitnessNodes.append(previousNode)
-        }
-
-        var zeroSubtrees: [Data] = []
-        zeroSubtrees.reserveCapacity(depth)
-        var zeroNode = Data(repeating: 0, count: 32)
-        for _ in 0..<depth {
-            zeroSubtrees.append(zeroNode)
-            zeroNode = try hasher.hashPair(left: zeroNode, right: zeroNode)
-        }
-
         let nextLeafIndex = leafIndex + 1
-        var nextNode = Data(repeating: 0, count: 32)
-        previousNode = Data(commitment)
-        var nextSiblings: [Data] = []
-        var nextDirections = Data()
-        nextSiblings.reserveCapacity(depth)
-        nextDirections.reserveCapacity(depth)
-        for level in 0..<depth {
-            let previousSubtreeIndex = leafIndex >> UInt64(level)
-            let nextSubtreeIndex = nextLeafIndex >> UInt64(level)
-            let direction = UInt8(nextSubtreeIndex & 1)
-            let sibling: Data
-            if nextSubtreeIndex == previousSubtreeIndex {
-                sibling = siblings[level]
-            } else if direction == 1,
-                      nextSubtreeIndex == previousSubtreeIndex + 1 {
-                sibling = previousNode
-            } else {
-                sibling = zeroSubtrees[level]
-            }
-            nextNode = direction == 0
-                ? try hasher.hashPair(left: nextNode, right: sibling)
-                : try hasher.hashPair(left: sibling, right: nextNode)
-            nextSiblings.append(sibling)
-            nextDirections.append(direction)
-            previousNode = previousWitnessNodes[level]
-        }
-        guard nextNode == expectedRoot else {
+        guard advanced.nextZeroPath.root == expectedRoot else {
             throw ZkAssetMerklePathError.verificationFailed("nextZeroPath")
         }
         return try ZkAssetMerklePath(
             leafIndex: nextLeafIndex,
-            siblings: nextSiblings,
-            directions: nextDirections,
+            siblings: advanced.nextZeroPath.siblings,
+            directions: advanced.nextZeroPath.directions,
             rootAtHeight: expectedRoot,
             heightOrIndex: heightOrIndex + 1
         )
@@ -587,7 +507,7 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
                 debugDescription: "frontier_len must be a u32-compatible integer"
             )
         }
-        guard treeDepth > 0, treeDepth <= Self.confidentialTreeDepthV2 else {
+        guard treeDepth == Self.confidentialTreeDepthV2 else {
             throw DecodingError.dataCorruptedError(
                 forKey: .treeDepth,
                 in: container,
@@ -675,8 +595,7 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
     }
 
     public func validatedPaths(
-        expectedCommitments: [Data],
-        hasher: ZkAssetMerkleHasher = PastaPoseidonNodeHasher()
+        expectedCommitments: [Data]
     ) throws -> [ZkAssetMerklePath] {
         guard paths.count == expectedCommitments.count else {
             throw ZkAssetMerklePathError.invalidField("paths")
@@ -708,8 +627,7 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
             )
             guard try path.verify(
                 commitment: expectedCommitments[index],
-                expectedRoot: root,
-                hasher: hasher
+                expectedRoot: root
             ) else {
                 throw ZkAssetMerklePathError.verificationFailed("paths[\(index)]")
             }
@@ -720,9 +638,7 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
 
     /// Return and cryptographically verify the authoritative padded-zero path
     /// used as the second path in one-input confidential proofs.
-    public func validatedNextZeroPath(
-        hasher: ZkAssetMerkleHasher = PastaPoseidonNodeHasher()
-    ) throws -> ZkAssetMerklePath {
+    public func validatedNextZeroPath() throws -> ZkAssetMerklePath {
         guard let entry = nextZeroPath else {
             throw ZkAssetMerklePathError.invalidField("next_zero_path")
         }
@@ -735,8 +651,7 @@ public struct ToriiZkMerklePathResponse: Decodable, Equatable, Sendable {
         )
         guard try path.verify(
             commitment: Data(repeating: 0, count: 32),
-            expectedRoot: root,
-            hasher: hasher
+            expectedRoot: root
         ) else {
             throw ZkAssetMerklePathError.verificationFailed("next_zero_path")
         }

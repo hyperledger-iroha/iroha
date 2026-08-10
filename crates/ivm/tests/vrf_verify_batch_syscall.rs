@@ -1,3 +1,5 @@
+//! VRF batch-syscall verification and exact-network admission tests.
+
 #![cfg(feature = "ivm_vrf_tests")]
 use ivm::{IVM, Memory, PointerType, host::DefaultHost};
 
@@ -37,10 +39,14 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 fn run_vrf_verify_batch(req: VrfVerifyBatchRequest) -> (u64, u64, u64) {
+    let network_id = req.items.first().map(|item| item.network_id);
     let body = norito::to_bytes(&req).expect("encode batch");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
     let mut vm = IVM::new(vrf_batch_vm_gas(body.len()));
+    if let Some(network_id) = network_id {
+        vm.set_host(DefaultHost::new().with_network_id(network_id));
+    }
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
 
@@ -63,11 +69,12 @@ fn syscall_vrf_verify_batch_two_items_ok() {
     let pk1 = (G1Projective::generator() * sk1)
         .to_affine()
         .to_compressed();
-    let chain = b"test-chain";
+    let network_id = common::test_network_id(0x51);
+    let network_bytes = network_id.as_bytes();
     let input1 = b"in1";
     let mut in1 = Vec::new();
     in1.extend_from_slice(b"iroha:vrf:v1:input|");
-    in1.extend_from_slice(chain);
+    in1.extend_from_slice(network_bytes);
     in1.push(b'|');
     in1.extend_from_slice(input1);
     let msg1: [u8; 32] = iroha_crypto::Hash::new(&in1).into();
@@ -93,7 +100,7 @@ fn syscall_vrf_verify_batch_two_items_ok() {
     let input2 = b"in2";
     let mut in2 = Vec::new();
     in2.extend_from_slice(b"iroha:vrf:v1:input|");
-    in2.extend_from_slice(chain);
+    in2.extend_from_slice(network_bytes);
     in2.push(b'|');
     in2.extend_from_slice(input2);
     let msg2: [u8; 32] = iroha_crypto::Hash::new(&in2).into();
@@ -111,14 +118,14 @@ fn syscall_vrf_verify_batch_two_items_ok() {
                 variant: 1,
                 pk: pk1.to_vec(),
                 proof: sig1.to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input1.to_vec(),
             },
             VrfVerifyRequest {
                 variant: 2,
                 pk: pk2.to_vec(),
                 proof: sig2.to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input2.to_vec(),
             },
         ],
@@ -127,6 +134,7 @@ fn syscall_vrf_verify_batch_two_items_ok() {
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
     let mut vm = IVM::new(vrf_batch_vm_gas(body.len()));
+    vm.set_host(DefaultHost::new().with_network_id(network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
 
@@ -157,11 +165,12 @@ fn syscall_vrf_verify_batch_fail_index_is_reported() {
     let pk1 = (G1Projective::generator() * sk1)
         .to_affine()
         .to_compressed();
-    let chain = b"test-chain";
+    let network_id = common::test_network_id(0x51);
+    let network_bytes = network_id.as_bytes();
     let input1 = b"in1";
     let mut in1 = Vec::new();
     in1.extend_from_slice(b"iroha:vrf:v1:input|");
-    in1.extend_from_slice(chain);
+    in1.extend_from_slice(network_bytes);
     in1.push(b'|');
     in1.extend_from_slice(input1);
     let msg1: [u8; 32] = iroha_crypto::Hash::new(&in1).into();
@@ -178,14 +187,14 @@ fn syscall_vrf_verify_batch_fail_index_is_reported() {
                 variant: 1,
                 pk: pk1.to_vec(),
                 proof: sig1.to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input1.to_vec(),
             },
             VrfVerifyRequest {
                 variant: 1,
                 pk: pk1.to_vec(),
                 proof: bad_sig_g1.to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input1.to_vec(),
             },
         ],
@@ -194,6 +203,7 @@ fn syscall_vrf_verify_batch_fail_index_is_reported() {
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
     let mut vm = IVM::new(vrf_batch_vm_gas(body.len()));
+    vm.set_host(DefaultHost::new().with_network_id(network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
 
@@ -206,13 +216,13 @@ fn syscall_vrf_verify_batch_fail_index_is_reported() {
 }
 
 #[test]
-fn syscall_vrf_verify_batch_chain_mismatch_reports_index() {
-    // Host enforces a fixed chain id; batch contains a mismatched item.
-    // Expect: r11 = 8 (ERR_CHAIN) and r12 = index of first mismatch.
-    let host_chain = b"chain-A";
-    let bad_chain = b"chain-B";
+fn syscall_vrf_verify_batch_network_mismatch_reports_index() {
+    // Host enforces an exact network identity; the second item claims another network.
+    // Expect: r11 = 8 (ERR_NETWORK) and r12 = index of first mismatch.
+    let host_network_id = common::test_network_id(0x51);
+    let bad_network_id = common::test_network_id(0x52);
 
-    // Item 1: Valid (SigInG2) with correct chain id
+    // Item 1: Valid (SigInG2) with the correct network identity.
     let sk1 = {
         let mut b = [0u8; 32];
         for (i, x) in b.iter_mut().enumerate() {
@@ -226,7 +236,7 @@ fn syscall_vrf_verify_batch_chain_mismatch_reports_index() {
     let input1 = b"in-ok";
     let mut in1 = Vec::new();
     in1.extend_from_slice(b"iroha:vrf:v1:input|");
-    in1.extend_from_slice(host_chain);
+    in1.extend_from_slice(host_network_id.as_bytes());
     in1.push(b'|');
     in1.extend_from_slice(input1);
     let msg1: [u8; 32] = iroha_crypto::Hash::new(&in1).into();
@@ -234,8 +244,8 @@ fn syscall_vrf_verify_batch_chain_mismatch_reports_index() {
         .to_affine()
         .to_compressed();
 
-    // Item 2: Any item with mismatched chain id; proof content is irrelevant because
-    // the host rejects on chain check before verification.
+    // Item 2: proof content is irrelevant because the host rejects the
+    // mismatched network identity before verification.
     let sk2 = {
         let mut b = [0u8; 32];
         for (i, x) in b.iter_mut().enumerate() {
@@ -249,7 +259,7 @@ fn syscall_vrf_verify_batch_chain_mismatch_reports_index() {
     let input2 = b"in-bad";
     let mut in2 = Vec::new();
     in2.extend_from_slice(b"iroha:vrf:v1:input|");
-    in2.extend_from_slice(bad_chain);
+    in2.extend_from_slice(bad_network_id.as_bytes());
     in2.push(b'|');
     in2.extend_from_slice(input2);
     let msg2: [u8; 32] = iroha_crypto::Hash::new(&in2).into();
@@ -263,14 +273,14 @@ fn syscall_vrf_verify_batch_chain_mismatch_reports_index() {
                 variant: 1,
                 pk: pk1.to_vec(),
                 proof: sig1.to_vec(),
-                chain_id: host_chain.to_vec(),
+                network_id: host_network_id,
                 input: input1.to_vec(),
             },
             VrfVerifyRequest {
                 variant: 2,
                 pk: pk2.to_vec(),
                 proof: sig2.to_vec(),
-                chain_id: bad_chain.to_vec(),
+                network_id: bad_network_id,
                 input: input2.to_vec(),
             },
         ],
@@ -279,8 +289,7 @@ fn syscall_vrf_verify_batch_chain_mismatch_reports_index() {
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
     let mut vm = IVM::new(vrf_batch_vm_gas(body.len()));
-    // Configure host to enforce chain id = host_chain
-    vm.set_host(DefaultHost::new().with_chain_id(host_chain.to_vec()));
+    vm.set_host(DefaultHost::new().with_network_id(host_network_id));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
 
@@ -288,14 +297,14 @@ fn syscall_vrf_verify_batch_chain_mismatch_reports_index() {
     vm.load_program(&prog).unwrap();
     vm.run().unwrap();
 
-    assert_eq!(vm.register(11), 8, "status must be ERR_CHAIN (8)");
+    assert_eq!(vm.register(11), 8, "status must be ERR_NETWORK (8)");
     assert_eq!(vm.register(12), 1, "failing index must be 1");
     assert_eq!(vm.register(10), 0, "output pointer must be 0 on error");
 }
 
 #[test]
 fn syscall_vrf_verify_batch_rejects_inert_material_with_index() {
-    let chain = b"test-chain";
+    let network_id = common::test_network_id(0x51);
     let input = b"ivm:vrf:batch-inert";
     let cases = [
         (
@@ -303,7 +312,7 @@ fn syscall_vrf_verify_batch_rejects_inert_material_with_index() {
                 variant: 1,
                 pk: vec![0u8; 48],
                 proof: G2Affine::generator().to_compressed().to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input.to_vec(),
             },
             4,
@@ -314,7 +323,7 @@ fn syscall_vrf_verify_batch_rejects_inert_material_with_index() {
                 variant: 1,
                 pk: G1Affine::generator().to_compressed().to_vec(),
                 proof: vec![0u8; 96],
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input.to_vec(),
             },
             5,
@@ -325,7 +334,7 @@ fn syscall_vrf_verify_batch_rejects_inert_material_with_index() {
                 variant: 2,
                 pk: G2Affine::identity().to_compressed().to_vec(),
                 proof: G1Affine::generator().to_compressed().to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input.to_vec(),
             },
             4,
@@ -336,7 +345,7 @@ fn syscall_vrf_verify_batch_rejects_inert_material_with_index() {
                 variant: 2,
                 pk: G2Affine::generator().to_compressed().to_vec(),
                 proof: G1Affine::identity().to_compressed().to_vec(),
-                chain_id: chain.to_vec(),
+                network_id,
                 input: input.to_vec(),
             },
             5,

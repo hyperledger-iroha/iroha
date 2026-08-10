@@ -344,6 +344,9 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "IndexedFixedCorridorDeadlines": (
                 "indexedAsyncState[initialContext][6]"
             ),
+            "IndexedServeProducerEpisodeDue": (
+                "indexedAsyncState[initialContext][7]"
+            ),
         }
         for symbol, expected_body in exact_indexed_projection_helpers.items():
             extracted = _top_level_operator_body(
@@ -413,6 +416,10 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "asyncFixedCorridorDeadlines <- "
                 "IndexedFixedCorridorDeadlines(initialContext)"
             )
+            expected_serve_producer_episode_mapping = (
+                "asyncServeProducerEpisodeDue <- "
+                "IndexedServeProducerEpisodeDue(initialContext)"
+            )
             missing_recovery = [
                 mapping
                 for mapping in expected_recovery_mappings
@@ -442,14 +449,18 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     + expected_mappings
                     + expected_recovery_mappings
                     + expected_producer_mappings
-                    + (expected_fixed_corridor_mapping,)
+                    + (
+                        expected_fixed_corridor_mapping,
+                        expected_serve_producer_episode_mapping,
+                    )
                 )
             )
             if normalized != exact_indexed_async:
                 errors.append(
                     f"{refinement_path}:{line}: IndexedAsync must use exactly "
                     "the reviewed ordered 49 Core, 46 scheduler, 5 recovery, "
-                    "3 producer-journal, and fixed-corridor substitutions"
+                    "3 producer-journal, fixed-corridor, and Serve-producer "
+                    "debt substitutions"
                 )
 
         verification_context = re.search(
@@ -473,6 +484,9 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "VerificationFixedCorridorDeadlines": (
                 "IndexedFixedCorridorDeadlines(VerificationContext)"
+            ),
+            "VerificationServeProducerEpisodeDue": (
+                "IndexedServeProducerEpisodeDue(VerificationContext)"
             ),
         }
         for symbol, expected_body in verification_helpers.items():
@@ -541,6 +555,8 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                         + (
                             "asyncFixedCorridorDeadlines <- "
                             "VerificationFixedCorridorDeadlines",
+                            "asyncServeProducerEpisodeDue <- "
+                            "VerificationServeProducerEpisodeDue",
                         )
                     )
                 )
@@ -549,7 +565,8 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                         f"{refinement_path}:{proof_line}: "
                         "VerificationAsyncProof must use exactly the reviewed "
                         "ordered 49 Core, 46 scheduler, 5 recovery, 3 "
-                        "producer-journal, and fixed-corridor "
+                        "producer-journal, fixed-corridor, and Serve-producer "
+                        "debt "
                         "substitutions through VerificationCore, "
                         "VerificationScheduler, VerificationRecovery, "
                         "VerificationProducer, and "
@@ -565,8 +582,8 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             body, line = indexed_shape
             normalized = " ".join(body.split())
             required = (
-                "Len(indexedAsyncState[initialContext]) = 6",
-                "DOMAIN indexedAsyncState[initialContext] = 1..6",
+                "Len(indexedAsyncState[initialContext]) = 7",
+                "DOMAIN indexedAsyncState[initialContext] = 1..7",
                 "indexedAsyncState[initialContext][1] = "
                 "indexedAsyncState[initialContext][2][7]",
                 f"Len(indexedAsyncState[initialContext][2]) = {len(core_fields)}",
@@ -621,6 +638,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     "IndexedRecovery",
                     "IndexedProducer",
                     "IndexedFixedCorridorDeadlines",
+                    "IndexedServeProducerEpisodeDue",
                 )
                 if definition not in body
             ]
@@ -1035,7 +1053,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "AdmissibleContextRecords: /\\ "
                 "IndexedDuplicatedGst(initialContext) = "
                 "IndexedCore(initialContext, 7) /\\ "
-                "IndexedAsync(initialContext)!gst = "
+                "IndexedAsync(initialContext)!AsyncAllVars[1] = "
                 "IndexedDuplicatedGst(initialContext)"
             ),
             proof_required=(
@@ -1080,10 +1098,27 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             exact=(
                 "IndexedAsyncStateShape => \\A initialContext \\in "
                 "AdmissibleContextRecords: "
-                "IndexedAsync(initialContext)!asyncFixedCorridorDeadlines = "
+                "IndexedAsync(initialContext)!"
+                "AsyncFixedCorridorDeadlineReceipts = "
                 "IndexedFixedCorridorDeadlines(initialContext)"
             ),
-            proof_required=("IndexedFixedCorridorDeadlines",),
+            proof_required=(
+                "IndexedAsync!AsyncFixedCorridorDeadlineReceipts",
+                "IndexedFixedCorridorDeadlines",
+            ),
+        )
+        require_chain_theorem_contract(
+            "IndexedServeProducerEpisodeDueProjectionIsExact",
+            exact=(
+                "IndexedAsyncStateShape => \\A initialContext \\in "
+                "AdmissibleContextRecords: "
+                "IndexedAsync(initialContext)!AsyncServeProducerEpisodeDebt = "
+                "IndexedServeProducerEpisodeDue(initialContext)"
+            ),
+            proof_required=(
+                "IndexedAsync!AsyncServeProducerEpisodeDebt",
+                "IndexedServeProducerEpisodeDue",
+            ),
         )
         require_chain_theorem_contract(
             "IndexedThreeFieldProducerProjectionIsExact",
@@ -1137,12 +1172,14 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "VerificationAsyncProof!vars",
                 "VerificationProducer",
                 "VerificationFixedCorridorDeadlines",
+                "VerificationServeProducerEpisodeDue",
                 "IndexedDuplicatedGst",
                 "IndexedCore",
                 "IndexedScheduler",
                 "IndexedRecovery",
                 "IndexedProducer",
                 "IndexedFixedCorridorDeadlines",
+                "IndexedServeProducerEpisodeDue",
             ),
         )
         require_chain_theorem_contract(
@@ -1150,7 +1187,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             exact=(
                 "IndexedAsyncStateShape => \\A initialContext \\in "
                 "AdmissibleContextRecords: "
-                "IndexedAsync(initialContext)!asyncLeaderWireLifecycles = "
+                "IndexedAsync(initialContext)!AsyncSchedulerVars[42] = "
                 "IndexedScheduler(initialContext, 42)"
             ),
             proof_required=("IndexedScheduler",),
@@ -1160,7 +1197,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             exact=(
                 "/\\ IndexedAsyncStateShape /\\ VerificationContext \\in "
                 "AdmissibleContextRecords => "
-                "VerificationAsyncProof!asyncLeaderWireLifecycles = "
+                "VerificationAsyncProof!AsyncSchedulerVars[42] = "
                 "VerificationScheduler(42)"
             ),
             proof_required=("VerificationScheduler", "IndexedScheduler"),
@@ -3562,6 +3599,7 @@ def _production_liveness_release_inventory_guard_errors(
         "sumeragi::v2_core::network_simulation",
         "sumeragi::v2_runtime::tests",
         "merge_sidecar::tests",
+        "state::tests",
         "sumeragi::v2_lane_work::tests",
         "sumeragi::v2_lifecycle_recovery::tests",
         "sumeragi::v2_runner::tests",

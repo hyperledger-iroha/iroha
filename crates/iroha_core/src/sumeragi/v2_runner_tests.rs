@@ -9,7 +9,6 @@ use std::{
 use iroha_config::parameters::actual::{NodeRole, SumeragiV2KeyPolicy, SumeragiV2Limits};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
-    ChainId,
     account::AccountId,
     block::decode_framed_signed_block,
     isi::Log,

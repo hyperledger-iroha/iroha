@@ -251,7 +251,7 @@ _apalache-out*
 /*.bin
 /*.der
 /*.pem
-/irohad
+/iroha3d
 /closure_clone
 /rust_out
 /test

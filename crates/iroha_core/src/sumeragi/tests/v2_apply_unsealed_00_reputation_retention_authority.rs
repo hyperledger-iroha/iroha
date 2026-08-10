@@ -52,7 +52,7 @@ impl ReputationFinalizedArchiveRetentionAuthorityV1 for ReputationRetentionAutho
 
     fn load_latest(
         &self,
-        _chain_id: &ChainId,
+        _network_id: &NetworkId,
     ) -> Result<
         Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>,
         ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
@@ -76,7 +76,7 @@ impl ReputationFinalizedArchiveRetentionAuthorityV1 for ReputationRetentionAutho
 
     fn compare_and_swap_latest(
         &self,
-        _chain_id: &ChainId,
+        _network_id: &NetworkId,
         expected_revision: Option<[u8; 32]>,
         next: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
     ) -> Result<(), ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1> {

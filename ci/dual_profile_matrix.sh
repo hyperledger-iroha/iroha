@@ -150,7 +150,7 @@ entry = {
 
 executables = []
 commands = {
-    "irohad": ["--version"],
+    "iroha3d": ["--version"],
     "iroha": ["--help"],
     "kagami": ["--help"],
 }
@@ -160,7 +160,7 @@ for name, args in commands.items():
     info = {"name": name, "path": str(binary)}
     if not binary.exists():
         info["missing"] = True
-        if name in ("irohad", "kagami"):
+        if name in ("iroha3d", "kagami"):
             missing_required.append(name)
         executables.append(info)
         continue

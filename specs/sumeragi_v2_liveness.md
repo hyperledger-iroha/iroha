@@ -668,7 +668,7 @@ The encrypted body itself must also fit the wire prefix, whose inclusive body
 ceiling is `u32::MAX`. Production uses the stricter architecture-independent
 `network.max_frame_bytes` ceiling of 2,147,483,643 bytes so the four-byte prefix
 plus body fits a contiguous `i32::MAX`-byte buffer on both 32-bit and 64-bit
-hosts. Both `irohad --check-config` and normal startup reject a larger
+hosts. Both `iroha3d --check-config` and normal startup reject a larger
 configured value before listener binding, and the sender independently derives
 the encrypted length with checked arithmetic and a checked `u32` conversion
 before encryption or frame allocation. Queue-charge arithmetic returns an
@@ -1289,12 +1289,12 @@ simulations cover lossy/offline leaders, symmetric and asymmetric partitions,
 current-owner QC redelivery, leader crashes, bounded corrupted-chunk recovery,
 WAL-intent replay, and divergent Taira views. They bring the inventory to the
 847-test checkpoint. The source-bound terminal-sweep partition regression brings
-the current
-source-bound inventory to the 848-test checkpoint. The late passive-Fetch
+the source-bound inventory to the 848-test checkpoint. The late passive-Fetch
 completion and one-shot completed-Serve reopening regressions bring the
 850-test checkpoint. Seven Native AMX finality-bound merge-projection
-regressions bring the current
-source-bound inventory to 857 exact tests across 40 modules and 87 pre-network
+regressions bring the 857-test, 40-module checkpoint. Three Kura recovery
+regressions and the governance-unlock audit bring the current
+source-bound inventory to 861 exact tests across 41 modules and 89 pre-network
 legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1303,7 +1303,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`090d4aa1d2ed4be9a55f4d6f265c51896034077f2f1bc7e33d80bba5cd440afd`.
+`8c39cb3717a9cab79e4d442e8179030c3af5af74947864d45838b80864290d2f`.
 Nine of those legs execute the separate 524-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 525 TSV lines and has SHA-256
 `bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
@@ -1550,8 +1550,9 @@ authenticated-non-validator, and two-anonymous owners (`5N+3H+2` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-87 legs, including the dedicated ten-test V2 core network-simulation module,
-the autonomous lifecycle-recovery module, separate exact
+89 legs, including the dedicated ten-test V2 core network-simulation module,
+the governance-unlock audit module, the autonomous lifecycle-recovery module,
+separate exact
 status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
 fixture check, two `iroha_config` geometry modules, the two new `iroha_p2p`
@@ -1563,7 +1564,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 857-test inventory is a mechanically checked
+The current 861-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1753,8 +1754,8 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 857 exact production
-liveness tests and executes all 40 owning Rust modules serially. The release
+Before those longer scenarios, the PR gate inventories 861 exact production
+liveness tests and executes all 41 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 524-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
@@ -1914,8 +1915,9 @@ then bring the 847-test checkpoint across 40 modules and 87 legs. The
 source-bound terminal-sweep partition regression brings the current inventory
 to the 848-test checkpoint. The two late-predecessor reopening regressions bring
 the 850-test checkpoint. Seven Native AMX finality-bound merge-projection
-regressions bring the current inventory to 857 tests across the same 40 modules
-and 87 legs.
+regressions bring the 857-test checkpoint across the same 40 modules and 87
+legs. Three Kura recovery regressions and the governance-unlock audit bring the
+current inventory to 861 tests across 41 modules and 89 legs.
 The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -1956,7 +1958,8 @@ source-sealed pre-network corridor remain required before release evidence may
 be promoted.
 
 The same pre-network gate inventories and executes four exact, non-ignored
-Taira release-profile validators plus the Rust summary-JSON schema contract.
+Taira release-profile validators, the Rust summary-JSON schema contract, and
+the strict all-validator restart/catch-up contract: six Taira contracts total.
 It then requires exactly 39 passing mocked soak launcher/evidence tests. Those
 tests reject profile drift, zero-test success, concurrent evidence ownership,
 source or artifact mismatch, malformed JSON, weakened acceptance bounds,
@@ -2095,6 +2098,7 @@ candidate the parent must later reject. An atomic lock gives
 that source root exactly one soak-evidence writer; a hard-killed run leaves the
 lock for explicit operator inspection. Before any real matrix, the release
 gate inventories and executes the five exact Rust release-profile/schema tests
+plus the strict all-validator restart/catch-up test,
 and requires all 39 mocked soak launcher/evidence adversaries to pass. The soak
 runner then inventories the exact ignored test and accepts Cargo output only
 when exactly one test ran and passed with networking required. The seed matrix
@@ -2199,8 +2203,8 @@ without terminal validation it cannot publish external completion.
 
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
-evidence directory. That receipt binds the 87 pre-network corridor legs and
-their exact 857-test production inventory, the separate 524-test G-UNIT
+evidence directory. That receipt binds the 89 pre-network corridor legs and
+their exact 861-test production inventory, the separate 524-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,
@@ -2208,7 +2212,10 @@ proof ledger/evidence/log, multilane Apalache evidence, and the TLAPS resource
 JSONL and summary. The validator requires the exact successful resource-guard
 event grammar, strict scalar types, identical terminal summaries, and
 sample-derived peak accounting rather than accepting those artifacts by digest
-alone. The receipt also carries all 160 matrix logs; exact G-4P completion,
+alone. Apalache evidence carries separate workspace and multilane source
+manifests: receipt replay binds the first to the sealed release identity and
+the second to the authenticated production trace-extraction certificate,
+rejecting omission or authority substitution. The receipt also carries all 160 matrix logs; exact G-4P completion,
 summary, and
 four run logs; exact deterministic G-12 seed completion, summary, and ten run
 logs; the two-hour G-12 fault-soak completion and log; the closed multilane

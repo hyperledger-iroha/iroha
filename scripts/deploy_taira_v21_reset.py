@@ -2,8 +2,9 @@
 """Deploy one authenticated four-validator Taira v21 fresh-reset cohort.
 
 Without ``--apply`` this command is strictly read-only: it verifies one signed
-archive-only rollout admission, binds that archive's receipt to the binary,
-supervisor, reset manifest, and exact four configs, then authenticates the
+rollout admission plus its independently parsed qualified BOI handoff, binds
+the exact signed archive and 13-artifact inventory to the binary, supervisor,
+reset manifest, and exact four configs, then authenticates the
 current launchd cohort, disk headroom, and a read-only directory fsync barrier.
 An explicitly authorized reset of an already-degraded testnet may use
 ``--allow-absent-old-child`` only when an exact loaded old supervisor has
@@ -50,11 +51,13 @@ from pathlib import Path
 from typing import Any, Callable, NoReturn, Optional, Sequence
 
 try:
+    from scripts import build_privacy_v1_boi_handoff as boi_handoff
     from scripts import taira_rollout_admission as rollout_admission
     from scripts import taira_constants
 except ModuleNotFoundError as error:
     if error.name != "scripts":
         raise
+    import build_privacy_v1_boi_handoff as boi_handoff
     import taira_rollout_admission as rollout_admission
     import taira_constants
 
@@ -134,6 +137,22 @@ MACOS_ACL_INSPECTOR = Path("/bin/ls")
 MACOS_ACL_CLEARER = Path("/bin/chmod")
 MACOS_ACL_COMMAND_TIMEOUT_SECONDS = 5
 MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES = 64 * 1024
+DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT = (
+    "iroha.taira.deploy-authenticated-run-nonce.v1"
+)
+COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT = (
+    "iroha.taira.complete-source-identity-attestation.v1"
+)
+DEPLOY_ISSUANCE_BARRIER = (
+    "missing preprovisioned iroha.taira.deploy-authenticated-run-nonce.v1: "
+    "neither workflow run ID nor attempt may authorize deployment or replay "
+    "consumption; missing preprovisioned "
+    "iroha.taira.complete-source-identity-attestation.v1: a root-owned authority "
+    "record must independently bind source commit, DPN validator release commit, "
+    "the exact canonical Cargo.lock digest, and workspace source-manifest digest "
+    "(or one stronger immutable candidate identity); deployment is disabled for "
+    "both dry-run and apply before identity, admission, or path inspection"
+)
 
 
 class DeploymentError(RuntimeError):
@@ -144,6 +163,12 @@ def fail(message: str) -> NoReturn:
     """Raise one redaction-safe deployment refusal."""
 
     raise DeploymentError(message)
+
+
+def require_deploy_issuance_contracts() -> NoReturn:
+    """Refuse deployment until run and complete-source authority are installed."""
+
+    fail(DEPLOY_ISSUANCE_BARRIER)
 
 
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -163,6 +188,22 @@ def require_sha256(value: object, label: str) -> str:
     if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
         fail(f"{label} must be one lowercase SHA-256 digest")
     return value
+
+
+def require_distinct_signing_fingerprints(
+    release_fingerprint: object,
+    qualification_fingerprint: object,
+) -> tuple[str, str]:
+    """Require separately pinned release and BOI qualification authorities."""
+
+    release = require_sha256(release_fingerprint, "trusted signing fingerprint")
+    qualification = require_sha256(
+        qualification_fingerprint,
+        "trusted BOI qualification signing fingerprint",
+    )
+    if release == qualification:
+        fail("release and BOI qualification signing identities must be distinct")
+    return release, qualification
 
 
 def require_genesis_expected_hash(value: object) -> str:
@@ -1103,10 +1144,17 @@ class AdmissionPlan:
     archive: Path
     archive_state: rollout_admission.StableFile
     authority_dir: Path
+    authority_state: tuple[tuple[str, rollout_admission.StableFile], ...]
+    boi_qualified_handoff: boi_handoff.QualifiedBoiSnapshot
     replay_ledger: Path
     receipt_id: str
     artifact_handoff_sha256: str
+    boi_artifact_inventory_sha256: str
+    boi_qualified_inventory_sha256: str
+    boi_qualification_receipt_id: str
     archive_sha256: str
+    privacy_protocol_receipt_id: str
+    release_manifest_sha256: str
     source_commit: str
     dpn_validator_release_commit: str
     cargo_lock_sha256: str
@@ -1366,11 +1414,13 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
     expected_fields = {
         "artifact_handoff_sha256",
         "archive_sha256",
+        "boi_artifact_inventory_sha256",
         "deployment_performed",
         "linux_authority_manifest_sha256",
         "macos_end_block_hash",
         "macos_end_height",
         "peer_count",
+        "privacy_protocol_receipt_id",
         "receipt_id",
         "release_manifest_sha256",
         "release_manifest_verifier_sha256",
@@ -1412,18 +1462,99 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
         (slug, require_sha256(raw_configs[slug], f"verified {slug} config SHA-256"))
         for slug in SLUGS
     )
+    try:
+        if rollout_admission.scan_inventory_paths(authority_dir) != list(
+            rollout_admission.FINAL_AUTHORITY_FILES
+        ):
+            fail("deployment candidate authority inventory is not exact")
+        authority_state = tuple(
+            (
+                relative,
+                rollout_admission.stable_hash_relative(authority_dir, relative),
+            )
+            for relative in rollout_admission.FINAL_AUTHORITY_FILES
+        )
+        boi_snapshot = boi_handoff.verify_qualified_boi_handoff(
+            Path(args.boi_qualified_handoff_root),
+            candidate_archive=archive,
+            candidate_authority_dir=authority_dir,
+            expected_source=source,
+            expected_receipt_id=args.expected_receipt_id,
+            replay_ledger_path=ledger,
+            trusted_signing_fingerprint=args.trusted_signing_fingerprint,
+            trusted_qualification_public_key_path=(
+                args.trusted_boi_qualification_public_key
+            ),
+            trusted_qualification_signing_fingerprint=(
+                args.trusted_boi_qualification_signing_fingerprint
+            ),
+            expected_qualification_host_id=(
+                args.expected_boi_qualification_host_id
+            ),
+            expected_qualification_installation_id=(
+                args.expected_boi_qualification_installation_id
+            ),
+            expected_controller_closure_digest=(
+                args.expected_boi_qualification_controller_digest
+            ),
+            expected_workflow_run_id=args.expected_workflow_run_id,
+            expected_workflow_run_attempt=args.expected_workflow_run_attempt,
+            release_manifest_verifier_path=verifier,
+            trusted_release_manifest_verifier_sha256=(
+                args.trusted_release_manifest_verifier_sha256
+            ),
+        )
+    except (
+        OSError,
+        rollout_admission.ReleaseArtifactError,
+        boi_handoff.BoiHandoffError,
+    ) as error:
+        raise DeploymentError(
+            f"qualified BOI handoff verification failed: {error}"
+        ) from error
+    if (
+        boi_snapshot.candidate_archive_sha256 != result["archive_sha256"]
+        or boi_snapshot.candidate_boi_artifact_inventory_sha256
+        != result["boi_artifact_inventory_sha256"]
+        or boi_snapshot.candidate_release_manifest_sha256
+        != result["release_manifest_sha256"]
+        or boi_snapshot.source != result["source"]
+    ):
+        fail("qualified BOI handoff differs from the exact signed admission")
     return AdmissionPlan(
         archive=archive,
         archive_state=before_archive,
         authority_dir=authority_dir,
+        authority_state=authority_state,
+        boi_qualified_handoff=boi_snapshot,
         replay_ledger=ledger,
         receipt_id=require_sha256(result["receipt_id"], "verified receipt ID"),
         artifact_handoff_sha256=require_sha256(
             result["artifact_handoff_sha256"],
             "verified macOS build handoff SHA-256",
         ),
+        boi_artifact_inventory_sha256=require_sha256(
+            result["boi_artifact_inventory_sha256"],
+            "verified BOI artifact inventory SHA-256",
+        ),
+        boi_qualified_inventory_sha256=require_sha256(
+            boi_snapshot.boi_inventory_sha256,
+            "verified qualified BOI inventory SHA-256",
+        ),
+        boi_qualification_receipt_id=require_sha256(
+            boi_snapshot.qualification_receipt_id,
+            "verified signed BOI qualification receipt ID",
+        ),
         archive_sha256=require_sha256(
             result["archive_sha256"], "verified archive SHA-256"
+        ),
+        privacy_protocol_receipt_id=require_sha256(
+            result["privacy_protocol_receipt_id"],
+            "verified privacy protocol receipt ID",
+        ),
+        release_manifest_sha256=require_sha256(
+            result["release_manifest_sha256"],
+            "verified candidate release manifest SHA-256",
         ),
         source_commit=args.expected_source_commit,
         dpn_validator_release_commit=args.expected_dpn_validator_release_commit,
@@ -1454,13 +1585,36 @@ def verify_deployment_admission(args: argparse.Namespace) -> AdmissionPlan:
 
 
 def require_admission_archive_unchanged(admission: AdmissionPlan) -> None:
-    """Reject archive replacement or byte changes after successful verification."""
+    """Reject candidate or qualified-BOI changes after successful verification."""
 
     if (
         _stable_admission_file(admission.archive, "admission archive")
         != admission.archive_state
     ):
         fail("verified admission archive was substituted before rollout")
+    try:
+        if rollout_admission.scan_inventory_paths(admission.authority_dir) != list(
+            rollout_admission.FINAL_AUTHORITY_FILES
+        ):
+            fail("verified admission authority inventory changed before rollout")
+        for relative, before in admission.authority_state:
+            if (
+                rollout_admission.stable_hash_relative(
+                    admission.authority_dir, relative
+                )
+                != before
+            ):
+                fail("verified admission authority changed before rollout")
+        boi_handoff.recheck_qualified_boi_handoff(
+            admission.boi_qualified_handoff
+        )
+    except (
+        rollout_admission.ReleaseArtifactError,
+        boi_handoff.BoiHandoffError,
+    ) as error:
+        raise DeploymentError(
+            f"verified BOI admission evidence changed before rollout: {error}"
+        ) from error
 
 
 def require_inputs_match_admission(
@@ -2346,9 +2500,18 @@ def consume_admission_receipt(
 
     require_admission_archive_unchanged(admission)
     prior = require_protected_replay_ledger(admission.replay_ledger)
-    if admission.receipt_id in prior.consumed_receipt_ids:
-        fail("verified admission receipt was already consumed under deployment lock")
-    consumed_ids = sorted((*prior.consumed_receipt_ids, admission.receipt_id))
+    receipt_ids = (
+        admission.receipt_id,
+        admission.boi_qualification_receipt_id,
+    )
+    if len(set(receipt_ids)) != 2:
+        fail("candidate and BOI qualification replay identities collide")
+    if any(item in prior.consumed_receipt_ids for item in receipt_ids):
+        fail(
+            "verified candidate or BOI qualification receipt was already consumed "
+            "under deployment lock"
+        )
+    consumed_ids = sorted((*prior.consumed_receipt_ids, *receipt_ids))
     try:
         consumed_payload = rollout_admission.canonical_replay_ledger_bytes(
             consumed_ids
@@ -3615,7 +3778,7 @@ def apply_reset(
     ensure_root_directory(supervisor_store, 0o755)
     binary_dir = binary_store / sources.binary_sha256
     supervisor_dir = supervisor_store / sources.supervisor_sha256
-    installed_binary = binary_dir / "irohad"
+    installed_binary = binary_dir / "iroha3d"
     installed_supervisor = supervisor_dir / "taira_peer_supervisor.py"
     if binary_dir.exists() and not (
         installed_binary.exists() or installed_binary.is_symlink()
@@ -3635,7 +3798,7 @@ def apply_reset(
     install_immutable(
         sources.supervisor, installed_supervisor, sources.supervisor_sha256
     )
-    require_exact_names(binary_dir, {"irohad"}, "content-addressed binary directory")
+    require_exact_names(binary_dir, {"iroha3d"}, "content-addressed binary directory")
     require_exact_names(
         supervisor_dir,
         {"taira_peer_supervisor.py"},
@@ -3847,6 +4010,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--supervisor", type=Path, required=True)
     parser.add_argument("--admission-archive", type=Path, required=True)
     parser.add_argument("--admission-authority-dir", type=Path, required=True)
+    parser.add_argument("--boi-qualified-handoff-root", type=Path, required=True)
     parser.add_argument(
         "--supervisor-python",
         type=Path,
@@ -3862,6 +4026,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-artifact-handoff-sha256", required=True)
     parser.add_argument("--expected-production-reset-manifest-sha256", required=True)
     parser.add_argument("--trusted-signing-fingerprint", required=True)
+    parser.add_argument(
+        "--trusted-boi-qualification-public-key", type=Path, required=True
+    )
+    parser.add_argument(
+        "--trusted-boi-qualification-signing-fingerprint", required=True
+    )
+    parser.add_argument("--expected-boi-qualification-host-id", required=True)
+    parser.add_argument(
+        "--expected-boi-qualification-installation-id", required=True
+    )
+    parser.add_argument(
+        "--expected-boi-qualification-controller-digest", required=True
+    )
+    parser.add_argument("--expected-workflow-run-id", type=int, required=True)
+    parser.add_argument("--expected-workflow-run-attempt", type=int, required=True)
     parser.add_argument("--release-manifest-verifier", type=Path, required=True)
     parser.add_argument(
         "--trusted-release-manifest-verifier-sha256", required=True
@@ -3929,8 +4108,12 @@ def validate_arguments(args: argparse.Namespace) -> None:
         args.expected_production_reset_manifest_sha256,
         "expected production reset-manifest SHA-256",
     )
-    args.trusted_signing_fingerprint = require_sha256(
-        args.trusted_signing_fingerprint, "trusted signing fingerprint"
+    (
+        args.trusted_signing_fingerprint,
+        args.trusted_boi_qualification_signing_fingerprint,
+    ) = require_distinct_signing_fingerprints(
+        args.trusted_signing_fingerprint,
+        args.trusted_boi_qualification_signing_fingerprint,
     )
     args.trusted_release_manifest_verifier_sha256 = require_sha256(
         args.trusted_release_manifest_verifier_sha256,
@@ -3972,10 +4155,10 @@ def require_sealed_external_tool_identity() -> Optional[tuple[int, int]]:
     return None if os.geteuid() != 0 else (uid, gid)
 
 
-def execute(
+def _execute_after_provisioned_authority_contracts(
     args: argparse.Namespace, *, ops: Optional[SystemOps] = None
 ) -> dict[str, Any]:
-    """Run the read-only preflight and optional guarded apply transaction."""
+    """Latent deployment path reached only after installed authority evolves."""
 
     require_sealed_external_tool_identity()
     validate_arguments(args)
@@ -4010,6 +4193,15 @@ def execute(
             "admission_receipt_consumed": False,
             "admission_receipt_id": admission.receipt_id,
             "applied": False,
+            "boi_artifact_inventory_sha256": (
+                admission.boi_artifact_inventory_sha256
+            ),
+            "boi_qualified_inventory_sha256": (
+                admission.boi_qualified_inventory_sha256
+            ),
+            "boi_qualification_receipt_id": (
+                admission.boi_qualification_receipt_id
+            ),
             "absent_old_children": sorted(
                 snapshot.path.stem
                 for snapshot in old_cohort
@@ -4033,9 +4225,11 @@ def execute(
         locked_admission = verify_deployment_admission(args)
         if locked_admission != admission:
             fail("verified admission identity changed before the deployment lock")
+        require_admission_archive_unchanged(locked_admission)
         require_admission_bound_inputs_unchanged(bundle, sources, locked_admission)
         old_cohort = capture_old_cohort(system_ops, **capture_options)
         require_admission_bound_inputs_unchanged(bundle, sources, locked_admission)
+        require_admission_archive_unchanged(locked_admission)
         with consume_admission_receipt(locked_admission) as consumption:
             report = apply_reset(
                 args,
@@ -4050,9 +4244,27 @@ def execute(
                 "admission_archive_sha256": locked_admission.archive_sha256,
                 "admission_receipt_consumed": True,
                 "admission_receipt_id": locked_admission.receipt_id,
+                "boi_artifact_inventory_sha256": (
+                    locked_admission.boi_artifact_inventory_sha256
+                ),
+                "boi_qualified_inventory_sha256": (
+                    locked_admission.boi_qualified_inventory_sha256
+                ),
+                "boi_qualification_receipt_id": (
+                    locked_admission.boi_qualification_receipt_id
+                ),
             }
         )
         return report
+
+
+def execute(
+    args: argparse.Namespace, *, ops: Optional[SystemOps] = None
+) -> dict[str, Any]:
+    """Refuse dry-run and apply before any identity, path, or admission read."""
+
+    del args, ops
+    require_deploy_issuance_contracts()
 
 
 def main(argv: Optional[list[str]] = None) -> int:

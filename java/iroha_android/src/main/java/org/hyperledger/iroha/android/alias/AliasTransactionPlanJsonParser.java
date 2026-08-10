@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.hyperledger.iroha.android.client.JsonParser;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /** Strict parser for the typed response returned by {@code POST /v1/aliases/setup/plan}. */
 public final class AliasTransactionPlanJsonParser {
@@ -34,7 +35,7 @@ public final class AliasTransactionPlanJsonParser {
         set(
             "version",
             "authority",
-            "chain_id",
+            "network_id",
             "anchor",
             "resources",
             "instructions",
@@ -46,7 +47,7 @@ public final class AliasTransactionPlanJsonParser {
     return new AliasSetupModels.AliasTransactionPlanBodyV1(
         intField(root, "version", "body.version"),
         stringField(root, "authority", "body.authority"),
-        stringField(root, "chain_id", "body.chain_id"),
+        NetworkId.parse(stringField(root, "network_id", "body.network_id")),
         parseAnchor(objectField(root, "anchor", "body.anchor")),
         mapObjects(root, "resources", "body.resources", AliasTransactionPlanJsonParser::parseResource),
         mapObjects(root, "instructions", "body.instructions", AliasTransactionPlanJsonParser::parseFrame),

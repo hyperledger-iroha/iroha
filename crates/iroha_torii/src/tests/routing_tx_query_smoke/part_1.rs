@@ -452,14 +452,14 @@ async fn account_transactions_get_filters_by_asset_id() {
     let committed0 = valid0.commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
 
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let asset_def: dm::AssetDefinitionId =
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
     let asset_id = dm::AssetId::new(asset_def, actor_id.clone().into());
     let mint = dm::Mint::asset_quantity(1_u32, asset_id.clone());
 
     let mut bldr_asset = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         actor_id.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -471,7 +471,7 @@ async fn account_transactions_get_filters_by_asset_id() {
     let tx_asset = AcceptedTransaction::new_unchecked(Cow::Owned(signed_asset));
 
     let mut bldr_log = dm::TransactionBuilder::new(
-        chain_id,
+        network_id,
         actor_id.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -592,7 +592,12 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
         .ok();
     dm::Register::asset_definition({
         let __asset_definition_id = def_id.clone();
-        dm::AssetDefinition::numeric(__asset_definition_id.clone(), asset_definition_display_name(&__asset_definition_id), iroha_data_model::asset::AssetBalancePolicy::Global, None)
+        dm::AssetDefinition::numeric(
+            __asset_definition_id.clone(),
+            asset_definition_display_name(&__asset_definition_id),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
     })
     .execute(exec_id.account(), &mut stx0)
     .ok();
@@ -611,12 +616,12 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
     let committed0 = valid0.commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
 
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let source_asset_id = dm::AssetId::new(def_id.clone(), alice_id.account().clone());
     let recipient_asset_id = dm::AssetId::new(def_id.clone(), bob_id.account().clone());
     let unrelated_asset_id = dm::AssetId::new(def_id.clone(), exec_id.account().clone());
     let mut tx_builder = dm::TransactionBuilder::new(
-        chain_id,
+        network_id,
         alice_id.account().clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -792,7 +797,7 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
 
     let (authority, keypair) = account_with_key();
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let mut metadata = dm::Metadata::default();
     metadata.insert(
         "contract_address".parse().unwrap(),
@@ -828,7 +833,7 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
         std::num::NonZeroU64::new(100_000),
     );
 
-    let mut tx_builder = dm::TransactionBuilder::new(chain_id, authority.clone(), fee_payment);
+    let mut tx_builder = dm::TransactionBuilder::new(network_id, authority.clone(), fee_payment);
     tx_builder.set_creation_time(core::time::Duration::from_millis(1_710_000_000_000));
     let signed = tx_builder
         .with_metadata(metadata)
@@ -958,7 +963,7 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
 
     // Build three transactions for the same authority (two share timestamp for tie-breaking)
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let (_max_clock_drift, _tx_limits) = {
         let v = state.view();
         let p = v.world().parameters();
@@ -966,7 +971,7 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
     };
     // tx_a: authority acc_a at t=1000ms
     let mut bldr_a = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -977,7 +982,7 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
     let tx_a = AcceptedTransaction::new_unchecked(Cow::Owned(tx_a));
     // tx_b: authority acc_a at t=2000ms
     let mut bldr_b = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -994,7 +999,7 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
 
     // tx_c: authority acc_a at t=2000ms (different entrypoint hash)
     let mut bldr_c = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1173,11 +1178,11 @@ async fn handle_v1_account_transactions_caps_total_with_fetch_size() {
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
 
     // Create five transactions for the same authority
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let mut accepted = Vec::new();
     for i in 0..5u64 {
         let mut builder = dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             actor_id.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -1300,7 +1305,7 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
     let committed0 = valid0.commit_unchecked().unpack(|_| {});
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
 
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let (_max_clock_drift, _tx_limits) = {
         let v = state.view();
         let p = v.world().parameters();
@@ -1309,7 +1314,7 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
 
     // tx1: t=1000, result_ok=true, capture entrypoint hash string
     let mut b1 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1321,7 +1326,7 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed1));
     // tx2: t=2000, result_ok=true
     let mut b2 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_b.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1430,7 +1435,7 @@ async fn handle_v1_account_transactions_emits_requested_format() {
         query,
     ));
 
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let kp = checked_smoke_keypair(
         0x5A,
         iroha_crypto::Algorithm::Ed25519,
@@ -1438,7 +1443,7 @@ async fn handle_v1_account_transactions_emits_requested_format() {
     );
     let account = dm::AccountId::new(kp.public_key().clone());
     let mut builder = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         account.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1512,7 +1517,7 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
         query,
     ));
 
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x5C,
         iroha_crypto::Algorithm::Ed25519,
@@ -1538,7 +1543,7 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
 
     // tx for A at 1000, tx for B at 2000
     let mut b1 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1550,7 +1555,7 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
 
     let mut b2 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_b.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1644,7 +1649,7 @@ async fn or_union_matches_both_authority_or_timestamp() {
     ));
 
     // Build two transactions: A at 1500ms, A at 900ms
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x5F,
         iroha_crypto::Algorithm::Ed25519,
@@ -1662,7 +1667,7 @@ async fn or_union_matches_both_authority_or_timestamp() {
     };
 
     let mut b1 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1673,7 +1678,7 @@ async fn or_union_matches_both_authority_or_timestamp() {
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
     let mut b2 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1765,7 +1770,7 @@ async fn typed_tx_predicate_matches_all_filter() {
         query,
     ));
 
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x61,
         iroha_crypto::Algorithm::Ed25519,
@@ -1780,7 +1785,7 @@ async fn typed_tx_predicate_matches_all_filter() {
         (p.sumeragi().max_clock_drift(), p.transaction())
     };
     let mut b1 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1791,7 +1796,7 @@ async fn typed_tx_predicate_matches_all_filter() {
     let _entry_hash_a = format!("{}", signed_a.hash_as_entrypoint());
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
     let mut b2 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1876,7 +1881,7 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
         query,
     ));
 
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x63,
         iroha_crypto::Algorithm::Ed25519,
@@ -1906,7 +1911,7 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
     };
     // Build four transactions across three authorities and different timestamps
     let mut b1 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1917,7 +1922,7 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
     let mut b2 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_b.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1928,7 +1933,7 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
     let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
     let mut b3 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_c.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1942,7 +1947,7 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
     let tx3 = AcceptedTransaction::new_unchecked(Cow::Owned(signed3));
 
     let mut b4 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_b.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -2064,7 +2069,7 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
         query,
     ));
 
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x67,
         iroha_crypto::Algorithm::Ed25519,
@@ -2096,7 +2101,7 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
 
     // Three external transactions with the same authority
     let mut b1 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -2107,7 +2112,7 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
     let mut b2 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -2118,7 +2123,7 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
     let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
     let mut b3 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -2287,7 +2292,7 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
         query,
     ));
 
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x6B,
         iroha_crypto::Algorithm::Ed25519,
@@ -2305,7 +2310,7 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
 
     // Two transactions with distinct entrypoint hashes
     let mut b1 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -2317,7 +2322,7 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed1));
 
     let mut b2 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -2515,7 +2520,7 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
         query,
     ));
 
-    let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let network_id = *state.network_id_ref();
     let kp_a = checked_smoke_keypair(
         0x6D,
         iroha_crypto::Algorithm::Ed25519,
@@ -2533,7 +2538,7 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
 
     // A: success, A: failure
     let mut b1 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -2544,7 +2549,7 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
     let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
     let mut b2 = dm::TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         acc_a.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );

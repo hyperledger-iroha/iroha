@@ -49,6 +49,7 @@ from seal_taira_release_controllers import (
 from taira_release_authority import (
     TairaReleaseAuthorityError,
     build_authority,
+    require_independent_native_evidence_authority_provisioned,
 )
 
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
@@ -84,6 +85,15 @@ PUBLIC_PRIVACY_INPUTS = {
 
 class FinalizationError(RuntimeError):
     """The unsigned archive cannot cross the release authority boundary."""
+
+
+def _require_independent_native_evidence_authority() -> None:
+    """Translate the shared provisioning barrier into finalizer's error."""
+
+    try:
+        require_independent_native_evidence_authority_provisioned()
+    except TairaReleaseAuthorityError as exc:
+        raise FinalizationError(str(exc)) from exc
 
 
 def _canonical_absolute(path: Path, label: str, *, must_exist: bool = True) -> Path:
@@ -273,6 +283,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def finalize(args: argparse.Namespace) -> dict[str, object]:
+    # This must be the first operation: do not inspect paths, controller state,
+    # signer material, public inputs, or output state for untrusted native bytes.
+    _require_independent_native_evidence_authority()
+
     if platform.system() != "Linux" or platform.machine() != "aarch64":
         raise FinalizationError(
             "Taira Linux authority finalization requires native Linux aarch64"

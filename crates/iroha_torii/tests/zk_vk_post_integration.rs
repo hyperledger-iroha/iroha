@@ -14,7 +14,7 @@ use iroha_core::{
     queue::Queue,
     state::{State, World},
 };
-use iroha_data_model::{account::AccountId, prelude::ChainId, transaction::TransactionBuilder};
+use iroha_data_model::{account::AccountId, transaction::TransactionBuilder};
 use iroha_torii::NoritoJson;
 use nonzero_ext::nonzero;
 use norito::json;
@@ -43,7 +43,6 @@ async fn vk_register_update_return_unsigned_local_signing_drafts() {
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura.clone(), query);
     let state = Arc::new(state);
-    let chain_id = Arc::new(ChainId::from("test-chain"));
     let queue_cfg = iroha_config::parameters::actual::Queue {
         capacity: nonzero!(8usize),
         capacity_per_user: nonzero!(8usize),
@@ -52,41 +51,32 @@ async fn vk_register_update_return_unsigned_local_signing_drafts() {
     };
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(4).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
-    // Build routes that capture the chain_id/queue/state
-    let app =
-        Router::new()
-            .route(
-                "/v1/zk/vk/register",
-                post({
-                    let chain_id = chain_id.clone();
+    // Build routes that capture the queue and CoreState network identity.
+    let app = Router::new()
+        .route(
+            "/v1/zk/vk/register",
+            post({
+                let queue = queue.clone();
+                let state = state.clone();
+                move |req: NoritoJson<iroha_torii::ZkVkRegisterDto>| {
                     let queue = queue.clone();
                     let state = state.clone();
-                    move |req: NoritoJson<iroha_torii::ZkVkRegisterDto>| {
-                        let chain_id = chain_id.clone();
-                        let queue = queue.clone();
-                        let state = state.clone();
-                        async move {
-                            iroha_torii::handle_post_vk_register(chain_id, queue, state, req).await
-                        }
-                    }
-                }),
-            )
-            .route(
-                "/v1/zk/vk/update",
-                post({
-                    let chain_id = chain_id.clone();
+                    async move { iroha_torii::handle_post_vk_register(queue, state, req).await }
+                }
+            }),
+        )
+        .route(
+            "/v1/zk/vk/update",
+            post({
+                let queue = queue.clone();
+                let state = state.clone();
+                move |req: NoritoJson<iroha_torii::ZkVkUpdateDto>| {
                     let queue = queue.clone();
                     let state = state.clone();
-                    move |req: NoritoJson<iroha_torii::ZkVkUpdateDto>| {
-                        let chain_id = chain_id.clone();
-                        let queue = queue.clone();
-                        let state = state.clone();
-                        async move {
-                            iroha_torii::handle_post_vk_update(chain_id, queue, state, req).await
-                        }
-                    }
-                }),
-            );
+                    async move { iroha_torii::handle_post_vk_update(queue, state, req).await }
+                }
+            }),
+        );
 
     // Helper: build headers
     let _json_ct = {

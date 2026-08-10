@@ -13,7 +13,7 @@ Bundles are produced via `scripts/build_release_bundle.sh` with `--profile` set 
 
 Each tarball contains:
 
-- `bin/` — `irohad`, `iroha`, and `kagami` built with the deploy profile.
+- `bin/` — `iroha3d`, `iroha`, and `kagami` built with the deploy profile.
 - `config/` — profile-specific genesis/client configuration (single vs. nexus). Nexus bundles include `config.toml` with lane and DA parameters.
 - `PROFILE.toml` — metadata describing profile, config, version, commit, OS/arch, and enabled feature set.
 - Metadata artefacts written alongside the tarball:
@@ -142,11 +142,13 @@ certification.
 - `specs/sora_nexus_operator_onboarding.md` — end-to-end onboarding flow for Sora Nexus data-space operators once artefacts are selected.
 
 The builders accept no signing or private-key option. Aggregate production
-signing uses a reviewed PKCS#11/HSM wrapper through `--external-signer`, a raw
-32-byte Ed25519 public key through `--signing-public-key`, and its independently
-approved lowercase SHA-256 fingerprint through
+signing uses the `authenticated_external_signer` provider through
+`--external-signer` with the exact `software` backend, a raw 32-byte Ed25519
+public key through `--signing-public-key`, and its independently approved
+lowercase SHA-256 fingerprint through
 `--trusted-signing-fingerprint`. Signing and publish-plan validation also
 require the packaged `sorafs-validate` candidate and its independently approved
-exact executable SHA-256. OIDC/cosign provenance, hosted scan results,
-publication receipts, and rollback/yank evidence remain external promotion
-inputs.
+exact executable SHA-256. A verified V1 release is `software-key-qualified`.
+OIDC/cosign provenance, hosted scan results, publication receipts, and
+rollback/yank evidence remain external promotion inputs. A later HSM adapter
+requires new HSM-backed deployment evidence and promotion signatures.

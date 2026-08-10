@@ -12,6 +12,17 @@ from .address import AccountAddress
 
 _crypto = load_crypto_extension()
 
+# Exact genesis-derived transaction domain. Construction is closed in the
+# native boundary so ordinary signing APIs cannot reinterpret labels or bare
+# byte strings as a NetworkId.
+NetworkId = _crypto.NetworkId
+
+
+def _require_network_id(value: Any, context: str = "network_id") -> NetworkId:
+    if not isinstance(value, NetworkId):
+        raise TypeError(f"{context} must be a NetworkId")
+    return value
+
 ED25519_ALGORITHM: Final[str] = "ed25519"
 SECP256K1_ALGORITHM: Final[str] = "secp256k1"
 ML_DSA_ALGORITHM: Final[str] = "ml-dsa"
@@ -23,8 +34,9 @@ GOST_3410_2012_512_PARAMSET_B_ALGORITHM: Final[str] = "gost3410-2012-512-paramse
 BLS_NORMAL_ALGORITHM: Final[str] = "bls_normal"
 BLS_SMALL_ALGORITHM: Final[str] = "bls_small"
 SM2_ALGORITHM: Final[str] = "sm2"
-PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 21
+PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 22
 PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: Final[int] = 256 * 1024
+PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1: Final[int] = 256 * 1024
 PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Final[Mapping[str, int]] = MappingProxyType(
     {
         "VALID": 0,
@@ -37,6 +49,21 @@ PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Final[Mapping[str, int]] 
         "MALFORMED_ARCHIVE": 7,
         "INVALID_CATALOG": 8,
     }
+)
+PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATION_STATUS_V1: Final[Mapping[str, int]] = (
+    MappingProxyType(
+        {
+            "VALID": 0,
+            "NULL_POINTER": 1,
+            "EMPTY": 2,
+            "ARCHIVE_TOO_LARGE": 3,
+            "DECODE_RESOURCE_LIMIT": 4,
+            "SCHEMA_MISMATCH": 5,
+            "NON_CANONICAL": 6,
+            "MALFORMED_ARCHIVE": 7,
+            "INVALID_MANIFEST": 8,
+        }
+    )
 )
 _PRIVACY_MAX_BRIDGE_ABI_VERSION: Final[int] = 0xFFFF_FFFF
 try:
@@ -94,6 +121,8 @@ __all__ = [
     "SM2_ALGORITHM",
     "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION",
     "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES",
+    "PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1",
+    "PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATION_STATUS_V1",
     "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1",
     "SUPPORTED_CRYPTO_ALGORITHMS",
     "ED25519_PRIVATE_KEY_LENGTH",
@@ -109,16 +138,10 @@ __all__ = [
     "Sm2KeyPair",
     "Instruction",
     "ContractCall",
+    "NetworkId",
     "TransactionExecutableEntry",
-    "PrivacyBootleLanternPresentationActionBuildResultV1",
-    "PrivacyJindoActionBuildResultV1",
     "PrivacyNativeActionBuildResultV1",
-    "PrivacyVeRangeActionBuildResultV1",
-    "PrivacyVegaActionPreparationV1",
-    "PrivacyVegaActionBuildResultV1",
-    "PrivacyZkAceTransferActionBuildResultV1",
-    "PrivacyZkAmsBatchAdmissionActionBuildResultV1",
-    "PrivacyZkAmsProvisionAccountActionBuildResultV1",
+    "PrivacyExact12CapabilityManifestV1",
     "SignedTransactionEnvelope",
     "TransactionBuilder",
     "ConfidentialKeyset",
@@ -189,9 +212,12 @@ __all__ = [
     "privacy_bridge_abi_version",
     "is_privacy_native_available",
     "privacy_compiled_profile_catalog_v1",
+    "privacy_exact12_capability_manifest_v1",
+    "privacy_validate_exact12_capability_manifest_v1",
     "canonical_genesis_header_hash_v1",
     "canonical_signed_transaction_hash_v1",
     "signed_transaction_envelope_from_versioned_v1",
+    "inspect_privacy_exact12_action_driver_transaction_context_v1",
     "privacy_vega_device_authentication_digest_v1",
     "inspect_signed_privacy_zk_ace_transfer_action_v1",
     "inspect_signed_privacy_bootle_lantern_presentation_action_v1",
@@ -271,12 +297,14 @@ def _native_issue_replication_order(
     order_payload: str,
     issued_epoch: int,
     deadline_epoch: int,
+    musubi_archive: str | None,
 ) -> Any:
     return _native_instruction_builder("issue_replication_order")(
         order_id,
         order_payload,
         issued_epoch,
         deadline_epoch,
+        musubi_archive,
     )
 
 
@@ -337,25 +365,12 @@ if TYPE_CHECKING:
             ...
 
         @staticmethod
-        def unshield_prepared(
-            asset_definition_id: str,
-            to_account_id: str,
-            public_amount: str,
-            inputs: Iterable[FixedBytesLike],
-            proof: Mapping[str, Any],
-            *,
-            root_hint: Optional[FixedBytesLike] = None,
-        ) -> Instruction:
-            """Build the output-free first-release unshield instruction."""
-
-            ...
-
-        @staticmethod
         def issue_replication_order(
             order_id: str,
             order_payload: str,
             issued_epoch: int,
             deadline_epoch: int,
+            musubi_archive: str | None = None,
         ) -> Instruction:
             """Build one canonical replication-order issue instruction."""
 
@@ -385,15 +400,8 @@ if TYPE_CHECKING:
 
         def to_json(self) -> str: ...
 
-    PrivacyBootleLanternPresentationActionBuildResultV1: TypeAlias = Any
-    PrivacyJindoActionBuildResultV1: TypeAlias = Any
     PrivacyNativeActionBuildResultV1: TypeAlias = Any
-    PrivacyVeRangeActionBuildResultV1: TypeAlias = Any
-    PrivacyVegaActionPreparationV1: TypeAlias = Any
-    PrivacyVegaActionBuildResultV1: TypeAlias = Any
-    PrivacyZkAceTransferActionBuildResultV1: TypeAlias = Any
-    PrivacyZkAmsBatchAdmissionActionBuildResultV1: TypeAlias = Any
-    PrivacyZkAmsProvisionAccountActionBuildResultV1: TypeAlias = Any
+    PrivacyExact12CapabilityManifestV1: TypeAlias = Any
     SignedTransactionEnvelope: TypeAlias = Any
     TransactionBuilder: TypeAlias = Any
 else:
@@ -429,6 +437,9 @@ else:
         def __getattr__(cls, name: str) -> Any:
             return getattr(_NativeInstruction, name)
 
+        def __instancecheck__(cls, instance: object) -> bool:
+            return isinstance(instance, _NativeInstruction)
+
     class Instruction(metaclass=_InstructionFacadeMeta):
         @staticmethod
         def cancel_asset_lock(
@@ -447,32 +458,12 @@ else:
             )
 
         @staticmethod
-        def unshield_prepared(
-            asset_definition_id: str,
-            to_account_id: str,
-            public_amount: str,
-            inputs: Iterable[FixedBytesLike],
-            proof: Mapping[str, Any],
-            *,
-            root_hint: Optional[FixedBytesLike] = None,
-        ) -> Any:
-            """Build the output-free first-release unshield instruction."""
-
-            return _NativeInstruction.unshield_prepared(
-                asset_definition_id,
-                to_account_id,
-                public_amount,
-                inputs,
-                proof,
-                root_hint=root_hint,
-            )
-
-        @staticmethod
         def issue_replication_order(
             order_id: str,
             order_payload: str,
             issued_epoch: int,
             deadline_epoch: int,
+            musubi_archive: str | None = None,
         ) -> Any:
             """Build a canonical native ``IssueReplicationOrder`` instruction."""
 
@@ -483,6 +474,7 @@ else:
                 order_payload,
                 issued_epoch,
                 deadline_epoch,
+                musubi_archive,
             )
 
         @staticmethod
@@ -521,21 +513,8 @@ else:
                 expiration_epoch,
             )
 
-    PrivacyBootleLanternPresentationActionBuildResultV1 = (
-        _crypto.PrivacyBootleLanternPresentationActionBuildResultV1
-    )
-    PrivacyJindoActionBuildResultV1 = _crypto.PrivacyJindoActionBuildResultV1
     PrivacyNativeActionBuildResultV1 = _crypto.PrivacyNativeActionBuildResultV1
-    PrivacyVeRangeActionBuildResultV1 = _crypto.PrivacyVeRangeActionBuildResultV1
-    PrivacyVegaActionPreparationV1 = _crypto.PrivacyVegaActionPreparationV1
-    PrivacyVegaActionBuildResultV1 = _crypto.PrivacyVegaActionBuildResultV1
-    PrivacyZkAceTransferActionBuildResultV1 = _crypto.PrivacyZkAceTransferActionBuildResultV1
-    PrivacyZkAmsBatchAdmissionActionBuildResultV1 = (
-        _crypto.PrivacyZkAmsBatchAdmissionActionBuildResultV1
-    )
-    PrivacyZkAmsProvisionAccountActionBuildResultV1 = (
-        _crypto.PrivacyZkAmsProvisionAccountActionBuildResultV1
-    )
+    PrivacyExact12CapabilityManifestV1 = _crypto.PrivacyExact12CapabilityManifestV1
     SignedTransactionEnvelope = _crypto.SignedTransactionEnvelope
     TransactionBuilder = _crypto.TransactionBuilder
 verify_signed_transaction_versioned = _crypto.verify_signed_transaction_versioned
@@ -548,16 +527,25 @@ AssetId = _crypto.AssetId
 def build_find_asset_escrow_query(
     authority: str,
     private_key: bytes,
+    network_id: NetworkId,
     escrow_id: str,
 ) -> bytes:
     """Build a versioned Norito signed query for one native escrow."""
 
-    return bytes(_crypto.build_find_asset_escrow_query(authority, private_key, escrow_id))
+    return bytes(
+        _crypto.build_find_asset_escrow_query(
+            authority,
+            private_key,
+            _require_network_id(network_id),
+            escrow_id,
+        )
+    )
 
 
 def build_find_asset_escrows_by_seller_query(
     authority: str,
     private_key: bytes,
+    network_id: NetworkId,
     seller: str,
 ) -> bytes:
     """Build a signed iterable query for escrows funded by ``seller``."""
@@ -566,6 +554,7 @@ def build_find_asset_escrows_by_seller_query(
         _crypto.build_find_asset_escrows_by_seller_query(
             authority,
             private_key,
+            _require_network_id(network_id),
             seller,
         )
     )
@@ -574,6 +563,7 @@ def build_find_asset_escrows_by_seller_query(
 def build_find_asset_escrows_by_buyer_query(
     authority: str,
     private_key: bytes,
+    network_id: NetworkId,
     buyer: str,
 ) -> bytes:
     """Build a signed iterable query for escrows benefiting ``buyer``."""
@@ -582,6 +572,7 @@ def build_find_asset_escrows_by_buyer_query(
         _crypto.build_find_asset_escrows_by_buyer_query(
             authority,
             private_key,
+            _require_network_id(network_id),
             buyer,
         )
     )
@@ -590,6 +581,7 @@ def build_find_asset_escrows_by_buyer_query(
 def build_find_committed_transaction_query(
     authority: str,
     private_key: bytes,
+    network_id: NetworkId,
     transaction_hash: str,
 ) -> bytes:
     """Build a signed native query for one canonical committed transaction."""
@@ -598,6 +590,7 @@ def build_find_committed_transaction_query(
         _crypto.build_find_committed_transaction_query(
             authority,
             private_key,
+            _require_network_id(network_id),
             transaction_hash,
         )
     )
@@ -606,6 +599,7 @@ def build_find_committed_transaction_query(
 def build_find_block_by_hash_query(
     authority: str,
     private_key: bytes,
+    network_id: NetworkId,
     block_hash: str,
 ) -> bytes:
     """Build a signed native query for one exact carrier block."""
@@ -614,6 +608,7 @@ def build_find_block_by_hash_query(
         _crypto.build_find_block_by_hash_query(
             authority,
             private_key,
+            _require_network_id(network_id),
             block_hash,
         )
     )
@@ -671,7 +666,7 @@ def decode_transaction_receipt_json(payload: bytes) -> str:
 
 def decode_zk_vk_transaction_payload(
     payload: bytes,
-    expected_chain_id: str,
+    network_id: NetworkId,
     expected_authority: str,
     operation: str,
 ) -> Mapping[str, Any]:
@@ -679,7 +674,7 @@ def decode_zk_vk_transaction_payload(
 
     decoded = _crypto.decode_zk_vk_transaction_payload(
         payload,
-        expected_chain_id,
+        _require_network_id(network_id),
         expected_authority,
         operation,
     )
@@ -1373,7 +1368,7 @@ def sm2_fixture_from_seed(
 
 
 def build_signed_transaction(
-    chain_id: str,
+    network_id: NetworkId,
     authority: str,
     private_key: bytes,
     *,
@@ -1390,8 +1385,9 @@ def build_signed_transaction(
 
     Parameters
     ----------
-    chain_id:
-        Target chain identifier.
+    network_id:
+        Exact typed genesis-derived transaction network. Human-readable chain
+        labels and bare hash bytes are not accepted.
     authority:
         Transaction authority account identifier (domainless encoded account
         literal: canonical I105 only).
@@ -1423,8 +1419,13 @@ def build_signed_transaction(
 
     if not isinstance(fee_payment, Mapping):
         raise TypeError("fee_payment must be a FeePaymentIntent mapping")
+    network_id = _require_network_id(network_id)
     fee_payment_json = json.dumps(dict(fee_payment), separators=(",", ":"))
-    builder = TransactionBuilder(chain_id, authority, fee_payment_json)
+    builder = TransactionBuilder(
+        network_id,
+        authority,
+        fee_payment_json,
+    )
     if creation_time_ms is not None:
         builder.set_creation_time_ms(int(creation_time_ms))
     if ttl_ms is not None:
@@ -1704,7 +1705,7 @@ def derive_confidential_note_v2(
 
 def build_confidential_transfer_proof_v2(
     *,
-    chain_id: str,
+    network_id: NetworkId,
     asset_definition_id: str,
     spend_key: bytes | bytearray | memoryview | str,
     tree_commitments: Iterable[bytes | bytearray | memoryview | str],
@@ -1724,7 +1725,7 @@ def build_confidential_transfer_proof_v2(
         "verifying_key",
     )
     result = _crypto.build_confidential_transfer_proof_v2(
-        str(chain_id),
+        _require_network_id(network_id),
         str(asset_definition_id),
         spend_key,
         list(tree_commitments),
@@ -1740,7 +1741,7 @@ def build_confidential_transfer_proof_v2(
 
 def build_confidential_transfer_proof_v2_with_paths(
     *,
-    chain_id: str,
+    network_id: NetworkId,
     asset_definition_id: str,
     spend_key: bytes | bytearray | memoryview | str,
     input_paths: Iterable[Mapping[str, Any]],
@@ -1760,7 +1761,7 @@ def build_confidential_transfer_proof_v2_with_paths(
         "verifying_key",
     )
     result = _crypto.build_confidential_transfer_proof_v2_with_paths(
-        str(chain_id),
+        _require_network_id(network_id),
         str(asset_definition_id),
         spend_key,
         list(input_paths),
@@ -1776,7 +1777,7 @@ def build_confidential_transfer_proof_v2_with_paths(
 
 def build_confidential_unshield_proof_v3(
     *,
-    chain_id: str,
+    network_id: NetworkId,
     asset_definition_id: str,
     spend_key: bytes | bytearray | memoryview | str,
     tree_commitments: Iterable[bytes | bytearray | memoryview | str],
@@ -1797,7 +1798,7 @@ def build_confidential_unshield_proof_v3(
         "verifying_key",
     )
     result = _crypto.build_confidential_unshield_proof_v3(
-        str(chain_id),
+        _require_network_id(network_id),
         str(asset_definition_id),
         spend_key,
         list(tree_commitments),
@@ -1814,7 +1815,7 @@ def build_confidential_unshield_proof_v3(
 
 def build_confidential_unshield_proof_v3_with_paths(
     *,
-    chain_id: str,
+    network_id: NetworkId,
     asset_definition_id: str,
     spend_key: bytes | bytearray | memoryview | str,
     input_paths: Iterable[Mapping[str, Any]],
@@ -1835,7 +1836,7 @@ def build_confidential_unshield_proof_v3_with_paths(
         "verifying_key",
     )
     result = _crypto.build_confidential_unshield_proof_v3_with_paths(
-        str(chain_id),
+        _require_network_id(network_id),
         str(asset_definition_id),
         spend_key,
         list(input_paths),
@@ -1966,6 +1967,12 @@ _PRIVACY_COMPILED_PROFILE_CATALOG_METHOD: Final[str] = (
 _PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATOR_METHOD: Final[str] = (
     "privacy_validate_compiled_profile_catalog_v1"
 )
+_PRIVACY_EXACT12_CAPABILITY_MANIFEST_METHOD: Final[str] = (
+    "privacy_exact12_capability_manifest_v1"
+)
+_PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATOR_METHOD: Final[str] = (
+    "privacy_validate_exact12_capability_manifest_v1"
+)
 
 
 def _privacy_bridge_abi_version(module: object) -> int | None:
@@ -2090,7 +2097,7 @@ def privacy_compiled_profile_catalog_v1() -> bytes:
     """Return this binary's canonical Norito V1 local compiled-profile catalog.
 
     This archive has no committed height, governance activation, or readiness
-    state. Use ``Client.privacy_capabilities_v1()`` for a fresh authoritative
+    state. Use the client's authoritative Exact12 capability query for a fresh
     snapshot from live Torii.
     """
 
@@ -2099,6 +2106,95 @@ def privacy_compiled_profile_catalog_v1() -> bytes:
         _PRIVACY_COMPILED_PROFILE_CATALOG_METHOD,
         _invoke_privacy_compiled_profile_catalog_native(),
     )
+
+
+def _privacy_exact12_capability_manifest_archive(
+    archive: bytes | bytearray | memoryview,
+) -> bytes:
+    if not isinstance(archive, (bytes, bytearray, memoryview)):
+        raise TypeError("Exact12 capability manifest archive must be bytes-like")
+    canonical = bytes(archive)
+    if not canonical:
+        raise ValueError("Exact12 capability manifest archive must be non-empty")
+    if len(canonical) > PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1:
+        raise ValueError("Exact12 capability manifest archive exceeds 262144 bytes")
+    return canonical
+
+
+def privacy_validate_exact12_capability_manifest_v1(
+    archive: bytes | bytearray | memoryview,
+) -> int:
+    """Return the native status for one untrusted canonical manifest archive."""
+
+    canonical = _privacy_exact12_capability_manifest_archive(archive)
+    if not _has_privacy_bridge_abi(_crypto):
+        raise RuntimeError(
+            "Exact12 capability manifests require native bridge ABI "
+            f"{PRIVACY_REQUIRED_BRIDGE_ABI_VERSION}"
+        )
+    validator = getattr(
+        _crypto,
+        _PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATOR_METHOD,
+        None,
+    )
+    if not callable(validator):
+        raise RuntimeError(
+            "iroha_python._crypto is missing "
+            "privacy_validate_exact12_capability_manifest_v1; rebuild the extension"
+        )
+    try:
+        status = validator(canonical)
+    except Exception:
+        raise RuntimeError("native Exact12 capability manifest validation failed") from None
+    if (
+        isinstance(status, bool)
+        or not isinstance(status, int)
+        or status
+        not in PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATION_STATUS_V1.values()
+    ):
+        raise RuntimeError(
+            "native Exact12 capability manifest validator returned an invalid status"
+        )
+    return status
+
+
+def privacy_exact12_capability_manifest_v1(
+    archive: bytes | bytearray | memoryview,
+) -> PrivacyExact12CapabilityManifestV1:
+    """Decode one exact Torii manifest without consulting the local catalog.
+
+    The native object retains and re-exposes the byte-identical canonical
+    archive.  Its ``require_network_capability`` method additionally requires
+    an active row whose complete compiled profile matches this binary.
+    """
+
+    canonical = _privacy_exact12_capability_manifest_archive(archive)
+    status = privacy_validate_exact12_capability_manifest_v1(canonical)
+    if status != PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATION_STATUS_V1["VALID"]:
+        raise ValueError(
+            "invalid canonical Exact12 capability manifest archive "
+            f"(native status {status})"
+        )
+    decoder = getattr(_crypto, _PRIVACY_EXACT12_CAPABILITY_MANIFEST_METHOD, None)
+    if not callable(decoder):
+        raise RuntimeError(
+            "iroha_python._crypto is missing privacy_exact12_capability_manifest_v1; "
+            "rebuild the extension"
+        )
+    try:
+        manifest = decoder(canonical)
+    except Exception:
+        raise ValueError("native Exact12 capability manifest decode failed") from None
+    returned = getattr(manifest, "canonical_archive", None)
+    if not isinstance(returned, (bytes, bytearray, memoryview)):
+        raise RuntimeError(
+            "native Exact12 capability manifest omitted its canonical archive"
+        )
+    if bytes(returned) != canonical:
+        raise RuntimeError(
+            "native Exact12 capability manifest changed the Torii archive bytes"
+        )
+    return manifest
 
 
 def canonical_genesis_header_hash_v1(
@@ -2153,17 +2249,20 @@ def canonical_signed_transaction_hash_v1(
 
 def signed_transaction_envelope_from_versioned_v1(
     signed_transaction_versioned: bytes | bytearray | memoryview,
+    network_id: NetworkId,
 ) -> SignedTransactionEnvelope:
-    """Reconstruct the authenticated public envelope from one exact signed wire."""
+    """Reconstruct an authenticated envelope bound to one exact NetworkId."""
 
     if not isinstance(
         signed_transaction_versioned,
         (bytes, bytearray, memoryview),
     ):
         raise TypeError("signed_transaction_versioned must be bytes-like")
+    network_id = _require_network_id(network_id)
     try:
         result = _crypto.signed_transaction_envelope_from_versioned_v1(
-            bytes(signed_transaction_versioned)
+            bytes(signed_transaction_versioned),
+            network_id,
         )
     except AttributeError as exc:
         raise RuntimeError(
@@ -2177,9 +2276,75 @@ def signed_transaction_envelope_from_versioned_v1(
     return result
 
 
+def inspect_privacy_exact12_action_driver_transaction_context_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+    candidate_binding_sha256: bytes | bytearray | memoryview,
+    request_id: bytes | bytearray | memoryview,
+    network_id: NetworkId,
+    creation_time_millis: int,
+    ttl_millis: int,
+    nonce: int,
+) -> Mapping[str, Any]:
+    """Authenticate one qualification action's exact signed public context.
+
+    The Rust boundary derives the expected signer internally from the candidate
+    and request identities. It returns only authenticated public identity; no
+    signing key or witness material crosses the extension boundary.
+    """
+
+    byte_inputs = (
+        (signed_transaction_versioned, "signed_transaction_versioned", None),
+        (candidate_binding_sha256, "candidate_binding_sha256", 32),
+        (request_id, "request_id", 32),
+    )
+    normalized: list[bytes] = []
+    for value, field, expected_length in byte_inputs:
+        if not isinstance(value, (bytes, bytearray, memoryview)):
+            raise TypeError(f"{field} must be bytes-like")
+        encoded = bytes(value)
+        if expected_length is not None and len(encoded) != expected_length:
+            raise ValueError(f"{field} must be exactly {expected_length} bytes")
+        normalized.append(encoded)
+    network_id = _require_network_id(network_id)
+    if (
+        not isinstance(creation_time_millis, int)
+        or isinstance(creation_time_millis, bool)
+        or not isinstance(ttl_millis, int)
+        or isinstance(ttl_millis, bool)
+        or not isinstance(nonce, int)
+        or isinstance(nonce, bool)
+    ):
+        raise TypeError("transaction time fields and nonce must be integers")
+    if not 1 <= creation_time_millis <= 0xFFFF_FFFF_FFFF_FFFF:
+        raise ValueError("creation_time_millis must be one nonzero u64")
+    if not 1 <= ttl_millis <= 0xFFFF_FFFF_FFFF_FFFF:
+        raise ValueError("ttl_millis must be one nonzero u64")
+    if not 1 <= nonce <= 0xFFFF_FFFF:
+        raise ValueError("nonce must be one nonzero u32")
+    try:
+        result = _crypto.inspect_privacy_exact12_action_driver_transaction_context_v1(
+            normalized[0],
+            normalized[1],
+            normalized[2],
+            network_id,
+            creation_time_millis,
+            ttl_millis,
+            nonce,
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing the Exact12 action-driver context inspector; "
+            "rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid Exact12 action-driver transaction context") from None
+    if not isinstance(result, Mapping):
+        raise RuntimeError("native Exact12 action-driver context inspector returned malformed data")
+    return result
+
+
 def privacy_vega_device_authentication_digest_v1(
-    chain_id: str,
-    canonical_genesis_hash: bytes | bytearray | memoryview,
+    network_id: NetworkId,
     transaction_intent_digest: bytes | bytearray | memoryview,
     issuer_id: bytes | bytearray | memoryview,
     issuer_record_epoch: int,
@@ -2195,16 +2360,15 @@ def privacy_vega_device_authentication_digest_v1(
     """Derive Vega ``H_dev`` for an explicit prepared transaction intent.
 
     The native derivation fixes the ISO 18013-5 document profile, action index,
-    governed Vega artifacts, chain, genesis, date, threshold, reader challenge,
-    session transcript, and canonical nonzero transaction intent. Prefer
-    :meth:`TransactionDraft.prepare_privacy_vega_action_v1`; this low-level
-    helper exists for independently transporting an already prepared intent.
+    governed Vega artifacts, exact NetworkId, date, threshold, reader challenge,
+    session transcript, and canonical nonzero transaction intent. This helper
+    handles public binding data only; generic Vega construction and every
+    credential-bearing operation must use
+    :class:`PrivacyWalletWorkerControllerV1`.
     """
 
-    if not isinstance(chain_id, str):
-        raise TypeError("chain_id must be a string")
+    network_id = _require_network_id(network_id)
     byte_inputs = (
-        (canonical_genesis_hash, "canonical_genesis_hash"),
         (transaction_intent_digest, "transaction_intent_digest"),
         (issuer_id, "issuer_id"),
         (issuer_record_digest, "issuer_record_digest"),
@@ -2217,8 +2381,7 @@ def privacy_vega_device_authentication_digest_v1(
             raise TypeError(f"{field} must be bytes-like")
     try:
         result = _crypto.privacy_vega_device_authentication_digest_v1(
-            chain_id,
-            bytes(canonical_genesis_hash),
+            network_id,
             bytes(transaction_intent_digest),
             bytes(issuer_id),
             issuer_record_epoch,

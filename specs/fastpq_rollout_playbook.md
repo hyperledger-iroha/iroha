@@ -113,7 +113,7 @@ Every rollout stage must include a rollback rehearsal:
 2. Force CPU mode for 10 minutes using either the config knob
    (`zk.fastpq.execution_mode = "cpu"`) or the environment override:
    ```bash
-   FASTPQ_GPU=cpu irohad --config <path> --genesis-manifest-json <path>
+   FASTPQ_GPU=cpu iroha3d --config <path> --genesis-manifest-json <path>
    ```
 3. Confirm the downgrade log
    (`telemetry::fastpq.execution_mode resolved="cpu" requested="gpu"`) and scrape

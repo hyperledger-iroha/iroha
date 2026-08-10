@@ -1593,17 +1593,20 @@ fn startup_rejects_prune_intent_crossing_durable_v2_finality_before_mutation() {
         .store_v2_finality_artifact(&artifact)
         .expect("finalize canonical block");
     let blocks_dir = kura.active_blocks_dir.lock().clone();
-    kura.persist_prune_intent(&admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
-        version: 2,
-        source_height: 1,
-        source_tip_hash: Some(block_hash),
-        target_height: 0,
-        target_tip_hash: None,
-        retained_merge_entries: 0,
-        retained_merge_tip_hash: None,
-        sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
-        capacity: unsealed_prune_capacity_fixture(),
-    }))
+    kura.persist_prune_intent(&admit_prune_intent_fixture(
+        &kura,
+        KuraPruneIntentV2 {
+            version: 2,
+            source_height: 1,
+            source_tip_hash: Some(block_hash),
+            target_height: 0,
+            target_tip_hash: None,
+            retained_merge_entries: 0,
+            retained_merge_tip_hash: None,
+            sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
+            capacity: unsealed_prune_capacity_fixture(),
+        },
+    ))
     .expect("plant otherwise valid prune intent");
     drop(kura);
 

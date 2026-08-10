@@ -18,6 +18,10 @@ import time
 
 import pytest
 
+from pytests.scripts.sumeragi_v2_release_bootstrap_tool_manifest_support import (
+    runner_tool_manifest as _runner_tool_manifest,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = REPO_ROOT / "scripts" / "bootstrap_sumeragi_v2_release.py"
@@ -333,23 +337,6 @@ print(f"Sumeragi v2 aggregate release receipt verified: {args.output.resolve(str
             + '\nprint(f"Sumeragi v2 aggregate release receipt verified:',
         )
     return source
-
-
-def _runner_tool_manifest() -> bytes:
-    tools = {}
-    for name in ("chmod", "ln", "mv", "sleep"):
-        discovered = shutil.which(name, path=os.defpath)
-        assert discovered is not None
-        path = Path(discovered).resolve(strict=True)
-        tools[name] = {"path": str(path), "sha256": _sha256(path)}
-    return (
-        json.dumps(
-            {"schema_version": 1, "tools": tools},
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
-    ).encode()
 
 
 def _identity_verifier(
@@ -776,8 +763,8 @@ for directory in (
 ):
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
 prebuilt_specs = (
-    ("irohad", "release/irohad"),
-    ("irohad_message_control", "message-control/release/irohad"),
+    ("irohad", "release/iroha3d"),
+    ("irohad_message_control", "message-control/release/iroha3d"),
     ("iroha", "release/iroha"),
     ("kagami", "release/kagami"),
 )
@@ -794,9 +781,8 @@ for role, relative in prebuilt_specs:
     )
 cargo_version = b"cargo 1.0.0\\n"
 rustc_version = b"rustc 1.0.0\\n"
-version_tools = release_runner / "output" / "version-tools"
-cargo_tool = evidence_file(version_tools, "cargo", cargo_version, 0o500)
-rustc_tool = evidence_file(version_tools, "rustc", rustc_version, 0o500)
+cargo_tool = Path(runner["tools"]["cargo"]["source_path"])
+rustc_tool = Path(runner["tools"]["rustc"]["source_path"])
 prebuilt_manifest_rows = [
     ("schema_version", "2"),
     ("source_manifest_sha256", identity["workspace_source_manifest_sha256"]),

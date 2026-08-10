@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for deterministic, fail-closed C# ABI-21 native NuGet packaging."""
+"""Tests for deterministic, fail-closed C# ABI-22 native NuGet packaging."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import check_native_sdk_abi21_artifact as artifact_checker  # noqa: E402
+import check_native_sdk_abi22_artifact as artifact_checker  # noqa: E402
 import package_csharp_native_artifacts as packager  # noqa: E402
 
 
@@ -49,12 +49,17 @@ def write_inputs(root: Path) -> dict[str, bytes]:
             "artifact_sha256": hashlib.sha256(payload).hexdigest(),
             "artifact_size": len(payload),
             "bridge_abi_version": artifact_checker.REQUIRED_BRIDGE_ABI_VERSION,
+            "privacy_c_exports": list(
+                artifact_checker.APPROVED_PRIVACY_C_EXPORTS
+            ),
+            "privacy_c_exports_inspected": True,
             "required_symbols": list(artifact_checker.REQUIRED_SYMBOLS["csharp"]),
             "schema": artifact_checker.SCHEMA,
             "sdk": "csharp",
             "source_commit": SOURCE_COMMIT,
             "source_tree_clean": True,
             "target": asset.target,
+            "workspace_source_manifest_sha256": "b" * 64,
         }
         (target_root / packager.EVIDENCE_MANIFEST_NAME).write_bytes(
             artifact_checker.canonical_manifest_bytes(manifest)
@@ -299,7 +304,7 @@ class CSharpNativePackageTests(unittest.TestCase):
             self.assertIn(row, smoke_job)
             self.assertIn(f"runtimes/{rid}/native/{library_name}", project)
 
-        self.assertEqual(native_job.count("check_native_sdk_abi21_artifact.py"), 2)
+        self.assertEqual(native_job.count("check_native_sdk_abi22_artifact.py"), 2)
         self.assertIn("--sdk csharp", native_job)
         self.assertIn('if [[ "$host_target" != "$target" ]]', native_job)
         self.assertIn('if [[ -e target ]]', native_job)

@@ -4,35 +4,19 @@ using Hyperledger.Iroha.Http;
 namespace Hyperledger.Iroha.Torii;
 
 /// <summary>
-/// Immutable trust context required by Torii operations that return bytes for local signing.
+/// Immutable trust context required by every Torii operation that creates local signatures.
 /// </summary>
 public sealed class ToriiLocalSigningContext
 {
-    /// <summary>Creates a signing context bound to one exact canonical chain identifier.</summary>
-    public ToriiLocalSigningContext(string chainId)
+    /// <summary>Creates a signing context bound to one exact canonical network identifier.</summary>
+    public ToriiLocalSigningContext(NetworkId networkId)
     {
-        ArgumentNullException.ThrowIfNull(chainId);
-        if (chainId.Length is 0 or > 128
-            || !IsAsciiAlphanumeric(chainId[0])
-            || !IsAsciiAlphanumeric(chainId[^1])
-            || chainId.Any(static character =>
-                !IsAsciiAlphanumeric(character) && character is not ('.' or '_' or ':' or '-')))
-        {
-            throw new ArgumentException(
-                "chainId must be exact canonical ASCII ChainId text.",
-                nameof(chainId));
-        }
-
-        ChainId = chainId;
+        ArgumentNullException.ThrowIfNull(networkId);
+        NetworkId = networkId;
     }
 
-    /// <summary>Exact chain identity expected in every server-prepared signing payload.</summary>
-    public string ChainId { get; }
-
-    private static bool IsAsciiAlphanumeric(char value) =>
-        value is >= '0' and <= '9'
-            or >= 'A' and <= 'Z'
-            or >= 'a' and <= 'z';
+    /// <summary>Exact network identity expected in every server-prepared signing payload.</summary>
+    public NetworkId NetworkId { get; }
 }
 
 public sealed class ToriiClientOptions
@@ -44,7 +28,7 @@ public sealed class ToriiClientOptions
     public CanonicalRequestCredentials? CanonicalRequestCredentials { get; init; }
 
     /// <summary>
-    /// Immutable chain trust context for endpoints that return bytes to be signed locally.
+    /// Immutable network trust context for canonical HTTP auth and locally signed drafts.
     /// </summary>
     public ToriiLocalSigningContext? LocalSigningContext { get; init; }
 

@@ -23,7 +23,7 @@ use std::{
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
-use iroha_data_model::{ChainId, account::AccountId};
+use iroha_data_model::{NetworkId, account::AccountId};
 use norito::{
     DecodeLimits, NoritoSerialize, decode_from_bytes_with_limits,
     derive::{
@@ -126,8 +126,6 @@ pub const BILLING_PUBLICATION_ROUTE_MAX_BYTES_V1: usize = 256;
 pub const BILLING_SIGNER_ID_MAX_BYTES_V1: usize = 128;
 /// Maximum source identifier length.
 pub const BILLING_SOURCE_ID_MAX_BYTES_V1: usize = 512;
-/// Maximum chain identifier length retained by this service.
-pub const HEDGING_BILLING_CHAIN_ID_MAX_BYTES_V1: usize = 128;
 /// Maximum consensus proof bytes carried by one page or period close.
 pub const HEDGING_BILLING_CONSENSUS_PROOF_MAX_BYTES_V1: usize = 1024 * 1024;
 /// Maximum acknowledgement authentication proof bytes.
@@ -224,6 +222,8 @@ impl HedgingBillingFinalizedCursorV1 {
 pub struct HedgingBillingJournalCommitmentV1 {
     /// Schema version.
     pub version: u8,
+    /// Exact genesis-derived network whose journal is committed.
+    pub network_id: NetworkId,
     /// Finalized block through which this journal prefix is authoritative.
     pub finalized_cursor: HedgingBillingFinalizedCursorV1,
     /// First journal sequence not committed into `journal_root`.
@@ -233,9 +233,10 @@ pub struct HedgingBillingJournalCommitmentV1 {
 }
 
 impl HedgingBillingJournalCommitmentV1 {
-    fn validate(self) -> Result<(), HedgingBillingServiceError> {
+    fn validate(self, network_id: NetworkId) -> Result<(), HedgingBillingServiceError> {
         self.finalized_cursor.validate()?;
         if self.version != HEDGING_BILLING_JOURNAL_COMMITMENT_VERSION_V1
+            || self.network_id != network_id
             || self.journal_next_sequence == 0
             || self.journal_root == [0; 32]
         {
@@ -382,7 +383,7 @@ pub struct HedgingBillingFinalizedEventPageV1 {
     /// Schema version.
     pub version: u8,
     /// Exact active chain.
-    pub chain_id: ChainId,
+    pub network_id: NetworkId,
     /// First event sequence in this page.
     pub start_sequence: u64,
     /// First event sequence after this page.
@@ -403,13 +404,13 @@ impl HedgingBillingFinalizedEventPageV1 {
         policy: &HedgingBillingServicePolicyV1,
     ) -> Result<[u8; 32], HedgingBillingServiceError> {
         if self.version != HEDGING_BILLING_FINALIZED_PAGE_VERSION_V1
-            || self.chain_id != policy.chain_id
+            || self.network_id != policy.network_id
             || self.start_sequence == 0
             || self.events.len() > usize::try_from(policy.max_events_per_page).unwrap_or(usize::MAX)
         {
             return Err(HedgingBillingServiceError::InvalidFinalizedPage);
         }
-        self.journal_commitment.validate()?;
+        self.journal_commitment.validate(policy.network_id)?;
         if self.next_sequence > self.journal_commitment.journal_next_sequence
             || self.append_proof.is_empty()
             || self.append_proof.len() > HEDGING_BILLING_CONSENSUS_PROOF_MAX_BYTES_V1
@@ -700,7 +701,7 @@ pub trait HedgingBillingJournalVerifier: HedgingBillingRuntimeProviderV1 {
     /// inclusion, or chain authentication cannot be established.
     fn verify_page(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         previous: Option<HedgingBillingJournalCommitmentV1>,
         page: &HedgingBillingFinalizedEventPageV1,
     ) -> Result<(), HedgingBillingExternalError>;
@@ -713,7 +714,7 @@ pub trait HedgingBillingJournalVerifier: HedgingBillingRuntimeProviderV1 {
     /// under its declared journal root and finalized cursor.
     fn verify_period_close(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         close: &HedgingBillingFinalizedPeriodCloseV1,
     ) -> Result<(), HedgingBillingExternalError>;
 
@@ -730,7 +731,7 @@ pub trait HedgingBillingJournalVerifier: HedgingBillingRuntimeProviderV1 {
     /// consensus authentication proof is invalid.
     fn verify_epoch_transition(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         transition: &HedgingBillingEpochTransitionV1,
     ) -> Result<(), HedgingBillingExternalError>;
 }
@@ -917,7 +918,7 @@ pub struct HedgingBillingServicePolicyV1 {
     /// Exact predecessor policy digest for revisions after one.
     pub predecessor_policy_digest: Option<[u8; 32]>,
     /// Exact chain whose finalized journal may be projected.
-    pub chain_id: ChainId,
+    pub network_id: NetworkId,
     /// Reviewed billing policy digest.
     pub billing_policy_digest: [u8; 32],
     /// Exact external feed-trust policy digest.
@@ -988,8 +989,6 @@ impl HedgingBillingServicePolicyV1 {
                 (_, Some(digest)) => digest == [0; 32],
                 (_, None) => true,
             }
-            || self.chain_id.as_str().is_empty()
-            || self.chain_id.as_str().len() > HEDGING_BILLING_CHAIN_ID_MAX_BYTES_V1
             || self.billing_policy_digest == [0; 32]
             || self.feed_trust_policy_digest == [0; 32]
             || self.billing_epoch_unix == 0
@@ -1206,7 +1205,7 @@ impl HedgingBillingEpochTransitionV1 {
                     .checked_add(1)
                     .ok_or(HedgingBillingServiceError::InvalidEpochTransition)?
             || self.next_service_policy.predecessor_policy_digest != Some(previous_policy_digest)
-            || self.previous_service_policy.chain_id != self.next_service_policy.chain_id
+            || self.previous_service_policy.network_id != self.next_service_policy.network_id
             || self.previous_service_policy.billing_epoch_unix
                 != self.next_service_policy.billing_epoch_unix
             || self.previous_service_policy.billing_period_secs
@@ -1244,7 +1243,8 @@ impl HedgingBillingEpochTransitionV1 {
         {
             return Err(HedgingBillingServiceError::InvalidEpochTransition);
         }
-        self.predecessor_journal_commitment.validate()?;
+        self.predecessor_journal_commitment
+            .validate(self.previous_service_policy.network_id)?;
         let key =
             checked_verifying_key(self.previous_service_policy.transition_authority.public_key)
                 .map_err(|_| HedgingBillingServiceError::InvalidEpochTransition)?;
@@ -1261,6 +1261,8 @@ impl HedgingBillingEpochTransitionV1 {
 pub struct HedgingBillingEpochWitnessRecordV1 {
     /// Schema version.
     pub version: u8,
+    /// Exact genesis-derived network owning this recovery record.
+    pub network_id: NetworkId,
     /// Exact monotonic epoch sequence.
     pub epoch_sequence: u64,
     /// Signed transition identity.
@@ -1274,10 +1276,16 @@ pub struct HedgingBillingEpochWitnessRecordV1 {
 }
 
 impl HedgingBillingEpochWitnessRecordV1 {
-    fn new(epoch_sequence: u64, transition_id: [u8; 32], checkpoint_bytes: Vec<u8>) -> Self {
+    fn new(
+        network_id: NetworkId,
+        epoch_sequence: u64,
+        transition_id: [u8; 32],
+        checkpoint_bytes: Vec<u8>,
+    ) -> Self {
         let checkpoint_digest = *blake3::hash(&checkpoint_bytes).as_bytes();
         let mut record = Self {
             version: HEDGING_BILLING_EPOCH_WITNESS_RECORD_VERSION_V1,
+            network_id,
             epoch_sequence,
             transition_id,
             checkpoint_digest,
@@ -1421,7 +1429,7 @@ pub struct HedgingBillingFinalizedPeriodCloseV1 {
     /// Schema version.
     pub version: u8,
     /// Exact active chain.
-    pub chain_id: ChainId,
+    pub network_id: NetworkId,
     /// Exclusive period boundary being closed.
     pub period_end_unix: u64,
     /// Consensus journal prefix that is complete for this close.
@@ -1446,9 +1454,9 @@ impl HedgingBillingFinalizedPeriodCloseV1 {
         policy: &HedgingBillingServicePolicyV1,
         feed_policy: &HedgingFeedTrustPolicyV1,
     ) -> Result<(), HedgingBillingServiceError> {
-        self.journal_commitment.validate()?;
+        self.journal_commitment.validate(policy.network_id)?;
         if self.version != HEDGING_BILLING_PERIOD_CLOSE_VERSION_V1
-            || self.chain_id != policy.chain_id
+            || self.network_id != policy.network_id
             || self.period_end_unix <= policy.billing_epoch_unix
             || !(self.period_end_unix - policy.billing_epoch_unix)
                 .is_multiple_of(policy.billing_period_secs)
@@ -1490,7 +1498,7 @@ impl HedgingBillingFinalizedPeriodCloseV1 {
             PERIOD_CLOSE_DOMAIN_V1,
             &HedgingBillingPeriodClosePreimageV1 {
                 version: self.version,
-                chain_id: self.chain_id.clone(),
+                network_id: self.network_id,
                 period_end_unix: self.period_end_unix,
                 journal_commitment: self.journal_commitment,
                 billing_policy_digest: self.billing_policy_digest,
@@ -1506,7 +1514,7 @@ impl HedgingBillingFinalizedPeriodCloseV1 {
 #[derive(Debug, Clone, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 struct HedgingBillingPeriodClosePreimageV1 {
     version: u8,
-    chain_id: ChainId,
+    network_id: NetworkId,
     period_end_unix: u64,
     journal_commitment: HedgingBillingJournalCommitmentV1,
     billing_policy_digest: [u8; 32],
@@ -1576,7 +1584,7 @@ pub struct SignedGovernedBillingStatementV1 {
     /// Schema version.
     pub version: u8,
     /// Exact active chain.
-    pub chain_id: ChainId,
+    pub network_id: NetworkId,
     /// Reviewed billing policy digest.
     pub billing_policy_digest: [u8; 32],
     /// Digest of the complete deterministic service policy.
@@ -1606,7 +1614,7 @@ impl SignedGovernedBillingStatementV1 {
     pub fn signing_digest(&self) -> Result<[u8; 32], HedgingBillingServiceError> {
         let preimage = BillingStatementSignaturePreimageV1 {
             version: self.version,
-            chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             billing_policy_digest: self.billing_policy_digest,
             service_policy_digest: self.service_policy_digest,
             signer_id: self.signer_id.clone(),
@@ -1633,7 +1641,7 @@ impl SignedGovernedBillingStatementV1 {
         policy.validate()?;
         period_close.validate(policy, feed_policy)?;
         if self.version != SIGNED_GOVERNED_BILLING_STATEMENT_VERSION_V1
-            || self.chain_id != policy.chain_id
+            || self.network_id != policy.network_id
             || self.billing_policy_digest != policy.billing_policy_digest
             || self.service_policy_digest != policy.digest()?
             || feed_policy.canonical_digest()? != policy.feed_trust_policy_digest
@@ -1697,7 +1705,7 @@ impl SignedGovernedBillingStatementV1 {
 #[derive(Debug, Clone, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 struct BillingStatementSignaturePreimageV1 {
     version: u8,
-    chain_id: ChainId,
+    network_id: NetworkId,
     billing_policy_digest: [u8; 32],
     service_policy_digest: [u8; 32],
     signer_id: String,
@@ -1851,6 +1859,8 @@ pub trait BillingStatementPublisher: HedgingBillingRuntimeProviderV1 {
 pub struct BillingStatementAcknowledgementV1 {
     /// Schema version.
     pub version: u8,
+    /// Exact genesis-derived network owning the acknowledgement.
+    pub network_id: NetworkId,
     /// Acknowledged statement identifier.
     pub statement_id: [u8; 32],
     /// Digest of the exact account bytes.
@@ -1870,6 +1880,7 @@ impl fmt::Debug for BillingStatementAcknowledgementV1 {
         formatter
             .debug_struct("BillingStatementAcknowledgementV1")
             .field("version", &self.version)
+            .field("network_id", &self.network_id)
             .field("statement_id", &self.statement_id)
             .field("account_digest", &self.account_digest)
             .field("request_binding_digest", &self.request_binding_digest)
@@ -2112,27 +2123,27 @@ impl<P: HedgingBillingJournalVerifier + ?Sized> HedgingBillingJournalVerifier
 
     fn verify_page(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         previous: Option<HedgingBillingJournalCommitmentV1>,
         page: &HedgingBillingFinalizedEventPageV1,
     ) -> Result<(), HedgingBillingExternalError> {
-        self.read(|provider| provider.verify_page(chain_id, previous, page))
+        self.read(|provider| provider.verify_page(network_id, previous, page))
     }
 
     fn verify_period_close(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         close: &HedgingBillingFinalizedPeriodCloseV1,
     ) -> Result<(), HedgingBillingExternalError> {
-        self.read(|provider| provider.verify_period_close(chain_id, close))
+        self.read(|provider| provider.verify_period_close(network_id, close))
     }
 
     fn verify_epoch_transition(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         transition: &HedgingBillingEpochTransitionV1,
     ) -> Result<(), HedgingBillingExternalError> {
-        self.read(|provider| provider.verify_epoch_transition(chain_id, transition))
+        self.read(|provider| provider.verify_epoch_transition(network_id, transition))
     }
 }
 
@@ -2294,7 +2305,7 @@ pub struct HedgeIntentV1 {
     /// Deterministic intent identifier.
     pub intent_id: [u8; 32],
     /// Exact active chain.
-    pub chain_id: ChainId,
+    pub network_id: NetworkId,
     /// Digest of the deterministic service policy.
     pub service_policy_digest: [u8; 32],
     /// Exact consensus-authenticated period-close digest.
@@ -2334,7 +2345,7 @@ impl HedgeIntentV1 {
     ) -> Result<(), HedgingBillingServiceError> {
         if self.version != HEDGE_INTENT_VERSION_V1
             || self.intent_id == [0; 32]
-            || self.chain_id != policy.chain_id
+            || self.network_id != policy.network_id
             || self.service_policy_digest != policy.digest()?
             || self.period_close_digest == [0; 32]
             || self.period_end_unix == 0
@@ -2708,6 +2719,7 @@ struct StoredStatementV1 {
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 struct HedgingBillingCheckpointV1 {
     version: u8,
+    network_id: NetworkId,
     policy_digest: [u8; 32],
     epoch_sequence: u64,
     compacted_journal_commitment: Option<HedgingBillingJournalCommitmentV1>,
@@ -2734,6 +2746,7 @@ impl HedgingBillingCheckpointV1 {
     fn empty(policy: &HedgingBillingServicePolicyV1) -> Result<Self, HedgingBillingServiceError> {
         Ok(Self {
             version: HEDGING_BILLING_CHECKPOINT_VERSION_V1,
+            network_id: policy.network_id,
             policy_digest: policy.digest()?,
             epoch_sequence: 0,
             compacted_journal_commitment: None,
@@ -2763,6 +2776,7 @@ impl HedgingBillingCheckpointV1 {
         feed_policy: &HedgingFeedTrustPolicyV1,
     ) -> Result<(), HedgingBillingServiceError> {
         if self.version != HEDGING_BILLING_CHECKPOINT_VERSION_V1
+            || self.network_id != policy.network_id
             || self.policy_digest != policy.digest()?
             || self.epoch_sequence.checked_add(1) != Some(policy.revision)
             || self.next_event_sequence == 0
@@ -2844,7 +2858,7 @@ impl HedgingBillingCheckpointV1 {
             return Err(HedgingBillingServiceError::InvalidCheckpoint);
         }
         if let Some(commitment) = self.journal_commitment {
-            commitment.validate()?;
+            commitment.validate(policy.network_id)?;
             if commitment.journal_next_sequence < self.next_event_sequence
                 || self.last_period_end_unix > commitment.finalized_cursor.finalized_at_unix
             {
@@ -2852,7 +2866,7 @@ impl HedgingBillingCheckpointV1 {
             }
         }
         if let Some(base) = self.compacted_journal_commitment {
-            base.validate()?;
+            base.validate(policy.network_id)?;
             if self.next_event_sequence < base.journal_next_sequence
                 || self.journal_commitment.is_none_or(|current| {
                     current.journal_next_sequence < base.journal_next_sequence
@@ -2909,13 +2923,13 @@ impl HedgingBillingCheckpointV1 {
                     || source_block_hashes
                         .insert(event.block_height, event.block_hash)
                         .is_some_and(|previous| previous != event.block_hash)
-                    || !source_receipts.insert(source_receipt(event)?)
+                    || !source_receipts.insert(source_receipt(policy.network_id, event)?)
                 {
                     return Err(HedgingBillingServiceError::InvalidCheckpoint);
                 }
                 source_event_digests.push(StoredEventReplayReceiptV1 {
                     sequence: event.sequence,
-                    event_digest: event_replay_digest(event)?,
+                    event_digest: event_replay_digest(policy.network_id, event)?,
                 });
                 source_events.push(event.clone());
                 previous_source_position = Some(position);
@@ -2978,7 +2992,7 @@ impl HedgingBillingCheckpointV1 {
                 .ok_or(HedgingBillingServiceError::InvalidCheckpoint)?;
             accrual.event.validate(policy.billing_epoch_unix, cursor)?;
             if previous_event_sequence.is_some_and(|previous| previous >= accrual.event.sequence)
-                || accrual.source_receipt != source_receipt(&accrual.event)?
+                || accrual.source_receipt != source_receipt(policy.network_id, &accrual.event)?
                 || !open_receipts.insert(accrual.source_receipt)
                 || accrual.event.occurred_at_unix < self.last_period_end_unix
             {
@@ -3010,7 +3024,7 @@ impl HedgingBillingCheckpointV1 {
                 .ok()
                 .and_then(|index| self.event_replay_receipts.get(index))
                 .ok_or(HedgingBillingServiceError::InvalidCheckpoint)?;
-            if replay.event_digest != event_replay_digest(&accrual.event)? {
+            if replay.event_digest != event_replay_digest(policy.network_id, &accrual.event)? {
                 return Err(HedgingBillingServiceError::InvalidCheckpoint);
             }
         }
@@ -3197,6 +3211,7 @@ impl HedgingBillingCheckpointV1 {
                 .ok_or(HedgingBillingServiceError::InvalidCheckpoint)?;
             if previous_ack.is_some_and(|previous| previous >= acknowledgement.acknowledgement_id)
                 || acknowledgement.version != BILLING_STATEMENT_ACKNOWLEDGEMENT_VERSION_V1
+                || acknowledgement.network_id != policy.network_id
                 || acknowledgement.statement_id == [0; 32]
                 || acknowledgement.account_digest == [0; 32]
                 || acknowledgement.request_binding_digest == [0; 32]
@@ -3276,11 +3291,11 @@ impl HedgingBillingCheckpointV1 {
     ) -> Result<(), HedgingBillingServiceError> {
         let mut previous = self.compacted_journal_commitment;
         for page in &self.source_pages {
-            verifier.verify_page(&policy.chain_id, previous, page)?;
+            verifier.verify_page(&policy.network_id, previous, page)?;
             previous = Some(page.journal_commitment);
         }
         for close in &self.period_closes {
-            verifier.verify_period_close(&policy.chain_id, close)?;
+            verifier.verify_period_close(&policy.network_id, close)?;
         }
         Ok(())
     }
@@ -3455,7 +3470,7 @@ fn derive_billing_domain_state(
             let mut intent = HedgeIntentV1 {
                 version: HEDGE_INTENT_VERSION_V1,
                 intent_id: [0; 32],
-                chain_id: policy.chain_id.clone(),
+                network_id: policy.network_id,
                 service_policy_digest: policy.digest()?,
                 period_close_digest: close.close_digest(policy, feed_policy)?,
                 period_end_unix: close.period_end_unix,
@@ -3491,7 +3506,7 @@ fn derive_billing_domain_state(
         .map(|event| {
             Ok(StoredAccrualV1 {
                 event: event.clone(),
-                source_receipt: source_receipt(event)?,
+                source_receipt: source_receipt(policy.network_id, event)?,
             })
         })
         .collect::<Result<Vec<_>, HedgingBillingServiceError>>()?;
@@ -4305,7 +4320,7 @@ impl fmt::Debug for HedgingBillingService {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("HedgingBillingService")
-            .field("chain_id", &self.policy.chain_id)
+            .field("network_id", &self.policy.network_id)
             .field("policy_revision", &self.policy.revision)
             .field("runtime_state", &"[REDACTED]")
             .finish_non_exhaustive()
@@ -4492,8 +4507,11 @@ impl HedgingBillingService {
             };
             (current, predecessor)
         };
-        self.journal_verifier
-            .verify_page(&self.policy.chain_id, verification_predecessor, page)?;
+        self.journal_verifier.verify_page(
+            &self.policy.network_id,
+            verification_predecessor,
+            page,
+        )?;
         let guard = self
             .state
             .lock()
@@ -4534,7 +4552,7 @@ impl HedgingBillingService {
                     .ok()
                     .and_then(|index| guard.checkpoint.event_replay_receipts.get(index))
                     .ok_or(HedgingBillingServiceError::FinalizedSequenceRollback)?;
-                if retained.event_digest != event_replay_digest(event)? {
+                if retained.event_digest != event_replay_digest(self.policy.network_id, event)? {
                     return Err(HedgingBillingServiceError::FinalizedEventEquivocation);
                 }
             }
@@ -4599,7 +4617,7 @@ impl HedgingBillingService {
             if event.occurred_at_unix < next.last_period_end_unix {
                 return Err(HedgingBillingServiceError::LateFinalizedEvent);
             }
-            let receipt = source_receipt(event)?;
+            let receipt = source_receipt(self.policy.network_id, event)?;
             if !receipts.insert(receipt) {
                 return Err(HedgingBillingServiceError::DuplicateBillingSource);
             }
@@ -4609,7 +4627,7 @@ impl HedgingBillingService {
             });
             next.event_replay_receipts.push(StoredEventReplayReceiptV1 {
                 sequence: event.sequence,
-                event_digest: event_replay_digest(event)?,
+                event_digest: event_replay_digest(self.policy.network_id, event)?,
             });
         }
         next.open_accruals
@@ -4729,7 +4747,7 @@ impl HedgingBillingService {
     ) -> Result<HedgingBillingPeriodOutcomeV1, HedgingBillingServiceError> {
         close.validate(&self.policy, &self.feed_policy)?;
         self.journal_verifier
-            .verify_period_close(&self.policy.chain_id, close)?;
+            .verify_period_close(&self.policy.network_id, close)?;
         let guard = self
             .state
             .lock()
@@ -4945,6 +4963,7 @@ impl HedgingBillingService {
         let compacted_source_digest = hash_canonical(
             COMPACTED_SOURCE_DOMAIN_V1,
             &CompactedSourceArchiveV1 {
+                network_id: checkpoint.network_id,
                 predecessor_compacted_journal_commitment: checkpoint.compacted_journal_commitment,
                 predecessor_compacted_through_period_end_unix: checkpoint
                     .compacted_through_period_end_unix,
@@ -4957,6 +4976,7 @@ impl HedgingBillingService {
         let compacted_economic_state_digest = hash_canonical(
             COMPACTED_ECONOMIC_STATE_DOMAIN_V1,
             &CompactedEconomicArchiveV1 {
+                network_id: checkpoint.network_id,
                 predecessor_account_bases: checkpoint.compacted_account_bases.clone(),
                 statements: checkpoint.statements.clone(),
                 acknowledgements: checkpoint.acknowledgements.clone(),
@@ -5056,12 +5076,13 @@ impl HedgingBillingService {
         transition.signature = signature;
         transition.verify()?;
         self.journal_verifier
-            .verify_epoch_transition(&self.policy.chain_id, &transition)?;
+            .verify_epoch_transition(&self.policy.network_id, &transition)?;
         next_checkpoint.latest_epoch_transition = Some(transition.clone());
         next_checkpoint.validate(&next_policy, &next_feed_policy)?;
         let checkpoint_bytes =
             encode_checkpoint(&next_checkpoint, &next_policy, &next_feed_policy)?;
         let next_witness = HedgingBillingEpochWitnessRecordV1::new(
+            self.policy.network_id,
             epoch_sequence,
             transition.transition_id,
             checkpoint_bytes.clone(),
@@ -5212,7 +5233,7 @@ impl HedgingBillingService {
             record.signing_claim_cursor = Some(cursor);
             let candidate = SignedGovernedBillingStatementV1 {
                 version: SIGNED_GOVERNED_BILLING_STATEMENT_VERSION_V1,
-                chain_id: self.policy.chain_id.clone(),
+                network_id: self.policy.network_id,
                 billing_policy_digest: self.policy.billing_policy_digest,
                 service_policy_digest: self.policy.digest()?,
                 signer_id: self.policy.statement_signer.signer_id.clone(),
@@ -5540,6 +5561,7 @@ impl HedgingBillingService {
         let (signed, preflight_fingerprint) = signed;
         let mut acknowledgement = BillingStatementAcknowledgementV1 {
             version: BILLING_STATEMENT_ACKNOWLEDGEMENT_VERSION_V1,
+            network_id: self.policy.network_id,
             statement_id,
             account_digest: *blake3::hash(account_id).as_bytes(),
             request_binding_digest,
@@ -5658,7 +5680,7 @@ impl HedgingBillingService {
                 return Err(HedgingBillingServiceError::ProjectionAnchorConflict);
             }
             let record = find_statement(&guard.checkpoint, statement_id)?;
-            validate_acknowledgement_record(record, &acknowledgement)?;
+            validate_acknowledgement_record(record, &acknowledgement, self.policy.network_id)?;
             (
                 record
                     .signed_statement
@@ -5682,7 +5704,7 @@ impl HedgingBillingService {
             return Err(HedgingBillingServiceError::ProjectionAnchorConflict);
         }
         let record = find_statement(&guard.checkpoint, statement_id)?;
-        validate_acknowledgement_record(record, &acknowledgement)?;
+        validate_acknowledgement_record(record, &acknowledgement, self.policy.network_id)?;
         if record.signed_statement.as_ref() != Some(&signed) {
             return Err(HedgingBillingServiceError::ConcurrentMutation);
         }
@@ -6684,7 +6706,7 @@ fn reconcile_authoritative_delivery_state(
                 .lookup(record.governed_statement.statement.statement_id)?
             {
                 Some(acknowledgement) => {
-                    validate_acknowledgement_record(record, &acknowledgement)?;
+                    validate_acknowledgement_record(record, &acknowledgement, policy.network_id)?;
                     acknowledgement_authority.verify(signed, &acknowledgement)?;
                     if local_acknowledgements
                         .get(&acknowledgement.statement_id)
@@ -6722,12 +6744,14 @@ fn reconcile_authoritative_delivery_state(
 fn validate_acknowledgement_record(
     record: &StoredStatementV1,
     acknowledgement: &BillingStatementAcknowledgementV1,
+    network_id: NetworkId,
 ) -> Result<(), HedgingBillingServiceError> {
     let publication = record
         .publication_receipt
         .as_ref()
         .ok_or(HedgingBillingServiceError::InvalidCheckpoint)?;
     if acknowledgement.version != BILLING_STATEMENT_ACKNOWLEDGEMENT_VERSION_V1
+        || acknowledgement.network_id != network_id
         || acknowledgement.statement_id != record.governed_statement.statement.statement_id
         || acknowledgement.account_digest
             != *blake3::hash(&record.governed_statement.statement.account_id).as_bytes()
@@ -6785,7 +6809,8 @@ fn validate_checkpoint_epoch_witness(
     let compacted_commitment = base_checkpoint
         .compacted_journal_commitment
         .ok_or(HedgingBillingServiceError::InvalidEpochWitness)?;
-    if checkpoint.epoch_sequence != record.epoch_sequence
+    if record.network_id != policy.network_id
+        || checkpoint.epoch_sequence != record.epoch_sequence
         || base_checkpoint.epoch_sequence != record.epoch_sequence
         || checkpoint
             .latest_epoch_transition
@@ -6809,7 +6834,7 @@ fn validate_checkpoint_epoch_witness(
     {
         return Err(HedgingBillingServiceError::InvalidEpochWitness);
     }
-    journal_verifier.verify_epoch_transition(&policy.chain_id, transition)?;
+    journal_verifier.verify_epoch_transition(&policy.network_id, transition)?;
     if record.epoch_sequence > 1 {
         let previous_record = witness_store
             .load_epoch(record.epoch_sequence - 1)?
@@ -7230,16 +7255,25 @@ fn runtime_api_service_error(error: HedgingBillingServiceError) -> HedgingBillin
 
 #[derive(DeriveNoritoSerialize)]
 struct BillingSourceReceiptPreimageV1 {
+    network_id: NetworkId,
     source: BillingAccrualSourceV1,
     source_id: String,
 }
 
+#[derive(DeriveNoritoSerialize)]
+struct BillingEventReplayPreimageV1<'a> {
+    network_id: NetworkId,
+    event: &'a HedgingBillingFinalizedEventV1,
+}
+
 fn source_receipt(
+    network_id: NetworkId,
     event: &HedgingBillingFinalizedEventV1,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
     hash_canonical(
         SOURCE_RECEIPT_DOMAIN_V1,
         &BillingSourceReceiptPreimageV1 {
+            network_id,
             source: event.source,
             source_id: event.source_id.clone(),
         },
@@ -7247,9 +7281,13 @@ fn source_receipt(
 }
 
 fn event_replay_digest(
+    network_id: NetworkId,
     event: &HedgingBillingFinalizedEventV1,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
-    hash_canonical(EVENT_REPLAY_RECEIPT_DOMAIN_V1, event)
+    hash_canonical(
+        EVENT_REPLAY_RECEIPT_DOMAIN_V1,
+        &BillingEventReplayPreimageV1 { network_id, event },
+    )
 }
 
 fn signed_statement_digest(
@@ -7317,6 +7355,7 @@ fn retained_epoch_state_digest(
         RETAINED_EPOCH_STATE_DOMAIN_V1,
         &RetainedEpochBaseStateV1 {
             checkpoint_version: checkpoint.version,
+            network_id: checkpoint.network_id,
             policy_digest: checkpoint.policy_digest,
             epoch_sequence: checkpoint.epoch_sequence,
             compacted_journal_commitment: checkpoint.compacted_journal_commitment,
@@ -7330,6 +7369,7 @@ fn epoch_witness_record_revision(record: &HedgingBillingEpochWitnessRecordV1) ->
     let mut hasher = blake3::Hasher::new();
     hasher.update(EPOCH_WITNESS_RECORD_DOMAIN_V1);
     hasher.update(&[record.version]);
+    hasher.update(record.network_id.as_bytes());
     hasher.update(&record.epoch_sequence.to_le_bytes());
     hasher.update(&record.transition_id);
     hasher.update(&record.checkpoint_digest);
@@ -7363,6 +7403,7 @@ fn epoch_transition_signature_digest(transition_id: [u8; 32]) -> [u8; 32] {
 #[derive(DeriveNoritoSerialize)]
 struct RetainedEpochBaseStateV1 {
     checkpoint_version: u8,
+    network_id: NetworkId,
     policy_digest: [u8; 32],
     epoch_sequence: u64,
     compacted_journal_commitment: Option<HedgingBillingJournalCommitmentV1>,
@@ -7372,6 +7413,7 @@ struct RetainedEpochBaseStateV1 {
 
 #[derive(DeriveNoritoSerialize)]
 struct CompactedSourceArchiveV1 {
+    network_id: NetworkId,
     predecessor_compacted_journal_commitment: Option<HedgingBillingJournalCommitmentV1>,
     predecessor_compacted_through_period_end_unix: u64,
     source_pages: Vec<HedgingBillingFinalizedEventPageV1>,
@@ -7382,6 +7424,7 @@ struct CompactedSourceArchiveV1 {
 
 #[derive(DeriveNoritoSerialize)]
 struct CompactedEconomicArchiveV1 {
+    network_id: NetworkId,
     predecessor_account_bases: Vec<GovernedBillingStatementV1>,
     statements: Vec<StoredStatementV1>,
     acknowledgements: Vec<BillingStatementAcknowledgementV1>,
@@ -7656,7 +7699,8 @@ mod tests {
     };
 
     use ed25519_dalek::{Signer as _, SigningKey};
-    use iroha_crypto::{Algorithm, KeyPair, numeric::Quantity};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, numeric::Quantity};
+    use iroha_data_model::block::BlockHeader;
     use sorafs_manifest::hedging::{
         HEDGING_PRICE_FEED_VERSION_V1, HedgingFeedStatusV1, HedgingPriceFeedV1,
         signed::{
@@ -7675,6 +7719,12 @@ mod tests {
     const FINALIZED_HASH: [u8; 32] = [0xA1; 32];
     const TEST_PROVIDER_QUALIFICATION: HedgingBillingRuntimeProviderQualificationV1 =
         HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA2; 32]);
+
+    fn test_network_id(genesis: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            genesis,
+        )))
+    }
 
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
@@ -7859,7 +7909,7 @@ mod tests {
             version: HEDGING_BILLING_POLICY_VERSION_V1,
             revision: 1,
             predecessor_policy_digest: None,
-            chain_id: ChainId::from("hedging-billing-test-chain"),
+            network_id: test_network_id(b"hedging-billing-test-genesis"),
             billing_policy_digest: [0x51; 32],
             feed_trust_policy_digest: feed_policy()
                 .canonical_digest()
@@ -7947,11 +7997,12 @@ mod tests {
         };
         HedgingBillingFinalizedEventPageV1 {
             version: HEDGING_BILLING_FINALIZED_PAGE_VERSION_V1,
-            chain_id: ChainId::from("hedging-billing-test-chain"),
+            network_id: test_network_id(b"hedging-billing-test-genesis"),
             start_sequence,
             next_sequence,
             journal_commitment: HedgingBillingJournalCommitmentV1 {
                 version: HEDGING_BILLING_JOURNAL_COMMITMENT_VERSION_V1,
+                network_id: test_network_id(b"hedging-billing-test-genesis"),
                 finalized_cursor: cursor(
                     cursor_height,
                     cursor_hash,
@@ -7982,7 +8033,7 @@ mod tests {
     ) -> HedgingBillingFinalizedPeriodCloseV1 {
         HedgingBillingFinalizedPeriodCloseV1 {
             version: HEDGING_BILLING_PERIOD_CLOSE_VERSION_V1,
-            chain_id: policy.chain_id.clone(),
+            network_id: policy.network_id,
             period_end_unix,
             journal_commitment: commitment,
             billing_policy_digest: policy.billing_policy_digest,
@@ -8035,13 +8086,13 @@ mod tests {
 
         fn verify_page(
             &self,
-            chain_id: &ChainId,
+            network_id: &NetworkId,
             _previous: Option<HedgingBillingJournalCommitmentV1>,
             page: &HedgingBillingFinalizedEventPageV1,
         ) -> Result<(), HedgingBillingExternalError> {
             self.page_calls.fetch_add(1, Ordering::Relaxed);
             if self.reject_pages.load(Ordering::Relaxed)
-                || chain_id != &ChainId::from("hedging-billing-test-chain")
+                || network_id != &test_network_id(b"hedging-billing-test-genesis")
                 || page.append_proof != [0xA5]
                 || page.inclusion_proof != [0xB6]
             {
@@ -8052,11 +8103,11 @@ mod tests {
 
         fn verify_period_close(
             &self,
-            chain_id: &ChainId,
+            network_id: &NetworkId,
             close: &HedgingBillingFinalizedPeriodCloseV1,
         ) -> Result<(), HedgingBillingExternalError> {
             self.close_calls.fetch_add(1, Ordering::Relaxed);
-            if chain_id != &ChainId::from("hedging-billing-test-chain")
+            if network_id != &test_network_id(b"hedging-billing-test-genesis")
                 || close.authentication_proof != [0xC7]
             {
                 return Err(HedgingBillingExternalError::Rejected);
@@ -8066,11 +8117,11 @@ mod tests {
 
         fn verify_epoch_transition(
             &self,
-            chain_id: &ChainId,
+            network_id: &NetworkId,
             transition: &HedgingBillingEpochTransitionV1,
         ) -> Result<(), HedgingBillingExternalError> {
             self.transition_calls.fetch_add(1, Ordering::Relaxed);
-            if chain_id != &ChainId::from("hedging-billing-test-chain")
+            if network_id != &test_network_id(b"hedging-billing-test-genesis")
                 || transition.consensus_authentication_proof != [0xD8]
             {
                 return Err(HedgingBillingExternalError::Rejected);
@@ -8633,7 +8684,7 @@ mod tests {
 
         fn verify_page(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _previous: Option<HedgingBillingJournalCommitmentV1>,
             _page: &HedgingBillingFinalizedEventPageV1,
         ) -> Result<(), HedgingBillingExternalError> {
@@ -8643,7 +8694,7 @@ mod tests {
 
         fn verify_period_close(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _close: &HedgingBillingFinalizedPeriodCloseV1,
         ) -> Result<(), HedgingBillingExternalError> {
             Ok(())
@@ -8651,7 +8702,7 @@ mod tests {
 
         fn verify_epoch_transition(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _transition: &HedgingBillingEpochTransitionV1,
         ) -> Result<(), HedgingBillingExternalError> {
             Ok(())
@@ -9001,7 +9052,7 @@ mod tests {
         assert_eq!(
             HedgingBillingJournalVerifier::verify_page(
                 &qualified_verifier,
-                &ChainId::from("hedging-billing-test-chain"),
+                &test_network_id(b"hedging-billing-test-genesis"),
                 None,
                 &page(Vec::new()),
             ),
@@ -9037,6 +9088,7 @@ mod tests {
 
         let acknowledgement = BillingStatementAcknowledgementV1 {
             version: BILLING_STATEMENT_ACKNOWLEDGEMENT_VERSION_V1,
+            network_id: test_network_id(b"hedging-billing-test-genesis"),
             statement_id: signed.governed_statement.statement.statement_id,
             account_digest: [0x81; 32],
             request_binding_digest: [0x82; 32],
@@ -9058,6 +9110,7 @@ mod tests {
 
         let witness = HedgingBillingEpochWitnessRecordV1 {
             version: HEDGING_BILLING_EPOCH_WITNESS_RECORD_VERSION_V1,
+            network_id: test_network_id(b"hedging-billing-test-genesis"),
             epoch_sequence: 1,
             transition_id: [0x85; 32],
             checkpoint_digest: [0x86; 32],
@@ -9132,11 +9185,12 @@ mod tests {
         let first_commitment = page(vec![event(1, "storage:event:1", "10")]).journal_commitment;
         let finality_only_page = HedgingBillingFinalizedEventPageV1 {
             version: HEDGING_BILLING_FINALIZED_PAGE_VERSION_V1,
-            chain_id: ChainId::from("hedging-billing-test-chain"),
+            network_id: test_network_id(b"hedging-billing-test-genesis"),
             start_sequence: 2,
             next_sequence: 2,
             journal_commitment: HedgingBillingJournalCommitmentV1 {
                 version: HEDGING_BILLING_JOURNAL_COMMITMENT_VERSION_V1,
+                network_id: test_network_id(b"hedging-billing-test-genesis"),
                 finalized_cursor: finality_only_cursor,
                 journal_next_sequence: 2,
                 journal_root: first_commitment.journal_root,
@@ -9454,7 +9508,7 @@ mod tests {
 
         let mut fork = HedgingBillingFinalizedEventPageV1 {
             version: HEDGING_BILLING_FINALIZED_PAGE_VERSION_V1,
-            chain_id: service_policy().chain_id,
+            network_id: service_policy().network_id,
             start_sequence: 2,
             next_sequence: 2,
             journal_commitment: first_page.journal_commitment,
@@ -10030,23 +10084,6 @@ mod tests {
     }
 
     #[test]
-    fn service_policy_has_one_bounded_canonical_artifact_format() {
-        let policy = service_policy();
-        let bytes = policy.canonical_bytes().expect("canonical policy bytes");
-        assert_eq!(
-            HedgingBillingServicePolicyV1::from_canonical_bytes(&bytes)
-                .expect("decode canonical policy"),
-            policy
-        );
-        let mut trailing = bytes;
-        trailing.push(0);
-        assert!(matches!(
-            HedgingBillingServicePolicyV1::from_canonical_bytes(&trailing),
-            Err(HedgingBillingServiceError::InvalidPolicy)
-        ));
-    }
-
-    #[test]
     fn epoch_witness_rejects_valid_same_epoch_non_base_checkpoint_substitution() {
         let root = tempfile::tempdir().expect("state root");
         let (service, _feed_policy, reference, verifier, publisher, acknowledgement_authority) =
@@ -10090,6 +10127,7 @@ mod tests {
             .insert(
                 1,
                 HedgingBillingEpochWitnessRecordV1::new(
+                    test_network_id(b"hedging-billing-test-genesis"),
                     1,
                     outcome.transition.transition_id,
                     progressed_bytes,
@@ -10622,31 +10660,7 @@ mod tests {
         assert_eq!(adapter.submit_calls.load(Ordering::Relaxed), 1);
     }
 
-    #[test]
-    fn finalized_events_require_exact_canonical_utf8_i105_account_bytes() {
-        let root = tempfile::tempdir().expect("state root");
-        let (service, _feed_policy, _reference, _verifier, _publisher, _ack_authority) =
-            ready_service(root.path());
-
-        let mut legacy = event(1, "storage:event:legacy-account", "1");
-        legacy.account_id = b"account-1".to_vec();
-        assert!(matches!(
-            service.ingest_finalized_page(&page(vec![legacy])),
-            Err(HedgingBillingServiceError::InvalidFinalizedEvent)
-        ));
-
-        let mut invalid_utf8 = event(1, "storage:event:invalid-utf8", "1");
-        invalid_utf8.account_id = vec![0xFF, 0xFE];
-        assert!(matches!(
-            service.ingest_finalized_page(&page(vec![invalid_utf8])),
-            Err(HedgingBillingServiceError::InvalidFinalizedEvent)
-        ));
-
-        let canonical = event(1, "storage:event:canonical-account", "1");
-        service
-            .ingest_finalized_page(&page(vec![canonical]))
-            .expect("exact canonical I105 account bytes");
-    }
+    include!("hedging_billing_service/finalized_account_validation_tests.rs");
 
     #[test]
     fn owner_api_is_anchor_bound_terminal_only_and_oracle_safe() {

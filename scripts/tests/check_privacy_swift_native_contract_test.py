@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the authenticated, no-skip ABI-21 Swift privacy lane."""
+"""Freeze the authenticated, no-skip ABI-22 Swift privacy lane."""
 
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT"',
             "configuredArtifactDirectory == nil",
             "must be outside the reviewed Iroha source tree",
-            "requiredBridgeAbiVersion = 21",
+            "requiredBridgeAbiVersion = 22",
             '"NoritoBridge.artifacts.json"',
             'manifest["native_bridge_abi_version"]',
             "validateBridgeArtifact(at: bridgeAbsolutePath)",
@@ -157,7 +157,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             "update-environment: false",
             "MOBILE_SDK_PYTHON_BINARY",
             '"${HOME}/.cargo/bin/rustup" toolchain install',
-            '"1.93.1"',
+            '"1.93.1-aarch64-apple-darwin"',
             "aarch64-apple-ios-sim",
             "x86_64-apple-darwin",
             "cargo fetch --locked",
@@ -167,7 +167,6 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             "NORITO_BRIDGE_OUT_DIR",
             "NORITO_BRIDGE_BUILD_DIR",
             'chmod -R a-w "$GITHUB_WORKSPACE"',
-            "NORITO_BRIDGE_PRESERVE_CARGO_TARGETS=1",
             "scripts/build_norito_xcframework.sh",
             "scripts/check_mobile_sdk_artifacts.sh --apple-only",
             "python3 -I -B scripts/tests/check_privacy_swift_native_contract_test.py",
@@ -178,6 +177,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             "--allow-dirty-source",
             "NORITO_BRIDGE_TEST_PREBUILT_SLICES",
             "MOBILE_SDK_SKIP_BINARY_INSPECTION",
+            "NORITO_BRIDGE_PRESERVE_CARGO_TARGETS",
         ):
             self.assertNotIn(forbidden, job)
 

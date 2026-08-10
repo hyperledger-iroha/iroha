@@ -1,3 +1,5 @@
+//! Shared test fixtures for the desktop supervisor shell.
+
 use std::{
     env, fs,
     path::{Path, PathBuf},

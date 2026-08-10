@@ -1206,7 +1206,7 @@ mod tests {
     fn reentrant_build_guard_preserves_explicit_network_binary_overrides() {
         let _env_guard = lock_env_guard();
         let _iroha_restore = EnvRestore::set(TEST_NETWORK_BIN_IROHA_ENV, "/tmp/explicit-iroha");
-        let _irohad_restore = EnvRestore::set(TEST_NETWORK_BIN_IROHAD_ENV, "/tmp/explicit-irohad");
+        let _irohad_restore = EnvRestore::set(TEST_NETWORK_BIN_IROHAD_ENV, "/tmp/explicit-iroha3d");
 
         let _build_guard = allow_reentrant_build_guard();
 
@@ -1216,7 +1216,7 @@ mod tests {
         );
         assert_eq!(
             std::env::var(TEST_NETWORK_BIN_IROHAD_ENV).as_deref(),
-            Ok("/tmp/explicit-irohad")
+            Ok("/tmp/explicit-iroha3d")
         );
     }
 

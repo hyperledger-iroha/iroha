@@ -10,52 +10,19 @@ final class TransactionInputValidatorTests: XCTestCase {
         return try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
     }
 
-    func testValidateRejectsEmptyChainId() throws {
-        let authority = try i105(seed: 1)
-        XCTAssertThrowsError(
-            try TransactionInputValidator.validate(chainId: "   ",
-                                                   authorityId: authority,
-                                                   assetDefinitionId: sampleAid)
-        ) { error in
-            XCTAssertEqual(error as? TransactionInputError, .emptyChainId)
-        }
-    }
-
-    func testValidateRejectsNonCanonicalChainIds() throws {
-        let authority = try i105(seed: 2)
-        let invalid = [
-            "-leading",
-            "trailing_",
-            "contains space",
-            "unicode-\u{00E9}",
-            String(repeating: "a", count: 129),
-        ]
-        for chainId in invalid {
-            XCTAssertThrowsError(
-                try TransactionInputValidator.validate(
-                    chainId: chainId,
-                    authorityId: authority,
-                    assetDefinitionId: sampleAid
-                )
-            ) { error in
-                XCTAssertEqual(error as? TransactionInputError, .invalidChainId(chainId))
-            }
-        }
-    }
-
-    func testValidateAcceptsCanonicalChainId() throws {
+    func testValidateCarriesExactNetworkId() throws {
         let authority = try i105(seed: 3)
         let ids = try TransactionInputValidator.validate(
-            chainId: "iroha.mainnet:v1-alpha_2",
+            networkId: TestNetworkIds.canonical,
             authorityId: authority,
             assetDefinitionId: sampleAid
         )
-        XCTAssertEqual(ids.chainId, "iroha.mainnet:v1-alpha_2")
+        XCTAssertEqual(ids.networkId, TestNetworkIds.canonical)
     }
 
     func testValidateRejectsMalformedAuthority() {
         XCTAssertThrowsError(
-            try TransactionInputValidator.validate(chainId: "0000",
+            try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                    authorityId: "alice",
                                                    assetDefinitionId: sampleAid)
         ) { error in
@@ -66,7 +33,7 @@ final class TransactionInputValidatorTests: XCTestCase {
 
     func testValidateRejectsAuthorityWithReservedCharacters() {
         XCTAssertThrowsError(
-            try TransactionInputValidator.validate(chainId: "0000",
+            try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                    authorityId: "alice#bad@banka.dataspace",
                                                    assetDefinitionId: sampleAid)
         ) { error in
@@ -78,7 +45,7 @@ final class TransactionInputValidatorTests: XCTestCase {
     func testValidateRejectsMalformedAssetDefinition() throws {
         let authority = try i105(seed: 2)
         XCTAssertThrowsError(
-            try TransactionInputValidator.validate(chainId: "0000",
+            try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                    authorityId: authority,
                                                    assetDefinitionId: "cbdc#banka")
         ) { error in
@@ -92,7 +59,7 @@ final class TransactionInputValidatorTests: XCTestCase {
         let invalidDefinition = "66owaQmAQMuHxPzxUN3bqZ6FJfDb"
 
         XCTAssertThrowsError(
-            try TransactionInputValidator.validate(chainId: "0000",
+            try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                    authorityId: authority,
                                                    assetDefinitionId: invalidDefinition)
         ) { error in
@@ -104,12 +71,12 @@ final class TransactionInputValidatorTests: XCTestCase {
     func testValidateRequiresCanonicalDataspaceScopeSuffix() throws {
         let authority = try i105(seed: 2)
         XCTAssertNoThrow(
-            try TransactionInputValidator.validate(chainId: "0000",
+            try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                    authorityId: authority,
                                                    assetDefinitionId: "\(sampleAid)#dataspace:0")
         )
         XCTAssertNoThrow(
-            try TransactionInputValidator.validate(chainId: "0000",
+            try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                    authorityId: authority,
                                                    assetDefinitionId: "\(sampleAid)#dataspace:42")
         )
@@ -125,7 +92,7 @@ final class TransactionInputValidatorTests: XCTestCase {
         ] {
             let value = "\(sampleAid)#\(suffix)"
             XCTAssertThrowsError(
-                try TransactionInputValidator.validate(chainId: "0000",
+            try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                        authorityId: authority,
                                                        assetDefinitionId: value),
                 "Expected non-canonical dataspace scope to fail: \(suffix)"
@@ -159,7 +126,7 @@ final class TransactionInputValidatorTests: XCTestCase {
     func testValidateRejectsAssetDefinitionWithReservedCharacters() throws {
         let authority = try i105(seed: 3)
         XCTAssertThrowsError(
-            try TransactionInputValidator.validate(chainId: "0000",
+            try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                    authorityId: authority,
                                                    assetDefinitionId: "rose$#wonderland")
         ) { error in
@@ -174,17 +141,7 @@ final class TransactionInputValidatorTests: XCTestCase {
 
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(
-                chainId: " 0000 ",
-                authorityId: authority,
-                assetDefinitionId: sampleAid,
-                accountIds: [.init(field: "destination", value: destination)]
-            )
-        ) { error in
-            XCTAssertEqual(error as? TransactionInputError, .invalidChainId(" 0000 "))
-        }
-        XCTAssertThrowsError(
-            try TransactionInputValidator.validate(
-                chainId: "0000",
+                networkId: TestNetworkIds.canonical,
                 authorityId: " \(authority) ",
                 assetDefinitionId: sampleAid,
                 accountIds: [.init(field: "destination", value: destination)]
@@ -195,7 +152,7 @@ final class TransactionInputValidatorTests: XCTestCase {
         }
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(
-                chainId: "0000",
+                networkId: TestNetworkIds.canonical,
                 authorityId: authority,
                 assetDefinitionId: " \(sampleAid) ",
                 accountIds: [.init(field: "destination", value: destination)]
@@ -206,7 +163,7 @@ final class TransactionInputValidatorTests: XCTestCase {
         }
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(
-                chainId: "0000",
+                networkId: TestNetworkIds.canonical,
                 authorityId: authority,
                 assetDefinitionId: sampleAid,
                 accountIds: [.init(field: "destination", value: " \(destination) ")]
@@ -293,7 +250,7 @@ final class TransactionInputValidatorTests: XCTestCase {
     func testValidateAcceptsI105Authority() throws {
         let publicKey = Data(repeating: 0xAB, count: 32)
         let i105 = try AccountId.makeI105(publicKey: publicKey)
-        let ids = try TransactionInputValidator.validate(chainId: "0000",
+        let ids = try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                          authorityId: i105)
         XCTAssertEqual(ids.authorityId, i105)
     }
@@ -301,7 +258,7 @@ final class TransactionInputValidatorTests: XCTestCase {
     func testValidateAcceptsSoraSentinelAuthority() throws {
         let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0xAD, count: 32))
         let i105 = try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
-        let ids = try TransactionInputValidator.validate(chainId: "0000",
+        let ids = try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                          authorityId: i105)
         XCTAssertEqual(ids.authorityId, i105)
     }
@@ -315,7 +272,7 @@ final class TransactionInputValidatorTests: XCTestCase {
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
 
         let ids = try TransactionInputValidator.validate(
-            chainId: "taira",
+            networkId: TestNetworkIds.canonical,
             authorityId: authority,
             assetDefinitionId: sampleAid,
             accountIds: [.init(field: "destination", value: destination)]
@@ -361,7 +318,7 @@ final class TransactionInputValidatorTests: XCTestCase {
         let i105 = try AccountId.makeI105(publicKey: publicKey)
         let literal = "\(i105)@banka.dataspace"
         XCTAssertThrowsError(
-            try TransactionInputValidator.validate(chainId: "0000",
+            try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                    authorityId: literal)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
@@ -373,7 +330,7 @@ final class TransactionInputValidatorTests: XCTestCase {
         let uaidHex = String(repeating: "0", count: 63) + "f"
         let literal = "uaid:\(uaidHex)"
         XCTAssertThrowsError(
-            try TransactionInputValidator.validate(chainId: "0000",
+            try TransactionInputValidator.validate(networkId: TestNetworkIds.canonical,
                                                    authorityId: literal)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,

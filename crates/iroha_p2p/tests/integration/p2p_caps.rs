@@ -13,7 +13,7 @@ use iroha_config_base::WithOrigin;
 use iroha_crypto::soranet::handshake::{
     DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
 };
-use iroha_data_model::{ChainId, prelude::Peer};
+use iroha_data_model::prelude::Peer;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{
     NetworkHandle,
@@ -326,7 +326,7 @@ fn make_config(
 async fn topic_cap_violation_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
 
-    let chain = ChainId::from("test_chain");
+    let chain = super::test_network_id("test_chain");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let a1 = super::next_addr();
@@ -426,7 +426,7 @@ async fn topic_cap_violation_disconnects() {
 async fn tcp_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
 
-    let chain = ChainId::from("test_chain_tcp");
+    let chain = super::test_network_id("test_chain_tcp");
     let kp_listener = super::random_node_key_pair();
     let kp_dialer = super::random_node_key_pair();
 
@@ -552,7 +552,7 @@ async fn tcp_global_frame_cap_disconnects() {
 async fn tls_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
 
-    let chain = ChainId::from("test_chain_tls");
+    let chain = super::test_network_id("test_chain_tls");
     let kp_listener = super::random_node_key_pair();
     let kp_dialer = super::random_node_key_pair();
 
@@ -687,7 +687,7 @@ async fn tls_global_frame_cap_disconnects() {
 async fn quic_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
 
-    let chain = ChainId::from("test_chain_quic");
+    let chain = super::test_network_id("test_chain_quic");
     let kp_listener = super::random_node_key_pair();
     let kp_dialer = super::random_node_key_pair();
 
@@ -819,7 +819,7 @@ async fn quic_global_frame_cap_disconnects() {
 async fn ws_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
 
-    let chain = ChainId::from("test_chain_ws");
+    let chain = super::test_network_id("test_chain_ws");
     let kp_listener = super::random_node_key_pair();
     let kp_dialer = super::random_node_key_pair();
 

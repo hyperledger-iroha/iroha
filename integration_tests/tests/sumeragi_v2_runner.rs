@@ -13,7 +13,7 @@ use iroha::{
     client::Client,
     crypto::{Algorithm, Hash, HashOf, KeyPair},
     data_model::{
-        Identifiable, Level,
+        Identifiable, Level, NetworkId,
         account::{Account, AccountId},
         block::{
             BlockHeader,
@@ -2099,7 +2099,7 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
         }
 
         let proof = fetch_bridge_finality_proof(&validators[0], LOCKED_REPROPOSAL_HEIGHT).await?;
-        verify_bridge_finality_proof(&proof, &network.chain_id())
+        verify_bridge_finality_proof(&proof, &network.client().network_id)
             .wrap_err("recovered block finality proof failed cryptographic validation")?;
         let committed_hashes = try_join_all(all_participants.iter().map(|peer| {
             committed_hash_at_height(peer, LOCKED_REPROPOSAL_HEIGHT)
@@ -3909,7 +3909,7 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             validate_exact_finality_proof(
                 peer,
                 proof,
-                &client.chain,
+                &client.network_id,
                 height,
                 second_view,
                 &second_reference,
@@ -4449,12 +4449,12 @@ async fn fetch_bridge_finality_proof(
 fn validate_exact_finality_proof(
     peer: &NetworkPeer,
     proof: &BridgeFinalityProof,
-    chain: &iroha::data_model::ChainId,
+    network_id: &NetworkId,
     height: u64,
     view: u64,
     expected_prepare: &QuorumCertificateRef,
 ) -> Result<()> {
-    verify_bridge_finality_proof(proof, chain).wrap_err_with(|| {
+    verify_bridge_finality_proof(proof, network_id).wrap_err_with(|| {
         format!(
             "{} returned a cryptographically invalid height-{height} finality proof",
             peer.mnemonic()

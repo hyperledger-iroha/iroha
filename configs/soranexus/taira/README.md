@@ -364,8 +364,9 @@ four systemd artifacts listed above. Install the drop-in only as
 `/etc/systemd/system/taira-irohad.service.d/peer1-privacy.conf` on
 `taira-validator-1`; peers 2–4 must not install or enable the broker unit.
 Copy the example public environment file to
-`/etc/default/taira-bootle-lantern-broker` and replace its two digest latches
-from the same reviewed export.
+`/etc/default/taira-bootle-lantern-broker`; set `TAIRA_NETWORK_ID` from the
+deployment's mandatory genesis expected hash and replace its two digest latches
+from the same reviewed export. The export's `network_id` must equal that value.
 
 Provision the issuer seed (exactly 32 random bytes), opaque bearer (32–4096
 random bytes), and stable-principal seed (exactly 32 independent random bytes)
@@ -514,7 +515,7 @@ source_sha="$(tr -d '\n' < "${bundle}/provenance/privacy-native/workspace-source
   --x509-resource-norito "${bundle}/provenance/privacy-native/zk-x509-resource-v1.norito" \
   --x509-resource-json "${bundle}/provenance/privacy-native/zk-x509-resource-v1.json" \
   --cargo-lock "${bundle}/provenance/Cargo.lock" \
-  --validator-binary "${bundle}/bin/irohad" \
+  --validator-binary "${bundle}/bin/iroha3d" \
   --command-manifest-norito "${bundle}/provenance/privacy-native/command-manifest-v1.norito" \
   --command-manifest-json "${bundle}/provenance/privacy-native/command-manifest-v1.json" \
   --stage-artifacts-norito "${bundle}/provenance/privacy-native/stage-artifacts-v1.norito" \
@@ -640,12 +641,13 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
 5. Copy each validator's complete generated directory to that validator
    host's canonical `/etc/iroha/taira-validator` directory. Every rendered
-   config binds signer sidecars and governance manifests to that same
-   first-release install root; it never embeds the developer checkout or
-   `dist/` path. The renderer creates bundle and runtime directories with mode
-   `0700`, creates the onboarding/faucet signer and API-token sidecars with mode
-   `0600`, writes only canonical signer paths and the BLAKE3 token digest to
-   peer config, and emits a protective `.gitignore`. It also creates the
+config binds signer sidecars and governance manifests to that same
+first-release install root; it never embeds the developer checkout or
+`dist/` path. The renderer creates bundle and runtime directories with mode
+`0700`, creates validator, SoraNet transport, streaming, Kagemusha command,
+onboarding, faucet, and API-token sidecars with mode `0600`, writes only
+canonical signer paths and the BLAKE3 token digest to peer config, and emits a
+protective `.gitignore`. It also creates the
    co-located `sorafs_admission/` directory and rewrites admission-envelope,
    signer, and manifest paths together when
    `--install-root` is changed. It prints sidecar paths but never their contents.
@@ -656,9 +658,16 @@ topology transaction is rebuilt from the public roster and PoPs, plus
 independently built, reviewed executable outside the checkout and run that
 command. The fixed protocol passes only `--unsigned-genesis`, `--peer-config`,
 `--bound-manifest-out`, `--signed-genesis-out`, and `--expected-hash-out`.
-The signer owns its HSM or key-provider access internally; it must never accept
-a private-key path or key bytes through argv, environment, or the rendered
-tree. Source-built Kagami is not a genesis signer in this release path. The
+The qualified signer must also publish the sibling `genesis.identity.toml`
+which binds its one exact signed-header hash as both client `network_id` and
+validator `genesis.expected_hash`; deployment automation must consume that
+paired artifact and reject either independently supplied value. The published
+template resolves `/run/iroha/genesis.expected_hash` through
+`genesis.expected_hash_file`; clients mount the same file as `network_id_file`.
+The signer owns its isolated external software-signing service and encrypted
+runtime-only key access internally; it must never accept a private-key path or
+key bytes through argv, environment, or the rendered tree. Source-built Kagami
+is not a genesis signer in this release path. The
 external signer binds the staged Nexus/AMX and execution-policy context,
 recomputes the consensus fingerprint, atomically replaces only the rendered
 `genesis.json`, and writes `genesis.signed.nrt`. Never copy the genesis signer,
@@ -682,6 +691,7 @@ reads only `trusted_peers_pop` and emits only the public canonical roster:
 cargo run -p iroha_kagami --bin kagami -- \
   kagemusha prepare-taira-release-roster-v4 \
   --validator-config /absolute/path/to/rendered-validator/config.toml \
+  --network-id "$(cat /absolute/path/to/genesis.expected_hash)" \
   --output /absolute/private/path/taira-release-roster.norito
 
 mkdir -m 700 /absolute/private/path/kagemusha-release-inputs
@@ -859,7 +869,7 @@ python3 scripts/migrate_taira_peer_supervision.py plan \
   --output-dir /absolute/path/to/new/taira-supervision-plan
 ```
 
-It requires four exact peer PID files, exact `irohad --sora --config ...`
+It requires four exact peer PID files, exact `iroha3d --sora --config ...`
 commands, one common parent whose command names an approved
 `run-canonical.sh` or `launchd-run.sh`, non-symlink configs, and four distinct
 existing storage directories. Each live peer's exact working directory is
@@ -1009,10 +1019,20 @@ is signed into the Linux authority, reset manifest, and final macOS candidate.
 
 `capture_taira_macos_four_peer_receipt.py` emits the canonical receipt only
 after all four restart proofs pass and the original reset inputs are unchanged.
+The untrusted macOS build job only compiles and inventories the Exact12 native
+test drivers. `capture_taira_privacy_protocol_four_peer_receipt.py` runs those
+frozen drivers inside secret-free qualification, never invokes Cargo, and
+preserves one bounded canonical transcript/result pair for each of the six
+protocol cases plus the independent governance case. The v2 privacy receipt
+binds those bytes, both driver digests, the macOS handoff, validator, Linux
+archive, Exact12 matrix, and complete source identity. Admission rejects the
+v1 receipt and independently reads, hashes, and parses every preserved v2
+record before accepting the signed candidate.
 `build_taira_rollout_candidate.py` binds that receipt, the exact binary,
 the sealed macOS controller manifest, and signed Linux authority into the final
 secret-free Mac admission archive. The private reset bundle, validator secrets,
-external genesis signer and its internal key/HSM state, validator binary, and
+external genesis software signer and its encrypted runtime-only key state,
+validator binary, and
 supervisor never enter Actions artifact storage or OCI. After the
 candidate authority is assembled, the protected macOS runner passes the local
 private bundle and candidate directly to `scripts/deploy_taira_v21_reset.py`,
@@ -1134,7 +1154,7 @@ Use the public-lane staking flow for validator candidacy instead of manual
 allowlisting:
 
 1. Render a per-validator config with the node's own `public_address` and
-   `torii_public_address`, then start `irohad` against the published seed peers.
+   `torii_public_address`, then start `iroha3d` against the published seed peers.
 2. Wait for the node to sync and confirm lane mode:
    - `iroha app nexus lane-report --summary`
    - `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq .`
@@ -1252,11 +1272,12 @@ quota overrides are therefore not part of the Taira storage contract.
 After every Taira reset or `irohad` rebuild, verify the manifest-registration
 ingress before retrying `yarn taira:publish`:
 
-- `curl -sSki -X POST "${PUBLIC_TORII_ROOT}/v1/sorafs/pin/register" -H 'content-type: application/json' --data '{}'`
+- `curl -sSki -X POST "${PUBLIC_TORII_ROOT}/v1/sorafs/pin/register" -H 'content-type: application/x-norito' --data-binary ''`
 
 Expected result:
 
-- `HTTP 400` with a handler-level validation error such as `missing field authority`
+- `HTTP 400` with `x-iroha-reject-code: invalid_transaction_payload` and a
+  versioned signed-transaction decode error
 
 Unexpected result:
 
@@ -1322,7 +1343,7 @@ TAIRA_VALIDATOR_ARGS=(
 )
 ```
 
-- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
+- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --write-config /run/secrets/taira-canary-client.toml --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}" --expected-dpn-validator-release-commit "${EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT}"`
 
 Then gate the SoraFS path on the same public node:
 
@@ -1394,8 +1415,9 @@ catalog, and committed-chain identity.
 
 That config must be a normal `iroha` client TOML for a low-risk runtime-only
 signer. Start from `taira-canary-client.example.toml`, not
-`defaults/client.toml`: the generic repo client uses the zero chain id and is
-not valid for Taira. The canary alias defaults to the dataspace-root form
+`defaults/client.toml`: the generic repo client uses the zero chain id and the
+development genesis `network_id`, so it is not valid for Taira. The canary
+alias defaults to the dataspace-root form
 `<label>@universal`; do not expand it to `@wonderland.universal` or
 `@universal.universal`. When `--write-config` is omitted and the automatically
 selected runtime path is missing, `check_mcp_rollout.sh` requires
@@ -1694,7 +1716,7 @@ away from the shipped MCP-enabled config:
      `sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils e2fsprogs iproute2 iptables`
    - verify the host will advertise real Inrou capacity:
      `bash configs/soranexus/taira/check_inrou_host_prereqs.sh`
-   - `sudo install -m 0755 dist/taira-rollout/<bundle>/bin/irohad /usr/local/bin/irohad`
+   - `sudo install -m 0755 dist/taira-rollout/<bundle>/bin/iroha3d /usr/local/bin/iroha3d`
    - `sudo install -m 0755 dist/taira-rollout/<bundle>/bin/iroha /usr/local/bin/iroha`
    - `sudo cp configs/soranexus/taira/taira-irohad.service /etc/systemd/system/`
    - copy `configs/soranexus/taira/taira-irohad.env.example` to
@@ -1705,7 +1727,7 @@ away from the shipped MCP-enabled config:
      update the unit's config, signer, manifest, and SoraFS admission preflight
      paths together before enabling it
    - if your repo checkout or binary path differs from `/opt/iroha` and
-     `/usr/local/bin/irohad`, adjust `WorkingDirectory=` and set
+     `/usr/local/bin/iroha3d`, adjust `WorkingDirectory=` and set
      `IROHA_TAIRA_IROHAD_BIN=` in `/etc/default/taira-irohad` before enabling
      the unit
 5. Reload systemd and restart the validator:
@@ -1714,7 +1736,7 @@ away from the shipped MCP-enabled config:
    - `sudo systemctl restart taira-irohad.service`
 6. Capture the resolved config in the rollout ticket:
    - `sudo journalctl -u taira-irohad.service -n 200 --no-pager`
-   - `cd /opt/iroha && sudo -u iroha env KURA_STORE_DIR=/var/lib/iroha/taira-validator-1 SNAPSHOT_STORE_DIR=/var/lib/iroha/taira-validator-1/snapshot /usr/local/bin/irohad --sora --config /etc/iroha/taira-validator/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json --trace-config | tee /tmp/taira-trace-config.txt`
+   - `cd /opt/iroha && sudo -u iroha env KURA_STORE_DIR=/var/lib/iroha/taira-validator-1 SNAPSHOT_STORE_DIR=/var/lib/iroha/taira-validator-1/snapshot /usr/local/bin/iroha3d --sora --config /etc/iroha/taira-validator/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json --trace-config | tee /tmp/taira-trace-config.txt`
    - verify `/tmp/taira-trace-config.txt` includes `nexus.fees.fee_asset_id = "xor#universal"`
 7. Prove the validator's loopback Torii endpoint exposes MCP and the expected
    direct-ingress routes before any public cutover:
@@ -1938,12 +1960,21 @@ From `../iroha2-block-explorer-web`:
      `/v1/sumeragi/status` `height_context.validator_count` and
      `last_commit_qc.validator_count`, or
      `/v1/sumeragi/validator-sets` for validator-set visibility.
-   - create a Connect session through the proxy and ask explicitly for JSON:
-     `curl -sS -X POST "${PUBLIC_TORII_ROOT}/v1/connect/session" -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<32-byte-base64url-sid>"}'`
+   - create a Connect session through the proxy and ask explicitly for JSON;
+     derive `sid` as BLAKE2b-256 over `iroha-connect|sid|`, the raw 32-byte
+     exact `NetworkId`, the raw 32-byte X25519 app key, and the fresh raw
+     16-byte nonce, in that order, then encode all binary fields as canonical
+     unpadded base64url:
+     `curl -sS -X POST "${PUBLIC_TORII_ROOT}/v1/connect/session" -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<derived-32-byte-base64url-sid>","network_id":"<canonical-hash-network-id>","app_pk":"<32-byte-base64url-x25519-app-key>","nonce":"<16-byte-base64url-random-nonce>"}'`
    - verify Connect websocket upgrades on both public hostnames with the
      returned `sid` and app token:
      `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' "${PUBLIC_TORII_ROOT}/v1/connect/ws?sid=<sid>&role=app"`
      `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' 'https://taira-explorer.sora.org/v1/connect/ws?sid=<sid>&role=app'`
+     These curl commands only probe the HTTP upgrade. A functional client must
+     send the one-shot app `Open` at sequence 1 with the same app key and exact
+     `NetworkId`, accept only the wallet's one-shot `Approve` at sequence 1 after
+     verifying its account signature and relay-token binding, and start
+     contiguous encrypted traffic at sequence 2.
    - verify CID-host origin isolation with a known site CID:
      `curl -vkI "https://<cid>.sorafs.taira.sora.org/"`
      `curl -vkI "https://taira.sora.org/sorafs/cid/<cid>/swap/ton/usdt" -H 'accept: text/html'`

@@ -27,7 +27,7 @@ fn try_context_with_powers(
         .collect();
     HeightContext::new(
         ContextId::repeat(0x50),
-        ChainId::repeat(0x51),
+        NetworkId::repeat(0x51),
         2,
         Some(CertificateRef::new(
             ContextId::repeat(0x40),
@@ -60,7 +60,7 @@ fn snapshot_bootstrap_context_is_explicit_and_cannot_replace_genesis() {
         .collect::<Vec<_>>();
     let anchored = HeightContext::new_snapshot_bootstrap(
         ContextId::repeat(0x60),
-        ChainId::repeat(0x61),
+        NetworkId::repeat(0x61),
         42,
         9,
         roster.clone(),
@@ -77,7 +77,7 @@ fn snapshot_bootstrap_context_is_explicit_and_cannot_replace_genesis() {
     assert!(matches!(
         HeightContext::new_snapshot_bootstrap(
             ContextId::repeat(0x60),
-            ChainId::repeat(0x61),
+            NetworkId::repeat(0x61),
             1,
             9,
             roster,
@@ -221,7 +221,7 @@ fn leader_rotation_reduces_the_full_hashed_seed() {
         .collect();
     let context = HeightContext::new(
         ContextId::repeat(0x50),
-        ChainId::repeat(0x51),
+        NetworkId::repeat(0x51),
         2,
         Some(CertificateRef::new(
             ContextId::repeat(0x40),
@@ -256,7 +256,7 @@ fn height_context_rejects_rosters_above_first_release_bound() {
         .collect();
     let result = HeightContext::new(
         ContextId::repeat(0x50),
-        ChainId::repeat(0x51),
+        NetworkId::repeat(0x51),
         2,
         Some(CertificateRef::new(
             ContextId::repeat(0x40),
@@ -286,7 +286,7 @@ fn height_context_requires_one_same_round_parent_commit_geometry() {
     let make_context = |proposal_round| {
         HeightContext::new(
             ContextId::repeat(0x50),
-            ChainId::repeat(0x51),
+            NetworkId::repeat(0x51),
             2,
             Some(CertificateRef::new_with_proposal_round(
                 parent_context,

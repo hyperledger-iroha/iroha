@@ -88,9 +88,9 @@ fn accepted_tx_with_attachments(
     metadata: Metadata,
     attachments: Option<ProofAttachmentList>,
 ) -> AcceptedTransaction<'static> {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+    let network_id = queue_test_network_id();
     let mut builder = TransactionBuilder::new_with_time_source(
-        chain_id.clone(),
+        network_id,
         account_id,
         time_source,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -113,7 +113,7 @@ fn accepted_tx_with_attachments(
     let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
     AcceptedTransaction::accept_with_time_source(
         tx,
-        &chain_id,
+        &network_id,
         Duration::from_millis(10),
         tx_limits,
         &crypto_cfg,
@@ -129,14 +129,14 @@ fn accepted_ivm_tx_by(
     time_source: &TimeSource,
     max_cycles: u64,
 ) -> AcceptedTransaction<'static> {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+    let network_id = queue_test_network_id();
     let program = minimal_ivm_program_with_max_cycles(1, max_cycles);
     let gas_limit = crate::smartcontracts::ivm::gas_limit_for_cycles(
         std::num::NonZeroU64::new(max_cycles)
             .expect("queue IVM fixture requires a positive cycle limit"),
     );
     let tx = TransactionBuilder::new_with_time_source(
-        chain_id.clone(),
+        network_id,
         account_id,
         time_source,
         iroha_data_model::transaction::FeePaymentIntent::authority(
@@ -158,7 +158,7 @@ fn accepted_ivm_tx_by(
     let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
     AcceptedTransaction::accept_with_time_source(
         tx,
-        &chain_id,
+        &network_id,
         Duration::from_millis(10),
         tx_limits,
         &crypto_cfg,

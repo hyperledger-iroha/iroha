@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncDecisionApplicationProofs ----
-EXTENDS SumeragiV2AsyncOutstandingLivenessDebt
+EXTENDS SumeragiV2AsyncTimeoutOwnershipProofs
 
 (***************************************************************************
 Exact Decision-to-application temporal closure.

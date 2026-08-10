@@ -32,6 +32,9 @@ EXPECTED_SWIFT_FIXTURES = frozenset(
         "swift_burn_asset_basic",
     }
 )
+CANONICAL_DEV_NETWORK_ID = (
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+)
 SWIFT_INSTRUCTION_SEMANTICS = {
     "swift_burn_asset_basic": ("Burn", "BurnAsset"),
     "swift_mint_asset_basic": ("Mint", "MintAsset"),
@@ -43,9 +46,9 @@ MAX_TRANSACTION_NONCE = 0xFFFF_FFFF
 SHARED_PAYLOAD_ENTRY_FIELDS = frozenset(
     {
         "authority",
-        "chain",
         "creation_time_ms",
         "name",
+        "network_id",
         "nonce",
         "payload",
         "payload_base64",
@@ -56,14 +59,26 @@ SHARED_PAYLOAD_ENTRY_FIELDS = frozenset(
     }
 )
 SWIFT_PAYLOAD_ENTRY_FIELDS = frozenset({"name", "payload"})
-PAYLOAD_FIELDS = frozenset(
+SHARED_PAYLOAD_FIELDS = frozenset(
     {
         "authority",
-        "chain",
         "creation_time_ms",
         "executable",
         "fee_payment",
         "metadata",
+        "network_id",
+        "nonce",
+        "time_to_live_ms",
+    }
+)
+SWIFT_PAYLOAD_FIELDS = frozenset(
+    {
+        "authority",
+        "creation_time_ms",
+        "executable",
+        "fee_payment",
+        "metadata",
+        "network_id",
         "nonce",
         "time_to_live_ms",
     }
@@ -71,11 +86,11 @@ PAYLOAD_FIELDS = frozenset(
 MANIFEST_ENTRY_FIELDS = frozenset(
     {
         "authority",
-        "chain",
         "creation_time_ms",
         "encoded_file",
         "encoded_len",
         "name",
+        "network_id",
         "nonce",
         "payload_base64",
         "payload_hash",
@@ -129,6 +144,15 @@ def require_nonempty_string(value: object, context: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{context} must be a non-empty string")
     return value
+
+
+def require_network_id(value: object, context: str) -> str:
+    if value != CANONICAL_DEV_NETWORK_ID:
+        raise ValueError(
+            f"{context} must be exactly the canonical Iroha3 dev network identity "
+            f"{CANONICAL_DEV_NETWORK_ID!r}"
+        )
+    return CANONICAL_DEV_NETWORK_ID
 
 
 def require_uint(value: object, context: str, *, minimum: int = 0, maximum: int) -> int:
@@ -385,7 +409,7 @@ def validate_fee_payment(value: object, context: str, *, shared: bool) -> None:
 class PayloadRecord:
     name: str
     authority: str
-    chain: str
+    network_id: str
     creation_time_ms: int
     time_to_live_ms: int
     nonce: Optional[int]
@@ -399,7 +423,7 @@ class PayloadRecord:
 class ManifestRecord:
     name: str
     authority: str
-    chain: str
+    network_id: str
     creation_time_ms: int
     time_to_live_ms: int
     nonce: Optional[int]
@@ -417,9 +441,11 @@ class ManifestRecord:
 def validate_payload_body(value: object, context: str, *, shared: bool) -> PayloadRecord:
     if not isinstance(value, dict):
         raise ValueError(f"{context} must be an object")
-    require_exact_fields(value, PAYLOAD_FIELDS, context)
+    require_exact_fields(
+        value, SHARED_PAYLOAD_FIELDS if shared else SWIFT_PAYLOAD_FIELDS, context
+    )
     authority = require_nonempty_string(value["authority"], f"{context}.authority")
-    chain = require_nonempty_string(value["chain"], f"{context}.chain")
+    network_id = require_network_id(value["network_id"], f"{context}.network_id")
     creation_time_ms = require_uint(
         value["creation_time_ms"], f"{context}.creation_time_ms", maximum=2**64 - 1
     )
@@ -441,7 +467,7 @@ def validate_payload_body(value: object, context: str, *, shared: bool) -> Paylo
     return PayloadRecord(
         name="",
         authority=authority,
-        chain=chain,
+        network_id=network_id,
         creation_time_ms=creation_time_ms,
         time_to_live_ms=time_to_live_ms,
         nonce=nonce,
@@ -488,8 +514,8 @@ def load_payload_records(path: Path, *, shared: bool) -> Dict[str, PayloadRecord
         if shared:
             for field in (
                 "authority",
-                "chain",
                 "creation_time_ms",
+                "network_id",
                 "time_to_live_ms",
                 "nonce",
             ):
@@ -516,7 +542,7 @@ def load_payload_records(path: Path, *, shared: bool) -> Dict[str, PayloadRecord
             body = PayloadRecord(
                 name=name,
                 authority=body.authority,
-                chain=body.chain,
+                network_id=body.network_id,
                 creation_time_ms=body.creation_time_ms,
                 time_to_live_ms=body.time_to_live_ms,
                 nonce=body.nonce,
@@ -529,7 +555,7 @@ def load_payload_records(path: Path, *, shared: bool) -> Dict[str, PayloadRecord
             body = PayloadRecord(
                 name=name,
                 authority=body.authority,
-                chain=body.chain,
+                network_id=body.network_id,
                 creation_time_ms=body.creation_time_ms,
                 time_to_live_ms=body.time_to_live_ms,
                 nonce=body.nonce,
@@ -576,13 +602,15 @@ def load_manifest_records(path: Path, *, swift: bool) -> Dict[str, ManifestRecor
         encoded_files.add(encoded_file)
         if swift:
             authority = ""
-            chain = ""
+            network_id = ""
             creation_time_ms = 0
             time_to_live_ms = 0
             nonce = None
         else:
             authority = require_nonempty_string(entry["authority"], f"{context}.authority")
-            chain = require_nonempty_string(entry["chain"], f"{context}.chain")
+            network_id = require_network_id(
+                entry["network_id"], f"{context}.network_id"
+            )
             creation_time_ms = require_uint(
                 entry["creation_time_ms"],
                 f"{context}.creation_time_ms",
@@ -643,7 +671,7 @@ def load_manifest_records(path: Path, *, swift: bool) -> Dict[str, ManifestRecor
         records[name] = ManifestRecord(
             name=name,
             authority=authority,
-            chain=chain,
+            network_id=network_id,
             creation_time_ms=creation_time_ms,
             time_to_live_ms=time_to_live_ms,
             nonce=nonce,
@@ -686,8 +714,8 @@ def validate_fixture_set(
         if shared:
             for field in (
                 "authority",
-                "chain",
                 "creation_time_ms",
+                "network_id",
                 "time_to_live_ms",
                 "nonce",
             ):

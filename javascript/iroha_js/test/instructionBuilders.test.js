@@ -11,7 +11,6 @@ import {
   buildBurnTriggerRepetitionsInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
-  buildRegisterAssetDefinitionInstruction,
   buildGrantAccountPermissionInstruction,
   buildSetAccountKeyValueInstruction,
   buildSetAssetDefinitionAliasInstruction,
@@ -3089,19 +3088,25 @@ test("buildCancelTwitterEscrowInstruction wraps keyed hash", () => {
 test("buildRegisterZkAssetInstruction normalizes verifying key ids", () => {
   const instruction = buildRegisterZkAssetInstruction({
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    mode: "Hybrid",
     unshieldVerifyingKey: { backend: "halo2/ipa", name: "vk_unshield" },
   });
   const payload = encodeAndDecode(instruction).zk.RegisterZkAsset;
-  assert.equal(payload.mode, "Hybrid");
   assert.deepEqual(payload.vk_unshield, { backend: "halo2/ipa", name: "vk_unshield" });
 });
 
-test("buildRegisterZkAssetInstruction rejects retired native mode and transfer verifier", () => {
+test("buildRegisterZkAssetInstruction rejects unknown retired fields", () => {
   const base = { assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" };
   assert.throws(
-    () => buildRegisterZkAssetInstruction({ ...base, mode: "ZkNative" }),
-    /must be 'Hybrid'/,
+    () =>
+      buildRegisterZkAssetInstruction({
+        ...base,
+        shieldVerifyingKey: "halo2/ipa:vk_shield",
+      }),
+    /requires vkUnshield/,
+  );
+  assert.throws(
+    () => buildRegisterZkAssetInstruction({ ...base, mode: "Hybrid" }),
+    /is not supported/,
   );
   assert.throws(
     () =>
@@ -3109,7 +3114,11 @@ test("buildRegisterZkAssetInstruction rejects retired native mode and transfer v
         ...base,
         transferVerifyingKey: "halo2\/ipa:vk_transfer",
       }),
-    /is no longer supported/,
+    /is not supported/,
+  );
+  assert.throws(
+    () => buildRegisterZkAssetInstruction({ ...base, allowShield: true }),
+    /is not supported/,
   );
 });
 

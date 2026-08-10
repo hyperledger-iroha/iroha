@@ -70,17 +70,28 @@ class ClientConfigManifestLoaderTest {
     @Test
     fun loadsAndPreservesImmutableLocalSigningContext() {
         val config = load(
-            manifest(extra = ""","chain_id":"test-chain""""),
+            manifest(
+                extra = ""","network_id":"$TEST_NETWORK_ID"""",
+            ),
         )
 
-        assertEquals("test-chain", config.localSigningContext().get().chainId())
+        assertEquals(TEST_NETWORK_ID, config.localSigningContext().get().networkId().literal)
         assertEquals(
-            "test-chain",
-            config.toBuilder().build().localSigningContext().get().chainId(),
+            TEST_NETWORK_ID,
+            config.toBuilder().build().localSigningContext().get().networkId().literal,
         )
         assertFalse(load(manifest()).localSigningContext().isPresent)
-        assertFailsWith<IllegalArgumentException> {
-            load(manifest(extra = ""","chain_id":" invalid """"))
+        assertFailsWith<IllegalStateException> {
+            load(manifest(extra = ""","network_id":"${TEST_NETWORK_ID.lowercase()}""""))
+        }
+    }
+
+    @Test
+    fun clientConfigManifestRejectsLegacyChainIdKey() {
+        for (field in listOf("chain", "chainId", "chain_id")) {
+            assertFailsWith<IllegalStateException> {
+                load(manifest(extra = ""","$field":"test-chain""""))
+            }
         }
     }
 
@@ -118,4 +129,9 @@ class ClientConfigManifestLoaderTest {
         telemetry: String = """{"enabled":false}""",
         extra: String = "",
     ): String = """{"torii":$torii,"telemetry":$telemetry$extra}"""
+
+    private companion object {
+        private const val TEST_NETWORK_ID =
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+    }
 }

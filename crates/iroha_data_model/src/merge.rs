@@ -11,6 +11,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
+    NetworkId,
     block::{
         BlockHeader,
         consensus::{
@@ -288,8 +289,8 @@ pub fn lane_drain_empty_unresolved_evidence_root() -> Hash {
 pub struct LaneDrainIntentV1 {
     /// Schema version. Only version one is valid.
     pub version: u8,
-    /// Domain-separated digest of the chain identifier.
-    pub chain_id_digest: Hash,
+    /// Exact genesis-derived network identity.
+    pub network_id: NetworkId,
     /// Lane being closed to new work.
     pub lane_id: LaneId,
     /// Dataspace bound to the lane at the close boundary.
@@ -483,8 +484,8 @@ pub struct MergeQuorumCertificate {
     pub carrier_height: u64,
     /// Exact canonical parent authorized for the global carrier.
     pub carrier_parent_hash: HashOf<BlockHeader>,
-    /// Domain-separated digest of the chain identifier sealed by this QC.
-    pub chain_id_digest: Hash,
+    /// Exact genesis-derived network identity sealed by this QC.
+    pub network_id: NetworkId,
     /// Version of the canonical validator-set hashing scheme.
     pub validator_set_hash_version: u16,
     /// Hash of the exact ordered validator set used by the signer bitmap.
@@ -512,7 +513,7 @@ impl MergeQuorumCertificate {
         epoch_id: u64,
         carrier_height: u64,
         carrier_parent_hash: HashOf<BlockHeader>,
-        chain_id_digest: Hash,
+        network_id: NetworkId,
         validator_set_hash_version: u16,
         validator_set_hash: HashOf<Vec<PeerId>>,
         validator_set: Vec<PeerId>,
@@ -526,7 +527,7 @@ impl MergeQuorumCertificate {
             epoch_id,
             carrier_height,
             carrier_parent_hash,
-            chain_id_digest,
+            network_id,
             validator_set_hash_version,
             validator_set_hash,
             validator_set,
@@ -642,8 +643,8 @@ pub struct MergeLaneExecution {
     pub commit_qc: LaneBlockQcV1,
     /// Canonically ordered `PoPs` needed to verify both embedded QCs after restart.
     pub signer_proofs: Vec<MergeLaneSignerProof>,
-    /// Chain binding of the producer-authenticated autonomous payload.
-    pub autonomous_chain_id_hash: Hash,
+    /// Exact network binding of the producer-authenticated autonomous payload.
+    pub autonomous_network_id: NetworkId,
     /// Consensus epoch bound into the autonomous payload.
     pub autonomous_epoch: u64,
     /// Canonical digest of the exact autonomous executable payload.
@@ -899,6 +900,10 @@ mod tests {
         Hash::new(label)
     }
 
+    fn sample_network_id(label: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(label)))
+    }
+
     fn sample_lane_drain_intent() -> LaneDrainIntentV1 {
         let validator_set = vec![PeerId::new(
             KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -908,7 +913,7 @@ mod tests {
         )];
         LaneDrainIntentV1 {
             version: 1,
-            chain_id_digest: sample_hash(b"drain-chain"),
+            network_id: sample_network_id(b"drain-genesis"),
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
             lane_incarnation: sample_hash(b"drain-incarnation"),
@@ -1183,7 +1188,7 @@ mod tests {
                 1,
                 1,
                 HashOf::from_untyped_unchecked(sample_hash(b"max-overhead-parent")),
-                sample_hash(b"max-overhead-chain"),
+                sample_network_id(b"max-overhead-chain"),
                 1,
                 validator_set_hash,
                 validator_set,
@@ -1214,7 +1219,7 @@ mod tests {
             3,
             4,
             HashOf::from_untyped_unchecked(sample_hash(b"carrier-parent")),
-            sample_hash(b"chain"),
+            sample_network_id(b"chain"),
             1,
             HashOf::new(&Vec::<PeerId>::new()),
             Vec::new(),
@@ -1416,7 +1421,7 @@ mod tests {
         #[derive(Encode)]
         struct LegacyLaneDrainIntentV1 {
             version: u8,
-            chain_id_digest: Hash,
+            network_id: NetworkId,
             lane_id: LaneId,
             dataspace_id: DataSpaceId,
             lane_incarnation: Hash,
@@ -1470,7 +1475,7 @@ mod tests {
         let intent = sample_lane_drain_intent();
         let legacy_intent = LegacyLaneDrainIntentV1 {
             version: intent.version,
-            chain_id_digest: intent.chain_id_digest,
+            network_id: intent.network_id,
             lane_id: intent.lane_id,
             dataspace_id: intent.dataspace_id,
             lane_incarnation: intent.lane_incarnation,
@@ -1556,8 +1561,9 @@ mod tests {
             "version"
         );
         assert_intent_field_bound!(
-            |changed: &mut LaneDrainIntentV1| changed.chain_id_digest = sample_hash(b"other-chain"),
-            "chain_id_digest"
+            |changed: &mut LaneDrainIntentV1| changed.network_id =
+                sample_network_id(b"other-genesis"),
+            "network_id"
         );
         assert_intent_field_bound!(
             |changed: &mut LaneDrainIntentV1| changed.lane_id = LaneId::new(8),
@@ -1761,7 +1767,7 @@ mod tests {
         assert_state_canonical_wire_changes(&certified, &changed, "version");
 
         changed = certified.clone();
-        changed.intent.chain_id_digest = sample_hash(b"different-state-intent");
+        changed.intent.network_id = sample_network_id(b"different-state-intent");
         assert_state_canonical_wire_changes(&certified, &changed, "intent");
 
         changed = certified.clone();
@@ -1809,7 +1815,7 @@ mod tests {
             5,
             6,
             HashOf::from_untyped_unchecked(sample_hash(b"carrier-parent")),
-            sample_hash(b"chain"),
+            sample_network_id(b"chain"),
             1,
             HashOf::new(&Vec::<PeerId>::new()),
             Vec::new(),

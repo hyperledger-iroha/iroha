@@ -304,7 +304,7 @@ fn retransmission_classes_rotate_fairly_at_capacity_one() {
     assert!(adapter.drain_effects(usize::MAX).iter().any(|effect| {
         matches!(effect, V2LaneWorkEffect::BroadcastMerge(signature) if signature.message_digest
         == crate::merge::merge_qc_message_digest(
-            &adapter.context.chain_id,
+            &adapter.context.network_id,
             &candidate,
             VALIDATOR_SET_HASH_VERSION_V1,
             adapter.frozen_validator_set_hash(),

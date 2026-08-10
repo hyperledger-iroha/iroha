@@ -69,10 +69,16 @@ from sorafs_runner_preflight import (  # noqa: E402
     validate_runner_preflight,
     write_runner_plan,
 )
+from sorafs_l1_lane_inventory_integration import (  # noqa: E402
+    PLAN_FIELDS as L1_LANE_INVENTORY_PLAN_FIELDS,
+    add_signed_lane_inventory_arguments,
+    inventory_plan_from_args,
+    validate_signer_independence,
+)
 from sorafs_topology_qualification import (  # noqa: E402
-    TOPOLOGY_BINDING_FIELDS,
-    add_topology_qualification_argument,
-    load_topology_qualification_binding,
+    AUTHENTICATED_TOPOLOGY_BINDING_FIELDS,
+    add_signed_topology_qualification_arguments,
+    load_signed_topology_qualification_from_args,
 )
 
 
@@ -86,10 +92,14 @@ REPLAY_INPUT_SET_DOMAIN = (
 )
 REPLAY_INPUT_SLOTS = (
     "topology_qualification",
+    "topology_qualification_envelope",
     "resilience_qualification",
+    "l1_lane_evidence_inventory",
     "foundational_prerequisite",
     *DEFAULT_REQUIRED_GATES,
 )
+if len(REPLAY_INPUT_SLOTS) != 22:
+    raise RuntimeError("production readiness replay requires exactly 22 input slots")
 CANONICAL_GATE_INVENTORY_ERROR = (
     "production readiness runner requires the exact canonical ordered 17-gate inventory"
 )
@@ -121,6 +131,7 @@ PLAN_FIELDS = frozenset(
         "deployment_context",
         "topology_qualification",
         "resilience_qualification",
+        "l1_lane_evidence_inventory",
         "external_summaries",
         "foundational_prerequisite",
         "summary_contract",
@@ -128,19 +139,33 @@ PLAN_FIELDS = frozenset(
     }
 )
 PLAN_REQUIRED_THRESHOLD_FIELDS = frozenset(
-    {"max_summary_artifact_age_secs", "now_unix"}
+    {
+        "max_summary_artifact_age_secs",
+        "max_topology_qualification_review_age_secs",
+        "now_unix",
+    }
 )
 PLAN_POSITIVE_THRESHOLD_FIELDS = frozenset({"now_unix"})
-PLAN_NON_NEGATIVE_THRESHOLD_FIELDS = frozenset({"max_summary_artifact_age_secs"})
-PLAN_THRESHOLD_FIELDS_LABEL = "max_summary_artifact_age_secs and now_unix"
+PLAN_NON_NEGATIVE_THRESHOLD_FIELDS = frozenset(
+    {"max_summary_artifact_age_secs", "max_topology_qualification_review_age_secs"}
+)
+PLAN_THRESHOLD_FIELDS_LABEL = (
+    "max_summary_artifact_age_secs, max_topology_qualification_review_age_secs, "
+    "and now_unix"
+)
 PLAN_DEPLOYMENT_CONTEXT_FIELDS = frozenset({"deployment_id", "environment"})
 COMMAND_PATH_FLAGS = frozenset(
     {
         "--evidence",
         "--summary-out",
         "--topology-qualification-summary",
+        "--topology-qualification-envelope",
         "--resilience-qualification-summary",
+        "--l1-lane-evidence-inventory",
     }
+)
+PLAN_TOPOLOGY_QUALIFICATION_FIELDS = AUTHENTICATED_TOPOLOGY_BINDING_FIELDS | frozenset(
+    {"summary", "envelope"}
 )
 PLAN_RESILIENCE_QUALIFICATION_FIELDS = (
     RESILIENCE_QUALIFICATION_BINDING_FIELDS | {"summary"}
@@ -259,7 +284,7 @@ def replay_manifest_path(args: argparse.Namespace) -> Path:
 def production_input_paths(
     args: argparse.Namespace,
 ) -> tuple[tuple[str, Path], ...]:
-    """Return topology, resilience, foundation, and canonical 17-lane inputs."""
+    """Return the exact ordered 22-input promotion replay set."""
 
     foundational_paths = list(args.foundational_prerequisite_summary)
     paths_by_gate = summary_paths_by_gate(args)
@@ -269,7 +294,12 @@ def production_input_paths(
         raise ValueError("production readiness replay input set is incomplete")
     return (
         ("topology_qualification", args.topology_qualification_summary),
+        (
+            "topology_qualification_envelope",
+            args.topology_qualification_envelope,
+        ),
         ("resilience_qualification", args.resilience_qualification_summary),
+        ("l1_lane_evidence_inventory", args.l1_lane_evidence_inventory),
         ("foundational_prerequisite", foundational_paths[0]),
         *(
             (gate, paths_by_gate[gate][0])
@@ -332,6 +362,18 @@ def validate_promotion_aggregate(payload: dict[str, Any]) -> list[str]:
     ):
         errors.append(
             "replayed aggregate resilience qualification must be present, "
+            "valid, bound, and error-free"
+        )
+    inventory = payload.get("l1_lane_evidence_inventory")
+    if (
+        not isinstance(inventory, dict)
+        or inventory.get("present") is not True
+        or inventory.get("valid") is not True
+        or inventory.get("errors") != []
+        or not isinstance(inventory.get("binding"), dict)
+    ):
+        errors.append(
+            "replayed aggregate L1 lane evidence inventory must be present, "
             "valid, bound, and error-free"
         )
 
@@ -483,7 +525,8 @@ def validate_replay_manifest(
     ):
         errors.append(
             "deterministic replay manifest input digests must use the exact "
-            "ordered topology, resilience, foundation, and 17-lane slots"
+            "ordered topology summary/envelope, resilience, signed inventory, "
+            "foundation, and 17-lane slots"
         )
     if replay.first_sha256 != replay.second_sha256:
         errors.append(
@@ -620,6 +663,18 @@ def execute_deterministic_replay(
     return 0
 
 
+def load_reviewed_topology_qualification(
+    args: argparse.Namespace,
+) -> tuple[dict[str, object] | None, list[str]]:
+    """Authenticate the exact topology summary with its reviewed software key."""
+
+    return load_signed_topology_qualification_from_args(
+        args,
+        expected_deployment_id=args.deployment_id,
+        expected_environment=args.environment,
+    )
+
+
 def validate_inputs(args: argparse.Namespace) -> list[str]:
     """Validate runner inputs before command-plan construction."""
 
@@ -646,6 +701,13 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             seen=seen_input_files,
         )
     )
+    errors.extend(
+        require_existing_files(
+            [args.topology_qualification_envelope],
+            "--topology-qualification-envelope",
+            seen=seen_input_files,
+        )
+    )
     resilience_paths = (
         []
         if args.resilience_qualification_summary is None
@@ -659,6 +721,14 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         require_existing_files(
             resilience_paths,
             "--resilience-qualification-summary",
+            seen=seen_input_files,
+        )
+    )
+    inventory_paths = [args.l1_lane_evidence_inventory]
+    errors.extend(
+        require_existing_files(
+            inventory_paths,
+            "--l1-lane-evidence-inventory",
             seen=seen_input_files,
         )
     )
@@ -709,6 +779,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             *paths_by_gate.values(),
             foundational_paths,
             resilience_paths,
+            inventory_paths,
         ]
         for path in paths
     ):
@@ -717,18 +788,26 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             "secret-looking, control-character, parent, current, or "
             "platform-specific components"
         )
-    if args.topology_qualification_summary is None:
-        topology_binding = None
-        errors.append("--topology-qualification-summary is required")
-    else:
-        topology_binding, topology_errors = load_topology_qualification_binding(
-            args.topology_qualification_summary,
-            expected_deployment_id=args.deployment_id,
-            expected_environment=args.environment,
-        )
-        errors.extend(topology_errors)
+    topology_binding, topology_errors = load_reviewed_topology_qualification(args)
+    errors.extend(topology_errors)
+    if topology_binding is not None:
+        args.topology_qualification_binding = topology_binding
+    inventory_plan, inventory_errors = inventory_plan_from_args(args)
+    errors.extend(inventory_errors)
+    if inventory_plan is not None:
+        args.l1_lane_evidence_inventory_plan = inventory_plan
     require_runner_positive_int(args, "now_unix", errors)
     require_runner_non_negative_int(args, "max_summary_artifact_age_secs", errors)
+    require_runner_non_negative_int(
+        args,
+        "max_topology_qualification_review_age_secs",
+        errors,
+    )
+    require_runner_positive_int(
+        args,
+        "topology_qualification_signer_key_revision",
+        errors,
+    )
     if args.deployment_id is None or args.environment is None:
         errors.append(
             "production readiness runner requires --deployment-id and --environment"
@@ -833,6 +912,23 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors.append(
                 "production readiness runner foundational sequence after 1 requires a non-zero predecessor"
             )
+    foundational_domain: Any = None
+    if len(foundational_paths) == 1:
+        try:
+            foundational_payload = decode_evidence_json(
+                read_evidence_bytes(foundational_paths[0], MAX_SUMMARY_BYTES)
+            )
+            foundational_domain = foundational_payload.get("signature")
+        except (OSError, RuntimeError, UnicodeDecodeError, ValueError):
+            pass
+    errors.extend(
+        validate_signer_independence(
+            ("topology", topology_binding),
+            ("resilience", getattr(args, "resilience_qualification_binding", None)),
+            ("L1 lane inventory", inventory_plan),
+            ("promotion", foundational_domain),
+        )
+    )
     return errors
 
 
@@ -845,8 +941,38 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
             [
                 "--topology-qualification-summary",
                 str(args.topology_qualification_summary),
+                "--topology-qualification-envelope",
+                str(args.topology_qualification_envelope),
+                "--topology-qualification-verification-public-key-hex",
+                args.topology_qualification_verification_public_key_hex,
+                "--topology-qualification-signer-service-id",
+                args.topology_qualification_signer_service_id,
+                "--topology-qualification-signer-administrator-id",
+                args.topology_qualification_signer_administrator_id,
+                "--topology-qualification-signer-key-revision",
+                str(args.topology_qualification_signer_key_revision),
+                "--topology-qualification-signer-policy-revision",
+                str(args.topology_qualification_signer_policy_revision),
+                "--topology-qualification-signer-policy-digest-hex",
+                args.topology_qualification_signer_policy_digest_hex,
+                "--max-topology-qualification-review-age-secs",
+                str(args.max_topology_qualification_review_age_secs),
                 "--resilience-qualification-summary",
                 str(args.resilience_qualification_summary),
+                "--l1-lane-evidence-inventory",
+                str(args.l1_lane_evidence_inventory),
+                "--l1-lane-evidence-inventory-verification-public-key-hex",
+                args.l1_lane_evidence_inventory_verification_public_key_hex,
+                "--l1-lane-evidence-inventory-signer-service-id",
+                args.l1_lane_evidence_inventory_signer_service_id,
+                "--l1-lane-evidence-inventory-signer-administrator-id",
+                args.l1_lane_evidence_inventory_signer_administrator_id,
+                "--l1-lane-evidence-inventory-signer-key-revision",
+                str(args.l1_lane_evidence_inventory_signer_key_revision),
+                "--l1-lane-evidence-inventory-signer-policy-revision",
+                str(args.l1_lane_evidence_inventory_signer_policy_revision),
+                "--l1-lane-evidence-inventory-signer-policy-digest-sha256",
+                args.l1_lane_evidence_inventory_signer_policy_digest_sha256,
             ]
         )
         if args.resilience_qualification_signer_public_key_hex is not None:
@@ -861,7 +987,9 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         paths_by_gate = summary_paths_by_gate(args)
         for gate in args.required_gates:
             for path in paths_by_gate[gate]:
-                command.extend(["--evidence", str(path)])
+                command.extend(
+                    ["--evidence", str(path), "--l1-lane-summary", f"{gate}={path}"]
+                )
         for required_gate in args.required_gates:
             command.extend(["--require-gate", required_gate])
         command.extend(
@@ -916,6 +1044,19 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     ]
 
 
+def topology_qualification_plan(args: argparse.Namespace) -> dict[str, object]:
+    """Render the exact authenticated topology binding and public trust metadata."""
+
+    binding = getattr(args, "topology_qualification_binding", None)
+    if binding is None:
+        binding, _topology_errors = load_reviewed_topology_qualification(args)
+    return {
+        "summary": str(args.topology_qualification_summary),
+        "envelope": str(args.topology_qualification_envelope),
+        **({} if binding is None else binding),
+    }
+
+
 def foundational_prerequisite_plan(args: argparse.Namespace) -> dict[str, object]:
     """Render the payload-free foundational prerequisite plan row."""
 
@@ -951,11 +1092,7 @@ def resilience_qualification_plan(args: argparse.Namespace) -> dict[str, object]
 
     binding = getattr(args, "resilience_qualification_binding", None)
     if binding is None and args.resilience_qualification_summary is not None:
-        topology_binding, _topology_errors = load_topology_qualification_binding(
-            args.topology_qualification_summary,
-            expected_deployment_id=args.deployment_id,
-            expected_environment=args.environment,
-        )
+        topology_binding, _topology_errors = load_reviewed_topology_qualification(args)
         key_errors: list[str] = []
         public_key = parse_foundational_signer_public_key(
             args.resilience_qualification_signer_public_key_hex,
@@ -997,11 +1134,23 @@ def resilience_qualification_plan(args: argparse.Namespace) -> dict[str, object]
     return row
 
 
+def l1_lane_evidence_inventory_plan(args: argparse.Namespace) -> dict[str, object]:
+    """Render the exact payload-free signed inventory plan row."""
+
+    row = getattr(args, "l1_lane_evidence_inventory_plan", None)
+    if row is None:
+        row, _errors = inventory_plan_from_args(args)
+    return {} if row is None else row
+
+
 def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
     """Render the aggregate dry-run plan."""
 
     thresholds: dict[str, int] = {
         "max_summary_artifact_age_secs": args.max_summary_artifact_age_secs,
+        "max_topology_qualification_review_age_secs": (
+            args.max_topology_qualification_review_age_secs
+        ),
     }
     thresholds["now_unix"] = args.now_unix
 
@@ -1011,22 +1160,15 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
     if args.environment is not None:
         deployment_context["environment"] = args.environment
 
-    topology_binding, _topology_errors = load_topology_qualification_binding(
-        args.topology_qualification_summary,
-        expected_deployment_id=args.deployment_id,
-        expected_environment=args.environment,
-    )
     return {
         "schema": PLAN_SCHEMA,
         "verifier_summary_schema": SUMMARY_SCHEMA,
         "required_gates": list(args.required_gates),
         "thresholds": thresholds,
         "deployment_context": deployment_context,
-        "topology_qualification": {
-            "summary": str(args.topology_qualification_summary),
-            **({} if topology_binding is None else topology_binding),
-        },
+        "topology_qualification": topology_qualification_plan(args),
         "resilience_qualification": resilience_qualification_plan(args),
+        "l1_lane_evidence_inventory": l1_lane_evidence_inventory_plan(args),
         "foundational_prerequisite": foundational_prerequisite_plan(args),
         "external_summaries": {
             gate: [str(path) for path in paths]
@@ -1066,6 +1208,11 @@ def rendered_plan_paths_are_safe(rendered: Mapping[str, object]) -> bool:
         foundational_summary = foundational_prerequisite.get("summary")
         if isinstance(foundational_summary, str):
             paths.append(foundational_summary)
+    inventory = rendered.get("l1_lane_evidence_inventory")
+    if isinstance(inventory, Mapping):
+        inventory_path = inventory.get("inventory")
+        if isinstance(inventory_path, str):
+            paths.append(inventory_path)
     resilience_qualification = rendered.get("resilience_qualification")
     if isinstance(resilience_qualification, Mapping):
         resilience_summary = resilience_qualification.get("summary")
@@ -1073,9 +1220,10 @@ def rendered_plan_paths_are_safe(rendered: Mapping[str, object]) -> bool:
             paths.append(resilience_summary)
     topology_qualification = rendered.get("topology_qualification")
     if isinstance(topology_qualification, Mapping):
-        topology_summary = topology_qualification.get("summary")
-        if isinstance(topology_summary, str):
-            paths.append(topology_summary)
+        for field in ("summary", "envelope"):
+            topology_path = topology_qualification.get(field)
+            if isinstance(topology_path, str):
+                paths.append(topology_path)
     steps = rendered.get("steps")
     if isinstance(steps, list):
         for step in steps:
@@ -1104,6 +1252,9 @@ def validate_plan_json(
 
     expected_thresholds: dict[str, int] = {
         "max_summary_artifact_age_secs": args.max_summary_artifact_age_secs,
+        "max_topology_qualification_review_age_secs": (
+            args.max_topology_qualification_review_age_secs
+        ),
     }
     expected_thresholds["now_unix"] = args.now_unix
 
@@ -1128,15 +1279,8 @@ def validate_plan_json(
     }
     expected_foundational_prerequisite = foundational_prerequisite_plan(args)
     expected_resilience_qualification = resilience_qualification_plan(args)
-    topology_binding, _topology_errors = load_topology_qualification_binding(
-        args.topology_qualification_summary,
-        expected_deployment_id=args.deployment_id,
-        expected_environment=args.environment,
-    )
-    expected_topology_qualification = {
-        "summary": str(args.topology_qualification_summary),
-        **({} if topology_binding is None else topology_binding),
-    }
+    expected_topology_qualification = topology_qualification_plan(args)
+    expected_inventory = l1_lane_evidence_inventory_plan(args)
 
     def deployment_context_value_errors(
         context: Mapping[str, object],
@@ -1187,7 +1331,7 @@ def validate_plan_json(
                 "production readiness runner plan topology_qualification must be an object"
             )
         else:
-            if set(topology_qualification) != TOPOLOGY_BINDING_FIELDS | {"summary"}:
+            if set(topology_qualification) != PLAN_TOPOLOGY_QUALIFICATION_FIELDS:
                 errors.append(
                     "production readiness runner plan topology_qualification fields must match the schema-closed contract"
                 )
@@ -1228,6 +1372,20 @@ def validate_plan_json(
                 errors,
                 path="production readiness runner plan resilience_qualification",
             )
+        inventory = rendered.get("l1_lane_evidence_inventory")
+        if not isinstance(inventory, Mapping):
+            errors.append(
+                "production readiness runner plan L1 lane evidence inventory must be an object"
+            )
+        else:
+            if set(inventory) != L1_LANE_INVENTORY_PLAN_FIELDS:
+                errors.append(
+                    "production readiness runner plan L1 lane evidence inventory fields must match the schema-closed contract"
+                )
+            if inventory != expected_inventory:
+                errors.append(
+                    "production readiness runner plan L1 lane evidence inventory must match reviewed inputs"
+                )
         foundational_prerequisite = rendered.get("foundational_prerequisite")
         if not isinstance(foundational_prerequisite, Mapping):
             errors.append(
@@ -1314,7 +1472,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = EvidenceArgumentParser(
         description="Run the aggregate SoraFS production-readiness gate.",
     )
-    add_topology_qualification_argument(parser, required=False)
+    add_signed_topology_qualification_arguments(parser)
+    add_signed_lane_inventory_arguments(parser)
     parser.add_argument(
         "--resilience-qualification-summary",
         type=Path,

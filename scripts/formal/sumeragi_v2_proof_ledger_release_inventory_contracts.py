@@ -63,6 +63,23 @@ def _production_liveness_release_inventory_errors(
             if line.strip() and not line.lstrip().startswith("#")
         ]
 
+    canonical_taira_contract_tests = (
+        "taira_public_localnet::release_execution_profile_accepts_only_the_exact_positive_profile",
+        "taira_public_localnet::release_execution_profile_rejects_wrong_or_blank_build_profiles",
+        "taira_public_localnet::release_execution_profile_rejects_cargo_profile_mismatch",
+        "taira_public_localnet::release_execution_profile_rejects_non_exact_offline_values",
+        "taira_public_localnet::simulation_summary_json_records_release_profile_and_status_evidence",
+        "taira_public_localnet::strict_restart::taira_localnet_restart_catchup_behavior",
+    )
+    runner_taira_contract_tests = tuple(
+        shell_array("required_taira_release_contract_tests")
+    )
+    if runner_taira_contract_tests != canonical_taira_contract_tests:
+        errors.append(
+            f"{release_path}: Taira release contract inventory must equal the "
+            f"reviewed six-test tuple; found {runner_taira_contract_tests!r}"
+        )
+
     canonical_grouped_sdk_suites = (
         ("openapi", 7),
         ("python", 62),
@@ -673,8 +690,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 439:
-        errors.append("internal release-regression seal must contain exactly 439 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 443:
+        errors.append("internal release-regression seal must contain exactly 443 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1269,13 +1286,13 @@ def _production_liveness_release_inventory_errors(
         )
     expected_irohad_list = (
         'production_irohad_unit_list="$(\n'
-        '  run_cargo test --locked --offline -p irohad --bin irohad '
+        '  run_cargo test --locked --offline -p irohad --bin iroha3d '
         '--features test-network-message-control -- --list\n'
         ')"'
     )
     expected_irohad_ignored_list = (
         'production_irohad_ignored_unit_list="$(\n'
-        '  run_cargo test --locked --offline -p irohad --bin irohad '
+        '  run_cargo test --locked --offline -p irohad --bin iroha3d '
         '--features test-network-message-control -- --list --ignored\n'
         ')"'
     )
@@ -1363,17 +1380,17 @@ def _production_liveness_release_inventory_errors(
     source_sealed_commands = (
         (
             "source-sealed-workspace-build",
-            "cargo +1.93.1 -j1 build --locked --offline --workspace",
+            "cargo +1.93.1 build -j1 --locked --offline --workspace",
             "run_cargo build --locked --offline --workspace",
         ),
         (
             "source-sealed-workspace-tests",
-            "cargo +1.93.1 -j1 test --locked --offline --workspace",
+            "cargo +1.93.1 test -j1 --locked --offline --workspace",
             "run_cargo test --locked --offline --workspace",
         ),
         (
             "source-sealed-workspace-clippy",
-            "cargo +1.93.1 -j1 clippy --locked --offline --workspace "
+            "cargo +1.93.1 clippy -j1 --locked --offline --workspace "
             "--all-targets -- -D warnings",
             "run_cargo clippy --locked --offline --workspace --all-targets "
             "-- -D warnings",
@@ -1528,6 +1545,7 @@ def _production_liveness_release_inventory_errors(
                 "_PRODUCTION_TEST_COUNT": [],
                 "_PRODUCTION_MODULES": [],
                 "_DATA_MODEL_PRODUCTION_MODULES": [],
+                "_TAIRA_CONTRACT_TESTS": [],
             }
             for statement in receipt_tree.body:
                 if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
@@ -1559,6 +1577,18 @@ def _production_liveness_release_inventory_errors(
                 errors.append(
                     f"{receipt_path}: production data-model receipt routing must "
                     "equal the exact shell data-model module inventory"
+                )
+            if assignments["_TAIRA_CONTRACT_TESTS"] != [
+                canonical_taira_contract_tests
+            ]:
+                errors.append(
+                    f"{receipt_path}: Taira receipt tuple must equal the exact "
+                    "six-test runner inventory"
+                )
+            if receipt_source.splitlines().count('                    "state::",') != 1:
+                errors.append(
+                    f"{receipt_path}: canonical receipt inventory parser must admit "
+                    "the exact state module namespace"
                 )
             expected_receipt_components = (
                 "write_sumeragi_v2_release_receipt_formal_artifacts.py",
@@ -1661,21 +1691,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current\ninventory to 857 tests across 40 modules.\n"
+            "current\ninventory to 861 tests across 41 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 857-test, 40-module inventory. The complete source-sealed\n"
+            "current 861-test, 41-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current\nsource-bound inventory to 857 exact tests across 40 modules and "
+            "current\nsource-bound inventory to 861 exact tests across 41 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network\nlegs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",

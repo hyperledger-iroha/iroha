@@ -120,6 +120,8 @@ pub fn provider_vrf_input(
 pub struct ProviderVrfSubmissionV1 {
     /// Schema version (`POR_VRF_SUBMISSION_VERSION_V1`).
     pub version: u8,
+    /// Exact 32-byte genesis-derived network identity.
+    pub network_id: [u8; 32],
     /// Governance-controlled provider identifier.
     pub provider_id: [u8; 32],
     /// Manifest digest for which the provider generated the proof.
@@ -144,6 +146,7 @@ pub struct ProviderVrfSubmissionV1 {
 struct ProviderVrfSubmissionSigningPayloadV1 {
     domain: String,
     version: u8,
+    network_id: [u8; 32],
     provider_id: [u8; 32],
     manifest_digest: [u8; 32],
     epoch_id: u64,
@@ -159,6 +162,7 @@ impl From<&ProviderVrfSubmissionV1> for ProviderVrfSubmissionSigningPayloadV1 {
         Self {
             domain: POR_VRF_SUBMISSION_SIGNATURE_DOMAIN_V1.to_owned(),
             version: submission.version,
+            network_id: submission.network_id,
             provider_id: submission.provider_id,
             manifest_digest: submission.manifest_digest,
             epoch_id: submission.epoch_id,
@@ -182,6 +186,9 @@ impl ProviderVrfSubmissionV1 {
             return Err(ProviderVrfSubmissionValidationError::UnsupportedVersion {
                 found: self.version,
             });
+        }
+        if self.network_id.iter().all(|byte| *byte == 0) {
+            return Err(ProviderVrfSubmissionValidationError::InvalidNetworkId);
         }
         if self.provider_id.iter().all(|byte| *byte == 0) {
             return Err(ProviderVrfSubmissionValidationError::InvalidProviderId);
@@ -286,6 +293,9 @@ pub enum ProviderVrfSubmissionValidationError {
         /// Version decoded from the cursor payload.
         found: u8,
     },
+    /// Exact network identity is inert.
+    #[error("provider VRF submission network id must be non-zero")]
+    InvalidNetworkId,
     /// Provider identifier is inert.
     #[error("provider VRF submission provider id must be non-zero")]
     InvalidProviderId,
@@ -3033,6 +3043,7 @@ mod tests {
     fn provider_vrf_submission_fixture() -> ProviderVrfSubmissionV1 {
         ProviderVrfSubmissionV1 {
             version: POR_VRF_SUBMISSION_VERSION_V1,
+            network_id: [0x31; 32],
             provider_id: [1; 32],
             manifest_digest: [2; 32],
             epoch_id: 3,
@@ -3124,76 +3135,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn provider_vrf_submission_requires_exact_non_inert_ed25519_material() {
-        let submission = provider_vrf_submission_fixture();
-        assert!(submission.validate().is_ok());
-        let exact = submission
-            .encoded_len_exact()
-            .expect("VRF submission exposes exact canonical length");
-        assert_eq!(
-            preflight_provider_vrf_submission_len(&submission, exact),
-            Ok(exact)
-        );
-        assert_eq!(
-            preflight_provider_vrf_submission_len(&submission, exact - 1),
-            Err(ProviderVrfSubmissionValidationError::PayloadTooLarge {
-                found: exact,
-                maximum: exact - 1,
-            })
-        );
-        let encoded = norito::to_bytes(&submission).expect("encode VRF submission");
-        assert_eq!(
-            decode_provider_vrf_submission_v1(&encoded).expect("bounded VRF decoder"),
-            submission
-        );
-        assert!(
-            decode_provider_vrf_submission_v1(&vec![
-                0;
-                PROVIDER_VRF_SUBMISSION_MAX_CANONICAL_BYTES_V1
-                    + 1
-            ])
-            .is_err()
-        );
-
-        let mut short_key = submission.clone();
-        short_key.signature.public_key.pop();
-        assert_eq!(
-            short_key.validate(),
-            Err(
-                ProviderVrfSubmissionValidationError::InvalidSignaturePublicKeyLength {
-                    found: PUBLIC_KEY_LENGTH - 1,
-                    expected: PUBLIC_KEY_LENGTH,
-                }
-            )
-        );
-
-        let mut overlong_signature = submission.clone();
-        overlong_signature.signature.signature.push(10);
-        assert_eq!(
-            overlong_signature.validate(),
-            Err(
-                ProviderVrfSubmissionValidationError::InvalidSignatureLength {
-                    found: SIGNATURE_LENGTH + 1,
-                    expected: SIGNATURE_LENGTH,
-                }
-            )
-        );
-
-        let mut inert = submission.clone();
-        inert.signature.public_key.fill(0);
-        assert_eq!(
-            inert.validate(),
-            Err(ProviderVrfSubmissionValidationError::InvalidSignature)
-        );
-
-        let mut reserved = submission;
-        reserved.signature.algorithm = SignatureAlgorithm::MultiSig;
-        assert_eq!(
-            reserved.validate(),
-            Err(ProviderVrfSubmissionValidationError::UnsupportedSignatureAlgorithm)
-        );
-    }
+    include!("por/provider_vrf_tests.rs");
 
     #[test]
     fn challenge_id_reflects_epoch_and_round() {

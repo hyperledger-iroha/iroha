@@ -1,7 +1,7 @@
 # Sora Taira (testnet) validator configuration
 # Network prefix: `taira`
 # Render a per-validator config first, then start with:
-# `irohad --sora --config <rendered-validator-config.toml>`
+# `iroha3d --sora --config <rendered-validator-config.toml>`
 # This is the checked-in peer-1 template. Runtime-only validator private keys,
 # SoraNet transport identities, onboarding/faucet authorities, and streaming
 # identity keys must come from a user-local `validator_secrets.local.toml`
@@ -11,9 +11,9 @@
 chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 chain_discriminant = 369
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-private_key = "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"
+private_key_file = "/run/secrets/iroha/taira-validator-private-key"
 soranet_transport_public_key = "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY"
-soranet_transport_private_key = "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY"
+soranet_transport_private_key_file = "/run/secrets/iroha/taira-soranet-transport-private-key"
 
 trusted_peers = [
   "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@taira-validator-1.sora.org:1337",
@@ -132,7 +132,7 @@ allow_tool_prefixes = ["iroha."]
 
 [torii.kagemusha_commands]
 enabled = true
-private_key = "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
+private_key_file = "/run/secrets/iroha/taira-kagemusha-commands-private-key"
 minimum_xor_balance = "1"
 max_tx_value = "1000000000"
 operation_registry_max_entries = 4096
@@ -312,11 +312,11 @@ volatility_class = "stable"
 
 [genesis]
 public_key = "ed0120CEF83A365F125EF1CB8F040290A4C5D23561A24CC4C6782AC07506C77003AF00"
-expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
+expected_hash_file = "/run/iroha/genesis.expected_hash"
 
 [streaming]
 identity_public_key = "REPLACE_WITH_STREAMING_IDENTITY_PUBLIC_KEY"
-identity_private_key = "REPLACE_WITH_STREAMING_IDENTITY_PRIVATE_KEY"
+identity_private_key_file = "/run/secrets/iroha/taira-streaming-identity-private-key"
 feature_bits = 0b11
 
 [crypto]

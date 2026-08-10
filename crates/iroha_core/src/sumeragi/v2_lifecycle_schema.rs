@@ -1030,6 +1030,12 @@ impl DurablePayloadReference {
                 Self::CertifiedServeNegative { outcome, .. },
                 Some(terminal),
             ) => outcome.terminal() == terminal,
+            (LifecycleWorkClass::Validate, Self::None, terminal) => {
+                matches!(
+                    terminal,
+                    None | Some(TerminalOutcome::Advanced | TerminalOutcome::Cancelled)
+                )
+            }
             (class, Self::None, _) => class != LifecycleWorkClass::CertifiedServe,
             _ => false,
         }
@@ -1589,4 +1595,36 @@ pub(super) fn lower_enter_view_ordinals(
         })
         .map(|record| record.ordinal)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DurablePayloadReference, LifecycleWorkClass, TerminalOutcome};
+
+    #[test]
+    fn durable_validate_accepts_only_live_advanced_or_cancelled_state() {
+        let payload = DurablePayloadReference::None;
+        assert!(payload.matches_terminal(LifecycleWorkClass::Validate, None));
+        assert!(payload.matches_terminal(
+            LifecycleWorkClass::Validate,
+            Some(TerminalOutcome::Advanced)
+        ));
+        assert!(payload.matches_terminal(
+            LifecycleWorkClass::Validate,
+            Some(TerminalOutcome::Cancelled)
+        ));
+        for terminal in [
+            TerminalOutcome::Completed(None),
+            TerminalOutcome::Rejected(7),
+            TerminalOutcome::Failed(9),
+        ] {
+            assert!(!payload.matches_terminal(LifecycleWorkClass::Validate, Some(terminal)));
+        }
+
+        assert!(payload.matches_terminal(
+            LifecycleWorkClass::InvalidBodyReport,
+            Some(TerminalOutcome::Rejected(7))
+        ));
+        assert!(!payload.matches_terminal(LifecycleWorkClass::CertifiedServe, None));
+    }
 }

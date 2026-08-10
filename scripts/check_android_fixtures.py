@@ -7,6 +7,7 @@ import argparse
 import base64
 import hashlib
 import json
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,11 +19,12 @@ DEFAULT_FIXTURES_PATH = DEFAULT_RESOURCES_DIR / "transaction_payloads.json"
 DEFAULT_MANIFEST_PATH = DEFAULT_RESOURCES_DIR / "transaction_fixtures.manifest.json"
 DEFAULT_STATE_PATH = Path("artifacts/android_fixture_regen_state.json")
 MAX_TRANSACTION_NONCE = 0xFFFF_FFFF
+NETWORK_ID_LITERAL = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
 
 PAYLOAD_FIXTURE_FIELDS = frozenset(
     {
         "authority",
-        "chain",
+        "network_id",
         "creation_time_ms",
         "name",
         "nonce",
@@ -37,7 +39,7 @@ PAYLOAD_FIXTURE_FIELDS = frozenset(
 PAYLOAD_FIELDS = frozenset(
     {
         "authority",
-        "chain",
+        "network_id",
         "creation_time_ms",
         "executable",
         "fee_payment",
@@ -55,7 +57,7 @@ MANIFEST_FIELDS = frozenset({"fixtures"})
 MANIFEST_FIXTURE_FIELDS = frozenset(
     {
         "authority",
-        "chain",
+        "network_id",
         "creation_time_ms",
         "encoded_file",
         "encoded_len",
@@ -199,7 +201,7 @@ def validate_payload_descriptor(entry: dict, name: str, path: Path) -> None:
         raise ValueError(f"fixture entry {name} metadata must be an object")
     for field in (
         "authority",
-        "chain",
+        "network_id",
         "creation_time_ms",
         "nonce",
         "time_to_live_ms",
@@ -236,12 +238,40 @@ def is_valid_transaction_nonce(value: object) -> bool:
     )
 
 
+def _crc16_ccitt_false(payload: bytes) -> int:
+    crc = 0xFFFF
+    for byte in payload:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = (
+                ((crc << 1) ^ 0x1021) & 0xFFFF
+                if crc & 0x8000
+                else (crc << 1) & 0xFFFF
+            )
+    return crc
+
+
+def validate_network_id(value: object, context: str) -> str:
+    """Require the exact canonical hash literal used by ``NetworkId``."""
+    if not isinstance(value, str):
+        raise ValueError(f"{context} has invalid network_id")
+    matched = NETWORK_ID_LITERAL.fullmatch(value)
+    if matched is None:
+        raise ValueError(f"{context} has invalid canonical network_id")
+    body, checksum = matched.groups()
+    expected_checksum = _crc16_ccitt_false(f"hash:{body}".encode("ascii"))
+    if checksum != f"{expected_checksum:04X}":
+        raise ValueError(f"{context} has invalid canonical network_id checksum")
+    if bytes.fromhex(body)[-1] & 1 != 1:
+        raise ValueError(f"{context} has unmarked network_id hash")
+    return value
+
+
 def validate_transaction_metadata(record: dict, context: str) -> None:
-    chain = record.get("chain")
+    network_id = record.get("network_id")
     authority = record.get("authority")
     creation_time_ms = record.get("creation_time_ms")
-    if not isinstance(chain, str) or not chain.strip():
-        raise ValueError(f"{context} has invalid chain")
+    validate_network_id(network_id, context)
     if not isinstance(authority, str) or not authority.strip():
         raise ValueError(f"{context} has invalid authority")
     if (
@@ -326,10 +356,37 @@ def signed_transaction_payload(data: bytes) -> bytes:
     return payload
 
 
+def transaction_payload_network_id(data: bytes, context: str) -> bytes:
+    """Read the exact ``TransactionDomain::Network`` identity from a payload."""
+    domain, _ = read_norito_field(data, 0, f"{context}.domain")
+    if len(domain) < 4:
+        raise ValueError(f"{context} has a truncated transaction domain")
+    tag = int.from_bytes(domain[:4], "little")
+    if tag == 1:
+        raise ValueError(f"{context} uses the genesis-only transaction domain")
+    if tag != 0:
+        raise ValueError(f"{context} has an unknown transaction domain tag {tag}")
+    network_id, offset = read_norito_field(
+        domain, 4, f"{context}.domain.network_id"
+    )
+    if offset != len(domain) or len(network_id) != 32:
+        raise ValueError(f"{context} has a malformed transaction network_id")
+    return network_id
+
+
+def require_transaction_network_id(
+    payload: bytes, network_id: str, context: str
+) -> None:
+    expected = bytes.fromhex(network_id[5:69])
+    if transaction_payload_network_id(payload, context) != expected:
+        raise ValueError(f"{context} network_id does not match its descriptor")
+
+
 def signed_transaction_entrypoint_hash(data: bytes) -> str:
     payload = signed_transaction_payload(data)
     entrypoint = b"\x00\x00\x00\x00" + compact_length(len(payload)) + payload
     return iroha_hash(entrypoint)
+
 
 def normalize_authority(value: str) -> str:
     if not isinstance(value, str):
@@ -349,7 +406,7 @@ class PayloadFixture:
     payload_hash: str
     signed_base64: str
     signed_hash: str
-    chain: str
+    network_id: str
     authority: str
     creation_time_ms: int
     time_to_live_ms: int
@@ -397,6 +454,12 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
                 f"fixture entry {name} in {path} missing payload_base64 string"
             )
         payload_bytes = decode_base64(payload_base64, f"{name} payload")
+        network_id = validate_network_id(
+            entry.get("network_id"), f"fixture entry {name} in {path}"
+        )
+        require_transaction_network_id(
+            payload_bytes, network_id, f"fixture entry {name} payload in {path}"
+        )
         if payload_bytes in seen_payloads:
             raise ValueError(f"duplicate fixture payload bytes for {name!r} in {path}")
         seen_payloads.add(payload_bytes)
@@ -414,6 +477,11 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
         signed_bytes = decode_base64(signed_base64, f"{name} signed payload")
         if signed_hash != signed_transaction_entrypoint_hash(signed_bytes):
             raise ValueError(f"fixture entry {name} in {path} signed_hash mismatch")
+        require_transaction_network_id(
+            signed_transaction_payload(signed_bytes),
+            network_id,
+            f"fixture entry {name} signed payload in {path}",
+        )
         if payload_hash in seen_payload_hashes:
             raise ValueError(f"duplicate fixture payload_hash {payload_hash!r} in {path}")
         seen_payload_hashes.add(payload_hash)
@@ -423,7 +491,6 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
         if signed_hash in seen_signed_hashes:
             raise ValueError(f"duplicate fixture signed_hash {signed_hash!r} in {path}")
         seen_signed_hashes.add(signed_hash)
-        chain = entry.get("chain")
         authority = entry.get("authority")
         creation_time_ms = entry.get("creation_time_ms")
         if "time_to_live_ms" not in entry:
@@ -434,8 +501,6 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
             raise ValueError(f"fixture entry {name} in {path} missing nonce field")
         time_to_live_ms = entry.get("time_to_live_ms")
         nonce = entry.get("nonce")
-        if not isinstance(chain, str) or not chain.strip():
-            raise ValueError(f"fixture entry {name} in {path} missing chain string")
         if not isinstance(authority, str) or not authority.strip():
             raise ValueError(f"fixture entry {name} in {path} missing authority string")
         if not isinstance(creation_time_ms, int) or isinstance(creation_time_ms, bool):
@@ -453,7 +518,7 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
             payload_hash=payload_hash,
             signed_base64=signed_base64,
             signed_hash=signed_hash,
-            chain=chain,
+            network_id=network_id,
             authority=authority,
             creation_time_ms=creation_time_ms,
             time_to_live_ms=time_to_live_ms,
@@ -521,7 +586,7 @@ def compare(
         signed_base64 = entry.get("signed_base64")
         signed_hash = entry.get("signed_hash")
         signed_len = entry.get("signed_len")
-        chain = entry.get("chain")
+        network_id = entry.get("network_id")
         authority = entry.get("authority")
         creation_time_ms = entry.get("creation_time_ms")
         if "time_to_live_ms" not in entry:
@@ -542,11 +607,16 @@ def compare(
                 payload_hash,
                 signed_base64,
                 signed_hash,
-                chain,
+                network_id,
                 authority,
             )
         ):
             errors.append(f"manifest fixture missing required string fields: {entry}")
+            continue
+        try:
+            network_id = validate_network_id(network_id, f"manifest fixture {name}")
+        except ValueError as exc:
+            errors.append(str(exc))
             continue
         if (
             not isinstance(encoded_len, int)
@@ -589,6 +659,12 @@ def compare(
         else:
             seen_payload_hashes.add(payload_hash)
         payload_identity = decode_base64(payload_base64, f"{name} payload")
+        try:
+            require_transaction_network_id(
+                payload_identity, network_id, f"manifest fixture {name} payload"
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
         if payload_identity in seen_payload_bytes:
             errors.append(f"manifest contains duplicate payload bytes: {name}")
         else:
@@ -598,6 +674,14 @@ def compare(
         else:
             seen_signed_hashes.add(signed_hash)
         signed_identity = decode_base64(signed_base64, f"{name} signed")
+        try:
+            require_transaction_network_id(
+                signed_transaction_payload(signed_identity),
+                network_id,
+                f"manifest fixture {name} signed payload",
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
         if signed_identity in seen_signed_bytes:
             errors.append(f"manifest contains duplicate signed bytes: {name}")
         else:
@@ -624,10 +708,10 @@ def compare(
                 errors.append(f"payload JSON signed_base64 mismatch for {name}")
             if payload_entry.signed_hash != signed_hash:
                 errors.append(f"payload JSON signed_hash mismatch for {name}")
-            if payload_entry.chain != chain:
+            if payload_entry.network_id != network_id:
                 errors.append(
-                    f"payload JSON chain mismatch for {name}: "
-                    f"payloads={payload_entry.chain} manifest={chain}"
+                    f"payload JSON network_id mismatch for {name}: "
+                    f"payloads={payload_entry.network_id} manifest={network_id}"
                 )
             normalized_payload_authority = normalize_authority(payload_entry.authority)
             normalized_manifest_authority = normalize_authority(authority)

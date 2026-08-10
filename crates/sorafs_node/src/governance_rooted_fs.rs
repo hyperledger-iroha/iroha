@@ -1,8 +1,9 @@
-//! Handle-rooted filesystem operations for durable Governance DAG state.
+//! Handle-rooted filesystem operations for durable local node state.
 //!
 //! Production mutations are resolved component-by-component below a retained
-//! directory handle. Linux and macOS use the `*at` family. Windows uses
-//! `NtCreateFile` for root-directory-relative opens and
+//! directory handle. The primitives back Governance DAG stores and the inert
+//! Musubi provider-attestation journal store. Linux and macOS use the `*at`
+//! family. Windows uses `NtCreateFile` for root-directory-relative opens and
 //! `SetFileInformationByHandle` for rename/disposition. Other targets fail
 //! closed because they are not V1 native release targets.
 
@@ -16,6 +17,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
@@ -40,6 +42,7 @@ const TWO_SLOT_STORE_NAME_MAX_BYTES_V1: usize = 128;
 const TWO_SLOT_STAGE_ENTRY_HARD_CAP_V1: usize = 16;
 const TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1: usize = 16;
 const TWO_SLOT_LOST_FOUND_TOTAL_MAX_BYTES_V1: u64 = 1024 * 1024 * 1024;
+const TWO_SLOT_INITIALIZATION_WAIT_MAX_V1: Duration = Duration::from_secs(5 * 60);
 const TWO_SLOT_NAMES_V1: [&str; 2] = ["slot-0.v1", "slot-1.v1"];
 const TWO_SLOT_COMMIT_MARKER_V1: [u8; 16] = *b"iroha-slot-v1-ok";
 const TWO_SLOT_ZERO_DIGEST: [u8; 32] = [0; 32];
@@ -736,9 +739,7 @@ mod platform {
         path::Path,
     };
 
-    #[cfg(test)]
-    use super::FileIdentity;
-    use super::{RootedDirectory, file_identity};
+    use super::{FileIdentity, RootedDirectory, file_identity};
 
     #[cfg(target_os = "linux")]
     const O_CREATE: c_int = 0x40;
@@ -762,9 +763,9 @@ mod platform {
     const O_DIRECTORY: c_int = 0x10_0000;
     const O_READ_ONLY: c_int = 0;
     const O_READ_WRITE: c_int = 2;
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     const AT_REMOVE_DIRECTORY: c_int = 0x200;
-    #[cfg(all(test, target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     const AT_REMOVE_DIRECTORY: c_int = 0x80;
     #[cfg(target_os = "linux")]
     const RENAME_NOREPLACE: c_uint = 1;
@@ -778,7 +779,6 @@ mod platform {
     unsafe extern "C" {
         fn openat(directory: c_int, path: *const c_char, flags: c_int, ...) -> c_int;
         fn mkdirat(directory: c_int, path: *const c_char, mode: c_uint) -> c_int;
-        #[cfg(test)]
         fn unlinkat(directory: c_int, path: *const c_char, flags: c_int) -> c_int;
     }
 
@@ -1291,7 +1291,6 @@ mod platform {
         }
     }
 
-    #[cfg(test)]
     pub(super) fn remove_open_directory(
         parent: &File,
         directory: &File,

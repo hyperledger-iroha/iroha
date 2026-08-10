@@ -65,16 +65,31 @@ java -version
 
 cd "${ROOT_DIR}/kotlin"
 ./gradlew --no-daemon -q :core-jvm:test \
-  --tests org.hyperledger.iroha.sdk.core.model.instructions.RegisterPinManifestInstructionTest
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.RegisterPinManifestInstructionTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.PinManifestLifecycleInstructionTest
 
 cd "${ROOT_DIR}"
-javac -d "${JAVA_OUT}" \
+KOTLIN_MAIN_CLASSES="${ROOT_DIR}/kotlin/core-jvm/build/classes/kotlin/main"
+if [[ ! -d "${KOTLIN_MAIN_CLASSES}" ]]; then
+  echo "Kotlin core-jvm main classes are missing after the focused Gradle tests." >&2
+  exit 1
+fi
+javac -cp "${KOTLIN_MAIN_CLASSES}" -d "${JAVA_OUT}" \
+  java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyEngineIdV1.java \
+  java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyProofSystemIdV1.java \
+  java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyProtocolIdV1.java \
   java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/InstructionBox.java \
   java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/InstructionKind.java \
   java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/InstructionTemplate.java \
+  java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ApprovePinManifestInstruction.java \
+  java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/BindManifestAliasInstruction.java \
   java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java \
+  java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RetirePinManifestInstruction.java \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/testing/SimpleJson.java \
+  java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsManifestInstructionBuilderTests.java \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java
 
-java -ea -cp "${JAVA_OUT}" \
+java -ea -cp "${JAVA_OUT}:${KOTLIN_MAIN_CLASSES}" \
+  org.hyperledger.iroha.android.sorafs.SorafsManifestInstructionBuilderTests
+java -ea -cp "${JAVA_OUT}:${KOTLIN_MAIN_CLASSES}" \
   org.hyperledger.iroha.android.sorafs.SorafsRegisterPinManifestBuilderTests

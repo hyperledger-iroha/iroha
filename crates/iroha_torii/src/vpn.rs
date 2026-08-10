@@ -660,7 +660,15 @@ fn require_signed_request(
     uri: &Uri,
     body: &[u8],
 ) -> Result<AccountId, Error> {
-    match crate::app_auth::verify_canonical_request(&app.state, headers, method, uri, body, None)? {
+    match crate::app_auth::verify_canonical_network_request(
+        &app.state,
+        app.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        body,
+        None,
+    )? {
         Some(verified) => Ok(verified.account),
         None => Err(not_permitted_error("signed account headers are required")),
     }
@@ -823,17 +831,25 @@ fn quote_policy_from_record(record: &VpnQuoteRecord) -> VpnQuotePolicyV1 {
     record.signed_quote.body.policy.clone()
 }
 
-fn validate_quote_record_projection(record: &VpnQuoteRecord) -> Result<(), Error> {
+fn validate_quote_record_projection(
+    record: &VpnQuoteRecord,
+    expected_network_id: &iroha_data_model::NetworkId,
+) -> Result<(), Error> {
     record.signed_quote.verify().map_err(|error| {
         inconsistent_vpn_state(format!("stored VPN quote signature is invalid: {error}"))
     })?;
     let body = &record.signed_quote.body;
     let policy = &body.policy;
     let quote_id = hex::encode(body.quote_id);
+    if &body.network_id != expected_network_id {
+        return Err(inconsistent_vpn_state(
+            "stored VPN quote belongs to a different exact network",
+        ));
+    }
     let canonical_lease_id =
-        derive_vpn_lease_id_v1(&body.chain_id, body.quote_id, &body.client_account_id);
+        derive_vpn_lease_id_v1(&body.network_id, body.quote_id, &body.client_account_id);
     let canonical_session_id = derive_vpn_session_id_v1(
-        &body.chain_id,
+        &body.network_id,
         body.quote_id,
         &body.client_account_id,
         body.address_slot,
@@ -960,8 +976,11 @@ fn validate_quote_record_projection(record: &VpnQuoteRecord) -> Result<(), Error
     Ok(())
 }
 
-fn open_lease_instruction(record: &VpnQuoteRecord) -> Result<VpnTxInstructionDto, Error> {
-    validate_quote_record_projection(record)?;
+fn open_lease_instruction(
+    record: &VpnQuoteRecord,
+    expected_network_id: &iroha_data_model::NetworkId,
+) -> Result<VpnTxInstructionDto, Error> {
+    validate_quote_record_projection(record, expected_network_id)?;
     let instruction: InstructionBox = OpenVpnLeaseEscrow::new(record.signed_quote.clone()).into();
     Ok(tx_instr_from_box(instruction))
 }
@@ -1014,8 +1033,11 @@ fn settlement_lease_id_from_request_or_index(
     Ok((lease_id, hex::encode(lease_id)))
 }
 
-fn quote_response_from_record(record: &VpnQuoteRecord) -> Result<VpnQuoteResponseDto, Error> {
-    let open_lease_instruction = open_lease_instruction(record)?;
+fn quote_response_from_record(
+    record: &VpnQuoteRecord,
+    expected_network_id: &iroha_data_model::NetworkId,
+) -> Result<VpnQuoteResponseDto, Error> {
+    let open_lease_instruction = open_lease_instruction(record, expected_network_id)?;
     Ok(VpnQuoteResponseDto {
         quote_id: record.quote_id.clone(),
         lease_id_hex: hex::encode(record.lease_id),
@@ -1284,7 +1306,7 @@ fn insert_quote_locked(
     state: &mut VpnRuntimeState,
     record: VpnQuoteRecord,
 ) -> Result<(), Error> {
-    validate_quote_record_projection(&record)?;
+    validate_quote_record_projection(&record, app.state.network_id_ref())?;
     let account_key = account_runtime_key(&record.account_id);
     let existing = quote_for_account_locked(app, state, &record.account_id);
     if existing.is_none() && state.quote_ids_by_account.len() >= state.quote_capacity {
@@ -1654,7 +1676,7 @@ fn verify_vpn_payment(
     quote: &VpnQuoteRecord,
     payment_tx_hash: &str,
 ) -> Result<(), Error> {
-    validate_quote_record_projection(quote)?;
+    validate_quote_record_projection(quote, app.state.network_id_ref())?;
     let payment_hash = payment_tx_hash.trim();
     if payment_hash.is_empty() {
         return Err(conversion_error("payment_tx_hash must not be empty"));
@@ -2063,13 +2085,10 @@ pub(crate) async fn handle_create_vpn_quote(
     let quote_id = build_quote_id(&account_id, &exit_class, nonce, current_ms);
     let quote_id_bytes = decode_hex_32(&quote_id, "quote_id")?;
     let address_slot = derive_vpn_address_slot_v1(quote_id_bytes);
-    let lease_id = derive_vpn_lease_id_v1(app.chain_id.as_ref(), quote_id_bytes, &account_id);
-    let session_id = derive_vpn_session_id_v1(
-        app.chain_id.as_ref(),
-        quote_id_bytes,
-        &account_id,
-        address_slot,
-    );
+    let network_id = *app.state.network_id_ref();
+    let lease_id = derive_vpn_lease_id_v1(&network_id, quote_id_bytes, &account_id);
+    let session_id =
+        derive_vpn_session_id_v1(&network_id, quote_id_bytes, &account_id, address_slot);
     let address_plan = derive_vpn_address_plan_v1(address_slot);
     let lease_duration_ms = profile
         .lease_secs
@@ -2089,10 +2108,8 @@ pub(crate) async fn handle_create_vpn_quote(
         .checked_mul(1_000)
         .ok_or_else(|| conversion_error("vpn settlement grace overflows milliseconds"))?;
     let asset_definition = xor_asset_definition_id();
-    let escrow_account_id =
-        vpn_lease_custody_account_id(app.chain_id.as_ref(), &lease_id, &asset_definition).map_err(
-            |error| conversion_error(format!("cannot derive VPN custody account: {error}")),
-        )?;
+    let escrow_account_id = vpn_lease_custody_account_id(&network_id, &lease_id, &asset_definition)
+        .map_err(|error| conversion_error(format!("cannot derive VPN custody account: {error}")))?;
     if escrow_account_id == operator_account_id {
         return Err(not_permitted_error(
             "vpn protocol custody account must differ from the relay operator",
@@ -2123,7 +2140,7 @@ pub(crate) async fn handle_create_vpn_quote(
     };
     let signed_quote = VpnSignedQuoteV1::try_sign(
         VpnQuoteBodyV1 {
-            chain_id: app.chain_id.as_ref().clone(),
+            network_id,
             quote_id: quote_id_bytes,
             lease_id,
             session_id,
@@ -2175,7 +2192,7 @@ pub(crate) async fn handle_create_vpn_quote(
         directory_snapshot_digest: trust.directory_snapshot_digest,
         relay_trust_valid_until_ms: trust.valid_until_ms,
     };
-    let response = quote_response_from_record(&record)?;
+    let response = quote_response_from_record(&record, &network_id)?;
     let mut vpn_state = lock_vpn_runtime(&app);
     expire_quote_for_account_locked(&app, &mut vpn_state, &record.account_id, current_ms);
     expire_session_for_account_locked(&app, &mut vpn_state, &record.account_id, current_ms);

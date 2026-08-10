@@ -62,6 +62,7 @@ macro_rules! schema_types {
             iroha_executor_data_model::permission::account::CanModifyAccountMetadata,
             iroha_executor_data_model::permission::asset_definition::CanUnregisterAssetDefinition,
             iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata,
+            iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy,
             iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionAlias,
             iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition,
             iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition,

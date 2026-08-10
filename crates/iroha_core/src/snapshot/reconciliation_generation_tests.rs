@@ -135,7 +135,7 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         BlockCount(1),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -195,7 +195,7 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
         signed_block_after_transaction(accepted_log_transaction("third"), Some(block2.as_ref()));
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
     let expected_snapshot = canonical_state_snapshot_bytes_for_tests(&state);
-    let expected_chain_id = state.chain_id.clone();
+    let expected_network_id = state.network_id.clone();
     store_complete_snapshot_commit_evidence_for_blocks(
         &state,
         &kura,
@@ -247,7 +247,7 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
         block_count,
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &expected_chain_id,
+        &expected_network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -364,7 +364,7 @@ async fn snapshot_read_succeeds_without_selector_bootstrap() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -917,7 +917,7 @@ async fn cannot_find_snapshot_on_read_is_not_found() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let key_pair = checked_random_snapshot_keypair();
-    let chain_id = ChainId::from(TEST_CHAIN_ID);
+    let network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x21));
 
     let Err(error) = try_read_snapshot(
         store_dir,
@@ -926,7 +926,7 @@ async fn cannot_find_snapshot_on_read_is_not_found() {
         BlockCount(15),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &chain_id,
+        &network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -943,7 +943,7 @@ async fn cannot_parse_snapshot_on_read_is_error() {
     let store_dir = tmp_root.path().join("snapshot");
     std::fs::create_dir(&store_dir).unwrap();
     let key_pair = checked_random_snapshot_keypair();
-    let chain_id = ChainId::from(TEST_CHAIN_ID);
+    let network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x22));
     let corrupted = [1, 4, 1, 2, 3, 4, 1, 4];
     write_snapshot_bundle_from_bytes(&store_dir, &corrupted, &key_pair);
 
@@ -954,7 +954,7 @@ async fn cannot_parse_snapshot_on_read_is_error() {
         BlockCount(15),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &chain_id,
+        &network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -987,7 +987,7 @@ async fn checksum_mismatch_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -1002,12 +1002,12 @@ async fn checksum_mismatch_rejected() {
 }
 
 #[tokio::test]
-async fn chain_id_mismatch_rejected() {
+async fn network_id_mismatch_rejected() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let state = state_factory();
     let key_pair = checked_random_snapshot_keypair();
-    let expected_chain_id = ChainId::from("other-chain");
+    let expected_network_id = NetworkId::from_genesis_hash(dummy_block_hash(0x42));
 
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
 
@@ -1018,7 +1018,7 @@ async fn chain_id_mismatch_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &expected_chain_id,
+        &expected_network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -1026,7 +1026,7 @@ async fn chain_id_mismatch_rejected() {
         panic!("should not be ok")
     };
 
-    assert!(matches!(error, TryReadError::ChainIdMismatch { .. }));
+    assert!(matches!(error, TryReadError::NetworkIdMismatch { .. }));
 }
 
 #[tokio::test]
@@ -1077,7 +1077,7 @@ async fn missing_checksum_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -1112,7 +1112,7 @@ async fn missing_merkle_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -1147,7 +1147,7 @@ async fn merkle_root_mismatch_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -1182,7 +1182,7 @@ async fn merkle_leaf_count_mismatch_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -1214,7 +1214,7 @@ async fn merkle_chunk_size_mismatch_rejected() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -1440,7 +1440,7 @@ async fn can_read_multiple_blocks() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -1506,7 +1506,7 @@ async fn finalized_snapshot_tip_rejects_replacement_without_mutation() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         <_>::default(),

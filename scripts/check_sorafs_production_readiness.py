@@ -65,6 +65,10 @@ from sorafs_response_args import (  # noqa: E402
     non_negative_int_arg,
     positive_int_arg,
 )
+import sorafs_software_signer_evidence as software_signer_evidence  # noqa: E402
+foundational_signing_payload = software_signer_evidence.foundational_signing_payload
+parse_foundational_signer_public_key = (
+    software_signer_evidence.parse_foundational_signer_public_key)
 from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as AI_PRESCREEN_REQUIRED_KINDS,
     KIND_BY_NAME as AI_PRESCREEN_KIND_BY_NAME,
@@ -219,11 +223,29 @@ from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
 )
 from sccp_release_common import verify_ed25519  # noqa: E402
 from sorafs_topology_qualification import (  # noqa: E402
-    add_topology_qualification_argument,
-    load_topology_qualification_binding,
+    add_signed_topology_qualification_arguments,
+    load_signed_topology_qualification_from_args,
+    validate_authenticated_topology_binding_object,
     validate_topology_binding_object,
 )
-
+from sorafs_l1_lane_inventory_integration import (  # noqa: E402
+    VerifiedLaneInventory,
+    add_signed_lane_inventory_arguments,
+    aggregate_inventory_row,
+    validate_aggregate_inventory_row,
+    validate_aggregate_foundational_lane_digest_bindings,
+    validate_disallowed_summary_diagnostics,
+    validate_duplicate_summary_diagnostics,
+    validate_foundational_inventory_digest,
+    validate_foundational_lane_summary_digest_bindings,
+    validate_inventory_lane_digest_bindings,
+    validate_signer_independence,
+    verify_inventory_from_args,
+)
+from sorafs_l1_lane_evidence_inventory import (  # noqa: E402
+    InventoryError,
+    parse_summary_specs as parse_inventory_summary_specs,
+)
 from sorafs_production_readiness_contract import (  # noqa: E402
     FOUNDATIONAL_PREREQUISITE_SCHEMA,
     FOUNDATIONAL_PREREQUISITE_SIGNATURE_DOMAIN,
@@ -248,6 +270,8 @@ from sorafs_production_readiness_contract import (  # noqa: E402
     AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS,
     FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS,
     AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS,
+    AGGREGATE_L1_LANE_EVIDENCE_INVENTORY_FIELDS,
+    AGGREGATE_L1_LANE_EVIDENCE_INVENTORY_SCHEMA,
     AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS,
     POP_CREDENTIALS_ROOT_BOUND_FINGERPRINT_FIELDS,
     POP_CREDENTIALS_REVOCATION_BOUND_FINGERPRINT_FIELDS,
@@ -431,6 +455,8 @@ class ValidationOptions:
     topology_qualification: Mapping[str, str] | None = None
     resilience_qualification: Mapping[str, Any] | None = None
     resilience_qualification_errors: tuple[str, ...] = ()
+    l1_lane_evidence_inventory: VerifiedLaneInventory | None = None
+    l1_lane_evidence_inventory_errors: tuple[str, ...] = ()
 
 
 def canonical_string(value: Any) -> str | None:
@@ -1286,6 +1312,7 @@ def validate_resilience_qualification_binding_object(
         return None
     if binding.get("schema") != RESILIENCE_QUALIFICATION_BINDING_SCHEMA:
         errors.append(f"{path}.schema must match the resilience binding contract")
+    software_signer_evidence.validate_aggregate_software_signer(binding, errors)
     for field in (
         "summary_sha256",
         "receipt_sha256",
@@ -1556,6 +1583,8 @@ def load_resilience_qualification_binding(
             )
         else:
             signature_bytes = bytes.fromhex(signature_hex)
+    signer_provenance = software_signer_evidence.validate_foundational_software_signer(
+        dict(authentication) if authentication is not None else None, errors)
 
     if (
         not isinstance(trusted_public_key, bytes)
@@ -1644,7 +1673,7 @@ def load_resilience_qualification_binding(
         receipt_sha256 is None
         or canonical_receipt_digest is None
         or generated_at_unix is None
-        or signer_fingerprint is None
+        or signer_fingerprint is None or any(value is None for value in signer_provenance.values())
     ):
         return None, errors
     return (
@@ -1654,47 +1683,11 @@ def load_resilience_qualification_binding(
             "receipt_sha256": receipt_sha256,
             "canonical_receipt_sha256": canonical_receipt_digest,
             "receipt_generated_at_unix": generated_at_unix,
+            **signer_provenance,
             "signer_public_key_fingerprint_sha256": signer_fingerprint,
         },
         errors,
     )
-
-
-def foundational_signing_payload(payload: dict[str, Any]) -> bytes:
-    """Return the canonical, domain-separated prerequisite signature payload."""
-
-    unsigned = dict(payload)
-    signature = unsigned.get("signature")
-    if isinstance(signature, dict):
-        unsigned_signature = dict(signature)
-        unsigned_signature.pop("signature_hex", None)
-        unsigned["signature"] = unsigned_signature
-    return FOUNDATIONAL_PREREQUISITE_SIGNATURE_DOMAIN + json.dumps(
-        unsigned,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("ascii")
-
-
-def parse_foundational_signer_public_key(
-    value: Any,
-    errors: list[str],
-    *,
-    path: str,
-) -> bytes | None:
-    """Decode one exact, non-zero Ed25519 public key without echoing it."""
-
-    public_key_hex = canonical_lower_hex(value, 64)
-    if public_key_hex is None:
-        errors.append(f"{path} must be exactly 32 bytes of lowercase hex")
-        return None
-    public_key = bytes.fromhex(public_key_hex)
-    if not any(public_key):
-        errors.append(f"{path} must not be the all-zero key")
-        return None
-    return public_key
 
 
 def validate_foundational_exact_fields(
@@ -2001,6 +1994,18 @@ def validate_foundational_prerequisite_summary(
                 "foundational prerequisite previous_envelope_sha256 must match the operator-reviewed expected digest"
             )
 
+    inventory_binding = (
+        options.l1_lane_evidence_inventory.verification
+        if options.l1_lane_evidence_inventory is not None
+        else None
+    )
+    l1_lane_evidence_inventory_sha256 = validate_foundational_inventory_digest(
+        payload.get("l1_lane_evidence_inventory_sha256"),
+        inventory_binding,
+        errors,
+        path="foundational prerequisite l1_lane_evidence_inventory_sha256",
+    )
+
     prerequisites = payload.get("prerequisites")
     prerequisite_ids: list[str] = []
     anchors: list[str] = []
@@ -2092,7 +2097,7 @@ def validate_foundational_prerequisite_summary(
     )
     topology_qualification = payload.get("topology_qualification")
     errors.extend(
-        validate_topology_binding_object(
+        validate_authenticated_topology_binding_object(
             topology_qualification,
             expected=options.topology_qualification,
             path="foundational prerequisite topology_qualification",
@@ -2114,6 +2119,9 @@ def validate_foundational_prerequisite_summary(
         FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS,
         "foundational prerequisite signature",
         errors,
+    )
+    signer_provenance = software_signer_evidence.validate_foundational_software_signer(
+        signature, errors
     )
     signer_fingerprint: str | None = None
     trusted_public_key = options.foundational_signer_public_key
@@ -2171,6 +2179,15 @@ def validate_foundational_prerequisite_summary(
             signature_valid = False
         if not signature_valid:
             errors.append("foundational prerequisite signature verification failed")
+    signer_provenance["signer_public_key_fingerprint_sha256"] = signer_fingerprint
+    errors.extend(
+        validate_signer_independence(
+            ("topology", topology_qualification),
+            ("resilience", resilience_qualification),
+            ("L1 lane inventory", inventory_binding),
+            ("promotion", signer_provenance),
+        )
+    )
 
     context = (
         (deployment_id, environment)
@@ -2194,7 +2211,10 @@ def validate_foundational_prerequisite_summary(
         "environment": environment,
         "release_sequence": release_sequence,
         "previous_envelope_sha256": previous_envelope_sha256,
-        "signer_public_key_fingerprint_sha256": signer_fingerprint,
+        "l1_lane_evidence_inventory_sha256": (
+            l1_lane_evidence_inventory_sha256
+        ),
+        **signer_provenance,
         "topology_qualification": topology_qualification,
         "resilience_qualification": resilience_qualification,
         "evidence_anchor_sha256": anchors,
@@ -5722,14 +5742,21 @@ def validate_aggregate_foundational_prerequisite_output(
             errors.append(
                 f"{path} previous_envelope_sha256 must be canonical lowercase SHA-256"
             )
+    validate_foundational_inventory_digest(
+        row.get("l1_lane_evidence_inventory_sha256"),
+        None,
+        errors,
+        path=f"{path} l1_lane_evidence_inventory_sha256",
+    )
     signer_fingerprint = row.get("signer_public_key_fingerprint_sha256")
     if signer_fingerprint is not None or valid is True:
         if canonical_lower_hex(signer_fingerprint, 64) is None:
             errors.append(
                 f"{path} signer fingerprint must be canonical lowercase SHA-256"
             )
+    software_signer_evidence.validate_aggregate_software_signer(row, errors)
     errors.extend(
-        validate_topology_binding_object(
+        validate_authenticated_topology_binding_object(
             row.get("topology_qualification"),
             path=f"{path} topology_qualification",
         )
@@ -5741,6 +5768,13 @@ def validate_aggregate_foundational_prerequisite_output(
             errors,
             path=f"{path} resilience_qualification",
         )
+    errors.extend(
+        validate_signer_independence(
+            ("topology", row.get("topology_qualification")),
+            ("resilience", resilience_qualification),
+            ("promotion", row),
+        )
+    )
 
     anchors = row.get("evidence_anchor_sha256")
     if not isinstance(anchors, list):
@@ -5870,6 +5904,11 @@ def validate_aggregate_summary_output(
         errors.append(
             "aggregate summary status must be ready, partial, failed, or blocked"
         )
+    signer_qualification = summary.get("signer_qualification")
+    if signer_qualification not in {"software-key-qualified", "unqualified"}:
+        errors.append(
+            "aggregate summary signer_qualification must be software-key-qualified or unqualified"
+        )
     required_gates_value = summary.get("required_gates")
     if not isinstance(required_gates_value, list):
         errors.append("aggregate summary required_gates must be a list")
@@ -5972,7 +6011,7 @@ def validate_aggregate_summary_output(
                 errors.append("aggregate summary environment must be production")
     topology_qualification = summary.get("topology_qualification")
     errors.extend(
-        validate_topology_binding_object(
+        validate_authenticated_topology_binding_object(
             topology_qualification,
             path="aggregate summary topology_qualification",
         )
@@ -5982,6 +6021,8 @@ def validate_aggregate_summary_output(
         resilience_row,
         errors,
     )
+    inventory_row = summary.get("l1_lane_evidence_inventory")
+    inventory_binding = validate_aggregate_inventory_row(inventory_row, errors)
     required = summary.get("required")
     if not isinstance(required, dict):
         errors.append("aggregate summary required must be an object")
@@ -6053,45 +6094,29 @@ def validate_aggregate_summary_output(
         foundational_prerequisites,
         errors,
     )
-    if (
-        isinstance(required, dict)
-        and isinstance(foundational_prerequisites, dict)
-        and foundational_prerequisites.get("present") is True
-    ):
-        foundational_lane_rows = foundational_prerequisites.get(
-            "lane_summary_sha256"
+    foundation_valid = (
+        isinstance(foundational_prerequisites, dict)
+        and foundational_prerequisites.get("valid") is True
+    )
+    inventory_valid = (
+        isinstance(inventory_row, dict) and inventory_row.get("valid") is True
+    )
+    expected_qualification = (
+        "software-key-qualified" if foundation_valid and inventory_valid else "unqualified"
+    )
+    if signer_qualification != expected_qualification:
+        errors.append(
+            "aggregate summary signer_qualification must match the validated software signer"
         )
-        if isinstance(foundational_lane_rows, list):
-            for lane_row in foundational_lane_rows:
-                if not isinstance(lane_row, dict):
-                    continue
-                gate_name = canonical_string(lane_row.get("gate"))
-                foundational_digest = canonical_lower_hex(
-                    lane_row.get("sha256"),
-                    64,
-                )
-                required_row = required.get(gate_name) if gate_name is not None else None
-                required_digest = (
-                    canonical_lower_hex(required_row.get("sha256"), 64)
-                    if isinstance(required_row, dict)
-                    else None
-                )
-                if (
-                    gate_name is not None
-                    and foundational_digest is not None
-                    and required_digest is not None
-                    and foundational_digest != required_digest
-                ):
-                    errors.append(
-                        f"{gate_name} aggregate foundational lane digest must "
-                        "match required row sha256"
-                    )
+    validate_aggregate_foundational_lane_digest_bindings(
+        foundational_prerequisites, required, errors
+    )
     if (
         isinstance(foundational_prerequisites, dict)
         and foundational_prerequisites.get("present") is True
     ):
         errors.extend(
-            validate_topology_binding_object(
+            validate_authenticated_topology_binding_object(
                 foundational_prerequisites.get("topology_qualification"),
                 expected=(
                     topology_qualification
@@ -6136,6 +6161,20 @@ def validate_aggregate_summary_output(
                 "aggregate foundational prerequisite resilience_qualification "
                 "must match aggregate resilience_qualification"
             )
+        validate_foundational_inventory_digest(
+            foundational_prerequisites.get("l1_lane_evidence_inventory_sha256"),
+            inventory_binding,
+            errors,
+            path="aggregate foundational prerequisite L1 inventory digest",
+        )
+        errors.extend(
+            validate_signer_independence(
+                ("topology", topology_qualification),
+                ("resilience", resilience_qualification),
+                ("L1 lane inventory", inventory_binding),
+                ("promotion", foundational_prerequisites),
+            )
+        )
     if summary.get("status") == "ready":
         if tuple(required_gates) != DEFAULT_REQUIRED_GATES:
             errors.append(
@@ -6185,6 +6224,15 @@ def validate_aggregate_summary_output(
         ):
             errors.append(
                 "aggregate summary ready resilience qualification must be present and valid"
+            )
+        if (
+            not isinstance(inventory_row, dict)
+            or inventory_row.get("present") is not True
+            or inventory_row.get("valid") is not True
+            or inventory_binding is None
+        ):
+            errors.append(
+                "aggregate summary ready L1 lane evidence inventory must be present and valid"
             )
     error_values = summary.get("errors")
     if not isinstance(error_values, list):
@@ -6416,99 +6464,6 @@ def validate_gate_summary(
     return summary, errors
 
 
-def validate_duplicate_summary_diagnostics(
-    required: dict[str, dict[str, Any]],
-    duplicate_summary_gates: set[str],
-    duplicate_summary_count: int,
-    errors: list[str],
-) -> None:
-    """Pin deterministic duplicate-summary diagnostics in final aggregate rows."""
-
-    counted_duplicate_errors = 0
-    for gate_name in sorted(duplicate_summary_gates):
-        row = required.get(gate_name)
-        diagnostic = f"duplicate {gate_name} production readiness summary"
-        counted_duplicate_errors += errors.count(diagnostic)
-        if not isinstance(row, dict):
-            errors.append(f"{gate_name} duplicate summary row must be an object")
-            continue
-        row_errors = row.get("errors")
-        if not isinstance(row_errors, list) or row_errors.count(diagnostic) != 1:
-            errors.append(
-                f"{gate_name} duplicate summary row errors must contain the deterministic duplicate summary diagnostic exactly once"
-            )
-    if counted_duplicate_errors != duplicate_summary_count:
-        errors.append(
-            "aggregate summary duplicate-summary diagnostics must match duplicate summary inputs"
-        )
-
-
-def validate_disallowed_summary_diagnostics(
-    errors: list[str],
-    *,
-    unknown_schema_count: int,
-    explicit_unrequired_count: int,
-) -> None:
-    """Pin aggregate blockers for disallowed summary inputs."""
-
-    if errors.count("unknown SoraFS readiness summary schema") != unknown_schema_count:
-        errors.append(
-            "aggregate summary unknown-schema diagnostics must match discovered unknown summaries"
-        )
-    if (
-        errors.count("explicit production readiness summary belongs to unrequired gate")
-        != explicit_unrequired_count
-    ):
-        errors.append(
-            "aggregate summary unrequired-gate diagnostics must match explicit unrequired summaries"
-        )
-
-
-def validate_foundational_lane_summary_digest_bindings(
-    foundational_prerequisites: dict[str, Any],
-    observed_summary_sha256: dict[str, str],
-    required_gates: tuple[str, ...],
-    errors: list[str],
-) -> None:
-    """Bind a full promotion run to the exact 17 supplied lane summary bytes."""
-
-    if (
-        len(required_gates) != len(DEFAULT_REQUIRED_GATES)
-        or set(required_gates) != set(DEFAULT_REQUIRED_GATES)
-    ):
-        return
-    rows = foundational_prerequisites.get("lane_summary_sha256")
-    if not isinstance(rows, list):
-        return
-    expected_by_gate = {
-        row.get("gate"): row.get("sha256")
-        for row in rows
-        if isinstance(row, dict)
-        and canonical_string(row.get("gate")) is not None
-        and canonical_lower_hex(row.get("sha256"), 64) is not None
-    }
-    row_errors = foundational_prerequisites.setdefault("errors", [])
-    if not isinstance(row_errors, list):
-        return
-    for gate_name in DEFAULT_REQUIRED_GATES:
-        observed = observed_summary_sha256.get(gate_name)
-        if observed is None:
-            continue
-        if expected_by_gate.get(gate_name) == observed:
-            continue
-        diagnostic = (
-            "foundational prerequisite lane summary binding for "
-            f"{gate_name} does not match the supplied readiness summary"
-        )
-        if diagnostic not in row_errors:
-            row_errors.append(diagnostic)
-        prefixed = f"foundational prerequisites: {diagnostic}"
-        if prefixed not in errors:
-            errors.append(prefixed)
-    if row_errors:
-        foundational_prerequisites["valid"] = False
-
-
 def validate_joint_gateway_moderation_catalog_binding(
     valid_lane_payloads: dict[str, dict[str, Any]],
     errors: list[str],
@@ -6546,6 +6501,11 @@ def build_summary(
     """Build the aggregate production-readiness summary."""
 
     errors: list[str] = []
+    inventory_errors = list(options.l1_lane_evidence_inventory_errors)
+    inventory_row = aggregate_inventory_row(
+        options.l1_lane_evidence_inventory, inventory_errors
+    )
+    errors.extend(inventory_errors)
     resilience_errors = list(options.resilience_qualification_errors)
     resilience_binding: dict[str, Any] | None = None
     if options.resilience_qualification is None:
@@ -6701,6 +6661,15 @@ def build_summary(
         required_gates,
         errors,
     )
+    if (
+        options.l1_lane_evidence_inventory is not None
+        and required_gates == DEFAULT_REQUIRED_GATES
+    ):
+        validate_inventory_lane_digest_bindings(
+            options.l1_lane_evidence_inventory.summary_sha256,
+            observed_summary_sha256,
+            errors,
+        )
     validate_joint_gateway_moderation_catalog_binding(
         valid_lane_payloads,
         errors,
@@ -6754,6 +6723,12 @@ def build_summary(
     summary = {
         "schema": SUMMARY_SCHEMA,
         "status": aggregate_summary_status(errors, required_gates),
+        "signer_qualification": (
+            "software-key-qualified"
+            if foundational_prerequisites.get("valid") is True
+            and inventory_row.get("valid") is True
+            else "unqualified"
+        ),
         "required_gates": list(required_gates),
         "thresholds": {
             "max_summary_artifact_age_secs": options.max_summary_artifact_age_secs,
@@ -6763,6 +6738,7 @@ def build_summary(
         "deployment": deployment,
         "topology_qualification": options.topology_qualification,
         "resilience_qualification": resilience_qualification,
+        "l1_lane_evidence_inventory": inventory_row,
         "foundational_prerequisites": foundational_prerequisites,
         "required": required,
         "errors": errors,
@@ -6778,7 +6754,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = EvidenceArgumentParser(
         description="Validate aggregate SoraFS production-readiness summaries.",
     )
-    add_topology_qualification_argument(parser, required=False)
+    add_signed_topology_qualification_arguments(parser)
+    add_signed_lane_inventory_arguments(parser, summary_flag="--l1-lane-summary")
     parser.add_argument(
         "--resilience-qualification-summary",
         type=Path,
@@ -6961,18 +6938,14 @@ def main(argv: list[str] | None = None) -> int:
     if preflight_errors:
         emit_checker_error_lines(preflight_errors)
         return 2
-    if args.topology_qualification_summary is None:
-        topology_qualification = None
-        topology_errors = ["--topology-qualification-summary is required"]
-    else:
-        topology_qualification, topology_errors = load_topology_qualification_binding(
-            args.topology_qualification_summary,
+    topology_qualification, topology_errors = (
+        load_signed_topology_qualification_from_args(
+            args,
             expected_deployment_id=args.deployment_id,
             expected_environment=args.environment,
         )
-    if args.topology_qualification_summary is not None and (
-        topology_errors or topology_qualification is None
-    ):
+    )
+    if topology_errors or topology_qualification is None:
         emit_checker_error_lines(topology_errors)
         return 2
     if args.resilience_qualification_summary is None:
@@ -6994,6 +6967,20 @@ def main(argv: list[str] | None = None) -> int:
             trusted_public_key=resilience_signer_public_key,
         )
     )
+    try:
+        inventory_specs = parse_inventory_summary_specs(args.l1_lane_summary)
+    except InventoryError as error:
+        l1_inventory = None
+        inventory_errors = [f"signed L1 lane evidence inventory: {error}"]
+    else:
+        l1_inventory, inventory_errors = verify_inventory_from_args(
+            args,
+            inventory_specs,
+            topology_qualification,
+            deployment_id=args.deployment_id,
+            environment=args.environment,
+            now_unix=args.now_unix,
+        )
     options = ValidationOptions(
         now_unix=args.now_unix,
         max_summary_artifact_age_secs=args.max_summary_artifact_age_secs,
@@ -7007,6 +6994,8 @@ def main(argv: list[str] | None = None) -> int:
         topology_qualification=topology_qualification,
         resilience_qualification=resilience_qualification,
         resilience_qualification_errors=tuple(resilience_errors),
+        l1_lane_evidence_inventory=l1_inventory,
+        l1_lane_evidence_inventory_errors=tuple(inventory_errors),
     )
     summary, errors = build_summary(
         args.evidence_dir,

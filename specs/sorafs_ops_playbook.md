@@ -22,8 +22,14 @@ incident retrospectives.
 
 ## Auth & Governance Checklist
 
-- RBAC tokens: SoraFS instructions remain gated by their dedicated permission tokens (pin register/approve/retire/alias; capacity declare/telemetry/dispute; replication order issue/complete; pricing/credit upsert). Keep grants in sync with governance onboarding/offboarding.
-- Provider binding: every provider id must be bound to an owner account via config/genesis/CLI before issuing orders or telemetry; `gov.sorafs_telemetry.require_submitter/require_nonce` defaults stay on, with global and per-provider submitter allow-lists enforced by the executor.
+- Pin lifecycle: registration is a paid public operation for any authenticated
+  account and has no general permission token. Approval authority is the
+  verified threshold-governance envelope (which an authenticated account may
+  relay), retirement is restricted to the recorded submitter, and only alias
+  attachment uses `CanBindSorafsAlias`. Keep the remaining provider,
+  telemetry, dispute, replication, pricing, and credit permissions in sync
+  with governance onboarding/offboarding.
+- Provider binding: configuration may establish bindings only before genesis. Runtime establishment, compare-and-set rebind, and compare-and-remove require an enacted `SorafsProviderGovernanceActionV1`; direct owner ISIs reject. Drain capacity and native reserve state before proposing rebind/removal. `gov.sorafs_telemetry.require_submitter/require_nonce` defaults stay on, with global and per-provider submitter allow-lists enforced by the executor.
 - Repair workers: `/v1/sorafs/audit/repair/{claim,heartbeat,complete,fail}`
   accept one caller-signed Iroha transaction containing exactly the matching
   native action and return `202 Accepted` from strict durable ingress. Native
@@ -33,7 +39,7 @@ incident retrospectives.
   owners may delegate/revoke the permission, and there is no admin-only repair
   override.
 - SoraNet privacy ingest: `/v1/soranet/privacy/{event,share}` stays disabled until `torii.soranet_privacy_ingest.enabled=true`. Tokens must match `torii.soranet_privacy_ingest.tokens` (`X-SoraNet-Privacy-Token` or `X-API-Token`), submitters must come from `allow_cidrs` (empty list denies), and rate limits apply via `rate_per_sec`/`burst`; rejects emit `soranet_privacy_ingest_reject_total{endpoint,reason}`.
-- Operations: when rotating submitter tokens/allow-lists, update `torii.soranet_privacy_ingest.*` and `gov.sorafs_telemetry` maps together, deploy the config bundle, and confirm a test submission succeeds while rejects counters reset; rotate provider ownership with `RegisterProviderOwner`/`UnregisterProviderOwner` before issuing orders/telemetry.
+- Operations: when rotating submitter tokens/allow-lists, update `torii.soranet_privacy_ingest.*` and `gov.sorafs_telemetry` maps together, deploy the config bundle, and confirm a test submission succeeds while rejects counters reset; rotate provider ownership only through the native Parliament proposal/enactment lifecycle before issuing new orders or telemetry.
 
 ## Escalation Matrix
 

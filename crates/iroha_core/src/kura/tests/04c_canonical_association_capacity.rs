@@ -79,7 +79,8 @@ fn canonical_association_stage_replace_peak_keeps_old_top_untouched_on_rejection
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("association replace Kura");
     let original = DummyBlocks::new().next();
     let original_hash = original.hash();
-    kura.store_block(original.clone()).expect("store original top");
+    kura.store_block(original.clone())
+        .expect("store original top");
     let replacement: Arc<SignedBlock> = Arc::new(
         ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
             header.set_height(nonzero!(1_u64));
@@ -130,7 +131,11 @@ fn canonical_association_stage_replace_peak_keeps_old_top_untouched_on_rejection
         .expect("replacement pre-stage state fits u64");
     let projected_after = used
         .saturating_sub(old_bytes)
-        .checked_add(pending_raw.saturating_add(new_bytes).saturating_sub(unindexed_bytes))
+        .checked_add(
+            pending_raw
+                .saturating_add(new_bytes)
+                .saturating_sub(unindexed_bytes),
+        )
         .and_then(|bytes| bytes.checked_add(terminal))
         .and_then(|bytes| bytes.checked_add(post_wsv))
         .and_then(|bytes| bytes.checked_add(certified))
@@ -163,7 +168,10 @@ fn canonical_association_stage_replace_peak_keeps_old_top_untouched_on_rejection
         Some(original_hash),
         "rejected replacement must not change the canonical marker",
     );
-    assert_eq!(kura.get_block(nonzero!(1_usize)).as_deref(), Some(original.as_ref()));
+    assert_eq!(
+        kura.get_block(nonzero!(1_usize)).as_deref(),
+        Some(original.as_ref())
+    );
 }
 
 #[test]

@@ -22,14 +22,14 @@ execution model).
 ## Build Procedure
 1. **CPU-only build**
    ```bash
-   cargo build --release -p irohad
+   cargo build --release -p irohad --bin iroha3d
    cargo build --release -p iroha_cli
    ```
    The production backend is compiled in by default; no extra features are required.
 
 2. **GPU-enabled build (optional)**
    ```bash
-   cargo build --release -p irohad --features fastpq_prover/fastpq-gpu
+   cargo build --release -p irohad --bin iroha3d --features fastpq_prover/fastpq-gpu
    ```
    GPU support requires an SM80+ CUDA toolkit with `nvcc` available during the build.【crates/fastpq_prover/Cargo.toml:11】
 
@@ -156,7 +156,7 @@ Environment overrides:
 
 2. Override at launch if needed:
    ```bash
-   irohad --fastpq-execution-mode gpu ...
+   iroha3d --fastpq-execution-mode gpu ...
    ```
    CLI overrides mutate the resolved config before the node boots.【crates/irohad/src/main.rs:270】【crates/irohad/src/main.rs:1733】
 
@@ -181,7 +181,7 @@ Environment overrides:
    - For Metal coverage confirm
      `fastpq_execution_mode_total{device_class="<matrix>",chip_family="<family>",gpu_kind="<kind>", backend="metal"}`
      increments alongside your deployment dashboards.【crates/iroha_telemetry/src/metrics.rs:5397】
-   - macOS nodes compiled with `irohad --features fastpq-gpu` additionally expose
+   - macOS `iroha3d` nodes compiled with `--features fastpq-gpu` additionally expose
      `fastpq_metal_queue_ratio{device_class="<matrix>",chip_family="<family>",gpu_kind="<kind>",queue="global",metric="busy"}`
      and
      `fastpq_metal_queue_depth{device_class="<matrix>",chip_family="<family>",gpu_kind="<kind>",metric="limit"}` so the Stage 7 dashboards

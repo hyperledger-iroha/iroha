@@ -6,6 +6,12 @@ JSON and let the tooling convert it into a signed `SignedQuery`. The
 `iroha_data_model::query::json` module defines the canonical envelope used by
 `iroha_cli ledger query stdin` and other utilities.
 
+This authoring envelope is not the signed wire payload. Before submission, the
+client binds the exact genesis-derived `network_id`, authority, Unix creation
+time, non-zero TTL, a fresh 32-byte nonce, and the complete query request into
+`QueryRequestWithAuthority`, then signs all six fields. The client configuration
+must therefore contain the exact `network_id` for the target deployment.
+
 ## Envelope shape
 
 The top-level document is an object containing either a `singular` or
@@ -154,8 +160,16 @@ $ cargo run -p iroha_cli -- query stdin <<'JSON'
 JSON
 ```
 
-The response is printed using the configured output format. The same envelope
-can be converted into a signed frame programmatically via
-`QueryEnvelopeJson::into_signed_request`. See
+The response is printed using the configured output format. Programmatic
+callers convert the envelope into a raw `QueryRequest` with
+`QueryEnvelopeJson::into_request`, then pass that request to
+`Client::execute_query_request`. The client supplies the configured network
+identity, current creation time, bounded lifetime, and a fresh operating-system
+random nonce before signing. See
 [`iroha_data_model::query::json`](../crates/iroha_data_model/src/query/json)
-for the full Rust API.
+for the JSON conversion API.
+
+Signed query frames are one-shot. Neither the CLI nor SDK clients resend an
+identical nonce-bearing body after a timeout, connection loss, or malformed
+response because the node may already have admitted it. A caller that chooses
+to issue the read again must construct and sign a new timestamp and nonce.

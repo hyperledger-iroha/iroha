@@ -28,3 +28,21 @@
         assert_eq!(remove_plan.label, "remove_domain_kv");
         // Removal path may leave map empty or retain other keys, but it must not panic.
     }
+
+    #[test]
+    fn publish_manifest_records_dataspace() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(2, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(99);
+        let plan = state
+            .plan_publish_space_manifest(&mut rng)
+            .expect("manifest plan builds");
+        assert_eq!(plan.label, "publish_space_directory_manifest");
+        assert!(
+            state
+                .space_directory_manifests
+                .values()
+                .any(|spaces| spaces.contains(&DataSpaceId::UNIVERSAL)),
+            "dataspace should be recorded as published"
+        );
+    }

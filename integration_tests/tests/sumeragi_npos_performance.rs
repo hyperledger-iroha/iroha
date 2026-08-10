@@ -694,7 +694,7 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         .ensure_blocks_with(|height| height.total >= 1)
         .await?;
 
-    let chain_id = network.chain_id();
+    let network_id = network.network_id();
 
     for idx in 0..2 {
         let payload = format!(
@@ -702,7 +702,7 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
             "S".repeat(RBC_STORE_PAYLOAD_BYTES.saturating_sub(18))
         );
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -716,7 +716,7 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
     for idx in 0..QUEUE_STRESS_TXS {
         let client = network.client();
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -931,7 +931,7 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
         .ensure_blocks_with(|height| height.total >= 1)
         .await?;
 
-    let chain_id = network.chain_id();
+    let network_id = network.network_id();
 
     for idx in 0..2 {
         let message = format!(
@@ -939,7 +939,7 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
             "S".repeat(RBC_STORE_PAYLOAD_BYTES.saturating_sub(13))
         );
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1089,13 +1089,13 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
         Log::new(Level::INFO, "chunk-loss seed".to_owned()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let chain_id = network.chain_id();
+    let network_id = network.network_id();
     let message = format!(
         "chunk-loss-fault-{}",
         "C".repeat(CHUNK_LOSS_PAYLOAD_BYTES.saturating_sub(18))
     );
     let tx = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

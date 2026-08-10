@@ -5,6 +5,8 @@
 # Supply the reviewed deployment's supply-chain source root, public provenance
 # trust tuple, and independently administered topology trust tuple for the same
 # deployment context.
+# Signed evidence must bind signing_provider=authenticated_external_signer and
+# signing_backend=software; accepted output is software-key-qualified.
 --evidence-dir /var/tmp/sorafs/reference-sdk-release
 --summary-out /var/tmp/sorafs/reference-sdk-release/release-summary.json
 --require-kind release_archive,signed_manifest,supply_chain,downstream_bindings,cookbook_smoke,ffi_header_contract,governance_approval
@@ -20,7 +22,9 @@
 --topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json
 --topology-qualification-envelope artifacts/sorafs/production-readiness/l1-topology-qualification.envelope.json
 --topology-qualification-verification-public-key-hex 2222222222222222222222222222222222222222222222222222222222222222
---topology-qualification-signer-identity sorafs-production-topology-qualification-hsm
+--topology-qualification-signer-service-id sorafs-production-topology-signer-a
+--topology-qualification-signer-administrator-id sorafs-production-topology-admin-b
 --topology-qualification-signer-key-revision 1
+--topology-qualification-signer-policy-revision 1
 --topology-qualification-signer-policy-digest-hex 3333333333333333333333333333333333333333333333333333333333333333
 --max-topology-qualification-review-age-secs 1209600

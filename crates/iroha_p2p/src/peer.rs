@@ -44,6 +44,13 @@ use crate::{
 };
 // (keep fully-qualified uses inline; avoid unused import warnings)
 
+#[cfg(test)]
+fn test_network_id(seed: &str) -> iroha_data_model::NetworkId {
+    iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+        iroha_crypto::Hash::new(seed.as_bytes()),
+    ))
+}
+
 /// Max length of a handshake message in bytes excluding the length prefix.
 ///
 /// Previously this value was limited to `u8::MAX` which proved insufficient once
@@ -801,7 +808,7 @@ type SoranetTransportDelegationChallenge = [u8; SORANET_TRANSPORT_DELEGATION_CHA
 struct SoranetTransportDelegationStatementV3 {
     p2p_preface_version: u8,
     challenge: SoranetTransportDelegationChallenge,
-    chain_id: iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
     node_id: PeerId,
     transport_public_key: iroha_crypto::PublicKey,
 }
@@ -855,7 +862,7 @@ fn soranet_transport_delegation_binding_v3(
 fn sign_soranet_transport_delegation_v3(
     node_key_pair: &iroha_crypto::KeyPair,
     soranet_transport_key_pair: &iroha_crypto::KeyPair,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     challenge: SoranetTransportDelegationChallenge,
 ) -> Result<LocalSoranetTransportDelegationV3, crate::Error> {
     use crate::SoranetTransportDelegationError as DelegationError;
@@ -876,7 +883,7 @@ fn sign_soranet_transport_delegation_v3(
     let statement = SoranetTransportDelegationStatementV3 {
         p2p_preface_version: PRE_VERSION,
         challenge,
-        chain_id: chain_id.clone(),
+        network_id: network_id.clone(),
         node_id: PeerId::from(node_key_pair.public_key().clone()),
         transport_public_key: soranet_transport_key_pair.public_key().clone(),
     };
@@ -911,7 +918,7 @@ fn sign_soranet_transport_delegation_v3(
 
 fn verify_soranet_transport_delegation_v3(
     canonical_signed_frame: &[u8],
-    expected_chain_id: &iroha_data_model::ChainId,
+    expected_network_id: &iroha_data_model::NetworkId,
     expected_peer_id: &PeerId,
     expected_challenge: &SoranetTransportDelegationChallenge,
 ) -> Result<VerifiedSoranetTransportDelegationV3, crate::SoranetTransportDelegationError> {
@@ -950,10 +957,10 @@ fn verify_soranet_transport_delegation_v3(
             found: signed.statement.challenge,
         });
     }
-    if &signed.statement.chain_id != expected_chain_id {
-        return Err(DelegationError::ChainMismatch {
-            expected: expected_chain_id.clone(),
-            found: signed.statement.chain_id,
+    if &signed.statement.network_id != expected_network_id {
+        return Err(DelegationError::NetworkMismatch {
+            expected: expected_network_id.clone(),
+            found: signed.statement.network_id,
         });
     }
     let node_algorithm = signed
@@ -1042,7 +1049,7 @@ where
 
 async fn read_and_verify_soranet_transport_delegation_v3<R>(
     read: &mut R,
-    expected_chain_id: &iroha_data_model::ChainId,
+    expected_network_id: &iroha_data_model::NetworkId,
     expected_peer_id: &PeerId,
     expected_challenge: &SoranetTransportDelegationChallenge,
 ) -> Result<VerifiedSoranetTransportDelegationV3, crate::Error>
@@ -1066,7 +1073,7 @@ where
     read.read_exact(&mut payload).await?;
     verify_soranet_transport_delegation_v3(
         &payload,
-        expected_chain_id,
+        expected_network_id,
         expected_peer_id,
         expected_challenge,
     )
@@ -3009,7 +3016,7 @@ pub mod handles {
         service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         idle_timeout: Duration,
         dial_timeout: Duration,
-        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -3048,7 +3055,7 @@ pub mod handles {
             our_public_address,
             key_pair,
             connection_id,
-            chain_id,
+            network_id,
             consensus_caps,
             confidential_caps,
             crypto_caps,
@@ -3094,7 +3101,7 @@ pub mod handles {
         connection: Connection,
         service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         idle_timeout: Duration,
-        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -3120,7 +3127,7 @@ pub mod handles {
             key_pair,
             soranet_transport_key_pair,
             connection,
-            chain_id,
+            network_id,
             consensus_caps,
             confidential_caps,
             crypto_caps,
@@ -13860,6 +13867,7 @@ mod state {
 
     #[derive(Clone, Debug, Encode, Decode)]
     pub(super) struct HandshakeHelloV1 {
+        pub(super) network_id: iroha_data_model::NetworkId,
         pub(super) algorithm: iroha_crypto::Algorithm,
         pub(super) public_key: Vec<u8>,
         pub(super) signature: Vec<u8>,
@@ -14152,7 +14160,7 @@ mod state {
     #[derive(Encode)]
     struct HandshakeIdentityBindingV1 {
         session_binding: [u8; iroha_crypto::Hash::LENGTH],
-        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         soranet_transport_binding: [u8; iroha_crypto::Hash::LENGTH],
         transport_binding: Option<[u8; iroha_crypto::Hash::LENGTH]>,
         algorithm: iroha_crypto::Algorithm,
@@ -14168,7 +14176,6 @@ mod state {
     pub(super) fn handshake_signature_payload<E: Enc>(
         cryptographer: &Cryptographer<E>,
         hello: &HandshakeHelloV1,
-        chain_id: &iroha_data_model::ChainId,
         soranet_transport_binding: &[u8; iroha_crypto::Hash::LENGTH],
         transport_binding: Option<&[u8; iroha_crypto::Hash::LENGTH]>,
     ) -> Vec<u8> {
@@ -14176,7 +14183,7 @@ mod state {
 
         let binding = HandshakeIdentityBindingV1 {
             session_binding: cryptographer.session_binding,
-            chain_id: chain_id.clone(),
+            network_id: hello.network_id.clone(),
             soranet_transport_binding: *soranet_transport_binding,
             transport_binding: transport_binding.copied(),
             algorithm: hello.algorithm,
@@ -14244,7 +14251,7 @@ mod state {
         pub our_public_address: SocketAddr,
         pub key_pair: KeyPair,
         pub connection_id: ConnectionId,
-        pub chain_id: iroha_data_model::ChainId,
+        pub network_id: iroha_data_model::NetworkId,
         pub consensus_caps: Option<ConsensusHandshakeCaps>,
         pub confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         pub crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -14289,7 +14296,7 @@ mod state {
                 our_public_address,
                 key_pair,
                 connection_id,
-                chain_id,
+                network_id,
                 consensus_caps,
                 confidential_caps,
                 crypto_caps,
@@ -14625,7 +14632,7 @@ mod state {
                         expected_peer_id: peer_id.clone(),
                         key_pair,
                         connection: conn,
-                        chain_id,
+                        network_id,
                         consensus_caps,
                         confidential_caps,
                         crypto_caps,
@@ -14648,7 +14655,7 @@ mod state {
                                 expected_peer_id: peer_id.clone(),
                                 key_pair,
                                 connection,
-                                chain_id,
+                                network_id,
                                 consensus_caps,
                                 confidential_caps,
                                 crypto_caps,
@@ -14777,7 +14784,7 @@ mod state {
                                     expected_peer_id: peer_id.clone(),
                                     key_pair,
                                     connection: conn,
-                                    chain_id,
+                                    network_id,
                                     consensus_caps,
                                     confidential_caps,
                                     crypto_caps,
@@ -14799,7 +14806,7 @@ mod state {
                 expected_peer_id: peer_id,
                 key_pair,
                 connection,
-                chain_id,
+                network_id,
                 consensus_caps,
                 confidential_caps,
                 crypto_caps,
@@ -14831,7 +14838,7 @@ mod state {
                 our_public_address: our_public_address.into(),
                 key_pair: KeyPair::random(),
                 connection_id: 0,
-                chain_id: iroha_data_model::ChainId::from("test-chain"),
+                network_id: test_network_id("test-chain"),
                 consensus_caps: None,
                 confidential_caps: None,
                 crypto_caps: None,
@@ -14963,7 +14970,7 @@ mod state {
         expected_peer_id: iroha_data_model::prelude::PeerId,
         key_pair: KeyPair,
         connection: Connection,
-        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         consensus_caps: Option<ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -14980,7 +14987,7 @@ mod state {
             expected_peer_id: iroha_data_model::prelude::PeerId,
             key_pair: KeyPair,
             connection: Connection,
-            chain_id: iroha_data_model::ChainId,
+            network_id: iroha_data_model::NetworkId,
             soranet_handshake: Arc<SoranetHandshakeConfig>,
         ) -> Self {
             Self {
@@ -14988,7 +14995,7 @@ mod state {
                 expected_peer_id,
                 key_pair,
                 connection,
-                chain_id,
+                network_id,
                 consensus_caps: None,
                 confidential_caps: None,
                 crypto_caps: None,
@@ -15006,7 +15013,7 @@ mod state {
                 expected_peer_id,
                 key_pair,
                 mut connection,
-                chain_id,
+                network_id,
                 consensus_caps,
                 confidential_caps,
                 crypto_caps,
@@ -15038,7 +15045,7 @@ mod state {
             }
             let verified_transport_delegation = read_and_verify_soranet_transport_delegation_v3(
                 &mut connection.read,
-                &chain_id,
+                &network_id,
                 &expected_peer_id,
                 &delegation_challenge,
             )
@@ -15129,7 +15136,7 @@ mod state {
                 key_pair,
                 connection,
                 cryptographer,
-                chain_id,
+                network_id,
                 soranet_transport_binding: verified_transport_delegation.binding,
                 consensus_caps,
                 confidential_caps,
@@ -15147,7 +15154,7 @@ mod state {
         pub key_pair: KeyPair,
         pub soranet_transport_key_pair: KeyPair,
         pub connection: Connection,
-        pub chain_id: iroha_data_model::ChainId,
+        pub network_id: iroha_data_model::NetworkId,
         pub consensus_caps: Option<ConsensusHandshakeCaps>,
         pub confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         pub crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -15165,7 +15172,7 @@ mod state {
                 key_pair,
                 soranet_transport_key_pair,
                 mut connection,
-                chain_id,
+                network_id,
                 consensus_caps,
                 confidential_caps,
                 crypto_caps,
@@ -15191,7 +15198,7 @@ mod state {
             let local_transport_delegation = sign_soranet_transport_delegation_v3(
                 &key_pair,
                 &soranet_transport_key_pair,
-                &chain_id,
+                &network_id,
                 delegation_challenge,
             )?;
             write_soranet_transport_delegation_v3(
@@ -15291,7 +15298,7 @@ mod state {
                 key_pair,
                 connection,
                 cryptographer,
-                chain_id,
+                network_id,
                 soranet_transport_binding: local_transport_delegation.binding,
                 consensus_caps,
                 confidential_caps,
@@ -15310,7 +15317,7 @@ mod state {
         pub(super) key_pair: KeyPair,
         pub(super) connection: Connection,
         pub(super) cryptographer: Cryptographer<E>,
-        pub(super) chain_id: iroha_data_model::ChainId,
+        pub(super) network_id: iroha_data_model::NetworkId,
         pub(super) soranet_transport_binding: [u8; iroha_crypto::Hash::LENGTH],
         pub(super) consensus_caps: Option<ConsensusHandshakeCaps>,
         pub(super) confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -15327,7 +15334,7 @@ mod state {
         pub(super) key_pair: KeyPair,
         pub(super) connection: Connection,
         pub(super) cryptographer: Cryptographer<E>,
-        pub(super) chain_id: iroha_data_model::ChainId,
+        pub(super) network_id: iroha_data_model::NetworkId,
         pub(super) soranet_transport_binding: [u8; iroha_crypto::Hash::LENGTH],
         pub(super) consensus_caps: Option<ConsensusHandshakeCaps>,
         pub(super) confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -15346,7 +15353,7 @@ mod state {
                 key_pair,
                 connection,
                 cryptographer,
-                chain_id,
+                network_id,
                 soranet_transport_binding,
                 consensus_caps,
                 confidential_caps,
@@ -15361,7 +15368,7 @@ mod state {
                 key_pair,
                 connection,
                 cryptographer,
-                chain_id,
+                network_id,
                 soranet_transport_binding,
                 consensus_caps,
                 confidential_caps,
@@ -15379,7 +15386,7 @@ mod state {
                 key_pair,
                 mut connection,
                 cryptographer,
-                chain_id,
+                network_id,
                 soranet_transport_binding,
                 consensus_caps,
                 confidential_caps,
@@ -15394,6 +15401,7 @@ mod state {
             let our_addr = our_public_address;
             let (alg, pk_bytes) = key_pair.public_key().to_bytes();
             let mut hello = HandshakeHelloV1 {
+                network_id: network_id.clone(),
                 algorithm: alg,
                 public_key: pk_bytes.to_vec(),
                 signature: Vec::new(),
@@ -15407,7 +15415,6 @@ mod state {
             let payload = handshake_signature_payload::<E>(
                 &cryptographer,
                 &hello,
-                &chain_id,
                 &soranet_transport_binding,
                 connection.transport_binding.as_ref(),
             );
@@ -15433,7 +15440,7 @@ mod state {
                 connection,
                 expected_peer_id,
                 cryptographer,
-                chain_id,
+                network_id,
                 soranet_transport_binding,
                 consensus_caps,
                 confidential_caps,
@@ -15450,7 +15457,7 @@ mod state {
         pub(super) connection: Connection,
         pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
         pub(super) cryptographer: Cryptographer<E>,
-        pub(super) chain_id: iroha_data_model::ChainId,
+        pub(super) network_id: iroha_data_model::NetworkId,
         pub(super) soranet_transport_binding: [u8; iroha_crypto::Hash::LENGTH],
         pub(super) consensus_caps: Option<ConsensusHandshakeCaps>,
         pub(super) confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -15467,7 +15474,7 @@ mod state {
                 mut connection,
                 expected_peer_id,
                 cryptographer,
-                chain_id,
+                network_id,
                 soranet_transport_binding,
                 consensus_caps,
                 confidential_caps,
@@ -15486,10 +15493,15 @@ mod state {
 
             let hello = decode_handshake_message(&cryptographer, data.as_slice())?;
             let HandshakeHello::V1(hello) = hello;
+            if hello.network_id != network_id {
+                return Err(crate::Error::HandshakeNetworkMismatch {
+                    expected: network_id,
+                    found: hello.network_id,
+                });
+            }
             let payload = handshake_signature_payload::<E>(
                 &cryptographer,
                 &hello,
-                &chain_id,
                 &soranet_transport_binding,
                 connection.transport_binding.as_ref(),
             );
@@ -15506,6 +15518,7 @@ mod state {
                 scion_supported_remote,
             ) = {
                 let HandshakeHelloV1 {
+                    network_id: _,
                     algorithm,
                     public_key,
                     signature,

@@ -2,6 +2,9 @@ package org.hyperledger.iroha.android.privacy;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.Signature;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -9,11 +12,19 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.ConfidentialAssetToriiClient;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
+import org.hyperledger.iroha.android.client.LocalSigningContext;
+import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.client.ZkRootsResponse;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 public final class ZkAssetMerklePathTests {
+  private static final NetworkId NETWORK_ID =
+      NetworkId.parse(
+          "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+  private static final KeyPair KEY_PAIR = generateKeyPair();
+
   private ZkAssetMerklePathTests() {}
 
   public static void main(final String[] args) {
@@ -42,9 +53,9 @@ public final class ZkAssetMerklePathTests {
     assert path.directions().length == LocalZkAssetMerklePathProvider.CONFIDENTIAL_TREE_DEPTH_V2
         : "direction count mismatch";
     assert Arrays.equals(root, path.rootAtHeight()) : "root mismatch";
-    assert path.verify(commitments.get(1), root, PastaPoseidonNodeHasher.instance())
+    assert path.verify(commitments.get(1), root)
         : "path must verify";
-    assert !path.verify(commitments.get(1), scalarBytes(9), PastaPoseidonNodeHasher.instance())
+    assert !path.verify(commitments.get(1), scalarBytes(9))
         : "path must reject wrong root";
   }
 
@@ -87,8 +98,10 @@ public final class ZkAssetMerklePathTests {
         ConfidentialAssetToriiClient.builder()
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(new LocalSigningContext(NETWORK_ID))
             .build();
-    final ToriiZkAssetMerklePathProvider provider = new ToriiZkAssetMerklePathProvider(client);
+    final ToriiZkAssetMerklePathProvider provider =
+        new ToriiZkAssetMerklePathProvider(client, canonicalAuth());
 
     final ZkAssetMerklePath path =
         provider.getMerklePathForCommitment("usd#bank", commitments.get(1)).join();
@@ -100,7 +113,7 @@ public final class ZkAssetMerklePathTests {
         : "request body mismatch: " + executor.lastBody;
     assert path.leafIndex() == 1L : "leaf index mismatch";
     assert Arrays.equals(root, path.rootAtHeight()) : "root mismatch";
-    assert path.verify(commitments.get(1), root, PastaPoseidonNodeHasher.instance())
+    assert path.verify(commitments.get(1), root)
         : "path must verify";
   }
 
@@ -175,8 +188,10 @@ public final class ZkAssetMerklePathTests {
         ConfidentialAssetToriiClient.builder()
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(new LocalSigningContext(NETWORK_ID))
             .build();
-    final ToriiZkAssetMerklePathProvider provider = new ToriiZkAssetMerklePathProvider(client);
+    final ToriiZkAssetMerklePathProvider provider =
+        new ToriiZkAssetMerklePathProvider(client, canonicalAuth());
     try {
       provider.getMerklePathForCommitment("usd#bank", requested).join();
       throw new AssertionError("expected commitment mismatch");
@@ -202,8 +217,10 @@ public final class ZkAssetMerklePathTests {
         ConfidentialAssetToriiClient.builder()
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(new LocalSigningContext(NETWORK_ID))
             .build();
-    final ToriiZkAssetMerklePathProvider provider = new ToriiZkAssetMerklePathProvider(client);
+    final ToriiZkAssetMerklePathProvider provider =
+        new ToriiZkAssetMerklePathProvider(client, canonicalAuth());
     try {
       provider.getMerklePathForCommitment("usd#bank", commitments.get(1)).join();
       throw new AssertionError("expected non-verifying path rejection");
@@ -226,7 +243,7 @@ public final class ZkAssetMerklePathTests {
     final byte[] directions = path.directions();
     directions[0] = 1;
 
-    assert path.verify(commitment, path.rootAtHeight(), PastaPoseidonNodeHasher.instance())
+    assert path.verify(commitment, path.rootAtHeight())
         : "defensive copies were not preserved";
   }
 
@@ -245,8 +262,9 @@ public final class ZkAssetMerklePathTests {
         ConfidentialAssetToriiClient.builder()
             .executor(new CapturingExecutor(responseBody))
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(new LocalSigningContext(NETWORK_ID))
             .build();
-    return new ToriiZkAssetMerklePathProvider(client);
+    return new ToriiZkAssetMerklePathProvider(client, canonicalAuth());
   }
 
   private static String merklePathResponse(
@@ -322,6 +340,33 @@ public final class ZkAssetMerklePathTests {
     }
   }
 
+  private static ToriiCanonicalRequestAuth canonicalAuth() {
+    return new ToriiCanonicalRequestAuth(
+        "alice",
+        ZkAssetMerklePathTests::sign,
+        Long.valueOf(1_700_000_000_000L),
+        "zk-provider-1");
+  }
+
+  private static KeyPair generateKeyPair() {
+    try {
+      return KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to create signing key fixture", ex);
+    }
+  }
+
+  private static byte[] sign(final byte[] message) {
+    try {
+      final Signature signer = Signature.getInstance("Ed25519");
+      signer.initSign(KEY_PAIR.getPrivate());
+      signer.update(message);
+      return signer.sign();
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to sign request fixture", ex);
+    }
+  }
+
   private static final class MerklePathResponseEntry {
     private final byte[] commitment;
     private final ZkAssetMerklePath path;
@@ -359,21 +404,7 @@ public final class ZkAssetMerklePathTests {
   }
 
   private static byte[] computeRoot(final List<byte[]> commitments) {
-    ArrayList<byte[]> layer =
-        new ArrayList<>(LocalZkAssetMerklePathProvider.CONFIDENTIAL_TREE_CAPACITY_V2);
-    for (final byte[] commitment : commitments) {
-      layer.add(commitment.clone());
-    }
-    while (layer.size() < LocalZkAssetMerklePathProvider.CONFIDENTIAL_TREE_CAPACITY_V2) {
-      layer.add(new byte[32]);
-    }
-    for (int level = 0; level < LocalZkAssetMerklePathProvider.CONFIDENTIAL_TREE_DEPTH_V2; level++) {
-      final ArrayList<byte[]> next = new ArrayList<>(layer.size() / 2);
-      for (int i = 0; i < layer.size(); i += 2) {
-        next.add(PastaPoseidonNodeHasher.instance().hashPair(layer.get(i), layer.get(i + 1)));
-      }
-      layer = next;
-    }
-    return layer.get(0);
+    return Arrays.copyOfRange(
+        PrivacyNativeBridge.deriveConfidentialMerklePathV3(commitments, 0), 0, 32);
   }
 }

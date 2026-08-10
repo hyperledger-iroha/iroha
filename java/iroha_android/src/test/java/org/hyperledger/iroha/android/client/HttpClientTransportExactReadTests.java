@@ -1,8 +1,14 @@
 package org.hyperledger.iroha.android.client;
 
+import static org.hyperledger.iroha.android.client.CanonicalRequestSigningTestSupport.VERIFYING_KEY_NETWORK_ID;
+import static org.hyperledger.iroha.android.client.CanonicalRequestSigningTestSupport.signedClientConfig;
+
 import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.Signature;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -14,9 +20,16 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.client.transport.RequestReplayPolicy;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /** Exact, bounded read-route contract tests split from the general transport harness. */
 public final class HttpClientTransportExactReadTests {
+  private static final NetworkId OTHER_NETWORK_ID =
+      NetworkId.parse(
+          "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22");
+  private static final KeyPair PRIVACY_KEY_PAIR = generatePrivacyKeyPair();
+
   private HttpClientTransportExactReadTests() {}
 
   public static void main(final String[] args) {
@@ -185,18 +198,19 @@ public final class HttpClientTransportExactReadTests {
                 body,
                 "ok",
                 Map.of(
-                    "Content-Type", List.of("application/json"),
+                    "Content-Type", List.of("application/x-norito"),
                     "Content-Length", List.of(Integer.toString(body.length)))));
     final HttpClientTransport client =
         HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://torii.example"))
-                .build());
-    final org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotV1 snapshot =
-        client.getPrivacyCapabilities().join();
-    assert snapshot.committedHeight.equals(BigInteger.valueOf(42L));
-    assert snapshot.protocols.size() == 12;
+            signedClientConfig("https://torii.example"));
+    boolean legacySnapshotRejected = false;
+    try {
+      client.getPrivacyCapabilities(privacyAuth("privacy-exact-1")).join();
+    } catch (final CompletionException expected) {
+      legacySnapshotRejected = true;
+    }
+    assert legacySnapshotRejected : "retired JSON capabilities must not authorize Exact12";
     assert "GET".equals(executor.lastRequest.method());
     assert "/v1/privacy/capabilities".equals(executor.lastRequest.uri().getRawPath());
     final List<String> requestAccepts = new ArrayList<>();
@@ -206,25 +220,24 @@ public final class HttpClientTransportExactReadTests {
         requestAccepts.addAll(entry.getValue());
       }
     }
-    assert List.of("application/json").equals(requestAccepts)
+    assert List.of("application/x-norito").equals(requestAccepts)
         : "privacy capability request must contain exactly one canonical Accept value";
     assert Long.valueOf(256L * 1024L).equals(executor.lastRequest.maximumResponseBytes());
+    assert executor.lastRequest.replayPolicy() == RequestReplayPolicy.ONE_SHOT
+        : "authenticated capability read must be one-shot";
+    assert executor.requestCount == 1 : "authenticated capability read must dispatch once";
+    assert executor.lastRequest.body().length == 0 : "capability GET must bind an empty body";
+    assert canonicalSignatureVerifies(
+        executor.lastRequest, VERIFYING_KEY_NETWORK_ID, "privacy-exact-1");
+    assert !canonicalSignatureVerifies(
+        executor.lastRequest, OTHER_NETWORK_ID, "privacy-exact-1");
 
-    final org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotV1 withoutContentLength =
-        HttpClientTransport.withExecutor(
-                new OneResponseExecutor(
-                    new TransportResponse(
-                        200,
-                        body,
-                        "ok",
-                        Map.of("Content-Type", List.of("application/json")))),
-                ClientConfig.builder()
-                    .setBaseUri(URI.create("https://torii.example"))
-                    .build())
-            .getPrivacyCapabilities()
-            .join();
-    assert withoutContentLength.committedHeight.equals(BigInteger.valueOf(42L))
-        : "Content-Length is optional when the remaining response is exact";
+    assertPrivacyCapabilitiesResponseRejected(
+        new TransportResponse(
+            200,
+            body,
+            "ok",
+            Map.of("Content-Type", List.of("application/x-norito"))));
 
     for (final String defaultAcceptName : List.of("Accept", "aCcEpT")) {
       final OneResponseExecutor blockedExecutor =
@@ -233,16 +246,16 @@ public final class HttpClientTransportExactReadTests {
                   200,
                   body,
                   "ok",
-                  Map.of("Content-Type", List.of("application/json"))));
+                  Map.of("Content-Type", List.of("application/x-norito"))));
       boolean overrideRejected = false;
       try {
         HttpClientTransport.withExecutor(
                 blockedExecutor,
-                ClientConfig.builder()
-                    .setBaseUri(URI.create("https://torii.example"))
-                    .putDefaultHeader(defaultAcceptName, "application/json")
+                signedClientConfig("https://torii.example")
+                    .toBuilder()
+                    .putDefaultHeader(defaultAcceptName, "application/x-norito")
                     .build())
-            .getPrivacyCapabilities();
+            .getPrivacyCapabilities(privacyAuth("privacy-accept"));
       } catch (final IllegalArgumentException expected) {
         overrideRejected = true;
       }
@@ -261,11 +274,9 @@ public final class HttpClientTransportExactReadTests {
                       200,
                       retired.getBytes(StandardCharsets.UTF_8),
                       "",
-                      Map.of("Content-Type", List.of("application/json")))),
-              ClientConfig.builder()
-                  .setBaseUri(URI.create("https://torii.example"))
-                  .build())
-          .getPrivacyCapabilities()
+                      Map.of("Content-Type", List.of("application/x-norito")))),
+              signedClientConfig("https://torii.example"))
+          .getPrivacyCapabilities(privacyAuth("privacy-retired"))
           .join();
     } catch (final CompletionException expected) {
       retiredRejected = true;
@@ -370,10 +381,8 @@ public final class HttpClientTransportExactReadTests {
     try {
       HttpClientTransport.withExecutor(
               new OneResponseExecutor(response),
-              ClientConfig.builder()
-                  .setBaseUri(URI.create("https://torii.example"))
-                  .build())
-          .getPrivacyCapabilities()
+              signedClientConfig("https://torii.example"))
+          .getPrivacyCapabilities(privacyAuth("privacy-hostile"))
           .join();
     } catch (final CompletionException expected) {
       rejected = true;
@@ -407,6 +416,57 @@ public final class HttpClientTransportExactReadTests {
         + "\"protocols\":["
         + rows
         + "]}";
+  }
+
+  private static ToriiCanonicalRequestAuth privacyAuth(final String nonce) {
+    return new ToriiCanonicalRequestAuth(
+        "alice",
+        HttpClientTransportExactReadTests::signPrivacyRequest,
+        Long.valueOf(1_700_000_000_000L),
+        nonce);
+  }
+
+  private static KeyPair generatePrivacyKeyPair() {
+    try {
+      return KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to create privacy request signing key", ex);
+    }
+  }
+
+  private static byte[] signPrivacyRequest(final byte[] message) {
+    try {
+      final Signature signer = Signature.getInstance("Ed25519");
+      signer.initSign(PRIVACY_KEY_PAIR.getPrivate());
+      signer.update(message);
+      return signer.sign();
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to sign privacy request", ex);
+    }
+  }
+
+  private static boolean canonicalSignatureVerifies(
+      final TransportRequest request,
+      final NetworkId networkId,
+      final String nonce) {
+    try {
+      final byte[] signature =
+          Base64.getDecoder()
+              .decode(request.headers().get(CanonicalRequestSigner.HEADER_SIGNATURE).get(0));
+      final Signature verifier = Signature.getInstance("Ed25519");
+      verifier.initVerify(PRIVACY_KEY_PAIR.getPublic());
+      verifier.update(
+          CanonicalRequestSigner.canonicalRequestSignatureMessage(
+              networkId,
+              request.method(),
+              request.uri(),
+              request.body(),
+              1_700_000_000_000L,
+              nonce));
+      return verifier.verify(signature);
+    } catch (final Exception ex) {
+      throw new AssertionError("failed to verify privacy request signature", ex);
+    }
   }
 
   private static final class OneResponseExecutor implements HttpTransportExecutor {

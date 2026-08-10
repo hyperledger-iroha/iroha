@@ -52,7 +52,7 @@ fn native_signer_bindings() -> String {
         format!(
             r#"
 [sorafs.storage.native_transaction_signers.{role}]
-handle = "hsm://sorafs/{handle_role}/governance-primary"
+handle = "software://sorafs/{handle_role}/governance-primary"
 authority = "{authority}"
 algorithm = "ed25519"
 public_key_hex = "{public_key_hex}"
@@ -129,7 +129,7 @@ fn governance_dag_runtime_signer_and_producer_store_project_exact_bindings() {
     let policy_digest = "71".repeat(32);
     let actual = parse_overlay(&signer_overlay(
         Some("12D3KooWGovernancePrimary"),
-        Some("pkcs11:governance-dag:primary"),
+        Some("software://sorafs/governance-dag/primary"),
         Some(17),
         Some(&policy_digest),
         Some(&public_key),
@@ -143,7 +143,7 @@ fn governance_dag_runtime_signer_and_producer_store_project_exact_bindings() {
     );
     assert_eq!(
         storage.governance_dag_signer_handle.as_deref(),
-        Some("pkcs11:governance-dag:primary")
+        Some("software://sorafs/governance-dag/primary")
     );
     assert_eq!(storage.governance_dag_signer_revision, Some(17));
     assert_eq!(
@@ -180,7 +180,7 @@ fn governance_dag_local_producer_rejects_missing_checkpoint_store_binding() {
     let policy_digest = "76".repeat(32);
     let source = signer_overlay(
         Some("12D3KooWGovernancePrimary"),
-        Some("pkcs11:governance-dag:primary"),
+        Some("software://sorafs/governance-dag/primary"),
         Some(31),
         Some(&policy_digest),
         Some(&public_key),
@@ -202,7 +202,7 @@ fn governance_dag_local_producer_rejects_partial_checkpoint_store_bindings() {
     let policy_digest = "77".repeat(32);
     let complete = signer_overlay(
         Some("12D3KooWGovernancePrimary"),
-        Some("pkcs11:governance-dag:primary"),
+        Some("software://sorafs/governance-dag/primary"),
         Some(33),
         Some(&policy_digest),
         Some(&public_key),
@@ -235,7 +235,7 @@ fn disabled_governance_service_rejects_network_auth_but_accepts_producer_store()
     let policy_digest = "78".repeat(32);
     let complete = signer_overlay(
         Some("12D3KooWGovernancePrimary"),
-        Some("pkcs11:governance-dag:primary"),
+        Some("software://sorafs/governance-dag/primary"),
         Some(35),
         Some(&policy_digest),
         Some(&public_key),
@@ -271,7 +271,7 @@ fn governance_dag_runtime_signer_rejects_every_partial_five_field_binding() {
     let policy_digest = "72".repeat(32);
     let complete = (
         Some("12D3KooWGovernancePrimary"),
-        Some("pkcs11:governance-dag:primary"),
+        Some("software://sorafs/governance-dag/primary"),
         Some(19),
         Some(policy_digest.as_str()),
         Some(public_key.as_str()),
@@ -333,7 +333,7 @@ fn governance_dag_runtime_signer_rejects_zero_and_noncanonical_qualification() {
     ] {
         let error = parse_overlay(&signer_overlay(
             Some("12D3KooWGovernancePrimary"),
-            Some("pkcs11:governance-dag:primary"),
+            Some("software://sorafs/governance-dag/primary"),
             Some(revision),
             Some(&digest),
             Some(&public_key),
@@ -350,7 +350,7 @@ fn governance_dag_runtime_signer_rejects_zero_and_noncanonical_qualification() {
 fn governance_dag_runtime_signer_rejects_test_marked_handle_without_echoing_it() {
     let public_key = public_key_hex(0x64);
     let policy_digest = "74".repeat(32);
-    let secret_marker = "pkcs11:governance-dag:test-secret-must-not-escape";
+    let secret_marker = "software://sorafs/governance-dag/test-secret-must-not-escape";
     let error = parse_overlay(&signer_overlay(
         Some("12D3KooWGovernancePrimary"),
         Some(secret_marker),
@@ -370,7 +370,7 @@ fn governance_dag_runtime_signer_rejects_dormant_and_disabled_bindings() {
     let policy_digest = "75".repeat(32);
     let complete = signer_overlay(
         Some("12D3KooWGovernancePrimary"),
-        Some("pkcs11:governance-dag:primary"),
+        Some("software://sorafs/governance-dag/primary"),
         Some(29),
         Some(&policy_digest),
         Some(&public_key),
@@ -396,7 +396,7 @@ governance_dag_dir = "/tmp/sorafs-governance"
             r#"
 [sorafs.storage]
 enabled = true
-governance_dag_signer_handle = "pkcs11:governance-dag:primary"
+governance_dag_signer_handle = "software://sorafs/governance-dag/primary"
 "#
             .to_owned(),
             "binding is forbidden without governance_dag_dir",

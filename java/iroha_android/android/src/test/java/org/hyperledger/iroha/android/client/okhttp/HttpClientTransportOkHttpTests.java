@@ -62,7 +62,8 @@ public final class HttpClientTransportOkHttpTests {
               .setFeePayment(
                   org.hyperledger.iroha.android.model.FeePaymentIntent.authority(
                       java.util.Collections.emptyList(), 1L))
-              .setChainId("00000001")
+              .setNetworkId(
+                  org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
               .setAuthority("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
               .setCreationTimeMs(1_700_000_000_000L)
               .setInstructionBytes("payload".getBytes(StandardCharsets.UTF_8))

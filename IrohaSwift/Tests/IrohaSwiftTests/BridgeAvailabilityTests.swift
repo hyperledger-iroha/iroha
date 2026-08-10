@@ -28,7 +28,7 @@ final class BridgeAvailabilityTests: XCTestCase {
         let privateKey = Data(repeating: 1, count: 32)
         let keypair = try Keypair(privateKeyBytes: privateKey)
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = TransferRequest(chainId: "chain",
+        let request = TransferRequest(networkId: TestNetworkIds.canonical,
                                       authority: authority,
                                       assetDefinitionId: canonicalAssetDefinitionId,
                                       quantity: "1",

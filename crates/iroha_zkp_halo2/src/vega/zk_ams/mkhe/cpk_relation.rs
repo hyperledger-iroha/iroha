@@ -39,7 +39,7 @@ use crate::{
             ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
             ZkAmsT256BulletproofSuiteV1, ZkAmsT256MembershipProofV1,
         },
-        sponge::{Keccak256, Shake256Reader},
+        sponge::Keccak256,
     },
 };
 
@@ -68,6 +68,13 @@ use super::{
     },
     signed_mod,
     wire::ZkAmsMkheAuthenticationWireV1,
+};
+
+#[path = "cpk_relation_common_a.rs"]
+mod common_a;
+pub(super) use common_a::{
+    ZkAmsMkhePreparedCollectivePublicAContextV1, active_collective_public_a_limb_frame_bytes_v1,
+    derive_active_collective_public_a_limb_v1, prepare_active_collective_public_a_v1,
 };
 
 const CPK_SHARE_STATEMENT_MAGIC_V1: [u8; 4] = *b"ZCPS";
@@ -319,6 +326,15 @@ impl ZkAmsMkheCpkPartyBPointerV1 {
     #[must_use]
     pub(super) const fn pointer_digest(self) -> [u8; 32] {
         self.0.pointer_digest()
+    }
+
+    /// Exact direct-object pointer retained by the verified CPK statement.
+    ///
+    /// This remains crate-private: a bare pointer is public data, not a CPK
+    /// verification capability.
+    #[must_use]
+    pub(super) const fn direct_object_pointer(self) -> ZkAmsMkheDirectObjectPointerV1 {
+        self.0
     }
 }
 
@@ -1381,8 +1397,8 @@ impl Drop for BestEffortErasingScalarVecV1 {
 /// Fixed-size secret byte owner with best-effort named-copy erasure on drop.
 ///
 /// The owner must be constructed before handing its buffer to a fallible or
-/// panicking entropy source. By-value copies passed to integer/scalar decoding
-/// remain compiler temporaries and cannot be guaranteed erased by Rust.
+/// panicking entropy source. Decoders borrow its array so the guarded entropy
+/// is not first duplicated into an unmanaged stack array.
 struct BestEffortErasingBytesV1<const N: usize>([u8; N]);
 
 impl<const N: usize> BestEffortErasingBytesV1<N> {
@@ -1394,8 +1410,8 @@ impl<const N: usize> BestEffortErasingBytesV1<N> {
         &mut self.0
     }
 
-    fn expose_copy(&self) -> [u8; N] {
-        self.0
+    fn as_array(&self) -> &[u8; N] {
+        &self.0
     }
 }
 
@@ -1729,7 +1745,10 @@ fn sample_exact_uniform_signed_box_v1<R: MaskedRelaxedRandomSourceV1>(
         random
             .fill_bytes(bytes.as_mut_slice())
             .map_err(|_| ZkAmsMkheCpkRelationErrorV1::RandomUnavailable)?;
-        let sample = u128::from_be_bytes(bytes.expose_copy());
+        let sample = bytes
+            .as_array()
+            .iter()
+            .fold(0_u128, |value, byte| (value << 8) | u128::from(*byte));
         if sample < threshold {
             continue;
         }
@@ -1751,7 +1770,7 @@ fn sample_t256_scalar_v1<R: MaskedRelaxedRandomSourceV1>(
     random
         .fill_bytes(uniform.as_mut_slice())
         .map_err(|_| ZkAmsMkheCpkRelationErrorV1::RandomUnavailable)?;
-    Ok(Scalar::from_uniform_le_bytes(uniform.expose_copy()))
+    Ok(Scalar::from_uniform_le_bytes_ref(uniform.as_array()))
 }
 
 fn response_index(
@@ -2102,70 +2121,6 @@ fn cpk_public_a_context_digest_v1(
     hash.update(&(derivation_context.len() as u32).to_be_bytes());
     hash.update(&derivation_context);
     Ok(hash.finalize())
-}
-
-fn derive_active_collective_public_a_limb_v1(
-    profile: &BgvProfile,
-    roster: &ZkAmsMkheGovernedActiveRosterV1,
-    cpk_transcript_digest: [u8; 32],
-    limb: usize,
-) -> Result<Vec<u64>, ZkAmsMkheCpkRelationErrorV1> {
-    profile
-        .validate()
-        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?;
-    if limb >= profile.moduli.len() {
-        return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
-    }
-    let context = active_collective_public_a_context_v1(roster, cpk_transcript_digest)?;
-    let profile_digest = profile
-        .digest()
-        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::GovernedContext)?;
-    let mut frame = Vec::new();
-    let frame_bytes = ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1
-        .len()
-        .checked_add(profile_digest.len())
-        .and_then(|value| value.checked_add(4))
-        .and_then(|value| value.checked_add(context.len()))
-        .and_then(|value| value.checked_add(2))
-        .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
-    frame
-        .try_reserve_exact(frame_bytes)
-        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
-    frame.extend_from_slice(ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1);
-    frame.extend_from_slice(&profile_digest);
-    frame.extend_from_slice(
-        &u32::try_from(context.len())
-            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?
-            .to_be_bytes(),
-    );
-    frame.extend_from_slice(&context);
-    frame.extend_from_slice(
-        &u16::try_from(limb)
-            .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?
-            .to_be_bytes(),
-    );
-
-    let modulus = profile.moduli[limb];
-    let zone = u64::MAX - u64::MAX % modulus;
-    let mut stream = Shake256Reader::new(&frame);
-    let mut coefficients = Vec::new();
-    coefficients
-        .try_reserve_exact(profile.ring_degree)
-        .map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
-    for _ in 0..profile.ring_degree {
-        let mut accepted = None;
-        for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
-            let mut bytes = [0_u8; 8];
-            stream.read(&mut bytes);
-            let candidate = u64::from_le_bytes(bytes);
-            if candidate < zone {
-                accepted = Some(candidate % modulus);
-                break;
-            }
-        }
-        coefficients.push(accepted.ok_or(ZkAmsMkheCpkRelationErrorV1::NativeRelation)?);
-    }
-    Ok(coefficients)
 }
 
 fn t256_scalar_from_signed_i64_v1(value: i64) -> Scalar {
@@ -2886,16 +2841,41 @@ impl VerifiedZkAmsMkheCpkContributionV1 {
         expected_party_index: usize,
         expected_party_b_payload_blake3: [u8; 32],
     ) -> Result<VerifiedZkAmsMkheCpkBindingSourceV1, ZkAmsMkheCpkRelationErrorV1> {
+        let source = self.into_compact_decryption_source(
+            roster,
+            expected_cpk_transcript_digest,
+            expected_party_index,
+        )?;
+        if expected_party_b_payload_blake3 == [0; 32]
+            || source.party_b_pointer().payload_blake3() != expected_party_b_payload_blake3
+        {
+            return Err(ZkAmsMkheCpkRelationErrorV1::GovernedContext);
+        }
+        Ok(source.into_binding_source())
+    }
+
+    /// Consume the complete verifier capability for bounded decryption setup.
+    ///
+    /// Unlike the legacy admission adapter, this transition does not accept a
+    /// caller-supplied content hash. It carries the exact governed pointer and
+    /// the verifier's owned complete-read receipt forward with the move-only
+    /// secret-commitment lineage. The bounded ceremony must subsequently
+    /// match and republish the canonical public share at this pointer.
+    pub(super) fn into_compact_decryption_source(
+        self,
+        roster: &ZkAmsMkheGovernedActiveRosterV1,
+        expected_cpk_transcript_digest: [u8; 32],
+        expected_party_index: usize,
+    ) -> Result<VerifiedZkAmsMkheCompactDecryptionSourceV1, ZkAmsMkheCpkRelationErrorV1> {
         let receipt = self.receipt;
         receipt
             .statement
             .validate_against_governed_roster(roster, expected_cpk_transcript_digest)?;
         if expected_party_index >= ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
             || receipt.statement.party_index() != expected_party_index
-            || expected_party_b_payload_blake3 == [0; 32]
+            || receipt.statement.party_b_pointer().payload_blake3() == [0; 32]
             || receipt.statement.party_b_pointer().payload_blake3()
-                != expected_party_b_payload_blake3
-            || receipt.party_b_payload_blake3 != expected_party_b_payload_blake3
+                != receipt.party_b_payload_blake3
             || receipt.statement.statement_digest()? != receipt.statement_digest
             || receipt.verification_digest == [0; 32]
             || receipt.verification_digest != verified_relation_digest(&receipt)
@@ -2908,7 +2888,7 @@ impl VerifiedZkAmsMkheCpkContributionV1 {
             receipt._membership_inputs.error.context(),
         )?;
         let secret = &receipt._membership_inputs.secret;
-        Ok(VerifiedZkAmsMkheCpkBindingSourceV1 {
+        let binding_source = VerifiedZkAmsMkheCpkBindingSourceV1 {
             profile_digest: receipt.statement.profile_digest,
             security_certificate_digest: receipt.statement.security_certificate_digest,
             roster_digest: receipt.statement.roster_digest,
@@ -2924,6 +2904,11 @@ impl VerifiedZkAmsMkheCpkContributionV1 {
             membership_proof_digest: secret.proof_set_digest(),
             verifier_transcript_digest: secret.verifier_transcript_digest(),
             relation_verification_digest: receipt.verification_digest,
+        };
+        Ok(VerifiedZkAmsMkheCompactDecryptionSourceV1 {
+            binding_source,
+            party_b_pointer: receipt.statement.party_b_pointer(),
+            party_b_read_receipt: receipt._party_b_read_receipt,
         })
     }
 }
@@ -2936,6 +2921,51 @@ impl fmt::Debug for VerifiedZkAmsMkheCpkContributionV1 {
                 "verification_digest",
                 &hex::encode(self.verification_digest()),
             )
+            .finish_non_exhaustive()
+    }
+}
+
+/// Move-only CPK lineage plus exact direct-object provenance for decryption.
+///
+/// There is no decoder, raw-pointer constructor, or `Clone` implementation.
+/// Only the complete native CPK verifier can create the contribution consumed
+/// into this value.
+pub(super) struct VerifiedZkAmsMkheCompactDecryptionSourceV1 {
+    binding_source: VerifiedZkAmsMkheCpkBindingSourceV1,
+    party_b_pointer: ZkAmsMkheCpkPartyBPointerV1,
+    party_b_read_receipt: ZkAmsMkheDirectObjectReadReceiptV1,
+}
+
+impl VerifiedZkAmsMkheCompactDecryptionSourceV1 {
+    #[must_use]
+    pub(super) const fn party_b_pointer(&self) -> ZkAmsMkheDirectObjectPointerV1 {
+        self.party_b_pointer.direct_object_pointer()
+    }
+
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        VerifiedZkAmsMkheCpkBindingSourceV1,
+        ZkAmsMkheDirectObjectPointerV1,
+        ZkAmsMkheDirectObjectReadReceiptV1,
+    ) {
+        (
+            self.binding_source,
+            self.party_b_pointer.direct_object_pointer(),
+            self.party_b_read_receipt,
+        )
+    }
+
+    fn into_binding_source(self) -> VerifiedZkAmsMkheCpkBindingSourceV1 {
+        self.binding_source
+    }
+}
+
+impl fmt::Debug for VerifiedZkAmsMkheCompactDecryptionSourceV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedZkAmsMkheCompactDecryptionSourceV1")
+            .field("party_b_pointer", &self.party_b_pointer)
             .finish_non_exhaustive()
     }
 }

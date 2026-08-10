@@ -7,6 +7,7 @@
 //! revision/policy-digest qualifications.
 
 use std::{
+    cell::Cell,
     fmt,
     io::{self, Read},
     sync::{
@@ -18,7 +19,10 @@ use std::{
 
 use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{
-    actual::SorafsProviderIngestRuntime,
+    actual::{
+        SorafsProviderAttestationJournal, SorafsProviderAttestationRuntimeBinding,
+        SorafsProviderIngestRuntime,
+    },
     defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
     is_production_runtime_handle,
 };
@@ -29,10 +33,14 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     block::BlockHeader,
     isi::sorafs::CompleteReplicationOrder,
+    musubi::{
+        MusubiArchiveCommitmentV1, MusubiProviderBundleAttestationKeyV1,
+        MusubiProviderBundleVerificationAttestationV1, MusubiProviderBundleVerificationPayloadV1,
+    },
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -49,37 +57,61 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use mv::storage::StorageReadOnly as _;
 use norito::{core::DecodeLimits, decode_from_bytes_with_limits};
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
-use sorafs_car::{CarBuildPlan, ChunkStoreError, compute_chunk_plan_digest_sha3};
+use sorafs_car::{
+    CarBuildPlan, ChunkStoreError, compute_chunk_plan_digest_sha3,
+    musubi::{MusubiBundleVerifierV1, VerifiedMusubiBundleV1},
+};
 use sorafs_manifest::{
     ManifestV1,
     capacity::{
         MAX_CAPACITY_METADATA_VALUE_BYTES, MAX_REPLICATION_ORDER_ASSIGNMENTS, ReplicationOrderV1,
     },
+    validate_registered_chunker_profile,
 };
 use sorafs_node::provider_ingest_runtime::{
     ProviderIngestAuthenticatedSourcePoolV1, ProviderIngestCompletionSignerBindingV1,
-    ProviderIngestCompletionSignerQualificationV1, ProviderIngestRuntimeProviderQualificationV1,
+    ProviderIngestCompletionSignerQualificationV1, ProviderIngestLocalStoredV1,
+    ProviderIngestRuntimeProviderQualificationV1, ProviderIngestVerifiedMusubiBundleReceiptV1,
 };
 use sorafs_node::{
-    FinalizedProviderIngestAuthorizationV1, NodeHandle, NodeStorageError,
+    AdmittedPayloadReadLeaseErrorV1, FinalizedProviderIngestAuthorizationV1,
+    MusubiProviderAttestationClaimOwnerV1,
+    MusubiProviderAttestationInventoryErrorV1, MusubiProviderAttestationInventoryItemV1,
+    MusubiProviderAttestationInventoryQualificationV1,
+    MusubiProviderAttestationInventoryReadbackV1, MusubiProviderAttestationInventoryReaderV1,
+    MusubiProviderAttestationInventoryRuntimeErrorV1, MusubiProviderAttestationInventoryRuntimeV1,
+    MusubiProviderAttestationInventoryScopeV1, MusubiProviderAttestationInventorySinkV1,
+    MusubiProviderAttestationInventoryV1, MusubiProviderAttestationJournalPolicyV1,
+    MusubiProviderAttestationJournalRuntimeV1,
+    MusubiProviderAttestationSignerErrorV1, MusubiProviderAttestationSignerQualificationV1,
+    MusubiProviderAttestationSignerV1, NodeHandle, NodeStorageError,
     ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestCheckpointExternalErrorV1,
     ProviderIngestCheckpointProviderQualificationV1, ProviderIngestCheckpointRuntimeV1,
-    ProviderIngestClaimOwnerV1, ProviderIngestCompletionPayloadBuilderV1,
-    ProviderIngestCompletionPayloadErrorV1, ProviderIngestCompletionPayloadRequestV1,
-    ProviderIngestCompletionSignerErrorV1, ProviderIngestCompletionSignerPolicyV1,
-    ProviderIngestCompletionSignerResolutionContextV1,
+    ProviderIngestClaimOwnerV1, ProviderIngestCompletedMusubiAttestationDriverV1,
+    ProviderIngestCompletedMusubiCaptureCoordinatorV1,
+    ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
+    ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerErrorV1,
+    ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerResolutionContextV1,
     ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
     ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
-    ProviderIngestFinalizedCursorV1, ProviderIngestFinalizedLedgerErrorV1,
-    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
+    ProviderIngestFinalizedClaimFactoryV1, ProviderIngestFinalizedCursorV1,
+    ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1,
+    ProviderIngestFinalizedMusubiArchiveClaimV1, ProviderIngestFinalizedMusubiCompletionClaimV1,
+    ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
     ProviderIngestIngressPrepareErrorV1, ProviderIngestLocalStorageErrorV1,
-    ProviderIngestLocalStorageV1, ProviderIngestRuntimeErrorV1, ProviderIngestRuntimePolicyV1,
-    ProviderIngestRuntimeV1, ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1,
-    ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
-    ProviderIngestTransactionObservationV1, store::StorageError,
+    ProviderIngestLocalStorageV1, ProviderIngestMusubiAttestationApprovalRequestV1,
+    ProviderIngestRuntimeErrorV1, ProviderIngestRuntimePolicyV1, ProviderIngestRuntimeV1,
+    ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1,
+    ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
+    ProviderIngestTransactionObservationV1,
+    musubi_provider_attestation_controller_policy_digest_v1,
+    store::{StorageError, StoredManifest},
+    validate_musubi_provider_attestation_inventory_binding_v1,
 };
 
-use crate::sorafs_provider_ingest_finalized_query::ArchivedProviderIngestFinalizedLedgerV1;
+use crate::sorafs_provider_ingest_finalized_query::{
+    ArchivedProviderIngestFinalizedLedgerV1, PreparedProviderIngestFinalizedArchiveV1,
+};
 
 const SHUTDOWN_WAIT_FLOOR: Duration = Duration::from_secs(2);
 const READINESS_STALE_TICK_MULTIPLIER_V1: u32 = 3;
@@ -91,6 +123,80 @@ const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1 * 4,
     32,
 );
+
+/// Move the exact prepared signed reader into this node's one inert capture tenure.
+///
+/// This composer is intentionally crate-private and performs no lazy scanner
+/// activation, page read, journal or inventory access, signing, transaction
+/// submission, registry mutation, or child start. Retaining its result merely
+/// prevents any later reader substitution for the same process-local
+/// storage/outbox incarnation.
+pub(crate) fn compose_inert_completed_musubi_capture_coordinator_v1(
+    node: &NodeHandle,
+    prepared: &mut PreparedProviderIngestFinalizedArchiveV1,
+    network_id: NetworkId,
+    max_page_rows: usize,
+) -> Result<ProviderIngestCompletedMusubiCaptureCoordinatorV1> {
+    let signed_reader = prepared.take_signed_capture_reader().ok_or_else(|| {
+        eyre::eyre!("prepared completed-Musubi signed capture reader was already taken")
+    })?;
+    node.take_provider_ingest_completed_musubi_capture_coordinator(
+        network_id,
+        max_page_rows,
+        Arc::new(signed_reader),
+    )
+    .wrap_err("reserve the inert completed-Musubi capture coordinator tenure")
+}
+
+/// Compose, but do not run, one deployment-bound completed-Musubi effect pump.
+///
+/// `journal` must come from ordinary `open_journal_runtime`; the node binder
+/// rejects a runtime returned by the explicit H0 initialization path. This
+/// composer never initializes H0, activates capture, starts a child, or calls
+/// an effect. Stock daemon launch therefore remains unconditionally closed.
+#[allow(dead_code, clippy::too_many_arguments)]
+pub(crate) fn compose_inert_completed_musubi_attestation_driver_v1(
+    node: &NodeHandle,
+    coordinator: ProviderIngestCompletedMusubiCaptureCoordinatorV1,
+    journal: Arc<MusubiProviderAttestationJournalRuntimeV1>,
+    state: Arc<State>,
+    network_id: NetworkId,
+    config: &SorafsProviderAttestationJournal,
+    signer: Arc<dyn MusubiProviderAttestationSignerV1>,
+    inventory: Arc<dyn MusubiProviderAttestationInventoryRuntimeV1>,
+) -> Result<ProviderIngestCompletedMusubiAttestationDriverV1> {
+    let provider_id = node
+        .config()
+        .provider_id()
+        .ok_or_else(|| eyre::eyre!("SoraFS provider identity is not configured"))?;
+    let policy = provider_attestation_journal_policy(config)?;
+    let claim_owner = random_provider_attestation_claim_owner()?;
+    let owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1> = state;
+    let signer: Arc<dyn MusubiProviderAttestationSignerV1> =
+        Arc::new(GovernedMusubiProviderAttestationSignerV1::new(
+            signer,
+            config.approval_signer.clone(),
+            owner_authority,
+            network_id,
+            provider_id,
+        ));
+    let inventory: Arc<dyn MusubiProviderAttestationInventoryRuntimeV1> =
+        Arc::new(GovernedMusubiProviderAttestationInventoryV1::new(
+            inventory,
+            config.inventory.clone(),
+            network_id,
+            provider_id,
+        ));
+    node.bind_provider_ingest_completed_musubi_attestation_driver_v1(
+        coordinator,
+        journal,
+        claim_owner,
+        policy,
+        signer,
+        inventory,
+    )
+    .wrap_err("bind inert completed-Musubi provider-attestation effect pump")
+}
 
 /// Exact verified source material passed directly into local `SoraFS` storage.
 ///
@@ -608,6 +714,542 @@ impl ProviderIngestFinalizedOwnerAuthorityV1 for State {
     }
 }
 
+// TODO: instantiate this adapter only after the provider-attestation archive,
+// checkpoint-head seal, and supervised journal activation gates are complete.
+// Keeping the adapter private prevents an unqualified signer from entering the
+// journal through a public construction surface in the meantime.
+#[derive(Clone)]
+#[allow(dead_code)]
+struct GovernedMusubiProviderAttestationSignerV1 {
+    signer: Arc<dyn MusubiProviderAttestationSignerV1>,
+    configured_binding: SorafsProviderAttestationRuntimeBinding,
+    owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
+    expected_network_id: NetworkId,
+    expected_provider_id: ProviderId,
+}
+
+#[derive(Clone, Copy)]
+struct MusubiProviderAttestationRequestBindingV1<'a> {
+    payload: &'a MusubiProviderBundleVerificationPayloadV1,
+    completion_claim_digest: [u8; 32],
+    observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+    signer_policy: ProviderIngestCompletionSignerPolicyV1,
+}
+
+type MusubiProviderAttestationApprovalFutureV1<'a> = ProviderIngestFutureV1<
+    'a,
+    Result<MusubiProviderBundleVerificationAttestationV1, MusubiProviderAttestationSignerErrorV1>,
+>;
+
+impl<'a> From<&'a ProviderIngestMusubiAttestationApprovalRequestV1>
+    for MusubiProviderAttestationRequestBindingV1<'a>
+{
+    fn from(request: &'a ProviderIngestMusubiAttestationApprovalRequestV1) -> Self {
+        Self {
+            payload: request.payload(),
+            completion_claim_digest: request.completion_claim_digest(),
+            observed_finalized_cursor: request.observed_finalized_cursor(),
+            signer_policy: request.signer_policy(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl GovernedMusubiProviderAttestationSignerV1 {
+    fn new(
+        signer: Arc<dyn MusubiProviderAttestationSignerV1>,
+        configured_binding: SorafsProviderAttestationRuntimeBinding,
+        owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
+        expected_network_id: NetworkId,
+        expected_provider_id: ProviderId,
+    ) -> Self {
+        Self {
+            signer,
+            configured_binding,
+            owner_authority,
+            expected_network_id,
+            expected_provider_id,
+        }
+    }
+
+    fn validate_configured_binding(&self) -> Result<(), MusubiProviderAttestationSignerErrorV1> {
+        if !is_production_runtime_handle(&self.configured_binding.handle)
+            || self.configured_binding.revision == 0
+            || self.configured_binding.policy_digest == [0; 32]
+            || self.expected_network_id.as_bytes()[31] & 1 != 1
+            || *self.expected_provider_id.as_bytes() == [0; 32]
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        Ok(())
+    }
+
+    fn qualified_snapshot(
+        &self,
+    ) -> Result<
+        MusubiProviderAttestationSignerQualificationV1,
+        MusubiProviderAttestationSignerErrorV1,
+    > {
+        self.validate_configured_binding()?;
+        let handle_before = self.signer.runtime_handle().to_owned();
+        if !is_production_runtime_handle(&handle_before)
+            || handle_before != self.configured_binding.handle
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        let qualification = self.signer.qualification()?;
+        let expected_controller_policy_digest =
+            musubi_provider_attestation_controller_policy_digest_v1(&qualification.authority)
+                .map_err(|_| MusubiProviderAttestationSignerErrorV1::Rejected)?;
+        if self.signer.runtime_handle() != handle_before
+            || qualification.validate().is_err()
+            || qualification.adapter_revision() != self.configured_binding.revision
+            || qualification.adapter_policy_digest() != self.configured_binding.policy_digest
+            || self.signer.authority() != &qualification.authority
+            || self.signer.signer_policy() != qualification.signer_policy
+            || qualification.controller_policy_digest != expected_controller_policy_digest
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        Ok(qualification)
+    }
+
+    fn request_snapshot(
+        &self,
+        request: MusubiProviderAttestationRequestBindingV1<'_>,
+    ) -> Result<
+        MusubiProviderAttestationSignerQualificationV1,
+        MusubiProviderAttestationSignerErrorV1,
+    > {
+        let binding = &request.payload.binding;
+        let finalized_cursor = request.observed_finalized_cursor;
+        let finalized_anchor = binding.finalized_anchor;
+        if request.payload.validate().is_err()
+            || binding.network_id != self.expected_network_id
+            || binding.provider_id != self.expected_provider_id
+            || request.completion_claim_digest == [0; 32]
+            || finalized_cursor.height == 0
+            || finalized_cursor.block_hash == [0; 32]
+            || !request.signer_policy.is_valid()
+            || binding.completed_by != binding.completion_authority.provider_owner
+            || request.signer_policy != binding.completion_authority.signer_policy
+            || finalized_anchor.height > finalized_cursor.height
+            || finalized_anchor.height == finalized_cursor.height
+                && finalized_anchor.block_hash != finalized_cursor.block_hash
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        let qualification = self.qualification()?;
+        let eligibility = self.current_eligibility()?;
+        let expected_controller_policy_digest =
+            musubi_provider_attestation_controller_policy_digest_v1(&binding.completed_by)
+                .map_err(|_| MusubiProviderAttestationSignerErrorV1::Rejected)?;
+        if qualification.authority != binding.completed_by
+            || qualification.signer_policy != request.signer_policy
+            || qualification.controller_policy_digest != expected_controller_policy_digest
+            || self.signer.authority() != &binding.completed_by
+            || self.signer.signer_policy() != request.signer_policy
+            || eligibility != request.signer_policy
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        Ok(qualification)
+    }
+
+    async fn approve_bound<'a, Approve>(
+        &'a self,
+        request: MusubiProviderAttestationRequestBindingV1<'a>,
+        approve: Approve,
+    ) -> Result<MusubiProviderBundleVerificationAttestationV1, MusubiProviderAttestationSignerErrorV1>
+    where
+        Approve: FnOnce() -> MusubiProviderAttestationApprovalFutureV1<'a> + Send + 'a,
+    {
+        self.validate_configured_binding()?;
+        let binding = &request.payload.binding;
+        if request.payload.validate().is_err()
+            || binding.network_id != self.expected_network_id
+            || binding.provider_id != self.expected_provider_id
+            || request.completion_claim_digest == [0; 32]
+            || !request.signer_policy.is_valid()
+            || binding.completed_by != binding.completion_authority.provider_owner
+            || request.signer_policy != binding.completion_authority.signer_policy
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        let expected_owner = binding.completed_by.clone();
+        if !self
+            .owner_authority
+            .owner_matches(self.expected_provider_id, &expected_owner)
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+        let qualification_before = self.request_snapshot(request)?;
+        if !self
+            .owner_authority
+            .owner_matches(self.expected_provider_id, &expected_owner)
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+
+        let approval = approve().await;
+        if !self
+            .owner_authority
+            .owner_matches(self.expected_provider_id, &expected_owner)
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+        let qualification_after = self.request_snapshot(request);
+        if !self
+            .owner_authority
+            .owner_matches(self.expected_provider_id, &expected_owner)
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+        let qualification_after = qualification_after?;
+        if qualification_after != qualification_before {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+
+        let attestation = approval?;
+        if &attestation.payload != request.payload
+            || attestation.verify(&request.payload.binding).is_err()
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        Ok(attestation)
+    }
+}
+
+impl MusubiProviderAttestationSignerV1 for GovernedMusubiProviderAttestationSignerV1 {
+    fn runtime_handle(&self) -> &str {
+        &self.configured_binding.handle
+    }
+
+    fn authority(&self) -> &AccountId {
+        self.signer.authority()
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<
+        MusubiProviderAttestationSignerQualificationV1,
+        MusubiProviderAttestationSignerErrorV1,
+    > {
+        let before = self.qualified_snapshot()?;
+        let after = self.qualified_snapshot()?;
+        if before != after {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+        Ok(after)
+    }
+
+    fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
+        self.signer.signer_policy()
+    }
+
+    fn current_eligibility(
+        &self,
+    ) -> Result<ProviderIngestCompletionSignerPolicyV1, MusubiProviderAttestationSignerErrorV1>
+    {
+        let qualification_before = self.qualified_snapshot()?;
+        let eligibility = self.signer.current_eligibility()?;
+        let qualification_after = self.qualified_snapshot()?;
+        if qualification_before != qualification_after
+            || eligibility != qualification_before.signer_policy
+            || self.signer.signer_policy() != qualification_before.signer_policy
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+        Ok(eligibility)
+    }
+
+    fn approve<'a>(
+        &'a self,
+        request: &'a ProviderIngestMusubiAttestationApprovalRequestV1,
+    ) -> MusubiProviderAttestationApprovalFutureV1<'a> {
+        Box::pin(self.approve_bound(request.into(), || self.signer.approve(request)))
+    }
+}
+
+// TODO: instantiate this adapter only after the provider-attestation archive,
+// checkpoint-head seal, and supervised journal activation gates are complete.
+// Keeping the adapter private prevents an inventory implementation from
+// bypassing the daemon-owned deployment binding in the meantime.
+#[derive(Clone)]
+#[allow(dead_code)]
+struct GovernedMusubiProviderAttestationInventoryV1 {
+    inventory: Arc<dyn MusubiProviderAttestationInventoryRuntimeV1>,
+    configured_binding: SorafsProviderAttestationRuntimeBinding,
+    expected_network_id: NetworkId,
+    expected_provider_id: ProviderId,
+}
+
+#[allow(dead_code)]
+impl GovernedMusubiProviderAttestationInventoryV1 {
+    fn new(
+        inventory: Arc<dyn MusubiProviderAttestationInventoryRuntimeV1>,
+        configured_binding: SorafsProviderAttestationRuntimeBinding,
+        expected_network_id: NetworkId,
+        expected_provider_id: ProviderId,
+    ) -> Self {
+        Self {
+            inventory,
+            configured_binding,
+            expected_network_id,
+            expected_provider_id,
+        }
+    }
+
+    fn validate_configured_binding(
+        &self,
+    ) -> std::result::Result<(), MusubiProviderAttestationInventoryRuntimeErrorV1> {
+        if !is_production_runtime_handle(&self.configured_binding.handle)
+            || self.configured_binding.revision == 0
+            || self.configured_binding.policy_digest == [0; 32]
+            || self.expected_network_id.as_bytes()[31] & 1 != 1
+            || *self.expected_provider_id.as_bytes() == [0; 32]
+        {
+            return Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected);
+        }
+        Ok(())
+    }
+
+    fn qualified_snapshot(
+        &self,
+    ) -> std::result::Result<
+        MusubiProviderAttestationInventoryQualificationV1,
+        MusubiProviderAttestationInventoryRuntimeErrorV1,
+    > {
+        self.validate_configured_binding()?;
+        let handle_before = self.inventory.runtime_handle().to_owned();
+        if !is_production_runtime_handle(&handle_before)
+            || handle_before != self.configured_binding.handle
+        {
+            return Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected);
+        }
+        let qualification = self.inventory.qualification()?;
+        if self.inventory.runtime_handle() != handle_before
+            || validate_musubi_provider_attestation_inventory_binding_v1(
+                &handle_before,
+                &qualification,
+            )
+            .is_err()
+            || qualification.adapter_revision() != self.configured_binding.revision
+            || qualification.policy_digest() != self.configured_binding.policy_digest
+        {
+            return Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected);
+        }
+        Ok(qualification)
+    }
+
+    fn validate_scope(
+        &self,
+        scope: &MusubiProviderAttestationInventoryScopeV1,
+    ) -> std::result::Result<(), MusubiProviderAttestationInventoryErrorV1> {
+        if scope.validate().is_err() || scope.network_id != self.expected_network_id {
+            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+        }
+        Ok(())
+    }
+
+    fn validate_key(
+        &self,
+        scope: &MusubiProviderAttestationInventoryScopeV1,
+        key: MusubiProviderBundleAttestationKeyV1,
+    ) -> std::result::Result<(), MusubiProviderAttestationInventoryErrorV1> {
+        self.validate_scope(scope)?;
+        if key.validate().is_err()
+            || key.archive_id != scope.archive_id
+            || key.replication_order != scope.replication_order
+            || key.provider_id != self.expected_provider_id
+        {
+            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+        }
+        Ok(())
+    }
+
+    fn validate_item(
+        &self,
+        item: &MusubiProviderAttestationInventoryItemV1,
+    ) -> std::result::Result<(), MusubiProviderAttestationInventoryErrorV1> {
+        if item.validate().is_err() {
+            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+        }
+        self.validate_key(item.scope(), item.key())
+    }
+
+    fn validate_readback(
+        &self,
+        scope: &MusubiProviderAttestationInventoryScopeV1,
+        key: MusubiProviderBundleAttestationKeyV1,
+        readback: &MusubiProviderAttestationInventoryReadbackV1,
+    ) -> std::result::Result<(), MusubiProviderAttestationInventoryErrorV1> {
+        self.validate_key(scope, key)?;
+        if readback.inventory_revision() == 0
+            || readback.item().validate().is_err()
+            || readback.item().scope() != scope
+            || readback.item().key() != key
+        {
+            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+        }
+        Ok(())
+    }
+
+    fn validate_inventory(
+        &self,
+        scope: &MusubiProviderAttestationInventoryScopeV1,
+        inventory: &MusubiProviderAttestationInventoryV1,
+    ) -> std::result::Result<(), MusubiProviderAttestationInventoryErrorV1> {
+        self.validate_scope(scope)?;
+        if inventory.scope() != scope || inventory.validate().is_err() {
+            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+        }
+        Ok(())
+    }
+}
+
+fn map_musubi_inventory_runtime_error(
+    error: MusubiProviderAttestationInventoryRuntimeErrorV1,
+) -> MusubiProviderAttestationInventoryErrorV1 {
+    match error {
+        MusubiProviderAttestationInventoryRuntimeErrorV1::Unavailable => {
+            MusubiProviderAttestationInventoryErrorV1::Unavailable
+        }
+        MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected => {
+            MusubiProviderAttestationInventoryErrorV1::Rejected
+        }
+    }
+}
+
+impl MusubiProviderAttestationInventoryRuntimeV1 for GovernedMusubiProviderAttestationInventoryV1 {
+    fn runtime_handle(&self) -> &str {
+        &self.configured_binding.handle
+    }
+
+    fn qualification(
+        &self,
+    ) -> std::result::Result<
+        MusubiProviderAttestationInventoryQualificationV1,
+        MusubiProviderAttestationInventoryRuntimeErrorV1,
+    > {
+        let before = self.qualified_snapshot()?;
+        let after = self.qualified_snapshot()?;
+        if before != after {
+            return Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected);
+        }
+        Ok(after)
+    }
+
+    fn check_readiness<'a>(
+        &'a self,
+    ) -> ProviderIngestFutureV1<
+        'a,
+        std::result::Result<(), MusubiProviderAttestationInventoryRuntimeErrorV1>,
+    > {
+        Box::pin(async move {
+            let before = self.qualified_snapshot()?;
+            let readiness = self.inventory.check_readiness().await;
+            let after = self.qualified_snapshot()?;
+            if before != after {
+                return Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected);
+            }
+            readiness
+        })
+    }
+}
+
+impl MusubiProviderAttestationInventorySinkV1 for GovernedMusubiProviderAttestationInventoryV1 {
+    fn put<'a>(
+        &'a self,
+        item: MusubiProviderAttestationInventoryItemV1,
+    ) -> ProviderIngestFutureV1<
+        'a,
+        std::result::Result<u64, MusubiProviderAttestationInventoryErrorV1>,
+    > {
+        Box::pin(async move {
+            self.validate_item(&item)?;
+            let before = self
+                .qualified_snapshot()
+                .map_err(map_musubi_inventory_runtime_error)?;
+            let result = self.inventory.put(item).await;
+            let after = self
+                .qualified_snapshot()
+                .map_err(map_musubi_inventory_runtime_error)?;
+            if before != after {
+                return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+            }
+            let revision = result?;
+            if revision == 0 {
+                return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+            }
+            Ok(revision)
+        })
+    }
+}
+
+impl MusubiProviderAttestationInventoryReaderV1 for GovernedMusubiProviderAttestationInventoryV1 {
+    fn get<'a>(
+        &'a self,
+        scope: &'a MusubiProviderAttestationInventoryScopeV1,
+        key: MusubiProviderBundleAttestationKeyV1,
+    ) -> ProviderIngestFutureV1<
+        'a,
+        std::result::Result<
+            Option<MusubiProviderAttestationInventoryReadbackV1>,
+            MusubiProviderAttestationInventoryErrorV1,
+        >,
+    > {
+        Box::pin(async move {
+            self.validate_key(scope, key)?;
+            let before = self
+                .qualified_snapshot()
+                .map_err(map_musubi_inventory_runtime_error)?;
+            let result = self.inventory.get(scope, key).await;
+            let after = self
+                .qualified_snapshot()
+                .map_err(map_musubi_inventory_runtime_error)?;
+            if before != after {
+                return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+            }
+            let readback = result?;
+            if let Some(readback) = readback.as_ref() {
+                self.validate_readback(scope, key, readback)?;
+            }
+            Ok(readback)
+        })
+    }
+
+    fn inventory<'a>(
+        &'a self,
+        scope: &'a MusubiProviderAttestationInventoryScopeV1,
+    ) -> ProviderIngestFutureV1<
+        'a,
+        std::result::Result<
+            Option<MusubiProviderAttestationInventoryV1>,
+            MusubiProviderAttestationInventoryErrorV1,
+        >,
+    > {
+        Box::pin(async move {
+            self.validate_scope(scope)?;
+            let before = self
+                .qualified_snapshot()
+                .map_err(map_musubi_inventory_runtime_error)?;
+            let result = self.inventory.inventory(scope).await;
+            let after = self
+                .qualified_snapshot()
+                .map_err(map_musubi_inventory_runtime_error)?;
+            if before != after {
+                return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+            }
+            let inventory = result?;
+            if let Some(inventory) = inventory.as_ref() {
+                self.validate_inventory(scope, inventory)?;
+            }
+            Ok(inventory)
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct FinalizedSnapshotProbeV1 {
     completed_cursor: Option<ProviderIngestFinalizedCursorV1>,
@@ -633,6 +1275,7 @@ impl ObservedArchivedFinalizedAssignmentLedgerV1 {
 impl ProviderIngestFinalizedLedgerV1 for ObservedArchivedFinalizedAssignmentLedgerV1 {
     fn read_assignment_page(
         &self,
+        claim_factory: ProviderIngestFinalizedClaimFactoryV1,
         at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
         after_order_id: Option<[u8; 32]>,
         limit: usize,
@@ -647,7 +1290,7 @@ impl ProviderIngestFinalizedLedgerV1 for ObservedArchivedFinalizedAssignmentLedg
         let probe = Arc::clone(&self.probe);
         Box::pin(async move {
             let page = archived
-                .read_assignment_page(at_finalized_cursor, after_order_id, limit)
+                .read_assignment_page(claim_factory, at_finalized_cursor, after_order_id, limit)
                 .await?;
             if page.next_after_order_id.is_none() {
                 probe
@@ -673,6 +1316,54 @@ impl NativeProviderIngestLocalStorageV1 {
             operation_timeout,
         }
     }
+
+    // TODO: Invoke this boundary from the finalized post-completion attestation coordinator once
+    // its governed signer/approval handoff exists. Keeping it uncalled makes this slice externally
+    // inert while fixing the only admissible way to derive the unsigned request.
+    #[allow(
+        dead_code,
+        reason = "the post-completion coordinator is intentionally not activated in this slice"
+    )]
+    fn prepare_musubi_attestation_approval_request(
+        &self,
+        retained_authorization: &FinalizedProviderIngestAuthorizationV1,
+        completed_claim: &ProviderIngestFinalizedMusubiCompletionClaimV1,
+    ) -> std::result::Result<
+        ProviderIngestMusubiAttestationApprovalRequestV1,
+        ProviderIngestLocalStorageErrorV1,
+    > {
+        if !completed_claim.matches_authorization(retained_authorization) {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        }
+        let stored = self
+            .node
+            .manifest_metadata_by_digest(&retained_authorization.manifest_digest())
+            .map_err(|error| classify_completed_attestation_manifest_lookup_error(&error))?;
+        if stored.manifest_digest() != &retained_authorization.manifest_digest()
+            || stored.manifest_cid() != retained_authorization.manifest_cid()
+            || stored.content_length() != retained_authorization.content_length()
+            || stored.chunk_profile_handle() != retained_authorization.chunker_handle()
+        {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        }
+        let manifest = stored
+            .load_manifest()
+            .map_err(|error| classify_storage_backend_error(&error))?;
+        validate_manifest_binding(retained_authorization, &manifest)?;
+        let registered_profile = validate_registered_chunker_profile(&manifest.chunking)
+            .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
+        let plan = stored
+            .try_to_car_plan_with_hint(registered_profile.profile, None)
+            .map_err(|error| classify_storage_backend_error(&error))?;
+        validate_verified_payload(retained_authorization, &manifest, &plan)?;
+
+        self.node
+            .verify_provider_ingest_completed_musubi_capture_bundle(
+                &plan,
+                retained_authorization,
+                completed_claim,
+            )
+    }
 }
 
 struct DeadlineBoundedReaderV1 {
@@ -682,6 +1373,21 @@ struct DeadlineBoundedReaderV1 {
     terminal_state: DeadlineBoundedReaderTerminalStateV1,
     #[cfg(test)]
     clock: Arc<dyn Fn() -> Instant + Send + Sync>,
+}
+
+struct ObservedAdmittedPayloadReaderV1<'observation, R> {
+    inner: R,
+    first_error_kind: &'observation Cell<Option<io::ErrorKind>>,
+}
+
+impl<R: Read> Read for ObservedAdmittedPayloadReaderV1<'_, R> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(output).inspect_err(|error| {
+            if self.first_error_kind.get().is_none() {
+                self.first_error_kind.set(Some(error.kind()));
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -846,24 +1552,30 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
     fn verify_existing(
         &self,
         authorization: FinalizedProviderIngestAuthorizationV1,
+        musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
     ) -> ProviderIngestFutureV1<
         '_,
-        std::result::Result<Option<String>, ProviderIngestLocalStorageErrorV1>,
+        std::result::Result<Option<ProviderIngestLocalStoredV1>, ProviderIngestLocalStorageErrorV1>,
     > {
         let node = self.node.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || verify_existing_manifest(&node, &authorization))
-                .await
-                .map_err(|_| ProviderIngestLocalStorageErrorV1::Retryable)?
+            tokio::task::spawn_blocking(move || {
+                verify_existing_manifest(&node, &authorization, musubi_archive.as_ref())
+            })
+            .await
+            .map_err(|_| ProviderIngestLocalStorageErrorV1::Retryable)?
         })
     }
 
     fn store(
         &self,
         authorization: FinalizedProviderIngestAuthorizationV1,
+        musubi_archive: Option<ProviderIngestFinalizedMusubiArchiveClaimV1>,
         mut fetched: VerifiedProviderIngestPayloadV1,
-    ) -> ProviderIngestFutureV1<'_, std::result::Result<String, ProviderIngestLocalStorageErrorV1>>
-    {
+    ) -> ProviderIngestFutureV1<
+        '_,
+        std::result::Result<ProviderIngestLocalStoredV1, ProviderIngestLocalStorageErrorV1>,
+    > {
         let node = self.node.clone();
         let operation_timeout = self.operation_timeout;
         Box::pin(async move {
@@ -882,11 +1594,28 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
                         &fetched.plan,
                         &mut fetched.reader,
                     ) {
-                        Ok(manifest_id) => Ok(manifest_id),
-                        Err(NodeStorageError::Storage(StorageError::ManifestExists { .. })) => {
-                            match verify_existing_manifest(&node, &authorization) {
-                                Ok(Some(manifest_id)) => Ok(manifest_id),
-                                Ok(None) => Err(ProviderIngestLocalStorageErrorV1::Permanent),
+                        Ok(manifest_id) => finish_newly_admitted_manifest_verification(
+                            manifest_id.as_str(),
+                            verify_existing_manifest(
+                                &node,
+                                &authorization,
+                                musubi_archive.as_ref(),
+                            ),
+                        ),
+                        Err(NodeStorageError::Storage(StorageError::ManifestExists {
+                            manifest_id,
+                        })) => {
+                            match verify_existing_manifest(
+                                &node,
+                                &authorization,
+                                musubi_archive.as_ref(),
+                            ) {
+                                Ok(Some(stored)) if stored.manifest_id() == manifest_id => {
+                                    Ok(stored)
+                                }
+                                Ok(Some(_)) | Ok(None) => {
+                                    Err(ProviderIngestLocalStorageErrorV1::Permanent)
+                                }
                                 Err(error) => Err(error),
                             }
                         }
@@ -907,10 +1636,43 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
     }
 }
 
+/// Finish verification after this provider-ingest call admitted a manifest.
+///
+/// Admission may deduplicate into a generic SoraFS object that another reference already uses, so
+/// a permanent verification failure cannot safely evict the object. `Quarantined` instead requires
+/// the provider-ingest runtime to retain the object, durably dead-letter the exact authorization,
+/// and make the completion path unreachable. Transient verification failures remain retryable.
+// TODO: keep daemon activation fail-closed until supported storage targets prove crash/restart
+// recovery across the admission-to-dead-letter interval and shared-object replay.
+fn finish_newly_admitted_manifest_verification(
+    manifest_id: &str,
+    verification: std::result::Result<
+        Option<ProviderIngestLocalStoredV1>,
+        ProviderIngestLocalStorageErrorV1,
+    >,
+) -> std::result::Result<ProviderIngestLocalStoredV1, ProviderIngestLocalStorageErrorV1> {
+    match verification {
+        Ok(Some(stored)) if stored.manifest_id() == manifest_id => Ok(stored),
+        Ok(Some(_)) | Ok(None) | Err(ProviderIngestLocalStorageErrorV1::Permanent) => {
+            Err(ProviderIngestLocalStorageErrorV1::Quarantined)
+        }
+        Err(ProviderIngestLocalStorageErrorV1::Retryable) => {
+            Err(ProviderIngestLocalStorageErrorV1::Retryable)
+        }
+        Err(ProviderIngestLocalStorageErrorV1::Quarantined) => {
+            Err(ProviderIngestLocalStorageErrorV1::Quarantined)
+        }
+    }
+}
+
 fn verify_existing_manifest(
     node: &NodeHandle,
     authorization: &FinalizedProviderIngestAuthorizationV1,
-) -> std::result::Result<Option<String>, ProviderIngestLocalStorageErrorV1> {
+    musubi_archive: Option<&ProviderIngestFinalizedMusubiArchiveClaimV1>,
+) -> std::result::Result<Option<ProviderIngestLocalStoredV1>, ProviderIngestLocalStorageErrorV1> {
+    authorization
+        .validate()
+        .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
     let stored = match node.manifest_metadata_by_digest(&authorization.manifest_digest()) {
         Ok(stored) => stored,
         Err(NodeStorageError::Storage(StorageError::ManifestNotFound { .. })) => return Ok(None),
@@ -925,12 +1687,163 @@ fn verify_existing_manifest(
     }
     let manifest = stored
         .load_manifest()
-        .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
+        .map_err(|error| classify_storage_backend_error(&error))?;
     validate_manifest_binding(authorization, &manifest)?;
     // Existing records are accepted only through StorageBackend's admission
     // invariant, which separately binds raw bytes to the stored plan payload
     // digest and ManifestV1.car_digest to the reconstructed full CARv2 archive.
-    Ok(Some(stored.manifest_id().to_owned()))
+    let manifest_id = stored.manifest_id().to_owned();
+    let claim = match (authorization.musubi_context(), musubi_archive) {
+        (None, None) => {
+            return Ok(Some(ProviderIngestLocalStoredV1::generic(manifest_id)));
+        }
+        (Some(_), Some(claim)) => claim,
+        (None, Some(_)) | (Some(_), None) => {
+            return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+        }
+    };
+    let receipt = verify_existing_musubi_bundle(node, authorization, claim, &stored, &manifest)?;
+    Ok(Some(ProviderIngestLocalStoredV1::musubi(
+        manifest_id,
+        receipt,
+    )))
+}
+
+fn verify_existing_musubi_bundle(
+    node: &NodeHandle,
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    claim: &ProviderIngestFinalizedMusubiArchiveClaimV1,
+    stored: &StoredManifest,
+    manifest: &ManifestV1,
+) -> std::result::Result<
+    ProviderIngestVerifiedMusubiBundleReceiptV1,
+    ProviderIngestLocalStorageErrorV1,
+> {
+    validate_musubi_claim_binding(authorization, claim)?;
+    let verified =
+        verify_admitted_musubi_bundle(node, authorization, claim.commitment(), stored, manifest)?;
+
+    ProviderIngestVerifiedMusubiBundleReceiptV1::from_verified_bundle(
+        claim,
+        authorization,
+        &verified,
+    )
+}
+
+/// Reconstruct and verify one admitted Musubi payload under a fresh lifecycle lease.
+///
+/// This helper deliberately returns the verifier's closed evidence instead of a persisted
+/// pre-completion receipt. The post-completion attestation path instead enters a new admitted
+/// payload lifecycle lease and calls
+/// [`NodeHandle::verify_provider_ingest_completed_musubi_capture_bundle`] with
+/// the independently sealed, store-instance-bound completed-row claim;
+/// possession of this earlier evidence never skips that read or authorizes
+/// signing.
+fn verify_admitted_musubi_bundle(
+    node: &NodeHandle,
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    commitment: &MusubiArchiveCommitmentV1,
+    stored: &StoredManifest,
+    manifest: &ManifestV1,
+) -> std::result::Result<VerifiedMusubiBundleV1, ProviderIngestLocalStorageErrorV1> {
+    validate_musubi_commitment_binding(authorization, commitment)?;
+    let registered_profile = validate_registered_chunker_profile(&manifest.chunking)
+        .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
+    let plan = stored
+        .try_to_car_plan_with_hint(registered_profile.profile, None)
+        .map_err(|error| classify_storage_backend_error(&error))?;
+    validate_verified_payload(authorization, manifest, &plan)?;
+
+    let verification = node
+        .with_admitted_payload_read_lease(&authorization.manifest_digest(), |lease| {
+            if lease.manifest_digest() != &authorization.manifest_digest()
+                || lease.content_length() != authorization.content_length()
+                || lease.payload_digest() != plan.payload_digest.as_bytes()
+            {
+                return None;
+            }
+            let first_read_error = Cell::new(None);
+            let verified =
+                MusubiBundleVerifierV1::verify_payload_with_factory(&plan, commitment, || {
+                    lease
+                        .open_reader()
+                        .inspect_err(|error| {
+                            if first_read_error.get().is_none() {
+                                first_read_error.set(Some(error.kind()));
+                            }
+                        })
+                        .map(|inner| ObservedAdmittedPayloadReaderV1 {
+                            inner,
+                            first_error_kind: &first_read_error,
+                        })
+                });
+            Some((verified, first_read_error.get()))
+        })
+        .map_err(classify_admitted_payload_lease_error)?
+        .ok_or(ProviderIngestLocalStorageErrorV1::Permanent)?;
+    match verification {
+        (Ok(verified), _) => Ok(verified),
+        (Err(_), Some(kind)) if admitted_payload_read_error_is_retryable(kind) => {
+            return Err(ProviderIngestLocalStorageErrorV1::Retryable);
+        }
+        (Err(_), _) => return Err(ProviderIngestLocalStorageErrorV1::Permanent),
+    }
+}
+
+fn validate_musubi_claim_binding(
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    claim: &ProviderIngestFinalizedMusubiArchiveClaimV1,
+) -> std::result::Result<(), ProviderIngestLocalStorageErrorV1> {
+    if !claim.matches_authorization(authorization) {
+        return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+    }
+    Ok(())
+}
+
+fn validate_musubi_commitment_binding(
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    commitment: &MusubiArchiveCommitmentV1,
+) -> std::result::Result<(), ProviderIngestLocalStorageErrorV1> {
+    let Some(musubi_context) = authorization.musubi_context() else {
+        return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+    };
+    if authorization.validate().is_err()
+        || commitment.validate().is_err()
+        || musubi_context.archive_id() != commitment.archive_id()
+        || commitment.root_cid.as_bytes() != authorization.manifest_cid()
+        || commitment.chunker.to_handle() != authorization.chunker_handle()
+        || commitment.chunk_plan_digest.as_bytes() != &authorization.chunk_digest_sha3_256()
+        || commitment.por_root.as_bytes() != &authorization.por_root()
+        || commitment.content_length != authorization.content_length()
+    {
+        return Err(ProviderIngestLocalStorageErrorV1::Permanent);
+    }
+    Ok(())
+}
+
+const fn classify_admitted_payload_lease_error(
+    error: AdmittedPayloadReadLeaseErrorV1,
+) -> ProviderIngestLocalStorageErrorV1 {
+    match error {
+        AdmittedPayloadReadLeaseErrorV1::StorageUnavailable => {
+            ProviderIngestLocalStorageErrorV1::Retryable
+        }
+        AdmittedPayloadReadLeaseErrorV1::NotAdmitted => {
+            ProviderIngestLocalStorageErrorV1::Retryable
+        }
+        AdmittedPayloadReadLeaseErrorV1::Disabled => ProviderIngestLocalStorageErrorV1::Permanent,
+    }
+}
+
+const fn admitted_payload_read_error_is_retryable(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::Interrupted
+            | io::ErrorKind::WouldBlock
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::NotFound
+            | io::ErrorKind::Other
+    )
 }
 
 fn validate_manifest_binding(
@@ -961,6 +1874,9 @@ fn validate_verified_payload(
     manifest: &ManifestV1,
     plan: &CarBuildPlan,
 ) -> std::result::Result<(), ProviderIngestLocalStorageErrorV1> {
+    authorization
+        .validate()
+        .map_err(|_| ProviderIngestLocalStorageErrorV1::Permanent)?;
     validate_manifest_binding(authorization, manifest)?;
     if plan.content_length != authorization.content_length()
         || compute_chunk_plan_digest_sha3(&plan.chunks) != authorization.chunk_digest_sha3_256()
@@ -976,34 +1892,58 @@ fn validate_verified_payload(
 
 fn classify_storage_error(error: &NodeStorageError) -> ProviderIngestLocalStorageErrorV1 {
     match error {
-        NodeStorageError::Storage(
-            StorageError::ChunkDigestMismatch { .. }
-            | StorageError::ManifestContentLengthMismatch
-            | StorageError::ManifestChunkPlanDigestMismatch
-            | StorageError::CarArchiveReconstruction { .. }
-            | StorageError::ManifestCarArchiveDigestMismatch
-            | StorageError::ManifestCarSizeMismatch { .. }
-            | StorageError::ManifestDagCodecMismatch { .. }
-            | StorageError::ChunkProfileMismatch
-            | StorageError::PorRootMismatch
-            | StorageError::ChunkStore(
-                ChunkStoreError::UnexpectedEof { .. }
-                | ChunkStoreError::DigestMismatch { .. }
-                | ChunkStoreError::LengthMismatch { .. }
-                | ChunkStoreError::PayloadDigestMismatch
-                | ChunkStoreError::SinkChunkOrder { .. }
-                | ChunkStoreError::SinkChunkMetadataMismatch { .. }
-                | ChunkStoreError::SinkChunkLengthMismatch { .. }
-                | ChunkStoreError::SinkChunkDigestMismatch { .. }
-                | ChunkStoreError::SinkIncomplete { .. },
-            )
-            | StorageError::InvalidFileLayout { .. }
-            | StorageError::CorruptStorageState { .. }
-            | StorageError::UnsupportedIndexVersion { .. },
-        ) => ProviderIngestLocalStorageErrorV1::Permanent,
-        NodeStorageError::Disabled
-        | NodeStorageError::Scheduler(_)
-        | NodeStorageError::Storage(_) => ProviderIngestLocalStorageErrorV1::Retryable,
+        NodeStorageError::Storage(error) => classify_storage_backend_error(error),
+        NodeStorageError::Disabled | NodeStorageError::Scheduler(_) => {
+            ProviderIngestLocalStorageErrorV1::Retryable
+        }
+    }
+}
+
+fn classify_completed_attestation_manifest_lookup_error(
+    error: &NodeStorageError,
+) -> ProviderIngestLocalStorageErrorV1 {
+    match error {
+        NodeStorageError::Disabled => ProviderIngestLocalStorageErrorV1::Permanent,
+        NodeStorageError::Storage(StorageError::ManifestNotFound { .. }) => {
+            ProviderIngestLocalStorageErrorV1::Retryable
+        }
+        other => classify_storage_error(other),
+    }
+}
+
+fn classify_storage_backend_error(error: &StorageError) -> ProviderIngestLocalStorageErrorV1 {
+    match error {
+        StorageError::ChunkDigestMismatch { .. }
+        | StorageError::PayloadLengthMismatch { .. }
+        | StorageError::UnsupportedManifestVersion { .. }
+        | StorageError::ManifestContentLengthMismatch
+        | StorageError::ManifestChunkPlanDigestMismatch
+        | StorageError::CarArchiveReconstruction { .. }
+        | StorageError::ManifestCarArchiveDigestMismatch
+        | StorageError::ManifestCarSizeMismatch { .. }
+        | StorageError::ManifestDagCodecMismatch { .. }
+        | StorageError::ChunkProfileMismatch
+        | StorageError::PorRootMismatch
+        | StorageError::ChunkStore(
+            ChunkStoreError::UnexpectedEof { .. }
+            | ChunkStoreError::DigestMismatch { .. }
+            | ChunkStoreError::LengthMismatch { .. }
+            | ChunkStoreError::PayloadDigestMismatch
+            | ChunkStoreError::SinkChunkOrder { .. }
+            | ChunkStoreError::SinkChunkMetadataMismatch { .. }
+            | ChunkStoreError::SinkChunkLengthMismatch { .. }
+            | ChunkStoreError::SinkChunkDigestMismatch { .. }
+            | ChunkStoreError::SinkIncomplete { .. },
+        )
+        | StorageError::Norito(_)
+        | StorageError::PersistentArtifactTooLarge { .. }
+        | StorageError::LayoutValueTooLarge { .. }
+        | StorageError::InvalidFileLayout { .. }
+        | StorageError::CorruptStorageState { .. }
+        | StorageError::UnsupportedIndexVersion { .. } => {
+            ProviderIngestLocalStorageErrorV1::Permanent
+        }
+        _ => ProviderIngestLocalStorageErrorV1::Retryable,
     }
 }
 
@@ -1061,7 +2001,7 @@ fn validate_completion_order_binding(
 
 #[derive(Clone)]
 struct NativeCompletionPayloadBuilderV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     state: Arc<State>,
     queue: Arc<Queue>,
     ttl: Duration,
@@ -1087,7 +2027,7 @@ impl NativeCompletionPayloadBuilderV1 {
             },
         );
         let mut builder = TransactionBuilder::new(
-            self.chain_id.clone(),
+            *self.state.network_id_ref(),
             request.provider_owner,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1102,7 +2042,7 @@ impl NativeCompletionPayloadBuilderV1 {
         &self,
         request: ProviderIngestCompletionPayloadRequestV1,
     ) -> std::result::Result<TransactionPayload, ProviderIngestCompletionPayloadErrorV1> {
-        if request.chain_id != self.chain_id
+        if request.network_id != self.network_id
             || request.finalized_cursor.height == 0
             || request.finalized_cursor.block_hash == [0; 32]
             || request.expected_assignment_revision == 0
@@ -1118,7 +2058,7 @@ impl NativeCompletionPayloadBuilderV1 {
             .latest_block_hash()
             .map(|hash| *hash.as_ref())
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Unavailable)?;
-        if view.chain_id != self.chain_id
+        if view.network_id() != &self.network_id
             || !completion_payload_anchor_matches_committed_chain(
                 request.finalized_cursor,
                 request.completion_epoch,
@@ -1205,7 +2145,6 @@ impl ProviderIngestCompletionPayloadBuilderV1 for NativeCompletionPayloadBuilder
 
 #[derive(Clone)]
 struct NativeTransactionIngressV1 {
-    chain_id: ChainId,
     state: Arc<State>,
     queue: Arc<Queue>,
 }
@@ -1219,7 +2158,7 @@ impl NativeTransactionIngressV1 {
         let (max_clock_drift, transaction_parameters) = self.state.transaction_admission_limits();
         AcceptedTransaction::accept(
             transaction,
-            &self.chain_id,
+            self.state.network_id_ref(),
             max_clock_drift,
             transaction_parameters,
             self.state.crypto().as_ref(),
@@ -1885,7 +2824,7 @@ impl QualifiedProviderIngestRuntimeAdaptersV1 {
 }
 
 struct ProviderIngestStartContextV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     state: Arc<State>,
     queue: Arc<Queue>,
     node: NodeHandle,
@@ -1896,7 +2835,7 @@ struct ProviderIngestStartContextV1 {
 
 /// Daemon-owned inputs needed to launch the supervised provider-ingest worker.
 pub(crate) struct ProviderIngestRuntimeStartArgsV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     state: Arc<State>,
     queue: Arc<Queue>,
     node: NodeHandle,
@@ -1904,17 +2843,17 @@ pub(crate) struct ProviderIngestRuntimeStartArgsV1 {
 }
 
 impl ProviderIngestRuntimeStartArgsV1 {
-    /// Bind one runtime launch to its configured chain, node, and archive-only
+    /// Bind one runtime launch to its exact network, node, and archive-only
     /// finalized reader.
     pub(crate) fn new(
-        chain_id: ChainId,
+        network_id: NetworkId,
         state: Arc<State>,
         queue: Arc<Queue>,
         node: NodeHandle,
         finalized_ledger: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
     ) -> Self {
         Self {
-            chain_id,
+            network_id,
             state,
             queue,
             node,
@@ -2156,8 +3095,8 @@ async fn qualify_provider_ingest_startup(
     preflight: &ProviderIngestStartupQualificationV1,
 ) -> Result<ProviderIngestStartupQualificationV1> {
     validate_config(config)?;
-    if context.finalized_ledger.chain_id() != &context.chain_id {
-        bail!("daemon-owned finalized provider-ingest query has a substituted chain identity");
+    if context.finalized_ledger.network_id() != context.network_id {
+        bail!("daemon-owned finalized provider-ingest query has a substituted network identity");
     }
     context.finalized_ledger.activation_ready().wrap_err(
         "qualify daemon-owned finalized provider-ingest archive activation gate at runtime startup",
@@ -2220,6 +3159,45 @@ fn provider_ingest_runtime_policy(
     }
 }
 
+fn provider_attestation_journal_policy(
+    config: &SorafsProviderAttestationJournal,
+) -> Result<MusubiProviderAttestationJournalPolicyV1> {
+    for (role, binding) in [
+        ("clock seal", &config.clock_seal),
+        ("approval signer", &config.approval_signer),
+        ("inventory", &config.inventory),
+    ] {
+        validate_provider_attestation_runtime_binding(role, binding)?;
+    }
+    let policy = MusubiProviderAttestationJournalPolicyV1 {
+        max_entries: config.max_entries,
+        max_attempts: config.max_attempts,
+        lease_ttl_ms: config.lease_ttl_ms,
+        approval_timeout_ms: config.approval_timeout_ms,
+        handoff_timeout_ms: config.handoff_timeout_ms,
+        retry_delay_ms: config.retry_delay_ms,
+        checkpoint_max_bytes: config.checkpoint_max_bytes,
+        max_cas_retries: config.max_cas_retries,
+    };
+    policy
+        .validate()
+        .wrap_err("validate provider-attestation durable journal policy")?;
+    Ok(policy)
+}
+
+fn validate_provider_attestation_runtime_binding(
+    role: &str,
+    binding: &SorafsProviderAttestationRuntimeBinding,
+) -> Result<()> {
+    if !is_production_runtime_handle(&binding.handle)
+        || binding.revision == 0
+        || binding.policy_digest == [0; 32]
+    {
+        bail!("provider-attestation {role} runtime binding is invalid");
+    }
+    Ok(())
+}
+
 fn assemble_native_provider_ingest_runtime(
     config: &SorafsProviderIngestRuntime,
     context: &ProviderIngestStartContextV1,
@@ -2242,7 +3220,7 @@ fn assemble_native_provider_ingest_runtime(
         Duration::from_millis(config.source_operation_timeout_ms),
     ));
     let payload_builder = Arc::new(NativeCompletionPayloadBuilderV1 {
-        chain_id: context.chain_id.clone(),
+        network_id: context.network_id,
         state: Arc::clone(&context.state),
         queue: Arc::clone(&context.queue),
         ttl: Duration::from_millis(config.completion_transaction_ttl_ms),
@@ -2257,14 +3235,13 @@ fn assemble_native_provider_ingest_runtime(
         expected_signer_binding: qualification.expected_signer_binding.clone(),
     });
     let ingress = Arc::new(NativeTransactionIngressV1 {
-        chain_id: context.chain_id.clone(),
         state: Arc::clone(&context.state),
         queue: Arc::clone(&context.queue),
     });
     let runtime = context
         .node
         .build_provider_ingest_runtime(
-            context.chain_id.clone(),
+            context.network_id,
             claim_owner,
             provider_ingest_runtime_policy(config),
             ledger,
@@ -2608,7 +3585,7 @@ pub(crate) async fn start(
     shutdown_signal: ShutdownSignal,
 ) -> Result<(ProviderIngestRuntimeHandleV1, Child)> {
     let ProviderIngestRuntimeStartArgsV1 {
-        chain_id,
+        network_id,
         state,
         queue,
         node,
@@ -2624,7 +3601,7 @@ pub(crate) async fn start(
         qualification: preflight_qualification,
     } = preflight;
     let context = ProviderIngestStartContextV1 {
-        chain_id,
+        network_id,
         state,
         queue,
         node,
@@ -2732,6 +3709,19 @@ fn random_claim_owner() -> Result<ProviderIngestClaimOwnerV1> {
     bail!("operating-system randomness repeatedly returned a zero provider-ingest claim owner")
 }
 
+fn random_provider_attestation_claim_owner() -> Result<MusubiProviderAttestationClaimOwnerV1> {
+    for _ in 0..8 {
+        let mut bytes = [0_u8; 32];
+        OsRng.try_fill_bytes(&mut bytes).wrap_err(
+            "operating-system randomness unavailable for provider-attestation claim owner",
+        )?;
+        if let Ok(owner) = MusubiProviderAttestationClaimOwnerV1::new(bytes) {
+            return Ok(owner);
+        }
+    }
+    bail!("operating-system randomness repeatedly returned a zero provider-attestation claim owner")
+}
+
 fn validate_config(config: &SorafsProviderIngestRuntime) -> Result<()> {
     let authenticated_source_qualification = configured_authenticated_source_qualification(config);
     let completion_signer_resolver_qualification =
@@ -2790,6 +3780,9 @@ fn validate_config(config: &SorafsProviderIngestRuntime) -> Result<()> {
     policy
         .validate()
         .wrap_err("validate provider-ingest durable outbox policy")?;
+    if let Some(journal) = config.provider_attestation_journal.as_ref() {
+        provider_attestation_journal_policy(journal)?;
+    }
     Ok(())
 }
 
@@ -2822,1798 +3815,4 @@ fn validate_authenticated_source_inventory(
 }
 
 #[cfg(test)]
-mod tests {
-    use iroha_config_base::util::Bytes;
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::isi::InstructionBox;
-    use sorafs_node::provider_ingest_runtime::{
-        ProviderIngestAuthenticatedProviderSourceV1, ProviderIngestAuthenticatedSourceBindingV1,
-        ProviderIngestAuthenticatedSourceRegistrationV1, ProviderIngestSourceQualificationV1,
-    };
-
-    use super::*;
-
-    #[derive(Debug)]
-    struct TestClockV1 {
-        now: Mutex<Instant>,
-    }
-
-    impl TestClockV1 {
-        fn new() -> Self {
-            Self {
-                now: Mutex::new(Instant::now()),
-            }
-        }
-
-        fn now(&self) -> Instant {
-            *self.now.lock().expect("test clock lock")
-        }
-
-        fn advance(&self, duration: Duration) {
-            let mut now = self.now.lock().expect("test clock lock");
-            *now = now.checked_add(duration).expect("test clock advance");
-        }
-    }
-
-    #[derive(Debug)]
-    enum TestTerminalBehaviorV1 {
-        Eof,
-        Error {
-            kind: io::ErrorKind,
-            message: &'static str,
-        },
-        ExtraByte(u8),
-        AdvancingEof {
-            clock: Arc<TestClockV1>,
-            advance: Duration,
-        },
-    }
-
-    struct TestTerminalReaderV1 {
-        payload: Vec<u8>,
-        offset: usize,
-        terminal_behavior: TestTerminalBehaviorV1,
-        terminal_probe_count: Arc<AtomicU64>,
-        terminal_probe_width: Arc<AtomicU64>,
-    }
-
-    impl TestTerminalReaderV1 {
-        fn new(
-            payload: impl Into<Vec<u8>>,
-            terminal_behavior: TestTerminalBehaviorV1,
-        ) -> (Self, Arc<AtomicU64>, Arc<AtomicU64>) {
-            let terminal_probe_count = Arc::new(AtomicU64::new(0));
-            let terminal_probe_width = Arc::new(AtomicU64::new(0));
-            (
-                Self {
-                    payload: payload.into(),
-                    offset: 0,
-                    terminal_behavior,
-                    terminal_probe_count: Arc::clone(&terminal_probe_count),
-                    terminal_probe_width: Arc::clone(&terminal_probe_width),
-                },
-                terminal_probe_count,
-                terminal_probe_width,
-            )
-        }
-    }
-
-    impl Read for TestTerminalReaderV1 {
-        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
-            if output.is_empty() {
-                return Ok(0);
-            }
-            if self.offset < self.payload.len() {
-                let copied = output.len().min(self.payload.len() - self.offset);
-                output[..copied].copy_from_slice(&self.payload[self.offset..self.offset + copied]);
-                self.offset += copied;
-                return Ok(copied);
-            }
-            self.terminal_probe_count.fetch_add(1, Ordering::SeqCst);
-            self.terminal_probe_width.store(
-                u64::try_from(output.len()).unwrap_or(u64::MAX),
-                Ordering::SeqCst,
-            );
-            match &self.terminal_behavior {
-                TestTerminalBehaviorV1::Eof => Ok(0),
-                TestTerminalBehaviorV1::Error { kind, message } => {
-                    Err(io::Error::new(*kind, *message))
-                }
-                TestTerminalBehaviorV1::ExtraByte(byte) => {
-                    output[0] = *byte;
-                    Ok(1)
-                }
-                TestTerminalBehaviorV1::AdvancingEof { clock, advance } => {
-                    clock.advance(*advance);
-                    Ok(0)
-                }
-            }
-        }
-    }
-
-    #[derive(Clone)]
-    struct TestOwnerAuthorityV1 {
-        owner: Arc<Mutex<Option<AccountId>>>,
-    }
-
-    impl TestOwnerAuthorityV1 {
-        fn new(owner: AccountId) -> Self {
-            Self {
-                owner: Arc::new(Mutex::new(Some(owner))),
-            }
-        }
-
-        fn replace(&self, owner: AccountId) {
-            *self.owner.lock().expect("owner authority lock") = Some(owner);
-        }
-    }
-
-    impl ProviderIngestFinalizedOwnerAuthorityV1 for TestOwnerAuthorityV1 {
-        fn owner_matches(&self, _provider_id: ProviderId, expected_owner: &AccountId) -> bool {
-            self.owner.lock().expect("owner authority lock").as_ref() == Some(expected_owner)
-        }
-    }
-
-    enum TestSignerMutationV1 {
-        Owner(AccountId),
-        Policy(ProviderIngestCompletionSignerPolicyV1),
-        QualificationRevision(u64),
-    }
-
-    struct TestGovernedCompletionSignerV1 {
-        key: KeyPair,
-        authority: AccountId,
-        policy: Mutex<ProviderIngestCompletionSignerPolicyV1>,
-        qualification_revision: AtomicU64,
-        owner_authority: TestOwnerAuthorityV1,
-        mutation: Mutex<Option<TestSignerMutationV1>>,
-        sign_calls: AtomicU64,
-    }
-
-    impl ProviderIngestCompletionSignerV1 for TestGovernedCompletionSignerV1 {
-        fn runtime_handle(&self) -> &'static str {
-            "pkcs11:sorafs-provider-ingest-primary"
-        }
-
-        fn authority(&self) -> &AccountId {
-            &self.authority
-        }
-
-        fn qualification(
-            &self,
-        ) -> std::result::Result<
-            ProviderIngestCompletionSignerQualificationV1,
-            ProviderIngestCompletionSignerErrorV1,
-        > {
-            Ok(ProviderIngestCompletionSignerQualificationV1::new(
-                self.qualification_revision.load(Ordering::SeqCst),
-                self.signer_policy(),
-                self.key.public_key().algorithm(),
-                self.key.public_key().clone(),
-            ))
-        }
-
-        fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
-            *self.policy.lock().expect("signer policy lock")
-        }
-
-        fn current_eligibility(
-            &self,
-        ) -> std::result::Result<
-            ProviderIngestCompletionSignerPolicyV1,
-            ProviderIngestCompletionSignerErrorV1,
-        > {
-            let policy = self.signer_policy();
-            if policy.is_valid() {
-                Ok(policy)
-            } else {
-                Err(ProviderIngestCompletionSignerErrorV1::Rejected)
-            }
-        }
-
-        fn sign(
-            &self,
-            payload: TransactionPayload,
-        ) -> ProviderIngestFutureV1<
-            '_,
-            std::result::Result<SignedTransaction, ProviderIngestCompletionSignerErrorV1>,
-        > {
-            Box::pin(async move {
-                self.sign_calls.fetch_add(1, Ordering::SeqCst);
-                let transaction = TransactionBuilder::from_payload(payload)
-                    .and_then(|builder| builder.try_sign(self.key.private_key()))
-                    .map_err(|_| ProviderIngestCompletionSignerErrorV1::Rejected)?;
-                match self.mutation.lock().expect("signer mutation lock").take() {
-                    Some(TestSignerMutationV1::Owner(owner)) => {
-                        self.owner_authority.replace(owner);
-                    }
-                    Some(TestSignerMutationV1::Policy(policy)) => {
-                        *self.policy.lock().expect("signer policy lock") = policy;
-                    }
-                    Some(TestSignerMutationV1::QualificationRevision(revision)) => {
-                        self.qualification_revision
-                            .store(revision, Ordering::SeqCst);
-                    }
-                    None => {}
-                }
-                Ok(transaction)
-            })
-        }
-    }
-
-    struct TestGovernedSignerResolverV1 {
-        signer: Arc<dyn ProviderIngestCompletionSignerV1>,
-        qualification: Mutex<ProviderIngestRuntimeProviderQualificationV1>,
-        qualification_after_readiness: Mutex<Option<ProviderIngestRuntimeProviderQualificationV1>>,
-        qualification_after_resolve: Mutex<Option<ProviderIngestRuntimeProviderQualificationV1>>,
-        readiness: Mutex<std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1>>,
-        last_resolution_context: Mutex<Option<ProviderIngestCompletionSignerResolutionContextV1>>,
-    }
-
-    impl TestGovernedSignerResolverV1 {
-        fn new(signer: Arc<dyn ProviderIngestCompletionSignerV1>) -> Self {
-            Self {
-                signer,
-                qualification: Mutex::new(ProviderIngestRuntimeProviderQualificationV1::new(
-                    6, [0xB2; 32],
-                )),
-                qualification_after_readiness: Mutex::new(None),
-                qualification_after_resolve: Mutex::new(None),
-                readiness: Mutex::new(Ok(())),
-                last_resolution_context: Mutex::new(None),
-            }
-        }
-    }
-
-    impl ProviderIngestGovernedSignerResolverRuntimeV1 for TestGovernedSignerResolverV1 {
-        fn runtime_handle(&self) -> &'static str {
-            "hsm:sorafs-provider-ingest-resolver"
-        }
-
-        fn qualification(
-            &self,
-        ) -> std::result::Result<
-            ProviderIngestRuntimeProviderQualificationV1,
-            ProviderIngestCompletionSignerResolverErrorV1,
-        > {
-            Ok(*self
-                .qualification
-                .lock()
-                .expect("resolver qualification lock"))
-        }
-
-        fn signer_binding(
-            &self,
-        ) -> std::result::Result<
-            ProviderIngestCompletionSignerBindingV1,
-            ProviderIngestCompletionSignerResolverErrorV1,
-        > {
-            let qualification = self.signer.qualification().map_err(|error| match error {
-                ProviderIngestCompletionSignerErrorV1::Unavailable => {
-                    ProviderIngestCompletionSignerResolverErrorV1::Unavailable
-                }
-                ProviderIngestCompletionSignerErrorV1::Rejected => {
-                    ProviderIngestCompletionSignerResolverErrorV1::Rejected
-                }
-            })?;
-            Ok(ProviderIngestCompletionSignerBindingV1::new(
-                self.signer.runtime_handle(),
-                qualification,
-            ))
-        }
-
-        fn check_readiness(
-            &self,
-        ) -> std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1> {
-            if let Some(qualification) = self
-                .qualification_after_readiness
-                .lock()
-                .expect("resolver readiness mutation lock")
-                .take()
-            {
-                *self
-                    .qualification
-                    .lock()
-                    .expect("resolver qualification lock") = qualification;
-            }
-            *self.readiness.lock().expect("resolver readiness lock")
-        }
-
-        fn resolve(
-            &self,
-            context: ProviderIngestCompletionSignerResolutionContextV1,
-        ) -> ProviderIngestFutureV1<
-            '_,
-            std::result::Result<
-                Option<Arc<dyn ProviderIngestCompletionSignerV1>>,
-                ProviderIngestCompletionSignerResolverErrorV1,
-            >,
-        > {
-            *self
-                .last_resolution_context
-                .lock()
-                .expect("resolver context lock") = Some(context);
-            let signer = Arc::clone(&self.signer);
-            if let Some(qualification) = self
-                .qualification_after_resolve
-                .lock()
-                .expect("resolver resolution mutation lock")
-                .take()
-            {
-                *self
-                    .qualification
-                    .lock()
-                    .expect("resolver qualification lock") = qualification;
-            }
-            Box::pin(async move { Ok(Some(signer)) })
-        }
-    }
-
-    fn test_signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
-        let digest_byte = u8::try_from(revision).unwrap_or(0xFE);
-        ProviderIngestCompletionSignerPolicyV1 {
-            policy_id: [0xA1; 32],
-            revision,
-            predecessor_digest: (revision > 1).then(|| [digest_byte.saturating_sub(1); 32]),
-            policy_digest: [digest_byte; 32],
-        }
-    }
-
-    fn test_completion_payload(
-        key: &KeyPair,
-        provider_id: ProviderId,
-        completion_epoch: u64,
-        expected_assignment_revision: u64,
-    ) -> TransactionPayload {
-        let provider_owner = AccountId::new(key.public_key().clone());
-        let signer_policy = test_signer_policy(1);
-        let mut builder = TransactionBuilder::new(
-            ChainId::from("provider-ingest-governed-signer-test"),
-            provider_owner.clone(),
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([InstructionBox::from(CompleteReplicationOrder {
-            order_id: ReplicationOrderId::new([0xB1; 32]),
-            provider_id,
-            completion_epoch,
-            expected_authority:
-                iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
-                    provider_owner,
-                    signer_policy,
-                ),
-            expected_assignment_revision,
-            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
-                height: completion_epoch,
-                block_hash: [0xB2; 32],
-            },
-        })]);
-        builder.set_creation_time(Duration::from_secs(1));
-        builder.set_ttl(Duration::from_secs(30));
-        builder
-            .try_sign(key.private_key())
-            .expect("sign payload fixture")
-            .payload()
-            .clone()
-    }
-
-    #[test]
-    fn canonical_completion_payload_fixture_fits_production_floor() {
-        assert_eq!(
-            provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN,
-            64 * 1024
-        );
-        let key =
-            KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).expect("derive signer key");
-        let payload = test_completion_payload(&key, ProviderId::new([0x41; 32]), 8, 1);
-        let payload_bytes =
-            norito::to_bytes(&payload).expect("encode canonical completion payload");
-        let decoded_payload = norito::decode_from_bytes::<TransactionPayload>(&payload_bytes)
-            .expect("decode canonical completion payload");
-        assert_eq!(decoded_payload, payload);
-        assert_eq!(
-            norito::to_bytes(&decoded_payload).expect("re-encode canonical completion payload"),
-            payload_bytes
-        );
-
-        let signed = TransactionBuilder::from_payload(payload.clone())
-            .expect("rebuild canonical completion transaction")
-            .try_sign(key.private_key())
-            .expect("sign canonical completion transaction");
-        let signed_bytes =
-            norito::to_bytes(&signed).expect("encode canonical signed completion transaction");
-        let decoded_signed = norito::decode_from_bytes::<SignedTransaction>(&signed_bytes)
-            .expect("decode canonical signed completion transaction");
-        assert_eq!(decoded_signed, signed);
-        assert_eq!(
-            norito::to_bytes(&decoded_signed)
-                .expect("re-encode canonical signed completion transaction"),
-            signed_bytes
-        );
-        let repeated_signed = TransactionBuilder::from_payload(payload.clone())
-            .expect("rebuild repeated canonical completion transaction")
-            .try_sign(key.private_key())
-            .expect("repeat canonical completion signature");
-        assert_eq!(
-            norito::to_bytes(&repeated_signed)
-                .expect("encode repeated canonical signed completion transaction"),
-            signed_bytes
-        );
-
-        let payload_with_envelope = u64::try_from(payload_bytes.len())
-            .expect("payload length fits u64")
-            .checked_add(
-                provider_ingest_outbox_defaults::SIGNED_TRANSACTION_ENVELOPE_RESERVE_BYTES_V1,
-            )
-            .expect("payload plus envelope reserve");
-        assert!(
-            payload_with_envelope
-                <= provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
-        );
-        assert!(
-            u64::try_from(signed_bytes.len()).expect("signed length fits u64")
-                <= provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
-        );
-    }
-
-    fn test_governed_signer(
-        policy: ProviderIngestCompletionSignerPolicyV1,
-        mutation: Option<TestSignerMutationV1>,
-    ) -> (
-        Arc<TestGovernedCompletionSignerV1>,
-        TestOwnerAuthorityV1,
-        ProviderId,
-        TransactionPayload,
-    ) {
-        let key =
-            KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).expect("derive signer key");
-        let authority = AccountId::new(key.public_key().clone());
-        let owner_authority = TestOwnerAuthorityV1::new(authority.clone());
-        let provider_id = ProviderId::new([0x41; 32]);
-        let payload = test_completion_payload(&key, provider_id, 8, 1);
-        let signer = Arc::new(TestGovernedCompletionSignerV1 {
-            key,
-            authority,
-            policy: Mutex::new(policy),
-            qualification_revision: AtomicU64::new(1),
-            owner_authority: owner_authority.clone(),
-            mutation: Mutex::new(mutation),
-            sign_calls: AtomicU64::new(0),
-        });
-        (signer, owner_authority, provider_id, payload)
-    }
-
-    fn test_readiness_resolver(
-        readiness: std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1>,
-    ) -> Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> {
-        let (signer, _, _, _) = test_governed_signer(test_signer_policy(1), None);
-        let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
-        let resolver = Arc::new(TestGovernedSignerResolverV1::new(signer));
-        *resolver.readiness.lock().expect("resolver readiness lock") = readiness;
-        resolver
-    }
-
-    fn governed_signer_adapter(
-        signer: Arc<TestGovernedCompletionSignerV1>,
-        owner_authority: TestOwnerAuthorityV1,
-        provider_id: ProviderId,
-    ) -> GovernedSignerResolverAdapterV1 {
-        let expected_signer_binding = ProviderIngestCompletionSignerBindingV1::new(
-            signer.runtime_handle(),
-            signer.qualification().expect("test signer qualification"),
-        );
-        let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
-        let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> =
-            Arc::new(TestGovernedSignerResolverV1::new(signer));
-        let owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1> =
-            Arc::new(owner_authority);
-        GovernedSignerResolverAdapterV1 {
-            resolver,
-            owner_authority,
-            provider_id,
-            expected_resolver_qualification: ProviderIngestRuntimeProviderQualificationV1::new(
-                6, [0xB2; 32],
-            ),
-            expected_signer_binding,
-        }
-    }
-
-    fn signer_test_cursor() -> ProviderIngestFinalizedCursorV1 {
-        ProviderIngestFinalizedCursorV1 {
-            height: 8,
-            block_hash: [0xB2; 32],
-        }
-    }
-
-    fn signer_resolution_context(
-        provider_owner: AccountId,
-    ) -> ProviderIngestCompletionSignerResolutionContextV1 {
-        ProviderIngestCompletionSignerResolutionContextV1::new(
-            provider_owner,
-            test_signer_policy(1),
-            1,
-            signer_test_cursor(),
-        )
-    }
-
-    #[test]
-    fn governed_signer_resolver_rejects_stale_advertised_binding() {
-        let (signer, _owner_authority, _provider_id, _payload) =
-            test_governed_signer(test_signer_policy(1), None);
-        let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
-        let resolver = TestGovernedSignerResolverV1::new(Arc::clone(&signer));
-        let mut expected = resolver.signer_binding().expect("signer binding");
-        expected.qualification.adapter_revision = 2;
-
-        assert_eq!(
-            validate_resolver_signer_binding(&resolver, &expected),
-            Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
-        );
-    }
-
-    #[test]
-    fn governed_signer_resolver_rejects_qualification_drift_across_readiness() {
-        let (signer, _owner_authority, _provider_id, _payload) =
-            test_governed_signer(test_signer_policy(1), None);
-        let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
-        let resolver = TestGovernedSignerResolverV1::new(signer);
-        let expected = ProviderIngestRuntimeProviderQualificationV1::new(6, [0xB2; 32]);
-        assert!(validate_resolver_qualification(&resolver, expected).is_ok());
-        *resolver
-            .qualification_after_readiness
-            .lock()
-            .expect("resolver readiness mutation lock") = Some(
-            ProviderIngestRuntimeProviderQualificationV1::new(7, [0xB3; 32]),
-        );
-
-        resolver.check_readiness().expect("readiness probe");
-
-        assert_eq!(
-            validate_resolver_qualification(&resolver, expected),
-            Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
-        );
-    }
-
-    #[tokio::test]
-    async fn governed_signer_resolver_rechecks_qualification_after_resolution() {
-        let (signer, owner_authority, provider_id, _payload) =
-            test_governed_signer(test_signer_policy(1), None);
-        let provider_owner = signer.authority().clone();
-        let expected_signer_binding = ProviderIngestCompletionSignerBindingV1::new(
-            signer.runtime_handle(),
-            signer.qualification().expect("test signer qualification"),
-        );
-        let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
-        let resolver = Arc::new(TestGovernedSignerResolverV1::new(signer));
-        let observed_resolver = Arc::clone(&resolver);
-        *resolver
-            .qualification_after_resolve
-            .lock()
-            .expect("resolver resolution mutation lock") = Some(
-            ProviderIngestRuntimeProviderQualificationV1::new(7, [0xB3; 32]),
-        );
-        let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
-        let adapter = GovernedSignerResolverAdapterV1 {
-            resolver,
-            owner_authority: Arc::new(owner_authority),
-            provider_id,
-            expected_resolver_qualification: ProviderIngestRuntimeProviderQualificationV1::new(
-                6, [0xB2; 32],
-            ),
-            expected_signer_binding,
-        };
-
-        let expected_context = signer_resolution_context(provider_owner);
-        assert!(matches!(
-            adapter.resolve(expected_context.clone()).await,
-            Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
-        ));
-        assert_eq!(
-            *observed_resolver
-                .last_resolution_context
-                .lock()
-                .expect("resolver context lock"),
-            Some(expected_context)
-        );
-    }
-
-    #[tokio::test]
-    async fn governed_signer_resolver_rejects_invalid_initial_policy() {
-        let (signer, owner_authority, provider_id, _payload) = test_governed_signer(
-            ProviderIngestCompletionSignerPolicyV1 {
-                policy_id: [0; 32],
-                revision: 0,
-                predecessor_digest: None,
-                policy_digest: [0; 32],
-            },
-            None,
-        );
-        let provider_owner = signer.authority().clone();
-        let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
-
-        assert!(matches!(
-            adapter
-                .resolve(signer_resolution_context(provider_owner))
-                .await,
-            Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
-        ));
-    }
-
-    #[tokio::test]
-    async fn governed_signer_pins_assignment_revision_before_hsm_signing() {
-        let (signer, owner_authority, provider_id, exact_payload) =
-            test_governed_signer(test_signer_policy(1), None);
-        let provider_owner = signer.authority().clone();
-        let adapter = governed_signer_adapter(Arc::clone(&signer), owner_authority, provider_id);
-        let governed = adapter
-            .resolve(signer_resolution_context(provider_owner))
-            .await
-            .expect("resolve governed signer")
-            .expect("governed signer");
-
-        let signed = governed
-            .sign(exact_payload.clone())
-            .await
-            .expect("sign exact assignment revision");
-        assert_eq!(signed.payload(), &exact_payload);
-        assert_eq!(signer.sign_calls.load(Ordering::SeqCst), 1);
-
-        let substituted_payload = test_completion_payload(&signer.key, provider_id, 8, 2);
-        assert_eq!(
-            governed.sign(substituted_payload).await,
-            Err(ProviderIngestCompletionSignerErrorV1::Rejected)
-        );
-        assert_eq!(
-            signer.sign_calls.load(Ordering::SeqCst),
-            1,
-            "substituted assignment revision must not reach the HSM signer"
-        );
-    }
-
-    #[tokio::test]
-    async fn governed_signer_rejects_provider_substitution_before_hsm_signing() {
-        let (signer, owner_authority, provider_id, _exact_payload) =
-            test_governed_signer(test_signer_policy(1), None);
-        let provider_owner = signer.authority().clone();
-        let adapter = governed_signer_adapter(Arc::clone(&signer), owner_authority, provider_id);
-        let governed = adapter
-            .resolve(signer_resolution_context(provider_owner))
-            .await
-            .expect("resolve governed signer")
-            .expect("governed signer");
-
-        let substituted_payload =
-            test_completion_payload(&signer.key, ProviderId::new([0x42; 32]), 8, 1);
-        assert_eq!(
-            governed.sign(substituted_payload).await,
-            Err(ProviderIngestCompletionSignerErrorV1::Rejected)
-        );
-        assert_eq!(
-            signer.sign_calls.load(Ordering::SeqCst),
-            0,
-            "a completion for another provider must not reach the HSM signer"
-        );
-    }
-
-    #[tokio::test]
-    async fn governed_signer_rechecks_policy_after_signing() {
-        let (signer, owner_authority, provider_id, payload) = test_governed_signer(
-            test_signer_policy(1),
-            Some(TestSignerMutationV1::Policy(test_signer_policy(2))),
-        );
-        let provider_owner = signer.authority().clone();
-        let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
-        let governed = adapter
-            .resolve(signer_resolution_context(provider_owner))
-            .await
-            .expect("resolve governed signer")
-            .expect("governed signer");
-
-        assert_eq!(
-            governed.sign(payload).await,
-            Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
-        );
-    }
-
-    #[tokio::test]
-    async fn governed_signer_rechecks_qualification_after_signing() {
-        let (signer, owner_authority, provider_id, payload) = test_governed_signer(
-            test_signer_policy(1),
-            Some(TestSignerMutationV1::QualificationRevision(2)),
-        );
-        let provider_owner = signer.authority().clone();
-        let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
-        let governed = adapter
-            .resolve(signer_resolution_context(provider_owner))
-            .await
-            .expect("resolve governed signer")
-            .expect("governed signer");
-
-        assert_eq!(
-            governed.sign(payload).await,
-            Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
-        );
-    }
-
-    #[tokio::test]
-    async fn governed_signer_surfaces_policy_rotation_before_authorization() {
-        let (signer, owner_authority, provider_id, _payload) =
-            test_governed_signer(test_signer_policy(1), None);
-        let provider_owner = signer.authority().clone();
-        let adapter = governed_signer_adapter(Arc::clone(&signer), owner_authority, provider_id);
-        let governed = adapter
-            .resolve(signer_resolution_context(provider_owner))
-            .await
-            .expect("resolve governed signer")
-            .expect("governed signer");
-
-        *signer.policy.lock().expect("signer policy lock") = test_signer_policy(2);
-
-        assert_eq!(governed.signer_policy(), test_signer_policy(2));
-        assert_eq!(
-            governed.current_eligibility(),
-            Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
-        );
-    }
-
-    #[tokio::test]
-    async fn governed_signer_reports_owner_rotation_before_authorization() {
-        let replacement_key = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
-            .expect("derive replacement owner");
-        let replacement_owner = AccountId::new(replacement_key.public_key().clone());
-        let (signer, owner_authority, provider_id, _payload) =
-            test_governed_signer(test_signer_policy(1), None);
-        let provider_owner = signer.authority().clone();
-        let adapter =
-            governed_signer_adapter(Arc::clone(&signer), owner_authority.clone(), provider_id);
-        let governed = adapter
-            .resolve(signer_resolution_context(provider_owner))
-            .await
-            .expect("resolve governed signer")
-            .expect("governed signer");
-
-        owner_authority.replace(replacement_owner);
-
-        assert_eq!(
-            governed.current_eligibility(),
-            Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
-        );
-    }
-
-    #[tokio::test]
-    async fn governed_signer_rechecks_owner_after_signing() {
-        let replacement_key = KeyPair::try_from_seed(vec![0x32; 32], Algorithm::Ed25519)
-            .expect("derive replacement owner");
-        let replacement_owner = AccountId::new(replacement_key.public_key().clone());
-        let (signer, owner_authority, provider_id, payload) = test_governed_signer(
-            test_signer_policy(1),
-            Some(TestSignerMutationV1::Owner(replacement_owner)),
-        );
-        let provider_owner = signer.authority().clone();
-        let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
-        let governed = adapter
-            .resolve(signer_resolution_context(provider_owner))
-            .await
-            .expect("resolve governed signer")
-            .expect("governed signer");
-
-        assert_eq!(
-            governed.sign(payload).await,
-            Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
-        );
-    }
-
-    #[test]
-    fn production_handle_validation_rejects_placeholders_and_whitespace() {
-        for handle in [
-            "",
-            "pkcs11 test",
-            "source-mock-primary",
-            "fake",
-            "dummy",
-            "kms-placeholder",
-            "source\nprimary",
-            "https://operator:secret@host",
-            "https://host/source?token=secret",
-            "https://host/source#fragment",
-        ] {
-            assert!(!is_production_runtime_handle(handle), "{handle:?}");
-        }
-        assert!(is_production_runtime_handle(
-            "hsm://sorafs/provider-ingest/primary"
-        ));
-        assert!(is_production_runtime_handle(
-            "https-pinned-source-pool:eu-1"
-        ));
-    }
-
-    #[test]
-    fn dependency_identity_rejects_runtime_substitution() {
-        assert!(validate_dependency_identity("source", "source:eu-1", "source:eu-2").is_err());
-        assert!(validate_dependency_identity("source", "source:eu-1", "source:eu-1").is_ok());
-    }
-
-    struct TestPoolProviderSourceV1 {
-        provider_id: [u8; 32],
-        runtime_handle: &'static str,
-        readiness: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
-    }
-
-    impl ProviderIngestAuthenticatedProviderSourceV1 for TestPoolProviderSourceV1 {
-        type Fetched = VerifiedProviderIngestPayloadV1;
-
-        fn provider_id(&self) -> [u8; 32] {
-            self.provider_id
-        }
-
-        fn runtime_handle(&self) -> &str {
-            self.runtime_handle
-        }
-
-        fn qualification(
-            &self,
-        ) -> std::result::Result<
-            ProviderIngestSourceQualificationV1,
-            ProviderIngestSourceFetchErrorV1,
-        > {
-            Ok(ProviderIngestSourceQualificationV1::new(
-                1,
-                self.provider_id,
-            ))
-        }
-
-        fn check_readiness(&self) -> std::result::Result<(), ProviderIngestSourceFetchErrorV1> {
-            self.readiness
-        }
-
-        fn fetch_provider(
-            &self,
-            _authorization: FinalizedProviderIngestAuthorizationV1,
-        ) -> ProviderIngestFutureV1<
-            '_,
-            std::result::Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>,
-        > {
-            Box::pin(async { Err(ProviderIngestSourceFetchErrorV1::Unavailable) })
-        }
-    }
-
-    fn test_runtime_source_pool(
-        first_readiness: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
-        second_readiness: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
-    ) -> ProviderIngestAuthenticatedSourcePoolV1<VerifiedProviderIngestPayloadV1> {
-        let registrations = [
-            ([0x22; 32], "https-pinned:provider-a", first_readiness),
-            ([0x33; 32], "https-pinned:provider-b", second_readiness),
-        ]
-        .into_iter()
-        .map(|(provider_id, runtime_handle, readiness)| {
-            let source: Arc<
-                dyn ProviderIngestAuthenticatedProviderSourceV1<
-                    Fetched = VerifiedProviderIngestPayloadV1,
-                >,
-            > = Arc::new(TestPoolProviderSourceV1 {
-                provider_id,
-                runtime_handle,
-                readiness,
-            });
-            ProviderIngestAuthenticatedSourceRegistrationV1::new(
-                ProviderIngestAuthenticatedSourceBindingV1 {
-                    provider_id,
-                    runtime_handle: runtime_handle.to_owned(),
-                    revision: 1,
-                    policy_digest: provider_id,
-                },
-                source,
-            )
-        })
-        .collect();
-        ProviderIngestAuthenticatedSourcePoolV1::new(
-            "https-pinned-source-pool:region-a",
-            ProviderIngestRuntimeProviderQualificationV1::new(5, [0xB1; 32]),
-            4,
-            registrations,
-        )
-        .expect("test source pool")
-    }
-
-    struct TestAuthenticatedSourceInventoryV1 {
-        provider_ids: Vec<[u8; 32]>,
-        qualification: Mutex<ProviderIngestRuntimeProviderQualificationV1>,
-        qualification_after_readiness: Mutex<Option<ProviderIngestRuntimeProviderQualificationV1>>,
-        qualification_after_fetch: Mutex<Option<ProviderIngestRuntimeProviderQualificationV1>>,
-        readiness: Mutex<std::result::Result<(), ProviderIngestSourceFetchErrorV1>>,
-    }
-
-    impl TestAuthenticatedSourceInventoryV1 {
-        fn new(provider_ids: Vec<[u8; 32]>) -> Self {
-            Self {
-                provider_ids,
-                qualification: Mutex::new(ProviderIngestRuntimeProviderQualificationV1::new(
-                    5, [0xB1; 32],
-                )),
-                qualification_after_readiness: Mutex::new(None),
-                qualification_after_fetch: Mutex::new(None),
-                readiness: Mutex::new(Ok(())),
-            }
-        }
-    }
-
-    fn test_readiness_source(
-        readiness: std::result::Result<(), ProviderIngestSourceFetchErrorV1>,
-    ) -> Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> {
-        let source = Arc::new(TestAuthenticatedSourceInventoryV1::new(vec![
-            [0x22; 32], [0x33; 32],
-        ]));
-        *source.readiness.lock().expect("source readiness lock") = readiness;
-        source
-    }
-
-    #[derive(Debug)]
-    struct TestStateFreeCheckpointRuntimeV1 {
-        qualification: Mutex<ProviderIngestCheckpointProviderQualificationV1>,
-        qualification_calls: AtomicU64,
-        load_calls: AtomicU64,
-        compare_and_swap_calls: AtomicU64,
-    }
-
-    impl TestStateFreeCheckpointRuntimeV1 {
-        fn new() -> Self {
-            Self {
-                qualification: Mutex::new(ProviderIngestCheckpointProviderQualificationV1::new(
-                    7, [0xA7; 32],
-                )),
-                qualification_calls: AtomicU64::new(0),
-                load_calls: AtomicU64::new(0),
-                compare_and_swap_calls: AtomicU64::new(0),
-            }
-        }
-    }
-
-    impl ProviderIngestCheckpointRuntimeV1 for TestStateFreeCheckpointRuntimeV1 {
-        fn handle(&self) -> &'static str {
-            "sealed:sorafs-provider-ingest-primary"
-        }
-
-        fn qualification(
-            &self,
-        ) -> std::result::Result<
-            ProviderIngestCheckpointProviderQualificationV1,
-            ProviderIngestCheckpointExternalErrorV1,
-        > {
-            self.qualification_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(*self
-                .qualification
-                .lock()
-                .expect("checkpoint qualification lock"))
-        }
-
-        fn load_latest(
-            &self,
-        ) -> std::result::Result<
-            Option<sorafs_node::ProviderIngestSealedCheckpointRecordV1>,
-            ProviderIngestCheckpointExternalErrorV1,
-        > {
-            self.load_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(None)
-        }
-
-        fn compare_and_swap_latest(
-            &self,
-            _expected_revision: Option<[u8; 32]>,
-            _next: &sorafs_node::ProviderIngestSealedCheckpointRecordV1,
-        ) -> std::result::Result<(), ProviderIngestCheckpointExternalErrorV1> {
-            self.compare_and_swap_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
-    fn state_free_preflight_fixture() -> (
-        SorafsProviderIngestRuntime,
-        ProviderId,
-        Arc<TestAuthenticatedSourceInventoryV1>,
-        Arc<TestGovernedSignerResolverV1>,
-        Arc<TestStateFreeCheckpointRuntimeV1>,
-    ) {
-        let (signer, _, _, _) = test_governed_signer(test_signer_policy(1), None);
-        let config = SorafsProviderIngestRuntime {
-            authenticated_source_fetch_handle: "https-pinned-source-pool:region-a".to_owned(),
-            authenticated_source_fetch_revision: 5,
-            authenticated_source_fetch_policy_digest: [0xB1; 32],
-            completion_signer_resolver_handle: "hsm:sorafs-provider-ingest-resolver".to_owned(),
-            completion_signer_resolver_revision: 6,
-            completion_signer_resolver_policy_digest: [0xB2; 32],
-            completion_signer_handle: signer.runtime_handle().to_owned(),
-            completion_signer_adapter_revision: 1,
-            completion_signer_policy: test_signer_policy(1),
-            completion_signer_algorithm: Algorithm::Ed25519,
-            completion_signer_public_key: signer.key.public_key().clone(),
-            checkpoint_store_handle: "sealed:sorafs-provider-ingest-primary".to_owned(),
-            checkpoint_store_revision: 7,
-            checkpoint_store_policy_digest: [0xA7; 32],
-            scan_interval_ms: 1_000,
-            max_page_rows: 64,
-            max_pages_per_tick: 4,
-            max_source_jobs_per_tick: 32,
-            max_source_providers: 1_024,
-            source_operation_timeout_ms: 30_000,
-            source_lease_renew_interval_ms: 5_000,
-            signer_timeout_ms: 10_000,
-            ingress_timeout_ms: 10_000,
-            completion_transaction_ttl_ms: 30_000,
-            finalized_archive:
-                iroha_config::parameters::actual::SorafsProviderIngestFinalizedArchive {
-                    relative_root: "provider-ingest-finalized-archive-v1".into(),
-                    max_record_bytes: 128 * 1024 * 1024,
-                    max_archive_entries: 1_000_000,
-                    max_total_bytes: 64 * 1024 * 1024 * 1024,
-                    max_providers_per_anchor: 1_024,
-                    max_orders_per_provider: 256,
-                    max_total_orders_per_anchor: 256,
-                    max_page_rows: 64,
-                    max_kura_tip_lag_blocks: 2,
-                    retention_authority: None,
-                },
-            outbox: iroha_config::parameters::actual::SorafsProviderIngestOutbox {
-                max_active_entries: 32,
-                max_terminal_entries: 4_096,
-                max_attempts: 8,
-                checkpoint_max_bytes: Bytes(160 * 1024 * 1024),
-                checkpoint_operation_timeout_ms: 30_000,
-                source_lease_ttl_ms: 30_000,
-                retry_base_delay_ms: 1_000,
-                retry_max_delay_ms: 60_000,
-                terminal_retention_blocks: 100_000,
-                max_signed_transaction_bytes: Bytes(1024 * 1024),
-                max_status_page_size: 256,
-            },
-        };
-        let source = Arc::new(TestAuthenticatedSourceInventoryV1::new(vec![
-            [0x22; 32], [0x33; 32],
-        ]));
-        let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
-        let resolver = Arc::new(TestGovernedSignerResolverV1::new(signer));
-        (
-            config,
-            ProviderId::new([0x11; 32]),
-            source,
-            resolver,
-            Arc::new(TestStateFreeCheckpointRuntimeV1::new()),
-        )
-    }
-
-    #[tokio::test]
-    async fn state_free_preflight_accepts_exact_adapters_without_creating_outbox_state() {
-        let (config, provider_id, source, resolver, checkpoint) = state_free_preflight_fixture();
-        let sentinel_parent = tempfile::tempdir().expect("preflight sentinel parent");
-        let state_root = sentinel_parent.path().join("provider-ingest-outbox");
-        let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = source;
-        let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
-        let checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1> = checkpoint.clone();
-
-        let _preflight = preflight_runtime_adapters(
-            &config,
-            provider_id,
-            ProviderIngestRuntimeAdaptersV1::new(source, resolver),
-            checkpoint_runtime,
-        )
-        .await
-        .expect("qualify exact state-free provider-ingest adapters");
-
-        assert!(
-            !state_root.exists(),
-            "state-free preflight must not create local outbox state"
-        );
-        assert_eq!(checkpoint.qualification_calls.load(Ordering::SeqCst), 2);
-        assert_eq!(checkpoint.load_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(checkpoint.compare_and_swap_calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn state_free_preflight_rejects_stale_source_without_creating_outbox_state() {
-        let (config, provider_id, source, resolver, checkpoint) = state_free_preflight_fixture();
-        *source
-            .qualification
-            .lock()
-            .expect("source qualification lock") =
-            ProviderIngestRuntimeProviderQualificationV1::new(6, [0xB1; 32]);
-        let sentinel_parent = tempfile::tempdir().expect("preflight sentinel parent");
-        let state_root = sentinel_parent.path().join("provider-ingest-outbox");
-        let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = source;
-        let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
-        let checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1> = checkpoint.clone();
-
-        let result = preflight_runtime_adapters(
-            &config,
-            provider_id,
-            ProviderIngestRuntimeAdaptersV1::new(source, resolver),
-            checkpoint_runtime,
-        )
-        .await;
-
-        let error = result.err().expect("stale source qualification must fail");
-        assert!(
-            error
-                .to_string()
-                .contains("authenticated source-fetch qualification"),
-            "unexpected preflight failure: {error:#}"
-        );
-        assert!(
-            !state_root.exists(),
-            "state-free preflight must not create local outbox state"
-        );
-        assert_eq!(checkpoint.qualification_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(checkpoint.load_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(checkpoint.compare_and_swap_calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn state_free_preflight_rejects_stale_resolver_without_creating_outbox_state() {
-        let (config, provider_id, source, resolver, checkpoint) = state_free_preflight_fixture();
-        *resolver
-            .qualification
-            .lock()
-            .expect("resolver qualification lock") =
-            ProviderIngestRuntimeProviderQualificationV1::new(7, [0xB2; 32]);
-        let sentinel_parent = tempfile::tempdir().expect("preflight sentinel parent");
-        let state_root = sentinel_parent.path().join("provider-ingest-outbox");
-        let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = source;
-        let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
-        let checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1> = checkpoint.clone();
-
-        let result = preflight_runtime_adapters(
-            &config,
-            provider_id,
-            ProviderIngestRuntimeAdaptersV1::new(source, resolver),
-            checkpoint_runtime,
-        )
-        .await;
-
-        let error = result
-            .err()
-            .expect("stale resolver qualification must fail");
-        assert!(
-            error
-                .to_string()
-                .contains("completion signer-resolver qualification"),
-            "unexpected preflight failure: {error:#}"
-        );
-        assert!(
-            !state_root.exists(),
-            "state-free preflight must not create local outbox state"
-        );
-        assert_eq!(checkpoint.qualification_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(checkpoint.load_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(checkpoint.compare_and_swap_calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn state_free_preflight_rejects_stale_checkpoint_without_load_cas_or_local_state() {
-        let (config, provider_id, source, resolver, checkpoint) = state_free_preflight_fixture();
-        *checkpoint
-            .qualification
-            .lock()
-            .expect("checkpoint qualification lock") =
-            ProviderIngestCheckpointProviderQualificationV1::new(8, [0xA7; 32]);
-        let sentinel_parent = tempfile::tempdir().expect("preflight sentinel parent");
-        let state_root = sentinel_parent.path().join("provider-ingest-outbox");
-        let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = source;
-        let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> = resolver;
-        let checkpoint_runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1> = checkpoint.clone();
-
-        let result = preflight_runtime_adapters(
-            &config,
-            provider_id,
-            ProviderIngestRuntimeAdaptersV1::new(source, resolver),
-            checkpoint_runtime,
-        )
-        .await;
-
-        let error = result
-            .err()
-            .expect("stale checkpoint qualification must fail");
-        assert!(
-            error
-                .to_string()
-                .contains("checkpoint runtime is substituted"),
-            "unexpected preflight failure: {error:#}"
-        );
-        assert!(
-            !state_root.exists(),
-            "state-free preflight must not create local outbox state"
-        );
-        assert_eq!(checkpoint.qualification_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(checkpoint.load_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(checkpoint.compare_and_swap_calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn opaque_preflight_is_consumed_and_revalidated_before_worker_assembly() {
-        let source = include_str!("sorafs_provider_ingest_runtime.rs");
-        let start = source
-            .find("pub(crate) async fn start(")
-            .expect("provider-ingest launcher");
-        let launch = &source[start..];
-        let consume = launch
-            .find("let QualifiedProviderIngestRuntimeAdaptersV1")
-            .expect("opaque preflight consumption");
-        let revalidate = launch
-            .find("qualify_provider_ingest_startup")
-            .expect("preflight revalidation");
-        let assemble = launch
-            .find("assemble_native_provider_ingest_runtime")
-            .expect("provider-ingest worker assembly");
-
-        assert!(
-            consume < revalidate && revalidate < assemble,
-            "the opaque token must be consumed and all adapter pins revalidated before state-backed worker assembly"
-        );
-    }
-
-    impl ProviderIngestAuthenticatedSourceFetchV1 for TestAuthenticatedSourceInventoryV1 {
-        type Fetched = VerifiedProviderIngestPayloadV1;
-
-        fn fetch(
-            &self,
-            _request: ProviderIngestSourceRequestV1,
-        ) -> ProviderIngestFutureV1<
-            '_,
-            std::result::Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>,
-        > {
-            if let Some(qualification) = self
-                .qualification_after_fetch
-                .lock()
-                .expect("source fetch mutation lock")
-                .take()
-            {
-                *self
-                    .qualification
-                    .lock()
-                    .expect("source qualification lock") = qualification;
-            }
-            Box::pin(async { Err(ProviderIngestSourceFetchErrorV1::Unavailable) })
-        }
-    }
-
-    impl ProviderIngestAuthenticatedSourceRuntimeV1 for TestAuthenticatedSourceInventoryV1 {
-        fn runtime_handle(&self) -> &'static str {
-            "https-pinned-source-pool:region-a"
-        }
-
-        fn qualification(
-            &self,
-        ) -> std::result::Result<
-            ProviderIngestRuntimeProviderQualificationV1,
-            ProviderIngestSourceFetchErrorV1,
-        > {
-            Ok(*self
-                .qualification
-                .lock()
-                .expect("source qualification lock"))
-        }
-
-        fn source_provider_ids(&self) -> &[[u8; 32]] {
-            &self.provider_ids
-        }
-
-        fn check_readiness(&self) -> std::result::Result<(), ProviderIngestSourceFetchErrorV1> {
-            if let Some(qualification) = self
-                .qualification_after_readiness
-                .lock()
-                .expect("source readiness mutation lock")
-                .take()
-            {
-                *self
-                    .qualification
-                    .lock()
-                    .expect("source qualification lock") = qualification;
-            }
-            *self.readiness.lock().expect("source readiness lock")
-        }
-    }
-
-    #[test]
-    fn authenticated_source_inventory_is_multi_provider_canonical_and_identity_stable() {
-        let local_provider_id = [0x11; 32];
-        let valid = TestAuthenticatedSourceInventoryV1::new(vec![[0x22; 32], [0x33; 32]]);
-        assert!(
-            validate_authenticated_source_inventory(
-                &valid,
-                local_provider_id,
-                Some(&[[0x22; 32], [0x33; 32]])
-            )
-            .is_ok()
-        );
-
-        for invalid in [
-            vec![[0x22; 32]],
-            vec![[0; 32], [0x22; 32]],
-            vec![local_provider_id, [0x22; 32]],
-            vec![[0x22; 32], [0x22; 32]],
-            vec![[0x33; 32], [0x22; 32]],
-        ] {
-            let source = TestAuthenticatedSourceInventoryV1::new(invalid);
-            assert!(
-                validate_authenticated_source_inventory(&source, local_provider_id, None).is_err()
-            );
-        }
-
-        assert!(
-            validate_authenticated_source_inventory(
-                &valid,
-                local_provider_id,
-                Some(&[[0x22; 32], [0x44; 32]])
-            )
-            .is_err()
-        );
-        let oversized = TestAuthenticatedSourceInventoryV1::new(
-            (0..=MAX_REPLICATION_ORDER_ASSIGNMENTS)
-                .map(|index| {
-                    let mut provider_id = [0x55; 32];
-                    provider_id[..8].copy_from_slice(
-                        &u64::try_from(index)
-                            .expect("provider index fits u64")
-                            .to_be_bytes(),
-                    );
-                    provider_id
-                })
-                .collect(),
-        );
-        assert!(
-            validate_authenticated_source_inventory(&oversized, local_provider_id, None).is_err()
-        );
-    }
-
-    #[test]
-    fn authenticated_source_rejects_qualification_drift_across_readiness() {
-        let source = TestAuthenticatedSourceInventoryV1::new(vec![[0x22; 32], [0x33; 32]]);
-        let expected = ProviderIngestRuntimeProviderQualificationV1::new(5, [0xB1; 32]);
-        assert!(validate_authenticated_source_qualification(&source, expected).is_ok());
-        *source
-            .qualification_after_readiness
-            .lock()
-            .expect("source readiness mutation lock") = Some(
-            ProviderIngestRuntimeProviderQualificationV1::new(6, [0xB4; 32]),
-        );
-
-        source.check_readiness().expect("readiness probe");
-
-        assert_eq!(
-            validate_authenticated_source_qualification(&source, expected),
-            Err(ProviderIngestSourceFetchErrorV1::Rejected)
-        );
-    }
-
-    #[test]
-    fn source_and_resolver_qualifications_remain_independent() {
-        let source = ProviderIngestRuntimeProviderQualificationV1::new(5, [0xB1; 32]);
-        let resolver = ProviderIngestRuntimeProviderQualificationV1::new(6, [0xB2; 32]);
-        assert!(source.is_valid());
-        assert!(resolver.is_valid());
-        assert_ne!(source, resolver);
-    }
-
-    #[test]
-    fn worker_liveness_guard_fails_readiness_closed_on_every_exit() {
-        let running = Arc::new(AtomicBool::new(false));
-        let in_flight = Arc::new(AtomicBool::new(true));
-        {
-            let _guard =
-                ProviderIngestWorkerLivenessGuardV1::new(running.clone(), in_flight.clone());
-            assert!(running.load(Ordering::Acquire));
-            assert!(in_flight.load(Ordering::Acquire));
-        }
-        assert!(!running.load(Ordering::Acquire));
-        assert!(!in_flight.load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn completed_cursor_consistency_rejects_historical_and_head_forks() {
-        let committed_hashes = (1_u8..=10)
-            .map(|byte| HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([byte; 32])))
-            .collect::<Vec<_>>();
-        let cursor_hash = *committed_hashes[8].as_ref();
-        let head_hash = *committed_hashes[9].as_ref();
-        let cursor = ProviderIngestFinalizedCursorV1 {
-            height: 9,
-            block_hash: cursor_hash,
-        };
-        assert!(!completed_cursor_matches_committed_chain(
-            None,
-            10,
-            head_hash,
-            &committed_hashes
-        ));
-        assert!(completed_cursor_matches_committed_chain(
-            Some(cursor),
-            10,
-            head_hash,
-            &committed_hashes
-        ));
-        assert!(!completed_cursor_matches_committed_chain(
-            Some(ProviderIngestFinalizedCursorV1 {
-                height: 9,
-                block_hash: [0xA9; 32],
-            }),
-            10,
-            head_hash,
-            &committed_hashes
-        ));
-        assert!(!completed_cursor_matches_committed_chain(
-            Some(cursor),
-            10,
-            [0xAA; 32],
-            &committed_hashes
-        ));
-        assert!(!completed_cursor_matches_committed_chain(
-            Some(cursor),
-            9,
-            cursor_hash,
-            &committed_hashes
-        ));
-    }
-
-    #[test]
-    fn completion_payload_anchor_accepts_an_authenticated_committed_prefix() {
-        let committed_hashes = (1_u8..=10)
-            .map(|byte| HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([byte; 32])))
-            .collect::<Vec<_>>();
-        let cursor = ProviderIngestFinalizedCursorV1 {
-            height: 9,
-            block_hash: *committed_hashes[8].as_ref(),
-        };
-        let head_hash = *committed_hashes[9].as_ref();
-
-        assert!(completion_payload_anchor_matches_committed_chain(
-            cursor,
-            9,
-            10,
-            head_hash,
-            &committed_hashes,
-        ));
-        assert!(!completion_payload_anchor_matches_committed_chain(
-            ProviderIngestFinalizedCursorV1 {
-                block_hash: [0xA9; 32],
-                ..cursor
-            },
-            9,
-            10,
-            head_hash,
-            &committed_hashes,
-        ));
-        assert!(!completion_payload_anchor_matches_committed_chain(
-            cursor,
-            10,
-            10,
-            head_hash,
-            &committed_hashes,
-        ));
-        assert!(!completion_payload_anchor_matches_committed_chain(
-            cursor,
-            9,
-            10,
-            [0xAA; 32],
-            &committed_hashes,
-        ));
-    }
-
-    #[test]
-    fn cancelling_store_wait_joins_late_writer() {
-        let completed = Arc::new(AtomicBool::new(false));
-        let late = Arc::clone(&completed);
-        let thread = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(10));
-            late.store(true, Ordering::Release);
-        });
-        drop(BlockingStoreJoinGuardV1(Some(thread)));
-        assert!(completed.load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn deadline_bounded_reader_authenticates_terminal_eof_once() {
-        let payload = b"authenticated provider payload".to_vec();
-        let expected_len = u64::try_from(payload.len()).expect("payload length fits u64");
-        let (inner, terminal_probe_count, terminal_probe_width) =
-            TestTerminalReaderV1::new(payload.clone(), TestTerminalBehaviorV1::Eof);
-        let mut reader =
-            DeadlineBoundedReaderV1::new(Box::new(inner), Duration::from_secs(1), expected_len);
-
-        let mut observed = Vec::new();
-        reader
-            .read_to_end(&mut observed)
-            .expect("authenticate terminal EOF");
-        assert_eq!(observed, payload);
-        assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
-        assert_eq!(terminal_probe_width.load(Ordering::SeqCst), 1);
-
-        let mut trailing = [0_u8; 8];
-        assert_eq!(reader.read(&mut trailing).expect("cached EOF"), 0);
-        assert_eq!(
-            terminal_probe_count.load(Ordering::SeqCst),
-            1,
-            "authenticated EOF must not re-enter the underlying transport"
-        );
-    }
-
-    #[test]
-    fn deadline_bounded_reader_rejects_premature_eof() {
-        let payload = b"short".to_vec();
-        let expected_len = u64::try_from(payload.len() + 1).expect("payload length fits u64");
-        let (inner, terminal_probe_count, _) =
-            TestTerminalReaderV1::new(payload.clone(), TestTerminalBehaviorV1::Eof);
-        let mut reader =
-            DeadlineBoundedReaderV1::new(Box::new(inner), Duration::from_secs(1), expected_len);
-
-        let mut observed = Vec::new();
-        let error = reader
-            .read_to_end(&mut observed)
-            .expect_err("premature EOF must fail closed");
-        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
-        assert_eq!(observed, payload);
-        assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
-
-        let mut trailing = [0_u8; 1];
-        assert_eq!(
-            reader
-                .read(&mut trailing)
-                .expect_err("premature EOF failure is sticky")
-                .kind(),
-            io::ErrorKind::UnexpectedEof
-        );
-        assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn deadline_bounded_reader_propagates_terminal_verification_failures() {
-        for (kind, message) in [
-            (
-                io::ErrorKind::InvalidData,
-                "authenticated source trailer rejected",
-            ),
-            (
-                io::ErrorKind::PermissionDenied,
-                "authenticated source qualification drifted",
-            ),
-        ] {
-            let payload = b"exact bytes".to_vec();
-            let expected_len = u64::try_from(payload.len()).expect("payload length fits u64");
-            let (inner, terminal_probe_count, terminal_probe_width) = TestTerminalReaderV1::new(
-                payload.clone(),
-                TestTerminalBehaviorV1::Error { kind, message },
-            );
-            let mut reader =
-                DeadlineBoundedReaderV1::new(Box::new(inner), Duration::from_secs(1), expected_len);
-            let mut observed = vec![0_u8; payload.len()];
-            reader
-                .read_exact(&mut observed)
-                .expect("read exact authorized bytes");
-            assert_eq!(observed, payload);
-
-            let mut trailing = [0_u8; 8];
-            let error = reader
-                .read(&mut trailing)
-                .expect_err("terminal source verification must propagate");
-            assert_eq!(error.kind(), kind);
-            assert_eq!(error.to_string(), message);
-            assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
-            assert_eq!(terminal_probe_width.load(Ordering::SeqCst), 1);
-
-            assert_eq!(
-                reader
-                    .read(&mut trailing)
-                    .expect_err("terminal verification failure is sticky")
-                    .kind(),
-                kind
-            );
-            assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
-        }
-    }
-
-    #[test]
-    fn deadline_bounded_reader_rejects_extra_bytes_at_terminal_probe() {
-        let payload = b"exact bytes".to_vec();
-        let expected_len = u64::try_from(payload.len()).expect("payload length fits u64");
-        let (inner, terminal_probe_count, terminal_probe_width) =
-            TestTerminalReaderV1::new(payload.clone(), TestTerminalBehaviorV1::ExtraByte(0xA5));
-        let mut reader =
-            DeadlineBoundedReaderV1::new(Box::new(inner), Duration::from_secs(1), expected_len);
-        let mut observed = vec![0_u8; payload.len()];
-        reader
-            .read_exact(&mut observed)
-            .expect("read exact authorized bytes");
-
-        let mut trailing = [0_u8; 8];
-        assert_eq!(
-            reader
-                .read(&mut trailing)
-                .expect_err("extra byte must fail closed")
-                .kind(),
-            io::ErrorKind::InvalidData
-        );
-        assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
-        assert_eq!(terminal_probe_width.load(Ordering::SeqCst), 1);
-
-        assert_eq!(
-            reader
-                .read(&mut trailing)
-                .expect_err("extra-byte failure is sticky")
-                .kind(),
-            io::ErrorKind::InvalidData
-        );
-        assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn deadline_bounded_reader_checks_deadline_after_terminal_probe() {
-        let payload = b"exact bytes".to_vec();
-        let expected_len = u64::try_from(payload.len()).expect("payload length fits u64");
-        let clock = Arc::new(TestClockV1::new());
-        let (inner, terminal_probe_count, terminal_probe_width) = TestTerminalReaderV1::new(
-            payload.clone(),
-            TestTerminalBehaviorV1::AdvancingEof {
-                clock: Arc::clone(&clock),
-                advance: Duration::from_secs(2),
-            },
-        );
-        let reader_clock = Arc::clone(&clock);
-        let mut reader = DeadlineBoundedReaderV1::new_with_clock(
-            Box::new(inner),
-            Duration::from_secs(1),
-            expected_len,
-            Arc::new(move || reader_clock.now()),
-        );
-        let mut observed = vec![0_u8; payload.len()];
-        reader
-            .read_exact(&mut observed)
-            .expect("read exact authorized bytes before deadline");
-
-        let mut trailing = [0_u8; 8];
-        assert_eq!(
-            reader
-                .read(&mut trailing)
-                .expect_err("late terminal EOF must fail closed")
-                .kind(),
-            io::ErrorKind::TimedOut
-        );
-        assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
-        assert_eq!(terminal_probe_width.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            reader
-                .read(&mut trailing)
-                .expect_err("post-probe deadline failure is sticky")
-                .kind(),
-            io::ErrorKind::TimedOut
-        );
-        assert_eq!(
-            terminal_probe_count.load(Ordering::SeqCst),
-            1,
-            "sticky timeout must not re-enter the underlying transport"
-        );
-    }
-
-    #[test]
-    fn archive_binding_storage_failures_are_permanent() {
-        for error in [
-            StorageError::ManifestChunkPlanDigestMismatch,
-            StorageError::CarArchiveReconstruction {
-                reason: "staged chunk is corrupt".to_owned(),
-            },
-            StorageError::ManifestCarArchiveDigestMismatch,
-            StorageError::ManifestCarSizeMismatch {
-                expected: 128,
-                actual: 127,
-            },
-            StorageError::ManifestDagCodecMismatch {
-                expected: 0x71,
-                actual: 0x55,
-            },
-        ] {
-            assert_eq!(
-                classify_storage_error(&NodeStorageError::Storage(error)),
-                ProviderIngestLocalStorageErrorV1::Permanent
-            );
-        }
-
-        for error in [
-            ChunkStoreError::UnexpectedEof {
-                chunk_index: 0,
-                expected: 64,
-            },
-            ChunkStoreError::DigestMismatch { chunk_index: 0 },
-            ChunkStoreError::LengthMismatch {
-                expected: 64,
-                actual: 65,
-            },
-            ChunkStoreError::PayloadDigestMismatch,
-        ] {
-            assert_eq!(
-                classify_storage_error(&NodeStorageError::Storage(StorageError::ChunkStore(error))),
-                ProviderIngestLocalStorageErrorV1::Permanent
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn daemon_dependency_probe_allows_one_ready_source_for_request_failover() {
-        let source: Arc<dyn ProviderIngestAuthenticatedSourceRuntimeV1> = Arc::new(
-            test_runtime_source_pool(Err(ProviderIngestSourceFetchErrorV1::Unavailable), Ok(())),
-        );
-        let result = probe_runtime_dependencies(
-            source,
-            test_readiness_resolver(Ok(())),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-        )
-        .await;
-
-        assert_eq!(result, RuntimeDependencyProbeV1::Ready);
-    }
-
-    #[tokio::test]
-    async fn daemon_dependency_probe_preserves_rejected_and_unavailable_outcomes() {
-        let unavailable = probe_runtime_dependencies(
-            test_readiness_source(Err(ProviderIngestSourceFetchErrorV1::Unavailable)),
-            test_readiness_resolver(Ok(())),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-        )
-        .await;
-        assert_eq!(unavailable, RuntimeDependencyProbeV1::Unavailable);
-
-        let source_rejected = probe_runtime_dependencies(
-            test_readiness_source(Err(ProviderIngestSourceFetchErrorV1::Rejected)),
-            test_readiness_resolver(Ok(())),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-        )
-        .await;
-        assert_eq!(source_rejected, RuntimeDependencyProbeV1::Rejected);
-
-        let signer_unavailable = probe_runtime_dependencies(
-            test_readiness_source(Ok(())),
-            test_readiness_resolver(Err(
-                ProviderIngestCompletionSignerResolverErrorV1::Unavailable,
-            )),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-        )
-        .await;
-        assert_eq!(signer_unavailable, RuntimeDependencyProbeV1::Unavailable);
-
-        let signer_rejected = probe_runtime_dependencies(
-            test_readiness_source(Ok(())),
-            test_readiness_resolver(Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)),
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-        )
-        .await;
-        assert_eq!(signer_rejected, RuntimeDependencyProbeV1::Rejected);
-    }
-
-    #[tokio::test]
-    async fn hung_readiness_probe_fails_at_explicit_deadline() {
-        let result = bounded_blocking_readiness_probe(Duration::from_millis(1), || {
-            std::thread::sleep(Duration::from_millis(25));
-            RuntimeDependencyProbeV1::Ready
-        })
-        .await;
-        assert_eq!(result, RuntimeDependencyProbeV1::TimedOut);
-    }
-
-    #[tokio::test]
-    async fn panicked_readiness_probe_is_distinct_from_transient_timeout() {
-        let result = bounded_blocking_readiness_probe(Duration::from_secs(1), || {
-            panic!("synthetic readiness probe panic");
-        })
-        .await;
-        assert_eq!(result, RuntimeDependencyProbeV1::Panicked);
-    }
-
-    #[test]
-    fn only_temporary_finalized_ledger_loss_is_a_retryable_tick_error() {
-        assert!(provider_ingest_tick_error_is_transient(
-            &ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable
-        ));
-        assert!(!provider_ingest_tick_error_is_transient(
-            &ProviderIngestRuntimeErrorV1::InvalidFinalizedPage
-        ));
-    }
-}
+mod tests;

@@ -15,9 +15,17 @@ use mv::storage::StorageReadOnly; // trait for .get()
 
 mod snapshots;
 
+fn test_network_id(label: &[u8]) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::new(label),
+        ),
+    )
+}
+
 fn run_with_gpu_bucket(
     gpu_key_bucket: bool,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     txs: Vec<SignedTransaction>,
     alice_id: &AccountId,
     bob_id: &AccountId,
@@ -41,8 +49,13 @@ fn run_with_gpu_bucket(
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state =
-        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let mut state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura,
+        query,
+        ChainId::from("chain"),
+        *network_id,
+    );
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -76,7 +89,7 @@ fn run_with_gpu_bucket(
 
 #[test]
 fn scheduler_gpu_key_bucket_parity() {
-    let chain_id = ChainId::from("chain");
+    let network_id = test_network_id(b"scheduler-gpu-key-bucket-parity");
     let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let rose: AssetDefinitionId =
@@ -90,7 +103,7 @@ fn scheduler_gpu_key_bucket_parity() {
     // Mixed instruction set to exercise scheduler prepass and DSU unions
     let txs: Vec<SignedTransaction> = vec![
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -101,7 +114,7 @@ fn scheduler_gpu_key_bucket_parity() {
         )])
         .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -113,14 +126,14 @@ fn scheduler_gpu_key_bucket_parity() {
         .sign(alice_keypair.private_key()),
         // Mint/Transfer on same asset to induce a dependency edge
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())])
         .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -132,7 +145,7 @@ fn scheduler_gpu_key_bucket_parity() {
         .sign(alice_keypair.private_key()),
         // Burn on bob to touch a different key
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -142,8 +155,8 @@ fn scheduler_gpu_key_bucket_parity() {
 
     // Compare with gpu_key_bucket OFF vs ON
     let (json_off, state_off) =
-        run_with_gpu_bucket(false, &chain_id, txs.clone(), &alice_id, &bob_id);
-    let (json_on, state_on) = run_with_gpu_bucket(true, &chain_id, txs, &alice_id, &bob_id);
+        run_with_gpu_bucket(false, &network_id, txs.clone(), &alice_id, &bob_id);
+    let (json_on, state_on) = run_with_gpu_bucket(true, &network_id, txs, &alice_id, &bob_id);
 
     assert_eq!(
         json_off, json_on,

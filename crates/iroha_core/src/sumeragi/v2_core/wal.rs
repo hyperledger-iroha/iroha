@@ -47,11 +47,11 @@ where
     }
 }
 
-/// Chain, protocol, and local consensus-key identity frozen into a WAL header.
+/// Network, protocol, and local consensus-key identity frozen into a WAL header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WalFileIdentity {
     protocol_version: u16,
-    chain_hash: [u8; SAFETY_WAL_HASH_LEN],
+    network_id: [u8; SAFETY_WAL_HASH_LEN],
     consensus_key_hash: [u8; SAFETY_WAL_HASH_LEN],
 }
 
@@ -60,12 +60,12 @@ impl WalFileIdentity {
     #[must_use]
     pub const fn new(
         protocol_version: u16,
-        chain_hash: [u8; SAFETY_WAL_HASH_LEN],
+        network_id: [u8; SAFETY_WAL_HASH_LEN],
         consensus_key_hash: [u8; SAFETY_WAL_HASH_LEN],
     ) -> Self {
         Self {
             protocol_version,
-            chain_hash,
+            network_id,
             consensus_key_hash,
         }
     }
@@ -76,10 +76,10 @@ impl WalFileIdentity {
         self.protocol_version
     }
 
-    /// Return the chain-identity digest.
+    /// Return the exact genesis-derived network identifier.
     #[must_use]
-    pub const fn chain_hash(self) -> [u8; SAFETY_WAL_HASH_LEN] {
-        self.chain_hash
+    pub const fn network_id(self) -> [u8; SAFETY_WAL_HASH_LEN] {
+        self.network_id
     }
 
     /// Return the local consensus-public-key digest.
@@ -94,8 +94,8 @@ impl WalFileIdentity {
 pub enum WalIdentityField {
     /// Consensus wire-protocol revision.
     ProtocolVersion,
-    /// Chain identifier digest.
-    ChainHash,
+    /// Exact genesis-derived network identifier.
+    NetworkId,
     /// Local consensus-key digest.
     ConsensusKeyHash,
 }
@@ -285,7 +285,7 @@ pub fn encode_wal_file_header(
     offset += 2;
     header[offset..offset + 2].copy_from_slice(&identity.protocol_version.to_le_bytes());
     offset += 2;
-    header[offset..offset + SAFETY_WAL_HASH_LEN].copy_from_slice(&identity.chain_hash);
+    header[offset..offset + SAFETY_WAL_HASH_LEN].copy_from_slice(&identity.network_id);
     offset += SAFETY_WAL_HASH_LEN;
     header[offset..offset + SAFETY_WAL_HASH_LEN].copy_from_slice(&identity.consensus_key_hash);
     let checksum = hasher.hash(&header[..SAFETY_WAL_FILE_HEADER_PREFIX_LEN]);
@@ -494,10 +494,10 @@ fn validate_wal_file_header(
         ));
     }
     offset += 2;
-    let mut actual_chain = [0_u8; SAFETY_WAL_HASH_LEN];
-    actual_chain.copy_from_slice(&bytes[offset..offset + SAFETY_WAL_HASH_LEN]);
-    if actual_chain != expected_identity.chain_hash {
-        return Err(WalCodecError::IdentityMismatch(WalIdentityField::ChainHash));
+    let mut actual_network_id = [0_u8; SAFETY_WAL_HASH_LEN];
+    actual_network_id.copy_from_slice(&bytes[offset..offset + SAFETY_WAL_HASH_LEN]);
+    if actual_network_id != expected_identity.network_id {
+        return Err(WalCodecError::IdentityMismatch(WalIdentityField::NetworkId));
     }
     offset += SAFETY_WAL_HASH_LEN;
     let mut actual_key = [0_u8; SAFETY_WAL_HASH_LEN];
@@ -519,8 +519,8 @@ fn validate_wal_file_header(
         format_matches,
         actual_protocol,
         expected_identity.protocol_version,
-        actual_chain,
-        expected_identity.chain_hash,
+        actual_network_id,
+        expected_identity.network_id,
         actual_key,
         expected_identity.consensus_key_hash,
         checksum_matches,
@@ -1570,7 +1570,7 @@ impl Error for ReplayError {}
 #[cfg(test)]
 mod byte_lifecycle_tests {
     use super::super::{
-        ChainId, Digest, OpaqueSignature, SignatureShare, TimeoutSignatureGroup, Validator,
+        Digest, NetworkId, OpaqueSignature, SignatureShare, TimeoutSignatureGroup, Validator,
         VotingMode, VotingPower,
     };
     use super::*;
@@ -1583,7 +1583,7 @@ mod byte_lifecycle_tests {
             .collect();
         HeightContext::new(
             ContextId::repeat(0x50),
-            ChainId::repeat(0x51),
+            NetworkId::repeat(0x51),
             2,
             Some(CertificateRef::new(
                 ContextId::repeat(0x40),
@@ -1916,7 +1916,7 @@ mod byte_lifecycle_tests {
             (
                 WalFileIdentity::new(
                     different_protocol_version,
-                    IDENTITY.chain_hash(),
+                    IDENTITY.network_id(),
                     IDENTITY.consensus_key_hash(),
                 ),
                 WalIdentityField::ProtocolVersion,
@@ -1927,12 +1927,12 @@ mod byte_lifecycle_tests {
                     [0x44; 32],
                     IDENTITY.consensus_key_hash(),
                 ),
-                WalIdentityField::ChainHash,
+                WalIdentityField::NetworkId,
             ),
             (
                 WalFileIdentity::new(
                     IDENTITY.protocol_version(),
-                    IDENTITY.chain_hash(),
+                    IDENTITY.network_id(),
                     [0x55; 32],
                 ),
                 WalIdentityField::ConsensusKeyHash,

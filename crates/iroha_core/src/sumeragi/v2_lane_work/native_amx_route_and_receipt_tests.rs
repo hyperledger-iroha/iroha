@@ -222,11 +222,12 @@ fn full_native_amx_receipt_metadata_is_derived_from_frozen_context_and_proposal(
     let receipt = adapter
         .assemble_native_receipt(source_id, coordinator, plan_digest, &proposal, Vec::new())
         .expect("canonical coordinator proposal builds a full receipt");
-    let chain_id = adapter.context.chain_id.clone().into_inner();
-
     assert_eq!(receipt.version, 2);
     assert_eq!(receipt.source_id, source_id);
-    assert_eq!(receipt.chain_id_hash, Hash::new(chain_id.as_bytes()));
+    assert_eq!(
+        receipt.network_id,
+        adapter.context.network_id
+    );
     assert_eq!(receipt.plan_digest, plan_digest);
     assert_eq!(receipt.lane_id, proposal.descriptor.lane_id);
     assert_eq!(receipt.dataspace_id, proposal.descriptor.dataspace_id);
@@ -260,5 +261,47 @@ fn full_native_amx_receipt_metadata_is_derived_from_frozen_context_and_proposal(
             )
             .is_none(),
         "receipt assembly must reject a proposal outside the frozen authority height"
+    );
+}
+
+#[test]
+fn lane_signing_boundary_requires_exact_descriptor_membership() {
+    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let (_, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    assert!(
+        proposal
+            .descriptor
+            .validator_set
+            .contains(&adapter.local_peer),
+        "fixture starts with local lane authority"
+    );
+    let replacement = PeerId::new(
+        KeyPair::try_from_seed(vec![0xA9; 32], Algorithm::BlsNormal)
+            .expect("derive descriptor-only replacement")
+            .public_key()
+            .clone(),
+    );
+    let local_index = proposal
+        .descriptor
+        .validator_set
+        .iter()
+        .position(|peer| peer == &adapter.local_peer)
+        .expect("local validator belongs to fixture descriptor");
+    proposal.descriptor.validator_set[local_index] = replacement;
+    proposal.descriptor.validator_set.sort();
+    proposal.descriptor.validator_set_hash = HashOf::new(&proposal.descriptor.validator_set);
+    proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    assert!(
+        !proposal
+            .descriptor
+            .validator_set
+            .contains(&adapter.local_peer)
+    );
+    assert!(
+        adapter
+            .sign_lane_vote(&proposal, CertPhase::Prepare)
+            .is_none(),
+        "configured validator role cannot sign a descriptor which omits the local key"
     );
 }

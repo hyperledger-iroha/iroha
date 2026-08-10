@@ -265,7 +265,7 @@ run_default_taira_command() {
     mv -f -- "$runtime_config_tmp" "$runtime_config_path"
     trap - EXIT
 
-    exec irohad --sora --config "$runtime_config_path" --genesis-manifest-json "$genesis_path"
+    exec iroha3d --sora --config "$runtime_config_path" --genesis-manifest-json "$genesis_path"
 }
 
 main() {
@@ -288,7 +288,7 @@ main() {
         run_default_taira_command
     fi
 
-    exec irohad
+    exec iroha3d
 }
 
 main "$@"

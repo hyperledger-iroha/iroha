@@ -53,6 +53,7 @@ use crate::{
         GraphErrorV1, GraphUpdateV1, resolve_workspace_offline_cached,
         resolve_workspace_online_cached, resolve_workspace_online_cached_fresh,
     },
+    local_file::read_bounded_single_link_regular_file_v1,
     lockfile::{LockfileError, LockfileV1},
     manifest::{
         ConcreteDependency, DependencyPath, DependencySection, DependencySpec, MANIFEST_FILE_NAME,
@@ -80,8 +81,8 @@ use crate::{
     resolver::{ConflictReasonV1, ResolveModeV1, ResolverError},
     test_runner::{WorkspaceTestErrorV1, WorkspaceTestOptionsV1, execute_workspace_tests_v1},
     workspace::{
-        DependencyKind, EffectiveDependency, Workspace, WorkspaceErrorKind, WorkspaceMember,
-        discover_manifest, load_workspace,
+        DependencyKind, EffectiveDependency, MAX_MANIFEST_BYTES, Workspace, WorkspaceErrorKind,
+        WorkspaceMember, discover_manifest, load_workspace,
     },
 };
 
@@ -673,9 +674,9 @@ enum CacheCommand {
         #[command(flatten)]
         registry: RegistryReadArgs,
     },
-    /// Remove only exact validated cache descendants authorized by finalized registry state.
+    /// Classify exact descendants; non-empty live prune remains fail-closed before mutation.
     Prune {
-        /// Print candidates without deleting them.
+        /// Print finalized candidates without attempting live mutation.
         #[arg(long)]
         dry_run: bool,
         #[command(flatten)]
@@ -1585,7 +1586,15 @@ fn project_manifest_path(explicit: Option<&Path>) -> Result<PathBuf, Diagnostic>
 }
 
 fn read_manifest_source(path: &Path) -> Result<String, Diagnostic> {
-    fs::read_to_string(path).map_err(|error| io_diagnostic("read manifest", path, &error))
+    let bytes = read_bounded_single_link_regular_file_v1(path, MAX_MANIFEST_BYTES)
+        .map_err(|error| io_diagnostic("read bounded manifest", path, &error))?;
+    String::from_utf8(bytes).map_err(|error| {
+        io_diagnostic(
+            "read manifest as UTF-8",
+            path,
+            &io::Error::new(io::ErrorKind::InvalidData, error),
+        )
+    })
 }
 
 fn atomic_replace_manifest(path: &Path, contents: &[u8]) -> Result<(), Diagnostic> {
@@ -1664,8 +1673,7 @@ fn lockfile_json(lock: &LockfileV1) -> Value {
     object([
         ("schema", Value::from(lock.schema.clone())),
         ("version", Value::from(u64::from(lock.version))),
-        ("chain", Value::from(lock.chain_id.to_string())),
-        ("genesis_hash", Value::from(hex::encode(lock.genesis_hash))),
+        ("network_id", Value::from(lock.network_id.to_string())),
         (
             "finalized_height",
             Value::from(lock.snapshot.finalized_height),
@@ -1970,7 +1978,7 @@ fn graph_diagnostic(error: GraphErrorV1) -> Diagnostic {
         .with_context("reason", reason),
         GraphErrorV1::CandidateLimit => Diagnostic::new(
             ErrorCode::ResolutionConflict,
-            "the bounded resolver candidate set is too large",
+            "the bounded resolver collection exceeds its resource corridor",
         ),
         GraphErrorV1::Resolver(ResolverError::LockChangeRequired) => Diagnostic::new(
             ErrorCode::Locked,
@@ -1984,6 +1992,11 @@ fn graph_diagnostic(error: GraphErrorV1) -> Diagnostic {
             };
             Diagnostic::new(code, conflict.to_string())
         }
+        GraphErrorV1::Resolver(ResolverError::SearchLimitExceeded { limit }) => Diagnostic::new(
+            ErrorCode::ResolutionConflict,
+            "dependency resolution exhausted its deterministic search corridor",
+        )
+        .with_context("candidate_branch_attempt_limit", limit.to_string()),
         GraphErrorV1::Resolver(ResolverError::InvalidInput(reason)) => Diagnostic::new(
             ErrorCode::Registry,
             "validated lock, workspace, and registry inputs disagree",
@@ -2073,11 +2086,7 @@ fn ensure_graph_archives(
             );
         }
         let adapter = MusubiArchiveFetchAdapterV1::new(graph.online_registry()?, cache)
-            .with_expected_deployment(
-                &graph.lock.chain_id,
-                graph.lock.genesis_hash,
-                graph.lock.snapshot,
-            );
+            .with_expected_deployment(graph.lock.network_id, graph.lock.snapshot);
         let outcome = adapter
             .fetch_exact(
                 archive_id,
@@ -2323,11 +2332,16 @@ fn open_user_cache() -> Result<MusubiCache, Diagnostic> {
             .with_context("reason", error.to_string())
     })?;
     MusubiCache::open(root).map_err(|error| {
-        Diagnostic::new(
-            ErrorCode::CacheCorrupt,
-            "Musubi V1 cache could not be opened",
-        )
-        .with_context("reason", error.to_string())
+        let code = if matches!(
+            &error,
+            CacheError::UnsupportedPlatform | CacheError::Io { .. }
+        ) {
+            ErrorCode::Io
+        } else {
+            ErrorCode::CacheCorrupt
+        };
+        Diagnostic::new(code, "Musubi V1 cache could not be opened")
+            .with_context("reason", error.to_string())
     })
 }
 
@@ -2358,6 +2372,7 @@ fn graph_mode_compiler_diagnostic(
 
 fn test_runner_diagnostic(error: &WorkspaceTestErrorV1) -> Diagnostic {
     let code = match error {
+        WorkspaceTestErrorV1::UnsupportedPlatform => ErrorCode::Io,
         WorkspaceTestErrorV1::Workspace(_) | WorkspaceTestErrorV1::Target(_) => {
             ErrorCode::WorkspaceInvalid
         }
@@ -2601,7 +2616,10 @@ fn package_output_writer(workspace: &Workspace) -> Result<AtomicWriteRoot, Diagn
 }
 
 fn package_diagnostic(error: &PackageError) -> Diagnostic {
-    let code = if matches!(error, PackageError::Io { .. }) {
+    let code = if matches!(
+        error,
+        PackageError::UnsupportedPlatform | PackageError::Io { .. }
+    ) {
         ErrorCode::Io
     } else {
         ErrorCode::PackageInvalid
@@ -2734,9 +2752,14 @@ fn run_publish(explicit_manifest: Option<&Path>, args: &PublishArgs) -> CommandR
     let registry = loaded.registry_reader();
     let bindings = loaded.bindings().clone();
     let (signing, mut services, _) = loaded.into_parts();
+    if signing.network_id() != graph.lock.network_id {
+        return Err(Diagnostic::new(
+            ErrorCode::Publish,
+            "signing configuration belongs to a different network than the resolved graph",
+        ));
+    }
     let request = PublicationRequestV1 {
-        chain_id: graph.lock.chain_id.clone(),
-        genesis_block_hash: graph.lock.genesis_hash,
+        network_id: graph.lock.network_id,
         publisher: signing.authority().clone(),
         ingress_broker: bindings.ingress_broker,
         seed_provider: bindings.seed_provider,
@@ -2898,8 +2921,7 @@ fn recover_publication_sidecars_at(
 
     let verification_lock = journal.request.publication.resolution.lock.clone();
     let graph_lock = LockfileV1::new(
-        journal.request.chain_id.clone(),
-        journal.request.genesis_block_hash,
+        journal.request.network_id(),
         journal.request.publication.resolution.snapshot,
         vec![crate::lockfile::LockedRootV1 {
             package: selector.clone(),
@@ -3120,11 +3142,7 @@ fn publication_result(namespace: &MusubiNamespaceV1, result: PublicationResultV1
                 "structural_release",
                 Value::from(checkpoint.release.to_string()),
             ),
-            ("chain_id", Value::from(checkpoint.chain_id.to_string())),
-            (
-                "genesis_hash",
-                Value::from(hex::encode(checkpoint.genesis_block_hash)),
-            ),
+            ("network_id", Value::from(checkpoint.network_id.to_string())),
             (
                 "snapshot",
                 object([
@@ -4111,8 +4129,7 @@ fn optional_cache_project_lock(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CacheRetentionDeploymentV1 {
-    chain_id: iroha_data_model::ChainId,
-    genesis_hash: [u8; 32],
+    network_id: iroha_data_model::NetworkId,
     snapshot: MusubiRegistrySnapshotV1,
 }
 
@@ -4125,8 +4142,7 @@ fn empty_cache_prune_success(dry_run: bool) -> Success {
         },
         data: object([
             ("dry_run", Value::from(dry_run)),
-            ("chain_id", Value::Null),
-            ("genesis_hash", Value::Null),
+            ("network_id", Value::Null),
             ("snapshot", Value::Null),
             ("queried", Value::from(0_u64)),
             ("retained", Value::from(0_u64)),
@@ -4140,7 +4156,7 @@ fn empty_cache_prune_success(dry_run: bool) -> Success {
 
 #[allow(
     clippy::too_many_lines,
-    reason = "retention proof validation and deletion remain one fail-closed workflow"
+    reason = "finalized classification and the fail-closed non-empty live-prune handoff remain one auditable workflow"
 )]
 fn prune_cache_targets(
     cache: &MusubiCache,
@@ -4172,14 +4188,13 @@ fn prune_cache_targets(
             .archive_retention(&request)
             .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))?;
         let response_deployment = CacheRetentionDeploymentV1 {
-            chain_id: page.chain_id.clone(),
-            genesis_hash: page.genesis_hash,
+            network_id: page.network_id,
             snapshot: page.snapshot,
         };
         if let Some(expected) = &deployment {
             if &response_deployment != expected {
                 return Err(cache_retention_diagnostic(
-                    "archive-retention batches disagree on chain, genesis, or finalized snapshot",
+                    "archive-retention batches disagree on network or finalized snapshot",
                 ));
             }
         } else {
@@ -4226,6 +4241,9 @@ fn prune_cache_targets(
     let prunable_count = u64::try_from(prunable.len()).map_err(|_| {
         cache_retention_diagnostic("archive-retention prunable count exceeds JSON output bounds")
     })?;
+    // Dry-run preserves the complete finalized classification. A non-empty live prune reaches
+    // the cache boundary only after that proof is coherent, then fails before inspecting or
+    // mutating any candidate until atomic handle-relative compare-and-delete exists.
     let removed = if dry_run {
         Vec::new()
     } else {
@@ -4259,14 +4277,7 @@ fn prune_cache_targets(
         },
         data: object([
             ("dry_run", Value::from(dry_run)),
-            (
-                "chain_id",
-                Value::from(deployment.chain_id.as_str().to_owned()),
-            ),
-            (
-                "genesis_hash",
-                Value::from(hex::encode(deployment.genesis_hash)),
-            ),
+            ("network_id", Value::from(deployment.network_id.to_string())),
             (
                 "snapshot",
                 object([
@@ -4483,7 +4494,10 @@ fn repair_cache_targets(
 }
 
 fn cache_maintenance_diagnostic(error: &CacheError) -> Diagnostic {
-    let code = if matches!(error, CacheError::Io { .. }) {
+    let code = if matches!(
+        error,
+        CacheError::UnsupportedPlatform | CacheError::Io { .. }
+    ) {
         ErrorCode::Io
     } else {
         ErrorCode::CacheCorrupt
@@ -4492,7 +4506,7 @@ fn cache_maintenance_diagnostic(error: &CacheError) -> Diagnostic {
         .with_context("reason", error.to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     include!("command_tests.rs");
 }

@@ -666,7 +666,6 @@ mod tests {
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
-        ChainId,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
@@ -949,7 +948,7 @@ mod tests {
 
     fn payload(authority: AccountId) -> TransactionPayload {
         TransactionBuilder::new(
-            ChainId::from("native-signer-qualification-test"),
+            crate::signed_query_test_network_id(),
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )

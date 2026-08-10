@@ -4,9 +4,29 @@
  * only committed, typed protocol state can authorize proof submission.
  */
 
-import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
+import { getNativeBinding } from "./native.js";
+import {
+  bindPrivacyExact12CapabilityAdmissionV1,
+  requirePrivacyExact12CapabilityAdmissionV1,
+  requirePrivacyExact12CapabilityTupleV1,
+} from "./privacyCapabilityAdmission.js";
+import {
+  privacyCapabilityTransportV1,
+  privacyExact12CapabilityManifestTransportV1,
+} from "./privacyCapabilityTransport.js";
+import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
+
+export {
+  requirePrivacyExact12CapabilityAdmissionV1,
+  requirePrivacyExact12CapabilityTupleV1,
+};
 
 export const PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1 = 1;
+
+/** Canonical public Exact12 capability-manifest version. */
+export const PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1 = 1;
+/** Native validator byte ceiling shared with the Rust decoder. */
+export const PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1 = 256 * 1024;
 
 export const PRIVACY_PROTOCOL_IDS_V1 = Object.freeze([
   "zk-ace-pq-authorization-v0",
@@ -122,7 +142,7 @@ export function parsePrivacyCapabilitySnapshotV1(payload) {
  * @param {object} [options] Client-specific request options.
  * @returns {Promise<Readonly<Record<string, unknown>>>}
  */
-export async function getPrivacyCapabilitiesV1(client, options = {}) {
+export async function getPrivacyCapabilitiesV1(client, options) {
   if (
     (typeof client !== "object" && typeof client !== "function")
     || client === null
@@ -402,3 +422,538 @@ function positiveU64(value, path) { const result = u64(value, path); if (result 
 function sameJson(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
 function fail(message, path) { throw new PrivacyCapabilitySnapshotError(message, path); }
 function deepFreeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { Object.freeze(value); for (const item of Object.values(value)) deepFreeze(item); } return value; }
+
+const PRIVACY_EXACT12_CAPABILITY_MANIFEST_JSON_MAX_BYTES_V1 = 2 * 1024 * 1024;
+const PRIVACY_EXACT12_MANIFEST_CONSTRUCTOR = Symbol("Exact12 manifest constructor");
+const privacyExact12ManifestState = new WeakMap();
+
+const PRIVACY_EXACT12_OPERATION_TUPLES_V1 = Object.freeze([
+  Object.freeze(["zk_ace_authorization_action_v1", "authorization_action", 0]),
+  Object.freeze(["anonymous_pgc_payment_action_v1", "payment_action", 6]),
+  Object.freeze(["verange_range_proof_v1", "component", 1]),
+  Object.freeze(["zk_ams_admission_and_provisioning_v1", "admission_action", 2]),
+  Object.freeze(["vega_credential_presentation_v1", "presentation_action", 2]),
+  Object.freeze(["zk_x509_identity_presentation_v1", "presentation_action", 2]),
+  Object.freeze(["jindo_polynomial_evaluation_v1", "component", 0]),
+  Object.freeze(["bootle_lantern_credential_presentation_v1", "presentation_action", 2]),
+  Object.freeze(["orchard_note_action_v1", "note_action", 7]),
+  Object.freeze(["fcmp_membership_payment_v1", "payment_action", 2]),
+  Object.freeze(["ivm_private_note_action_v1", "note_action", 7]),
+  Object.freeze(["pq_masp_note_action_v1", "note_action", 31]),
+]);
+
+const PRIVACY_EXACT12_NATIVE_METHODS_V1 = Object.freeze([
+  "privacyCompiledProfileCatalogV1",
+  "privacyValidateCompiledProfileCatalogV1",
+  "privacyValidateExact12CapabilityManifestV1",
+  "privacyExact12CapabilityManifestJsonV1",
+  "privacyRequireExact12CapabilityTupleV1",
+]);
+
+/** Error raised when canonical Exact12 bytes or native admission fail closed. */
+export class PrivacyExact12CapabilityManifestError extends TypeError {
+  constructor(message, path = "Exact12 capability manifest", options = undefined) {
+    super(`${path}: ${message}`, options);
+    this.name = "PrivacyExact12CapabilityManifestError";
+    this.path = path;
+  }
+}
+
+/**
+ * Immutable model created only from native-validated canonical manifest bytes.
+ *
+ * The public fields preserve the exact `manifest_digest`, `operation_schema`,
+ * `execution_mode`, `privacy_feature_mask`, readiness, and `activation_state`
+ * projection. The self-digest identifies content; it does not authenticate an
+ * untrusted producer. Use authenticated Torii transport or a signed candidate.
+ */
+export class PrivacyExact12CapabilityManifestV1 {
+  constructor(token, canonicalArchive, projection) {
+    if (token !== PRIVACY_EXACT12_MANIFEST_CONSTRUCTOR) {
+      throw new TypeError(
+        "PrivacyExact12CapabilityManifestV1 has no public constructor; decode canonical Torii bytes",
+      );
+    }
+    this.version = projection.version;
+    this.committed_height = projection.committed_height;
+    this.consensus_policy = projection.consensus_policy;
+    this.protocols = projection.protocols;
+    this.manifest_digest = projection.manifest_digest;
+    privacyExact12ManifestState.set(this, {
+      canonicalArchive: Uint8Array.from(canonicalArchive),
+    });
+    bindPrivacyExact12CapabilityAdmissionV1(
+      this,
+      (protocolId) => admitPrivacyExact12CapabilityTupleV1(this, protocolId),
+    );
+    Object.freeze(this);
+  }
+
+  /** Return a defensive copy of the exact native-validated Torii bytes. */
+  canonicalBytes() {
+    const state = privacyExact12ManifestState.get(this);
+    if (!state) {
+      throw new TypeError("invalid Exact12 capability manifest receiver");
+    }
+    return Uint8Array.from(state.canonicalArchive);
+  }
+}
+
+/**
+ * Return this N-API binary's canonical compiled-profile catalog bytes.
+ *
+ * This local catalog has no committed height or activation state and therefore
+ * never authorizes network construction by itself.
+ */
+export function compiledProfileCatalogV1() {
+  const native = requirePrivacyExact12NativeV1();
+  return compiledProfileCatalogFromNativeV1(native);
+}
+
+function compiledProfileCatalogFromNativeV1(native) {
+  const archive = callPrivacyExact12NativeV1(
+    native,
+    "privacyCompiledProfileCatalogV1",
+    [],
+  );
+  const bytes = copyPrivacyExact12ArchiveV1(
+    archive,
+    "native compiled-profile catalog",
+  );
+  const status = callPrivacyExact12NativeV1(
+    native,
+    "privacyValidateCompiledProfileCatalogV1",
+    [bytes],
+  );
+  if (status !== 0) {
+    manifestFailV1(
+      `native local compiled-profile catalog validation returned status ${String(status)}`,
+      "compiled profile catalog",
+    );
+  }
+  return bytes;
+}
+
+/** Decode the sole canonical Exact12 manifest archive through native ABI22/N-API. */
+export function decodePrivacyExact12CapabilityManifestV1(canonicalArchive) {
+  const bytes = copyPrivacyExact12ArchiveV1(canonicalArchive, "canonical archive");
+  const native = requirePrivacyExact12NativeV1();
+  const status = callPrivacyExact12NativeV1(
+    native,
+    "privacyValidateExact12CapabilityManifestV1",
+    [bytes],
+  );
+  if (status !== 0) {
+    manifestFailV1(
+      `native canonical manifest validation returned status ${String(status)}`,
+      "canonical archive",
+    );
+  }
+  const jsonText = callPrivacyExact12NativeV1(
+    native,
+    "privacyExact12CapabilityManifestJsonV1",
+    [bytes],
+  );
+  if (typeof jsonText !== "string") {
+    manifestFailV1("native decoder returned a non-string projection", "native projection");
+  }
+  if (jsonText.length > PRIVACY_EXACT12_CAPABILITY_MANIFEST_JSON_MAX_BYTES_V1) {
+    manifestFailV1(
+      `native projection exceeds ${PRIVACY_EXACT12_CAPABILITY_MANIFEST_JSON_MAX_BYTES_V1} bytes`,
+      "native projection",
+    );
+  }
+  let payload;
+  try {
+    payload = parseStrictLosslessIntegerJson(
+      jsonText,
+      "native Exact12 capability manifest projection",
+    );
+  } catch (cause) {
+    throw new PrivacyExact12CapabilityManifestError(
+      "native decoder returned invalid lossless JSON",
+      "native projection",
+      { cause },
+    );
+  }
+  const projection = parsePrivacyExact12ManifestProjectionV1(payload);
+  return new PrivacyExact12CapabilityManifestV1(
+    PRIVACY_EXACT12_MANIFEST_CONSTRUCTOR,
+    bytes,
+    projection,
+  );
+}
+
+/**
+ * Fetch Torii's canonical Norito manifest and validate it with the required
+ * N-API binding. Browser-only clients and JSON/mock transports fail closed.
+ */
+export async function getPrivacyExact12CapabilityManifestV1(client, options) {
+  requirePrivacyExact12NativeV1();
+  if (
+    (typeof client !== "object" && typeof client !== "function")
+    || client === null
+  ) {
+    throw new TypeError(
+      "getPrivacyExact12CapabilityManifestV1 requires the N-API Torii client",
+    );
+  }
+  const transport = client[privacyExact12CapabilityManifestTransportV1];
+  if (typeof transport !== "function") {
+    throw new TypeError(
+      "getPrivacyExact12CapabilityManifestV1 requires the N-API Torii client; browser and mock transports cannot authorize privacy",
+    );
+  }
+  const archive = await Reflect.apply(transport, client, [options]);
+  return decodePrivacyExact12CapabilityManifestV1(archive);
+}
+
+/**
+ * Require one committed active row and exact native-local compiled tuple.
+ *
+ * Transaction builders must call this guard with the validated manifest at
+ * construction time. A legacy `PrivacyCapabilitySnapshotV1`, local catalog,
+ * digest shell, or caller-created object is never accepted as admission.
+ */
+function admitPrivacyExact12CapabilityTupleV1(manifest, protocolId) {
+  const state = privacyExact12ManifestState.get(manifest);
+  if (!state) manifestFailV1("lost its native validation state", "admission");
+  const index = requirePrivacyExact12ProtocolIdV1(protocolId);
+  const row = manifest.protocols[index];
+  const readiness = row.readiness.readiness;
+  if (
+    (readiness !== "available" && readiness !== "available-experimental")
+    || row.activation_state.activation_state !== "active"
+    || row.compiled_profile.status !== "available"
+  ) {
+    manifestFailV1(
+      `protocol ${protocolId} is not active and available in committed state`,
+      `protocols[${index}]`,
+    );
+  }
+  const native = requirePrivacyExact12NativeV1();
+  // Validate the immutable local catalog surface as an independent prerequisite;
+  // the native admission call below performs the actual exact row comparison.
+  compiledProfileCatalogFromNativeV1(native);
+  const admitted = callPrivacyExact12NativeV1(
+    native,
+    "privacyRequireExact12CapabilityTupleV1",
+    [Uint8Array.from(state.canonicalArchive), protocolId],
+  );
+  if (admitted !== true) {
+    manifestFailV1(
+      "native tuple admission did not return the sole success value",
+      `protocols[${index}]`,
+    );
+  }
+  return deepFreeze({
+    manifest_digest: Array.from(manifest.manifest_digest),
+    committed_height: manifest.committed_height,
+    protocol_id: protocolId,
+    operation_schema: row.operation_schema.operation_schema,
+    execution_mode: row.execution_mode.execution_mode,
+    privacy_feature_mask: row.privacy_feature_mask,
+    readiness,
+    activation_state: row.activation_state.activation_state,
+    limitation: row.limitation?.limitation ?? null,
+    compiled_profile: row.compiled_profile.value,
+  });
+}
+
+function requirePrivacyExact12NativeV1() {
+  let native;
+  try {
+    native = getNativeBinding();
+  } catch (cause) {
+    throw new PrivacyExact12CapabilityManifestError(
+      "authenticated iroha_js_host native binding is required; no browser or mock fallback is permitted",
+      "native binding",
+      { cause },
+    );
+  }
+  let abiVersion;
+  try {
+    abiVersion = native?.connectNoritoBridgeAbiVersion?.();
+  } catch (cause) {
+    throw new PrivacyExact12CapabilityManifestError(
+      "could not read the native bridge ABI version",
+      "native binding",
+      { cause },
+    );
+  }
+  if (abiVersion !== 22) {
+    manifestFailV1("requires exact ABI22", "native binding");
+  }
+  for (const method of PRIVACY_EXACT12_NATIVE_METHODS_V1) {
+    if (typeof native?.[method] !== "function") {
+      manifestFailV1(`is missing ${method}`, "native binding");
+    }
+  }
+  return native;
+}
+
+function callPrivacyExact12NativeV1(native, method, args) {
+  try {
+    return Reflect.apply(native[method], native, args);
+  } catch (cause) {
+    throw new PrivacyExact12CapabilityManifestError(
+      `${method} failed`,
+      "native binding",
+      { cause },
+    );
+  }
+}
+
+function copyPrivacyExact12ArchiveV1(value, path) {
+  if (typeof value === "string") {
+    manifestFailV1("must be canonical Norito bytes, not text", path);
+  }
+  let bytes;
+  if (value instanceof ArrayBuffer) {
+    bytes = new Uint8Array(value.slice(0));
+  } else if (ArrayBuffer.isView(value)) {
+    if (!(value.buffer instanceof ArrayBuffer)) {
+      manifestFailV1("must not use shared memory", path);
+    }
+    bytes = Uint8Array.from(
+      new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+    );
+  } else {
+    manifestFailV1("must be an ArrayBuffer or contiguous byte view", path);
+  }
+  if (bytes.length === 0) manifestFailV1("must not be empty", path);
+  if (bytes.length > PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1) {
+    manifestFailV1(
+      `exceeds ${PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1} bytes`,
+      path,
+    );
+  }
+  return bytes;
+}
+
+function parsePrivacyExact12ManifestProjectionV1(payload) {
+  const manifest = exactManifestObjectV1(payload, [
+    "version",
+    "committed_height",
+    "consensus_policy",
+    "protocols",
+    "manifest_digest",
+  ], "Exact12 capability manifest");
+  let snapshot;
+  try {
+    snapshot = parsePrivacyCapabilitySnapshotV1({
+      version: manifest.version,
+      committed_height: manifest.committed_height,
+      consensus_policy: manifest.consensus_policy,
+      protocols: Array.isArray(manifest.protocols)
+        ? manifest.protocols.map((row) => ({
+            protocol_id: row?.protocol_id,
+            compiled_profile: row?.compiled_profile,
+            activation: row?.activation,
+          }))
+        : manifest.protocols,
+    });
+  } catch (cause) {
+    throw new PrivacyExact12CapabilityManifestError(
+      "native projection violates the closed profile, policy, or activation contract",
+      "Exact12 capability manifest",
+      { cause },
+    );
+  }
+  const protocols = manifest.protocols.map((rawRow, index) => {
+    const path = `Exact12 capability manifest.protocols[${index}]`;
+    const row = exactManifestObjectV1(rawRow, [
+      "protocol_id",
+      "operation_schema",
+      "execution_mode",
+      "privacy_feature_mask",
+      "compiled_profile",
+      "readiness",
+      "activation_state",
+      "activation",
+      "limitation",
+    ], path);
+    const base = snapshot.protocols[index];
+    const [operationSchema, executionMode, featureMask] =
+      PRIVACY_EXACT12_OPERATION_TUPLES_V1[index];
+    const operation = manifestTaggedUnitV1(
+      row.operation_schema,
+      "operation_schema",
+      "value",
+      operationSchema,
+      `${path}.operation_schema`,
+    );
+    const execution = manifestTaggedUnitV1(
+      row.execution_mode,
+      "execution_mode",
+      "value",
+      executionMode,
+      `${path}.execution_mode`,
+    );
+    if (row.privacy_feature_mask !== featureMask) {
+      manifestFailV1(
+        `must equal the closed feature mask ${featureMask}`,
+        `${path}.privacy_feature_mask`,
+      );
+    }
+    const readiness = parsePrivacyExact12ReadinessV1(
+      row.readiness,
+      base,
+      index,
+      `${path}.readiness`,
+    );
+    const expectedActivationState = base.activation === null
+      ? "not-registered"
+      : base.activation.lifecycle.state;
+    const activationState = manifestTaggedUnitV1(
+      row.activation_state,
+      "activation_state",
+      "detail",
+      expectedActivationState,
+      `${path}.activation_state`,
+    );
+    const limitation = parsePrivacyExact12LimitationV1(
+      row.limitation,
+      index,
+      `${path}.limitation`,
+    );
+    return {
+      ...base,
+      operation_schema: operation,
+      execution_mode: execution,
+      privacy_feature_mask: featureMask,
+      readiness,
+      activation_state: activationState,
+      limitation,
+    };
+  });
+  return deepFreeze({
+    version: PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1,
+    committed_height: snapshot.committed_height,
+    consensus_policy: snapshot.consensus_policy,
+    protocols,
+    manifest_digest: manifestFixed32V1(
+      manifest.manifest_digest,
+      "Exact12 capability manifest.manifest_digest",
+    ),
+  });
+}
+
+function parsePrivacyExact12ReadinessV1(value, row, index, path) {
+  const readiness = exactManifestObjectV1(value, ["readiness", "detail"], path);
+  const expected = row.compiled_profile.status === "unavailable"
+    ? "unavailable"
+    : index === 6
+      ? "available-experimental"
+      : "available";
+  if (readiness.readiness !== expected) {
+    manifestFailV1(`must equal evidence-derived ${expected}`, `${path}.readiness`);
+  }
+  const expectedDetail = expected === "unavailable"
+    ? row.compiled_profile.value
+    : null;
+  if (!manifestValuesEqualV1(readiness.detail, expectedDetail)) {
+    manifestFailV1("detail does not match the compiled result", `${path}.detail`);
+  }
+  return {
+    readiness: expected,
+    detail: expectedDetail,
+  };
+}
+
+function parsePrivacyExact12LimitationV1(value, index, path) {
+  if (index !== 6) {
+    if (value !== null) manifestFailV1("must be null for this protocol", path);
+    return null;
+  }
+  return manifestTaggedUnitV1(
+    value,
+    "limitation",
+    "detail",
+    "missing-distribution-wide-knowledge-soundness-evidence",
+    path,
+  );
+}
+
+function requirePrivacyExact12ProtocolIdV1(value) {
+  if (typeof value !== "string") {
+    throw new TypeError("protocolId must be an exact retained Exact12 identifier");
+  }
+  const index = PRIVACY_PROTOCOL_IDS_V1.indexOf(value);
+  if (index < 0) {
+    throw new TypeError(
+      "protocolId must be one exact retained Exact12 identifier; aliases and retired identifiers are rejected",
+    );
+  }
+  return index;
+}
+
+function exactManifestObjectV1(value, expectedKeys, path) {
+  const prototype = value === null || typeof value !== "object"
+    ? undefined
+    : Object.getPrototypeOf(value);
+  if (
+    value === null
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || (prototype !== Object.prototype && prototype !== null)
+  ) {
+    manifestFailV1("must be a plain JSON object", path);
+  }
+  const keys = Object.keys(value).sort();
+  const expected = [...expectedKeys].sort();
+  if (
+    keys.length !== expected.length
+    || keys.some((key, index) => key !== expected[index])
+  ) {
+    manifestFailV1(`must contain exactly: ${expected.join(", ")}`, path);
+  }
+  return value;
+}
+
+function manifestTaggedUnitV1(value, tagKey, contentKey, expected, path) {
+  const taggedValue = exactManifestObjectV1(value, [tagKey, contentKey], path);
+  if (taggedValue[tagKey] !== expected || taggedValue[contentKey] !== null) {
+    manifestFailV1(`must be the exact ${expected} unit variant`, path);
+  }
+  return { [tagKey]: expected, [contentKey]: null };
+}
+
+function manifestFixed32V1(value, path) {
+  if (!Array.isArray(value) || value.length !== 32) {
+    manifestFailV1("must contain exactly 32 bytes", path);
+  }
+  const bytes = value.map((byte, index) => {
+    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+      manifestFailV1("must contain only uint8 values", `${path}[${index}]`);
+    }
+    return byte;
+  });
+  if (bytes.every((byte) => byte === 0)) {
+    manifestFailV1("must be non-zero", path);
+  }
+  return bytes;
+}
+
+function manifestValuesEqualV1(left, right) {
+  if (Object.is(left, right)) return true;
+  if (typeof left !== typeof right || left === null || right === null) return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left)
+      && Array.isArray(right)
+      && left.length === right.length
+      && left.every((item, index) => manifestValuesEqualV1(item, right[index]));
+  }
+  if (typeof left !== "object") return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every(
+      (key, index) => key === rightKeys[index]
+        && manifestValuesEqualV1(left[key], right[key]),
+    );
+}
+
+function manifestFailV1(message, path) {
+  throw new PrivacyExact12CapabilityManifestError(message, path);
+}

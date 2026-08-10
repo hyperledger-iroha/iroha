@@ -1,3 +1,12 @@
+"""Post-provisioning archive validation tests.
+
+Production entry points are unconditionally closed by the controller-origin
+authority barrier.  This module replaces only that barrier so the independent
+archive, signature, mutation, and TOCTOU checks behind the trust boundary keep
+their focused coverage.  The production barrier itself is exercised without
+replacement in ``taira_privacy_protocol_provenance_gate_test.py``.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -17,8 +26,13 @@ from scripts import build_taira_rollout_candidate as candidate_builder
 from scripts import release_artifact_contract as contract
 from scripts import release_manifest_signing as signing
 from scripts import seal_taira_release_controllers as controller_seal
+from scripts import taira_privacy_protocol_receipt as privacy_evidence
 from scripts import taira_release_authority as linux_authority
 from scripts import taira_rollout_admission as admission
+from scripts.tests.taira_privacy_protocol_receipt_test import (
+    DRIVER_BYTES,
+    build_valid_evidence,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 EXACT12 = ROOT / "fixtures" / "privacy" / "exact12_v1.tsv"
@@ -38,7 +52,24 @@ SUBSTITUTE_PUBLIC_KEY = bytes.fromhex(
 SOURCE_DATE_EPOCH = 1_700_000_000
 
 
+@pytest.fixture(autouse=True)
+def _exercise_checks_behind_unprovisioned_authority_barrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        privacy_evidence,
+        "require_controller_origin_authority_provisioned",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        linux_authority,
+        "require_independent_native_evidence_authority_provisioned",
+        lambda: None,
+    )
+
+
 ReceiptMutation = Callable[[dict[str, object]], None]
+PrivacyReceiptMutation = Callable[[dict[str, object]], None]
 ManifestMutation = Callable[[dict[str, object]], None]
 
 
@@ -46,6 +77,7 @@ ManifestMutation = Callable[[dict[str, object]], None]
 class Candidate:
     archive: Path
     authority_dir: Path
+    boi_artifact_handoff: Path
     replay_ledger: Path
     verifier: Path
     verifier_sha256: str
@@ -279,6 +311,93 @@ def _receipt(now_unix: int, mutation: ReceiptMutation | None) -> dict[str, objec
     return {**body, "receipt_id": receipt_id}
 
 
+def _privacy_protocol_evidence(
+    root: Path,
+    now_unix: int,
+    linux_archive_sha256: str,
+    validator_binary_sha256: str,
+    artifact_handoff_sha256: str,
+    mutation: PrivacyReceiptMutation | None,
+) -> tuple[dict[str, object], dict[str, bytes]]:
+    evidence_root = root / "privacy-protocol-four-peer-v2"
+    build_valid_evidence(
+        evidence_root,
+        source=SOURCE.as_dict(),
+        bindings={
+            "artifact_handoff_sha256": artifact_handoff_sha256,
+            "exact12_matrix_sha256": hashlib.sha256(EXACT12.read_bytes()).hexdigest(),
+            "linux_release_archive_sha256": linux_archive_sha256,
+            "validator_binary_sha256": validator_binary_sha256,
+        },
+        now_unix=now_unix - 30,
+    )
+    receipt_path = evidence_root / privacy_evidence.RECEIPT_NAME
+    body = json.loads(receipt_path.read_bytes())
+    assert isinstance(body, dict)
+    body.pop("receipt_id")
+    if mutation is not None:
+        mutation(body)
+    receipt = {
+        **body,
+        "receipt_id": privacy_evidence.compute_receipt_id(body),
+    }
+    receipt_path.write_bytes(contract.canonical_json_bytes(receipt))
+    files = {
+        f"{admission.PRIVACY_PROTOCOL_EVIDENCE_DIRECTORY}/{name}": (
+            evidence_root / name
+        ).read_bytes()
+        for name in privacy_evidence.EVIDENCE_NAMES
+    }
+    return receipt, files
+
+
+def _boi_artifact_handoff(
+    root: Path,
+    mutation: ManifestMutation | None = None,
+) -> tuple[Path, bytes]:
+    handoff = root / "privacy-v1-boi-artifacts"
+    handoff.mkdir(mode=0o700)
+    rows: list[dict[str, object]] = []
+    for relative in admission.BOI_SOURCE_ARTIFACT_PATHS:
+        if relative == "source/Cargo.lock":
+            payload = CARGO_LOCK
+        elif relative == "source/exact12-v1.tsv":
+            payload = EXACT12.read_bytes()
+        elif relative == "source/workspace-source-manifest.sha256":
+            payload = f"{WORKSPACE_SHA}\n".encode("ascii")
+        else:
+            payload = f"BOI artifact fixture: {relative}\n".encode("ascii")
+        path = handoff / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        rows.append(
+            {
+                "path": relative,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "size": len(payload),
+            }
+        )
+    manifest: dict[str, object] = {
+        "files": rows,
+        "kind": admission.BOI_SOURCE_HANDOFF_KIND,
+        "schema": admission.BOI_SOURCE_HANDOFF_SCHEMA,
+        "schema_version": 1,
+    }
+    if mutation is not None:
+        mutation(manifest)
+    payload = (
+        json.dumps(
+            manifest,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("ascii")
+    (handoff / admission.BOI_SOURCE_HANDOFF_MANIFEST).write_bytes(payload)
+    return handoff, payload
+
+
 def _tar_bytes(
     destination: Path,
     files: dict[str, bytes],
@@ -318,6 +437,8 @@ def _build_candidate(
     tmp_path: Path,
     *,
     receipt_mutation: ReceiptMutation | None = None,
+    privacy_receipt_mutation: PrivacyReceiptMutation | None = None,
+    boi_inventory_mutation: ManifestMutation | None = None,
     admission_mutation: ManifestMutation | None = None,
     nested_authority_mutation: ManifestMutation | None = None,
     nested_manifest_mutation: ManifestMutation | None = None,
@@ -326,6 +447,7 @@ def _build_candidate(
     outer_key: bytes = TEST_PUBLIC_KEY,
     nested_key: bytes = TEST_PUBLIC_KEY,
     receipt_id_override: str | None = None,
+    omit_boi_inventory: bool = False,
     archive_attack: str | None = None,
     add_extra_file: bool = False,
     replayed: bool = False,
@@ -335,6 +457,9 @@ def _build_candidate(
     root.mkdir(mode=0o700)
     verifier = root / "trusted-sorafs-validate"
     verifier_sha256 = _write_fake_native_verifier(verifier)
+    boi_artifact_handoff, boi_inventory_payload = _boi_artifact_handoff(
+        root, boi_inventory_mutation
+    )
     evidence = _evidence_root(root)
     linux_archive = _linux_archive(root, evidence)
     authority_payload = _authority_payload(evidence, linux_archive, verifier_sha256)
@@ -401,6 +526,15 @@ def _build_candidate(
         receipt["receipt_id"] = receipt_id_override
     receipt_payload = contract.canonical_json_bytes(receipt)
     receipt_id = str(receipt["receipt_id"])
+    privacy_receipt, privacy_evidence_files = _privacy_protocol_evidence(
+        root,
+        now_unix,
+        hashlib.sha256(linux_archive.read_bytes()).hexdigest(),
+        str(receipt["validator_binary_sha256"]),
+        str(receipt["artifact_handoff_sha256"]),
+        privacy_receipt_mutation,
+    )
+    privacy_receipt_id = str(privacy_receipt["receipt_id"])
     macos_controller_rows = []
     for relative in admission.MACOS_CONTROLLER_FILES:
         reviewed_payload = f"reviewed controller: {relative}\n".encode("ascii")
@@ -437,8 +571,12 @@ def _build_candidate(
         "linux/authority/release_manifest.json.sig": nested_signature,
         f"linux/{linux_archive.name}": linux_archive.read_bytes(),
         admission.MACOS_RECEIPT_PATH: receipt_payload,
+        admission.BOI_ARTIFACT_INVENTORY_PATH: boi_inventory_payload,
+        **privacy_evidence_files,
         admission.CONTROLLER_MANIFEST_PATH: macos_controller_manifest,
     }
+    if omit_boi_inventory:
+        del outer_files[admission.BOI_ARTIFACT_INVENTORY_PATH]
     if add_extra_file:
         outer_files["unexpected.txt"] = b"unexpected\n"
     inventory = [
@@ -450,6 +588,13 @@ def _build_candidate(
         for path, payload in sorted(outer_files.items())
     ]
     admission_manifest: dict[str, object] = {
+        "boi_privacy_v1": {
+            "artifact_count": len(admission.BOI_SOURCE_ARTIFACT_PATHS),
+            "inventory_path": admission.BOI_ARTIFACT_INVENTORY_PATH,
+            "inventory_sha256": hashlib.sha256(
+                boi_inventory_payload
+            ).hexdigest(),
+        },
         "controller": {
             "digest": macos_controller_digest,
             "manifest_path": admission.CONTROLLER_MANIFEST_PATH,
@@ -468,6 +613,8 @@ def _build_candidate(
         "macos_arm64": {
             "arch": "arm64",
             "os": "macos",
+            "privacy_protocol_receipt_id": privacy_receipt_id,
+            "privacy_protocol_receipt_path": admission.PRIVACY_PROTOCOL_RECEIPT_PATH,
             "receipt_id": receipt_id,
             "receipt_path": admission.MACOS_RECEIPT_PATH,
         },
@@ -524,6 +671,7 @@ def _build_candidate(
     return Candidate(
         archive=archive,
         authority_dir=authority_dir,
+        boi_artifact_handoff=boi_artifact_handoff,
         replay_ledger=replay_ledger,
         verifier=verifier,
         verifier_sha256=verifier_sha256,
@@ -546,10 +694,14 @@ def _verify(candidate: Candidate) -> dict[str, object]:
     )
 
 
-def _assembler_inputs(base: Candidate, root: Path) -> tuple[Path, Path, Path, Path]:
+def _assembler_inputs(
+    base: Candidate, root: Path
+) -> tuple[Path, Path, Path, Path, Path, Path]:
     linux_authority_dir = root / "linux-authority"
     linux_authority_dir.mkdir(parents=True, mode=0o700)
     receipt_path = root / "macos-receipt.json"
+    privacy_evidence_dir = root / "privacy-protocol-four-peer-v2"
+    privacy_evidence_dir.mkdir(mode=0o700)
     controller_manifest = root / "authority-controller-v1.json"
     with tarfile.open(base.archive, mode="r:gz") as archive:
         prefix = base.archive.name.removesuffix(".tar.gz")
@@ -577,12 +729,27 @@ def _assembler_inputs(base: Candidate, root: Path) -> tuple[Path, Path, Path, Pa
         )
         assert receipt_member is not None
         receipt_path.write_bytes(receipt_member.read())
+        for name in privacy_evidence.EVIDENCE_NAMES:
+            privacy_member = archive.extractfile(
+                members[
+                    f"{prefix}/{admission.PRIVACY_PROTOCOL_EVIDENCE_DIRECTORY}/{name}"
+                ]
+            )
+            assert privacy_member is not None
+            (privacy_evidence_dir / name).write_bytes(privacy_member.read())
         controller_member = archive.extractfile(
             members[f"{prefix}/{admission.CONTROLLER_MANIFEST_PATH}"]
         )
         assert controller_member is not None
         controller_manifest.write_bytes(controller_member.read())
-    return linux_archive, linux_authority_dir, receipt_path, controller_manifest
+    return (
+        linux_archive,
+        linux_authority_dir,
+        base.boi_artifact_handoff,
+        receipt_path,
+        privacy_evidence_dir,
+        controller_manifest,
+    )
 
 
 def test_valid_dual_target_archive_is_verified_without_deployment(
@@ -600,9 +767,225 @@ def test_valid_dual_target_archive_is_verified_without_deployment(
     assert result["reset_manifest_sha256"] == "8" * 64
     assert result["supervisor_sha256"] == "7" * 64
     assert result["validator_binary_sha256"] == "3" * 64
+    assert result["boi_artifact_inventory_sha256"] == hashlib.sha256(
+        (
+            candidate.boi_artifact_handoff
+            / admission.BOI_SOURCE_HANDOFF_MANIFEST
+        ).read_bytes()
+    ).hexdigest()
     assert set(result["validator_config_sha256"]) == {
         f"taira-validator-{number}" for number in range(1, 5)
     }
+
+
+def _replace_boi_row_digest(
+    manifest: dict[str, object], relative: str, digest: str
+) -> None:
+    rows = manifest["files"]
+    assert isinstance(rows, list)
+    row = next(value for value in rows if value["path"] == relative)
+    row["sha256"] = digest
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (lambda value: value["files"].pop(), "exactly thirteen"),
+        (lambda value: value["files"].reverse(), "exact.*sequence"),
+        (
+            lambda value: _replace_boi_row_digest(
+                value, "source/Cargo.lock", "9" * 64
+            ),
+            "different Cargo.lock",
+        ),
+        (
+            lambda value: _replace_boi_row_digest(
+                value, "source/workspace-source-manifest.sha256", "9" * 64
+            ),
+            "different source manifest",
+        ),
+        (
+            lambda value: _replace_boi_row_digest(
+                value, "source/exact12-v1.tsv", "9" * 64
+            ),
+            "different Exact12 matrix",
+        ),
+    ),
+    ids=("missing-row", "reordered", "wrong-lock", "stale-source", "wrong-matrix"),
+)
+def test_signed_candidate_rejects_hostile_boi_inventory(
+    tmp_path: Path,
+    mutation: ManifestMutation,
+    message: str,
+) -> None:
+    candidate = _build_candidate(tmp_path, boi_inventory_mutation=mutation)
+
+    with pytest.raises(admission.TairaRolloutAdmissionError, match=message):
+        _verify(candidate)
+
+
+def test_signed_candidate_requires_boi_inventory_not_macos_handoff_substitution(
+    tmp_path: Path,
+) -> None:
+    missing_root = tmp_path / "missing"
+    missing_root.mkdir()
+    candidate = _build_candidate(
+        missing_root,
+        omit_boi_inventory=True,
+    )
+    with pytest.raises(admission.TairaRolloutAdmissionError):
+        _verify(candidate)
+
+    substitution_root = tmp_path / "macos-substitution"
+    substitution_root.mkdir()
+    candidate = _build_candidate(
+        substitution_root,
+        admission_mutation=lambda manifest: manifest["boi_privacy_v1"].__setitem__(
+            "inventory_sha256", "2" * 64
+        ),
+    )
+    with pytest.raises(
+        admission.TairaRolloutAdmissionError,
+        match="BOI artifact inventory differs|BOI artifact inventory.*binding",
+    ):
+        _verify(candidate)
+
+
+def test_signed_candidate_rejects_non_integer_boi_artifact_count(
+    tmp_path: Path,
+) -> None:
+    candidate = _build_candidate(
+        tmp_path,
+        admission_mutation=lambda manifest: manifest["boi_privacy_v1"].__setitem__(
+            "artifact_count", 13.0
+        ),
+    )
+
+    with pytest.raises(
+        admission.TairaRolloutAdmissionError,
+        match="artifact count must be an integer",
+    ):
+        _verify(candidate)
+
+
+def test_candidate_authority_rejects_boi_bytes_not_named_by_inventory(
+    tmp_path: Path,
+) -> None:
+    candidate = _build_candidate(tmp_path)
+    target = candidate.boi_artifact_handoff / "worker/iroha_privacy_wallet_worker"
+    target.write_bytes(b"wrong worker bytes\n")
+
+    with pytest.raises(
+        candidate_builder.TairaCandidateBuildError,
+        match="differs from inventory",
+    ):
+        candidate_builder._capture_boi_artifact_handoff(
+            candidate.boi_artifact_handoff.resolve(),
+            source=SOURCE,
+            expected_exact12_matrix_sha256=hashlib.sha256(
+                EXACT12.read_bytes()
+            ).hexdigest(),
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation, message",
+    (
+        (lambda value: value["outcomes"].pop(), "exactly twelve"),
+        (
+            lambda value: value["outcomes"].append(dict(value["outcomes"][0])),
+            "exactly twelve",
+        ),
+        (
+            lambda value: value["outcomes"].__setitem__(
+                slice(0, 2), [value["outcomes"][1], value["outcomes"][0]]
+            ),
+            "substituted|noncanonical",
+        ),
+        (
+            lambda value: value["outcomes"][0].__setitem__(
+                "profile", "engine-unavailable"
+            ),
+            "unavailable|substituted",
+        ),
+        (
+            lambda value: value["candidate"].__setitem__(
+                "linux_release_archive_sha256", "9" * 64
+            ),
+            "stale linux_release_archive_sha256",
+        ),
+        (
+            lambda value: value["candidate"]["source"].__setitem__(
+                "commit", "e" * 40
+            ),
+            "different source identity",
+        ),
+        (
+            lambda value: value["cases"][0].__setitem__(
+                "transcript_sha256", "9" * 64
+            ),
+            "stored bytes differ",
+        ),
+        (
+            lambda value: value["cases"][1].__setitem__(
+                "transcript_id", value["cases"][0]["transcript_id"]
+            ),
+            "IDs differ|repeats",
+        ),
+        (
+            lambda value: value.__setitem__("expires_at_unix", 1),
+            "lifetime|stale",
+        ),
+    ),
+    ids=(
+        "missing-row",
+        "unknown-extra-row",
+        "outcome-swap",
+        "availability-outcome-substitution",
+        "stale-candidate-archive",
+        "stale-candidate-source",
+        "per-case-candidate-substitution",
+        "shared-case-digest-substitution",
+        "stale-receipt",
+    ),
+)
+def test_privacy_protocol_receipt_rejects_hostile_exact12_mutations(
+    tmp_path: Path,
+    mutation: PrivacyReceiptMutation,
+    message: str,
+) -> None:
+    candidate = _build_candidate(
+        tmp_path,
+        privacy_receipt_mutation=mutation,
+    )
+
+    with pytest.raises(admission.TairaRolloutAdmissionError, match=message):
+        _verify(candidate)
+
+
+def test_fail_closed_protocol_receipt_cannot_replace_native_release_authority(
+    tmp_path: Path,
+) -> None:
+    def remove_exact12_native_evidence(authority: dict[str, object]) -> None:
+        rows = authority["native_release_evidence"]
+        assert isinstance(rows, list)
+        authority["native_release_evidence"] = [
+            row
+            for row in rows
+            if not (
+                isinstance(row, dict)
+                and row.get("path")
+                == linux_authority.EVIDENCE_PATHS["exact12_matrix"]
+            )
+        ]
+
+    candidate = _build_candidate(
+        tmp_path,
+        nested_authority_mutation=remove_exact12_native_evidence,
+    )
+
+    with pytest.raises(admission.TairaRolloutAdmissionError):
+        _verify(candidate)
 
 
 def test_admission_controller_closure_matches_the_root_sealer() -> None:
@@ -667,7 +1050,14 @@ def test_candidate_builder_reconstructs_the_same_admitted_archive_deterministica
     base = _build_candidate(base_root)
     input_root = tmp_path / "assembler-inputs"
     input_root.mkdir()
-    linux_archive, linux_authority_dir, receipt, controller_manifest = (
+    (
+        linux_archive,
+        linux_authority_dir,
+        boi_artifact_handoff,
+        receipt,
+        privacy_evidence_dir,
+        controller_manifest,
+    ) = (
         _assembler_inputs(base, input_root)
     )
     controller_digest = hashlib.sha256(
@@ -678,6 +1068,20 @@ def test_candidate_builder_reconstructs_the_same_admitted_archive_deterministica
         candidate_builder,
         "_sealed_controller_manifest_path",
         lambda: controller_manifest,
+    )
+    static_rebinds: list[Path] = []
+
+    def accept_fixture_boi(root: Path, **_kwargs) -> dict[str, contract.StableFile]:
+        static_rebinds.append(root)
+        return {
+            relative: contract.stable_hash_relative(root, relative)
+            for relative in admission.BOI_SOURCE_ARTIFACT_PATHS
+        }
+
+    monkeypatch.setattr(
+        candidate_builder.boi_handoff,
+        "validate_candidate_boi_artifact_handoff",
+        accept_fixture_boi,
     )
     public_key = input_root / "release.pub"
     public_key.write_bytes(TEST_PUBLIC_KEY)
@@ -691,9 +1095,11 @@ def test_candidate_builder_reconstructs_the_same_admitted_archive_deterministica
         "dpn_validator_release_commit": DPN_COMMIT,
         "expected_receipt_id": base.receipt_id,
         "external_signer": signer,
+        "boi_artifact_handoff_dir": boi_artifact_handoff,
         "linux_archive": linux_archive,
         "linux_authority_dir": linux_authority_dir,
         "macos_receipt": receipt,
+        "privacy_protocol_evidence_dir": privacy_evidence_dir,
         "now_unix": base.now_unix,
         "release_manifest_verifier": base.verifier,
         "signing_public_key": public_key,
@@ -719,12 +1125,68 @@ def test_candidate_builder_reconstructs_the_same_admitted_archive_deterministica
     assert first["verified"] is True
     assert first["receipt_id"] == base.receipt_id
     assert second["archive_sha256"] == first["archive_sha256"]
+    assert static_rebinds == [boi_artifact_handoff.resolve()] * 2
+    prefix = first_archive.name.removesuffix(".tar.gz")
+    with tarfile.open(first_archive, mode="r:gz") as archive:
+        members = {member.name: member for member in archive.getmembers()}
+        boi_member = archive.extractfile(
+            members[f"{prefix}/{admission.BOI_ARTIFACT_INVENTORY_PATH}"]
+        )
+        assert boi_member is not None
+        assert boi_member.read() == (
+            boi_artifact_handoff / admission.BOI_SOURCE_HANDOFF_MANIFEST
+        ).read_bytes()
+        for driver_name, payload in DRIVER_BYTES.items():
+            relative = (
+                f"{prefix}/{admission.PRIVACY_PROTOCOL_EVIDENCE_DIRECTORY}/"
+                f"{privacy_evidence.DRIVER_EVIDENCE_NAMES[driver_name]}"
+            )
+            member = archive.extractfile(members[relative])
+            assert member is not None
+            assert member.read() == payload
     first_authority = Path(str(first["authority_dir"]))
     second_authority = Path(str(second["authority_dir"]))
     for name in admission.FINAL_AUTHORITY_FILES:
         assert (first_authority / name).read_bytes() == (
             second_authority / name
         ).read_bytes()
+
+
+@pytest.mark.parametrize(
+    "relative",
+    (
+        admission.BOI_SOURCE_HANDOFF_MANIFEST,
+        "sdk/iroha_python_privacy_v1.whl",
+    ),
+    ids=("inventory", "artifact"),
+)
+def test_candidate_builder_rejects_boi_inventory_toctou(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative: str,
+) -> None:
+    candidate = _build_candidate(tmp_path)
+    monkeypatch.setattr(
+        candidate_builder.boi_handoff,
+        "validate_candidate_boi_artifact_handoff",
+        lambda root, **_kwargs: {
+            relative: contract.stable_hash_relative(root, relative)
+            for relative in admission.BOI_SOURCE_ARTIFACT_PATHS
+        },
+    )
+    snapshot = candidate_builder._capture_boi_artifact_handoff(
+        candidate.boi_artifact_handoff.resolve(),
+        source=SOURCE,
+        expected_exact12_matrix_sha256=hashlib.sha256(EXACT12.read_bytes()).hexdigest(),
+    )
+    target = candidate.boi_artifact_handoff / relative
+    target.write_bytes(b"substituted after candidate preflight\n")
+
+    with pytest.raises(
+        candidate_builder.TairaCandidateBuildError,
+        match="changed during signing|cannot recheck",
+    ):
+        candidate_builder._recheck_boi_artifact_handoff(snapshot)
 
 
 @pytest.mark.parametrize("field", ["schema", "source", "trust"])

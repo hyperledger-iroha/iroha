@@ -7,26 +7,17 @@ import java.util.Map;
 /** Typed representation of {@code zk::RegisterZkAsset}. */
 public final class RegisterZkAssetInstruction implements InstructionTemplate {
   private final String asset;
-  private final ZkAssetMode mode;
-  private final boolean allowShield;
-  private final boolean allowUnshield;
   private final String unshieldVerifyingKey;
   private final String shieldVerifyingKey;
   private final Map<String, String> arguments;
 
   private RegisterZkAssetInstruction(final Builder builder) {
     this.asset = builder.asset;
-    this.mode = builder.mode;
-    this.allowShield = builder.allowShield;
-    this.allowUnshield = builder.allowUnshield;
     this.unshieldVerifyingKey = builder.unshieldVerifyingKey;
     this.shieldVerifyingKey = builder.shieldVerifyingKey;
     final LinkedHashMap<String, String> args = new LinkedHashMap<>();
     args.put("action", "RegisterZkAsset");
     args.put("asset", asset);
-    args.put("mode", mode.wireName());
-    args.put("allow_shield", Boolean.toString(allowShield));
-    args.put("allow_unshield", Boolean.toString(allowUnshield));
     args.put("vk_unshield", unshieldVerifyingKey == null ? "" : unshieldVerifyingKey);
     args.put("vk_shield", shieldVerifyingKey == null ? "" : shieldVerifyingKey);
     this.arguments = Collections.unmodifiableMap(args);
@@ -34,18 +25,6 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
 
   public String asset() {
     return asset;
-  }
-
-  public ZkAssetMode mode() {
-    return mode;
-  }
-
-  public boolean allowShield() {
-    return allowShield;
-  }
-
-  public boolean allowUnshield() {
-    return allowUnshield;
   }
 
   public String unshieldVerifyingKey() {
@@ -71,16 +50,15 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
   }
 
   public static RegisterZkAssetInstruction fromArguments(final Map<String, String> arguments) {
-    if (arguments.containsKey("vk_transfer")) {
-      throw new IllegalArgumentException("Instruction argument 'vk_transfer' is no longer supported");
+    for (final String key : arguments.keySet()) {
+      if (!"action".equals(key)
+          && !"asset".equals(key)
+          && !"vk_unshield".equals(key)
+          && !"vk_shield".equals(key)) {
+        throw new IllegalArgumentException("Unknown instruction argument: " + key);
+      }
     }
-    final Builder builder =
-        builder()
-            .setAsset(requireArgument(arguments, "asset"))
-            .setMode(ZkAssetMode.fromWireName(requireArgument(arguments, "mode")))
-            .setAllowShield(parseBoolean(requireArgument(arguments, "allow_shield"), "allow_shield"))
-            .setAllowUnshield(
-                parseBoolean(requireArgument(arguments, "allow_unshield"), "allow_unshield"));
+    final Builder builder = builder().setAsset(requireArgument(arguments, "asset"));
     final String unshield = optionalArgument(arguments, "vk_unshield");
     if (unshield != null) {
       builder.setUnshieldVerifyingKey(unshield);
@@ -105,21 +83,8 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
     return (value == null || value.trim().isEmpty()) ? null : value;
   }
 
-  private static boolean parseBoolean(final String value, final String name) {
-    if ("true".equals(value)) {
-      return true;
-    }
-    if ("false".equals(value)) {
-      return false;
-    }
-    throw new IllegalArgumentException(name + " must be 'true' or 'false'");
-  }
-
   public static final class Builder {
     private String asset;
-    private ZkAssetMode mode = ZkAssetMode.HYBRID;
-    private boolean allowShield = true;
-    private boolean allowUnshield = true;
     private String unshieldVerifyingKey;
     private String shieldVerifyingKey;
 
@@ -127,24 +92,6 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
 
     public Builder setAsset(final String asset) {
       this.asset = ZkInstructionUtils.requireText(asset, "asset");
-      return this;
-    }
-
-    public Builder setMode(final ZkAssetMode mode) {
-      if (mode == null) {
-        throw new IllegalArgumentException("mode must be provided");
-      }
-      this.mode = mode;
-      return this;
-    }
-
-    public Builder setAllowShield(final boolean allowShield) {
-      this.allowShield = allowShield;
-      return this;
-    }
-
-    public Builder setAllowUnshield(final boolean allowUnshield) {
-      this.allowUnshield = allowUnshield;
       return this;
     }
 
@@ -163,6 +110,10 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
     public RegisterZkAssetInstruction build() {
       if (asset == null) {
         throw new IllegalStateException("asset must be provided");
+      }
+      if (shieldVerifyingKey != null && unshieldVerifyingKey == null) {
+        throw new IllegalStateException(
+            "shieldVerifyingKey requires unshieldVerifyingKey so shielded funds remain redeemable");
       }
       return new RegisterZkAssetInstruction(this);
     }

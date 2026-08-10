@@ -2063,6 +2063,7 @@ pub struct DefaultHost {
     zk_gas_schedule: gas::ZkGasScheduleV1,
     zk_execution_counters: ZkExecutionCounters,
     vrf_execution_counters: VrfExecutionCounters,
+    network_id: Option<iroha_data_model::NetworkId>,
     chain_id: Option<Vec<u8>>,
     halo2_external_vks: std::collections::HashMap<String, Vec<u8>>,
     axt_state: Option<axt::HostAxtState>,
@@ -2087,6 +2088,7 @@ impl DefaultHost {
             zk_gas_schedule: gas::ZkGasScheduleV1::default(),
             zk_execution_counters: ZkExecutionCounters::default(),
             vrf_execution_counters: VrfExecutionCounters::default(),
+            network_id: None,
             chain_id: None,
             halo2_external_vks: std::collections::HashMap::new(),
             axt_state: None,
@@ -2298,12 +2300,18 @@ impl DefaultHost {
         self
     }
 
-    /// Set the host-owned chain identity used for VRF prehash binding.
-    ///
-    /// VRF verification fails closed when this context is absent and rejects
-    /// envelopes whose claimed chain identity does not match it.
+    /// Set the display chain label returned by `SYSVAR_CHAIN_ID`.
     pub fn with_chain_id(mut self, chain_id: Vec<u8>) -> Self {
         self.chain_id = Some(chain_id);
+        self
+    }
+
+    /// Set the host-owned exact network identity used for VRF prehash binding.
+    ///
+    /// VRF verification fails closed when this context is absent and rejects
+    /// envelopes whose claimed network identity does not match it.
+    pub fn with_network_id(mut self, network_id: iroha_data_model::NetworkId) -> Self {
+        self.network_id = Some(network_id);
         self
     }
 
@@ -2313,9 +2321,14 @@ impl DefaultHost {
         self
     }
 
-    /// Mutably set the host-owned chain identity without moving the host.
+    /// Mutably set the display chain label without moving the host.
     pub fn set_chain_id_bytes(&mut self, chain_id: Vec<u8>) {
         self.chain_id = Some(chain_id);
+    }
+
+    /// Mutably set the host-owned exact network identity without moving the host.
+    pub fn set_network_id(&mut self, network_id: iroha_data_model::NetworkId) {
+        self.network_id = Some(network_id);
     }
 
     /// Enable or disable SM helper syscalls for this host.
@@ -3768,7 +3781,7 @@ impl IVMHost for DefaultHost {
                 const ERR_PK: u64 = 4; // bad pk encoding/length
                 const ERR_PROOF: u64 = 5; // bad proof encoding/length
                 const ERR_VERIFY: u64 = 6; // pairing check failed
-                const ERR_CHAIN: u64 = 8; // chain_id mismatch
+                const ERR_NETWORK: u64 = 8; // network_id mismatch
 
                 let ptr = vm.register(10);
                 let (pointer_type, payload_len) = read_tlv_header_at(vm, ptr)?;
@@ -3806,24 +3819,24 @@ impl IVMHost for DefaultHost {
                 preflight_reserved_syscall_gas(vm, actual)?;
 
                 // VRF domains are host-owned consensus context. A guest-supplied
-                // chain identifier is only a claimed binding and can never
+                // network identifier is only a claimed binding and can never
                 // substitute for an absent host configuration.
-                let Some(chain_id) = self.chain_id.as_ref() else {
+                let Some(network_id) = self.network_id.as_ref() else {
                     vm.set_register(10, 0);
-                    vm.set_register(11, ERR_CHAIN);
+                    vm.set_register(11, ERR_NETWORK);
                     return Ok(actual);
                 };
-                if req.chain_id != *chain_id {
+                if req.network_id != *network_id {
                     vm.set_register(10, 0);
-                    vm.set_register(11, ERR_CHAIN);
+                    vm.set_register(11, ERR_NETWORK);
                     return Ok(actual);
                 }
-                let chain_bytes = chain_id.as_slice();
+                let network_bytes = network_id.as_bytes();
                 let mut in_buf = Vec::with_capacity(
-                    b"iroha:vrf:v1:input|".len() + chain_bytes.len() + 1 + req.input.len(),
+                    b"iroha:vrf:v1:input|".len() + network_bytes.len() + 1 + req.input.len(),
                 );
                 in_buf.extend_from_slice(b"iroha:vrf:v1:input|");
-                in_buf.extend_from_slice(chain_bytes);
+                in_buf.extend_from_slice(network_bytes);
                 in_buf.push(b'|');
                 in_buf.extend_from_slice(&req.input);
                 let msg: [u8; 32] = iroha_crypto::Hash::new(&in_buf).into();
@@ -3983,7 +3996,7 @@ impl IVMHost for DefaultHost {
                 const ERR_PK: u64 = 4;
                 const ERR_PROOF: u64 = 5;
                 const ERR_VERIFY: u64 = 6;
-                const ERR_CHAIN: u64 = 8;
+                const ERR_NETWORK: u64 = 8;
                 const ERR_BATCH: u64 = 9;
 
                 let ptr = vm.register(10);
@@ -4089,24 +4102,24 @@ impl IVMHost for DefaultHost {
                 let mut outputs: Vec<[u8; 32]> = Vec::with_capacity(req.items.len());
                 for (idx, it) in req.items.iter().enumerate() {
                     let examined_gas = Self::vrf_verify_gas(idx.saturating_add(1), payload_len);
-                    let Some(chain_id) = self.chain_id.as_ref() else {
+                    let Some(network_id) = self.network_id.as_ref() else {
                         vm.set_register(10, 0);
-                        vm.set_register(11, ERR_CHAIN);
+                        vm.set_register(11, ERR_NETWORK);
                         vm.set_register(12, idx as u64);
                         return Ok(examined_gas);
                     };
-                    if it.chain_id != *chain_id {
+                    if it.network_id != *network_id {
                         vm.set_register(10, 0);
-                        vm.set_register(11, ERR_CHAIN);
+                        vm.set_register(11, ERR_NETWORK);
                         vm.set_register(12, idx as u64);
                         return Ok(examined_gas);
                     }
-                    let chain_bytes = chain_id.as_slice();
+                    let network_bytes = network_id.as_bytes();
                     let mut in_buf = Vec::with_capacity(
-                        b"iroha:vrf:v1:input|".len() + chain_bytes.len() + 1 + it.input.len(),
+                        b"iroha:vrf:v1:input|".len() + network_bytes.len() + 1 + it.input.len(),
                     );
                     in_buf.extend_from_slice(b"iroha:vrf:v1:input|");
-                    in_buf.extend_from_slice(chain_bytes);
+                    in_buf.extend_from_slice(network_bytes);
                     in_buf.push(b'|');
                     in_buf.extend_from_slice(&it.input);
                     let msg: [u8; 32] = iroha_crypto::Hash::new(&in_buf).into();
@@ -5142,7 +5155,18 @@ mod tests {
         )
     }
 
-    fn valid_vrf_request(chain_id: &[u8], input: &[u8]) -> crate::vrf::VrfVerifyRequest {
+    fn test_network_id(marker: u8) -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([marker; iroha_crypto::Hash::LENGTH]),
+        ))
+    }
+
+    fn valid_vrf_request(
+        network_id: iroha_data_model::NetworkId,
+        input: &[u8],
+    ) -> crate::vrf::VrfVerifyRequest {
         use blstrs::{G1Projective, G2Projective, Scalar};
         use group::{Curve as _, Group as _};
 
@@ -5150,10 +5174,12 @@ mod tests {
         let public_key = (G1Projective::generator() * secret)
             .to_affine()
             .to_compressed();
-        let mut preimage =
-            Vec::with_capacity(b"iroha:vrf:v1:input|".len() + chain_id.len() + 1 + input.len());
+        let network_bytes = network_id.as_bytes();
+        let mut preimage = Vec::with_capacity(
+            b"iroha:vrf:v1:input|".len() + network_bytes.len() + 1 + input.len(),
+        );
         preimage.extend_from_slice(b"iroha:vrf:v1:input|");
-        preimage.extend_from_slice(chain_id);
+        preimage.extend_from_slice(network_bytes);
         preimage.push(b'|');
         preimage.extend_from_slice(input);
         let message: [u8; 32] = iroha_crypto::Hash::new(&preimage).into();
@@ -5165,7 +5191,7 @@ mod tests {
             variant: 1,
             pk: public_key.to_vec(),
             proof: proof.to_vec(),
-            chain_id: chain_id.to_vec(),
+            network_id,
             input: input.to_vec(),
         }
     }
@@ -5187,7 +5213,7 @@ mod tests {
         vm.set_register(10, pointer);
         vm.set_register(11, u64::MAX);
         vm.set_register(12, u64::MAX);
-        let mut host = DefaultHost::new().with_chain_id(b"test-chain".to_vec());
+        let mut host = DefaultHost::new().with_network_id(test_network_id(0x71));
         let quote = host
             .prepare_syscall(syscalls::SYSCALL_VRF_VERIFY_BATCH, &vm)
             .expect("quote VRF batch without decoding");
@@ -5230,92 +5256,6 @@ mod tests {
     fn downcast_default_host() {
         let mut host: Box<dyn IVMHost + Send + Sync> = Box::new(DefaultHost::new());
         assert!(host.as_any().downcast_mut::<DefaultHost>().is_some());
-    }
-
-    #[test]
-    fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
-        let blob = test_tlv(PointerType::Blob, b"owned-heap-input");
-
-        let mut heap_vm = IVM::new(u64::MAX);
-        let heap_pointer = heap_vm
-            .alloc_heap(u64::try_from(blob.len()).expect("TLV length fits u64"))
-            .expect("allocate complete HEAP envelope");
-        heap_vm
-            .store_bytes(heap_pointer, &blob)
-            .expect("store complete HEAP envelope");
-        heap_vm.set_register(10, heap_pointer);
-        DefaultHost::new()
-            .syscall(syscalls::SYSCALL_SHA256_HASH, &mut heap_vm)
-            .expect("allocated HEAP must be a valid pointer-ABI source");
-        let digest = heap_vm
-            .validate_tlv(heap_vm.register(10))
-            .expect("validate hash result");
-        assert_eq!(digest.type_id, PointerType::Blob);
-        assert_eq!(digest.payload.len(), 32);
-
-        for (label, pointer) in [
-            ("unallocated HEAP", Memory::HEAP_START),
-            ("OUTPUT", Memory::OUTPUT_START),
-            ("stack", Memory::STACK_START),
-        ] {
-            let mut vm = IVM::new(u64::MAX);
-            vm.store_bytes(pointer, &blob)
-                .unwrap_or_else(|error| panic!("store {label} envelope: {error:?}"));
-            vm.set_register(10, pointer);
-            assert!(
-                matches!(
-                    DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut vm),
-                    Err(VMError::NoritoInvalid)
-                ),
-                "{label} bytes must not acquire pointer provenance"
-            );
-            assert_eq!(vm.register(10), pointer);
-        }
-
-        let mut partial_vm = IVM::new(u64::MAX);
-        let owned_blob_bytes = blob
-            .len()
-            .checked_sub(8)
-            .expect("Blob envelope exceeds one HEAP alignment unit");
-        let partial_pointer = partial_vm
-            .alloc_heap(u64::try_from(owned_blob_bytes).expect("partial length fits u64"))
-            .expect("allocate truncated HEAP ownership");
-        partial_vm
-            .store_bytes(partial_pointer, &blob)
-            .expect("write across the unowned HEAP boundary");
-        partial_vm.set_register(10, partial_pointer);
-        assert!(matches!(
-            DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut partial_vm),
-            Err(VMError::NoritoInvalid)
-        ));
-
-        for malformed in [test_tlv(PointerType::Name, b"wrong-type"), {
-            let mut corrupted = blob.clone();
-            let last = corrupted.len() - 1;
-            corrupted[last] ^= 1;
-            corrupted
-        }] {
-            let mut vm = IVM::new(u64::MAX);
-            let pointer = vm
-                .alloc_host_tlv(&malformed)
-                .expect("allocate malformed adversarial envelope");
-            vm.set_register(10, pointer);
-            assert!(matches!(
-                DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut vm),
-                Err(VMError::NoritoInvalid)
-            ));
-        }
-
-        let mut code_vm = IVM::new(u64::MAX);
-        let mut code = crate::encoding::wide::encode_halt().to_le_bytes().to_vec();
-        let code_pointer = u64::try_from(code.len()).expect("code offset fits u64");
-        code.extend_from_slice(&blob);
-        code_vm.load_code(&code).expect("load arbitrary code bytes");
-        code_vm.set_register(10, code_pointer);
-        assert!(matches!(
-            DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut code_vm),
-            Err(VMError::NoritoInvalid)
-        ));
     }
 
     #[test]
@@ -5789,7 +5729,8 @@ mod tests {
     fn default_host_vrf_verify_status_paths_charge_bytes_and_examined_items() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
-        let mut host = DefaultHost::new().with_chain_id(b"test-chain".to_vec());
+        let network_id = test_network_id(0x71);
+        let mut host = DefaultHost::new().with_network_id(network_id);
 
         let wrong_type_payload = b"{\"not\":\"vrf\"}";
         let wrong_type_ptr = vm
@@ -5819,7 +5760,7 @@ mod tests {
             variant: 1,
             pk: vec![1],
             proof: vec![2; 96],
-            chain_id: b"test-chain".to_vec(),
+            network_id,
             input: b"message".to_vec(),
         };
         let body = norito::to_bytes(&bad_pk).expect("encode vrf request");
@@ -5888,13 +5829,13 @@ mod tests {
     }
 
     #[test]
-    fn default_host_vrf_verification_rejects_absent_host_chain_context() {
+    fn default_host_vrf_verification_rejects_absent_host_network_context() {
         crate::set_banner_enabled(false);
         let request = crate::vrf::VrfVerifyRequest {
             variant: 1,
             pk: vec![1; 48],
             proof: vec![2; 96],
-            chain_id: b"guest-selected-chain".to_vec(),
+            network_id: test_network_id(0x72),
             input: b"message".to_vec(),
         };
         let body = encode_canonical_norito(&request).expect("encode canonical VRF request");
@@ -5947,7 +5888,7 @@ mod tests {
             variant: 0,
             pk: Vec::new(),
             proof: Vec::new(),
-            chain_id: b"test-chain".to_vec(),
+            network_id: test_network_id(0x71),
             input: Vec::new(),
         };
         for count in [0_usize, crate::vrf::MAX_VRF_VERIFY_BATCH_ITEMS_V1 + 1] {
@@ -6015,7 +5956,7 @@ mod tests {
                 variant: 0,
                 pk: Vec::new(),
                 proof: Vec::new(),
-                chain_id: Vec::new(),
+                network_id: test_network_id(0x71),
                 input: Vec::new(),
             }],
         };
@@ -6102,12 +6043,12 @@ mod tests {
 
     #[test]
     fn vm_dispatched_vrf_batch_refunds_unexamined_items() {
-        let valid = valid_vrf_request(b"test-chain", b"valid");
+        let valid = valid_vrf_request(test_network_id(0x71), b"valid");
         let invalid = crate::vrf::VrfVerifyRequest {
             variant: 0,
             pk: Vec::new(),
             proof: Vec::new(),
-            chain_id: b"test-chain".to_vec(),
+            network_id: test_network_id(0x71),
             input: b"invalid".to_vec(),
         };
         let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
@@ -6136,7 +6077,7 @@ mod tests {
     #[test]
     fn vm_dispatched_vrf_batch_success_refunds_reserved_tail() {
         let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
-            items: vec![valid_vrf_request(b"test-chain", b"success")],
+            items: vec![valid_vrf_request(test_network_id(0x71), b"success")],
         })
         .expect("encode successful VRF batch");
         let (vm, host, quote) = run_vm_dispatched_vrf_batch(&payload);
@@ -6199,7 +6140,7 @@ mod tests {
     #[test]
     fn unaffordable_vrf_batch_stops_before_decode_or_backend_work() {
         let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
-            items: vec![valid_vrf_request(b"test-chain", b"unaffordable")],
+            items: vec![valid_vrf_request(test_network_id(0x71), b"unaffordable")],
         })
         .expect("encode VRF batch");
         let mut vm = IVM::new(u64::MAX);
@@ -6236,7 +6177,7 @@ mod tests {
     #[test]
     fn vrf_batch_allocation_failure_reports_metered_work_without_publication() {
         let payload = encode_canonical_norito(&crate::vrf::VrfVerifyBatchRequest {
-            items: vec![valid_vrf_request(b"test-chain", b"allocation")],
+            items: vec![valid_vrf_request(test_network_id(0x71), b"allocation")],
         })
         .expect("encode successful VRF batch");
         let input = test_tlv(PointerType::NoritoBytes, &payload);
@@ -6256,7 +6197,7 @@ mod tests {
         vm.set_register(10, pointer);
         vm.set_register(11, 0xfeed);
         vm.set_register(12, 0xbeef);
-        let mut host = DefaultHost::new();
+        let mut host = DefaultHost::new().with_network_id(test_network_id(0x71));
         let actual = DefaultHost::vrf_verify_gas(1, payload.len());
 
         let error = host

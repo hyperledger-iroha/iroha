@@ -832,6 +832,7 @@ mod tests {
     ) -> ReserveTransactionContextV1 {
         let policy_record = policy_record(operations, decision, 1, None);
         ReserveTransactionContextV1 {
+            network_id: crate::signed_query_test_network_id(),
             chain_id: ChainId::from(CHAIN),
             projection: ReserveTransactionProjectionV1::Provider {
                 account: provider_account(provider, policy_record.policy_digest, 7),
@@ -905,6 +906,7 @@ mod tests {
         provider: &KeyPair,
     ) -> ReserveTransactionContextV1 {
         ReserveTransactionContextV1 {
+            network_id: crate::signed_query_test_network_id(),
             chain_id: ChainId::from(CHAIN),
             policy_record: policy_record(operations, decision, 1, None),
             projection: ReserveTransactionProjectionV1::Registration {

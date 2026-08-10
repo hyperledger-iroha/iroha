@@ -280,35 +280,37 @@ mod tests {
     // commitments disagree in length.
     #[test]
     fn fold_rejects_mismatched_commitment_lengths() {
-        let width = 32;
-        let comm_one = commit_with_len(b"fold-one-row", 16, width); // one row
-        let comm_two = commit_with_len(b"fold-two-rows", 64, width); // two rows
-        let r = Scalar::from(3u64);
+        crate::iroha_rng::with_deterministic_test_seed(0x32, || {
+            let width = 32;
+            let comm_one = commit_with_len(b"fold-one-row", 16, width); // one row
+            let comm_two = commit_with_len(b"fold-two-rows", 64, width); // two rows
+            let r = Scalar::from(3u64);
 
-        // Mismatched witness commitment lengths.
-        let u1 = RelaxedR1CSInstance::<E> {
-            comm_W: comm_two.clone(),
-            comm_E: comm_two.clone(),
-            X: vec![],
-            u: Scalar::from(1u64),
-        };
-        let u2 = R1CSInstance::<E> {
-            comm_W: comm_one.clone(),
-            X: vec![],
-        };
-        assert!(u1.fold(&u2, &comm_two, &r).is_err());
+            // Mismatched witness commitment lengths.
+            let u1 = RelaxedR1CSInstance::<E> {
+                comm_W: comm_two.clone(),
+                comm_E: comm_two.clone(),
+                X: vec![],
+                u: Scalar::from(1u64),
+            };
+            let u2 = R1CSInstance::<E> {
+                comm_W: comm_one.clone(),
+                X: vec![],
+            };
+            assert!(u1.fold(&u2, &comm_two, &r).is_err());
 
-        // Mismatched cross-term commitment lengths.
-        let u1 = RelaxedR1CSInstance::<E> {
-            comm_W: comm_one.clone(),
-            comm_E: comm_one.clone(),
-            X: vec![],
-            u: Scalar::from(1u64),
-        };
-        let u2 = R1CSInstance::<E> {
-            comm_W: comm_one.clone(),
-            X: vec![],
-        };
-        assert!(u1.fold(&u2, &comm_two, &r).is_err());
+            // Mismatched cross-term commitment lengths.
+            let u1 = RelaxedR1CSInstance::<E> {
+                comm_W: comm_one.clone(),
+                comm_E: comm_one.clone(),
+                X: vec![],
+                u: Scalar::from(1u64),
+            };
+            let u2 = R1CSInstance::<E> {
+                comm_W: comm_one.clone(),
+                X: vec![],
+            };
+            assert!(u1.fold(&u2, &comm_two, &r).is_err());
+        });
     }
 }

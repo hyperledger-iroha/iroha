@@ -23,7 +23,7 @@ use std::{
 };
 
 use super::v2_core::{
-    CanonicalIdentityProjection, Committee, EquivocationKind, EventTag, IDENTITY_DOMAIN_PAYLOAD,
+    CanonicalIdentityProjection, Committee, EventTag, IDENTITY_DOMAIN_PAYLOAD,
     IDENTITY_DOMAIN_PEER, IDENTITY_DOMAIN_PROCESS_LOCAL, IDENTITY_KIND_MERGE_ENTRY,
     IDENTITY_KIND_NETWORK_RESPONSE, IDENTITY_KIND_PEER, IDENTITY_KIND_REFERENCE_DIGEST,
     IDENTITY_KIND_REPLY_DELIVERY_ROUTE, IDENTITY_KIND_REPLY_PAYLOAD,
@@ -10057,7 +10057,7 @@ pub(crate) struct DurableExactOutputHandoffReceipt {
     predecessor_context_hash: HashOf<wire::HeightContext>,
     predecessor_context_id: wire::HeightContextId,
     predecessor_height: u64,
-    predecessor_chain_id: iroha_data_model::ChainId,
+    predecessor_network_id: iroha_data_model::NetworkId,
     finality_artifact_hash: HashOf<wire::finality::V2FinalityArtifact>,
     finality_commit_qc: wire::QuorumCertificate,
 }
@@ -10076,7 +10076,7 @@ impl DurableExactOutputHandoffReceipt {
         self.predecessor_context_hash == HashOf::new(context)
             && self.predecessor_context_id == context.id()
             && self.predecessor_height == context.height
-            && self.predecessor_chain_id == context.chain_id
+            && self.predecessor_network_id == context.network_id
     }
 
     /// Match the exact durable finality artifact that authorized the seal.
@@ -10088,14 +10088,14 @@ impl DurableExactOutputHandoffReceipt {
             && self.predecessor_context_hash == HashOf::new(&artifact.height_context)
             && self.predecessor_context_id == artifact.context_id()
             && self.predecessor_height == artifact.height
-            && self.predecessor_chain_id == artifact.height_context.chain_id
+            && self.predecessor_network_id == artifact.height_context.network_id
             && self.finality_commit_qc == artifact.commit_qc
     }
 
     /// Verify the exact parent QC and height relation for one immediate successor.
     pub(crate) fn authorizes_immediate_successor(&self, successor: &wire::HeightContext) -> bool {
         self.predecessor_height.checked_add(1) == Some(successor.height)
-            && self.predecessor_chain_id == successor.chain_id
+            && self.predecessor_network_id == successor.network_id
             && successor.parent_commit_qc.as_ref() == Some(&self.finality_commit_qc)
             && self.finality_commit_qc.round.context_id == self.predecessor_context_id
             && self.finality_commit_qc.round.height == self.predecessor_height
@@ -12628,7 +12628,7 @@ impl PendingExactOutput {
 fn durable_history_source_covers(
     messages: &[NetworkMessage],
     rollover_claim: &ExactOutputRolloverClaim,
-    source_chain_id: &iroha_data_model::ChainId,
+    source_network_id: &iroha_data_model::NetworkId,
     maximum_source_height: wire::Height,
     kura: &Kura,
 ) -> Result<(), String> {
@@ -12666,7 +12666,7 @@ fn durable_history_source_covers(
                 .ok_or_else(|| {
                     "durable CommitQC response lost its Kura finality source".to_owned()
                 })?;
-            if &source.height_context.chain_id != source_chain_id
+            if &source.height_context.network_id != source_network_id
                 || source.context_id() != *source_context_id
                 || response.certificate != source.commit_qc
                 || &response.responder != claimed_responder
@@ -12706,7 +12706,7 @@ fn durable_history_source_covers(
                 .v2_finality_artifact(source_round.height)
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| "durable body response lost its Kura finality source".to_owned())?;
-            if &source.height_context.chain_id != source_chain_id
+            if &source.height_context.network_id != source_network_id
                 || source.context_id() != source_round.context_id
                 || source.subject != *source_subject
             {
@@ -12903,7 +12903,7 @@ fn durable_history_source_covers(
                         .ok_or_else(|| {
                             "historical canonical-body response lost its finality source".to_owned()
                         })?;
-                    if &source.height_context.chain_id != source_chain_id
+                    if &source.height_context.network_id != source_network_id
                         || source != *finality_artifact
                         || source.validate_for_header(&block.header()).is_err()
                         || source.verify().is_err()
@@ -12960,7 +12960,7 @@ fn durable_history_source_covers(
                         .current_autonomous_lane_payload(
                             descriptor.lane_id,
                             descriptor.lane_block_height,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             expected_epoch,
                         )
                         .ok_or_else(|| {
@@ -12970,7 +12970,7 @@ fn durable_history_source_covers(
                         .read_autonomous_lane_block_artifact(
                             descriptor.lane_id,
                             descriptor.lane_block_height,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             expected_epoch,
                         )
                         .and_then(|artifact| artifact.availability_certificate);
@@ -13019,7 +13019,7 @@ fn durable_history_source_covers(
                             "historical canonical executed-block chunk lost its Kura body"
                                 .to_owned()
                         })?;
-                    if &source.height_context.chain_id != source_chain_id
+                    if &source.height_context.network_id != source_network_id
                         || source != *finality_artifact
                         || source.verify().is_err()
                         || source.validate_for_header(&block.header()).is_err()
@@ -13080,7 +13080,7 @@ fn durable_history_source_covers(
 fn autonomous_new_view_body_matches_durable_payload(
     body: &crate::lane_consensus::LaneBlockNewViewBodyV1,
     payload: &crate::lane_consensus::LaneExecutablePayloadV1,
-    expected_chain_id_hash: Hash,
+    expected_network_id: iroha_data_model::NetworkId,
     expected_epoch: u64,
 ) -> bool {
     let Ok(source) = crate::lane_consensus::retarget_lane_block_proposal_exact_view(
@@ -13093,7 +13093,7 @@ fn autonomous_new_view_body_matches_durable_payload(
         &source,
         payload,
         body.target_view,
-        expected_chain_id_hash,
+        expected_network_id,
         expected_epoch,
     )
     .is_ok_and(|expected| expected == *body)
@@ -13126,7 +13126,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
         .validate()
         .map_err(|error| error.to_string())?;
     if source_artifact.height != proposal_height
-        || source_artifact.height_context.chain_id != artifact.height_context.chain_id
+        || source_artifact.height_context.network_id != artifact.height_context.network_id
     {
         return Err(
             "autonomous-lane output differs from its exact historical height context".to_owned(),
@@ -13147,8 +13147,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
     {
         return Err("autonomous-lane output differs from its canonical Kura carrier".to_owned());
     }
-    let chain_id = source_artifact.height_context.chain_id.clone().into_inner();
-    let chain_id_hash = Hash::new(chain_id.as_bytes());
+    let network_id = source_artifact.height_context.network_id;
     let epoch = source_artifact.height_context.epoch;
     let autonomous_envelopes = source_block
         .execution_context()
@@ -13158,9 +13157,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
         .iter()
         .map(|envelope| {
             crate::lane_consensus::decode_autonomous_lane_payload_envelope(
-                envelope,
-                chain_id_hash,
-                epoch,
+                envelope, network_id, epoch,
             )
             .and_then(|payload| {
                 payload.attach_global_hint_exact(
@@ -13169,7 +13166,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                         proposal_view: source_block.header().view_change_index(),
                         proposal_block_hash: source_artifact.block_hash,
                     },
-                    chain_id_hash,
+                    network_id,
                     epoch,
                 )
             })
@@ -13239,7 +13236,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
         match envelope.as_message() {
             BlockMessage::LaneExecutablePayload(payload) => {
                 payload
-                    .validate(chain_id_hash, epoch)
+                    .validate(network_id, epoch)
                     .map_err(|error| error.to_string())?;
                 let descriptor = &payload.origin_proposal.descriptor;
                 if payload.producer != *local_peer
@@ -13255,7 +13252,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     .read_autonomous_lane_block_artifact(
                         descriptor.lane_id,
                         descriptor.lane_block_height,
-                        chain_id_hash,
+                        network_id,
                         epoch,
                     )
                     .ok_or_else(|| {
@@ -13275,7 +13272,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     .current_autonomous_lane_payload(
                         body.lane_id,
                         body.lane_block_height,
-                        chain_id_hash,
+                        network_id,
                         epoch,
                     )
                     .ok_or_else(|| {
@@ -13283,10 +13280,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     })?;
                 if vote.signer != *local_peer
                     || !autonomous_new_view_body_matches_durable_payload(
-                        body,
-                        &payload,
-                        chain_id_hash,
-                        epoch,
+                        body, &payload, network_id, epoch,
                     )
                     || body.proposal_height != proposal_height
                     || payload != *canonical_payload
@@ -13308,7 +13302,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                         &current,
                         &payload,
                         body.target_view,
-                        chain_id_hash,
+                        network_id,
                         epoch,
                     )
                     .map_err(|error| error.to_string())?;
@@ -13326,7 +13320,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     .read_autonomous_lane_block_artifact(
                         body.lane_id,
                         body.lane_block_height,
-                        chain_id_hash,
+                        network_id,
                         epoch,
                     )
                     .ok_or_else(|| {
@@ -13334,10 +13328,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     })?;
                 let payload = &durable.executable_payload;
                 if !autonomous_new_view_body_matches_durable_payload(
-                    body,
-                    payload,
-                    chain_id_hash,
-                    epoch,
+                    body, payload, network_id, epoch,
                 ) || body.proposal_height != proposal_height
                     || payload != canonical_payload
                     || certificate.validator_set != payload.origin_proposal.descriptor.validator_set
@@ -13488,7 +13479,7 @@ fn applied_height_reconstruction_covers(
         return durable_history_source_covers(
             messages,
             rollover_claim,
-            &artifact.height_context.chain_id,
+            &artifact.height_context.network_id,
             artifact.height,
             durable_history.ok_or_else(|| {
                 "Sumeragi v2 durable response lacks an independently readable history source"
@@ -13704,6 +13695,8 @@ include!("v2_worker/kura_replica_advert_refresh.rs");
 /// Concrete effect services used by the live v2 height runner.
 pub(crate) struct ProductionV2Services {
     context: wire::HeightContext,
+    validator_set_pops: Vec<Vec<u8>>,
+    state: Arc<crate::state::State>,
     local_peer: PeerId,
     local_validator: Option<wire::ValidatorIndex>,
     key_pair: KeyPair,
@@ -13888,6 +13881,7 @@ impl ProductionV2Services {
         )?;
         std::fs::create_dir_all(&context_chunk_root).map_err(|error| error.to_string())?;
         let durable_history = Arc::clone(&kura);
+        let evidence_state = Arc::clone(&state);
         let certified_serve_validator_set_pops = validator_set_pops.clone();
         let apply_service = V2ApplyService::new(
             state,
@@ -13895,7 +13889,6 @@ impl ProductionV2Services {
             Arc::clone(&kura),
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
-            context.chain_id.clone(),
             block_cadence,
             genesis_account,
             events_sender,
@@ -13923,6 +13916,8 @@ impl ProductionV2Services {
         );
         let mut service = Self {
             context,
+            validator_set_pops: certified_serve_validator_set_pops,
+            state: evidence_state,
             local_peer,
             local_validator,
             key_pair,
@@ -16611,7 +16606,7 @@ impl ProductionV2Services {
             predecessor_context_hash: HashOf::new(&self.context),
             predecessor_context_id: self.context.id(),
             predecessor_height: self.context.height,
-            predecessor_chain_id: self.context.chain_id.clone(),
+            predecessor_network_id: self.context.network_id,
             finality_artifact_hash: HashOf::new(artifact),
             finality_commit_qc: artifact.commit_qc.clone(),
         };
@@ -17271,7 +17266,7 @@ impl ProductionV2Services {
         durable_history_source_covers(
             &messages,
             &rollover_claim,
-            &self.context.chain_id,
+            &self.context.network_id,
             self.context.height,
             self.kura.as_ref(),
         )?;
@@ -17403,7 +17398,7 @@ impl ProductionV2Services {
         durable_history_source_covers(
             &messages,
             &rollover_claim,
-            &self.context.chain_id,
+            &self.context.network_id,
             self.context.height,
             self.kura.as_ref(),
         )?;
@@ -18448,12 +18443,27 @@ impl V2EffectServices for ProductionV2Services {
 
     fn report_equivocation(
         &mut self,
-        offender: PeerId,
-        round: wire::ConsensusRound,
-        kind: EquivocationKind,
+        evidence: wire::SumeragiV2Equivocation,
     ) -> Result<(), Self::Error> {
         let _permit = self.output_permit()?;
-        iroha_logger::warn!(%offender, ?round, ?kind, "authenticated Sumeragi v2 equivocation");
+        if self.state.network_id_ref() != &self.context.network_id {
+            return Err(
+                "Sumeragi v2 equivocation context is not anchored to the active network".to_owned(),
+            );
+        }
+        let inserted = super::evidence::persist_sumeragi_v2_equivocation(
+            self.state.as_ref(),
+            &self.context,
+            &self.validator_set_pops,
+            evidence.clone(),
+        )
+        .map_err(|error| format!("invalid Sumeragi v2 equivocation evidence: {error:?}"))?;
+        if inserted {
+            iroha_logger::warn!(
+                ?evidence,
+                "persisted authenticated Sumeragi v2 equivocation evidence"
+            );
+        }
         Ok(())
     }
 
@@ -18581,7 +18591,7 @@ pub(super) mod tests {
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
-        ChainId, DataSpaceId, LaneId,
+        DataSpaceId, LaneId,
         block::{
             BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
             consensus::{
@@ -18594,6 +18604,7 @@ pub(super) mod tests {
             LaneDrainCertificateBodyV1, LaneDrainIntentV1, MergeLedgerEntry, MergeQuorumCertificate,
         },
     };
+    use mv::storage::StorageReadOnly;
     use tempfile::TempDir;
 
     use super::*;
@@ -18625,6 +18636,10 @@ pub(super) mod tests {
         v2_body_store::BlockSignaturePolicy,
         v2_effects::EffectExecutorStep,
         v2_runtime::{RuntimeQueueConfig, SerializedV2Runtime},
+    };
+    use crate::{
+        query::store::LiveQueryStore,
+        state::{State, World},
     };
 
     #[test]
@@ -19720,7 +19735,7 @@ pub(super) mod tests {
             })
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: ChainId::from("v2-worker-test"),
+            network_id: crate::sumeragi::synthetic_network_id("v2-worker-test"),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -19759,13 +19774,29 @@ pub(super) mod tests {
             .iter()
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
+        let validator_set_pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("worker fixture validator PoP")
+            })
+            .collect::<Vec<_>>();
         let kura = Kura::blank_kura_for_testing();
+        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            iroha_data_model::ChainId::from("sumeragi-v2-worker-display-name"),
+            context.network_id,
+        ));
         let kura_replica_advert_refresh = Arc::new(
             KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
                 .expect("valid test Kura replica advert refresh owner"),
         );
         let service = ProductionV2Services {
             context,
+            validator_set_pops,
+            state,
             local_peer,
             local_validator: Some(0),
             key_pair: keys[0].clone(),
@@ -19824,6 +19855,133 @@ pub(super) mod tests {
         task: BodyFetchTask,
         manifest: wire::PayloadManifest,
         body: Vec<u8>,
+    }
+
+    /// Build exact signed phase-vote evidence for the production persistence bridge.
+    fn exact_vote_equivocation(
+        service: &ProductionV2Services,
+        keys: &[KeyPair],
+    ) -> wire::SumeragiV2Equivocation {
+        let round = wire::ConsensusRound {
+            context_id: service.context.id(),
+            height: service.context.height,
+            view: 0,
+        };
+        let signer = 1;
+        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"equivocation parent state"),
+            Hash::new(b"equivocation post state"),
+            Hash::new(b"equivocation ordinary writes"),
+            1,
+            Hash::new(b"equivocation executed block"),
+        );
+        let signed_vote = |seed: u8| {
+            let mut vote = wire::Vote {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Prepare,
+                subject: wire::BlockSubject {
+                    parent_block_hash: None,
+                    block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32])),
+                    payload_hash: Hash::prehashed([seed.wrapping_add(1); 32]),
+                },
+                execution_commitment,
+                signer,
+                signature: Vec::new(),
+            };
+            vote.signature = Signature::new(
+                keys[usize::try_from(signer).expect("small signer index")].private_key(),
+                &vote.signature_preimage(),
+            )
+            .payload()
+            .to_vec();
+            vote
+        };
+        wire::SumeragiV2Equivocation::PhaseVote {
+            first: signed_vote(0xA1),
+            second: signed_vote(0xA2),
+        }
+    }
+
+    #[test]
+    fn production_equivocation_bridge_validates_persists_and_deduplicates_restart_replay() {
+        let (mut service, keys) = fixture();
+        let evidence = exact_vote_equivocation(&service, &keys);
+        service
+            .report_equivocation(evidence.clone())
+            .expect("persist valid exact equivocation evidence");
+        let shared_state = Arc::clone(&service.state);
+        assert_eq!(
+            shared_state.world.consensus_evidence.view().iter().count(),
+            1
+        );
+
+        let wire::SumeragiV2Equivocation::PhaseVote { first, second } = evidence.clone() else {
+            unreachable!("phase-vote fixture")
+        };
+        service
+            .report_equivocation(wire::SumeragiV2Equivocation::PhaseVote {
+                first: second,
+                second: first,
+            })
+            .expect("swapped replay is an idempotent duplicate");
+
+        let (mut restarted_service, _) = fixture();
+        restarted_service.context = service.context.clone();
+        restarted_service.validator_set_pops = service.validator_set_pops.clone();
+        restarted_service.state = Arc::clone(&shared_state);
+        restarted_service
+            .report_equivocation(evidence)
+            .expect("restart replay observes the canonical persisted key");
+        assert_eq!(
+            shared_state.world.consensus_evidence.view().iter().count(),
+            1
+        );
+    }
+
+    #[test]
+    fn production_equivocation_bridge_rejects_invalid_or_unanchored_evidence() {
+        let (mut invalid_service, invalid_keys) = fixture();
+        let mut forged = exact_vote_equivocation(&invalid_service, &invalid_keys);
+        let wire::SumeragiV2Equivocation::PhaseVote { second, .. } = &mut forged else {
+            unreachable!("phase-vote fixture")
+        };
+        second.signature[0] ^= 0x80;
+        assert!(
+            invalid_service.report_equivocation(forged).is_err(),
+            "invalid evidence must fail before persistence or reporting"
+        );
+        assert_eq!(
+            invalid_service
+                .state
+                .world
+                .consensus_evidence
+                .view()
+                .iter()
+                .count(),
+            0
+        );
+
+        let (mut foreign_context_service, foreign_keys) = fixture();
+        foreign_context_service.context.network_id =
+            crate::sumeragi::synthetic_network_id("foreign-evidence-chain");
+        let foreign_evidence = exact_vote_equivocation(&foreign_context_service, &foreign_keys);
+        assert!(
+            foreign_context_service
+                .report_equivocation(foreign_evidence)
+                .is_err(),
+            "a valid pair from an unanchored context must fail closed"
+        );
+        assert_eq!(
+            foreign_context_service
+                .state
+                .world
+                .consensus_evidence
+                .view()
+                .iter()
+                .count(),
+            0
+        );
     }
 
     /// Production-shaped selected-Serve recovery shared with the runner regression.
@@ -19931,7 +20089,7 @@ pub(super) mod tests {
             ingress
                 .configure_roster_for_context(
                     roster.iter().cloned(),
-                    &context.chain_id,
+                    &context.network_id,
                     context.da_layout,
                 )
                 .expect("configure selected-Serve timeout ingress");
@@ -20707,7 +20865,7 @@ pub(super) mod tests {
         let payload_hash = Hash::new(b"non-retireable lane transport payload");
         let payload = crate::lane_consensus::LaneExecutablePayloadV1 {
             version: crate::lane_consensus::LANE_EXECUTABLE_PAYLOAD_VERSION_V2,
-            chain_id_hash: Hash::new(b"non-retireable lane transport chain"),
+            network_id: crate::sumeragi::synthetic_network_id("non-retireable-lane-transport"),
             epoch: 0,
             origin_proposal: proposal,
             entrypoint_hashes: Vec::new(),
@@ -20721,7 +20879,7 @@ pub(super) mod tests {
         };
         let new_view_body = crate::lane_consensus::LaneBlockNewViewBodyV1 {
             version: 1,
-            chain_id_hash: payload.chain_id_hash,
+            network_id: payload.network_id,
             epoch: payload.epoch,
             lane_id: body.lane_id,
             dataspace_id: body.dataspace_id,
@@ -20801,7 +20959,7 @@ pub(super) mod tests {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    chain_id_digest: Hash::new(b"v2-worker-drain-chain"),
+                    network_id: crate::sumeragi::synthetic_network_id("v2-worker-drain"),
                     lane_id: LaneId::new(3),
                     dataspace_id: DataSpaceId::new(5),
                     lane_incarnation: Hash::new(b"v2-worker-drain-incarnation"),
@@ -20843,9 +21001,7 @@ pub(super) mod tests {
                     view: 0,
                 },
                 epoch: context.epoch,
-                chain_id_hash: Hash::new(
-                    norito::to_bytes(&context.chain_id).expect("encode worker chain id"),
-                ),
+                network_id: context.network_id,
                 source_id: [0x31; 32],
                 tx_entrypoint_hash: HashOf::from_untyped_unchecked(Hash::new(
                     b"worker Native AMX entrypoint",
@@ -25869,7 +26025,7 @@ pub(super) mod tests {
                     wire::ConsensusMessageV2Payload::CommitCertificateRequest(
                         wire::CommitCertificateRequest {
                             protocol_version: wire::PROTOCOL_VERSION,
-                            chain_id: service.context.chain_id.clone(),
+                            network_id: service.context.network_id,
                             context_id: service.context.id(),
                             height,
                             requester: source.clone(),
@@ -26058,7 +26214,7 @@ pub(super) mod tests {
             ingress
                 .configure_roster_for_context(
                     roster.iter().cloned(),
-                    &service.context.chain_id,
+                    &service.context.network_id,
                     service.context.da_layout,
                 )
                 .expect("configure production-shaped combined ingress");
@@ -26257,7 +26413,7 @@ pub(super) mod tests {
         ingress
             .configure_roster_for_context(
                 roster.iter().cloned(),
-                &service.context.chain_id,
+                &service.context.network_id,
                 service.context.da_layout,
             )
             .expect("configure the production-shaped timeout/Serve ingress");
@@ -26468,7 +26624,7 @@ pub(super) mod tests {
         ingress
             .configure_roster_for_context(
                 roster.iter().cloned(),
-                &service.context.chain_id,
+                &service.context.network_id,
                 service.context.da_layout,
             )
             .expect("configure production-shaped combined ingress");
@@ -26725,7 +26881,7 @@ pub(super) mod tests {
         ingress
             .configure_roster_for_context(
                 roster.iter().cloned(),
-                &service.context.chain_id,
+                &service.context.network_id,
                 service.context.da_layout,
             )
             .expect("configure the combined Serve/leader ingress");
@@ -27633,7 +27789,7 @@ pub(super) mod tests {
                     wire::ConsensusMessageV2Payload::CommitCertificateRequest(
                         wire::CommitCertificateRequest {
                             protocol_version: wire::PROTOCOL_VERSION,
-                            chain_id: context.chain_id.clone(),
+                            network_id: context.network_id,
                             context_id: context.id(),
                             height,
                             requester: source.clone(),
@@ -29983,7 +30139,7 @@ pub(super) mod tests {
                 wire::ConsensusMessageV2Payload::CommitCertificateRequest(
                     wire::CommitCertificateRequest {
                         protocol_version: wire::PROTOCOL_VERSION,
-                        chain_id: context.chain_id.clone(),
+                        network_id: context.network_id,
                         context_id: context.id(),
                         height: context.height.saturating_add(1),
                         requester: replay_via.clone(),
@@ -30568,7 +30724,8 @@ pub(super) mod tests {
 
         let (mut foreign_service, foreign_keys) = fixture();
         allow_fixture_block_payload(&mut foreign_service.context);
-        foreign_service.context.chain_id = ChainId::from("v2-worker-foreign-test");
+        foreign_service.context.network_id =
+            crate::sumeragi::synthetic_network_id("v2-worker-foreign-test");
         foreign_service
             .context
             .validate()
@@ -31261,6 +31418,21 @@ pub(super) mod tests {
             Some(&local_peer),
             "history-fixture key roster must match its durable context"
         );
+        service.validator_set_pops = validators
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("history-fixture validator PoP")
+            })
+            .collect();
+        let business_chain_id = service.state.chain_id.clone();
+        service.state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            business_chain_id,
+            context.network_id,
+        ));
         service.context = context;
         service.local_peer = local_peer;
         service.local_validator = Some(local_validator);
@@ -31619,7 +31791,7 @@ pub(super) mod tests {
                 9,
                 1,
                 HashOf::from_untyped_unchecked(Hash::new(b"merge parent")),
-                Hash::new(b"chain id"),
+                crate::sumeragi::synthetic_network_id("v2-worker-merge-sidecar"),
                 1,
                 HashOf::new(&Vec::<PeerId>::new()),
                 Vec::new(),
@@ -32259,7 +32431,7 @@ pub(super) mod tests {
         ingress
             .configure_roster_for_context(
                 roster.clone(),
-                &service.context.chain_id,
+                &service.context.network_id,
                 service.context.da_layout,
             )
             .expect("configure productive-orphan ingress");

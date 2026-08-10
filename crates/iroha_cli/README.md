@@ -345,8 +345,8 @@ iroha app zk attachments cleanup --content-type application/json --before-ms 172
 
 The first-release CLI intentionally has no generic `zk shield` command. Public-to-confidential
 movement is admitted only by the proof-bound Kagemusha V4 top-up flow. In asset policy
-configuration, `allow_shield` and `vk_shield` refer exclusively to that authenticated top-up
-circuit; they do not enable an opaque caller-supplied commitment.
+configuration, the presence of `vk_shield` enables only that authenticated top-up circuit;
+it does not enable an opaque caller-supplied commitment.
 
 Encrypted memo envelopes remain available as a local wallet utility:
 
@@ -359,7 +359,6 @@ iroha app zk envelope --ephemeral-pubkey 0101... --nonce-hex 0202... \
 
 ```bash
 iroha app zk register-asset --asset <base58-asset-definition-id> \
-  --allow-shield true --allow-unshield true \
   --vk-unshield halo2/ipa:vk_unshield \
   --vk-shield <canonical-kagemusha-top-up-vk>
 ```

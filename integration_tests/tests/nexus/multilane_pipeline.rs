@@ -40,14 +40,23 @@ use tempfile::tempdir;
 
 const TEST_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 
+fn test_chain_id() -> ChainId {
+    ChainId::from(TEST_CHAIN_ID)
+}
+
+fn test_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
+        iroha_crypto::Hash::new(b"multilane-pipeline-test-genesis"),
+    ))
+}
+
 fn sample_transaction(
     authority: &AccountId,
     signer: &iroha_crypto::PrivateKey,
     instructions: Vec<InstructionBox>,
 ) -> AcceptedTransaction<'static> {
-    let chain_id = ChainId::from(TEST_CHAIN_ID);
     let tx = TransactionBuilder::new(
-        chain_id.clone(),
+        test_network_id(),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -64,8 +73,14 @@ fn sample_transaction(
         default_limits.max_metadata_depth(),
     );
     let crypto_cfg = Crypto::default();
-    AcceptedTransaction::accept(tx, &chain_id, Duration::from_secs(30), params, &crypto_cfg)
-        .expect("transaction should be accepted")
+    AcceptedTransaction::accept(
+        tx,
+        &test_network_id(),
+        Duration::from_secs(30),
+        params,
+        &crypto_cfg,
+    )
+    .expect("transaction should be accepted")
 }
 
 #[test]
@@ -154,15 +169,13 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         Kura::new_with_configured_lane_catalog(&kura_cfg, &lane_config, &lane_catalog)?;
     assert_eq!(block_count.0, 0, "fresh Kura should have no blocks");
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
+    let mut state = State::new_with_chain_and_network_id_for_testing(
         World::default(),
         Arc::clone(&kura),
         query,
-        iroha_core::telemetry::StateTelemetry::default(),
+        test_chain_id(),
+        test_network_id(),
     );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(World::default(), Arc::clone(&kura), query);
     state.prepare_configured_primary_geometry_anchor(&lane_catalog)?;
     state.restore_kura_lane_segments_before_startup_replay()?;
     state.set_nexus_from_config(iroha_config::parameters::actual::Nexus {

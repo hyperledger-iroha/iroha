@@ -1264,7 +1264,7 @@ def _destination(value: Any, lane: Any, label: str) -> _SccpDestinationDeploymen
 def _settlement(value: Any, label: str) -> None:
     record = _exact_fields(
         value,
-        frozenset({"asset_definition_id", "custody_account_id", "payload_amount_scale"}),
+        frozenset({"asset_definition_id", "custody_owner", "payload_amount_scale"}),
         label,
     )
     asset_definition_id = _text(
@@ -1272,7 +1272,7 @@ def _settlement(value: Any, label: str) -> None:
     )
     if asset_definition_id != "6TEAJqbb8oEPmLncoNiMRbLEK6tw":
         raise ValueError(f"{label}.asset_definition_id must be canonical Taira XOR")
-    authority = _text(record["custody_account_id"], f"{label}.custody_account_id", 512)
+    authority = _text(record["custody_owner"], f"{label}.custody_owner", 512)
     from .client import _decode_canonical_i105_string
 
     _decode_canonical_i105_string(authority)

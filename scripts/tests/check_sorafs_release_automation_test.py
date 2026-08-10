@@ -277,7 +277,7 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     assert "WhenAvailable" not in validator_tests
     assert "Assert.True(" in validator_tests
     assert (
-        "ABI-21 connect_norito_bridge with Governance DAG symbols is required."
+        "ABI-22 connect_norito_bridge with Governance DAG symbols is required."
         in validator_tests
     )
 
@@ -461,11 +461,23 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/build_sorafs_foundational_prerequisite.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/sorafs_software_signer_receipt.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
             '- "scripts/sorafs_topology_qualification.py"',
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
             '- "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/tests/build_sorafs_foundational_prerequisite_test.py"',
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
@@ -523,13 +535,30 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         (".github/workflows/sorafs-orchestrator-sdk.yml", "bash ci/sdk_sorafs_orchestrator.sh"),
         (".github/workflows/sorafs-orchestrator-sdk.yml", "  mobile-parity:"),
         (".github/workflows/sorafs-orchestrator-sdk.yml", "  csharp-parity:"),
+        (".github/workflows/sorafs-orchestrator-sdk.yml", '- ".cargo/**"'),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            '- "scripts/package_mobile_sdk_artifacts.sh"',
+        ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
             "bash ci/check_kagemusha_jvm_native_bridge.sh",
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
-            "check_native_sdk_abi21_artifact.py verify",
+            "check_native_sdk_abi22_artifact.py verify",
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "Build and authenticate the exact ABI-22 C# bridge",
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            'sdkmanager_status="${PIPESTATUS[1]}"',
+        ),
+        (
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            "dotnet restore Hyperledger.Iroha.Sdk.sln",
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
@@ -547,6 +576,31 @@ def test_validate_release_automation_rejects_removed_contract_markers(
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="missing contract marker"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    [
+        (
+            "    runs-on: ubuntu-latest\n",
+            "    continue-on-error: true\n    runs-on: ubuntu-latest\n",
+        ),
+        (
+            "        run: cargo fetch --locked\n",
+            "        run: cargo fetch --locked || true\n",
+        ),
+    ],
+)
+def test_validate_release_automation_rejects_fail_open_parity_jobs(
+    tmp_path: Path, needle: str, replacement: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-orchestrator-sdk.yml"
+    source = workflow.read_text(encoding="utf-8")
+    assert source.count(needle) == 1
+    workflow.write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="fail-open marker"):
         automation.validate_release_automation(tmp_path)
 
 
@@ -771,13 +825,23 @@ def test_validate_release_automation_rejects_alternate_promotion_job(
             "external receipt, topology, or public-key binding",
         ),
         (
-            "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY: "
-            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY }}",
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID }}",
             "external receipt, topology, or public-key binding",
         ),
         (
             "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION: "
             "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION }}",
+            "external receipt, topology, or public-key binding",
+        ),
+        (
+            "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_REVISION: "
+            "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_REVISION }}",
             "external receipt, topology, or public-key binding",
         ),
         (

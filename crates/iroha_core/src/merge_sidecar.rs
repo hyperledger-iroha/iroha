@@ -6910,6 +6910,50 @@ impl MergeSidecarTransport {
         ))
     }
 
+    /// Return whether the current responder generation already owns this
+    /// requester's bounded semantic stream.
+    ///
+    /// Callers may use this to authenticate a cumulative close from a peer
+    /// whose historical request was admitted after a roster change. Merely
+    /// naming an earlier generation or requester never creates authority.
+    pub(crate) fn owns_current_server_stream(
+        &self,
+        requester: &PeerId,
+        service_generation: CertifiedMergeSidecarServiceGenerationV1,
+    ) -> bool {
+        service_generation == self.server_service_generation
+            && self.server_streams.contains_key(requester)
+    }
+
+    /// Return whether a current-generation request would create a new
+    /// responder stream.
+    ///
+    /// Lower-generation requests are stateless generation probes and future
+    /// generations fail before allocation, so neither belongs to a reserved
+    /// identity corridor.
+    pub(crate) fn would_allocate_current_server_stream(
+        &self,
+        requester: &PeerId,
+        service_generation: CertifiedMergeSidecarServiceGenerationV1,
+    ) -> bool {
+        service_generation == self.server_service_generation
+            && !self.server_streams.contains_key(requester)
+    }
+
+    /// Count responder identities selected by an allocation-free classifier.
+    ///
+    /// The adapter uses this allocation-free projection to preserve every
+    /// current-roster slot while admitting a bounded predecessor committee.
+    pub(crate) fn server_stream_count_matching(
+        &self,
+        mut predicate: impl FnMut(&PeerId) -> bool,
+    ) -> usize {
+        self.server_streams
+            .keys()
+            .filter(|requester| predicate(requester))
+            .count()
+    }
+
     fn supersede_server_stream(
         &mut self,
         sender: &PeerId,
@@ -10327,7 +10371,7 @@ mod tests {
                 7,
                 2,
                 HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent")),
-                Hash::new(b"chain"),
+                crate::sumeragi::synthetic_network_id("merge-sidecar-test"),
                 1,
                 HashOf::new(&validator_set),
                 validator_set,

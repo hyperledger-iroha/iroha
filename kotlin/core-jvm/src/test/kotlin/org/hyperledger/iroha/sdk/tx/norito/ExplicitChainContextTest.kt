@@ -9,6 +9,7 @@ import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.instructions.RegisterZkAssetInstruction
@@ -21,6 +22,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProver
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
+import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -134,7 +136,7 @@ class ExplicitChainContextTest {
     fun `signed envelopes preserve canonical payload and reject all noncanonical inner forms`() {
         val adapter = NoritoJavaCodecAdapter(TAIRA)
         val payload = TransactionPayload(
-            chainId = "00000001",
+            networkId = TestNetworkIds.canonical(),
             authority = account(0x46, TAIRA),
             creationTimeMs = 1_735_369_000_000L,
             executable = Executable.ivm(byteArrayOf(0x01)),
@@ -240,12 +242,29 @@ class ExplicitChainContextTest {
     }
 
     @Test
+    fun jniTransactionBridgeRequiresExactNetworkIdBytes() {
+        val managed = NativeSignerBridge::class.java.declaredMethods.single {
+            it.name == "encodeRegisterZkAssetSignedTransaction" &&
+                Modifier.isPublic(it.modifiers) &&
+                Modifier.isStatic(it.modifiers)
+        }
+        val native = NativeSignerBridge::class.java.declaredMethods.single {
+            it.name == "nativeEncodeRegisterZkAssetSignedTransaction" &&
+                Modifier.isNative(it.modifiers)
+        }
+
+        assertEquals(NetworkId::class.java, managed.parameterTypes[1])
+        assertEquals(ByteArray::class.java, native.parameterTypes[1])
+        assertEquals(32, NetworkId.BYTE_LENGTH)
+    }
+
+    @Test
     fun `native signer rejects out-of-range chain before native dispatch`() {
         val feePayment = FeePaymentIntent.authority(emptyList())
         val register = assertFailsWith<IllegalArgumentException> {
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                 algorithm = SigningAlgorithm.ED25519,
-                chainId = "chain",
+                networkId = TestNetworkIds.canonical(),
                 chainDiscriminant = -1,
                 authority = "authority",
                 creationTimeMs = 0,
@@ -258,7 +277,7 @@ class ExplicitChainContextTest {
 
         assertTrue(
             NativeSignerBridge.isNativeAvailable(),
-            "connect_norito_bridge ABI 21 is required",
+            "connect_norito_bridge ABI 22 is required",
         )
         val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
             SigningAlgorithm.ED25519,
@@ -273,7 +292,7 @@ class ExplicitChainContextTest {
         assertFailsWith<IllegalArgumentException> {
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                 algorithm = SigningAlgorithm.ED25519,
-                chainId = "00000042",
+                networkId = TestNetworkIds.canonical(),
                 chainDiscriminant = OTHER,
                 authority = tairaAuthority,
                 creationTimeMs = 1_736_000_000_000,
@@ -285,7 +304,7 @@ class ExplicitChainContextTest {
     }
 
     private fun payload(authority: String): TransactionPayload = TransactionPayload(
-        chainId = "00000001",
+        networkId = TestNetworkIds.canonical(),
         authority = authority,
         creationTimeMs = 1_735_369_000_000L,
         executable = Executable.ivm(byteArrayOf(0x01)),

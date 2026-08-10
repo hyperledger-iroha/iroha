@@ -55,10 +55,12 @@ scripts/release_sorafs_cli.sh \
 
 The external signer contract is deliberately small: it receives the manifest
 path and a new signature-output path and writes exactly 64 raw Ed25519 signature
-bytes. A PKCS#11/HSM adapter should implement that contract. The wrapper copies
-the governed 32-byte raw public key, checks its reviewed SHA256 fingerprint, and
-verifies immutable snapshots with the exact `sorafs-validate` binary whose
-SHA256 was supplied.
+bytes. V1 requires the `authenticated_external_signer` provider with exact
+`software` backend. The wrapper copies the governed 32-byte raw public key,
+checks its reviewed SHA256 fingerprint, and verifies immutable snapshots with
+the exact `sorafs-validate` binary whose SHA256 was supplied. Successful output
+is `software-key-qualified`. The same provider boundary can accept a future HSM
+adapter only after new HSM-backed qualification evidence exists.
 
 There are no fixture, key, fingerprint, or verifier defaults. Missing inputs,
 unsafe path aliases, malformed key/signature sizes, fingerprint drift, verifier
@@ -72,7 +74,7 @@ Archive these public artifacts together:
 - `release_manifest.verify.json`
 - the reviewed signer fingerprint and native-verifier SHA256
 
-Private keys, HSM credentials, bearer tokens, and signer sessions are
+Private keys, external-signer credentials, bearer tokens, and signer sessions are
 runtime-only and must never enter the artifact packet.
 
 ## Provenance is separate

@@ -2,18 +2,18 @@
 
 use std::num::NonZeroU64;
 
-use iroha_crypto::{Hash, HashOf, KeyPair};
+use iroha_crypto::{Hash, HashOf, MerkleProof};
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus::{
-            CertPhase, LaneBlockCommitment, LaneSettlementReceipt, PERMISSIONED_TAG, Qc,
-            QcAggregate,
-        },
+        consensus::{LaneBlockCommitment, LaneSettlementReceipt},
+        consensus_v2::finality::V2FinalityArtifact,
     },
     da::commitment,
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError, compute_settlement_hash},
-    peer::PeerId,
+    nexus::{
+        DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope, LaneRelayError,
+        compute_settlement_hash,
+    },
 };
 use norito::core::NoritoDeserialize;
 
@@ -28,39 +28,6 @@ fn sample_block_header(da_hash: Option<HashOf<commitment::DaCommitmentBundle>>) 
     );
     header.set_da_commitments_hash(da_hash);
     header
-}
-
-fn checked_random_peer_id() -> PeerId {
-    PeerId::from(
-        KeyPair::try_random()
-            .expect("generate checked lane-relay peer keypair")
-            .public_key()
-            .clone(),
-    )
-}
-
-fn sample_qc(block_header: &BlockHeader) -> Qc {
-    let validator_set = vec![checked_random_peer_id(), checked_random_peer_id()];
-    Qc {
-        phase: CertPhase::Commit,
-        subject_block_hash: block_header.hash(),
-        parent_state_root: Hash::prehashed([0x22; Hash::LENGTH]),
-        post_state_root: Hash::prehashed([0x11; Hash::LENGTH]),
-        height: block_header.height().get(),
-        view: block_header.view_change_index(),
-        epoch: 1,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: 1,
-        validator_set,
-        aggregate: QcAggregate {
-            signers_bitmap: vec![0b1010_0001],
-            bls_aggregate_signature: vec![0xAB; 48],
-        },
-    }
 }
 
 fn sample_settlement() -> LaneBlockCommitment {
@@ -97,11 +64,19 @@ fn lane_relay_envelope_roundtrips_and_verifies_hash() {
     )));
     let header = sample_block_header(da_hash);
     let settlement = sample_settlement();
-    let qc = sample_qc(&header);
     let manifest_root = Some([0x44; 32]);
-    let envelope = LaneRelayEnvelope::new(header, Some(qc.clone()), da_hash, settlement.clone(), 0)
+    let envelope = LaneRelayEnvelope::new(header, da_hash, settlement.clone(), 0)
         .expect("construct envelope")
-        .with_manifest_root(manifest_root);
+        .with_manifest_root(manifest_root)
+        .with_lane_block_descriptor_hash(Some(Hash::new(b"roundtrip-lane-descriptor")))
+        .with_finality_authority(Some(LaneFinalityAuthorityV1 {
+            version: 1,
+            global_block_height: header.height().get(),
+            finality_artifact_hash: HashOf::<V2FinalityArtifact>::from_untyped_unchecked(
+                Hash::new(b"roundtrip-finality-artifact"),
+            ),
+            statement_proof: MerkleProof::from_audit_path(0, Vec::new()),
+        }));
 
     let bytes = norito::to_bytes(&envelope).expect("encode envelope");
     let archived = norito::from_bytes::<LaneRelayEnvelope>(&bytes).expect("archive envelope");
@@ -117,17 +92,8 @@ fn lane_relay_envelope_roundtrips_and_verifies_hash() {
     assert_eq!(manifest_root, decoded.manifest_root);
     decoded.verify().expect("envelope should verify");
 
-    // QC mismatch should be rejected.
-    let bad_qc = Qc {
-        subject_block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xEE; 32])),
-        ..qc
-    };
-    let err = LaneRelayEnvelope::new(header, Some(bad_qc), da_hash, settlement.clone(), 0)
-        .expect_err("qc mismatch should fail");
-    assert!(matches!(err, LaneRelayError::QcSubjectMismatch));
-
     // DA hash mismatch should be rejected.
-    let err = LaneRelayEnvelope::new(header, None, None, settlement.clone(), 0)
+    let err = LaneRelayEnvelope::new(header, None, settlement.clone(), 0)
         .expect_err("da mismatch should fail");
     assert!(matches!(err, LaneRelayError::DaCommitmentHashMismatch));
 }
@@ -139,7 +105,7 @@ fn lane_relay_envelope_distinguishes_lane_local_and_global_heights() {
     settlement.block_height = 1;
     assert_ne!(settlement.block_height, header.height().get());
 
-    let envelope = LaneRelayEnvelope::new(header, None, None, settlement, 0)
+    let envelope = LaneRelayEnvelope::new(header, None, settlement, 0)
         .expect("lane-local settlement height may differ from global proposal height");
     assert_eq!(envelope.block_height, 1);
     assert_eq!(envelope.block_header.height().get(), header.height().get());
@@ -147,24 +113,31 @@ fn lane_relay_envelope_distinguishes_lane_local_and_global_heights() {
 }
 
 #[test]
-fn lane_relay_envelope_rejects_qc_height_mismatch() {
+fn lane_relay_envelope_rejects_finality_authority_height_mismatch() {
     let header = sample_block_header(None);
     let settlement = sample_settlement();
-    let mut qc = sample_qc(&header);
-    qc.height = header.height().get() + 1;
-
-    let err = LaneRelayEnvelope::new(header, Some(qc), None, settlement.clone(), 0)
-        .expect_err("mismatched execution QC height should be rejected");
-    assert_eq!(err, LaneRelayError::QcHeightMismatch);
-
-    let mut envelope =
-        LaneRelayEnvelope::new(header, Some(sample_qc(&header)), None, settlement, 0)
-            .expect("construct envelope");
-    let qc_ref = envelope.qc.as_mut().expect("qc present in envelope");
-    qc_ref.height += 1;
+    let mut envelope = LaneRelayEnvelope::new(header, None, settlement, 0)
+        .expect("construct envelope")
+        .with_finality_authority(Some(LaneFinalityAuthorityV1 {
+            version: 1,
+            global_block_height: header.height().get() + 1,
+            finality_artifact_hash: HashOf::<V2FinalityArtifact>::from_untyped_unchecked(
+                Hash::new(b"wrong-height-finality-artifact"),
+            ),
+            statement_proof: MerkleProof::from_audit_path(0, Vec::new()),
+        }));
     assert_eq!(
-        envelope.verify().unwrap_err(),
-        LaneRelayError::QcHeightMismatch
+        envelope.validate_finality_authority_ref().unwrap_err(),
+        LaneRelayError::FinalityAuthorityHeightMismatch
+    );
+    envelope
+        .finality_authority
+        .as_mut()
+        .expect("authority")
+        .version = 2;
+    assert_eq!(
+        envelope.validate_finality_authority_ref().unwrap_err(),
+        LaneRelayError::UnsupportedFinalityAuthorityVersion(2)
     );
 }
 
@@ -175,20 +148,8 @@ fn lane_relay_envelope_detects_tampering_on_verify() {
     )));
     let header = sample_block_header(da_hash);
     let settlement = sample_settlement();
-    let qc = sample_qc(&header);
-    let envelope = LaneRelayEnvelope::new(header, Some(qc), da_hash, settlement, 2048)
-        .expect("construct envelope");
-
-    // Global proposal-height tamper: the QC still certifies the old height.
-    let mut tampered = envelope.clone();
-    tampered
-        .block_header
-        .set_height(NonZeroU64::new(tampered.block_header.height().get() + 1).unwrap());
-    tampered.qc.as_mut().expect("QC present").subject_block_hash = tampered.block_header.hash();
-    assert_eq!(
-        tampered.verify().unwrap_err(),
-        LaneRelayError::QcHeightMismatch
-    );
+    let envelope =
+        LaneRelayEnvelope::new(header, da_hash, settlement, 2048).expect("construct envelope");
 
     // Settlement height tamper.
     let mut tampered = envelope.clone();

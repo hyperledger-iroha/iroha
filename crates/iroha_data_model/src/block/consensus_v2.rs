@@ -8,18 +8,18 @@
 use core::fmt;
 use std::{collections::BTreeSet, vec::Vec};
 
-use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_crypto::{Hash, HashOf, MerkleTree, MerkleTreeCommitment};
 use iroha_primitives::erasure::rs16;
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
 
 use super::Header as BlockHeader;
 use crate::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     block::consensus::LaneBlockCommitment,
     merge::MergeLedgerEntry,
-    nexus::{DataSpaceId, LaneId, PublicLaneValidatorRecord},
+    nexus::{DataSpaceId, LaneFinalityStatement, LaneId, PublicLaneValidatorRecord},
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
@@ -100,6 +100,13 @@ pub const NATIVE_AMX_APPLICATION_MANIFEST_VERSION: u16 = 1;
 /// representable by the wire-level `u32` field.
 #[allow(clippy::cast_possible_truncation)]
 pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES: u32 =
+    crate::nexus::MAX_ACTIVE_EXECUTION_LANES as u32;
+/// Maximum lane-finality statements committed by one global block.
+///
+/// A canonical execution emits at most one statement per active lane route,
+/// and the active-lane protocol bound is fixed at 1,024.
+#[allow(clippy::cast_possible_truncation)]
+pub const MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK: u32 =
     crate::nexus::MAX_ACTIVE_EXECUTION_LANES as u32;
 /// Maximum ordered source/result members in one participant application leaf.
 pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_MEMBERS: usize = 4_096;
@@ -481,8 +488,8 @@ impl SnapshotV2BootstrapRecord {
 )]
 #[norito(deny_unknown_fields)]
 pub struct HeightContext {
-    /// Chain identifier used for replay protection.
-    pub chain_id: ChainId,
+    /// Exact genesis-derived network identity used for replay protection.
+    pub network_id: NetworkId,
     /// Wire protocol version; must equal [`PROTOCOL_VERSION`].
     pub protocol_version: u16,
     /// Height governed by this context.
@@ -536,7 +543,7 @@ impl HeightContext {
     pub fn id(&self) -> HeightContextId {
         let identity = HeightContextIdentity {
             identity_version: HEIGHT_CONTEXT_IDENTITY_VERSION,
-            chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             protocol_version: self.protocol_version,
             height: self.height,
             epoch: self.epoch,
@@ -677,7 +684,7 @@ impl HeightContext {
 #[derive(Encode)]
 struct HeightContextIdentity {
     identity_version: u16,
-    chain_id: ChainId,
+    network_id: NetworkId,
     protocol_version: u16,
     height: Height,
     epoch: u64,
@@ -1004,6 +1011,13 @@ pub struct ExecutionCommitment {
     pub native_amx_application_manifest_root: Hash,
     /// Number of leaves committed by `native_amx_application_manifest_root`.
     pub native_amx_application_manifest_count: u32,
+    /// Exact root and leaf count of canonical post-execution lane effects.
+    ///
+    /// Absence is canonical only when the result-bearing block contains no
+    /// lane-finality statements. A present commitment is derived from the
+    /// executed block by validators; it is never supplied by relay callers.
+    #[norito(required)]
+    pub lane_finality_manifest: Option<MerkleTreeCommitment<LaneFinalityStatement>>,
     /// Exact compact merge-carrier identity, explicitly absent for ordinary blocks.
     ///
     /// This option is mandatory on the current wire. JSON must carry either an
@@ -1037,6 +1051,7 @@ impl ExecutionCommitment {
             native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
             native_amx_application_manifest_count: 0,
+            lane_finality_manifest: None,
             merge_carrier: None,
             executed_block_wire_len,
             executed_block_wire_hash,
@@ -1133,6 +1148,46 @@ impl ExecutionCommitment {
         executed_block_wire_len: u64,
         executed_block_wire_hash: Hash,
     ) -> Result<Self, ValidationError> {
+        Self::new_with_manifests(
+            parent_state_root,
+            post_state_root,
+            ordinary_writes_root,
+            topup_anchor_root,
+            topup_anchor_count,
+            native_amx_application_manifest_version,
+            native_amx_application_manifest_root,
+            native_amx_application_manifest_count,
+            None,
+            merge_carrier,
+            executed_block_wire_len,
+            executed_block_wire_hash,
+        )
+    }
+
+    /// Construct a commitment with all explicit execution manifests.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the state-transition projection or any bounded
+    /// manifest or merge-carrier commitment is non-canonical.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the constructor mirrors the canonical execution-commitment wire fields"
+    )]
+    pub fn new_with_manifests(
+        parent_state_root: Hash,
+        post_state_root: Hash,
+        ordinary_writes_root: Hash,
+        topup_anchor_root: Option<Hash>,
+        topup_anchor_count: u32,
+        native_amx_application_manifest_version: u16,
+        native_amx_application_manifest_root: Hash,
+        native_amx_application_manifest_count: u32,
+        lane_finality_manifest: Option<MerkleTreeCommitment<LaneFinalityStatement>>,
+        merge_carrier: Option<MergeCarrierCommitmentV1>,
+        executed_block_wire_len: u64,
+        executed_block_wire_hash: Hash,
+    ) -> Result<Self, ValidationError> {
         let commitment = Self {
             parent_state_root,
             post_state_root,
@@ -1142,6 +1197,7 @@ impl ExecutionCommitment {
             native_amx_application_manifest_version,
             native_amx_application_manifest_root,
             native_amx_application_manifest_count,
+            lane_finality_manifest,
             merge_carrier,
             executed_block_wire_len,
             executed_block_wire_hash,
@@ -1186,16 +1242,22 @@ impl ExecutionCommitment {
         }
         let empty_root = native_amx_application_manifest_empty_root();
         match self.native_amx_application_manifest_count {
-            0 if self.native_amx_application_manifest_root == empty_root => Ok(()),
-            0 => Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment),
+            0 if self.native_amx_application_manifest_root == empty_root => {}
+            0 => return Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment),
             count if count > MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES => {
-                Err(ValidationError::TooManyNativeAmxApplicationManifestLeaves)
+                return Err(ValidationError::TooManyNativeAmxApplicationManifestLeaves);
             }
             _ if self.native_amx_application_manifest_root == empty_root => {
-                Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment)
+                return Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment);
             }
-            _ => Ok(()),
+            _ => {}
         }
+        if self.lane_finality_manifest.is_some_and(|commitment| {
+            commitment.leaf_count().get() > u64::from(MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK)
+        }) {
+            return Err(ValidationError::TooManyLaneFinalityStatements);
+        }
+        Ok(())
     }
 
     /// Derive the canonical combined post-state root for a non-empty top-up tree.
@@ -2435,8 +2497,8 @@ pub struct CertifiedBodyResponseSignaturePayload {
 pub struct CommitCertificateRequest {
     /// Consensus protocol revision included in the signed request.
     pub protocol_version: u16,
-    /// Chain identifier included explicitly for replay rejection at ingress.
-    pub chain_id: ChainId,
+    /// Exact genesis-derived network identity included for replay rejection at ingress.
+    pub network_id: NetworkId,
     /// Exact frozen context whose durable `CommitQC` is requested.
     pub context_id: HeightContextId,
     /// Height repeated for bounded serving and early rejection.
@@ -2477,7 +2539,7 @@ impl CommitCertificateRequest {
                 actual: self.protocol_version,
             });
         }
-        if self.chain_id != context.chain_id
+        if self.network_id != context.network_id
             || self.context_id != context.id()
             || self.height != context.height
         {
@@ -3961,6 +4023,8 @@ pub enum ValidationError {
     InvalidMergeCarrierCommitmentVersion,
     /// A Native AMX application manifest exceeds the route-leaf bound.
     TooManyNativeAmxApplicationManifestLeaves,
+    /// A lane-finality manifest exceeds the active-lane protocol bound.
+    TooManyLaneFinalityStatements,
     /// A Native AMX application leaf carries an invalid route or block identity.
     InvalidNativeAmxApplicationManifestLeaf,
     /// A Native AMX application leaf carries malformed ordered membership.
@@ -4144,6 +4208,9 @@ impl fmt::Display for ValidationError {
             }
             Self::TooManyNativeAmxApplicationManifestLeaves => {
                 f.write_str("Native AMX application manifest exceeds the route-leaf limit")
+            }
+            Self::TooManyLaneFinalityStatements => {
+                f.write_str("lane-finality manifest exceeds the active-lane limit")
             }
             Self::InvalidNativeAmxApplicationManifestLeaf => {
                 f.write_str("Native AMX application manifest leaf identity is malformed")

@@ -16,7 +16,7 @@ categories = ["cryptography::cryptocurrencies"]
 [workspace.metadata]
 docker_bins = [
     "iroha",
-    "irohad",
+    "iroha3d",
     "sorafs_governance_dag",
     "kagami",
     "attachment_sanitizer",
@@ -33,7 +33,6 @@ iroha_torii_shared = { path = "crates/iroha_torii_shared" }
 
 iroha = { path = "crates/iroha" }
 
-iroha_macro_utils = { path = "crates/iroha_macro_utils" }
 iroha_telemetry = { path = "crates/iroha_telemetry" }
 iroha_p2p = { path = "crates/iroha_p2p" }
 iroha_primitives = { path = "crates/iroha_primitives", default-features = false }

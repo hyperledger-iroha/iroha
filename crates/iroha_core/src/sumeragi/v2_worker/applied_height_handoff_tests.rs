@@ -816,3 +816,84 @@ fn applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate() 
     );
     assert!(rejected_service.output_guard.restart_required());
 }
+
+#[test]
+fn applied_height_handoff_authenticates_exact_payload_chunk_fanout() {
+    let (mut service, keys) = fixture_with_block_payload();
+    let peer = service.context.roster[1].validator.clone();
+    let (_, artifact) = durable_finality_fixture(&service, &keys);
+    let (_, payload, _) = proposal_body_and_payload(&service.context, &keys);
+    let manifest = payload.manifest().clone();
+    let owner = service.active_tag;
+    service
+        .register_outbound_payload(owner, payload)
+        .expect("sign and retain exact payload chunks");
+    let retained_chunks = service
+        .outbound_chunks
+        .get(&HashOf::new(&manifest))
+        .expect("registered payload owns its exact manifest")
+        .messages
+        .clone();
+    let messages = retained_chunks
+        .iter()
+        .cloned()
+        .map(ProductionV2Services::preencode_v2_network_message)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("preencode exact payload chunks");
+    let chunk_count = messages.len();
+    let claim = ExactOutputRolloverClaim::PayloadChunks {
+        scope: service.exact_output_scope(),
+        manifest: manifest.clone(),
+    };
+    let mut pending = PendingExactOutput::new(1, chunk_count, 1, &[])
+        .expect("one exact payload-chunk fanout corridor");
+    pending
+        .enqueue(
+            PendingExactFanout::claimed(messages, vec![peer.clone()], claim)
+                .expect("payload chunks match their exact manifest claim")
+                .expect("non-empty payload-chunk fanout"),
+        )
+        .expect("retain exact payload-chunk fanout");
+
+    assert_eq!(
+        pending
+            .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
+            .expect("applied context authenticates every retained payload chunk"),
+        chunk_count
+    );
+    assert!(!pending.is_pending());
+
+    let mut tampered_chunks = retained_chunks;
+    let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &mut tampered_chunks[0].payload
+    else {
+        unreachable!("registered outbound payload contains only chunks")
+    };
+    chunk.signature[0] ^= 0x01;
+    let tampered_messages = tampered_chunks
+        .into_iter()
+        .map(ProductionV2Services::preencode_v2_network_message)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("preencode signature-tampered payload chunks");
+    let mut tampered = PendingExactOutput::new(1, chunk_count, 1, &[])
+        .expect("one tampered payload-chunk fanout corridor");
+    tampered
+        .enqueue(
+            PendingExactFanout::claimed(
+                tampered_messages,
+                vec![peer],
+                ExactOutputRolloverClaim::PayloadChunks {
+                    scope: service.exact_output_scope(),
+                    manifest,
+                },
+            )
+            .expect("tampered signature retains exact structural coordinates")
+            .expect("non-empty tampered payload-chunk fanout"),
+        )
+        .expect("retain structurally exact tampered payload chunks");
+
+    let error = tampered
+        .handoff_applied_height_to_durable_reconstruction(&artifact, None, None)
+        .expect_err("an altered chunk signature cannot cross finality handoff");
+    assert!(error.contains("signature"));
+    assert!(tampered.is_pending(), "rejection is atomic");
+}

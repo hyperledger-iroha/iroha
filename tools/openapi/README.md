@@ -90,7 +90,7 @@ tree with `artifacts/openapi/`; `allowed_signers.json` remains an input.
 
 ## Release signing
 
-Release signing is detached-only: private keys remain in HSM or PKCS#11
+Release signing is detached-only: private keys remain encrypted and runtime-only in the external software signer
 custody. First commit the complete generator input tree. At that clean commit,
 create private out-of-tree staging, copy the existing artifact baseline, and
 emit the deterministic signing payload:
@@ -113,7 +113,7 @@ bash ci/run_openapi_generator.sh \
   --signing-payload "${OPERATOR_STAGE}/openapi-manifest-v2.payload"
 ```
 
-After the HSM returns an Ed25519 signature envelope, regenerate from the same
+After the external software signer returns an Ed25519 signature envelope, regenerate from the same
 source state and attach it:
 
 ```bash

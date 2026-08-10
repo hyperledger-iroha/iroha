@@ -108,15 +108,13 @@ impl Kura {
                 continue;
             }
             if allowed_view_temp.is_some_and(|allowed| allowed == path.as_path()) {
-                let identity =
-                    Self::autonomous_lane_block_attempt_view_temp_coordinates(&name).ok_or_else(
-                        || {
-                            Self::invalid_lane_artifact_error(
-                                path.clone(),
-                                "allowed autonomous view-state recovery temp has a malformed name",
-                            )
-                        },
-                    )?;
+                let identity = Self::autonomous_lane_block_attempt_view_temp_coordinates(&name)
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "allowed autonomous view-state recovery temp has a malformed name",
+                        )
+                    })?;
                 lifecycle_identities.insert(identity);
                 continue;
             }
@@ -460,8 +458,7 @@ impl Kura {
         if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
             return Ok(0);
         }
-        let (persisted_count, unindexed_bytes) =
-            self.persisted_count_and_unindexed_bytes()?;
+        let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
         self.pending_block_bytes(persisted_count, unindexed_bytes)
     }
 

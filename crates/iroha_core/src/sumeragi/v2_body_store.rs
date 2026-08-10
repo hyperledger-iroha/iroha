@@ -1672,6 +1672,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
+        NetworkId,
         block::{
             BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
             consensus_v2 as wire, decode_framed_signed_block,
@@ -1691,6 +1692,12 @@ mod tests {
         v2::RecoveredValidationAuthority, v2_apply::VerifiedRecoveredFinalitySubject,
         v2_chunks::encode_payload, v2_effects::BodyValidationTask,
     };
+
+    fn test_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x94; Hash::LENGTH]),
+        ))
+    }
 
     #[derive(Debug)]
     enum FixtureValidationError {
@@ -1734,7 +1741,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: "sumeragi-v2-body-store-test".into(),
+            network_id: test_network_id(),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -1783,7 +1790,7 @@ mod tests {
                 7,
                 receipt.round().height,
                 parent_hash,
-                Hash::new(b"body-store validation chain"),
+                test_network_id(),
                 1,
                 HashOf::new(&Vec::<PeerId>::new()),
                 Vec::new(),

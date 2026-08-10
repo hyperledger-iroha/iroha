@@ -442,8 +442,9 @@ public sealed partial class ToriiClientTests
 
         Assert.Contains("ToriiLocalSigningContext", error.Message);
         Assert.Null(handler.LastRequest);
-        Assert.Throws<ArgumentException>(() => new ToriiLocalSigningContext(""));
-        Assert.Throws<ArgumentException>(() => new ToriiLocalSigningContext("chain/other"));
+        Assert.Throws<FormatException>(() => NetworkId.Parse(""));
+        Assert.Throws<FormatException>(() => NetworkId.Parse("chain/other"));
+        Assert.Throws<ArgumentNullException>(() => new ToriiLocalSigningContext(null!));
     }
 
     [Fact]
@@ -475,11 +476,11 @@ public sealed partial class ToriiClientTests
                 "full requested record"
             ),
             (
-                "wrong chain",
+                "wrong network",
                 CanonicalVerifyingKeyTransactionPayload(
                     request,
-                    chainId: "other-chain"),
-                "configured chain"
+                    networkId: NetworkId.Parse(AlternateNetworkId)),
+                "configured network"
             ),
             (
                 "wrong authority",

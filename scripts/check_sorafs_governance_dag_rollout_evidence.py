@@ -59,6 +59,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_minimum_int,
     require_object,
     require_object_array,
+    require_policy_digest,
     required_evidence_kind_names,
     require_passed_status,
     require_positive_int,
@@ -435,16 +436,14 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
 )
 
 
-ROUTE_REQUIRED_FIELDS = frozenset(
-    {
-        "name",
-        "passed",
-        "status_code",
-        "body_blake3_hex",
-        "latency_ms",
-        "publisher_identity_present",
-        "verification_valid",
-    }
+ROUTE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "name",
+    "passed",
+    "status_code",
+    "body_blake3_hex",
+    "latency_ms",
+    "publisher_identity_present",
+    "verification_valid",
 )
 
 
@@ -856,7 +855,9 @@ def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> 
         MIRROR_RETENTION_MAX_BYTES,
         errors,
     )
-    require_nonzero_digest(payload, "policy_digest_hex", errors)
+    policy_digest = require_policy_digest(payload, errors)
+    if policy_digest == "0" * HEX64_LEN:
+        errors.append("policy_digest_hex must not be the zero digest")
 
 
 def validate_kind_specific(

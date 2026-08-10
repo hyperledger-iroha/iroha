@@ -98,7 +98,7 @@ descriptions, not evidence:
     "source_revision": "<lowercase 40- or 64-hex commit>",
     "workspace_source_sha256": "<scripts/compute_workspace_source_manifest.py output>",
     "nexus_config_sha256": "<SHA-256 of the supplied configuration>",
-    "irohad_sha256": "<SHA-256 of the release irohad binary>",
+    "irohad_sha256": "<SHA-256 of the release iroha3d binary>",
     "iroha_cli_sha256": "<SHA-256 of the release iroha CLI binary>"
   }
 }
@@ -248,7 +248,7 @@ receive these exact values through authenticated bootstrap
 | `IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST` | Absolute canonical non-symlink path to the bundle's `scaling_evidence.json` |
 | `IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256` | Lowercase SHA-256 of the approved archived harness |
 | `IROHA_RELEASE_SCALING_CONFIGURATION_SHA256` | Lowercase SHA-256 of the pinned archived configuration |
-| `IROHA_RELEASE_SCALING_IROHAD_SHA256` | Lowercase SHA-256 named for the measured `irohad` binary |
+| `IROHA_RELEASE_SCALING_IROHAD_SHA256` | Lowercase SHA-256 named for the measured `iroha3d` binary |
 | `IROHA_RELEASE_SCALING_IROHA_CLI_SHA256` | Lowercase SHA-256 named for the measured CLI binary |
 
 Ambient or lookalike variables are not accepted. The sealed corridor checks

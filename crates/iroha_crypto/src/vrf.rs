@@ -2,7 +2,8 @@
 //!
 //! Design
 //! - Proof: BLS signature bytes `sigma` over
-//!   `msg = Blake2b-256(b"iroha:vrf:v1:input|" || chain_id || "|" || input)`.
+//!   `msg = Blake2b-256(b"iroha:vrf:v1:input|" || network_id || "|" || input)`,
+//!   where `network_id` is the exact 32-byte genesis-derived identity.
 //! - Output: `y = Blake2b-256(b"iroha:vrf:v1:output" || sigma)`.
 //! - Blake2b outputs are raw 32-byte digests (no Hash LSB tweak) to keep the
 //!   VRF output unbiased and deterministic across hardware.
@@ -110,10 +111,10 @@ pub enum VrfBlsVariant {
     Small,
 }
 
-fn prehash_input_with_chain(chain_id: &[u8], input: &[u8]) -> [u8; 32] {
+fn prehash_input_with_network_id(network_id: &[u8; 32], input: &[u8]) -> [u8; 32] {
     blake2b_256_chunks(&[
         VRF_INPUT_HASH_DOMAIN,
-        chain_id,
+        network_id,
         VRF_INPUT_HASH_SEPARATOR,
         input,
     ])
@@ -145,13 +146,13 @@ fn blake2b_256_chunks(chunks: &[&[u8]]) -> [u8; 32] {
 ///
 /// Returns [`VrfProofError::InvalidSecretKey`] when the stored BLS secret-key
 /// bytes do not decode to a valid non-zero scalar.
-pub fn prove_normal_with_chain(
+pub fn prove_normal_with_network_id(
     sk: &BlsNormalPrivateKey,
-    chain_id: &[u8],
+    network_id: &[u8; 32],
     input: &[u8],
 ) -> Result<(VrfOutput, VrfProof), VrfProofError> {
     use blstrs::G2Projective;
-    let msg = prehash_input_with_chain(chain_id, input);
+    let msg = prehash_input_with_network_id(network_id, input);
     let sk_bytes = Zeroizing::new(sk.to_bytes());
     let x = scalar_from_secret_key_bytes(sk_bytes.as_ref())?;
     let h = G2Projective::hash_to_curve(&msg, DST_G2, &[]);
@@ -162,33 +163,19 @@ pub fn prove_normal_with_chain(
     Ok((y, VrfProof::SigInG2(arr)))
 }
 
-/// Produce a VRF proof and output using the BLS Normal variant with an empty chain-id.
-/// The proof is a signature in G2 over a pre-hashed input; the output is a 32-byte digest.
-///
-/// # Errors
-///
-/// Returns [`VrfProofError::InvalidSecretKey`] when the stored BLS secret-key
-/// bytes do not decode to a valid non-zero scalar.
-pub fn prove_normal(
-    sk: &BlsNormalPrivateKey,
-    input: &[u8],
-) -> Result<(VrfOutput, VrfProof), VrfProofError> {
-    prove_normal_with_chain(sk, &[], input)
-}
-
 /// Produce a VRF proof and output using the BLS Small variant.
 ///
 /// # Errors
 ///
 /// Returns [`VrfProofError::InvalidSecretKey`] when the stored BLS secret-key
 /// bytes do not decode to a valid non-zero scalar.
-pub fn prove_small_with_chain(
+pub fn prove_small_with_network_id(
     sk: &BlsSmallPrivateKey,
-    chain_id: &[u8],
+    network_id: &[u8; 32],
     input: &[u8],
 ) -> Result<(VrfOutput, VrfProof), VrfProofError> {
     use blstrs::G1Projective;
-    let msg = prehash_input_with_chain(chain_id, input);
+    let msg = prehash_input_with_network_id(network_id, input);
     let sk_bytes = Zeroizing::new(sk.to_bytes());
     let x = scalar_from_secret_key_bytes(sk_bytes.as_ref())?;
     let h = G1Projective::hash_to_curve(&msg, DST_G1, &[]);
@@ -199,28 +186,14 @@ pub fn prove_small_with_chain(
     Ok((y, VrfProof::SigInG1(arr)))
 }
 
-/// Produce a VRF proof and output using the BLS Small variant with an empty chain-id.
-/// The proof is a signature in G1 over a pre-hashed input; the output is a 32-byte digest.
-///
-/// # Errors
-///
-/// Returns [`VrfProofError::InvalidSecretKey`] when the stored BLS secret-key
-/// bytes do not decode to a valid non-zero scalar.
-pub fn prove_small(
-    sk: &BlsSmallPrivateKey,
-    input: &[u8],
-) -> Result<(VrfOutput, VrfProof), VrfProofError> {
-    prove_small_with_chain(sk, &[], input)
-}
-
 /// Verify a VRF proof under the BLS Normal public key and recompute the output.
-pub fn verify_normal_with_chain(
+pub fn verify_normal_with_network_id(
     pk: &BlsNormalPublicKey,
-    chain_id: &[u8],
+    network_id: &[u8; 32],
     input: &[u8],
     proof: &VrfProof,
 ) -> Option<VrfOutput> {
-    let msg = prehash_input_with_chain(chain_id, input);
+    let msg = prehash_input_with_network_id(network_id, input);
     match proof {
         VrfProof::SigInG2(sig) => {
             verify_vrf_normal_pairing(pk, &msg, sig).then(|| output_from_sigma(sig))
@@ -231,17 +204,17 @@ pub fn verify_normal_with_chain(
 
 /// Verify a Normal-variant VRF proof using canonical compressed public-key bytes.
 ///
-/// This is the wire-boundary counterpart to [`verify_normal_with_chain`]. It
+/// This is the wire-boundary counterpart to [`verify_normal_with_network_id`]. It
 /// rejects malformed, non-canonical, wrong-subgroup, and identity public keys
 /// before performing the pairing check.
 #[must_use]
-pub fn verify_normal_bytes_with_chain(
+pub fn verify_normal_bytes_with_network_id(
     public_key: &[u8],
-    chain_id: &[u8],
+    network_id: &[u8; 32],
     input: &[u8],
     proof: &VrfProof,
 ) -> Option<VrfOutput> {
-    let msg = prehash_input_with_chain(chain_id, input);
+    let msg = prehash_input_with_network_id(network_id, input);
     let VrfProof::SigInG2(signature) = proof else {
         return None;
     };
@@ -249,20 +222,14 @@ pub fn verify_normal_bytes_with_chain(
         .then(|| output_from_sigma(signature))
 }
 
-/// Verify a VRF proof under the BLS Normal public key with an empty chain-id.
-/// Returns the derived output if proof verification succeeds; otherwise `None`.
-pub fn verify_normal(pk: &BlsNormalPublicKey, input: &[u8], proof: &VrfProof) -> Option<VrfOutput> {
-    verify_normal_with_chain(pk, &[], input, proof)
-}
-
 /// Verify a VRF proof under the BLS Small public key and recompute the output.
-pub fn verify_small_with_chain(
+pub fn verify_small_with_network_id(
     pk: &BlsSmallPublicKey,
-    chain_id: &[u8],
+    network_id: &[u8; 32],
     input: &[u8],
     proof: &VrfProof,
 ) -> Option<VrfOutput> {
-    let msg = prehash_input_with_chain(chain_id, input);
+    let msg = prehash_input_with_network_id(network_id, input);
     match proof {
         VrfProof::SigInG1(sig) => {
             verify_vrf_small_pairing(pk, &msg, sig).then(|| output_from_sigma(sig))
@@ -273,17 +240,17 @@ pub fn verify_small_with_chain(
 
 /// Verify a Small-variant VRF proof using canonical compressed public-key bytes.
 ///
-/// This is the wire-boundary counterpart to [`verify_small_with_chain`]. It
+/// This is the wire-boundary counterpart to [`verify_small_with_network_id`]. It
 /// rejects malformed, non-canonical, wrong-subgroup, and identity public keys
 /// before performing the pairing check.
 #[must_use]
-pub fn verify_small_bytes_with_chain(
+pub fn verify_small_bytes_with_network_id(
     public_key: &[u8],
-    chain_id: &[u8],
+    network_id: &[u8; 32],
     input: &[u8],
     proof: &VrfProof,
 ) -> Option<VrfOutput> {
-    let msg = prehash_input_with_chain(chain_id, input);
+    let msg = prehash_input_with_network_id(network_id, input);
     let VrfProof::SigInG1(signature) = proof else {
         return None;
     };
@@ -301,12 +268,6 @@ pub fn is_valid_normal_public_key_bytes(public_key: &[u8]) -> bool {
 #[must_use]
 pub fn is_valid_small_public_key_bytes(public_key: &[u8]) -> bool {
     canonical_g2(public_key).is_some()
-}
-
-/// Verify a VRF proof under the BLS Small public key with an empty chain-id.
-/// Returns the derived output if proof verification succeeds; otherwise `None`.
-pub fn verify_small(pk: &BlsSmallPublicKey, input: &[u8], proof: &VrfProof) -> Option<VrfOutput> {
-    verify_small_with_chain(pk, &[], input, proof)
 }
 
 /// Derive VRF output from a canonical proof encoding without re-verification.
@@ -494,17 +455,18 @@ mod tests {
         let (_pk, sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]))
             .expect("BLS keypair");
         let input = b"vrf:test:normal";
-        let chain = b"test-chain";
-        let (y1, pi) = prove_normal_with_chain(&sk, chain, input).expect("normal VRF proof");
+        let network_id = [0x41; 32];
+        let (y1, pi) =
+            prove_normal_with_network_id(&sk, &network_id, input).expect("normal VRF proof");
         // Re-derive pk from sk for verification
         let (pk2, _sk2) = bls::BlsNormal::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()))
             .expect("BLS keypair");
-        let y2 = verify_normal_with_chain(&pk2, chain, input, &pi).expect("valid proof");
+        let y2 = verify_normal_with_network_id(&pk2, &network_id, input, &pi).expect("valid proof");
         assert_eq!(y1, y2);
         // Output-only derivation is consistent
         assert_eq!(y1, output_from_proof(&pi));
         assert_eq!(
-            verify_normal_bytes_with_chain(&pk2.to_bytes(), chain, input, &pi),
+            verify_normal_bytes_with_network_id(&pk2.to_bytes(), &network_id, input, &pi),
             Some(y1)
         );
         assert!(is_valid_normal_public_key_bytes(&pk2.to_bytes()));
@@ -516,15 +478,16 @@ mod tests {
         let (_pk, sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]))
             .expect("BLS keypair");
         let input = b"vrf:test:small";
-        let chain = b"test-chain";
-        let (y1, pi) = prove_small_with_chain(&sk, chain, input).expect("small VRF proof");
+        let network_id = [0x42; 32];
+        let (y1, pi) =
+            prove_small_with_network_id(&sk, &network_id, input).expect("small VRF proof");
         let (pk2, _sk2) = bls::BlsSmall::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()))
             .expect("BLS keypair");
-        let y2 = verify_small_with_chain(&pk2, chain, input, &pi).expect("valid proof");
+        let y2 = verify_small_with_network_id(&pk2, &network_id, input, &pi).expect("valid proof");
         assert_eq!(y1, y2);
         assert_eq!(y1, output_from_proof(&pi));
         assert_eq!(
-            verify_small_bytes_with_chain(&pk2.to_bytes(), chain, input, &pi),
+            verify_small_bytes_with_network_id(&pk2.to_bytes(), &network_id, input, &pi),
             Some(y1)
         );
         assert!(is_valid_small_public_key_bytes(&pk2.to_bytes()));
@@ -539,48 +502,50 @@ mod tests {
         let (small_public_key, _small_private_key) =
             bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![0x42; 32]))
                 .expect("small keypair");
+        let network_a = [0x43; 32];
+        let network_b = [0x44; 32];
         let (output, proof) =
-            prove_normal_with_chain(&normal_private_key, b"chain-a", b"bound-input")
+            prove_normal_with_network_id(&normal_private_key, &network_a, b"bound-input")
                 .expect("normal proof");
 
         assert_eq!(
-            verify_normal_bytes_with_chain(
+            verify_normal_bytes_with_network_id(
                 &normal_public_key.to_bytes(),
-                b"chain-a",
+                &network_a,
                 b"bound-input",
                 &proof,
             ),
             Some(output)
         );
         assert_eq!(
-            verify_normal_bytes_with_chain(
+            verify_normal_bytes_with_network_id(
                 &normal_public_key.to_bytes(),
-                b"chain-b",
+                &network_b,
                 b"bound-input",
                 &proof,
             ),
             None
         );
         assert_eq!(
-            verify_normal_bytes_with_chain(
+            verify_normal_bytes_with_network_id(
                 &normal_public_key.to_bytes(),
-                b"chain-a",
+                &network_a,
                 b"other-input",
                 &proof,
             ),
             None
         );
         assert_eq!(
-            verify_small_bytes_with_chain(
+            verify_small_bytes_with_network_id(
                 &small_public_key.to_bytes(),
-                b"chain-a",
+                &network_a,
                 b"bound-input",
                 &proof,
             ),
             None
         );
         assert_eq!(
-            verify_normal_bytes_with_chain(&[0; 48], b"chain-a", b"bound-input", &proof),
+            verify_normal_bytes_with_network_id(&[0; 48], &network_a, b"bound-input", &proof),
             None
         );
     }
@@ -590,17 +555,17 @@ mod tests {
         // Normal variant
         let (_pk, sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![9, 9, 9]))
             .expect("BLS keypair");
-        let chain = b"chain-A";
+        let network_id = [0x45; 32];
         let input = b"input";
-        let (y, pi) =
-            prove_normal_with_chain(&sk, chain, input).expect("normal cross-protocol VRF proof");
+        let (y, pi) = prove_normal_with_network_id(&sk, &network_id, input)
+            .expect("normal cross-protocol VRF proof");
         assert!(y.0 != [0u8; 32]);
         let (pk, _sk2) = bls::BlsNormal::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()))
             .expect("BLS keypair");
         // Attempt to verify VRF proof as a regular BLS signature
         if let VrfProof::SigInG2(sig) = pi {
             // Use the VRF prehash as the "message"; w3f-bls still uses a different DST.
-            let msg = prehash_input_with_chain(chain, input);
+            let msg = prehash_input_with_network_id(&network_id, input);
             let ok = bls::BlsNormal::verify(&msg, &sig, &pk).is_ok();
             assert!(
                 !ok,
@@ -621,9 +586,9 @@ mod tests {
         let proof = VrfProof::SigInG2(arr);
         let (pk, _sk2) =
             bls::BlsNormal::keypair(crate::KeyGenOption::FromPrivateKey(sk)).expect("BLS keypair");
-        let chain = b"chain-A";
+        let network_id = [0x46; 32];
         let input = b"input";
-        let out = verify_normal_with_chain(&pk, chain, input, &proof);
+        let out = verify_normal_with_network_id(&pk, &network_id, input, &proof);
         assert!(
             out.is_none(),
             "regular BLS signature must not pass VRF verify"
@@ -635,15 +600,15 @@ mod tests {
         // Small variant (SigInG1)
         let (_pk, sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![3, 3, 3]))
             .expect("BLS keypair");
-        let chain = b"chain-B";
+        let network_id = [0x47; 32];
         let input = b"inputB";
-        let (y, pi) =
-            prove_small_with_chain(&sk, chain, input).expect("small cross-protocol VRF proof");
+        let (y, pi) = prove_small_with_network_id(&sk, &network_id, input)
+            .expect("small cross-protocol VRF proof");
         assert!(y.0 != [0u8; 32]);
         let (pk, _sk2) = bls::BlsSmall::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()))
             .expect("BLS keypair");
         if let VrfProof::SigInG1(sig) = pi {
-            let msg = prehash_input_with_chain(chain, input);
+            let msg = prehash_input_with_network_id(&network_id, input);
             let ok = bls::BlsSmall::verify(&msg, &sig, &pk).is_ok();
             assert!(
                 !ok,
@@ -663,9 +628,9 @@ mod tests {
         let proof = VrfProof::SigInG1(arr);
         let (pk, _sk2) =
             bls::BlsSmall::keypair(crate::KeyGenOption::FromPrivateKey(sk)).expect("BLS keypair");
-        let chain = b"chain-B";
+        let network_id = [0x48; 32];
         let input = b"inputB";
-        let out = verify_small_with_chain(&pk, chain, input, &proof);
+        let out = verify_small_with_network_id(&pk, &network_id, input, &proof);
         assert!(
             out.is_none(),
             "regular BLS Small signature must not pass VRF verify"
@@ -680,7 +645,7 @@ mod tests {
         let mut sig = [0u8; 96];
         sig.copy_from_slice(&identity);
         let proof = VrfProof::SigInG2(sig);
-        let out = verify_normal_with_chain(&pk, b"chain", b"input", &proof);
+        let out = verify_normal_with_network_id(&pk, &[0x49; 32], b"input", &proof);
         assert!(out.is_none(), "identity signature must be rejected");
     }
 
@@ -692,7 +657,7 @@ mod tests {
         let mut sig = [0u8; 48];
         sig.copy_from_slice(&identity);
         let proof = VrfProof::SigInG1(sig);
-        let out = verify_small_with_chain(&pk, b"chain", b"input", &proof);
+        let out = verify_small_with_network_id(&pk, &[0x4A; 32], b"input", &proof);
         assert!(out.is_none(), "identity signature must be rejected");
     }
 
@@ -703,7 +668,7 @@ mod tests {
         let proof = VrfProof::SigInG2([0u8; 96]);
 
         assert!(to_g2(&[0u8; 96]).is_none());
-        assert!(verify_normal_with_chain(&pk, b"chain", b"input", &proof).is_none());
+        assert!(verify_normal_with_network_id(&pk, &[0x4B; 32], b"input", &proof).is_none());
     }
 
     #[test]
@@ -713,7 +678,7 @@ mod tests {
         let proof = VrfProof::SigInG1([0u8; 48]);
 
         assert!(to_g1(&[0u8; 48]).is_none());
-        assert!(verify_small_with_chain(&pk, b"chain", b"input", &proof).is_none());
+        assert!(verify_small_with_network_id(&pk, &[0x4C; 32], b"input", &proof).is_none());
     }
 
     #[test]
@@ -734,13 +699,18 @@ mod tests {
             bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]))
                 .expect("BLS keypair");
         let normal_proof = VrfProof::SigInG2([0xFF; 96]);
-        assert!(verify_normal_with_chain(&normal_pk, b"chain", b"input", &normal_proof).is_none());
+        assert!(
+            verify_normal_with_network_id(&normal_pk, &[0x4D; 32], b"input", &normal_proof)
+                .is_none()
+        );
 
         let (small_pk, _small_sk) =
             bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]))
                 .expect("BLS keypair");
         let small_proof = VrfProof::SigInG1([0xFF; 48]);
-        assert!(verify_small_with_chain(&small_pk, b"chain", b"input", &small_proof).is_none());
+        assert!(
+            verify_small_with_network_id(&small_pk, &[0x4E; 32], b"input", &small_proof).is_none()
+        );
     }
 
     #[cfg(not(feature = "bls-backend-blstrs"))]
@@ -749,30 +719,30 @@ mod tests {
         let invalid_normal =
             bls::BlsNormalPrivateKey::from_unchecked_bytes_for_test(vec![0xFF; 32]);
         assert_eq!(
-            prove_normal_with_chain(&invalid_normal, b"chain", b"input"),
+            prove_normal_with_network_id(&invalid_normal, &[0x4F; 32], b"input"),
             Err(VrfProofError::InvalidSecretKey)
         );
 
         let invalid_small = bls::BlsSmallPrivateKey::from_unchecked_bytes_for_test(vec![0xFF; 32]);
         assert_eq!(
-            prove_small_with_chain(&invalid_small, b"chain", b"input"),
+            prove_small_with_network_id(&invalid_small, &[0x50; 32], b"input"),
             Err(VrfProofError::InvalidSecretKey)
         );
     }
 
     #[test]
-    fn vrf_hash_helpers_match_legacy_contiguous_layout() {
-        let chain_id = b"chain|with|separator";
+    fn vrf_hash_helpers_match_exact_network_contiguous_layout() {
+        let network_id = [0x51; 32];
         let input = b"input\x00with|separator";
-        let mut legacy_input =
-            Vec::with_capacity(VRF_INPUT_HASH_DOMAIN.len() + chain_id.len() + 1 + input.len());
-        legacy_input.extend_from_slice(VRF_INPUT_HASH_DOMAIN);
-        legacy_input.extend_from_slice(chain_id);
-        legacy_input.extend_from_slice(VRF_INPUT_HASH_SEPARATOR);
-        legacy_input.extend_from_slice(input);
+        let mut exact_input =
+            Vec::with_capacity(VRF_INPUT_HASH_DOMAIN.len() + network_id.len() + 1 + input.len());
+        exact_input.extend_from_slice(VRF_INPUT_HASH_DOMAIN);
+        exact_input.extend_from_slice(&network_id);
+        exact_input.extend_from_slice(VRF_INPUT_HASH_SEPARATOR);
+        exact_input.extend_from_slice(input);
         assert_eq!(
-            prehash_input_with_chain(chain_id, input),
-            blake2b_256(&legacy_input)
+            prehash_input_with_network_id(&network_id, input),
+            blake2b_256(&exact_input)
         );
 
         let mut sigma = [0u8; 96];
@@ -787,14 +757,15 @@ mod tests {
 
     #[test]
     fn vrf_prehash_uses_raw_blake2b() {
-        let chain_id = b"chain-vrf";
+        let network_id = [0x52; 32];
         let mut input = vec![0u8];
         let mut tries = 0u16;
         let expected = loop {
-            let mut buf =
-                Vec::with_capacity(b"iroha:vrf:v1:input|".len() + chain_id.len() + 1 + input.len());
+            let mut buf = Vec::with_capacity(
+                b"iroha:vrf:v1:input|".len() + network_id.len() + 1 + input.len(),
+            );
             buf.extend_from_slice(b"iroha:vrf:v1:input|");
-            buf.extend_from_slice(chain_id);
+            buf.extend_from_slice(&network_id);
             buf.push(b'|');
             buf.extend_from_slice(&input);
             let candidate = blake2b_256(&buf);
@@ -805,7 +776,7 @@ mod tests {
             tries = tries.wrapping_add(1);
             assert!(tries < 256, "failed to find raw digest with LSB=0");
         };
-        let prehashed = prehash_input_with_chain(chain_id, &input);
+        let prehashed = prehash_input_with_network_id(&network_id, &input);
         assert_eq!(prehashed, expected);
         assert_eq!(prehashed[31] & 1, 0);
     }

@@ -1125,7 +1125,7 @@ fn generated_orderbook_operation_in_one_finalized_view(
         (
             operation,
             sorafs_node::orderbook_transaction_forwarder::OrderbookTransactionContextV1 {
-                chain_id: state.chain_id.as_ref().clone(),
+                network_id: *state.state.network_id_ref(),
                 policy_record,
                 book_revision: status.book_revision,
                 finalized_cursor,
@@ -1263,7 +1263,7 @@ fn decode_exact_orderbook_signed_transaction(
         norito::decode_from_bytes_with_limits::<SignedTransaction>(bytes, limits).ok()?;
     if norito::to_bytes(&transaction).ok()?.as_slice() != bytes
         || transaction.verify_signature().is_err()
-        || transaction.chain() != &request.chain_id
+        || transaction.network_id() != Some(&request.network_id)
         || transaction.authority() != &request.authority
     {
         return None;
@@ -1440,7 +1440,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
         {
             Ok(retained)
                 if retained.operation_id == delivery.operation_id
-                    && retained.chain_id == delivery.chain_id
+                    && retained.network_id == delivery.network_id
                     && retained.authority == delivery.authority
                     && validate_orderbook_reconciliation_material_v1(&delivery, &retained)
                         .is_ok() =>
@@ -1453,6 +1453,11 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
                 continue;
             }
         };
+        if retained.network_id != *state.state.network_id_ref() {
+            scan.deferred = scan.deferred.saturating_add(1);
+            warn!("durable native SoraFS orderbook delivery belongs to another network");
+            continue;
+        }
 
         let exact_transaction = match delivery.signed_transaction_bytes.as_deref() {
             Some(bytes) => {
@@ -1496,7 +1501,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
             continue;
         };
         let semantics = reconcile_orderbook_semantics(
-            state.chain_id.as_ref(),
+            state.state.network_id_ref(),
             &delivery,
             &retained,
             &observation.snapshot,
@@ -1526,7 +1531,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
             .as_ref()
             .map(|signer| signer.authority());
         let action = plan_orderbook_worker_action(
-            state.chain_id.as_ref(),
+            state.state.network_id_ref(),
             signer_authority.as_ref(),
             &delivery,
             envelope,
@@ -1753,11 +1758,13 @@ async fn sign_sorafs_orderbook_transaction(
     signer: Arc<dyn SoraFsOrderbookTransactionSigner>,
     request: &OrderbookTransactionSigningRequestV1,
 ) -> Option<(SignedTransaction, Vec<u8>)> {
-    if signer.authority() != request.authority || request.chain_id != *state.chain_id {
+    if signer.authority() != request.authority
+        || request.network_id != *state.state.network_id_ref()
+    {
         return None;
     }
     let mut builder = TransactionBuilder::new(
-        request.chain_id.clone(),
+        request.network_id,
         request.authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1788,11 +1795,10 @@ async fn submit_sorafs_orderbook_transaction(
     transaction_bytes: Vec<u8>,
     transaction: SignedTransaction,
 ) -> OrderbookTransactionSubmissionResultV1 {
-    if transaction.chain() != state.chain_id.as_ref() {
+    if transaction.network_id() != Some(state.state.network_id_ref()) {
         return OrderbookTransactionSubmissionResultV1::Deferred;
     }
     let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.chain_id.clone(),
         state.state.clone(),
         transaction.clone(),
         &state.telemetry,

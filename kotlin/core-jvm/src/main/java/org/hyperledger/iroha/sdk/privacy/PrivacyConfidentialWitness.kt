@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.privacy
 import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import java.util.Collections
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
@@ -69,7 +70,7 @@ class PrivacyConfidentialUnshieldChangeWitnessV1(
 
 /** Native `PrivacyConfidentialWitnessV1` payload accepted by `connect_norito_bridge`. */
 class PrivacyConfidentialWitnessV1(
-    chainId: String,
+    @JvmField val networkId: NetworkId,
     assetDefinitionId: String,
     spendKey: ByteArray,
     treeCommitments: List<ByteArray>,
@@ -87,9 +88,6 @@ class PrivacyConfidentialWitnessV1(
     private val transferOutputValues = transferOutputs.toList()
     private val unshieldChangeValues = unshieldChange.toList()
     private val rootHintBytes = privacyFixed32(rootHint, "rootHint")
-
-    @JvmField
-    val chainId: String = privacyCanonicalText(chainId, "chainId")
 
     @JvmField
     val assetDefinitionId: String = privacyCanonicalText(assetDefinitionId, "assetDefinitionId")
@@ -163,13 +161,13 @@ object PrivacyConfidentialWitnessCodecs {
         (
             "{\"schema\":\"confidential_transfer_v2\",\"public_inputs\":[\"input_commitment_0\"," +
                 "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"output_commitment_0\"," +
-                "\"output_commitment_1\",\"root\",\"asset_tag\",\"chain_tag\"]}"
+                "\"output_commitment_1\",\"root\",\"asset_tag\",\"network_tag\"]}"
             ).toByteArray(StandardCharsets.UTF_8)
     private val UNSHIELD_PUBLIC_INPUTS_SCHEMA: ByteArray =
         (
             "{\"schema\":\"confidential_unshield_v3\",\"public_inputs\":[\"input_commitment_0\"," +
                 "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"change_commitment_0\"," +
-                "\"root\",\"public_amount\",\"asset_tag\",\"chain_tag\"]}"
+                "\"root\",\"public_amount\",\"asset_tag\",\"network_tag\"]}"
             ).toByteArray(StandardCharsets.UTF_8)
 
     @JvmStatic
@@ -237,7 +235,7 @@ object PrivacyConfidentialWitnessCodecs {
 
 private object PrivacyConfidentialWitnessAdapter : TypeAdapter<PrivacyConfidentialWitnessV1> {
     override fun encode(encoder: NoritoEncoder, value: PrivacyConfidentialWitnessV1) {
-        writeField(encoder) { writeString(it, value.chainId) }
+        writeField(encoder) { it.writeBytes(value.networkId.bytes()) }
         writeField(encoder) { writeString(it, value.assetDefinitionId) }
         writeField(encoder) { writeBytesVec(it, value.spendKey) }
         writeField(encoder) { writeSequence(it, value.treeCommitments) { item, bytes -> writeBytesVec(item, bytes) } }

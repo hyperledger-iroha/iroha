@@ -15,6 +15,7 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
   private final String orderPayloadBase64;
   private final long issuedEpoch;
   private final long deadlineEpoch;
+  private final String musubiArchiveIdHex;
   private final Map<String, String> arguments;
 
   private IssueReplicationOrderInstruction(final Builder builder) {
@@ -27,6 +28,7 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
     this.orderPayloadBase64 = builder.orderPayloadBase64;
     this.issuedEpoch = builder.issuedEpoch;
     this.deadlineEpoch = builder.deadlineEpoch;
+    this.musubiArchiveIdHex = builder.musubiArchiveIdHex;
     this.arguments =
         Collections.unmodifiableMap(
             new LinkedHashMap<>(Objects.requireNonNull(canonicalArguments, "arguments")));
@@ -48,6 +50,11 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
     return deadlineEpoch;
   }
 
+  /** Optional immutable Musubi ArchiveId purpose for this order. */
+  public String musubiArchiveIdHex() {
+    return musubiArchiveIdHex;
+  }
+
   @Override
   public InstructionKind kind() {
     return InstructionKind.CUSTOM;
@@ -59,19 +66,34 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
   }
 
   public static IssueReplicationOrderInstruction fromArguments(final Map<String, String> arguments) {
-    ReplicationOrderInstructionValidation.requireArguments(
-        arguments,
-        ACTION,
-        "order_id_hex",
-        "order_payload_base64",
-        "issued_epoch",
-        "deadline_epoch");
+    final boolean hasMusubiArchive = arguments.containsKey("musubi_archive_id_hex");
+    if (hasMusubiArchive) {
+      ReplicationOrderInstructionValidation.requireArguments(
+          arguments,
+          ACTION,
+          "order_id_hex",
+          "order_payload_base64",
+          "issued_epoch",
+          "deadline_epoch",
+          "musubi_archive_id_hex");
+    } else {
+      ReplicationOrderInstructionValidation.requireArguments(
+          arguments,
+          ACTION,
+          "order_id_hex",
+          "order_payload_base64",
+          "issued_epoch",
+          "deadline_epoch");
+    }
     final Builder builder =
         builder()
             .setOrderIdHex(require(arguments, "order_id_hex"))
             .setOrderPayloadBase64(require(arguments, "order_payload_base64"))
             .setIssuedEpoch(requireLong(arguments, "issued_epoch"))
             .setDeadlineEpoch(requireLong(arguments, "deadline_epoch"));
+    if (hasMusubiArchive) {
+      builder.setMusubiArchiveIdHex(require(arguments, "musubi_archive_id_hex"));
+    }
     return new IssueReplicationOrderInstruction(builder, new LinkedHashMap<>(arguments));
   }
 
@@ -108,12 +130,14 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
     return issuedEpoch == other.issuedEpoch
         && deadlineEpoch == other.deadlineEpoch
         && Objects.equals(orderIdHex, other.orderIdHex)
-        && Objects.equals(orderPayloadBase64, other.orderPayloadBase64);
+        && Objects.equals(orderPayloadBase64, other.orderPayloadBase64)
+        && Objects.equals(musubiArchiveIdHex, other.musubiArchiveIdHex);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(orderIdHex, orderPayloadBase64, issuedEpoch, deadlineEpoch);
+    return Objects.hash(
+        orderIdHex, orderPayloadBase64, issuedEpoch, deadlineEpoch, musubiArchiveIdHex);
   }
 
   public static final class Builder {
@@ -121,6 +145,7 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
     private String orderPayloadBase64;
     private Long issuedEpoch;
     private Long deadlineEpoch;
+    private String musubiArchiveIdHex;
 
     private Builder() {}
 
@@ -158,6 +183,20 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
       return this;
     }
 
+    /** Bind the order to one exact non-zero Musubi ArchiveId. */
+    public Builder setMusubiArchiveIdHex(final String musubiArchiveIdHex) {
+      this.musubiArchiveIdHex =
+          ReplicationOrderInstructionValidation.requireMusubiArchiveId(musubiArchiveIdHex);
+      return this;
+    }
+
+    /** Convenience helper that accepts the exact 32 ArchiveId bytes. */
+    public Builder setMusubiArchiveId(final byte[] musubiArchiveId) {
+      this.musubiArchiveIdHex =
+          ReplicationOrderInstructionValidation.encodeMusubiArchiveId(musubiArchiveId);
+      return this;
+    }
+
     public IssueReplicationOrderInstruction build() {
       if (orderIdHex == null || orderIdHex.isEmpty()) {
         throw new IllegalStateException("orderIdHex must be provided");
@@ -182,6 +221,9 @@ public final class IssueReplicationOrderInstruction implements InstructionTempla
       args.put("order_payload_base64", orderPayloadBase64);
       args.put("issued_epoch", Long.toString(issuedEpoch));
       args.put("deadline_epoch", Long.toString(deadlineEpoch));
+      if (musubiArchiveIdHex != null) {
+        args.put("musubi_archive_id_hex", musubiArchiveIdHex);
+      }
       return args;
     }
   }

@@ -71,6 +71,8 @@ const SEEKABLE_EVALUATED_KEY_HEADER_BYTES_V1: usize =
     SEEKABLE_EVALUATED_KEY_BINDING_BYTES_V1 + 32 + 32 + 1;
 const SEEKABLE_EVALUATED_KEY_DIGIT_PREFIX_BYTES_V1: usize = 1 + 4;
 const SEEKABLE_EVALUATED_KEY_READ_BYTES_V1: usize = 8 * 1024;
+/// Largest signed-digit batch that fits the frozen 160 MiB workspace.
+const HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1: usize = 5;
 
 /// Largest callback chunk used by the canonical evidence stream.
 ///
@@ -167,16 +169,28 @@ fn seekable_evaluated_key_layout(
     })
 }
 
-fn streamed_hybrid_decomposition_passes(profile: &BgvProfile) -> Result<usize, ZkAmsMkheErrorV1> {
-    let per_digit = profile
+/// Conservative coefficient-limb passes for one hoisted decomposition.
+///
+/// The CRT reconstruction and balanced-radix walk are performed once per
+/// bounded five-digit batch instead of once per digit. Each digit is then
+/// materialized into one RNS polynomial immediately before its evaluated-key
+/// record is streamed. This keeps both the 48.5 GB artifact and the complete
+/// 38-digit decomposition out of memory.
+fn hoisted_hybrid_decomposition_passes(profile: &BgvProfile) -> Result<usize, ZkAmsMkheErrorV1> {
+    let per_batch = profile
         .moduli
         .len()
         .checked_add(2)
         .and_then(|value| value.checked_add(profile.gadget_digits))
-        .and_then(|value| value.checked_add(1))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    per_digit
-        .checked_mul(profile.gadget_digits)
+    let batch_count = profile
+        .gadget_digits
+        .checked_add(HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1 - 1)
+        .and_then(|value| value.checked_div(HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1))
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    per_batch
+        .checked_mul(batch_count)
+        .and_then(|value| value.checked_add(profile.gadget_digits))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)
 }
 
@@ -201,7 +215,12 @@ pub(super) fn seekable_evaluated_key_accounting(
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let signed_decomposition_scratch_bytes = profile
         .ring_degree
-        .checked_mul(core::mem::size_of::<i64>())
+        .checked_mul(
+            profile
+                .gadget_digits
+                .min(HOISTED_HYBRID_DIGIT_BATCH_SIZE_V1),
+        )
+        .and_then(|values| values.checked_mul(core::mem::size_of::<i64>()))
         .and_then(|bytes| u64::try_from(bytes).ok())
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let crt_residue_scratch_bytes = profile
@@ -216,7 +235,7 @@ pub(super) fn seekable_evaluated_key_accounting(
         u64::try_from(core::mem::size_of::<norito::streaming::Blake3Hasher>())
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let explicit_multiplication_state_bytes = u64::try_from(
-        core::mem::size_of::<StreamedHybridDigitDecomposerV1<'static>>()
+        core::mem::size_of::<HoistedHybridDigitBatchV1<'static>>()
             .checked_add(
                 4_usize
                     .checked_mul(core::mem::size_of::<RnsPolynomial>())
@@ -228,17 +247,18 @@ pub(super) fn seekable_evaluated_key_accounting(
     .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let decomposition_phase_bytes = output_accumulator_bytes
         .checked_add(signed_decomposition_scratch_bytes)
-        .and_then(|bytes| bytes.checked_add(crt_residue_scratch_bytes))
         .and_then(|bytes| bytes.checked_add(native_polynomial_allocation_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let provider_read_phase_bytes = output_accumulator_bytes
-        .checked_add(native_polynomial_allocation_bytes)
+        .checked_add(signed_decomposition_scratch_bytes)
+        .and_then(|bytes| bytes.checked_add(native_polynomial_allocation_bytes))
         .and_then(|bytes| bytes.checked_add(native_polynomial_allocation_bytes))
         .and_then(|bytes| bytes.checked_add(provider_read_buffer_bytes))
         .and_then(|bytes| bytes.checked_add(provider_hash_state_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let peak_heap_allocation_bytes = output_accumulator_bytes
-        .checked_add(native_polynomial_allocation_bytes)
+        .checked_add(signed_decomposition_scratch_bytes)
+        .and_then(|bytes| bytes.checked_add(native_polynomial_allocation_bytes))
         .and_then(|bytes| bytes.checked_add(native_polynomial_allocation_bytes))
         .and_then(|bytes| bytes.checked_add(ntt_limb_scratch_bytes))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
@@ -258,7 +278,7 @@ pub(super) fn seekable_evaluated_key_accounting(
     let balanced_decomposition_work_units = profile
         .ring_degree
         .checked_mul(profile.moduli.len())
-        .and_then(|value| value.checked_mul(streamed_hybrid_decomposition_passes(profile).ok()?))
+        .and_then(|value| value.checked_mul(hoisted_hybrid_decomposition_passes(profile).ok()?))
         .and_then(|value| u64::try_from(value).ok())
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let ring_multiplication_work_units = ring_multiplication_work(profile)?
@@ -4582,7 +4602,7 @@ pub struct ZkAmsMkheSeekableEvaluatedKeyAccountingV1 {
     pub native_polynomial_allocation_bytes: u64,
     /// Exact heap capacity of the two owned output accumulators.
     pub output_accumulator_bytes: u64,
-    /// Exact signed coefficient scratch live while producing one digit.
+    /// Exact digit-major signed coefficient batch retained while switching one key.
     pub signed_decomposition_scratch_bytes: u64,
     /// Exact one-residue-per-limb CRT input scratch.
     pub crt_residue_scratch_bytes: u64,
@@ -4592,7 +4612,7 @@ pub struct ZkAmsMkheSeekableEvaluatedKeyAccountingV1 {
     pub provider_read_buffer_bytes: u64,
     /// Exact target-layout size of one incremental BLAKE3 state.
     pub provider_hash_state_bytes: u64,
-    /// Managed live bytes while constructing one plaintext digit.
+    /// Managed live bytes while retaining one batch and materializing one digit.
     pub decomposition_phase_bytes: u64,
     /// Managed live bytes while decoding and authenticating one stored digit.
     pub provider_read_phase_bytes: u64,
@@ -4608,7 +4628,7 @@ pub struct ZkAmsMkheSeekableEvaluatedKeyAccountingV1 {
     pub peak_managed_workspace_bytes: u64,
     /// Fixed metadata retained by a validated handle for every digit.
     pub validation_metadata_bytes: u64,
-    /// Accounted coefficient work for independently recomputed balanced digits.
+    /// Accounted coefficient work for CRT/radix passes shared within each batch.
     pub balanced_decomposition_work_units: u64,
     /// Exact work of the frozen 76 negacyclic ring multiplications.
     pub ring_multiplication_work_units: u64,

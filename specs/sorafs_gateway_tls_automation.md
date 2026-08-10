@@ -108,7 +108,7 @@ Add or update the following section in the Torii configuration bundle
 ```toml
 [sorafs.gateway.acme]
 enabled = true
-provider_handle = "hsm://gateway/acme/primary"
+provider_handle = "runtime://sorafs/gateway-acme/primary"
 provider_revision = 7
 provider_policy_digest_hex = "5151515151515151515151515151515151515151515151515151515151515151"
 account_email = "tls-ops@example.com"

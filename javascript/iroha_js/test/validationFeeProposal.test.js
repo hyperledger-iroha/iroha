@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { ed25519 } from "@noble/curves/ed25519";
 
 import { AccountAddress } from "../src/address.js";
+import { NetworkId } from "../src/networkId.js";
 import { noritoDecodeInstruction, noritoEncodeInstruction } from "../src/norito.js";
 import { buildTransactionPayload } from "../src/transaction.js";
 import {
@@ -36,6 +37,9 @@ const plainElectorateRules = Object.freeze({
     value: null,
   }),
 });
+const validationFeeNetworkId = NetworkId.fromBytes(
+  Buffer.from("13".repeat(32), "hex"),
+).toString();
 
 function withNativeBinding(native, body) {
   const previous = globalThis.__IROHA_NATIVE_BINDING__;
@@ -54,7 +58,7 @@ function withNativeBinding(native, body) {
 test("validation-fee proposal fingerprint delegates exact native policy and lifecycle bytes", () => {
   const policy = Object.freeze({
     schema_version: 1,
-    chain_id: "validation-fee-test",
+    network_id: validationFeeNetworkId,
   });
   const lifecycleId = "56".repeat(32);
   const fingerprint = withNativeBinding(
@@ -232,8 +236,7 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
   }).toI105();
   const policy = {
     schema_version: 1,
-    chain_id: "validation-fee-js-test",
-    genesis_hash: "12".repeat(32),
+    network_id: validationFeeNetworkId,
     policy_version: "1",
     previous_policy_hash: null,
     ds_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",

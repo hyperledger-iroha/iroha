@@ -208,3 +208,55 @@ fn exposure_and_intent_pages_include_below_threshold_periods_without_auto_execut
         "targeted publication must not disturb an unrelated ready statement"
     );
 }
+
+#[test]
+fn exact_network_domain_roundtrips_and_rejects_cross_genesis_replay() {
+    let policy = service_policy();
+    let policy_bytes = policy.canonical_bytes().expect("canonical policy bytes");
+    assert_eq!(
+        HedgingBillingServicePolicyV1::from_canonical_bytes(&policy_bytes)
+            .expect("decode canonical policy"),
+        policy
+    );
+    let mut trailing = policy_bytes;
+    trailing.push(0);
+    assert!(matches!(
+        HedgingBillingServicePolicyV1::from_canonical_bytes(&trailing),
+        Err(HedgingBillingServiceError::InvalidPolicy)
+    ));
+
+    let event = event(1, "storage:network-domain:1", "1");
+    let page = page(vec![event.clone()]);
+    let page_bytes = norito::to_bytes(&page).expect("canonical page bytes");
+    let decoded: HedgingBillingFinalizedEventPageV1 =
+        norito::decode_from_bytes(&page_bytes).expect("decode canonical page");
+    assert_eq!(decoded, page);
+
+    let foreign_network = test_network_id(b"hedging-billing-foreign-genesis");
+    assert_ne!(policy.network_id, foreign_network);
+    let mut foreign_page = page.clone();
+    foreign_page.network_id = foreign_network;
+    foreign_page.journal_commitment.network_id = foreign_network;
+    assert!(matches!(
+        foreign_page.validate(&policy),
+        Err(HedgingBillingServiceError::InvalidFinalizedPage)
+    ));
+    assert_ne!(
+        source_receipt(policy.network_id, &event).expect("local source receipt"),
+        source_receipt(foreign_network, &event).expect("foreign source receipt")
+    );
+    assert_ne!(
+        event_replay_digest(policy.network_id, &event).expect("local replay identity"),
+        event_replay_digest(foreign_network, &event).expect("foreign replay identity")
+    );
+
+    let checkpoint = HedgingBillingCheckpointV1::empty(&policy).expect("empty checkpoint");
+    let checkpoint_bytes = encode_checkpoint(&checkpoint, &policy, &feed_policy())
+        .expect("canonical checkpoint bytes");
+    let mut foreign_policy = policy;
+    foreign_policy.network_id = foreign_network;
+    assert!(matches!(
+        decode_checkpoint(&checkpoint_bytes, &foreign_policy, &feed_policy()),
+        Err(HedgingBillingServiceError::InvalidCheckpoint)
+    ));
+}

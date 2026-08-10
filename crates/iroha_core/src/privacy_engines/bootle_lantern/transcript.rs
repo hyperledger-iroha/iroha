@@ -508,11 +508,11 @@ impl PresentationChallengeBindingV1 {
 
 /// Complete public prefix shared by every presentation transcript stage.
 ///
-/// The canonical statement digest binds chain id, action index, transaction
-/// intent, compiled profile, verifier, schema, manifest, issuer identity,
-/// policy identity, policy epoch, issuer parameters, the committed policy
-/// digest, and disclosures. The separately supplied genesis hash prevents
-/// replay between chains that reuse a chain id. The extra relation digest
+/// The canonical statement digest binds the exact genesis-derived network ID,
+/// action index, transaction intent, compiled profile, verifier, schema,
+/// manifest, issuer identity, policy identity, policy epoch, issuer parameters,
+/// the committed policy digest, and disclosures. The separately supplied
+/// genesis hash must agree with that network ID. The extra relation digest
 /// commits the exact verifier-compiled matrix and public offset, while
 /// `matrix_seed` commits the transparent CRS seed used to expand all matrices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

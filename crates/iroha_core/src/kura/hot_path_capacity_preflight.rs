@@ -53,8 +53,7 @@ impl AutonomousClaimMutationPeak {
     }
 
     fn additional_peak_bytes(&self) -> std::result::Result<u64, &'static str> {
-        u64::try_from(self.peak_delta)
-            .map_err(|_| "autonomous claim capacity peak is outside u64")
+        u64::try_from(self.peak_delta).map_err(|_| "autonomous claim capacity peak is outside u64")
     }
 }
 
@@ -132,7 +131,7 @@ impl Kura {
             let incoming = AutonomousLaneEntrypointClaimV3::new(payload, *entrypoint_hash);
             let path = Self::autonomous_lane_entrypoint_claim_path(
                 &self.store_root,
-                &incoming.chain_id_hash,
+                &incoming.network_id,
                 &incoming.entrypoint_hash,
             );
             if !unique_paths.insert(path.clone()) {

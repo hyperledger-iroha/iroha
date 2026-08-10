@@ -7,7 +7,7 @@ set -euo pipefail
 #   IROHA_DIR        Path to the workspace root (default: repository root).
 #   CARGO_TARGET_DIR Cargo target directory override (default: <IROHA_DIR>/target).
 #   KAGAMI_BIN       Path to the `kagami` binary (default: <target-dir>/<profile>/kagami).
-#   IROHAD_BIN       Path to the `irohad` binary (default: <target-dir>/<profile>/irohad).
+#   IROHAD_BIN       Path to the `iroha3d` binary (default: <target-dir>/<profile>/iroha3d).
 #   IROHA_BIN        Path to the `iroha` CLI binary (default: <target-dir>/<profile>/iroha).
 #   SKIP_TOOL_BUILD  Skip cargo build and reuse existing binaries (default: false).
 #   IROHA_LOCALNET_NOFILE_MIN Minimum RLIMIT_NOFILE for localnet peers (default: 4096).
@@ -18,7 +18,7 @@ usage() {
   cat <<'EOF'
 Usage: deploy_localnet.sh [OPTIONS]
 
-Builds `kagami`, `irohad`, and `iroha`, generates a fresh localnet, starts peers,
+Builds `kagami`, `iroha3d`, and `iroha`, generates a fresh localnet, starts peers,
 waits for readiness, and verifies the built-in Kagemusha asset alias.
 
 Options:
@@ -502,7 +502,7 @@ echo "Building Iroha tools ($PROFILE)..."
 cd "$IROHA_DIR"
 build_tool_bins() {
   "${cargo_runner[@]}" build "$@" -p iroha_kagami --bin kagami
-  "${cargo_runner[@]}" build "$@" -p irohad --bin irohad
+  "${cargo_runner[@]}" build "$@" -p irohad --bin iroha3d
   "${cargo_runner[@]}" build "$@" -p iroha_cli --bin iroha
 }
 if [[ "$SKIP_TOOL_BUILD" == "true" ]]; then
@@ -514,7 +514,7 @@ else
 fi
 
 KAGAMI_BIN="${KAGAMI_BIN:-"$TARGET_DIR/$PROFILE/kagami"}"
-IROHAD_BIN="${IROHAD_BIN:-"$TARGET_DIR/$PROFILE/irohad"}"
+IROHAD_BIN="${IROHAD_BIN:-"$TARGET_DIR/$PROFILE/iroha3d"}"
 CLI_BIN="${IROHA_BIN:-"$TARGET_DIR/$PROFILE/iroha"}"
 for bin_path in "$KAGAMI_BIN" "$IROHAD_BIN" "$CLI_BIN"; do
   if [[ ! -x "$bin_path" ]]; then

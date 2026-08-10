@@ -6,6 +6,8 @@ namespace Hyperledger.Iroha.Norito;
 
 public static class NoritoCodec
 {
+    internal const byte CanonicalLayoutFlags = 0x02;
+
     private const int MaxHeaderPaddingBytes = 64;
     private const byte SupportedLayoutFlags = 0x27;
     private const byte FieldBitsetFlag = 0x20;

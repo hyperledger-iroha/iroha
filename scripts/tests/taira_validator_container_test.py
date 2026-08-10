@@ -199,11 +199,11 @@ class TairaValidatorContainerScriptTest(unittest.TestCase):
         environment = BARE_METAL_ENV_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "Environment=IROHA_TAIRA_IROHAD_BIN=/usr/local/bin/irohad",
+            "Environment=IROHA_TAIRA_IROHAD_BIN=/usr/local/bin/iroha3d",
             service,
         )
         self.assertIn(
-            "IROHA_TAIRA_IROHAD_BIN=/usr/local/bin/irohad",
+            "IROHA_TAIRA_IROHAD_BIN=/usr/local/bin/iroha3d",
             environment,
         )
         self.assertIn(

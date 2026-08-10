@@ -633,7 +633,7 @@ fileprivate struct OfflineAndroidKeyMintChallengePreimage {
 }
 
 public struct RegisterKagemushaDeviceAttestationRequest: Sendable {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let registration: KagemushaDeviceAttestationRegistration
     public let feePayment: FeePaymentIntent
@@ -641,14 +641,14 @@ public struct RegisterKagemushaDeviceAttestationRequest: Sendable {
     public let nonce: UInt32?
     public let metadata: [String: ToriiJSONValue]
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 registration: KagemushaDeviceAttestationRegistration,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil,
                 nonce: UInt32? = nil,
                 metadata: [String: ToriiJSONValue] = [:]) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.registration = registration
         self.feePayment = feePayment
@@ -1105,7 +1105,7 @@ public struct KagemushaDeviceAttestationUnsignedTransaction: Sendable {
 public enum KagemushaDeviceAttestationSignedTransactionError: Error, LocalizedError, Equatable {
     case invalidCanonicalNorito(String)
     case registrationIdMismatch
-    case chainIdMismatch
+    case networkIdMismatch
     case authorityMismatch
     case transactionHashMismatch
     case statusTransactionHashMismatch
@@ -1116,8 +1116,8 @@ public enum KagemushaDeviceAttestationSignedTransactionError: Error, LocalizedEr
             return "Invalid canonical Kagemusha device-registration transaction: \(reason)"
         case .registrationIdMismatch:
             return "The embedded Kagemusha device registration does not match the expected registration id."
-        case .chainIdMismatch:
-            return "The embedded transaction chain id does not match the expected chain id."
+        case .networkIdMismatch:
+            return "The embedded transaction NetworkId does not match the expected genesis-derived identity."
         case .authorityMismatch:
             return "The embedded transaction authority does not match the expected authority."
         case .transactionHashMismatch:
@@ -1136,7 +1136,7 @@ public enum KagemushaDeviceAttestationSignedTransactionError: Error, LocalizedEr
 public struct KagemushaDeviceAttestationSignedTransaction: Sendable {
     public let envelope: SignedTransactionEnvelope
     public let registrationId: Data
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
 
     public var registrationIdHex: String {
@@ -1146,7 +1146,7 @@ public struct KagemushaDeviceAttestationSignedTransaction: Sendable {
     public init(
         canonicalNorito: Data,
         expectedRegistrationId: Data,
-        expectedChainId: String? = nil,
+        expectedNetworkId: NetworkId,
         expectedAuthority: String? = nil,
         expectedTransactionHash: Data? = nil
     ) throws {
@@ -1160,8 +1160,8 @@ public struct KagemushaDeviceAttestationSignedTransaction: Sendable {
         guard inspected.registrationId == expectedRegistrationId else {
             throw KagemushaDeviceAttestationSignedTransactionError.registrationIdMismatch
         }
-        if let expectedChainId, inspected.chainId != expectedChainId {
-            throw KagemushaDeviceAttestationSignedTransactionError.chainIdMismatch
+        if inspected.networkId != expectedNetworkId {
+            throw KagemushaDeviceAttestationSignedTransactionError.networkIdMismatch
         }
         if let expectedAuthority, inspected.authority != expectedAuthority {
             throw KagemushaDeviceAttestationSignedTransactionError.authorityMismatch
@@ -1174,7 +1174,7 @@ public struct KagemushaDeviceAttestationSignedTransaction: Sendable {
         }
         self.envelope = inspected.envelope
         self.registrationId = inspected.registrationId
-        self.chainId = inspected.chainId
+        self.networkId = inspected.networkId
         self.authority = inspected.authority
     }
 
@@ -1193,7 +1193,7 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
     struct Inspection {
         let envelope: SignedTransactionEnvelope
         let registrationId: Data
-        let chainId: String
+        let networkId: NetworkId
         let authority: String
     }
 
@@ -1215,7 +1215,7 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         }
 
         var payloadReader = CanonicalNoritoReader(data: transactionPayload)
-        let chainField = try field(&payloadReader, "chain id")
+        let domainField = try field(&payloadReader, "transaction domain")
         let authorityField = try field(&payloadReader, "authority")
         let creationTimeField = try field(&payloadReader, "creation time")
         let executableField = try field(&payloadReader, "executable")
@@ -1226,7 +1226,7 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         let attachmentsField = try field(&payloadReader, "attachments")
         try finish(payloadReader, "transaction payload")
 
-        let chainId = try canonicalString(chainField, field: "chain id")
+        let networkId = try networkId(from: domainField)
         let authority = try canonicalString(authorityField, field: "authority")
         guard creationTimeField.count == 8 else {
             throw invalid("creation time")
@@ -1239,11 +1239,11 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
             throw invalid("proof attachments")
         }
         let validated = try TransactionInputValidator.validate(
-            chainId: chainId,
+            networkId: networkId,
             authorityId: authority
         )
-        guard validated.chainId == chainId, validated.authorityId == authority else {
-            throw invalid("non-canonical chain id or authority")
+        guard validated.networkId == networkId, validated.authorityId == authority else {
+            throw invalid("non-canonical network id or authority")
         }
 
         let registrationPayload = try registrationPayload(from: executableField)
@@ -1283,7 +1283,7 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         return Inspection(
             envelope: envelope,
             registrationId: registrationId,
-            chainId: chainId,
+            networkId: networkId,
             authority: authority
         )
     }
@@ -1579,6 +1579,28 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         return value
     }
 
+    private static func networkId(from data: Data) throws -> NetworkId {
+        var reader = CanonicalNoritoReader(data: data)
+        guard try reader.readUInt32LE() == 0 else {
+            throw invalid("transaction domain")
+        }
+        let bytes = try field(&reader, "network id")
+        try finish(reader, "transaction domain")
+        let networkId: NetworkId
+        do {
+            networkId = try NetworkId(bytes: bytes)
+        } catch {
+            throw invalid("network id")
+        }
+        var canonical = CanonicalNoritoWriter()
+        canonical.writeUInt32LE(0)
+        canonical.writeField(networkId.bytes)
+        guard canonical.data == data else {
+            throw invalid("network id")
+        }
+        return networkId
+    }
+
     private static func field(
         _ reader: inout CanonicalNoritoReader,
         _ name: String
@@ -1624,12 +1646,12 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         creationTimeMs: UInt64
     ) throws -> KagemushaDeviceAttestationUnsignedTransaction {
         let ids = try TransactionInputValidator.validate(
-            chainId: request.chainId,
+            networkId: request.networkId,
             authorityId: request.authority
         )
         let instruction = try encodeInstruction(registration: request.registration)
         let payload = try encodeTransactionPayload(
-            chainId: ids.chainId,
+            networkId: ids.networkId,
             authority: ids.authorityId,
             creationTimeMs: creationTimeMs,
             ttlMs: request.ttlMs,
@@ -1663,7 +1685,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
     }
 
     private static func encodeTransactionPayload(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -1672,8 +1694,11 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         instructionPayload: Data,
         metadata: [String: ToriiJSONValue]
     ) throws -> Data {
+        var domain = CanonicalNoritoWriter()
+        domain.writeUInt32LE(0)
+        domain.writeField(networkId.bytes)
         var payload = CanonicalNoritoWriter()
-        payload.writeField(CanonicalNorito.encodeString(chainId))
+        payload.writeField(domain.data)
         payload.writeField(CanonicalNorito.encodeString(authority))
         payload.writeField(CanonicalNorito.encodeUInt64(creationTimeMs))
         payload.writeField(encodeExecutable(instructionPayload))

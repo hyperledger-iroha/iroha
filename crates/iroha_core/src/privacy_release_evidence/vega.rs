@@ -4,7 +4,6 @@
 use super::*;
 
 pub(super) const VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1: u64 = 1_785_024_000_000;
-pub(super) const VEGA_RELEASE_CHAIN_ID_V1: &str = "taira-privacy-release-evidence-vega-v1";
 const VEGA_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0xa7; 32];
 pub(super) const VEGA_RELEASE_ACTION_INDEX_V1: u32 = VEGA_PRIVACY_ACTION_INDEX_V1;
 pub(super) const VEGA_RELEASE_CREATION_TIME_MS_V1: u64 = VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1 - 1;
@@ -70,7 +69,7 @@ pub(super) struct VegaReleaseFixtureV1 {
 pub(super) fn vega_release_transaction_context_v1()
 -> Result<VegaPrivacyActionTransactionContextV1, PrivacyReleaseEvidenceErrorClassV1> {
     Ok(VegaPrivacyActionTransactionContextV1 {
-        chain_id: ChainId::from(VEGA_RELEASE_CHAIN_ID_V1),
+        network_id: release_network_id_from_genesis_hash(VEGA_RELEASE_GENESIS_HASH_V1),
         authority: privacy_release_account_v1(0x56)?,
         creation_time: Duration::from_millis(VEGA_RELEASE_CREATION_TIME_MS_V1),
         time_to_live: Some(Duration::from_secs(60)),
@@ -214,9 +213,10 @@ pub(super) fn run_vega_stage_v1(
         &proof,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
-    let authoritative_chain_id = ChainId::from(VEGA_RELEASE_CHAIN_ID_V1);
+    let authoritative_network_id =
+        release_network_id_from_genesis_hash(VEGA_RELEASE_GENESIS_HASH_V1);
     let authoritative_action_index = VEGA_RELEASE_ACTION_INDEX_V1;
-    if statement.context.chain_id != authoritative_chain_id
+    if statement.context.network_id != authoritative_network_id
         || statement.context.action_index != authoritative_action_index
         || genesis_hash != VEGA_RELEASE_GENESIS_HASH_V1
     {
@@ -226,7 +226,7 @@ pub(super) fn run_vega_stage_v1(
         &statement,
         Some(&issuer_record),
         &proof,
-        &authoritative_chain_id,
+        &authoritative_network_id,
         genesis_hash,
         authoritative_action_index,
         VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
@@ -328,10 +328,9 @@ pub(super) fn run_vega_stage_v1(
                 vega_compressed_public_key_v1(&substitute_signing_key)?;
             refresh_vega_device_authentication_digest_v1(&mut wrong_issuer_key, genesis_hash)?;
 
-            let mut wrong_chain = statement.clone();
-            wrong_chain.context.chain_id =
-                ChainId::from("taira-privacy-release-evidence-vega-wrong-chain");
-            refresh_vega_device_authentication_digest_v1(&mut wrong_chain, genesis_hash)?;
+            let mut wrong_network = statement.clone();
+            wrong_network.context.network_id = release_network_id_from_genesis_hash([0xa8; 32]);
+            refresh_vega_device_authentication_digest_v1(&mut wrong_network, genesis_hash)?;
 
             let mut wrong_action_index = statement.clone();
             wrong_action_index.context.action_index = wrong_action_index
@@ -361,7 +360,7 @@ pub(super) fn run_vega_stage_v1(
                 &wrong_issuer,
                 &wrong_record_digest,
                 &wrong_issuer_key,
-                &wrong_chain,
+                &wrong_network,
                 &wrong_action_index,
             ] {
                 let mutated_binding =
@@ -382,7 +381,7 @@ pub(super) fn run_vega_stage_v1(
                     mutation,
                     Some(&issuer_record),
                     &proof,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     genesis_hash,
                     authoritative_action_index,
                     VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
@@ -416,7 +415,7 @@ pub(super) fn run_vega_stage_v1(
                     &statement,
                     issuer_state,
                     &proof,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     genesis_hash,
                     authoritative_action_index,
                     VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
@@ -439,7 +438,7 @@ pub(super) fn run_vega_stage_v1(
                     &statement,
                     Some(&issuer_record),
                     &proof,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     wrong_genesis,
                     authoritative_action_index,
                     wrong_timestamp,
@@ -480,7 +479,7 @@ pub(super) fn run_vega_stage_v1(
                     &statement,
                     Some(&issuer_record),
                     &corrupt_header,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     genesis_hash,
                     authoritative_action_index,
                     VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
@@ -509,7 +508,7 @@ pub(super) fn run_vega_stage_v1(
                     &statement,
                     Some(&issuer_record),
                     &corrupt_interior,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     genesis_hash,
                     authoritative_action_index,
                     VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
@@ -536,7 +535,7 @@ pub(super) fn run_vega_stage_v1(
                     &statement,
                     Some(&issuer_record),
                     &proof[..truncated_length],
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     genesis_hash,
                     authoritative_action_index,
                     VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
@@ -583,7 +582,7 @@ pub(super) fn verify_vega_release_production_envelope_v1(
     statement: &VegaExistingCredentialStatementV1,
     issuer_record: Option<&PrivacyVegaIssuerRecordV1>,
     proof: &[u8],
-    authoritative_chain_id: &ChainId,
+    authoritative_network_id: &NetworkId,
     genesis_hash: [u8; 32],
     authoritative_action_index: u32,
     block_timestamp_ms: u64,
@@ -620,7 +619,7 @@ pub(super) fn verify_vega_release_production_envelope_v1(
         PrivacyVerificationContextV1 {
             activation: &activation,
             consensus_limits: &limits,
-            chain_id: authoritative_chain_id,
+            network_id: authoritative_network_id,
             genesis_hash,
             current_height: 2,
             expected_action_index: authoritative_action_index,

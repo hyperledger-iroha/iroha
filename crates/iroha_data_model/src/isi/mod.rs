@@ -370,6 +370,16 @@ impl From<crate::isi::bridge::ApplySccpRouteGovernance> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::bridge::FundSccpRouteEscrow> for InstructionBox {
+    fn from(i: crate::isi::bridge::FundSccpRouteEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::bridge::RefundSccpRouteEscrow> for InstructionBox {
+    fn from(i: crate::isi::bridge::RefundSccpRouteEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::asset_alias::SetAssetDefinitionAlias> for InstructionBox {
     fn from(i: crate::isi::asset_alias::SetAssetDefinitionAlias) -> Self {
         InstructionBox(Box::new(i))
@@ -1660,6 +1670,12 @@ impl From<crate::isi::governance::ProposeSccpRouteGovernance> for InstructionBox
     }
 }
 #[cfg(feature = "governance")]
+impl From<crate::isi::governance::ProposeSorafsProviderGovernance> for InstructionBox {
+    fn from(i: crate::isi::governance::ProposeSorafsProviderGovernance) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+#[cfg(feature = "governance")]
 impl From<crate::isi::governance::ProposeValidationFeePolicy> for InstructionBox {
     fn from(i: crate::isi::governance::ProposeValidationFeePolicy) -> Self {
         InstructionBox(Box::new(i))
@@ -1729,6 +1745,12 @@ impl From<crate::isi::transparent::SetAccountQuorum> for InstructionBox {
 #[cfg(feature = "governance")]
 impl From<crate::isi::governance::EnactReferendum> for InstructionBox {
     fn from(i: crate::isi::governance::EnactReferendum) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+#[cfg(feature = "governance")]
+impl From<crate::isi::governance::EnactSccpRouteGovernance> for InstructionBox {
+    fn from(i: crate::isi::governance::EnactSccpRouteGovernance) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -4271,7 +4293,8 @@ pub mod prelude {
             SetAssetTransferControl,
         },
         bridge::{
-            ApplySccpRouteGovernance, RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof,
+            ApplySccpRouteGovernance, FundSccpRouteEscrow, RecordBridgeReceipt, RecordSccpMessage,
+            RefundSccpRouteEscrow, SubmitBridgeProof,
         },
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
@@ -4318,8 +4341,9 @@ pub mod prelude {
             RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
         },
         settlement::{
-            DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSettlementDetails,
-            PvpIsi, SetFxCorridorPolicy, SettleFxCorridor, SettlementAtomicity,
+            DvpIsi, FundFxCorridorEscrow, FxCorridorId, FxCorridorOracleEvidence, FxCorridorPolicy,
+            FxCorridorPolicyRegistry, FxCorridorSettlementDetails, FxCorridorUsage, PvpIsi,
+            RefundFxCorridorEscrow, SetFxCorridorPolicy, SettleFxCorridor, SettlementAtomicity,
             SettlementExecutionOrder, SettlementInstructionBox, SettlementKind, SettlementLeg,
             SettlementLegRole, SettlementLegSnapshot, SettlementPlan, SettlementReceipt,
         },

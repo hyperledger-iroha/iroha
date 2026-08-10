@@ -5,13 +5,30 @@ Last updated: 2026-08-09
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
-## VPN MCP and Torii content audit closeout
+## Exact network identity completion
 
-- Run the focused locked/offline Torii tests for the exact inner-target MCP
-  signature/witness bridge, closed VPN schemas, active/unknown content
-  download coercion, inert-media preservation, and the documented content
-  response boundary. Retain the existing VPN auth-before-parse and protected
-  content auth/cache/path tests in the same validation lane.
+Signed queries, ordinary transactions, peer authentication, core consensus
+preimages, NPoS and IVM VRF proofs, beacon helpers, SoraFS provider PoR VRF
+submissions, and their durable VRF snapshots now use the exact genesis-derived
+`NetworkId`. Signed
+requests are fresh, fail closed on replay, and use one-shot owned transports;
+genesis transactions have a separate explicit domain and ordinary admission
+rejects it after initialization. Complete DAT-17 by replacing the remaining
+label-derived capability, offline/Kagemusha, Musubi, validation-fee, recovery,
+proof/nullifier, and SDK wire domains. First-release decoders do not retain the
+old label-only layout. The coordinated release lane must also run focused Rust
+and four-peer cross-genesis tests and regenerate the affected OpenAPI/schema
+artifacts.
+
+## MCP gateway and Torii content release closeout
+
+- Regenerate the OpenAPI provenance manifests from the final source seal and
+  run the focused locked/offline Torii tests for exact nested-target account
+  and operator authentication, retired async-job methods, closed VPN schemas,
+  active/unknown content download coercion, inert-media preservation, and the
+  documented content response boundary. Retain the existing VPN
+  auth-before-parse and protected content auth/cache/path tests in the same
+  validation lane.
 
 ## Sumeragi v2 revision-4 release gates
 
@@ -88,6 +105,117 @@ activation interval and canonical block anchors, and rollback/replay uses the
 ordinary MV state lifecycle. The stale Kotodama/IVM references to the retired
 generic confidential instructions are removed; the final focused Core
 test-target build remains part of the coordinated validation lane.
+The custom daemon launch path is now late-bound: a one-shot factory receives
+the exact live chain/genesis, state, queue, and SoraFS handles after trusted
+startup replay, while stock `irohad` remains fail-closed. The provider-grade
+bundle verifier also has a fresh-reader three-pass path that avoids CAR
+materialization and rejects pass substitution and non-exact EOF. Mandatory
+bundle metadata now crosses shared exact-slice, canonical, resource-limited
+data-model decoders; semantic-release and lock decoding each has a 48 MiB
+cumulative allocation ceiling that includes nested field and realignment
+charges. Both provider entry points drop the 32 MiB PoR store before metadata
+parsing. Supported-target whole-process RSS qualification against the 64 MiB
+target remains outstanding, and the separate generic chunk-store ceiling still
+needs reduction or measured qualification. Payload-only verification is deliberately limited to authenticated
+extractions or admitted chunk storage; raw provider CARs still require the full
+canonical-container boundary.
+The embedded SoraFS node now also exposes a digest-selected, callback-scoped
+payload lease with exactly three scheduled fresh readers and eviction safety;
+lookup is keyed rather than scanned, acquisition failures are redacted, and
+chunk-boundary short reads preserve `Read` semantics when a later chunk fails.
+An exclusive transient retirement intent prevents steady new leases from
+starving eviction, and verified-read failures retain their admitted byte charge.
+Completed provider-ingest and post-completion claim/request primitives are
+recorded in `status.md`. The completed claim is now accepted only by the
+lifecycle-leased fresh-reader verifier. The only downstream-visible minting
+boundary is the doc-hidden `NodeHandle` method that checks its process-local
+marker before and after the crate-private lease verifier; the raw
+verifier-evidence request constructor is crate-private. The inert provider-
+attestation core now covers a stable cursor-independent completed-row identity
+with later-head rebasing, the approval-only replay-stable signer contract, and
+a bounded CAS journal with restart-ready pages, UNIX-time and claim fencing,
+dead-letter recovery, and opaque inventory acknowledgements. The outstanding
+gate is production activation. An effect-free bounded scanner with private
+claim minting and a dedicated request-bound signed archive reader now validates
+completed-Musubi pages without mutating an external service. The reader lazily
+owns one ephemeral Ed25519 session, signs a bounded canonical transcript over
+the exact request and every projected field, and caches one exact generation
+response so cancellation is replay-safe even as the archive head advances. The
+reader receives no claim factory or opaque claim; the scanner pins the session,
+verifies the signature before privately sealing the projection, and commits its
+generation only after full validation. It retains separate continuation,
+finalized-high-water, and completed-head state so same-head suppression remains
+deterministic for one scanner lifetime; restart creates a fresh scanner and
+rescans. A crate-private one-page reconciler rederives each request under the
+admitted-payload lifecycle lease, idempotently enqueues it while the key remains
+  retained in the bounded journal, and uses a drop guard to roll all scanner
+  progress back on cancellation and on every returned failure.
+Delivered entries can be capacity-pruned, so this is not durable deduplication.
+A private clone-shared `Arc` marker exists only on a `NodeHandle` with storage
+and an ingest outbox and identifies that process-local handle incarnation
+through completed claims, candidates, and approval requests. Clones share it;
+  another handle or restart gets a fresh non-equal marker. Reconciliation rejects
+  a foreign scanner before a signed page request; a foreign or generic-unbound
+  claim fails before the lifecycle lease or payload-reader I/O. Stable
+  completion/approval digests exclude the marker, but it does not authenticate Kura, State, the
+signed reader, or provider slots. The generic production builder is removed;
+the scanner and reconciler stay crate-private. A non-resetting atomic take guard
+is shared across `NodeHandle` clones, and the prepared archive exposes one
+movable concrete signed reader with no cloneable accessor. A private daemon
+composer consumes both into a doc-hidden non-generic coordinator retained on
+`Iroha`; construction performs no reader call and lazy binding retries the same
+reader/session. The reconciler now performs a qualified, timed exact slot-59
+lookup after request verification and before enqueue: exact valid payload
+suppresses, absence proceeds, and conflict or qualification failure fails. The
+default-off nested configuration provides
+independent 1--4,096 entry and 4--128 MiB checkpoint caps; `enabled = true`
+remains an activation request. Stock launch fails earlier during pre-Tokio
+broker resolution because slots 57--59 are unsupported; an injected registry
+that resolves them still reaches the shared pre-supervisor start gate. The
+inert public root-fenced file adapter now provides an exact
+chain/genesis/provider-bound two-slot CAS with a fixed 128 MiB
+checkpoint/payload ceiling on Linux/macOS with nonblocking normal locks and a
+fixed five-second initialization deadline. Its sealed wrapper reuses the exact
+initialization-lock identity committed in the immutable two-slot headers as a
+nonblocking process/cross-process composite lease spanning external authority
+and local cache reconciliation; cancellation releases it and exact retry can
+complete a direct-predecessor repair. Raw checkpoint/CAS and checkpoint-head
+orchestration, the abstract store, sealed wrapper, transition engine, and
+journal runtime constructor are crate-private. The public file-store paths
+separate explicit empty-`H0` initialization from ordinary open, which rejects a
+missing external head and never promotes local bytes.
+
+Slot 57 now defines one qualified combined durability provider with separate
+small monotonic-time and checkpoint-head CAS namespaces plus immutable
+content-addressed checkpoint blobs. Canonical domain-separated hashes bind the
+checkpoint scope to chain, genesis, provider, and the exact journal-policy
+digest. Mutation order is blob put/readback, head CAS/readback, then local
+two-slot CAS. The external head/blob is authoritative; a local exact direct
+predecessor can be proved from the retained predecessor record/blob and repaired
+forward, while deeper rollback, ahead/fork, substitution, or missing state
+fails closed. The separate sealed time floor bounds every head timestamp.
+Restoring the local cache therefore cannot make an older checkpoint current.
+Exact successor replay remains idempotent after cancellation or response loss.
+
+The non-secret activation catalog reserves all-or-none runtime slots 57--59 for
+the combined durability seal, approval signer, and authenticated inventory.
+Registry resolution performs exact pre/post handle and qualification snapshots,
+but the stock broker has no implementations and resolution invokes neither
+readiness nor effects. Private daemon wrappers now pin signer calls to the
+configured adapter, chain/genesis/provider, and finalized
+`State::provider_owners()` value, and inventory calls/results to the configured
+adapter and exact local scope. They remain uninstantiated, as do the
+crate-private sealed-clock and checkpoint-head effect drivers.
+
+Keep the pre-supervisor rejection until the retained non-generic daemon
+coordinator owns those private effect drivers. It must also
+provide a concrete combined time/head/blob durability adapter, signer and
+inventory adapters, broker support, bounded readiness and supervision, and
+crash/cancellation/revocation/corruption/concurrency/platform chaos evidence.
+Deployment must enforce a singleton rooted runtime session for each exact
+external provider scope across machines, or equivalent provider-side session
+fencing; the implemented OS lease covers only processes sharing one state root.
+The provider must not mutate the attestation registry directly.
 Remaining release gates, in order, are:
 
 - Finish focused validation of the occurrence-bound targeted resolver,
@@ -166,18 +294,45 @@ Remaining release gates, in order, are:
   permanently, and rejected proof registration rebases only from a covering
   strictly advanced finalized location revision. Qualify the std-only path
   implementation with descriptor-relative primitives and crash injection.
-  Retain as a release blocker the absent deployment-owned storage/finality
-  backend. Core now exposes its consensus-owned finalized snapshot-history
-  validator for that backend's future daemon reader, without exposing a route
-  or duplicating revision-activation rules. The latest exact archive query can
-  reproduce the immutable registration projection without a historical mutable
-  WSV. Same-ID renewal follows the current finalized pin, order, epochs, and
-  exact provider evidence. Exercise the real fee-quote/submission transport and crash
+  The daemon now exposes a read-only authoritative archive-registration reader
+  bound to one exact `NetworkId` and `Arc<State>`. It consumes Core's
+  consensus-owned snapshot-history validator, requires a cryptographically
+  verified V2-finality artifact to commit to the exact result-bearing
+  registered-height Kura block wire and sole successful native registration,
+  and returns only a current record with an equal immutable projection. It has
+  no effects and keeps stock activation fail-closed. Retain as the release
+  blocker the absent deployment-owned effectful storage coordinator and
+  production SoraFS pin/replication backend. Activate the implemented
+  provider-attestation foundation through one
+  non-generic deployment-owned coordinator: extend its implemented take-once
+  `NodeHandle` plus exact prepared signed-reader tenure to the private effect
+  drivers and spawn the capture/reconciliation child around the
+  crate-private one-page primitive. Rediscover its paged ready work, and after
+  every fresh request verification exact-read the authenticated slot-59
+  inventory before enqueue; suppress an existing valid exact-payload item,
+  proceed on absence, and fail on conflict. Wrap
+  concrete slot-58 and slot-59 providers
+  in the existing private governed signer and inventory adapters before calling
+  the crate-private effect drivers. Provision the implemented root-fenced
+  two-slot CAS adapter through its scope/policy-bound consuming constructor and
+  bind it to a qualified combined slot-57 provider implementing the separate
+  authenticated time/head namespaces and immutable checkpoint blobs. The
+  inventory/coordinator must not mutate the registry directly. Keep delivery
+  and the stock launch unavailable until concrete slot-57--59 broker support,
+  bounded readiness, supervision, and singleton rooted-session or provider-side
+  cross-machine session fencing are configured and authenticated. Qualify the
+  header-bound composite lease, dead-letter repair, timeout/revocation,
+  capacity, corruption, concurrent resume, cancellation after durable successor
+  installation, crash-at-every-transition, offline rollback, and
+  supported-platform paths.
+  Same-ID renewal follows the current finalized pin, order, epochs, and exact
+  provider evidence. Exercise the real fee-quote/submission transport and crash
   boundaries before send, after registry commit, after authoritative-record
   persistence, after coordinator response, and after location commit, including
   concurrent resumes and receipt expiry.
 
-- Supply and qualify the deployment-owned private HTTPS/TLS runner, concrete
+- Supply and qualify the deployment-owned private HTTPS/TLS runner and its
+  implementation of the completed late-bound factory, concrete
   HSM/KMS or threshold implementations of the completed publisher-request and
   receipt-approval provider boundaries, and assemble the completed bounded
   durable Unix replay journal with deployment-selected operation,
@@ -195,14 +350,21 @@ Remaining release gates, in order, are:
   non-Unix and descriptor-relative primitives are qualified. Bind configured
   origins, DNS answers, and token-verification keys to finalized provider
   adverts.
-- Add a safe workspace-owned Windows handle-relative no-replace directory
-  rename/replacement primitive. Until then Windows cache reads and verification
-  remain supported while cache publication/quarantine/prune and atomic project
-  state mutation fail closed.
+- Add a safe stable non-Unix handle abstraction covering identity, single-link,
+  no-follow opens, and handle-relative no-replace directory rename/replacement.
+  Until then Windows and other non-Unix targets fail with
+  `UnsupportedPlatform` before cache-root inspection or creation, package and
+  workspace-test reads, platform-config reads, and publication journal/staged
+  filesystem access.
+- Add an atomic handle-relative compare-and-delete primitive for cache trees on
+  every supported platform. Until then dry-run retention classification remains
+  available, every non-empty live prune fails before candidate inspection or
+  mutation, and install staging/payload residue is retained without automatic
+  destructive cleanup.
 - Replace the Unix cache's advisory-lock plus ordinary directory rename with a
   safe descriptor-relative no-replace primitive. The current absence check does
   not prevent an uncooperative same-UID process from planting a destination
-  immediately before rename, affecting install, repair quarantine, and prune.
+  immediately before rename, affecting install and repair quarantine.
   The fix requires an approved existing workspace abstraction or dependency
   change; do not weaken the no-clobber contract with another path-only check.
 - Replace package collection's path-based ancestor pre/post checks with retained,
@@ -210,6 +372,15 @@ Remaining release gates, in order, are:
   identity is already pinned, but a deliberately timed ancestor ABA replacement
   remains an OS-specific packaging race gate; qualify it with rename-only,
   symlink, and reparse race fuzzing on every supported host before release.
+- Replace workspace-manifest, consumer-lock, and declared-test path-based
+  ancestor checks with retained, handle-relative no-follow/open-beneath
+  traversal. On qualified Unix their final components are now singly linked,
+  byte-bounded, and pinned through an architecture-qualified
+  nonblocking/no-follow descriptor, so symlink, FIFO, device, and oversize leaf
+  substitution cannot supply bytes. Other targets remain fail-closed until a
+  stable handle-identity implementation exists. The Unix leaf boundary does
+  not close a deliberately timed ancestor-directory ABA around the pathname
+  open.
 - Wire the remaining metrics only at their authoritative long-lived producers:
   journal phase age, cache corruption/capacity, and selected-root storage
   pressure, plus the injected consumer-fetch integrity observer. The fetch
@@ -296,13 +467,19 @@ identity leg before closing UNM-14.
 The H21/H22/H25/H26 confidential-ledger source and SDK hard cut is implemented.
 The first-release registry contains no generic `Shield`, `ZkTransfer`, or
 `Unshield` instruction, compatibility discriminant, relay, IVM bridge, CLI, or
-SDK transaction builder. Kagemusha top-up/redemption owns public settlement and
-its escrow/anchor conservation checks; native anonymous escrow consumes the
-underlying transfer circuit only through a sealed purpose-bound internal path.
+SDK transaction builder. Native anonymous escrow and the authority-free
+`PrivateKaigi` entrypoint are removed rather than retained as specialized
+wrappers. Kagemusha top-up/redemption owns public settlement and its
+escrow/anchor conservation checks; the transfer-v2 verifier is a
+protocol-global recursive-proof component and has no public dispatch path.
 Each asset persists the sole first-release Poseidon tree profile with
 fail-closed retained-root/checkpoint validation and atomic incremental batch
-append. Generated Android instruction, builder, manifest, metadata, and
-hash-tree artifacts now describe the 110-entry release schema. Focused
+append. `RegisterZkAsset` contains only `asset`, `vk_unshield`, and `vk_shield`;
+optional key presence enables those two protocol roles, with no registration
+mode, enablement booleans, or asset-bound transfer verifier. The generic
+producerless confidential event/filter surface is also absent. Generated
+Android instruction, builder, manifest, metadata, and hash-tree artifacts must
+be regenerated from this final release schema. Focused
 data-model, Core, IVM, bridge, fixture, and cross-SDK execution remains required
 before these audit items can close; physical Kagemusha recursion also remains
 blocked on a clean SSH-signed source seal and reviewed external inputs.
@@ -792,7 +969,7 @@ strict verification and token release. Missing, substituted, stale, drifting,
 revoked, or test-marked providers fail closed. Focused Cargo/workspace
 validation and reviewed reference-HSM deployment evidence remain open.
 
-The mandatory SoraFS ABI-21 Python native reference lane is now pinned to exact
+The mandatory SoraFS ABI-22 Python native reference lane is now pinned to exact
 Python 3.12. The obsolete tracked `_crypto.cpython-39-darwin.so` is removed, and
 the runner rejects any tracked package `.so`, `.so.*`, `.dylib`, `.pyd`, or
 `.dll`, activates its selected virtual environment, covers the
@@ -804,21 +981,21 @@ reference inventory currently binds 82 payload artifacts, 32 exact
 appeal-finance `CancelAssetLock` files are mandatory. The current non-native
 hard-cut slice passes 85 focused Python tests, seven static guards, 36
 fixture-workflow trigger tests, and 39 native-artifact contract tests; managed
-Kotlin/JVM, mirrored Java Android, and C#
-parity is green. No checked-in, clean-source, five-target ABI-21 inventory or
+Kotlin/JVM, mirrored Java Android, and C# parity is green. No checked-in,
+clean-source, five-target ABI-22 inventory or
 authenticated native replay record exists, so no native-dependent SDK suite is
 qualified. Clean native rebuilds, unskipped fixture replay, and source-bound
 provenance across all five release targets remain open. Kotlin/JVM and mirrored
-Java Android now require
-both exact bridge ABI 21 and `NativeSignerBridge` JNI contract revision 3 before
+Java Android now require both exact bridge ABI 22 and `NativeSignerBridge` JNI
+contract revision 5 before
 making any native signer call; the Android artifact gate requires both
 revision-probe exports, preventing a stale same-ABI JNI descriptor from passing
 package qualification. Swift package admission now requires an embedded
-`NoritoBridge.artifacts.json` declaring exact ABI 21, and its runtime loader
+`NoritoBridge.artifacts.json` declaring exact ABI 22, and its runtime loader
 rejects missing or stale manifest ABI metadata before accepting a matching
 artifact hash. Ignored or locally rebuilt artifacts remain unqualified
 regardless of their reported ABI: no checked-in, clean-source, five-target
-ABI-21 inventory or authenticated execution record exists. The separate
+ABI-22 inventory or authenticated execution record exists. The separate
 SoraFS pin-register SDK workflow, runner, and guard are also exact Python 3.12
 and install only the hash-locked, binary-only `requirements-ci.lock`; a fresh
 isolated CPython 3.12.13 venv is green at 3/3, including positive static
@@ -827,10 +1004,10 @@ Kotlin/JVM contract-manifest and SCCP protocol-V4 source drift is closed at
 26/26 focused tests, the mirrored Java SCCP harness passes, and the complete
 51-test Android module now exercises the mandatory fresh transaction
 compatibility probe. The remaining Kotlin/JVM and Java core failures are
-explicit stale-ABI-21 native failures; rebuild and rerun them before `G-FINAL`.
+explicit stale-ABI-22 native failures; rebuild and rerun them before `G-FINAL`.
 Seven focused Rust `EscrowId` hard-cut regressions are green across lowercase
 checksum parsing, canonical JSON/Norito/schema handling, noncanonical query
-rejection, and typed public-selector roundtrip. The clean ABI-21 native rebuild
+rejection, and typed public-selector roundtrip. The clean ABI-22 native rebuild
 and qualification remain required before the wire/SDK cut can be closed.
 
 The SoraFS monitoring source slice is green under checksum-verified
@@ -1061,7 +1238,7 @@ native bridges and runtimes available.
   divergence.
 - Re-run the complete Swift package suite with a bridge artifact accepted by
   the active Swift compiler. Keep Kagemusha native-canonical bytes and bridge
-  ABI 21 unchanged while platform delivery adapters converge on the shared
+  ABI 22 unchanged while platform delivery adapters converge on the shared
   peer-message core. Do not add a backend endpoint or backend reconciliation
   fallback to close a device-only evidence gap.
 
@@ -1100,7 +1277,7 @@ Neither extension may be implemented as a sender fallback or an unscoped
 aggregate balance check.
 
 Kagemusha transport and proof admission are fail-closed for the first release.
-It is the only offline-spend protocol. Exact bridge ABI 21 and governed schema
+It is the only offline-spend protocol. Exact bridge ABI 22 and governed schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v4` are the current
 artifact and readiness contract, not a runtime product selector. Runtime,
 wallet, and readiness surfaces remain selector-free. Each authenticated V4
@@ -1110,7 +1287,7 @@ final-key selector-zero bootstrap witness for each parity. Bounded circuit
 parameters are authenticated inline in the two profiles rather than represented
 as additional streamed artifacts.
 The unreleased recursive state boundary carrier remains V2 without changing
-bridge ABI 21 or manifest V4, while its nested compact profile is V5. The
+bridge ABI 22 or manifest V4, while its nested compact profile is V5. The
 boundary is the complete 138-limb canonical state, including the public
 append-only `next_zero_leaf_index`; each fixed Eq/Ep public-input schema is 66
 field elements.
@@ -1933,15 +2110,18 @@ post-publication durability outcome closes the process-wide consensus output
 guard and requires restart recovery before admission, persistence, or network
 output can resume.
 
-Consensus owns one bounded `SccpRegistryV1`. Typed
-`ApplySccpRouteGovernance` actions register an exact route, change its
-directional activation, switch to the next revision, initialize or advance a
-lane trust anchor by compare-and-swap, or remove only an unused staged
-revision. Direct execution requires `CanManageSccpGovernance`; constitutional
-governance uses the same typed action. Generic parameter writes, node-local
-configuration, HTTP signing fields, and old route-manifest instructions cannot
-change SCCP policy. Registry changes follow normal transaction, block, MVCC,
-snapshot, and rollback semantics.
+Consensus owns one bounded `SccpRegistryV1`. A complete
+`SccpRouteGovernanceAnchorV1` binds the exact genesis-derived `NetworkId` and
+one closed compare-and-swap action. Only `EnactSccpRouteGovernance` may apply
+that action after a finalized threshold referendum; the old direct
+`ApplySccpRouteGovernance` surface rejects every caller, including genesis and
+legacy managers. Generic parameter writes, node-local configuration, HTTP
+signing fields, and old route-manifest instructions cannot change SCCP policy.
+Each route names an immutable custody owner, while Core derives a distinct
+non-signable protocol escrow from the exact network, route revision, and asset.
+Owner funding, proof-backed settlement, and inactive-route refund are the only
+movement corridors; generic transfer, burn, unregister, and rekey paths reject
+the escrow.
 
 Each governed route binds the exact transfer-only XOR settlement, source
 emitter, native inbound verifier and trust anchor, immutable token/verifier/
@@ -2882,7 +3062,7 @@ excluded from the first release.
   data-model, bridge, Torii, CLI, SDK, mobile, packaging, and documentation
   surface must expose exact readiness only, with no runtime product, version,
   or compatibility selector. The current artifact/readiness contract is exact
-  bridge ABI 21 and manifest V4 with exactly eight external Eq/Ep artifacts;
+  bridge ABI 22 and manifest V4 with exactly eight external Eq/Ep artifacts;
   bounded circuit parameters remain authenticated inline. Versioned type names
   are internal wire and artifact schemas, not selectable products.
   Proof-gated init, append, verify, top-up, redeem, and change are selected by
@@ -6243,38 +6423,34 @@ excluded from the first release.
   `gateway load promote`, and `gateway load soak` CLI spellings while
   preserving local conformance, staging-canary/evidence, transport-scope
   canary, promotion-evidence, and payload-free gateway-load canary labels.
-- SoraFS Pin Registry validation policy wiring now covers the governance config
-  surface exposed today: `manifest_pin_policy_constraints_from_config` maps
-  replica floors/ceilings, retention ceilings, storage-class allowlists, and
-  council-signature requirements into the shared validator, while
-  `RegisterPinManifest` enforces the registry DTO subset before state or public
-  pin-fee side effects. Torii `POST /v1/sorafs/pin/register` now requires
-  `manifest_payload`, the canonical padded-base64 encoding of the exact
-  canonical Norito `ManifestV1`; that payload is the sole source of the digest,
-  chunker, content length, pin policy, and fee inputs. The closed request rejects
-  the retired `manifest_b64`, duplicate summary, fee, and gas fields, bounds the
-  manifest and alias proof before and after decode, and requires canonical alias
-  and non-zero predecessor encodings. The Rust client and `iroha app sorafs pin
-  register` command accept only exact canonical manifest bytes. The Rust,
-  JavaScript, Python, C#, and Swift client builders all emit the same sole
-  `manifest_payload` wire field and fail closed on malformed or conflicting
-  local inputs before request submission. Torii
-  pin-register validation failures return stable `sorafs_pin_*`
-  `AppQueryValidation` envelope codes for malformed request fields, canonical
-  payload failures, and governed manifest validation failures. The SoraFS
-  pin-register SDK guard pins the Rust/Torii/OpenAPI contract plus the
-  JavaScript, Python, Swift, and C# surfaces, including adversarial negative
-  controls, while reading guard inputs and Swift source probes through
-  no-follow descriptors. The manifest-detail readback endpoint
-  `/v1/sorafs/pin/{digest_hex}` now returns exact native Norito JSON
-  `PinManifestFinalizedRecordV1`: one finalized cursor and the authoritative
-  `PinManifestRecord`, including PoR root, content length, and lifecycle status.
-  Its optional expected finalized height/hash must be supplied together, and a
-  stale anchor returns 409. The retired `limit`, attestation, embedded
-  alias/order arrays, counts, and truncation projection are absent; bounded
-  alias and replication audits use their dedicated list endpoints. Focus future
-  SF-4 submission work on rollout and production evidence instead of reopening
-  the completed SORAFS-215/SORAFS-216 validator wiring tasks.
+- SoraFS Pin Registry validation and admission now use the native first-release
+  hard cut. `POST /v1/sorafs/pin/register` accepts only a canonical versioned
+  `SignedTransaction` for the exact runtime `NetworkId`, verifies its authority
+  signature, and requires exactly one `RegisterPinManifest`. The instruction
+  carries canonical `ManifestV1` bytes plus optional alias and non-zero
+  predecessor; there is no JSON registration DTO or client-supplied lifecycle
+  epoch. Core revalidates the manifest, derives submission, approval, and
+  retirement epochs from block consensus time, enforces global/per-account
+  count-and-byte ceilings plus lineage depth/fanout, maintains authenticated
+  expiry and lifecycle-status indexes, and collects the public-pin fee.
+  Submitter retirement or consensus-time expiry releases only live-content byte
+  charges; retained-record counts and successor fanout remain charged while the
+  lifecycle evidence remains in consensus state. Pinning is a paid public
+  operation for authenticated accounts without a general pin
+  permission token; aliases retain `CanBindSorafsAlias`, threshold approval
+  authority comes from the bounded council envelope that any authenticated
+  account may relay, and retirement is submitter-only. Rust, Kotlin/mirrored
+  Java, JavaScript, Python, Swift, and C# builders reject retired epoch/DTO keys
+  and emit the same native wire. `GET /v1/sorafs/pin` returns
+  `PinManifestPageV1`: bounded summaries at one finalized height/hash, row and
+  encoded-byte ceilings, an exclusive digest continuation key, and O(1)
+  consensus-maintained `charged_usage`; offset/full-registry materialization is
+  absent. `GET /v1/sorafs/pin/{digest_hex}` returns one exact bounded
+  `PinManifestFinalizedRecordV1`, with alias and replication lists remaining
+  separate. Prometheus reads only the maintained O(1) global retained-record
+  and live-content summary; scan-derived inventory gauges are absent and the
+  finalized query remains authoritative quota evidence. Keep future SF-4 work
+  focused on source validation and rollout/production evidence.
 - SoraFS pricing docs now reflect the implemented egress accounting path:
   `RecordCapacityTelemetry.egress_bytes` is charged through
   `PricingScheduleRecord::egress_charge_bytes_nano`, recorded in the capacity
@@ -7863,7 +8039,7 @@ excluded from the first release.
   payloads through `validate_hedging_payload_bytes`, and `sorafs-validate
   hedging`/`billing` provides local operator validation for those artifacts.
   The source bridge surface now exposes the same validator through
-  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 21
+	  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 22
   `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM,
   Java Android, and Swift SDK wrappers. `sorafs_node` now also exports the
   durable `HedgingBillingService`, and standard `irohad` can supervise it under
@@ -15030,9 +15206,10 @@ excluded from the first release.
 	  Payload validation is not value or settlement authorization: generic
 	  `zk::Shield`, `zk::ZkTransfer`, and `zk::Unshield` instructions and their
 	  CLI/native/SDK transaction encoders are removed. Public settlement now
-	  requires the proof-bound Kagemusha V4 top-up/redemption paths; native
-	  anonymous escrow applies its transfer circuit only behind an exact typed
-	  lifecycle capability. The standalone CLI envelope utility retains the same
+	  requires the proof-bound Kagemusha V4 top-up/redemption paths. The
+	  transfer-v2 relation is retained only as a protocol-global Kagemusha
+	  recursive-proof component, with no public instruction or anonymous-escrow
+	  lifecycle wrapper. The standalone CLI envelope utility retains the same
 	  structural payload preflight.
   Standalone ML-KEM public-key validation, secret-key validation,
   encapsulation, and decapsulation now reject all-zero public keys, all-zero
@@ -16660,7 +16837,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   variables, then available `python3.11`/Homebrew Python 3.11 candidates before
   falling back to `python3` for the existing fail-closed version check, with
   override and resolver drift pinned by negative controls. The mandatory SoraFS
-  ABI-21 native reference and pin-register SDK lanes are separately pinned to
+	  ABI-22 native reference and pin-register SDK lanes are separately pinned to
   exact Python 3.12; their runners must activate and report their 3.12 venvs
   before any native build or pytest execution. Pin-register dependencies must
   come only from `requirements-ci.lock` under
@@ -19261,9 +19438,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   matched adversarial coverage for blank circuit ids, empty or oversized public
   inputs, empty proof bytes, auxiliary metadata, verifier-key hashes, and active
   circuit indexes. ZK-ACE authorized-transfer admission runs it before
-  public-input decoding or STARK wrapper checks. Anonymous escrow close
-  prechecks validate the confidential-transfer-v2 proof
-  envelope before trusting parsed input commitments. IVM-proved overlay
+  public-input decoding or STARK wrapper checks. IVM-proved overlay
   admission now reuses the shared envelope validator with node and
   verifier-record proof-byte bounds before semantic replay or verifier dispatch.
   IVM host registered-key verify syscalls also run the same shared validator
@@ -19351,7 +19526,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   `zk-trace/mock-proof` artifacts while the real transparent IVM trace prover
   remains future work.
   Kagemusha is the single mode-free offline-cash protocol. Its current artifact
-  and readiness contract is exact bridge ABI 21 with authenticated manifest V4
+	  and readiness contract is exact bridge ABI 22 with authenticated manifest V4
   artifacts: exactly eight external Eq/Ep roles with circuit parameters inline.
   Versioned type names are internal wire and artifact schema identifiers only.
   Runtime, SDK, CLI,

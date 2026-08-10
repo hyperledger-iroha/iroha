@@ -26,7 +26,7 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     block::consensus_v2::{
         BlockSubject, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode, ConsensusRound,
     },
@@ -110,6 +110,16 @@ pub(crate) fn is_bls_normal_public_key(public_key: &PublicKey) -> bool {
     public_key
         .try_algorithm()
         .is_ok_and(|algorithm| algorithm == Algorithm::BlsNormal)
+}
+
+#[cfg(test)]
+/// Build a deterministic exact network identity for protocol fixtures.
+pub(crate) fn synthetic_network_id(seed: &str) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(CryptoHash::new(
+            seed.as_bytes(),
+        )),
+    )
 }
 
 #[cfg(test)]
@@ -410,17 +420,15 @@ pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
         .map(|params| params.slashing_delay_blocks())
 }
 
-fn chain_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
-    let chain = chain_id.clone().into_inner();
-    let hash = CryptoHash::new(chain.as_bytes());
-    <[u8; 32]>::from(hash)
+fn network_epoch_seed(network_id: &NetworkId) -> [u8; 32] {
+    *network_id.as_bytes()
 }
 
-fn npos_base_epoch_seed(world: &impl WorldReadOnly, chain_id: &ChainId) -> [u8; 32] {
+fn npos_base_epoch_seed(world: &impl WorldReadOnly, network_id: &NetworkId) -> [u8; 32] {
     world
         .sumeragi_npos_parameters()
         .map(|params| params.epoch_seed())
-        .unwrap_or_else(|| chain_epoch_seed(chain_id))
+        .unwrap_or_else(|| network_epoch_seed(network_id))
 }
 
 fn next_epoch_seed_from_seed_and_reveals(
@@ -457,17 +465,17 @@ fn next_epoch_seed_from_record(record: &VrfEpochRecord) -> [u8; 32] {
 
 pub(crate) fn deterministic_npos_seed_for_epoch_from_world(
     world: &impl WorldReadOnly,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     epoch: u64,
 ) -> [u8; 32] {
-    let mut seed = npos_base_epoch_seed(world, chain_id);
+    let mut seed = npos_base_epoch_seed(world, network_id);
     for _ in 0..epoch {
         seed = next_epoch_seed_from_seed(seed);
     }
     seed
 }
 
-fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, chain_id: &ChainId) -> [u8; 32] {
+fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, network_id: &NetworkId) -> [u8; 32] {
     if let Some((_epoch, record)) = world.vrf_epochs().iter().last() {
         return if record.finalized {
             next_epoch_seed_from_record(record)
@@ -475,7 +483,7 @@ fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, chain_id: &ChainId) 
             record.seed
         };
     }
-    npos_base_epoch_seed(world, chain_id)
+    npos_base_epoch_seed(world, network_id)
 }
 
 /// Resolve the epoch index for a height using finalized VRF epoch boundaries when available.
@@ -485,22 +493,22 @@ pub(crate) fn epoch_for_height_from_world(world: &impl WorldReadOnly, height: u6
 
 /// Resolve the `NPoS` PRF seed for the epoch containing `height`.
 pub fn npos_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
-    npos_seed_for_height_from_world(&view.world, view.chain_id(), height)
+    npos_seed_for_height_from_world(&view.world, view.network_id(), height)
 }
 
 /// Resolve the PRF seed for the epoch containing `height`.
 pub fn prf_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
-    prf_seed_for_height_from_world(&view.world, view.chain_id(), height)
+    prf_seed_for_height_from_world(&view.world, view.network_id(), height)
 }
 
 /// Resolve the `NPoS` PRF seed for the epoch containing `height` from any world snapshot.
 pub fn npos_seed_for_height_from_world(
     world: &impl WorldReadOnly,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     height: u64,
 ) -> [u8; 32] {
     let epoch = epoch_for_height_from_world(world, height);
-    npos_seed_for_epoch_from_world(world, chain_id, epoch)
+    npos_seed_for_epoch_from_world(world, network_id, epoch)
 }
 
 /// Resolve the `NPoS` PRF seed for one exact authenticated epoch.
@@ -509,7 +517,7 @@ pub fn npos_seed_for_height_from_world(
 /// than re-deriving an epoch from a possibly different height schedule.
 pub(crate) fn npos_seed_for_epoch_from_world(
     world: &impl WorldReadOnly,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     epoch: u64,
 ) -> [u8; 32] {
     if let Some(record) = world.vrf_epochs().get(&epoch) {
@@ -530,19 +538,19 @@ pub(crate) fn npos_seed_for_epoch_from_world(
         return seed;
     }
     if world.sumeragi_npos_parameters().is_some() {
-        deterministic_npos_seed_for_epoch_from_world(world, chain_id, epoch)
+        deterministic_npos_seed_for_epoch_from_world(world, network_id, epoch)
     } else {
-        latest_epoch_seed_from_world(world, chain_id)
+        latest_epoch_seed_from_world(world, network_id)
     }
 }
 
 /// Resolve the PRF seed for the epoch containing `height` from any world snapshot.
 pub(crate) fn prf_seed_for_height_from_world(
     world: &impl WorldReadOnly,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     height: u64,
 ) -> [u8; 32] {
-    npos_seed_for_height_from_world(world, chain_id, height)
+    npos_seed_for_height_from_world(world, network_id, height)
 }
 
 #[cfg(test)]
@@ -595,11 +603,11 @@ mod exact_epoch_seed_tests {
         let view = state.world_view();
         assert_eq!(epoch_for_height_from_world(&view, 2), 0);
         assert_ne!(
-            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 2),
+            npos_seed_for_height_from_world(&view, state.network_id_ref(), 2),
             authenticated_seed
         );
         assert_eq!(
-            npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 7),
+            npos_seed_for_epoch_from_world(&view, state.network_id_ref(), 7),
             authenticated_seed,
             "a parent-authenticated epoch number is authoritative"
         );
@@ -3992,7 +4000,7 @@ fn fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes() -> usize {
 /// protocol-maximum public key and signature, covering non-roster observers as
 /// well as validators. The checked calculation mirrors bare Norito v1 exactly.
 fn fair_v2_ingress_required_recovery_request_bytes_for_key(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     roster_len: usize,
     raw_key_bytes: usize,
 ) -> usize {
@@ -4011,11 +4019,9 @@ fn fair_v2_ingress_required_recovery_request_bytes_for_key(
         let certified_body_request =
             fair_v2_ingress_v2_envelope_bytes(certified_body_request_bytes)?;
 
-        let chain_string_bytes = fair_v2_ingress_framed_bytes(chain_id.as_str().len())?;
-        let boxed_chain_string_bytes = fair_v2_ingress_framed_bytes(chain_string_bytes)?;
-        let embedded_chain_id_bytes = fair_v2_ingress_framed_bytes(boxed_chain_string_bytes)?;
+        let embedded_network_id_bytes = network_id.encode().len();
         let commit_certificate_request_bytes = 3_usize
-            .checked_add(embedded_chain_id_bytes)?
+            .checked_add(embedded_network_id_bytes)?
             .checked_add(34)?
             .checked_add(9)?
             .checked_add(requester_bytes)?
@@ -4027,9 +4033,12 @@ fn fair_v2_ingress_required_recovery_request_bytes_for_key(
     required().unwrap_or(usize::MAX)
 }
 
-fn fair_v2_ingress_required_recovery_request_bytes(chain_id: &ChainId, roster_len: usize) -> usize {
+fn fair_v2_ingress_required_recovery_request_bytes(
+    network_id: &NetworkId,
+    roster_len: usize,
+) -> usize {
     fair_v2_ingress_required_recovery_request_bytes_for_key(
-        chain_id,
+        network_id,
         roster_len,
         iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
     )
@@ -5146,7 +5155,7 @@ impl FairV2Ingress {
     pub(crate) fn configure_roster_for_context(
         &self,
         roster: impl IntoIterator<Item = PeerId>,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
     ) -> Result<(), FairV2IngressCapacityError> {
         let roster = roster.into_iter().collect::<BTreeSet<_>>();
@@ -5161,7 +5170,7 @@ impl FairV2Ingress {
             fair_v2_ingress_required_transport_completion_bytes(layout)
                 .max(MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES);
         let required_recovery_request_bytes =
-            fair_v2_ingress_required_recovery_request_bytes(chain_id, roster.len());
+            fair_v2_ingress_required_recovery_request_bytes(network_id, roster.len());
         let required_lane_progress_frame_bytes =
             fair_v2_ingress_required_lane_p2p_frame_bytes(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES);
         let required_consensus_frame_bytes =
@@ -10027,12 +10036,12 @@ mod authoritative_runtime_gate_tests {
             .public_key()
             .try_to_bytes()
             .expect("fixture public key is canonical");
-        let recovery_chain_id = ChainId::from("fair-v2-ingress-test");
+        let recovery_network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
         let (body_request, commit_request, commit_response) =
-            v2_maximum_recovery_wires(&recovery_chain_id, minimal_peer, 1);
+            v2_maximum_recovery_wires(&recovery_network_id, minimal_peer, 1);
         assert_eq!(
             super::fair_v2_ingress_required_recovery_request_bytes_for_key(
-                &recovery_chain_id,
+                &recovery_network_id,
                 1,
                 minimal_peer_key_bytes.len(),
             ),
@@ -10084,7 +10093,7 @@ mod authoritative_runtime_gate_tests {
         ingress
             .configure_roster_for_context(
                 validator_peers(4),
-                &ChainId::from("fair-v2-ingress-test"),
+                &crate::sumeragi::synthetic_network_id("fair-v2-ingress-test"),
                 layout,
             )
             .expect("recommended four-validator genesis context fits default ingress bytes");
@@ -10144,7 +10153,7 @@ mod authoritative_runtime_gate_tests {
             "maximum completion must retain exact protocol-maximum direct-relay geometry"
         );
         assert!(protocol_maximum_response_frame >= actual_direct_response_frame);
-        let chain_id = ChainId::from("fair-v2-ingress-test");
+        let network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
         let roster_len = 1;
         let certified_bytes =
             super::fair_v2_ingress_required_certified_fence_escape_bytes(roster_len);
@@ -10152,7 +10161,7 @@ mod authoritative_runtime_gate_tests {
         let control_message_bytes = proposal_bytes
             .max(super::fair_v2_ingress_required_commit_certificate_response_bytes(roster_len));
         let request_bytes =
-            super::fair_v2_ingress_required_recovery_request_bytes(&chain_id, roster_len);
+            super::fair_v2_ingress_required_recovery_request_bytes(&network_id, roster_len);
         let lane_progress_frame = super::fair_v2_ingress_required_lane_p2p_frame_bytes(
             super::MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES,
         );
@@ -10191,11 +10200,7 @@ mod authoritative_runtime_gate_tests {
             None,
         );
         let error = short
-            .configure_roster_for_context(
-                [validator.clone()],
-                &ChainId::from("fair-v2-ingress-test"),
-                layout,
-            )
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("one byte below the exact completion ceiling fails closed");
         assert_eq!(error.configured(), required - 1);
         assert_eq!(error.required(), required);
@@ -10224,11 +10229,7 @@ mod authoritative_runtime_gate_tests {
                 None,
             );
         let ordinary_error = ordinary_short
-            .configure_roster_for_context(
-                [validator.clone()],
-                &ChainId::from("fair-v2-ingress-test"),
-                layout,
-            )
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("completion reserve cannot consume the reviewed ordinary region");
         assert_eq!(ordinary_error.configured(), ordinary_bytes - 1);
         assert_eq!(ordinary_error.required(), ordinary_bytes);
@@ -10238,22 +10239,15 @@ mod authoritative_runtime_gate_tests {
             .checked_add(certified_bytes)
             .and_then(|bytes| bytes.checked_add(required))
             .expect("test source bound fits usize");
-        let invalid_chain_id =
-            "x".repeat(iroha_data_model::id::MAX_CHAIN_ID_BYTES.saturating_add(1));
-        assert!(
-            ChainId::try_from(invalid_chain_id).is_err(),
-            "an overlong chain id must be rejected before ingress sizing"
+        let other_network_id =
+            crate::sumeragi::synthetic_network_id("fair-v2-ingress-other-genesis");
+        let other_network_request_bytes =
+            super::fair_v2_ingress_required_recovery_request_bytes(&other_network_id, roster_len);
+        assert_eq!(
+            other_network_request_bytes, request_bytes,
+            "fixed-width exact network identity keeps ingress sizing genesis-independent"
         );
-        let maximum_chain_id =
-            ChainId::try_from("x".repeat(iroha_data_model::id::MAX_CHAIN_ID_BYTES))
-                .expect("maximum-length canonical chain id");
-        let maximum_request_bytes =
-            super::fair_v2_ingress_required_recovery_request_bytes(&maximum_chain_id, roster_len);
-        assert!(
-            maximum_request_bytes <= ordinary_bytes,
-            "the reviewed ordinary region must cover every canonical chain id"
-        );
-        let maximum_chain_ingress =
+        let other_network_ingress =
             super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
                 7,
                 2 * source_bytes,
@@ -10267,9 +10261,9 @@ mod authoritative_runtime_gate_tests {
                 usize::MAX,
                 None,
             );
-        maximum_chain_ingress
-            .configure_roster_for_context([validator.clone()], &maximum_chain_id, layout)
-            .expect("the maximum canonical chain id fits its ordinary byte owner");
+        other_network_ingress
+            .configure_roster_for_context([validator.clone()], &other_network_id, layout)
+            .expect("every exact network id fits its fixed-width ordinary byte owner");
 
         let ingress_with_caps = |consensus, control, block_sync, outbound_high| {
             super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
@@ -10293,7 +10287,7 @@ mod authoritative_runtime_gate_tests {
             outbound_high_frame,
         );
         let consensus_error = consensus_short
-            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("one byte below the recovery-request frame fails closed");
         assert_eq!(consensus_error.configured(), consensus_frame - 1);
         assert_eq!(consensus_error.required(), consensus_frame);
@@ -10306,7 +10300,7 @@ mod authoritative_runtime_gate_tests {
             outbound_high_frame,
         );
         let control_error = control_short
-            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("one byte below the maximal safety/control frame fails closed");
         assert_eq!(control_error.configured(), control_frame - 1);
         assert_eq!(control_error.required(), control_frame);
@@ -10319,7 +10313,7 @@ mod authoritative_runtime_gate_tests {
             outbound_high_frame,
         );
         let block_sync_error = block_sync_short
-            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("one byte below the payload-completion frame fails closed");
         assert_eq!(block_sync_error.configured(), block_sync_frame - 1);
         assert_eq!(block_sync_error.required(), block_sync_frame);
@@ -10332,7 +10326,7 @@ mod authoritative_runtime_gate_tests {
             outbound_high_frame - 1,
         );
         let outbound_error = outbound_short
-            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("one byte below one encrypted high frame fails closed");
         assert_eq!(outbound_error.configured(), outbound_high_frame - 1);
         assert_eq!(outbound_error.required(), outbound_high_frame);
@@ -10345,7 +10339,7 @@ mod authoritative_runtime_gate_tests {
             outbound_high_frame,
         );
         ingress
-            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect("exact completion ceiling leaves a reviewed ordinary partition");
         ingress.open().expect("exactly sized ingress opens");
 
@@ -10411,7 +10405,7 @@ mod authoritative_runtime_gate_tests {
         let error = ingress
             .configure_roster_for_context(
                 validator_peers(1),
-                &ChainId::from("overflow-test"),
+                &crate::sumeragi::synthetic_network_id("overflow-test"),
                 layout,
             )
             .expect_err(

@@ -216,12 +216,14 @@ The server validates the complete `(epoch, issued_at, challenge_id)` anchor
 against retained authority, while the CLI rejects non-canonical cursors and
 response cursors whose generation does not match their page.
 
-The proof and verdict mutation routes use the canonical `x-iroha-operator-*` request-signature
-envelope. Method, path, canonical query, exact body digest, timestamp, and nonce
-are signed; stale timestamps, reused nonces, cross-path replays, body changes,
-and keys outside the configured operator allow-list fail before payload
-processing. PoR mutations fail closed when operator request signatures are
-disabled, even if another operator-auth fallback is configured. Provider proof
+The proof and verdict mutation routes use the canonical `x-iroha-operator-*`
+request-signature envelope. Its domain commits the exact genesis-derived
+`NetworkId` before the method, path, canonical query, exact body digest,
+timestamp, and nonce. Stale timestamps, reused nonces, foreign-network or
+cross-path replays, body changes, and keys outside the configured operator
+allow-list fail before payload processing. PoR mutations fail closed when
+operator request signatures are disabled, even if another operator-auth
+fallback is configured. Provider proof
 and auditor verdict signatures use domain-separated canonical Norito payloads
 (`sorafs.por.proof.signature.v1` and
 `sorafs.por.verdict.signature.v1`). The proof signature covers the version,

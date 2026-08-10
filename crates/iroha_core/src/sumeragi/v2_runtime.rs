@@ -15744,7 +15744,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             .map_err(|error| error.to_string())
     }
 
-    /// Commit one previously checked terminal authority refinement.
+    /// Commit one source-audited terminal refinement through the atomic batch API.
+    #[allow(dead_code)]
     pub(crate) fn commit_body_pipeline_candidate_terminal(
         &mut self,
         effect: &AdapterEffect,
@@ -18553,7 +18554,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: "sumeragi-v2-runtime-ingress-test".into(),
+            network_id: crate::sumeragi::synthetic_network_id("sumeragi-v2-runtime-ingress-test"),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 1,
@@ -20691,7 +20692,7 @@ mod tests {
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
         ingress
-            .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
+            .configure_roster_for_context(roster.clone(), &context.network_id, context.da_layout)
             .expect("preowned leader-wire geometry");
         ingress.require_leader_wire_lifecycle_gate();
         let capacity =
@@ -20886,7 +20887,7 @@ mod tests {
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
         ingress
-            .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
+            .configure_roster_for_context(roster.clone(), &context.network_id, context.da_layout)
             .expect("leader-wire runtime fixture geometry");
         ingress.require_leader_wire_lifecycle_gate();
         let capacity =
@@ -29344,7 +29345,7 @@ mod tests {
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
         restored_ingress
-            .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
+            .configure_roster_for_context(roster.clone(), &context.network_id, context.da_layout)
             .expect("restored leader-wire geometry");
         restored_ingress.require_leader_wire_lifecycle_gate();
         let capacity =
@@ -33033,7 +33034,8 @@ mod tests {
             authenticated_network_runtime(&malformed_directory, RuntimeQueueConfig::new(8, 1, 1));
         let mut malformed_manifest = runtime_manifest(&malformed_context, 0x9F);
         let mut foreign_context = malformed_context.clone();
-        foreign_context.chain_id = "foreign-runtime-preflight".into();
+        foreign_context.network_id =
+            crate::sumeragi::synthetic_network_id("foreign-runtime-preflight");
         malformed_manifest.round.context_id = foreign_context.id();
         let next_ordinal = malformed_runtime.ingress.next_admission_ordinal;
         assert_eq!(

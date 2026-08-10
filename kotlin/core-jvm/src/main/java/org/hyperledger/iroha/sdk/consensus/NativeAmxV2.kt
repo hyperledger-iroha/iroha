@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets
 import java.util.Collections
 import java.util.LinkedHashMap
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 import org.hyperledger.iroha.sdk.crypto.Blake2b
 import org.hyperledger.iroha.sdk.norito.CRC64
@@ -197,7 +198,7 @@ object NativeAmxV2 {
     class AttestationBody internal constructor(
         val round: Round,
         val epoch: BigInteger,
-        val chainIdHash: ConsensusHash,
+        val networkId: NetworkId,
         val sourceId: SourceId,
         val transactionEntrypointHash: TransactionEntrypointHash,
         val planDigest: ConsensusHash,
@@ -228,7 +229,7 @@ object NativeAmxV2 {
         private fun identity(): List<Any?> = listOf(
             round,
             epoch,
-            chainIdHash,
+            networkId,
             sourceId,
             transactionEntrypointHash,
             planDigest,
@@ -505,7 +506,7 @@ object NativeAmxV2 {
     class Receipt internal constructor(
         val version: Int,
         val sourceId: SourceId,
-        val chainIdHash: ConsensusHash,
+        val networkId: NetworkId,
         val planDigest: ConsensusHash,
         val laneId: Long,
         val dataspaceId: BigInteger,
@@ -522,7 +523,7 @@ object NativeAmxV2 {
             other is Receipt &&
                 version == other.version &&
                 sourceId == other.sourceId &&
-                chainIdHash == other.chainIdHash &&
+                networkId == other.networkId &&
                 planDigest == other.planDigest &&
                 laneId == other.laneId &&
                 dataspaceId == other.dataspaceId &&
@@ -536,7 +537,7 @@ object NativeAmxV2 {
         override fun hashCode(): Int = listOf(
             version,
             sourceId,
-            chainIdHash,
+            networkId,
             planDigest,
             laneId,
             dataspaceId,
@@ -712,7 +713,7 @@ object NativeAmxV2 {
         val version = int(record["version"], "$path.version")
         require(version == RECEIPT_VERSION) { "$path.version must equal $RECEIPT_VERSION" }
         val sourceId = source(record["source_id"], "$path.source_id")
-        val chainIdHash = hash(record["chain_id_hash"], "$path.chain_id_hash")
+        val networkId = networkId(record["network_id"], "$path.network_id")
         val planDigest = hash(record["plan_digest"], "$path.plan_digest")
         val laneId = laneId(record["lane_id"], "$path.lane_id")
         val dataspaceId = unsignedU64(record["dataspace_id"], "$path.dataspace_id")
@@ -747,7 +748,7 @@ object NativeAmxV2 {
                 body.round == firstBody.round &&
                     body.epoch == firstBody.epoch &&
                     body.round.height == authorityHeight &&
-                    body.chainIdHash == chainIdHash &&
+                    body.networkId == networkId &&
                     body.sourceId == sourceId &&
                     body.transactionEntrypointHash == firstBody.transactionEntrypointHash &&
                     body.planDigest == planDigest &&
@@ -773,7 +774,7 @@ object NativeAmxV2 {
         return Receipt(
             version,
             sourceId,
-            chainIdHash,
+            networkId,
             planDigest,
             laneId,
             dataspaceId,
@@ -985,7 +986,7 @@ object NativeAmxV2 {
         return AttestationBody(
             round = round,
             epoch = unsignedU64(record["epoch"], "$path.epoch"),
-            chainIdHash = hash(record["chain_id_hash"], "$path.chain_id_hash"),
+            networkId = networkId(record["network_id"], "$path.network_id"),
             sourceId = source(record["source_id"], "$path.source_id"),
             transactionEntrypointHash = entrypoint(
                 record["tx_entrypoint_hash"],
@@ -1352,6 +1353,9 @@ object NativeAmxV2 {
 
     private fun hash(value: Any?, path: String): ConsensusHash =
         ConsensusHash(string(value, path))
+
+    private fun networkId(value: Any?, path: String): NetworkId =
+        NetworkId.parse(string(value, path))
 
     private fun optionalHash(
         record: Map<String, Any?>,
@@ -1793,7 +1797,7 @@ object NativeAmxV2 {
     private val RECEIPT_FIELDS = setOf(
         "version",
         "source_id",
-        "chain_id_hash",
+        "network_id",
         "plan_digest",
         "lane_id",
         "dataspace_id",
@@ -1825,7 +1829,7 @@ object NativeAmxV2 {
     private val BODY_FIELDS = setOf(
         "round",
         "epoch",
-        "chain_id_hash",
+        "network_id",
         "source_id",
         "tx_entrypoint_hash",
         "plan_digest",

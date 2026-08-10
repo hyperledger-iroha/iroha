@@ -8,7 +8,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
-use crate::{ChainId, nexus::LaneId, proof::ProofBox};
+use crate::{NetworkId, nexus::LaneId, proof::ProofBox};
 
 /// Versioned SCCP network, lane, and source-identity wire types.
 pub mod sccp;
@@ -44,7 +44,7 @@ pub use sccp_registry::{
     sccp_exact_evm_xor_route_config_hash_v1, sccp_exact_solana_xor_route_config_hash_v1,
     sccp_exact_tron_xor_route_config_hash_v1, sccp_groth16_bn254_public_signal_schema_hash_v1,
     sccp_groth16_bn254_verifying_key_hash_v1, sccp_lane_id_hash_v1, sccp_network_identity_hash_v1,
-    sccp_network_tag_v1, sccp_semantic_proof_profile_hash_v1,
+    sccp_network_tag_v1, sccp_route_escrow_account_id_v1, sccp_semantic_proof_profile_hash_v1,
     sccp_solana_destination_binding_hash_v1, sccp_solana_native_verifier_config_hash_v1,
     sccp_sora_finality_anchor_hash_v1, sccp_sora_taira_chain_id_hash_v1,
     sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
@@ -618,8 +618,8 @@ pub struct BridgeFinalityAttestationBodyV1 {
     pub version: u8,
     /// Unpredictable caller challenge, required to be non-zero.
     pub challenge: [u8; 32],
-    /// Chain identifier repeated outside the proof for explicit signed routing identity.
-    pub chain_id: crate::ChainId,
+    /// Exact genesis-derived network identity repeated for explicit signed routing identity.
+    pub network_id: NetworkId,
     /// Canonical identity of the node which signs this body.
     pub node_id: crate::peer::PeerId,
     /// Hash of the canonical encoded `node_id`.
@@ -684,7 +684,7 @@ impl BridgeFinalityAttestationBodyV1 {
         if self.status.protocol_version != PROTOCOL_VERSION {
             return Err(BridgeFinalityAttestationValidationError::ProtocolVersionMismatch);
         }
-        validate_bridge_finality_proof_structure(&self.genesis_finality_proof, &self.chain_id)
+        validate_bridge_finality_proof_structure(&self.genesis_finality_proof, &self.network_id)
             .map_err(BridgeFinalityAttestationValidationError::InvalidGenesisProof)?;
         let genesis_artifact = &self.genesis_finality_proof.finality_artifact;
         if genesis_artifact.protocol_version != self.status.protocol_version {
@@ -696,7 +696,7 @@ impl BridgeFinalityAttestationBodyV1 {
         if genesis_artifact.block_hash != self.genesis_block_hash {
             return Err(BridgeFinalityAttestationValidationError::GenesisProofBlockMismatch);
         }
-        validate_bridge_finality_proof_structure(&self.finality_proof, &self.chain_id)
+        validate_bridge_finality_proof_structure(&self.finality_proof, &self.network_id)
             .map_err(BridgeFinalityAttestationValidationError::InvalidProof)?;
         let artifact = &self.finality_proof.finality_artifact;
         if artifact.height == 1 && self.genesis_finality_proof != self.finality_proof {
@@ -753,7 +753,7 @@ impl BridgeFinalityAttestationV1 {
 
 /// Failure while validating a challenge-bound node finality attestation.
 #[allow(variant_size_differences)]
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum BridgeFinalityAttestationValidationError {
     /// Attestation schema version is unsupported.
     #[error("bridge finality attestation version {actual} is unsupported; expected {expected}")]
@@ -781,10 +781,10 @@ pub enum BridgeFinalityAttestationValidationError {
     /// Status and proof do not use the compiled current protocol.
     #[error("bridge finality attestation protocol versions do not match")]
     ProtocolVersionMismatch,
-    /// The exact proof is structurally invalid or belongs to another chain.
+    /// The exact proof is structurally invalid or belongs to another network.
     #[error("bridge finality attestation proof is invalid: {0}")]
     InvalidProof(BridgeFinalityVerifyError),
-    /// The height-one proof is structurally invalid or belongs to another chain.
+    /// The height-one proof is structurally invalid or belongs to another network.
     #[error("bridge finality attestation genesis proof is invalid: {0}")]
     InvalidGenesisProof(BridgeFinalityVerifyError),
     /// The genesis proof is not for height one.
@@ -814,7 +814,7 @@ pub enum BridgeFinalityAttestationValidationError {
 }
 
 /// Commitment covering a block hash and its exact Sumeragi-v2 context.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -822,8 +822,8 @@ pub enum BridgeFinalityAttestationValidationError {
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(deny_unknown_fields)]
 pub struct BridgeCommitment {
-    /// Chain identifier to prevent cross-chain replay.
-    pub chain_id: crate::ChainId,
+    /// Exact genesis-derived network identity to prevent cross-network replay.
+    pub network_id: NetworkId,
     /// Typed hash of the complete immutable height context that finalized the block.
     pub height_context_id: crate::block::consensus_v2::HeightContextId,
     /// Block height bound into the commitment.
@@ -850,9 +850,9 @@ pub struct BridgeFinalityBundle {
 /// Internal consistency failure for a bridge finality bundle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum BridgeFinalityBundleValidationError {
-    /// Commitment and proof carry different chain identifiers.
-    #[error("bridge commitment chain id does not match its finality proof")]
-    ChainIdMismatch,
+    /// Commitment and proof carry different network identities.
+    #[error("bridge commitment network id does not match its finality proof")]
+    NetworkIdMismatch,
     /// Commitment and proof carry different immutable context identifiers.
     #[error("bridge commitment context id does not match its finality proof")]
     ContextIdMismatch,
@@ -870,11 +870,11 @@ impl BridgeFinalityBundle {
     /// # Errors
     ///
     /// Returns [`BridgeFinalityBundleValidationError`] when any duplicate
-    /// chain, context, height, or block-hash binding differs.
+    /// network, context, height, or block-hash binding differs.
     pub fn validate_consistency(&self) -> Result<(), BridgeFinalityBundleValidationError> {
         let artifact = &self.finality_proof.finality_artifact;
-        if self.commitment.chain_id != artifact.height_context.chain_id {
-            return Err(BridgeFinalityBundleValidationError::ChainIdMismatch);
+        if self.commitment.network_id != artifact.height_context.network_id {
+            return Err(BridgeFinalityBundleValidationError::NetworkIdMismatch);
         }
         if self.commitment.height_context_id != artifact.context_id() {
             return Err(BridgeFinalityBundleValidationError::ContextIdMismatch);
@@ -891,7 +891,7 @@ impl BridgeFinalityBundle {
 
 /// Errors surfaced when verifying bridge finality proofs.
 #[allow(variant_size_differences)]
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum BridgeFinalityVerifyError {
     /// Proof schema version is unsupported.
     #[error("bridge finality proof version {actual} is unsupported; expected {expected}")]
@@ -901,13 +901,13 @@ pub enum BridgeFinalityVerifyError {
         /// Version carried by the proof.
         actual: u8,
     },
-    /// Proof is bound to a different chain id.
-    #[error("chain id mismatch: expected {expected}, got {got}")]
-    ChainIdMismatch {
-        /// Expected chain id.
-        expected: ChainId,
-        /// Chain id carried inside the artifact.
-        got: ChainId,
+    /// Proof is bound to a different exact network identity.
+    #[error("network id mismatch: expected {expected}, got {got}")]
+    NetworkIdMismatch {
+        /// Expected network identity.
+        expected: NetworkId,
+        /// Network identity carried inside the artifact.
+        got: NetworkId,
     },
     /// Typed artifact failed its structural v2 bindings.
     #[error("invalid Sumeragi-v2 finality artifact: {0}")]
@@ -982,12 +982,12 @@ pub enum BridgeFinalityVerifyError {
 }
 
 /// Failure while verifying a complete bridge finality bundle.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum BridgeFinalityBundleVerifyError {
     /// Commitment metadata is not internally consistent with the exact proof.
     #[error(transparent)]
     InvalidCommitment(#[from] BridgeFinalityBundleValidationError),
-    /// The exact Sumeragi-v2 proof failed chain, context, transition, or cryptographic checks.
+    /// The exact Sumeragi-v2 proof failed network, context, transition, or cryptographic checks.
     #[error(transparent)]
     InvalidProof(#[from] BridgeFinalityVerifyError),
 }
@@ -1001,32 +1001,32 @@ pub enum BridgeFinalityBundleVerifyError {
 /// proof-controlled roster.
 #[derive(Debug, Clone)]
 pub struct BridgeFinalityVerifier {
-    expected_chain_id: ChainId,
+    expected_network_id: NetworkId,
     trusted_context_id: Option<crate::block::consensus_v2::HeightContextId>,
     latest_proof: Option<BridgeFinalityProof>,
 }
 
 impl BridgeFinalityVerifier {
-    /// Construct a verifier bound only to a chain id.
+    /// Construct a verifier bound only to an exact network identity.
     ///
     /// [`Self::set_context_anchor`] must be called before the first proof can be accepted.
     #[must_use]
-    pub fn new(expected_chain_id: ChainId) -> Self {
+    pub fn new(expected_network_id: NetworkId) -> Self {
         Self {
-            expected_chain_id,
+            expected_network_id,
             trusted_context_id: None,
             latest_proof: None,
         }
     }
 
-    /// Construct a verifier bound to a chain and first trusted v2 context id.
+    /// Construct a verifier bound to a network and first trusted v2 context id.
     #[must_use]
     pub fn with_context(
-        expected_chain_id: ChainId,
+        expected_network_id: NetworkId,
         trusted_context_id: crate::block::consensus_v2::HeightContextId,
     ) -> Self {
         Self {
-            expected_chain_id,
+            expected_network_id,
             trusted_context_id: Some(trusted_context_id),
             latest_proof: None,
         }
@@ -1045,11 +1045,11 @@ impl BridgeFinalityVerifier {
     ///
     /// # Errors
     ///
-    /// Returns [`BridgeFinalityVerifyError`] when the proof's version, chain,
+    /// Returns [`BridgeFinalityVerifyError`] when the proof's version, network,
     /// artifact/header binding, context anchor, successor transition, quorum,
     /// `PoPs`, or aggregate signature is invalid.
     pub fn verify(&mut self, proof: &BridgeFinalityProof) -> Result<(), BridgeFinalityVerifyError> {
-        validate_bridge_finality_proof_structure(proof, &self.expected_chain_id)?;
+        validate_bridge_finality_proof_structure(proof, &self.expected_network_id)?;
         if let Some(previous) = self.latest_proof.as_ref() {
             let previous_height = previous.finality_artifact.height;
             let height = proof.finality_artifact.height;
@@ -1106,16 +1106,16 @@ impl BridgeFinalityVerifier {
 ///
 /// # Errors
 ///
-/// Returns [`BridgeFinalityVerifyError`] when the version, chain, header,
+/// Returns [`BridgeFinalityVerifyError`] when the version, network, header,
 /// durable artifact, powered quorum, roster `PoPs`, or aggregate signature is
 /// invalid. Callers must separately pin the artifact's
 /// [`crate::block::consensus_v2::finality::V2FinalityArtifact::context_id`]
 /// or use [`BridgeFinalityVerifier`] when establishing trust.
 pub fn verify_bridge_finality_proof(
     proof: &BridgeFinalityProof,
-    expected_chain_id: &ChainId,
+    expected_network_id: &NetworkId,
 ) -> Result<(), BridgeFinalityVerifyError> {
-    validate_bridge_finality_proof_structure(proof, expected_chain_id)?;
+    validate_bridge_finality_proof_structure(proof, expected_network_id)?;
     proof
         .finality_artifact
         .verify()
@@ -1124,7 +1124,7 @@ pub fn verify_bridge_finality_proof(
 
 /// Verify one complete bridge finality bundle without maintaining successor state.
 ///
-/// This checks the exact commitment/proof bindings, expected chain id,
+/// This checks the exact commitment/proof bindings, expected network identity,
 /// header/artifact bindings, powered quorum, roster `PoPs`, and aggregate
 /// signature.
 ///
@@ -1134,16 +1134,16 @@ pub fn verify_bridge_finality_proof(
 /// proof is invalid.
 pub fn verify_bridge_finality_bundle(
     bundle: &BridgeFinalityBundle,
-    expected_chain_id: &ChainId,
+    expected_network_id: &NetworkId,
 ) -> Result<(), BridgeFinalityBundleVerifyError> {
     bundle.validate_consistency()?;
-    verify_bridge_finality_proof(&bundle.finality_proof, expected_chain_id)?;
+    verify_bridge_finality_proof(&bundle.finality_proof, expected_network_id)?;
     Ok(())
 }
 
 fn validate_bridge_finality_proof_structure(
     proof: &BridgeFinalityProof,
-    expected_chain_id: &ChainId,
+    expected_network_id: &NetworkId,
 ) -> Result<(), BridgeFinalityVerifyError> {
     if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V2 {
         return Err(BridgeFinalityVerifyError::UnsupportedProofVersion {
@@ -1155,10 +1155,10 @@ fn validate_bridge_finality_proof_structure(
     artifact
         .validate()
         .map_err(BridgeFinalityVerifyError::InvalidArtifact)?;
-    if artifact.height_context.chain_id != *expected_chain_id {
-        return Err(BridgeFinalityVerifyError::ChainIdMismatch {
-            expected: expected_chain_id.clone(),
-            got: artifact.height_context.chain_id.clone(),
+    if artifact.height_context.network_id != *expected_network_id {
+        return Err(BridgeFinalityVerifyError::NetworkIdMismatch {
+            expected: *expected_network_id,
+            got: artifact.height_context.network_id,
         });
     }
     let header_height = proof.block_header.height().get();
@@ -1202,7 +1202,7 @@ fn verify_successor_bridge_finality_proof(
     let Some(parent_qc) = context.parent_commit_qc.as_ref() else {
         return Err(BridgeFinalityVerifyError::ParentFinalityMismatch);
     };
-    if context.chain_id != parent.height_context.chain_id
+    if context.network_id != parent.height_context.network_id
         || context.mode != parent.height_context.mode
         || context.da_layout != parent.height_context.da_layout
         || !parent_qc
@@ -1256,6 +1256,12 @@ mod tests {
     use super::*;
     use crate::{block::consensus_v2 as wire, peer::PeerId};
 
+    fn test_network_id(seed: &str) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+            Hash::new(seed.as_bytes()),
+        ))
+    }
+
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{algorithm:?} bridge fixture key generation should succeed: {err}")
@@ -1272,20 +1278,20 @@ mod tests {
         successor_keys: Option<Vec<KeyPair>>,
     }
 
-    fn make_v2_fixture(chain_id: &str) -> V2Fixture {
-        make_v2_fixture_config(chain_id, &[1, 1, 1, 1], &[0, 1, 2], false)
+    fn make_v2_fixture(network_seed: &str) -> V2Fixture {
+        make_v2_fixture_config(network_seed, &[1, 1, 1, 1], &[0, 1, 2], false)
     }
 
     fn make_v2_fixture_with_quorum(
-        chain_id: &str,
+        network_seed: &str,
         powers: &[u64],
         signer_indices: &[u32],
     ) -> V2Fixture {
-        make_v2_fixture_config(chain_id, powers, signer_indices, false)
+        make_v2_fixture_config(network_seed, powers, signer_indices, false)
     }
 
-    fn make_boundary_v2_fixture(chain_id: &str) -> V2Fixture {
-        make_v2_fixture_config(chain_id, &[1, 1, 1, 1], &[0, 1, 2], true)
+    fn make_boundary_v2_fixture(network_seed: &str) -> V2Fixture {
+        make_v2_fixture_config(network_seed, &[1, 1, 1, 1], &[0, 1, 2], true)
     }
 
     fn attestation_for_fixture(fixture: &V2Fixture) -> BridgeFinalityAttestationV1 {
@@ -1344,7 +1350,7 @@ mod tests {
         let body = BridgeFinalityAttestationBodyV1 {
             version: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,
             challenge: *Hash::new(b"unpredictable finality capture challenge").as_ref(),
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             node_fingerprint: status.node_fingerprint,
             node_id,
             genesis_block_hash: fixture.proof.block_header.hash(),
@@ -1362,7 +1368,7 @@ mod tests {
         reason = "the self-contained fixture builds one cryptographically coherent v2 artifact"
     )]
     fn make_v2_fixture_config(
-        chain_id: &str,
+        network_seed: &str,
         powers: &[u64],
         signer_indices: &[u32],
         boundary: bool,
@@ -1454,7 +1460,7 @@ mod tests {
             (None, None)
         };
         let context = HeightContext {
-            chain_id: chain_id.parse().expect("chain id"),
+            network_id: test_network_id(network_seed),
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -1595,7 +1601,7 @@ mod tests {
             0,
         );
         let context = wire::HeightContext {
-            chain_id: parent_artifact.height_context.chain_id.clone(),
+            network_id: parent_artifact.height_context.network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height,
             epoch,
@@ -2663,7 +2669,7 @@ mod tests {
         let context_id = proof.finality_artifact.context_id();
         let bundle = BridgeFinalityBundle {
             commitment: BridgeCommitment {
-                chain_id: proof.finality_artifact.height_context.chain_id.clone(),
+                network_id: proof.finality_artifact.height_context.network_id,
                 height_context_id: context_id,
                 block_height: proof.finality_artifact.height,
                 block_hash: proof.finality_artifact.block_hash,
@@ -2684,7 +2690,7 @@ mod tests {
                 .finality_proof
                 .finality_artifact
                 .height_context
-                .chain_id,
+                .network_id,
         )
         .expect("stateless exact bundle verification succeeds");
 
@@ -2693,8 +2699,7 @@ mod tests {
                 .finality_proof
                 .finality_artifact
                 .height_context
-                .chain_id
-                .clone(),
+                .network_id,
             context_id,
         );
         verifier
@@ -2708,7 +2713,7 @@ mod tests {
         let proof = fixture.proof;
         let bundle = BridgeFinalityBundle {
             commitment: BridgeCommitment {
-                chain_id: proof.finality_artifact.height_context.chain_id.clone(),
+                network_id: proof.finality_artifact.height_context.network_id,
                 height_context_id: proof.finality_artifact.context_id(),
                 block_height: proof.finality_artifact.height,
                 block_hash: proof.finality_artifact.block_hash,
@@ -2716,11 +2721,11 @@ mod tests {
             finality_proof: proof,
         };
 
-        let mut wrong_chain = bundle.clone();
-        wrong_chain.commitment.chain_id = "other-chain".parse().expect("chain id");
+        let mut wrong_network = bundle.clone();
+        wrong_network.commitment.network_id = test_network_id("other-network");
         assert_eq!(
-            wrong_chain.validate_consistency(),
-            Err(BridgeFinalityBundleValidationError::ChainIdMismatch)
+            wrong_network.validate_consistency(),
+            Err(BridgeFinalityBundleValidationError::NetworkIdMismatch)
         );
 
         let mut wrong_context = bundle.clone();
@@ -2754,7 +2759,7 @@ mod tests {
         let fixture = make_v2_fixture("chain-a");
         let proof = fixture.proof;
         let mut verifier = BridgeFinalityVerifier::with_context(
-            proof.finality_artifact.height_context.chain_id.clone(),
+            proof.finality_artifact.height_context.network_id,
             proof.finality_artifact.context_id(),
         );
 
@@ -2764,14 +2769,8 @@ mod tests {
     #[test]
     fn verifier_requires_an_explicit_context_anchor() {
         let fixture = make_v2_fixture("chain-a");
-        let mut verifier = BridgeFinalityVerifier::new(
-            fixture
-                .proof
-                .finality_artifact
-                .height_context
-                .chain_id
-                .clone(),
-        );
+        let mut verifier =
+            BridgeFinalityVerifier::new(fixture.proof.finality_artifact.height_context.network_id);
 
         assert!(matches!(
             verifier.verify(&fixture.proof),
@@ -2780,19 +2779,14 @@ mod tests {
     }
 
     #[test]
-    fn verifier_rejects_version_chain_header_height_and_hash_drift() {
+    fn verifier_rejects_version_network_header_height_and_hash_drift() {
         let fixture = make_v2_fixture("chain-a");
-        let expected_chain = fixture
-            .proof
-            .finality_artifact
-            .height_context
-            .chain_id
-            .clone();
+        let expected_network = fixture.proof.finality_artifact.height_context.network_id;
         let context_id = fixture.proof.finality_artifact.context_id();
 
         let mut wrong_version = fixture.proof.clone();
         wrong_version.version = BRIDGE_FINALITY_PROOF_VERSION_V2 + 1;
-        let mut verifier = BridgeFinalityVerifier::with_context(expected_chain.clone(), context_id);
+        let mut verifier = BridgeFinalityVerifier::with_context(expected_network, context_id);
         assert!(matches!(
             verifier.verify(&wrong_version),
             Err(BridgeFinalityVerifyError::UnsupportedProofVersion { .. })
@@ -2800,7 +2794,7 @@ mod tests {
 
         let mut legacy_v1 = fixture.proof.clone();
         legacy_v1.version = 1;
-        let mut verifier = BridgeFinalityVerifier::with_context(expected_chain.clone(), context_id);
+        let mut verifier = BridgeFinalityVerifier::with_context(expected_network, context_id);
         assert!(matches!(
             verifier.verify(&legacy_v1),
             Err(BridgeFinalityVerifyError::UnsupportedProofVersion {
@@ -2809,13 +2803,11 @@ mod tests {
             })
         ));
 
-        let mut verifier = BridgeFinalityVerifier::with_context(
-            "other-chain".parse().expect("chain id"),
-            context_id,
-        );
+        let mut verifier =
+            BridgeFinalityVerifier::with_context(test_network_id("other-chain"), context_id);
         assert!(matches!(
             verifier.verify(&fixture.proof),
-            Err(BridgeFinalityVerifyError::ChainIdMismatch { .. })
+            Err(BridgeFinalityVerifyError::NetworkIdMismatch { .. })
         ));
 
         let mut wrong_height = fixture.proof.clone();
@@ -2827,7 +2819,7 @@ mod tests {
             0,
             0,
         );
-        let mut verifier = BridgeFinalityVerifier::with_context(expected_chain.clone(), context_id);
+        let mut verifier = BridgeFinalityVerifier::with_context(expected_network, context_id);
         assert!(matches!(
             verifier.verify(&wrong_height),
             Err(BridgeFinalityVerifyError::BlockHeaderHeightMismatch { .. })
@@ -2844,7 +2836,7 @@ mod tests {
             0,
             0,
         );
-        let mut verifier = BridgeFinalityVerifier::with_context(expected_chain, context_id);
+        let mut verifier = BridgeFinalityVerifier::with_context(expected_network, context_id);
         assert!(matches!(
             verifier.verify(&wrong_hash),
             Err(BridgeFinalityVerifyError::BlockHeaderHashMismatch { .. })
@@ -2875,8 +2867,7 @@ mod tests {
                 .proof
                 .finality_artifact
                 .height_context
-                .chain_id
-                .clone(),
+                .network_id,
             parent_attack.proof.finality_artifact.context_id(),
         );
         assert_eq!(
@@ -2907,8 +2898,7 @@ mod tests {
                 .proof
                 .finality_artifact
                 .height_context
-                .chain_id
-                .clone(),
+                .network_id,
             view_attack.proof.finality_artifact.context_id(),
         );
         assert_eq!(
@@ -2937,12 +2927,7 @@ mod tests {
             .validate_for_header(&delayed.proof.block_header)
             .expect("a later-round certificate is valid for the unchanged locked block");
         let mut verifier = BridgeFinalityVerifier::with_context(
-            delayed
-                .proof
-                .finality_artifact
-                .height_context
-                .chain_id
-                .clone(),
+            delayed.proof.finality_artifact.height_context.network_id,
             delayed.proof.finality_artifact.context_id(),
         );
         verifier
@@ -2962,12 +2947,7 @@ mod tests {
         rebind_v2_proof_to_header(&mut child, &parent.keys);
 
         let mut verifier = BridgeFinalityVerifier::with_context(
-            parent
-                .proof
-                .finality_artifact
-                .height_context
-                .chain_id
-                .clone(),
+            parent.proof.finality_artifact.height_context.network_id,
             parent.proof.finality_artifact.context_id(),
         );
         verifier
@@ -2987,8 +2967,7 @@ mod tests {
 
         let mut missing = fixture.proof.clone();
         missing.finality_artifact.validator_set_pops.pop();
-        let mut verifier =
-            BridgeFinalityVerifier::with_context(context.chain_id.clone(), context_id);
+        let mut verifier = BridgeFinalityVerifier::with_context(context.network_id, context_id);
         assert!(matches!(
             verifier.verify(&missing),
             Err(BridgeFinalityVerifyError::InvalidArtifact(
@@ -3000,7 +2979,7 @@ mod tests {
         let mut invalid = fixture.proof;
         invalid.finality_artifact.validator_set_pops[3] =
             other.proof.finality_artifact.validator_set_pops[0].clone();
-        let mut verifier = BridgeFinalityVerifier::with_context(context.chain_id, context_id);
+        let mut verifier = BridgeFinalityVerifier::with_context(context.network_id, context_id);
         assert!(matches!(
             verifier.verify(&invalid),
             Err(BridgeFinalityVerifyError::CertificateVerification(
@@ -3017,8 +2996,7 @@ mod tests {
         let mut oversized = fixture.proof.clone();
         oversized.finality_artifact.commit_qc.aggregate_signature =
             vec![0x7F; crate::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES + 1];
-        let mut verifier =
-            BridgeFinalityVerifier::with_context(context.chain_id.clone(), context.id());
+        let mut verifier = BridgeFinalityVerifier::with_context(context.network_id, context.id());
         assert!(matches!(
             verifier.verify(&oversized),
             Err(BridgeFinalityVerifyError::InvalidArtifact(
@@ -3034,7 +3012,7 @@ mod tests {
             .commit_qc
             .aggregate_signature[0] ^= 0x80;
         let context_id = context.id();
-        let mut verifier = BridgeFinalityVerifier::with_context(context.chain_id, context_id);
+        let mut verifier = BridgeFinalityVerifier::with_context(context.network_id, context_id);
 
         assert!(matches!(
             verifier.verify(&fixture.proof),
@@ -3062,7 +3040,7 @@ mod tests {
             .expect("boundary snapshot")
             .leader_seed[0] ^= 0x80;
         let mut verifier = BridgeFinalityVerifier::with_context(
-            original_context.chain_id.clone(),
+            original_context.network_id,
             original_context.id(),
         );
         assert!(matches!(
@@ -3092,7 +3070,7 @@ mod tests {
             .proposal_round
             .context_id = replacement_context_id;
         let mut verifier = BridgeFinalityVerifier::with_context(
-            original_context.chain_id,
+            original_context.network_id,
             forged_context_id.finality_artifact.context_id(),
         );
         assert!(matches!(
@@ -3118,15 +3096,10 @@ mod tests {
             snapshot.roster, parent.proof.finality_artifact.height_context.roster,
             "boundary fixture must exercise a genuinely rotated BLS roster"
         );
-        let chain_id = parent
-            .proof
-            .finality_artifact
-            .height_context
-            .chain_id
-            .clone();
+        let network_id = parent.proof.finality_artifact.height_context.network_id;
         let context_anchor = parent.proof.finality_artifact.context_id();
 
-        let mut verifier = BridgeFinalityVerifier::with_context(chain_id.clone(), context_anchor);
+        let mut verifier = BridgeFinalityVerifier::with_context(network_id, context_anchor);
         verifier
             .verify(&parent.proof)
             .expect("authenticated boundary parent");
@@ -3146,11 +3119,11 @@ mod tests {
                 .as_deref()
                 .expect("rotated successor keys"),
         );
-        verify_bridge_finality_proof(&substituted, &chain_id)
+        verify_bridge_finality_proof(&substituted, &network_id)
             .expect("substituted child is independently self-consistent");
         substituted.finality_artifact.commit_qc.aggregate_signature[0] ^= 0x80;
 
-        let mut verifier = BridgeFinalityVerifier::with_context(chain_id, context_anchor);
+        let mut verifier = BridgeFinalityVerifier::with_context(network_id, context_anchor);
         verifier
             .verify(&parent.proof)
             .expect("authenticated boundary parent");
@@ -3167,18 +3140,13 @@ mod tests {
 
         let parent = make_boundary_v2_fixture("rotated-chain");
         let child = make_successor_v2_proof(&parent);
-        let chain_id = parent
-            .proof
-            .finality_artifact
-            .height_context
-            .chain_id
-            .clone();
+        let network_id = parent.proof.finality_artifact.height_context.network_id;
         let anchor = parent.proof.finality_artifact.context_id();
 
         let mut old_pops = child.clone();
         old_pops.finality_artifact.validator_set_pops =
             parent.proof.finality_artifact.validator_set_pops.clone();
-        let mut verifier = BridgeFinalityVerifier::with_context(chain_id.clone(), anchor);
+        let mut verifier = BridgeFinalityVerifier::with_context(network_id, anchor);
         verifier.verify(&parent.proof).expect("boundary parent");
         assert_eq!(
             verifier.verify(&old_pops),
@@ -3190,7 +3158,7 @@ mod tests {
             .finality_artifact
             .validator_set_pops
             .swap(0, 1);
-        let mut verifier = BridgeFinalityVerifier::with_context(chain_id.clone(), anchor);
+        let mut verifier = BridgeFinalityVerifier::with_context(network_id, anchor);
         verifier.verify(&parent.proof).expect("boundary parent");
         assert_eq!(
             verifier.verify(&permuted_pops),
@@ -3199,7 +3167,7 @@ mod tests {
 
         let mut old_key_signature = child;
         resign_v2_proof(&mut old_key_signature, &parent.keys);
-        let mut verifier = BridgeFinalityVerifier::with_context(chain_id, anchor);
+        let mut verifier = BridgeFinalityVerifier::with_context(network_id, anchor);
         verifier.verify(&parent.proof).expect("boundary parent");
         assert!(matches!(
             verifier.verify(&old_key_signature),
@@ -3277,12 +3245,7 @@ mod tests {
         let fixture = make_v2_fixture("chain-a");
         let other = make_v2_fixture("chain-a");
         let mut verifier = BridgeFinalityVerifier::with_context(
-            fixture
-                .proof
-                .finality_artifact
-                .height_context
-                .chain_id
-                .clone(),
+            fixture.proof.finality_artifact.height_context.network_id,
             other.proof.finality_artifact.context_id(),
         );
 

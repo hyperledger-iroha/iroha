@@ -29,8 +29,10 @@ PROVENANCE_CERTIFICATE_IDENTITY = (
 PROVENANCE_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX = "11" * 32
 TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX = "22" * 32
-TOPOLOGY_SIGNER_IDENTITY = "sorafs-reference-sdk-topology-software"
+TOPOLOGY_SIGNER_SERVICE_ID = "sorafs-reference-sdk-topology-signer-a"
+TOPOLOGY_SIGNER_ADMINISTRATOR_ID = "sorafs-reference-sdk-topology-admin-b"
 TOPOLOGY_SIGNER_KEY_REVISION = 7
+TOPOLOGY_SIGNER_POLICY_REVISION = 9
 TOPOLOGY_SIGNER_POLICY_DIGEST_HEX = "33" * 32
 TOPOLOGY_MAX_REVIEW_AGE_SECS = 3_600
 
@@ -54,8 +56,11 @@ def write_topology_qualification(path: Path) -> Path:
         "deployment": {
             "deployment_id": "reference-sdk-release-20260701",
             "environment": "production",
+            "network": "taira",
+            "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
+            "chain_discriminant": 369,
         },
-        "validator_count": 4,
+        "validator_count": 4, "validator_ids": ["taira-validator-1", "taira-validator-2", "taira-validator-3", "taira-validator-4"],
         "storage_provider_count": 2,
         "gateway_count": 2,
         "governance_dag_instance_count": 2,
@@ -80,10 +85,14 @@ def topology_args(tmp_path: Path) -> list[str]:
         str(envelope),
         "--topology-qualification-verification-public-key-hex",
         TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX,
-        "--topology-qualification-signer-identity",
-        TOPOLOGY_SIGNER_IDENTITY,
+        "--topology-qualification-signer-service-id",
+        TOPOLOGY_SIGNER_SERVICE_ID,
+        "--topology-qualification-signer-administrator-id",
+        TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
         "--topology-qualification-signer-key-revision",
         str(TOPOLOGY_SIGNER_KEY_REVISION),
+        "--topology-qualification-signer-policy-revision",
+        str(TOPOLOGY_SIGNER_POLICY_REVISION),
         "--topology-qualification-signer-policy-digest-hex",
         TOPOLOGY_SIGNER_POLICY_DIGEST_HEX,
         "--max-topology-qualification-review-age-secs",
@@ -195,8 +204,10 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
         "verification_public_key_fingerprint_hex": hashlib.sha256(
             bytes.fromhex(TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX)
         ).hexdigest(),
-        "signer_identity": TOPOLOGY_SIGNER_IDENTITY,
+        "signer_service_id": TOPOLOGY_SIGNER_SERVICE_ID,
+        "signer_administrator_id": TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
         "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,
+        "signer_policy_revision": TOPOLOGY_SIGNER_POLICY_REVISION,
         "signer_policy_digest_hex": TOPOLOGY_SIGNER_POLICY_DIGEST_HEX,
     }
     assert plan["evidence_contract"]["release_archive"]["schema"] == (
@@ -275,11 +286,17 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
         + 1
     ] == TOPOLOGY_VERIFICATION_PUBLIC_KEY_HEX
     assert verifier[
-        verifier.index("--topology-qualification-signer-identity") + 1
-    ] == TOPOLOGY_SIGNER_IDENTITY
+        verifier.index("--topology-qualification-signer-service-id") + 1
+    ] == TOPOLOGY_SIGNER_SERVICE_ID
+    assert verifier[
+        verifier.index("--topology-qualification-signer-administrator-id") + 1
+    ] == TOPOLOGY_SIGNER_ADMINISTRATOR_ID
     assert verifier[
         verifier.index("--topology-qualification-signer-key-revision") + 1
     ] == str(TOPOLOGY_SIGNER_KEY_REVISION)
+    assert verifier[
+        verifier.index("--topology-qualification-signer-policy-revision") + 1
+    ] == str(TOPOLOGY_SIGNER_POLICY_REVISION)
     assert verifier[
         verifier.index(
             "--topology-qualification-signer-policy-digest-hex"
@@ -379,8 +396,10 @@ def test_plan_json_rejects_tampered_signed_topology_binding(
     cases = (
         ("envelope_path", "runtime-only-envelope-substitution"),
         ("verification_public_key_fingerprint_hex", "44" * 32),
-        ("signer_identity", "runtime-only-signer-substitution"),
+        ("signer_service_id", "runtime-only-service-substitution"),
+        ("signer_administrator_id", "runtime-only-admin-substitution"),
         ("signer_key_revision", 0),
+        ("signer_policy_revision", 0),
         ("signer_policy_digest_hex", "55" * 32),
     )
     for field, replacement in cases:
@@ -401,7 +420,7 @@ def test_plan_json_rejects_tampered_signed_topology_binding(
     args = MODULE.parse_args(complete_args(tmp_path))
     plan = MODULE.build_command_plan(args)
     rendered = MODULE.plan_json(plan, args)
-    del rendered["topology_qualification"]["signer_identity"]
+    del rendered["topology_qualification"]["signer_service_id"]
     rendered["topology_qualification"]["private_key"] = (
         "runtime-only-key-material"
     )
@@ -740,8 +759,10 @@ def test_missing_signed_topology_arguments_fail_before_plan(
         "--topology-qualification-summary",
         "--topology-qualification-envelope",
         "--topology-qualification-verification-public-key-hex",
-        "--topology-qualification-signer-identity",
+        "--topology-qualification-signer-service-id",
+        "--topology-qualification-signer-administrator-id",
         "--topology-qualification-signer-key-revision",
+        "--topology-qualification-signer-policy-revision",
         "--topology-qualification-signer-policy-digest-hex",
     )
     for option in required_options:

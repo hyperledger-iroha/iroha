@@ -151,12 +151,12 @@ pub const ALIAS_FRONTIER_HASH_DOMAIN: &[u8] = b"iroha:alias:frontier:v1|";
 
 /// Deterministic digest for alias frontier checkpoints.
 ///
-/// Combines the domain tag, chain id, block height, root hash, and a
+/// Combines the domain tag, exact genesis-derived network id, block height, root hash, and a
 /// lexicographically sorted frontier list to keep the digest stable across
 /// hardware and ordering differences.
 #[must_use]
 pub fn alias_frontier_digest(
-    chain_id: &crate::id::ChainId,
+    network_id: &crate::NetworkId,
     height: u64,
     snapshot: &AliasMerkleSnapshot,
 ) -> Hash {
@@ -173,15 +173,13 @@ pub fn alias_frontier_digest(
 
     let mut buf = Vec::with_capacity(
         ALIAS_FRONTIER_HASH_DOMAIN.len()
-            + chain_id.as_str().len()
-            + 1
+            + Hash::LENGTH
             + std::mem::size_of::<u64>()
             + Hash::LENGTH
             + frontier.len() * Hash::LENGTH,
     );
     buf.extend_from_slice(ALIAS_FRONTIER_HASH_DOMAIN);
-    buf.extend_from_slice(chain_id.as_str().as_bytes());
-    buf.push(b'|');
+    buf.extend_from_slice(network_id.as_bytes());
     buf.extend_from_slice(&height.to_be_bytes());
     buf.extend_from_slice(snapshot.root.as_ref());
     for node in frontier {
@@ -260,7 +258,11 @@ mod tests {
         let root = HashOf::<AliasRecord>::new(&record);
         let f1 = HashOf::<AliasRecord>::from_untyped_unchecked(Hash::new(b"frontier-1"));
         let f2 = HashOf::<AliasRecord>::from_untyped_unchecked(Hash::new(b"frontier-2"));
-        let chain_id = crate::id::ChainId::from("demo-chain");
+        let network_id = crate::NetworkId::from_genesis_hash(
+            HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"alias-frontier-network",
+            )),
+        );
 
         let snap_ab = AliasMerkleSnapshot {
             root,
@@ -271,11 +273,19 @@ mod tests {
             frontier: vec![f2, f1],
         };
 
-        let digest_ab = alias_frontier_digest(&chain_id, 42, &snap_ab);
-        let digest_ba = alias_frontier_digest(&chain_id, 42, &snap_ba);
+        let digest_ab = alias_frontier_digest(&network_id, 42, &snap_ab);
+        let digest_ba = alias_frontier_digest(&network_id, 42, &snap_ba);
         assert_eq!(digest_ab, digest_ba);
 
-        let digest_height_variation = alias_frontier_digest(&chain_id, 43, &snap_ab);
+        let digest_height_variation = alias_frontier_digest(&network_id, 43, &snap_ab);
         assert_ne!(digest_ab, digest_height_variation);
+
+        let foreign_network = crate::NetworkId::from_genesis_hash(HashOf::<
+            crate::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(b"foreign-alias-frontier-network"),
+        ));
+        let digest_network_variation = alias_frontier_digest(&foreign_network, 42, &snap_ab);
+        assert_ne!(digest_ab, digest_network_variation);
     }
 }

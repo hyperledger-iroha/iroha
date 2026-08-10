@@ -35,17 +35,19 @@ prefix. The 29-byte address payload is
 
 ```text
 "iroha:contract-address:v1"
-|| chain_id_utf8_len_u16_be || exact_canonical_chain_id_utf8
+|| network_id_raw_32
 || dataspace_id_u64_be || deploy_nonce_u64_be
 || deployer_canonical_bytes_len_u32_be || deployer_canonical_bytes
 ```
 
-`CommitContractDeployment` always supplies the authenticated chain identifier
-from consensus state and recomputes the address before writing any binding.
-Client-side derivation APIs therefore require an explicit full `ChainId`; the
-account-address I105 discriminant is used only to decode or render the deployer
-literal and is never a contract-identity input. The CLI spelling is
-`iroha contract derive-address --chain-id <CHAIN_ID> ...`.
+`network_id_raw_32` is the exact genesis consensus-header hash, without text or
+length framing. `CommitContractDeployment` always supplies the authenticated
+`NetworkId` from consensus state and recomputes the address before writing any
+binding. Client-side derivation APIs therefore require an explicit canonical
+`NetworkId`; a human-readable `ChainId` is not accepted as a security-domain
+input. The account-address I105 discriminant is used only to decode or render
+the deployer literal and is never a contract-identity input. The CLI spelling
+is `iroha contract derive-address --network-id <NETWORK_ID> ...`.
 
 ## Stored Artifacts & Retention
 

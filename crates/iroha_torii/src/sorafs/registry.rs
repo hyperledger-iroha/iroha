@@ -46,7 +46,7 @@ use sorafs_manifest::{
 use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::{routing::MaybeTelemetry, sorafs::capability_name};
+use crate::sorafs::capability_name;
 
 const METADATA_STATUS_TIMESTAMP_KEY: &str = "sorafs_status_timestamp_unix";
 const METADATA_GOVERNANCE_REFS_KEY: &str = "sorafs_governance_refs";
@@ -866,29 +866,6 @@ impl PinRegistrySnapshot {
             anomalies,
         }
     }
-}
-
-/// Record Prometheus metrics for the given registry snapshot.
-pub(crate) fn record_pin_registry_metrics(
-    telemetry: &MaybeTelemetry,
-    snapshot: &PinRegistrySnapshot,
-) {
-    let summary = PinRegistryMetricsSummary::from_snapshot(snapshot);
-    telemetry.with_metrics(|metrics| {
-        metrics.record_sorafs_registry(
-            summary.manifests_pending,
-            summary.manifests_approved,
-            summary.manifests_retired,
-            summary.alias_total,
-            summary.orders_pending,
-            summary.orders_completed,
-            summary.orders_expired,
-            summary.sla_met,
-            summary.sla_missed,
-            &summary.completion_latencies,
-            &summary.deadline_slack_epochs,
-        );
-    });
 }
 
 #[derive(Debug, Clone)]
@@ -2508,6 +2485,7 @@ mod tests {
             order_id: ReplicationOrderId::new(order_payload.order_id),
             manifest_digest: ManifestDigest::new([0x55; 32]),
             manifest_root_cid,
+            musubi_archive: None,
             issued_by: issuer.clone(),
             issued_epoch: 10,
             deadline_epoch: 20,

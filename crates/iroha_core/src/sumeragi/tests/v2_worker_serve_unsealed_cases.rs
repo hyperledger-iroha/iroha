@@ -349,7 +349,7 @@ fn dormant_exact_head_fail_stops_after_saturated_fair_prefix_without_repair() {
             wire::ConsensusMessageV2Payload::CommitCertificateRequest(
                 wire::CommitCertificateRequest {
                     protocol_version: wire::PROTOCOL_VERSION,
-                    chain_id: service.context.chain_id.clone(),
+                    network_id: service.context.network_id,
                     context_id: service.context.id(),
                     height: fair_predecessor_height,
                     requester: via.clone(),

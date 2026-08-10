@@ -1679,7 +1679,7 @@ mod tests {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum ConsensusBindingAxisV1 {
-        ChainId,
+        NetworkId,
         GenesisHash,
         ActionIndex,
         TransactionIntentDigest,
@@ -1691,7 +1691,7 @@ mod tests {
     }
 
     const CONSENSUS_BINDING_AXES_V1: [ConsensusBindingAxisV1; 9] = [
-        ConsensusBindingAxisV1::ChainId,
+        ConsensusBindingAxisV1::NetworkId,
         ConsensusBindingAxisV1::GenesisHash,
         ConsensusBindingAxisV1::ActionIndex,
         ConsensusBindingAxisV1::TransactionIntentDigest,
@@ -1705,10 +1705,14 @@ mod tests {
     impl ConsensusBindingAxisV1 {
         fn mutate_binding(self, binding: &mut PrivacyNativeConsensusBindingV1) {
             match self {
-                Self::ChainId => {
-                    binding.chain_id = "substituted-ivm-private-note-chain"
-                        .parse()
-                        .expect("valid substituted chain id");
+                Self::NetworkId => {
+                    binding.network_id =
+                        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                            iroha_data_model::block::BlockHeader,
+                        >::from_untyped_unchecked(
+                            iroha_crypto::Hash::prehashed([0xD0; 32]),
+                        ));
+                    binding.genesis_hash = [0xD0; 32];
                 }
                 Self::GenesisHash => binding.genesis_hash = [0xD0; 32],
                 Self::ActionIndex => binding.action_index ^= 1,
@@ -1737,10 +1741,13 @@ mod tests {
 
         fn mutate_context(self, context: &mut PrivacyStatementContextV1) {
             match self {
-                Self::ChainId => {
-                    context.chain_id = "substituted-ivm-private-note-chain"
-                        .parse()
-                        .expect("valid substituted chain id");
+                Self::NetworkId => {
+                    context.network_id =
+                        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                            iroha_data_model::block::BlockHeader,
+                        >::from_untyped_unchecked(
+                            iroha_crypto::Hash::prehashed([0xD0; 32]),
+                        ));
                 }
                 Self::GenesisHash => {}
                 Self::ActionIndex => context.action_index ^= 1,
@@ -1769,10 +1776,12 @@ mod tests {
 
         fn mismatch_error(self) -> Option<PrivacyNativeConsensusBindingValidationErrorV1> {
             match self {
-                Self::ChainId => {
-                    Some(PrivacyNativeConsensusBindingValidationErrorV1::ChainIdMismatch)
+                Self::NetworkId => {
+                    Some(PrivacyNativeConsensusBindingValidationErrorV1::NetworkIdMismatch)
                 }
-                Self::GenesisHash => None,
+                Self::GenesisHash => {
+                    Some(PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch)
+                }
                 Self::ActionIndex => {
                     Some(PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch)
                 }
@@ -1827,9 +1836,14 @@ mod tests {
         } else {
             axis.mutate_context(&mut substituted_statement.context);
             redigest_statement_v1(&mut substituted_statement);
+            let genesis_hash = if axis == ConsensusBindingAxisV1::NetworkId {
+                *substituted_statement.context.network_id.as_bytes()
+            } else {
+                binding.genesis_hash
+            };
             PrivacyNativeConsensusBindingV1::new(
                 &substituted_statement.context,
-                binding.genesis_hash,
+                genesis_hash,
                 limits,
             )
             .expect("coordinated substituted consensus binding")

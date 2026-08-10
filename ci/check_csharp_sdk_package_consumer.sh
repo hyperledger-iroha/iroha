@@ -175,10 +175,10 @@ if (Encoding.UTF8.GetString(canonicalMessage) != expectedMessage)
 EthereumMainnetSccp.RequireMainnetChainId(EthereumMainnetSccp.MainnetChainId);
 EthereumMainnetSccp.RequireInboundRoute(EthereumMainnetSccp.DomainEthereum, EthereumMainnetSccp.DomainSora);
 EthereumMainnetSccp.RequireOutboundRoute(EthereumMainnetSccp.DomainSora, EthereumMainnetSccp.DomainEthereum);
-if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 21u
+if (SoraFsReferenceValidators.RequiredBridgeAbiVersion != 22u
     || !SoraFsReferenceValidators.IsAppealFinanceAvailable())
 {
-    throw new InvalidOperationException("Packed ABI-21 SoraFS native bridge is unavailable");
+    throw new InvalidOperationException("Packed ABI-22 SoraFS native bridge is unavailable");
 }
 
 Console.WriteLine("Hyperledger.Iroha.Sdk package consumer smoke passed");

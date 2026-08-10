@@ -715,7 +715,7 @@ def test_post_rename_publisher_failure_retains_final_and_recovery_journal(
     assert summary["post_run_validation"] == "completed"
     assert summary["post_success_finalize"] == "failed"
     assert summary["post_run_cleanup"] == "failed"
-    assert summary["exit_reason"] == "post_run_cleanup_error"
+    assert summary["exit_reason"] == "post_success_finalize_error"
     assert not list(tmp_path.glob(f"{MODULE.STAGING_PREFIX}*"))
 
 

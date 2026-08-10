@@ -2528,9 +2528,9 @@ pub mod extractors {
         #[cfg(feature = "app_api")]
         fn offline_ingress_top_up_fixture() -> iroha_torii_shared::offline_api::OfflineTopUpRequest
         {
-            use iroha_crypto::{Algorithm, KeyPair};
+            use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
             use iroha_data_model::{
-                ChainId,
+                NetworkId,
                 account::AccountId,
                 asset::{AssetDefinitionId, AssetId},
                 domain::DomainId,
@@ -2550,7 +2550,11 @@ pub mod extractors {
                 DomainId::try_new("offline", "universal").expect("fixture domain"),
                 "ingress".parse().expect("fixture asset name"),
             );
-            let chain_id = ChainId::from("offline-ingress-test");
+            let network_id = NetworkId::from_genesis_hash(HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                Hash::new(b"offline-ingress-test-network"),
+            ));
             let amount = KagemushaScaledAmountV2 {
                 atomic_units: 500,
                 scale: 0,
@@ -2569,7 +2573,7 @@ pub mod extractors {
                 asset: AssetId::new(definition.clone(), authority.clone()),
                 amount,
                 current_note: KagemushaSpendableNoteDescriptorV2 {
-                    chain_id,
+                    network_id,
                     asset: definition.clone(),
                     note_commitment: [0x45; 32],
                     spend_nullifier: [0x46; 32],
@@ -2648,7 +2652,7 @@ pub mod extractors {
                 binding.manifest_sha256,
             );
             let statement = KagemushaRecursiveSpendPublicStatementV4 {
-                chain_id: note.chain_id.clone(),
+                network_id: note.network_id,
                 asset: note.asset.clone(),
                 asset_scale: amount.scale,
                 final_root: [0x53; 32],
@@ -2707,10 +2711,10 @@ pub mod extractors {
                 root: [0x53; 32],
                 public_amount: [0x5A; 32],
                 asset_tag: [0x5B; 32],
-                chain_tag: [0x5C; 32],
+                network_tag: [0x5C; 32],
             };
             let redemption = KagemushaRecursiveSpendRedemptionIntentV4 {
-                chain_id: note.chain_id.clone(),
+                network_id: note.network_id,
                 asset: note.asset.clone(),
                 input_note: note,
                 parent_branch_claims: vec![branch_claim],
@@ -3984,7 +3988,7 @@ pub mod extractors {
             let lineage = OfflineRecipientLineageRequest {
                 version: iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION,
                 selector: OfflineRecipientLineageSelectorV2 {
-                    chain_id: top_up.current_note.chain_id.clone(),
+                    network_id: top_up.current_note.network_id,
                     recipient: top_up.authorization.authority.clone(),
                     receiver_device_id: "d".repeat(128),
                     asset: top_up.current_note.asset.clone(),

@@ -95,7 +95,7 @@ fn run(args: &Args) -> Result<Receipt, String> {
         return Err("signed genesis is not canonical framed Norito".to_owned());
     }
     let genesis_account = AccountId::new(args.genesis_public_key.clone());
-    validate_genesis_block(&block, &genesis_account, &args.chain_id)
+    validate_genesis_block(&block, &genesis_account)
         .map_err(|error| format!("root signature or genesis invariants failed: {error}"))?;
 
     let expected = manifest
@@ -107,9 +107,11 @@ fn run(args: &Args) -> Result<Receipt, String> {
         return Err("signed genesis transaction count differs from policy genesis".to_owned());
     }
     for (index, (expected_batch, transaction)) in expected.iter().zip(&actual).enumerate() {
-        if transaction.chain() != &args.chain_id || transaction.authority() != &genesis_account {
+        if transaction.domain() != &iroha_data_model::transaction::TransactionDomain::Genesis
+            || transaction.authority() != &genesis_account
+        {
             return Err(format!(
-                "signed genesis transaction {index} has the wrong chain or root authority"
+                "signed genesis transaction {index} has the wrong genesis domain or root authority"
             ));
         }
         let Executable::Instructions(actual_batch) = transaction.instructions() else {

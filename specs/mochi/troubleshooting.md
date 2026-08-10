@@ -103,13 +103,13 @@ Most peer launch failures fall into three buckets:
 
 ### Missing binaries or bad overrides
 
-`SupervisorBuilder` shells out to `irohad`, `kagami`, and (future) `iroha_cli`.
+`SupervisorBuilder` shells out to `iroha3d`, `kagami`, and `iroha`.
 If the UI reports “failed to spawn process” or “permission denied”, point MOCHI
 at known-good binaries:
 
 ```bash
 cargo run -p mochi-ui --features gui --bin mochi -- \
-  --irohad /path/to/irohad \
+  --irohad /path/to/iroha3d \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
 ```

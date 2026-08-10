@@ -22,8 +22,14 @@ final class FeePaymentJson {
         objectValue(JsonParser.parse(new String(payload, StandardCharsets.UTF_8)), path);
     requireExactKeys(
         root,
-        keys("id", "lifecycle", "active_revision", "staged_revision", "scheduled_activation"),
-        keys("id", "lifecycle"),
+        keys(
+            "id",
+            "payout_account",
+            "lifecycle",
+            "active_revision",
+            "staged_revision",
+            "scheduled_activation"),
+        keys("id", "payout_account", "lifecycle"),
         path);
     final Map<String, Object> id = objectValue(root.get("id"), path + ".id");
     requireExactKeys(id, keys("sponsor", "name"), keys("sponsor", "name"), path + ".id");
@@ -75,6 +81,7 @@ final class FeePaymentJson {
         new FeeSponsorProgramId(
             string(id.get("sponsor"), path + ".id.sponsor"),
             string(id.get("name"), path + ".id.name")),
+        string(root.get("payout_account"), path + ".payout_account"),
         lifecycleValue,
         root.get("active_revision") == null
             ? null : positiveLong(root.get("active_revision"), path + ".active_revision"),

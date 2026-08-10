@@ -924,7 +924,7 @@ fn offline_operation_index_extracts_authorized_ids_and_ignores_zero_or_unrelated
     );
 
     let unrelated = TransactionBuilder::new(
-        ChainId::from("kura-offline-operation-index"),
+        test_network_id(b"kura-offline-operation-index"),
         SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

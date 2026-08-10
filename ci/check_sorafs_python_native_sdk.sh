@@ -28,7 +28,7 @@ TRACKED_NATIVE_EXTENSIONS="$(
     'python/iroha_python/src/iroha_python/*.dll'
 )"
 if [[ -n "${TRACKED_NATIVE_EXTENSIONS}" ]]; then
-  echo "error: Python native SDK artifacts must be rebuilt in the ABI-21 lane, not tracked:" >&2
+  echo "error: Python native SDK artifacts must be rebuilt in the ABI-22 lane, not tracked:" >&2
   printf '%s\n' "${TRACKED_NATIVE_EXTENSIONS}" >&2
   exit 1
 fi
@@ -53,8 +53,8 @@ NATIVE_EXTENSION="$("${VENV_PYTHON}" -I -c \
   'import iroha_python._crypto as native; print(native.__file__)')"
 NATIVE_TARGET="$("${VENV_PYTHON}" -I -c \
   'import platform, sys; print(f"{platform.system().lower()}-{platform.machine().lower()}-python{sys.version_info.major}{sys.version_info.minor}")')"
-NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi21.json"
-"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi21_artifact.py" \
+NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi22.json"
+"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py" \
   record \
   --artifact "${NATIVE_EXTENSION}" \
   --manifest "${NATIVE_MANIFEST}" \
@@ -62,7 +62,7 @@ NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi21.json"
   --python "${VENV_PYTHON}" \
   --sdk python \
   --target "${NATIVE_TARGET}"
-"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi21_artifact.py" \
+"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py" \
   verify \
   --artifact "${NATIVE_EXTENSION}" \
   --manifest "${NATIVE_MANIFEST}" \
@@ -102,7 +102,7 @@ if [[ -n "${SORAFS_PYTHON_SDK_EVIDENCE_DIR:-}" ]]; then
     --evidence-dir "${SORAFS_PYTHON_SDK_EVIDENCE_DIR}"
   )
 fi
-"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi21_artifact.py" \
+"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py" \
   verify \
   --artifact "${NATIVE_EXTENSION}" \
   --manifest "${NATIVE_MANIFEST}" \

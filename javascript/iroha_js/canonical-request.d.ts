@@ -1,5 +1,18 @@
 import type { Buffer } from "buffer";
 
+/** Exact immutable genesis-header hash used as the canonical request domain. */
+export class NetworkId {
+  private constructor();
+  static readonly BYTE_LENGTH: 32;
+  static parse(literal: string): NetworkId;
+  static fromBytes(value: ArrayBuffer | ArrayBufferView): NetworkId;
+  readonly literal: string;
+  toBytes(): Uint8Array;
+  equals(other: unknown): other is NetworkId;
+  toString(): string;
+  toJSON(): string;
+}
+
 export type CanonicalRequestBytes = Buffer | ArrayBuffer | ArrayBufferView;
 
 export interface CanonicalRequestMessageInput {
@@ -11,6 +24,8 @@ export interface CanonicalRequestMessageInput {
 
 export interface CanonicalRequestSignatureMessageInput
   extends CanonicalRequestMessageInput {
+  /** Exact genesis-derived network identity included in the signed preimage. */
+  networkId: NetworkId;
   timestampMs: number;
   nonce: string;
 }
@@ -19,6 +34,8 @@ export interface CanonicalRequestHeadersInput
   extends CanonicalRequestMessageInput {
   /** Exact canonical I105 account or active ASCII alias used as X-Iroha-Account. */
   accountId: string;
+  /** Exact genesis-derived network domain for every authenticated route. */
+  networkId: NetworkId;
   privateKey: CanonicalRequestBytes;
   timestampMs?: number;
   nonce?: string;
@@ -34,6 +51,7 @@ export interface CanonicalRequestHeaders {
 export interface CanonicalJsonRequestSignerInput {
   message: Buffer;
   messageBase64: string;
+  networkId: NetworkId;
   method: string;
   path: string;
   query?: string | URLSearchParams;
@@ -52,6 +70,8 @@ export type CanonicalJsonRequestSignature =
 export interface CanonicalJsonRequestInput {
   /** Exact canonical I105 account or active ASCII alias used as X-Iroha-Account. */
   accountId: string;
+  /** Exact genesis-derived network domain for the signed request. */
+  networkId: NetworkId;
   method?: string;
   path: string;
   baseUrl?: string;

@@ -8,7 +8,7 @@
 use core::cmp::Ordering;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt,
+    fmt, io,
     str::FromStr,
     string::String,
     vec::Vec,
@@ -21,9 +21,9 @@ use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
+    NetworkId,
     account::{AccountController, AccountId, MultisigMember, MultisigPolicy},
     error::ParseError,
-    id::ChainId,
     name::Name,
     nexus::DataSpaceId,
     sorafs::{
@@ -58,6 +58,42 @@ pub const MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1: u64 = 64 * 1024 * 1024;
 pub const MUSUBI_MAX_CAR_BYTES_V1: u64 = 96 * 1024 * 1024;
 /// Maximum concatenated bundle payload, including source and three mandatory metadata entries.
 pub const MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1: u64 = MUSUBI_MAX_CAR_BYTES_V1;
+/// Maximum canonical bytes in the mandatory Musubi artifact-descriptor bundle file.
+pub const MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1: u64 = 64 * 1024;
+/// Maximum canonical bytes in one mandatory Musubi bundle metadata file.
+///
+/// The semantic release and exact verification lock share this provider-memory corridor; the
+/// artifact descriptor uses [`MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1`].
+pub const MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1: u64 = 2 * 1024 * 1024;
+// Norito charges nested length-delimited bodies, container reservations, and any whole-input
+// realignment copy cumulatively. The producer-reachable 2,056,570-byte dense-lock fixture needs
+// 43 MiB on a misaligned slice; the 48 MiB corridor retains 5 MiB of reviewed headroom.
+const MUSUBI_BUNDLE_METADATA_DECODE_MAX_ALLOCATED_BYTES_V1: usize =
+    24 * MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize;
+const MUSUBI_ARTIFACT_DESCRIPTOR_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
+    32,
+    MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1 as usize,
+    256,
+    128 * 1024,
+    32,
+);
+const MUSUBI_SEMANTIC_RELEASE_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
+    1_024,
+    MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize,
+    100_000,
+    MUSUBI_BUNDLE_METADATA_DECODE_MAX_ALLOCATED_BYTES_V1,
+    64,
+);
+// A dense valid graph can carry 1,024 nodes with 256 edges each and up to 16 requirement
+// comparators per edge. The element limit covers those counts; the independent file and
+// allocation ceilings bound which complete graph shapes are admissible bundle metadata.
+const MUSUBI_VERIFICATION_LOCK_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::new(
+    1_024,
+    MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize,
+    8_000_000,
+    MUSUBI_BUNDLE_METADATA_DECODE_MAX_ALLOCATED_BYTES_V1,
+    64,
+);
 /// Maximum regular files committed by one archive.
 pub const MUSUBI_MAX_FILES_V1: u32 = 4_096;
 /// Maximum chunks committed by one archive.
@@ -79,6 +115,12 @@ pub const MUSUBI_MAX_ARCHIVE_LOCATIONS_V1: usize = 4;
 pub const MUSUBI_MIN_HEALTHY_REPLICAS_V1: u16 = 3;
 /// Maximum providers recorded for one archive location.
 pub const MUSUBI_MAX_LOCATION_PROVIDERS_V1: usize = 64;
+/// Maximum canonical Norito bytes for one replication-order/archive trust binding.
+///
+/// The commitment itself has fixed-size digests and counters plus a chunker handle bounded by
+/// [`MusubiArchiveCommitmentV1::validate`]. This deliberately conservative ceiling keeps decoded
+/// snapshot values bounded if that commitment grows within the first-release schema.
+pub const MUSUBI_MAX_REPLICATION_ORDER_ARCHIVE_BINDING_CANONICAL_BYTES_V1: usize = 4 * 1024;
 /// Maximum package owners.
 pub const MUSUBI_MAX_PACKAGE_OWNERS_V1: usize = 64;
 /// Maximum canonical Norito bytes for any account identity carried by Musubi V1.
@@ -348,7 +390,7 @@ fn validate_musubi_account_id_canonical_bytes_v1(encoded: &[u8]) -> Result<(), P
 ///
 /// Returns an error when canonical Norito encoding fails or exceeds the fixed V1 bound.
 pub fn validate_musubi_account_id_v1(account_id: &AccountId) -> Result<(), ParseError> {
-    let encoded = norito::to_bytes(account_id)
+    let encoded = norito::encode_canonical(account_id)
         .map_err(|_| ParseError::new("Musubi account identity has no canonical Norito encoding"))?;
     validate_musubi_account_id_canonical_bytes_v1(&encoded)
 }
@@ -1471,8 +1513,11 @@ impl MusubiArchiveCommitmentV1 {
     }
 }
 
+include!("musubi/bundle_file_decode.rs");
+
 /// Typed descriptor parsed and verified by every provider before serving a bundle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MusubiArtifactDescriptorV1 {
     /// Must equal [`MUSUBI_ARTIFACT_DESCRIPTOR_VERSION_V1`].
@@ -1490,6 +1535,22 @@ pub struct MusubiArtifactDescriptorV1 {
 }
 
 impl MusubiArtifactDescriptorV1 {
+    /// Decode one exact canonical artifact-descriptor bundle file under the shared V1 limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns one stable payload-free error when the file is empty, oversized, malformed,
+    /// trailing, noncanonical, or fails descriptor validation.
+    pub fn decode_canonical_bundle_file(bytes: &[u8]) -> Result<Self, ParseError> {
+        decode_canonical_bundle_file_v1(
+            bytes,
+            MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1,
+            MUSUBI_ARTIFACT_DESCRIPTOR_DECODE_LIMITS_V1,
+            Self::validate,
+            "Musubi artifact descriptor bundle file is invalid or out of bounds",
+        )
+    }
+
     /// Construct and validate a first-release artifact descriptor.
     ///
     /// # Errors
@@ -1736,38 +1797,7 @@ impl MusubiPinLocationReferenceV1 {
     }
 }
 
-/// Fixed-size reverse-index value from one `SoraFS` replication order to one Musubi location.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-pub struct MusubiReplicationOrderLocationReferenceV1 {
-    /// Exact replication-order key duplicated for snapshot consistency validation.
-    pub replication_order: ReplicationOrderId,
-    /// Uniquely bound Musubi archive location.
-    pub location: MusubiArchiveLocationKeyV1,
-    /// Whether this is the location's current order rather than an immutable reuse tombstone.
-    pub active: bool,
-}
-
-impl MusubiReplicationOrderLocationReferenceV1 {
-    /// Validate non-inert order and location identities.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the replication-order digest, archive identity, or location identity
-    /// is zero.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        if digest_is_zero(self.replication_order.as_bytes())
-            || self.location.archive_id.is_zero()
-            || self.location.location_id.is_zero()
-        {
-            return Err(ParseError::new(
-                "Musubi replication-order-to-location reverse reference is invalid",
-            ));
-        }
-        Ok(())
-    }
-}
+include!("musubi/replication_order_lifecycle.rs");
 
 /// Ordered provider/location composite key for exact provider-prefix lifecycle refreshes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
@@ -2399,6 +2429,7 @@ impl MusubiVerificationNodeV1 {
 
 /// Normalized, secret-free exact verification lock packaged with a release.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MusubiVerificationLockV1 {
     /// Lock schema identifier; must equal `musubi-verification-lock`.
@@ -2417,6 +2448,22 @@ pub struct MusubiVerificationLockV1 {
 impl MusubiVerificationLockV1 {
     /// Fixed verification-lock schema label.
     pub const SCHEMA: &'static str = "musubi-verification-lock";
+
+    /// Decode one exact canonical verification-lock bundle file under the shared V1 limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns one stable payload-free error when the file is empty, oversized, malformed,
+    /// trailing, noncanonical, or fails verification-lock validation.
+    pub fn decode_canonical_bundle_file(bytes: &[u8]) -> Result<Self, ParseError> {
+        decode_canonical_bundle_file_v1(
+            bytes,
+            MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
+            MUSUBI_VERIFICATION_LOCK_DECODE_LIMITS_V1,
+            Self::validate,
+            "Musubi verification lock bundle file is invalid or out of bounds",
+        )
+    }
 
     /// Canonicalize all set-like vectors.
     pub fn canonicalize(&mut self) {
@@ -2587,6 +2634,7 @@ impl MusubiResolutionProofV1 {
 /// payload, so including [`ArchiveId`] here would create an impossible hash cycle
 /// between the bundle digest and the archive commitment.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiSemanticReleaseManifestV1 {
@@ -2609,6 +2657,22 @@ pub struct MusubiSemanticReleaseManifestV1 {
 }
 
 impl MusubiSemanticReleaseManifestV1 {
+    /// Decode one exact canonical semantic-release bundle file under the shared V1 limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns one stable payload-free error when the file is empty, oversized, malformed,
+    /// trailing, noncanonical, or fails semantic-release validation.
+    pub fn decode_canonical_bundle_file(bytes: &[u8]) -> Result<Self, ParseError> {
+        decode_canonical_bundle_file_v1(
+            bytes,
+            MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
+            MUSUBI_SEMANTIC_RELEASE_DECODE_LIMITS_V1,
+            Self::validate,
+            "Musubi semantic release bundle file is invalid or out of bounds",
+        )
+    }
+
     /// Canonicalize every set-like semantic field before packaging.
     pub fn canonicalize(&mut self) {
         self.dependencies.sort();
@@ -2826,11 +2890,8 @@ impl MusubiPublicationV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiSeedIngressReceiptBindingV1 {
-    /// Deployment-selected chain identity.
-    pub chain_id: ChainId,
-    /// Exact committed genesis block hash for the selected chain.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub genesis_block_hash: [u8; 32],
+    /// Exact deployment identity derived from the committed genesis header.
+    pub network_id: NetworkId,
     /// Account publishing the package release.
     pub publisher: AccountId,
     /// Authenticated seed-ingress broker whose controller signs the receipt.
@@ -2855,12 +2916,13 @@ impl MusubiSeedIngressReceiptBindingV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if an account identity is invalid, a required identity, digest, or nonce
-    /// is zero, or the CAR body length is outside its V1 bound.
+    /// Returns an error if an account identity is invalid, the exact network identity is
+    /// malformed, a required identity, digest, or nonce is zero, or the CAR body length is outside
+    /// its V1 bound.
     pub fn validate(&self) -> Result<(), ParseError> {
         validate_musubi_account_id_v1(&self.publisher)?;
         validate_musubi_account_id_v1(&self.ingress_broker)?;
-        if digest_is_zero(&self.genesis_block_hash)
+        if self.network_id.as_bytes()[31] & 1 != 1
             || self.seed_provider.as_bytes().iter().all(|byte| *byte == 0)
             || self.semantic_release_manifest_digest.is_zero()
             || self.archive_id.is_zero()
@@ -3050,11 +3112,8 @@ impl MusubiSeedIngressReceiptV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiProviderBundleVerificationBindingV1 {
-    /// Deployment-selected chain identity.
-    pub chain_id: ChainId,
-    /// Exact committed genesis block hash for the selected chain.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub genesis_block_hash: [u8; 32],
+    /// Exact deployment identity derived from the committed genesis header.
+    pub network_id: NetworkId,
     /// Provider that parsed and verified the canonical bundle.
     pub provider_id: ProviderId,
     /// Registered provider owner that finalized the replication completion.
@@ -3089,11 +3148,12 @@ impl MusubiProviderBundleVerificationBindingV1 {
     /// # Errors
     ///
     /// Returns an error if an account, provider authority, assignment, finalized anchor, archive,
-    /// replication order, or required bundle commitment is invalid or inert.
+    /// replication order, exact network identity, or required bundle commitment is invalid or
+    /// inert.
     pub fn validate(&self) -> Result<(), ParseError> {
         validate_musubi_account_id_v1(&self.completed_by)?;
         validate_musubi_account_id_v1(&self.completion_authority.provider_owner)?;
-        if digest_is_zero(&self.genesis_block_hash)
+        if self.network_id.as_bytes()[31] & 1 != 1
             || self.provider_id.as_bytes().iter().all(|byte| *byte == 0)
             || self.completed_by != self.completion_authority.provider_owner
             || !self.completion_authority.is_valid()
@@ -3184,7 +3244,7 @@ impl MusubiProviderBundleVerificationAttestationV1 {
     /// Returns an error if canonical encoding fails or is oversized, the payload is invalid,
     /// approvals are empty or noncanonical, or an approval signature length is invalid.
     pub fn validate(&self) -> Result<(), ParseError> {
-        let canonical = norito::to_bytes(self).map_err(|_| {
+        let canonical = norito::encode_canonical(self).map_err(|_| {
             ParseError::new("Musubi provider bundle attestation has no canonical Norito encoding")
         })?;
         if canonical.is_empty()

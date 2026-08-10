@@ -18,7 +18,7 @@ fn transaction_result_json_roundtrip() {
 #[cfg(feature = "json")]
 #[test]
 fn transaction_entrypoint_json_roundtrip() {
-    let chain: ChainId = "json-chain".parse().unwrap();
+    let network_id = test_network_id(0x29);
     let _domain: DomainId = DomainId::try_new("default", "universal").unwrap();
     let public_key: iroha_crypto::PublicKey =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -31,7 +31,7 @@ fn transaction_entrypoint_json_roundtrip() {
     let authority = AccountId::new(public_key);
 
     let tx = TransactionBuilder::new(
-        chain,
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

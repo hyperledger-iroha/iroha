@@ -175,3 +175,57 @@ fn aggregate_lane_block_votes_rejects_adversarial_vote_sets() {
         Err(LaneBlockQcBuildError::ValidatorSetNotCanonical)
     );
 }
+
+#[test]
+fn compacted_new_view_checkpoint_rejects_forged_jump_and_replay_domains() {
+    let keypairs = [
+        checked_bls_keypair(11),
+        checked_bls_keypair(12),
+        checked_bls_keypair(13),
+    ];
+    let (network_id, epoch, payload) = autonomous_payload_fixture(&keypairs);
+    let source = retarget_lane_block_proposal_exact_view(&payload.origin_proposal, 256)
+        .expect("canonical checkpoint source");
+    let target =
+        retarget_lane_block_proposal_view(&source, 257).expect("canonical checkpoint target");
+    let mut checkpoint = DurableLaneBlockViewCheckpointV1 {
+        source_proposal: source.clone(),
+        target_proposal: target,
+        certificate: durable_new_view_certificate(&source, &payload, &keypairs, network_id, epoch),
+    };
+
+    checkpoint.source_proposal.descriptor.lane_block_view = 255;
+    checkpoint.source_proposal.descriptor.descriptor_hash = checkpoint
+        .source_proposal
+        .descriptor
+        .computed_descriptor_hash();
+    checkpoint.source_proposal.proposal_hash = checkpoint.source_proposal.computed_proposal_hash();
+    assert!(matches!(
+        validate_lane_block_view_checkpoint(&checkpoint, &payload, network_id, epoch),
+        Err(LaneAutonomousArtifactError::NewViewSourceMismatch)
+    ));
+
+    let valid_source = retarget_lane_block_proposal_exact_view(&payload.origin_proposal, 256)
+        .expect("canonical checkpoint source");
+    checkpoint.source_proposal = valid_source;
+    assert!(matches!(
+        validate_lane_block_view_checkpoint(
+            &checkpoint,
+            &payload,
+            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                b"foreign-checkpoint-genesis",
+            ))),
+            epoch,
+        ),
+        Err(LaneAutonomousArtifactError::NetworkOrEpochMismatch)
+    ));
+    assert!(matches!(
+        validate_lane_block_view_checkpoint(
+            &checkpoint,
+            &payload,
+            network_id,
+            epoch.saturating_add(1),
+        ),
+        Err(LaneAutonomousArtifactError::NetworkOrEpochMismatch)
+    ));
+}

@@ -36,6 +36,9 @@ readonly verus_runner="scripts/verify_sumeragi_v2.sh"
 readonly replay_runner="scripts/formal/check_sumeragi_v2_replay_trace.sh"
 readonly chaos_runner="scripts/run_sumeragi_v2_100k_chaos.sh"
 readonly taira_runner="scripts/run_taira_v2_24h_soak.sh"
+readonly taira_strict_restart_source="integration_tests/tests/taira_public_localnet/strict_restart.rs"
+readonly taira_strict_restart_test="taira_localnet_restart_catchup_behavior"
+readonly taira_strict_restart_qualified_test="taira_public_localnet::strict_restart::${taira_strict_restart_test}"
 readonly kura_source="crates/iroha_core/src/kura.rs"
 readonly test_network_source="crates/iroha_test_network/src/lib.rs"
 readonly autoscale_test="nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
@@ -46,7 +49,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=857
+readonly canonical_production_test_count=861
 
 require_nonignored_test() {
   local path="$1"
@@ -110,6 +113,14 @@ require_nonignored_test "$autoscale_file" "$autoscale_test"
 require_nonignored_test "$autoscale_file" "$autoscale_restart_test"
 require_nonignored_test "$autoscale_file" "$autoscale_drain_test"
 require_nonignored_test "$native_file" "$native_test"
+require_nonignored_test "$taira_strict_restart_source" "$taira_strict_restart_test"
+
+require_exact_token \
+  "$release_runner" \
+  "  ${taira_strict_restart_qualified_test}"
+require_exact_token \
+  "$release_receipt_writer" \
+  "    \"${taira_strict_restart_qualified_test}\","
 
 if [[ ! -f "$release_receipt_component" || -L "$release_receipt_component" ]]; then
   echo "release receipt formal-artifact component must be a regular non-symlink file" >&2
@@ -181,7 +192,7 @@ require_exact_token \
   "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=87"
+  "  readonly expected_corridor_leg_count=89"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -462,13 +473,13 @@ if (
         f"{canonical_production_test_count}"
     )
 production_modules = receipt_assignments.get("_PRODUCTION_MODULES")
-if not isinstance(production_modules, tuple) or len(production_modules) != 40:
-    reject("receipt writer must bind exactly 40 production modules")
+if not isinstance(production_modules, tuple) or len(production_modules) != 41:
+    reject("receipt writer must bind exactly 41 production modules")
 module_counts = {
     module: count for _leg_id, module, count in production_modules
 }
 if (
-    len(module_counts) != 40
+    len(module_counts) != 41
     or sum(module_counts.values()) != canonical_production_test_count
 ):
     reject(
@@ -504,10 +515,10 @@ runner_modules = shell_array("production_liveness_modules")
 runner_leg_ids = shell_array("production_liveness_leg_ids")
 receipt_modules = tuple(module for _leg_id, module, _count in production_modules)
 receipt_leg_ids = tuple(leg_id for leg_id, _module, _count in production_modules)
-if runner_modules != receipt_modules or len(set(runner_modules)) != 40:
-    reject("release runner must bind the exact 40 receipt production modules")
-if runner_leg_ids != receipt_leg_ids or len(set(runner_leg_ids)) != 40:
-    reject("release runner must bind the exact 40 receipt production leg IDs")
+if runner_modules != receipt_modules or len(set(runner_modules)) != 41:
+    reject("release runner must bind the exact 41 receipt production modules")
+if runner_leg_ids != receipt_leg_ids or len(set(runner_leg_ids)) != 41:
+    reject("release runner must bind the exact 41 receipt production leg IDs")
 
 expected_apalache_refinement_results = (
     (
@@ -560,13 +571,14 @@ if (
         "plus the one layout-only result"
     )
 expected_changed_module_counts = {
-    "kura::tests": 14,
+    "kura::tests": 17,
     "sumeragi::authoritative_runtime_gate_tests": 43,
     "sumeragi::serviced_candidate_store::tests": 1,
     "sumeragi::v2_effects::tests": 72,
     "sumeragi::v2::tests": 46,
     "sumeragi::v2_runtime::tests": 68,
     "merge_sidecar::tests": 118,
+    "state::tests": 1,
     "sumeragi::v2_lane_work::tests": 60,
     "sumeragi::v2_lifecycle_recovery::tests": 5,
     "sumeragi::v2_runner::tests": 37,
@@ -598,8 +610,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "090d4aa1d2ed4be9a55f4d6f265c5189"
-    "6034077f2f1bc7e33d80bba5cd440afd"
+    "8c39cb3717a9cab79e4d442e8179030c3"
+    "af5af74947864d45838b80864290d2f"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -1588,14 +1600,14 @@ if prebuilt_shell.count('require_disjoint_release_roots "$prebuilt_repo_root"') 
 if prebuilt_root_guard >= prebuilt_first_cargo:
     reject("shared prebuild helper validates roots after Cargo execution")
 publish_block = '''\
-  export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/irohad"
-  export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/irohad"
+  export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/iroha3d"
+  export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/iroha3d"
   export TEST_NETWORK_BIN_IROHA="${IROHA_TEST_TARGET_DIR}/release/iroha"
   export KAGAMI_BIN="${IROHA_TEST_TARGET_DIR}/release/kagami"'''
 if prebuilt_shell.count(publish_block) != 1:
     reject("shared prebuild helper must publish the four exact manifest paths once")
 for command in (
-    "run_cargo build --locked --offline --release -p irohad --bin irohad",
+    "run_cargo build --locked --offline --release -p irohad --bin iroha3d",
     "run_cargo build --locked --offline --release -p iroha_cli --bin iroha",
     "run_cargo build --locked --offline --release -p iroha_kagami --bin kagami",
 ):
@@ -1643,8 +1655,8 @@ for token in (
     "_BINARY_MODE = 0o500",
     "_MANIFEST_MODE = 0o400",
     "_DIRECTORY_MODE = 0o500",
-    '"release/irohad"',
-    '"message-control/release/irohad"',
+    '"release/iroha3d"',
+    '"message-control/release/iroha3d"',
     '"release/iroha"',
     '"release/kagami"',
     '"cargo_version_sha256"',
@@ -2142,4 +2154,4 @@ if [[ "$(grep -Fxc -- "      export IROHA_MULTILANE_RELEASE_MODE=1" "$launcher" 
   exit 1
 fi
 
-echo "[multilane-release-inventory] 87 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 40 modules, exact 524/524 G-UNIT (318 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 89 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 41 modules, exact 524/524 G-UNIT (318 core, 143 queue-journal, 13 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, Rust-owned grouped SDK corpus parity, and exact no-skip Sumeragi diagnostics SDK inventories are source-bound (fixture_sha256=${grouped_fixture_sha256}, grouped_suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256}, sdk_diagnostics_suite_source_manifest_sha256=${sdk_diagnostics_suite_source_manifest_sha256})"

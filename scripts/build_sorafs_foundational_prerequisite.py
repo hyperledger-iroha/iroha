@@ -2,9 +2,10 @@
 """Prepare and finalize the signed SoraFS foundational prerequisite envelope.
 
 The tool never accepts private signing material. ``prepare`` writes the exact
-domain-separated binary payload for an external Ed25519 HSM, while ``finalize``
-verifies the raw detached signature against an operator-trusted public key and
-writes the schema-closed envelope consumed by the aggregate readiness gate.
+domain-separated binary payload for an authenticated external Ed25519 software
+signer, while ``finalize`` verifies the raw detached signature against an
+operator-trusted public key and writes the schema-closed envelope consumed by
+the aggregate readiness gate.
 Prerequisite anchors are derived only from validated, exact evidence-package
 files; callers cannot supply digests or evidence timestamps directly.
 """
@@ -18,7 +19,9 @@ import json
 import os
 import secrets
 import stat
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -70,15 +73,34 @@ from sorafs_response_args import (  # noqa: E402
     non_negative_int_arg,
     positive_int_arg,
 )
+from sorafs_software_signer_receipt import (  # noqa: E402
+    parse_canonical_validation,
+    validate_receipt_validation,
+)
 from sorafs_runner_preflight import plan_rendered_path_is_safe  # noqa: E402
+from sorafs_l1_lane_inventory_integration import (  # noqa: E402
+    VerifiedLaneInventory,
+    add_signed_lane_inventory_arguments,
+    validate_inventory_lane_digest_bindings,
+    verify_inventory_from_args,
+)
+from sorafs_l1_lane_evidence_inventory import (  # noqa: E402
+    InventoryError,
+    parse_summary_specs as parse_inventory_summary_specs,
+)
 from sorafs_topology_qualification import (  # noqa: E402
-    add_topology_qualification_argument,
-    load_topology_qualification_binding,
+    add_signed_topology_qualification_arguments,
+    load_signed_topology_qualification_from_args,
     validate_topology_binding_object,
 )
 
 
 MAX_FOUNDATIONAL_ARTIFACT_BYTES = 64 * 1024
+MAX_EXTERNAL_SIGNER_VERIFIER_BYTES = 128 * 1024 * 1024
+MAX_EXTERNAL_SIGNER_BINDING_BYTES = 64 * 1024
+MAX_EXTERNAL_SIGNER_RECEIPT_BYTES = 64 * 1024
+MAX_EXTERNAL_SIGNER_VALIDATION_BYTES = 16 * 1024
+EXTERNAL_SIGNER_VERIFIER_TIMEOUT_SECS = 30
 MAX_PREREQUISITE_PACKAGE_BYTES = MAX_SUMMARY_BYTES
 MAX_LANE_SUMMARY_BYTES = MAX_SUMMARY_BYTES
 MAX_DEPLOYMENT_ID_BYTES = 128
@@ -241,6 +263,53 @@ def _validate_bounded_text(
         return
     if len(encoded) > maximum_bytes:
         errors.append(f"{label} must be at most {maximum_bytes} UTF-8 bytes")
+
+
+def _validate_software_signer_binding(
+    *,
+    service_id: Any,
+    administrator_id: Any,
+    key_revision: Any,
+    policy_revision: Any,
+    policy_digest_sha256: Any,
+    label_prefix: str,
+    errors: list[str],
+) -> None:
+    """Require one independently administered software-signer binding."""
+
+    _validate_bounded_text(
+        service_id,
+        label=f"{label_prefix}service-id",
+        maximum_bytes=128,
+        errors=errors,
+    )
+    _validate_bounded_text(
+        administrator_id,
+        label=f"{label_prefix}administrator-id",
+        maximum_bytes=128,
+        errors=errors,
+    )
+    if service_id == administrator_id:
+        errors.append(
+            f"{label_prefix}service-id and {label_prefix}administrator-id must differ"
+        )
+    _bounded_positive_integer(
+        key_revision,
+        label=f"{label_prefix}key-revision",
+        maximum=MAX_TIMESTAMP,
+        errors=errors,
+    )
+    _bounded_positive_integer(
+        policy_revision,
+        label=f"{label_prefix}policy-revision",
+        maximum=MAX_TIMESTAMP,
+        errors=errors,
+    )
+    digest = canonical_lower_hex(policy_digest_sha256, 64)
+    if digest is None or not any(bytes.fromhex(digest)):
+        errors.append(
+            f"{label_prefix}policy-digest-sha256 must be non-zero canonical lowercase SHA-256"
+        )
 
 
 def parse_prerequisite_specs(
@@ -1052,6 +1121,7 @@ def validation_options(
     previous_envelope_sha256: str,
     topology_qualification: dict[str, str] | None,
     resilience_qualification: dict[str, Any] | None = None,
+    lane_inventory: VerifiedLaneInventory | None = None,
 ) -> ValidationOptions:
     """Build exact aggregate-gate options for one reviewed envelope."""
 
@@ -1065,6 +1135,7 @@ def validation_options(
         foundational_previous_envelope_sha256=previous_envelope_sha256,
         topology_qualification=topology_qualification,
         resilience_qualification=resilience_qualification,
+        l1_lane_evidence_inventory=lane_inventory,
     )
 
 
@@ -1119,6 +1190,7 @@ def build_unsigned_envelope(
     lane_summaries: list[dict[str, str]],
     topology_qualification: dict[str, str],
     resilience_qualification: dict[str, Any],
+    lane_inventory: VerifiedLaneInventory,
 ) -> dict[str, Any]:
     """Build the schema-closed body carried by the binary signing payload."""
 
@@ -1132,15 +1204,62 @@ def build_unsigned_envelope(
         "generated_at_unix": args.generated_at_unix,
         "release_sequence": args.release_sequence,
         "previous_envelope_sha256": args.previous_envelope_sha256,
+        "l1_lane_evidence_inventory_sha256": lane_inventory.verification[
+            "inventory_sha256"
+        ],
         "topology_qualification": topology_qualification,
         "resilience_qualification": resilience_qualification,
         "prerequisites": prerequisites,
         "lane_summaries": lane_summaries,
         "signature": {
             "algorithm": "ed25519",
+            "backend": "software",
+            "service_id": args.signer_service_id,
+            "administrator_id": args.signer_administrator_id,
+            "key_revision": args.signer_key_revision,
+            "policy_revision": args.signer_policy_revision,
+            "policy_digest_sha256": args.signer_policy_digest_sha256,
             "public_key_fingerprint_sha256": hashlib.sha256(public_key).hexdigest(),
         },
     }
+
+
+def load_reviewed_topology_qualification(
+    args: argparse.Namespace,
+    *,
+    deployment_id: str,
+    environment: str,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Authenticate the exact topology summary under reviewed public trust."""
+
+    return load_signed_topology_qualification_from_args(
+        args,
+        expected_deployment_id=deployment_id,
+        expected_environment=environment,
+    )
+
+
+def load_reviewed_lane_inventory(
+    args: argparse.Namespace,
+    topology_qualification: dict[str, Any],
+    *,
+    deployment_id: str,
+    environment: str,
+) -> tuple[VerifiedLaneInventory | None, list[str]]:
+    """Authenticate and replay the exact ordered lane inventory."""
+
+    try:
+        summary_specs = parse_inventory_summary_specs(args.lane_summary)
+    except InventoryError as error:
+        return None, [f"signed L1 lane evidence inventory: {error}"]
+    return verify_inventory_from_args(
+        args,
+        summary_specs,
+        topology_qualification,
+        deployment_id=deployment_id,
+        environment=environment,
+        now_unix=args.now_unix,
+    )
 
 
 def validate_prepare_inputs(
@@ -1151,6 +1270,7 @@ def validate_prepare_inputs(
     list[dict[str, str]],
     dict[str, str] | None,
     dict[str, Any] | None,
+    VerifiedLaneInventory | None,
     list[str],
 ]:
     """Validate all reviewed prepare-phase inputs."""
@@ -1171,6 +1291,15 @@ def validate_prepare_inputs(
         args.environment,
         label="--environment",
         maximum_bytes=MAX_ENVIRONMENT_BYTES,
+        errors=errors,
+    )
+    _validate_software_signer_binding(
+        service_id=args.signer_service_id,
+        administrator_id=args.signer_administrator_id,
+        key_revision=args.signer_key_revision,
+        policy_revision=args.signer_policy_revision,
+        policy_digest_sha256=args.signer_policy_digest_sha256,
+        label_prefix="--signer-",
         errors=errors,
     )
     _bounded_positive_integer(
@@ -1200,10 +1329,10 @@ def validate_prepare_inputs(
         errors,
         path="--resilience-qualification-signer-public-key-hex",
     )
-    topology_qualification, topology_errors = load_topology_qualification_binding(
-        args.topology_qualification_summary,
-        expected_deployment_id=args.deployment_id,
-        expected_environment=args.environment,
+    topology_qualification, topology_errors = load_reviewed_topology_qualification(
+        args,
+        deployment_id=args.deployment_id,
+        environment=args.environment,
     )
     errors.extend(topology_errors)
     resilience_qualification = None
@@ -1243,6 +1372,21 @@ def validate_prepare_inputs(
         if topology_qualification is not None
         else []
     )
+    lane_inventory = None
+    if topology_qualification is not None:
+        lane_inventory, inventory_errors = load_reviewed_lane_inventory(
+            args,
+            topology_qualification,
+            deployment_id=args.deployment_id,
+            environment=args.environment,
+        )
+        errors.extend(inventory_errors)
+    if lane_inventory is not None:
+        validate_inventory_lane_digest_bindings(
+            lane_inventory.summary_sha256,
+            {row["gate"]: row["sha256"] for row in lane_summaries},
+            errors,
+        )
     if public_key is not None:
         errors.extend(
             validate_previous_envelope(
@@ -1267,12 +1411,13 @@ def validate_prepare_inputs(
         lane_summaries,
         topology_qualification,
         resilience_qualification,
+        lane_inventory,
         errors,
     )
 
 
 def prepare(args: argparse.Namespace) -> int:
-    """Write the exact external-HSM signing payload."""
+    """Write the exact authenticated external-software signing payload."""
 
     (
         public_key,
@@ -1280,6 +1425,7 @@ def prepare(args: argparse.Namespace) -> int:
         lane_summaries,
         topology_qualification,
         resilience_qualification,
+        lane_inventory,
         errors,
     ) = validate_prepare_inputs(args)
     if (
@@ -1287,6 +1433,7 @@ def prepare(args: argparse.Namespace) -> int:
         or public_key is None
         or topology_qualification is None
         or resilience_qualification is None
+        or lane_inventory is None
     ):
         emit_checker_error_lines(errors)
         return 2
@@ -1297,6 +1444,7 @@ def prepare(args: argparse.Namespace) -> int:
         lane_summaries,
         topology_qualification,
         resilience_qualification,
+        lane_inventory,
     )
     options = validation_options(
         now_unix=args.now_unix,
@@ -1308,6 +1456,7 @@ def prepare(args: argparse.Namespace) -> int:
         previous_envelope_sha256=args.previous_envelope_sha256,
         topology_qualification=topology_qualification,
         resilience_qualification=resilience_qualification,
+        lane_inventory=lane_inventory,
     )
     errors = validate_unsigned_envelope(unsigned, options)
     if errors:
@@ -1539,6 +1688,174 @@ def load_unsigned_signing_payload(
     return signing_payload, unsigned, errors
 
 
+def _write_private_verifier_input(path: Path, payload: bytes, mode: int) -> None:
+    """Write one private, process-owned verifier input inside a fresh directory."""
+
+    descriptor = os.open(
+        path,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+        mode,
+    )
+    try:
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("short verifier input write")
+            offset += written
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def verify_external_software_signer_receipt(
+    args: argparse.Namespace,
+    *,
+    signing_payload: bytes,
+    signature: bytes,
+) -> tuple[bytes | None, list[str]]:
+    """Run the pinned offline verifier over stable private copies of all inputs."""
+
+    errors: list[str] = []
+    operation_id_hex = canonical_lower_hex(
+        args.expected_signer_operation_id,
+        64,
+    )
+    if operation_id_hex is None or not any(bytes.fromhex(operation_id_hex)):
+        errors.append(
+            "--expected-signer-operation-id must be a non-zero lowercase 32-byte identifier"
+        )
+    expected_verifier_sha256 = canonical_lower_hex(
+        args.expected_signer_verifier_sha256,
+        64,
+    )
+    if expected_verifier_sha256 is None or not any(
+        bytes.fromhex(expected_verifier_sha256)
+    ):
+        errors.append(
+            "--expected-signer-verifier-sha256 must be a non-zero canonical lowercase SHA-256"
+        )
+    verifier, verifier_errors = read_bounded_regular_file(
+        args.signer_verifier,
+        label="--signer-verifier",
+        maximum_bytes=MAX_EXTERNAL_SIGNER_VERIFIER_BYTES,
+    )
+    binding, binding_errors = read_bounded_regular_file(
+        args.signer_binding,
+        label="--signer-binding",
+        maximum_bytes=MAX_EXTERNAL_SIGNER_BINDING_BYTES,
+    )
+    receipt, receipt_errors = read_bounded_regular_file(
+        args.signer_receipt,
+        label="--signer-receipt",
+        maximum_bytes=MAX_EXTERNAL_SIGNER_RECEIPT_BYTES,
+    )
+    errors.extend(verifier_errors + binding_errors + receipt_errors)
+    if verifier is not None and (
+        expected_verifier_sha256 is not None
+        and hashlib.sha256(verifier).hexdigest() != expected_verifier_sha256
+    ):
+        errors.append(
+            "--signer-verifier SHA-256 does not match the independently reviewed digest"
+        )
+    if verifier == b"":
+        errors.append("--signer-verifier must not be empty")
+    if binding == b"":
+        errors.append("--signer-binding must not be empty")
+    if receipt == b"":
+        errors.append("--signer-receipt must not be empty")
+    if (
+        errors
+        or verifier is None
+        or binding is None
+        or receipt is None
+        or operation_id_hex is None
+    ):
+        return None, errors
+
+    validation_raw: bytes | None = None
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="sorafs-promotion-receipt-"
+        ) as temporary_directory:
+            root = Path(temporary_directory).resolve(strict=True)
+            verifier_path = root / "receipt-verifier"
+            binding_path = root / "promotion.binding.norito"
+            payload_path = root / "foundational.signing-payload.bin"
+            signature_path = root / "signature.raw"
+            receipt_path = root / "signature-receipt.json"
+            validation_path = root / "receipt-validation.json"
+            for path, payload, mode in (
+                (verifier_path, verifier, 0o500),
+                (binding_path, binding, 0o400),
+                (payload_path, signing_payload, 0o400),
+                (signature_path, signature, 0o400),
+                (receipt_path, receipt, 0o400),
+            ):
+                _write_private_verifier_input(path, payload, mode)
+            result = subprocess.run(
+                [
+                    str(verifier_path),
+                    "verify-receipt",
+                    "--binding",
+                    str(binding_path),
+                    "--payload",
+                    str(payload_path),
+                    "--signature",
+                    str(signature_path),
+                    "--receipt",
+                    str(receipt_path),
+                    "--expected-operation-id",
+                    operation_id_hex,
+                    "--validation-out",
+                    str(validation_path),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=root,
+                env={"LANG": "C", "LC_ALL": "C", "PATH": os.defpath},
+                check=False,
+                timeout=EXTERNAL_SIGNER_VERIFIER_TIMEOUT_SECS,
+            )
+            if result.returncode != 0 or result.stdout or result.stderr:
+                errors.append(
+                    "external software signer receipt verification failed"
+                )
+            else:
+                validation_raw, validation_read_errors = read_bounded_regular_file(
+                    validation_path,
+                    label="software signer receipt validation",
+                    maximum_bytes=MAX_EXTERNAL_SIGNER_VALIDATION_BYTES,
+                )
+                errors.extend(validation_read_errors)
+    except (OSError, subprocess.SubprocessError):
+        errors.append("external software signer receipt verifier could not run")
+    if validation_raw is None:
+        return None, errors
+    validation, validation_errors = parse_canonical_validation(validation_raw)
+    errors.extend(validation_errors)
+    if validation is not None:
+        errors.extend(
+            validate_receipt_validation(
+                validation,
+                operation_id_hex=operation_id_hex,
+                payload_length=len(signing_payload),
+                service_id=args.expected_signer_service_id,
+                administrator_id=args.expected_signer_administrator_id,
+                key_revision=args.expected_signer_key_revision,
+                policy_revision=args.expected_signer_policy_revision,
+                policy_digest_sha256=args.expected_signer_policy_digest_sha256,
+            )
+        )
+    return (validation_raw if not errors else None), errors
+
+
 def validate_finalize_inputs(
     args: argparse.Namespace,
 ) -> tuple[
@@ -1548,6 +1865,7 @@ def validate_finalize_inputs(
     bytes | None,
     dict[str, str] | None,
     dict[str, Any] | None,
+    VerifiedLaneInventory | None,
     list[str],
 ]:
     """Validate reviewed finalization inputs and load bounded public artifacts."""
@@ -1568,6 +1886,15 @@ def validate_finalize_inputs(
         args.expected_environment,
         label="--expected-environment",
         maximum_bytes=MAX_ENVIRONMENT_BYTES,
+        errors=errors,
+    )
+    _validate_software_signer_binding(
+        service_id=args.expected_signer_service_id,
+        administrator_id=args.expected_signer_administrator_id,
+        key_revision=args.expected_signer_key_revision,
+        policy_revision=args.expected_signer_policy_revision,
+        policy_digest_sha256=args.expected_signer_policy_digest_sha256,
+        label_prefix="--expected-signer-",
         errors=errors,
     )
     _bounded_positive_integer(
@@ -1597,10 +1924,10 @@ def validate_finalize_inputs(
         errors,
         path="--resilience-qualification-signer-public-key-hex",
     )
-    topology_qualification, topology_errors = load_topology_qualification_binding(
-        args.topology_qualification_summary,
-        expected_deployment_id=args.expected_deployment_id,
-        expected_environment=args.expected_environment,
+    topology_qualification, topology_errors = load_reviewed_topology_qualification(
+        args,
+        deployment_id=args.expected_deployment_id,
+        environment=args.expected_environment,
     )
     errors.extend(topology_errors)
     resilience_qualification = None
@@ -1617,6 +1944,15 @@ def validate_finalize_inputs(
             )
         )
         errors.extend(resilience_errors)
+    lane_inventory = None
+    if topology_qualification is not None:
+        lane_inventory, inventory_errors = load_reviewed_lane_inventory(
+            args,
+            topology_qualification,
+            deployment_id=args.expected_deployment_id,
+            environment=args.expected_environment,
+        )
+        errors.extend(inventory_errors)
     validate_output_path(
         args.envelope_out,
         label="--envelope-out",
@@ -1630,6 +1966,7 @@ def validate_finalize_inputs(
             public_key,
             topology_qualification,
             resilience_qualification,
+            lane_inventory,
             errors,
         )
 
@@ -1637,6 +1974,23 @@ def validate_finalize_inputs(
         args.signing_payload
     )
     errors.extend(payload_errors)
+    if unsigned is not None:
+        signature = unsigned.get("signature")
+        expected_signer_binding = {
+            "backend": "software",
+            "service_id": args.expected_signer_service_id,
+            "administrator_id": args.expected_signer_administrator_id,
+            "key_revision": args.expected_signer_key_revision,
+            "policy_revision": args.expected_signer_policy_revision,
+            "policy_digest_sha256": args.expected_signer_policy_digest_sha256,
+        }
+        if not isinstance(signature, dict) or any(
+            signature.get(field) != expected
+            for field, expected in expected_signer_binding.items()
+        ):
+            errors.append(
+                "signing payload software-signer binding must match the independently reviewed expectations"
+            )
     if public_key is not None and unsigned is not None:
         current_generated_at_unix = unsigned.get("generated_at_unix")
         if (
@@ -1674,6 +2028,7 @@ def validate_finalize_inputs(
         public_key,
         topology_qualification,
         resilience_qualification,
+        lane_inventory,
         errors,
     )
 
@@ -1688,6 +2043,7 @@ def finalize(args: argparse.Namespace) -> int:
         public_key,
         topology_qualification,
         resilience_qualification,
+        lane_inventory,
         errors,
     ) = validate_finalize_inputs(args)
     if (
@@ -1698,6 +2054,7 @@ def finalize(args: argparse.Namespace) -> int:
         or public_key is None
         or topology_qualification is None
         or resilience_qualification is None
+        or lane_inventory is None
     ):
         emit_checker_error_lines(errors)
         return 2
@@ -1712,8 +2069,18 @@ def finalize(args: argparse.Namespace) -> int:
         previous_envelope_sha256=args.expected_previous_envelope_sha256,
         topology_qualification=topology_qualification,
         resilience_qualification=resilience_qualification,
+        lane_inventory=lane_inventory,
     )
     errors = validate_unsigned_envelope(unsigned, options)
+    validate_inventory_lane_digest_bindings(
+        lane_inventory.summary_sha256,
+        {
+            row.get("gate"): row.get("sha256")
+            for row in unsigned.get("lane_summaries", [])
+            if isinstance(row, dict)
+        },
+        errors,
+    )
     if errors:
         emit_checker_error_lines(errors)
         return 2
@@ -1721,6 +2088,14 @@ def finalize(args: argparse.Namespace) -> int:
         emit_checker_error_lines(
             ["foundational prerequisite signature verification failed"]
         )
+        return 1
+    receipt_validation, receipt_errors = verify_external_software_signer_receipt(
+        args,
+        signing_payload=signing_payload,
+        signature=signature,
+    )
+    if receipt_errors or receipt_validation is None:
+        emit_checker_error_lines(receipt_errors)
         return 1
 
     final_envelope = copy.deepcopy(unsigned)
@@ -1760,13 +2135,32 @@ def finalize(args: argparse.Namespace) -> int:
         return 2
     emit_checker_notice(
         "Finalized SoraFS foundational prerequisite envelope with SHA-256 "
-        f"{hashlib.sha256(envelope_bytes).hexdigest()}."
+        f"{hashlib.sha256(envelope_bytes).hexdigest()} after external software "
+        "signer receipt validation SHA-256 "
+        f"{hashlib.sha256(receipt_validation).hexdigest()}."
     )
     return 0
 
 
+def add_software_signer_binding_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    expected: bool = False,
+) -> None:
+    """Add public, non-secret software-signer provenance arguments."""
+
+    prefix = "--expected-signer-" if expected else "--signer-"
+    parser.add_argument(f"{prefix}service-id", required=True)
+    parser.add_argument(f"{prefix}administrator-id", required=True)
+    parser.add_argument(f"{prefix}key-revision", required=True, type=positive_int_arg)
+    parser.add_argument(
+        f"{prefix}policy-revision", required=True, type=positive_int_arg
+    )
+    parser.add_argument(f"{prefix}policy-digest-sha256", required=True)
+
+
 def build_parser() -> EvidenceArgumentParser:
-    """Build the two-phase external-HSM command line."""
+    """Build the two-phase external-software-signer command line."""
 
     parser = EvidenceArgumentParser(
         description=(
@@ -1780,7 +2174,8 @@ def build_parser() -> EvidenceArgumentParser:
         "prepare",
         help="Write the exact binary payload for an external Ed25519 signer.",
     )
-    add_topology_qualification_argument(prepare_parser)
+    add_signed_topology_qualification_arguments(prepare_parser)
+    add_signed_lane_inventory_arguments(prepare_parser)
     prepare_parser.add_argument(
         "--resilience-qualification-summary",
         required=True,
@@ -1830,6 +2225,7 @@ def build_parser() -> EvidenceArgumentParser:
         required=True,
         help="Operator-trusted raw 32-byte Ed25519 public key in lowercase hex.",
     )
+    add_software_signer_binding_arguments(prepare_parser)
     prepare_parser.add_argument(
         "--prerequisite",
         action="append",
@@ -1850,21 +2246,22 @@ def build_parser() -> EvidenceArgumentParser:
         help=(
             "Exact ready lane summary approved for this release. Repeat once "
             "for every readiness lane in canonical aggregate order; the stable "
-            "file bytes are hashed into the HSM-signed envelope."
+            "file bytes are hashed into the software-signed envelope."
         ),
     )
     prepare_parser.add_argument(
         "--signing-payload-out",
         required=True,
         type=Path,
-        help="New output path for the exact binary HSM signing payload.",
+        help="New output path for the exact binary software-signer payload.",
     )
 
     finalize_parser = subparsers.add_parser(
         "finalize",
         help="Verify a raw detached signature and write the final envelope.",
     )
-    add_topology_qualification_argument(finalize_parser)
+    add_signed_topology_qualification_arguments(finalize_parser)
+    add_signed_lane_inventory_arguments(finalize_parser)
     finalize_parser.add_argument(
         "--resilience-qualification-summary",
         required=True,
@@ -1895,10 +2292,39 @@ def build_parser() -> EvidenceArgumentParser:
         help="Regular file containing exactly 64 raw Ed25519 signature bytes.",
     )
     finalize_parser.add_argument(
+        "--signer-binding",
+        required=True,
+        type=Path,
+        help="Reviewed canonical Norito public binding for the promotion signer.",
+    )
+    finalize_parser.add_argument(
+        "--signer-receipt",
+        required=True,
+        type=Path,
+        help="Canonical JSON receipt emitted with the detached signature.",
+    )
+    finalize_parser.add_argument(
+        "--signer-verifier",
+        required=True,
+        type=Path,
+        help="Pinned external software signer binary providing verify-receipt.",
+    )
+    finalize_parser.add_argument(
+        "--expected-signer-verifier-sha256",
+        required=True,
+        help="Independently reviewed SHA-256 of the exact verifier binary.",
+    )
+    finalize_parser.add_argument(
+        "--expected-signer-operation-id",
+        required=True,
+        help="Non-zero lowercase 32-byte idempotency key recorded by the signer.",
+    )
+    finalize_parser.add_argument(
         "--trusted-public-key-hex",
         required=True,
         help="Operator-trusted raw 32-byte Ed25519 public key in lowercase hex.",
     )
+    add_software_signer_binding_arguments(finalize_parser, expected=True)
     finalize_parser.add_argument("--expected-deployment-id", required=True)
     finalize_parser.add_argument("--expected-environment", required=True)
     finalize_parser.add_argument(
@@ -1923,6 +2349,13 @@ def build_parser() -> EvidenceArgumentParser:
         "--max-evidence-age-secs",
         type=non_negative_int_arg,
         default=DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS,
+    )
+    finalize_parser.add_argument(
+        "--lane-summary",
+        action="append",
+        default=[],
+        metavar="GATE=PATH",
+        help="Repeat exactly 17 times in canonical lane order for final replay.",
     )
     finalize_parser.add_argument(
         "--envelope-out",

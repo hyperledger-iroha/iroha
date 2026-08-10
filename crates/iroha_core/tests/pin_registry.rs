@@ -16,8 +16,7 @@ use iroha_data_model::{
         error::{InstructionExecutionError, InvalidParameterError},
         sorafs::{
             ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-            RegisterPinManifest, RegisterProviderOwner, RetirePinManifest,
-            SetProviderIngestCompletionAuthority,
+            RegisterPinManifest, RetirePinManifest, SetProviderIngestCompletionAuthority,
         },
     },
     prelude::*,
@@ -33,9 +32,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::sorafs::{
-    CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
-    CanIssueSorafsReplicationOrder, CanRegisterSorafsPin, CanRegisterSorafsProviderOwner,
-    CanRetireSorafsPin,
+    CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder,
 };
 use mv::storage::StorageReadOnly;
 use norito::{decode_from_bytes, json, json::Value, to_bytes};
@@ -94,6 +91,7 @@ fn pin_registry_snapshot_matches_fixture() {
         order_payload,
         issued_epoch: 20,
         deadline_epoch: 28,
+        musubi_archive: None,
     }
     .execute(&alice(), &mut tx)
     .expect("issue replication order");
@@ -330,6 +328,7 @@ fn replication_order_with_mismatched_profile_is_rejected() {
         order_payload,
         issued_epoch: 20,
         deadline_epoch: 28,
+        musubi_archive: None,
     }
     .execute(&alice(), &mut tx)
     .expect_err("replication order with mismatched profile must be rejected");
@@ -446,6 +445,7 @@ fn replication_order_below_min_replicas_is_rejected() {
         order_payload,
         issued_epoch: 20,
         deadline_epoch: 28,
+        musubi_archive: None,
     }
     .execute(&alice(), &mut tx)
     .expect_err("replication order below minimum replicas must be rejected");
@@ -476,7 +476,6 @@ fn register_manifest_rejects_unknown_chunker_profile() {
 
     let err = RegisterPinManifest {
         manifest_payload: manifest.encode().expect("encode invalid manifest"),
-        submitted_epoch: 5,
         alias: None,
         successor_of: None,
     }
@@ -540,7 +539,6 @@ fn register_manifest_rejects_unknown_successor() {
 
     let err = RegisterPinManifest {
         manifest_payload: manifest_payload_for_seed(0xE1),
-        submitted_epoch: 5,
         alias: None,
         successor_of: Some(unknown_parent),
     }
@@ -569,7 +567,6 @@ fn register_manifest_rejects_self_successor() {
 
     let err = RegisterPinManifest {
         manifest_payload: manifest_payload_for_seed(0xE2),
-        submitted_epoch: 5,
         alias: None,
         successor_of: Some(digest),
     }
@@ -597,7 +594,6 @@ fn register_manifest_accepts_active_successor() {
     let parent = manifest_digest_for_seed(0xE3);
     RegisterPinManifest {
         manifest_payload: manifest_payload_for_seed(0xE3),
-        submitted_epoch: 5,
         alias: None,
         successor_of: None,
     }
@@ -611,7 +607,6 @@ fn register_manifest_accepts_active_successor() {
     bootstrap_sorafs(&mut tx);
     RegisterPinManifest {
         manifest_payload: manifest_payload_for_seed(0xE4),
-        submitted_epoch: 6,
         alias: None,
         successor_of: Some(parent),
     }
@@ -644,7 +639,6 @@ fn register_manifest_rejects_retired_successor() {
     bootstrap_sorafs(&mut tx);
     RetirePinManifest {
         digest: parent,
-        retired_epoch: 20,
         reason: None,
     }
     .execute(&alice(), &mut tx)
@@ -657,7 +651,6 @@ fn register_manifest_rejects_retired_successor() {
     bootstrap_sorafs(&mut tx);
     let err = RegisterPinManifest {
         manifest_payload: manifest_payload_for_seed(0xE6),
-        submitted_epoch: 30,
         alias: None,
         successor_of: Some(parent),
     }
@@ -695,7 +688,6 @@ fn register_manifest_with_successor_persists_pointer() {
     let child = manifest_digest_for_seed(0xE8);
     RegisterPinManifest {
         manifest_payload: manifest_payload_for_seed(0xE8),
-        submitted_epoch: 40,
         alias: None,
         successor_of: Some(parent),
     }
@@ -835,7 +827,24 @@ fn make_state() -> State {
         [alice_account, bob_account],
         std::iter::empty::<AssetDefinition>(),
     );
-    let state = State::new_for_testing(world, kura, live);
+    let mut state = State::new_for_testing(world, kura, live);
+    let mut governance = state.gov.clone();
+    governance.sorafs_provider_owners.extend(
+        [
+            ProviderId::new([0x51; 32]),
+            ProviderId::new([0x52; 32]),
+            ProviderId::new([0x53; 32]),
+            ProviderId::new([0x61; 32]),
+            ProviderId::new([0x62; 32]),
+            ProviderId::new([0x63; 32]),
+            ProviderId::new([0x71; 32]),
+            ProviderId::new([0x72; 32]),
+            ProviderId::new([0x73; 32]),
+        ]
+        .into_iter()
+        .map(|provider_id| (provider_id, alice.clone())),
+    );
+    state.set_gov(governance);
     state
 }
 
@@ -941,7 +950,6 @@ fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_me
         ManifestDigest::from_manifest(&manifest).expect("digest governed policy fixture");
     let err = RegisterPinManifest {
         manifest_payload: manifest.encode().expect("encode governed policy fixture"),
-        submitted_epoch: 5,
         alias: None,
         successor_of: None,
     }
@@ -1083,13 +1091,9 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     {
         let world = &mut tx.world;
         for perm in [
-            Permission::from(CanRegisterSorafsPin),
-            Permission::from(CanApproveSorafsPin),
-            Permission::from(CanRetireSorafsPin),
             Permission::from(CanBindSorafsAlias),
             Permission::from(CanIssueSorafsReplicationOrder),
             Permission::from(CanCompleteSorafsReplicationOrder),
-            Permission::from(CanRegisterSorafsProviderOwner),
         ] {
             world.add_account_permission(&alice, perm);
         }
@@ -1107,12 +1111,6 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
         ProviderId::new([0x72; 32]),
         ProviderId::new([0x73; 32]),
     ] {
-        RegisterProviderOwner {
-            provider_id,
-            owner: alice.clone(),
-        }
-        .execute(&alice, tx)
-        .expect("register provider owner");
         let expected_current = tx
             .world()
             .provider_ingest_completion_authorities()
@@ -1143,7 +1141,6 @@ fn register_and_approve(
     );
     RegisterPinManifest {
         manifest_payload: manifest.encode().expect("encode registration fixture"),
-        submitted_epoch: 5,
         alias: None,
         successor_of: None,
     }
@@ -1169,7 +1166,6 @@ fn register_and_approve(
 
     ApprovePinManifest {
         digest,
-        approved_epoch: 5,
         council_envelope: Some(envelope),
         council_envelope_digest: None,
     }

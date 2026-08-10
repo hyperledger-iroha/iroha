@@ -1976,16 +1976,16 @@ impl Iso20022BridgeRuntime {
                             format_args!(" lane={}", lane.as_u32()),
                         );
                     }
-                    if let Some(era) = ctx.next_min_handle_era {
+                    if let Some(era) = ctx.active_handle_era {
                         let _ = FmtWrite::write_fmt(
                             &mut detail,
-                            format_args!(" next_min_handle_era={era}"),
+                            format_args!(" active_handle_era={era}"),
                         );
                     }
-                    if let Some(sub) = ctx.next_min_sub_nonce {
+                    if let Some(sub) = ctx.next_handle_counter {
                         let _ = FmtWrite::write_fmt(
                             &mut detail,
-                            format_args!(" next_min_sub_nonce={sub}"),
+                            format_args!(" next_handle_counter={sub}"),
                         );
                     }
                     (format!("PRTRY:{}", ctx.reason.code()), detail)
@@ -2228,6 +2228,7 @@ impl Iso20022BridgeRuntime {
         world: &impl WorldReadOnly,
         now_ms: u64,
         chain_id: &ChainId,
+        network_id: &iroha_data_model::NetworkId,
         telemetry: &MaybeTelemetry,
     ) -> Result<(TransactionPayload, IsoMessageContext), MsgError> {
         let debtor_iban = require_identifier(
@@ -2369,7 +2370,7 @@ impl Iso20022BridgeRuntime {
         }
 
         let mut builder = TransactionBuilder::new(
-            chain_id.clone(),
+            *network_id,
             self.signer_account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2391,6 +2392,7 @@ impl Iso20022BridgeRuntime {
         world: &impl WorldReadOnly,
         now_ms: u64,
         chain_id: &ChainId,
+        network_id: &iroha_data_model::NetworkId,
         telemetry: &MaybeTelemetry,
     ) -> Result<(TransactionPayload, IsoMessageContext), MsgError> {
         let debtor_iban = require_identifier(
@@ -2547,7 +2549,7 @@ impl Iso20022BridgeRuntime {
         }
 
         let mut builder = TransactionBuilder::new(
-            chain_id.clone(),
+            *network_id,
             self.signer_account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -21797,7 +21799,14 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let (payload, context) = runtime
-            .build_pacs008_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs008_payload(
+                &msg,
+                &world_view,
+                10_000,
+                &chain_id,
+                &crate::test_utils::signed_query_network_id(),
+                &telemetry,
+            )
             .expect("build");
         assert_eq!(context.ledger_id.as_deref(), Some(chain_id.as_str()));
         let (_expected_account, canonical_account, _) = sample_account_bundle();
@@ -21821,7 +21830,10 @@ mod tests {
         );
         assert!(context.asset_id.as_ref().is_some());
 
-        assert_eq!(&payload.chain, &chain_id);
+        assert_eq!(
+            payload.network_id().copied(),
+            Some(crate::test_utils::signed_query_network_id())
+        );
         runtime
             .sign_transaction_payload(payload.clone())
             .expect("sign pacs.008 payload")
@@ -21873,7 +21885,14 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let (_tx, context) = runtime
-            .build_pacs008_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs008_payload(
+                &msg,
+                &world_view,
+                10_000,
+                &chain_id,
+                &crate::test_utils::signed_query_network_id(),
+                &telemetry,
+            )
             .expect("build");
         let expected_asset_definition = sample_asset_definition_literal();
 
@@ -21902,7 +21921,14 @@ mod tests {
             let parsed =
                 parse_message("pacs.008", message.as_bytes()).expect("pacs.008 hint parses");
             let err = runtime
-                .build_pacs008_payload(&parsed, &world_view, 10_000, &chain_id, &telemetry)
+                .build_pacs008_payload(
+                    &parsed,
+                    &world_view,
+                    10_000,
+                    &chain_id,
+                    &crate::test_utils::signed_query_network_id(),
+                    &telemetry,
+                )
                 .expect_err("mismatched account hint must not replace the IBAN binding");
             assert!(matches!(
                 err,
@@ -21942,6 +21968,7 @@ mod tests {
                 &world_view,
                 10_000,
                 &chain_id,
+                &crate::test_utils::signed_query_network_id(),
                 &telemetry,
             )
             .expect("amount equal to the configured cap must be accepted");
@@ -21951,6 +21978,7 @@ mod tests {
                 &world_view,
                 10_000,
                 &chain_id,
+                &crate::test_utils::signed_query_network_id(),
                 &telemetry,
             )
             .expect_err("amount above the configured cap must fail");
@@ -21975,6 +22003,7 @@ mod tests {
                 &world_view,
                 10_000,
                 &chain_id,
+                &crate::test_utils::signed_query_network_id(),
                 &telemetry,
             )
             .expect_err("asset hint must not replace the currency binding");
@@ -22015,7 +22044,14 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs008_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs008_payload(
+                &msg,
+                &world_view,
+                10_000,
+                &chain_id,
+                &crate::test_utils::signed_query_network_id(),
+                &telemetry,
+            )
             .expect_err("unknown BIC must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -22041,7 +22077,14 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs008_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs008_payload(
+                &msg,
+                &world_view,
+                10_000,
+                &chain_id,
+                &crate::test_utils::signed_query_network_id(),
+                &telemetry,
+            )
             .expect_err("unmapped IBAN must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -22067,7 +22110,14 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs008_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs008_payload(
+                &msg,
+                &world_view,
+                10_000,
+                &chain_id,
+                &crate::test_utils::signed_query_network_id(),
+                &telemetry,
+            )
             .expect_err("unbound currency must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -22093,7 +22143,14 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let (payload, context) = runtime
-            .build_pacs009_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs009_payload(
+                &msg,
+                &world_view,
+                10_000,
+                &chain_id,
+                &crate::test_utils::signed_query_network_id(),
+                &telemetry,
+            )
             .expect("build");
         assert_eq!(context.ledger_id.as_deref(), Some(chain_id.as_str()));
         let (_expected_account, canonical_account, _) = sample_account_bundle();
@@ -22144,7 +22201,14 @@ mod tests {
             let parsed =
                 parse_message("pacs.009", message.as_bytes()).expect("pacs.009 hint parses");
             let err = runtime
-                .build_pacs009_payload(&parsed, &world_view, 10_000, &chain_id, &telemetry)
+                .build_pacs009_payload(
+                    &parsed,
+                    &world_view,
+                    10_000,
+                    &chain_id,
+                    &crate::test_utils::signed_query_network_id(),
+                    &telemetry,
+                )
                 .expect_err("mismatched account hint must not replace the IBAN binding");
             assert!(matches!(
                 err,
@@ -22184,6 +22248,7 @@ mod tests {
                 &world_view,
                 10_000,
                 &chain_id,
+                &crate::test_utils::signed_query_network_id(),
                 &telemetry,
             )
             .expect("amount equal to the configured cap must be accepted");
@@ -22193,6 +22258,7 @@ mod tests {
                 &world_view,
                 10_000,
                 &chain_id,
+                &crate::test_utils::signed_query_network_id(),
                 &telemetry,
             )
             .expect_err("amount above the configured cap must fail");
@@ -22217,6 +22283,7 @@ mod tests {
                 &world_view,
                 10_000,
                 &chain_id,
+                &crate::test_utils::signed_query_network_id(),
                 &telemetry,
             )
             .expect_err("asset hint must not replace the currency binding");
@@ -22244,7 +22311,14 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs009_payload(
+                &msg,
+                &world_view,
+                10_000,
+                &chain_id,
+                &crate::test_utils::signed_query_network_id(),
+                &telemetry,
+            )
             .expect_err("non-SECU purpose must fail");
         match err {
             MsgError::InvalidValue { field, kind } => {
@@ -22270,7 +22344,14 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs009_payload(
+                &msg,
+                &world_view,
+                10_000,
+                &chain_id,
+                &crate::test_utils::signed_query_network_id(),
+                &telemetry,
+            )
             .expect_err("unmapped IBAN must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -22296,7 +22377,14 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs009_payload(
+                &msg,
+                &world_view,
+                10_000,
+                &chain_id,
+                &crate::test_utils::signed_query_network_id(),
+                &telemetry,
+            )
             .expect_err("unbound currency must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -22335,7 +22423,14 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs009_payload(
+                &msg,
+                &world_view,
+                10_000,
+                &chain_id,
+                &crate::test_utils::signed_query_network_id(),
+                &telemetry,
+            )
             .expect_err("unknown BIC must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -22433,7 +22528,14 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let (_tx, context) = runtime
-            .build_pacs008_payload(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .build_pacs008_payload(
+                &msg,
+                &world_view,
+                10_000,
+                &chain_id,
+                &crate::test_utils::signed_query_network_id(),
+                &telemetry,
+            )
             .expect("build");
         assert_eq!(context.settlement_amount(), Some("10.25"));
         assert_eq!(context.settlement_currency(), Some("USD"));
@@ -22667,9 +22769,9 @@ mod tests {
             dataspace: Some(DataSpaceId::new(11)),
             lane: Some(LaneId::new(2)),
             snapshot_version: Some(99),
-            detail: "handle era below policy minimum".to_owned(),
-            next_min_handle_era: Some(7),
-            next_min_sub_nonce: Some(4),
+            detail: "handle era differs from the exact active policy era".to_owned(),
+            active_handle_era: Some(7),
+            next_handle_counter: Some(4),
         };
         let reason = TransactionRejectionReason::Validation(ValidationFail::AxtReject(ctx));
         runtime.mark_transaction_rejected("tx-axt", Some(&reason));
@@ -22690,7 +22792,7 @@ mod tests {
             "detail missing ids: {detail}"
         );
         assert!(
-            detail.contains("next_min_handle_era=7") && detail.contains("next_min_sub_nonce=4"),
+            detail.contains("active_handle_era=7") && detail.contains("next_handle_counter=4"),
             "detail missing hints: {detail}"
         );
     }

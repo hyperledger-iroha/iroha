@@ -7,12 +7,15 @@
 use std::{env, error::Error, fs, path::Path};
 
 use hex::{decode, encode};
-use iroha_crypto::Hash;
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
+    NetworkId,
+    block::BlockHeader,
     nexus::{
-        AssetHandle, AxtBinding, AxtDescriptorBuilder, AxtFastpqBinding, AxtHandleFragment,
-        AxtProofEnvelope, AxtProofFragment, AxtTouchFragment, DataSpaceId, GroupBinding,
-        HandleBudget, HandleSubject, LaneId, ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest,
+        AssetHandle, AssetHandleDraft, AxtBinding, AxtDescriptorBuilder, AxtFastpqBinding,
+        AxtHandleFragment, AxtHandleIssuerContextV1, AxtProofEnvelope, AxtProofFragment,
+        AxtTouchFragment, DataSpaceId, GroupBinding, HandleBudget, HandleSubject, LaneId,
+        ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest, UniversalAccountId,
         compute_descriptor_binding,
     },
     testing::axt::{
@@ -36,6 +39,27 @@ const POSEIDON_FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/axt_poseidon_constants.json"
 );
+
+fn fixture_issuer() -> KeyPair {
+    KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+}
+
+fn signed_fixture_handle(draft: AssetHandleDraft, dsid: DataSpaceId) -> AssetHandle {
+    let context = AxtHandleIssuerContextV1 {
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"axt-fixture-network"),
+        )),
+        asset_dsid: dsid,
+        issuer: UniversalAccountId::from_hash(Hash::new(b"axt-fixture-issuer")),
+        issuer_manifest_root: draft.manifest_view_root,
+        code_root: Hash::new(b"axt-fixture-program").into(),
+        abi_version: 1,
+        abi_hash: [0xA1; 32],
+    };
+    draft
+        .sign_by_issuer_v1(context, fixture_issuer().private_key())
+        .expect("fixture issuer key must sign canonical AXT claims")
+}
 
 fn fixture_digest(label: &[u8], dsid: DataSpaceId) -> String {
     let mut payload = Vec::new();
@@ -151,28 +175,31 @@ fn transfer_handle_fixture(
 ) -> AxtHandleFragment {
     let dsid = DataSpaceId::new(1);
     AxtHandleFragment {
-        handle: AssetHandle {
-            scope: vec!["transfer".to_string()],
-            subject: HandleSubject {
-                account: alice.clone(),
-                origin_dsid: Some(dsid),
+        handle: signed_fixture_handle(
+            AssetHandleDraft {
+                scope: vec!["transfer".to_string()],
+                subject: HandleSubject {
+                    account: alice.clone(),
+                    origin_dsid: Some(dsid),
+                },
+                budget: HandleBudget {
+                    remaining: Quantity::from(2_u64),
+                    per_use: Some(Quantity::from(1_u64)),
+                },
+                handle_era: 5,
+                sub_nonce: 3,
+                group_binding: GroupBinding {
+                    composability_group_id: b"ds:reports".to_vec(),
+                    epoch_id: 42,
+                },
+                target_lane: LaneId::new(4),
+                axt_binding: binding,
+                manifest_view_root,
+                expiry_slot: 200,
+                max_clock_skew_ms: Some(5_000),
             },
-            budget: HandleBudget {
-                remaining: Quantity::from(2_u64),
-                per_use: Some(Quantity::from(1_u64)),
-            },
-            handle_era: 5,
-            sub_nonce: 3,
-            group_binding: GroupBinding {
-                composability_group_id: b"ds:reports".to_vec(),
-                epoch_id: 42,
-            },
-            target_lane: LaneId::new(4),
-            axt_binding: binding,
-            manifest_view_root,
-            expiry_slot: 200,
-            max_clock_skew_ms: Some(5_000),
-        },
+            dsid,
+        ),
         intent: RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {
@@ -197,28 +224,31 @@ fn lock_handle_fixture(
 ) -> AxtHandleFragment {
     let dsid = DataSpaceId::new(7);
     AxtHandleFragment {
-        handle: AssetHandle {
-            scope: vec!["lock".to_string()],
-            subject: HandleSubject {
-                account: bob.clone(),
-                origin_dsid: Some(dsid),
+        handle: signed_fixture_handle(
+            AssetHandleDraft {
+                scope: vec!["lock".to_string()],
+                subject: HandleSubject {
+                    account: bob.clone(),
+                    origin_dsid: Some(dsid),
+                },
+                budget: HandleBudget {
+                    remaining: Quantity::from(5_u64),
+                    per_use: None,
+                },
+                handle_era: 9,
+                sub_nonce: 1,
+                group_binding: GroupBinding {
+                    composability_group_id: b"ds:audits".to_vec(),
+                    epoch_id: 7,
+                },
+                target_lane: LaneId::new(4),
+                axt_binding: binding,
+                manifest_view_root,
+                expiry_slot: 160,
+                max_clock_skew_ms: Some(2_000),
             },
-            budget: HandleBudget {
-                remaining: Quantity::from(5_u64),
-                per_use: None,
-            },
-            handle_era: 9,
-            sub_nonce: 1,
-            group_binding: GroupBinding {
-                composability_group_id: b"ds:audits".to_vec(),
-                epoch_id: 7,
-            },
-            target_lane: LaneId::new(4),
-            axt_binding: binding,
-            manifest_view_root,
-            expiry_slot: 160,
-            max_clock_skew_ms: Some(2_000),
-        },
+            dsid,
+        ),
         intent: RemoteSpendIntent {
             asset_dsid: dsid,
             op: SpendOp {

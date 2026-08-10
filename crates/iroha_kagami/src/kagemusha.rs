@@ -143,9 +143,9 @@ enum Command {
     /// Build the actual rendered Taira validator roster for signed V4 release generation.
     #[command(name = "prepare-taira-release-roster-v4")]
     PrepareTairaReleaseRosterV4(taira::PrepareReleaseRosterV4Args),
-    /// Append the complete authenticated offline-cash state to a fresh Taira genesis.
-    #[command(name = "prepare-taira-testnet-bootstrap-v4")]
-    PrepareTairaTestnetBootstrapV4(taira::PrepareTestnetBootstrapV4Args),
+    /// Append network-independent offline-cash prerequisites to a fresh Taira genesis.
+    #[command(name = "prepare-taira-testnet-base-genesis-v4")]
+    PrepareTairaTestnetBaseGenesisV4(taira::PrepareTestnetBaseGenesisV4Args),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -303,8 +303,8 @@ impl<T: Write> RunArgs<T> for Args {
             Command::PrepareTairaReleaseRosterV4(args) => {
                 taira::prepare_release_roster_v4(args, writer)?;
             }
-            Command::PrepareTairaTestnetBootstrapV4(args) => {
-                taira::prepare_testnet_bootstrap_v4(args, writer)?;
+            Command::PrepareTairaTestnetBaseGenesisV4(args) => {
+                taira::prepare_testnet_base_genesis_v4(args, writer)?;
             }
         }
         Ok(())
@@ -988,7 +988,7 @@ fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManif
     let roster: KagemushaTopUpFinalityRosterArtifactV2 =
         decode_canonical_norito(&bytes, "Kagemusha V4 top-up finality roster")?;
     roster.validate().map_err(|error| eyre!(error))?;
-    if roster.chain_id != manifest.chain_id
+    if roster.network_id != manifest.network_id
         || !roster_release_generations_match_v4(
             &roster.artifact_generation,
             &manifest.generation,
@@ -2078,7 +2078,7 @@ struct VerificationReport {
     generation: String,
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
-    chain_id: String,
+    network_id: String,
     asset_definition_id: String,
     asset_scale: u32,
     bridge_abi_version: u32,
@@ -2129,7 +2129,7 @@ impl VerificationReport {
             generation_memory_enforcement_profile: manifest
                 .generation_memory_enforcement_profile
                 .clone(),
-            chain_id: manifest.chain_id.to_string(),
+            network_id: manifest.network_id.to_string(),
             asset_definition_id: manifest.asset.to_string(),
             asset_scale: manifest.asset_scale,
             bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
@@ -2152,7 +2152,7 @@ struct VerificationReportV4 {
     generation: String,
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
-    chain_id: String,
+    network_id: String,
     asset_definition_id: String,
     asset_scale: u32,
     bridge_abi_version: u32,
@@ -2180,7 +2180,7 @@ impl VerificationReportV4 {
             generation_memory_enforcement_profile: report
                 .generation_memory_enforcement_profile
                 .clone(),
-            chain_id: report.chain_id.clone(),
+            network_id: report.network_id,
             asset_definition_id: report.asset_definition_id.clone(),
             asset_scale: report.asset_scale,
             bridge_abi_version: report.bridge_abi_version,

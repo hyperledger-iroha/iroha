@@ -7,7 +7,7 @@
 /// therefore does not trust volatile wire state or pin an exact-output slot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KuraReplicaAdvertSourceV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     height: u64,
     block_hash: HashOf<BlockHeader>,
     executed_block_wire_len: u64,
@@ -30,7 +30,7 @@ impl KuraReplicaAdvertSourceV1 {
             Hash::new(preimage)
         };
         Self {
-            chain_id: ChainId::from("kura-replica-refresh-owner-test"),
+            network_id: crate::sumeragi::synthetic_network_id("kura-replica-refresh-owner-test"),
             height,
             block_hash: HashOf::from_untyped_unchecked(test_hash(b"kura-replica-refresh-block")),
             executed_block_wire_len: 1,
@@ -45,7 +45,7 @@ impl KuraReplicaAdvertSourceV1 {
 
     fn from_advert(advert: &KuraReplicaAdvertV1) -> Self {
         Self {
-            chain_id: advert.chain_id.clone(),
+            network_id: advert.network_id,
             height: advert.height,
             block_hash: advert.block_hash,
             executed_block_wire_len: advert.executed_block_wire_len,
@@ -59,7 +59,7 @@ impl KuraReplicaAdvertSourceV1 {
     fn unsigned_advert(&self) -> KuraReplicaAdvertV1 {
         KuraReplicaAdvertV1 {
             version: crate::sumeragi::message::KURA_REPLICA_ADVERT_VERSION_V1,
-            chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             height: self.height,
             block_hash: self.block_hash,
             executed_block_wire_len: self.executed_block_wire_len,
@@ -329,7 +329,7 @@ impl Kura {
             ));
         }
         Ok(Some(KuraReplicaAdvertSourceV1 {
-            chain_id: authority.chain_id,
+            network_id: authority.network_id,
             height,
             block_hash: canonical_hash,
             executed_block_wire_len: authority.key.executed_block_wire_len,
@@ -447,7 +447,7 @@ impl Kura {
                     "advertised block has no authenticated retained v2 finality".to_owned(),
                 )
             })?;
-        if advert.chain_id != authority.chain_id
+        if advert.network_id != authority.network_id
             || advert.block_hash != authority.key.block_hash
             || advert.finality_artifact_hash != authority.key.finality_artifact_hash
             || advert.executed_block_wire_len != authority.key.executed_block_wire_len

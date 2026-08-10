@@ -1,3 +1,27 @@
+use iroha_data_model::{
+    isi::musubi::PublishMusubiReleaseV1,
+    musubi::{
+        ArchiveId, MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1, MUSUBI_MAX_DEPENDENCIES_V1,
+        MUSUBI_MAX_EXPORTS_V1, MUSUBI_MAX_KEYWORDS_V1, MUSUBI_MAX_PRERELEASE_IDENTIFIER_BYTES_V1,
+        MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1, MUSUBI_MAX_VERSION_COMPARATORS_V1,
+        MUSUBI_REGISTRY_VERSION_V1, MUSUBI_RESOLVER_PAGE_JSON_ITEMS_BUDGET_BYTES_V1,
+        MusubiAbiBindingV1, MusubiArchiveAvailabilityV1, MusubiArtifactGovernanceStateV1,
+        MusubiArtifactTakedownV1, MusubiComparatorOpV1, MusubiContentDigestV1,
+        MusubiDependencyKindV1, MusubiDependencyReqV1, MusubiDescriptionV1, MusubiDocumentRefV1,
+        MusubiExactDependencyEdgeV1, MusubiExactReleaseSnapshotV1, MusubiGovernanceActionDigestV1,
+        MusubiKeywordV1, MusubiKotodamaEditionV1, MusubiNamespaceV1, MusubiPackageIdV1,
+        MusubiPackageScopeV1, MusubiPrereleaseIdentifierV1, MusubiPublicationV1, MusubiReasonV1,
+        MusubiRegistrySnapshotV1, MusubiReleaseIdV1, MusubiReleaseManifestV1,
+        MusubiReleaseMetadataV1, MusubiReleaseRecordV1, MusubiReleaseRevisionsV1,
+        MusubiReleaseSelectionStateV1, MusubiReleaseYankV1, MusubiResolutionProofV1,
+        MusubiResolverReleaseRowV1, MusubiStorageAvailabilityV1, MusubiVerificationLockV1,
+        MusubiVerificationNodeV1, MusubiVersionComparatorV1, MusubiVersionReqV1, MusubiVersionV1,
+        validate_musubi_account_id_v1,
+    },
+};
+
+use super::public_musubi::MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES;
+
 #[test]
 fn provider_bundle_attestation_uses_dedicated_public_musubi_route() {
     assert_eq!(
@@ -230,10 +254,7 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
         }
     };
 
-    let chain_id: ChainId = "c"
-        .repeat(MAX_CHAIN_ID_BYTES)
-        .parse()
-        .expect("maximal chain id");
+    let network_id = test_network_id();
     let namespace = MusubiNamespaceV1::new(&format!("{root_domain_text}.n"))
         .expect("maximal domain-qualified namespace");
     let (publisher, publisher_signer) = near_limit_account();
@@ -245,7 +266,7 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
         let instruction =
             PublishMusubiReleaseV1::new(namespace.clone(), publication, None, 1, None);
         let mut builder = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -338,8 +359,7 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
             },
         };
         MusubiExactReleaseSnapshotV1 {
-            chain_id: chain_id.clone(),
-            genesis_hash: [0xFF; 32],
+            network_id,
             snapshot,
             home_release,
             universal_release,

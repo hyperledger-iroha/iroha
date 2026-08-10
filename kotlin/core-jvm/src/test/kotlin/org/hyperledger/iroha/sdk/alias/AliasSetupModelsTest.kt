@@ -14,6 +14,7 @@ import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import kotlin.test.Test
@@ -292,6 +293,7 @@ class AliasSetupModelsTest {
         val setupTransaction = AliasPlanApply.buildTransactionPayload(
             AliasSetupPlanRequestV1(listOf(ensure)),
             setupPlan,
+            TEST_NETWORK_ID,
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(emptyList()),
             creationTimeMs = 40_000,
@@ -306,6 +308,7 @@ class AliasSetupModelsTest {
         val lifecycleTransaction = AliasLifecyclePlanApply.buildTransactionPayload(
             AliasLeaseRenewPlanRequestV1(renewal),
             lifecyclePlan,
+            TEST_NETWORK_ID,
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(emptyList()),
             creationTimeMs = 40_000,
@@ -372,9 +375,18 @@ class AliasSetupModelsTest {
             original.body,
             HashLiteral.canonicalize(AliasPlanVerifier.canonicalHash(bodyBytes)),
         )
+        val canonicalJson = JsonEncoder.encode(checksummed.toJsonMap())
+        assertTrue("\"network_id\":\"${TEST_NETWORK_ID.literal}\"" in canonicalJson)
+        assertFalse("\"chain_id\"" in canonicalJson)
         val parsed = AliasTransactionPlanJsonParser.parse(
-            JsonEncoder.encode(checksummed.toJsonMap()).toByteArray(StandardCharsets.UTF_8),
+            canonicalJson.toByteArray(StandardCharsets.UTF_8),
         )
+        assertFailsWith<IllegalStateException> {
+            AliasTransactionPlanJsonParser.parse(
+                canonicalJson.replace("\"network_id\"", "\"chain_id\"")
+                    .toByteArray(StandardCharsets.UTF_8),
+            )
+        }
         assertEquals(checksummed, parsed)
         assertTrue(AliasPlanVerifier.verifyHash(parsed, bodyBytes))
 
@@ -393,18 +405,34 @@ class AliasSetupModelsTest {
                 assertEquals(AccountAddress.DEFAULT_I105_DISCRIMINANT, chainDiscriminant)
                 DecodedEnsureAliasFrame(ensure, frame.copyOf())
             },
+            TEST_NETWORK_ID,
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(emptyList()),
             creationTimeMs = 40_000,
             nonce = 7,
         )
 
-        assertEquals(parsed.body.chainId, payload.chainId)
+        assertEquals(TEST_NETWORK_ID, payload.networkId)
+        assertEquals(TEST_NETWORK_ID, parsed.body.networkId)
         assertEquals(parsed.body.authority, payload.authority)
         assertEquals(9_000L, payload.timeToLiveMs)
         val executable = payload.executable as Executable.Instructions
         assertEquals(1, executable.instructions.size)
         assertEquals(EnsureAlias.WIRE_ID, executable.instructions.single().name)
+        assertFailsWith<IllegalArgumentException> {
+            AliasPlanApply.buildTransactionPayload(
+                request,
+                parsed,
+                AliasPlanBodyNoritoEncoder { bodyBytes.copyOf() },
+                AliasEnsureInstructionFrameCodec { _, frame, _ ->
+                    DecodedEnsureAliasFrame(ensure, frame.copyOf())
+                },
+                OTHER_NETWORK_ID,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                FeePaymentIntent.authority(emptyList()),
+                creationTimeMs = 40_000,
+            )
+        }
     }
 
     @Test
@@ -445,7 +473,7 @@ class AliasSetupModelsTest {
         val body = AliasLifecycleTransactionPlanBodyV1(
             AliasLifecycleTransactionPlanBodyV1.VERSION,
             account(0x11),
-            "test-chain",
+            TEST_NETWORK_ID,
             AliasPlanAnchorV1(9, "01".repeat(32)),
             request.operation,
             AliasLifecyclePlanDispositionV1.APPLY,
@@ -460,9 +488,18 @@ class AliasSetupModelsTest {
             body,
             hex(AliasPlanVerifier.canonicalLifecycleHash(bodyBytes)),
         )
+        val canonicalJson = JsonEncoder.encode(plan.toJsonMap())
+        assertTrue("\"network_id\":\"${TEST_NETWORK_ID.literal}\"" in canonicalJson)
+        assertFalse("\"chain_id\"" in canonicalJson)
         val parsed = AliasLifecycleTransactionPlanJsonParser.parse(
-            JsonEncoder.encode(plan.toJsonMap()).toByteArray(StandardCharsets.UTF_8),
+            canonicalJson.toByteArray(StandardCharsets.UTF_8),
         )
+        assertFailsWith<IllegalStateException> {
+            AliasLifecycleTransactionPlanJsonParser.parse(
+                canonicalJson.replace("\"network_id\"", "\"chain_id\"")
+                    .toByteArray(StandardCharsets.UTF_8),
+            )
+        }
 
         assertEquals(plan, parsed)
         assertEquals(emptyList(), AliasPlanVerifier.validateLifecycleExecutable(parsed))
@@ -484,12 +521,27 @@ class AliasSetupModelsTest {
             AliasLifecycleInstructionFrameCodec { _, payload, _ ->
                 DecodedAliasLifecycleFrame(request.operation, payload.copyOf())
             },
+            TEST_NETWORK_ID,
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(emptyList()),
             creationTimeMs = 40_000,
         )
         val executable = transaction.executable as Executable.Instructions
         assertEquals(RenewAliasLease.WIRE_ID, executable.instructions.single().name)
+        assertFailsWith<IllegalArgumentException> {
+            AliasLifecyclePlanApply.buildTransactionPayload(
+                request,
+                parsed,
+                AliasLifecyclePlanBodyNoritoEncoder { bodyBytes.copyOf() },
+                AliasLifecycleInstructionFrameCodec { _, payload, _ ->
+                    DecodedAliasLifecycleFrame(request.operation, payload.copyOf())
+                },
+                OTHER_NETWORK_ID,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                FeePaymentIntent.authority(emptyList()),
+                creationTimeMs = 40_000,
+            )
+        }
     }
 
     @Test
@@ -501,7 +553,7 @@ class AliasSetupModelsTest {
         val body = AliasLifecycleTransactionPlanBodyV1(
             1,
             account(0x11),
-            "test-chain",
+            TEST_NETWORK_ID,
             AliasPlanAnchorV1(9, "01".repeat(32)),
             request.operation,
             AliasLifecyclePlanDispositionV1.NO_OP,
@@ -532,6 +584,7 @@ class AliasSetupModelsTest {
                 plan,
                 AliasLifecyclePlanBodyNoritoEncoder { bodyBytes },
                 AliasLifecycleInstructionFrameCodec { _, _, _ -> error("unreachable") },
+                TEST_NETWORK_ID,
                 AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 FeePaymentIntent.authority(emptyList()),
                 creationTimeMs = 40_000,
@@ -558,7 +611,7 @@ class AliasSetupModelsTest {
             1,
             request,
             account(0x11),
-            "test-chain",
+            TEST_NETWORK_ID,
             AliasPlanAnchorV1(9, "01".repeat(32)),
             AliasPlanResourceV1(intent, AliasPlanDispositionV1.CREATE, null, 0),
             AliasLeaseAcquisitionV1(1),
@@ -746,15 +799,15 @@ class AliasSetupModelsTest {
         )
 
         val receipt = signedOnboardingReceipt(body, signer)
-        assertTrue(AccountOnboardingReceiptVerifier.verify(receipt))
-        assertEquals(receipt, AccountOnboardingReceiptVerifier.requireValidForRequest(body.request, receipt))
+        assertTrue(AccountOnboardingReceiptVerifier.verify(receipt, body.networkId, null))
+        assertEquals(receipt, AccountOnboardingReceiptVerifier.requireValidForRequest(body.request, receipt, body.networkId, null))
 
         val tampered = AccountOnboardingPlanReceiptV1(
-            onboardingBody(authority, "other-chain"),
+            onboardingBody(authority, OTHER_NETWORK_ID),
             receipt.planHash,
             receipt.signature,
         )
-        assertFalse(AccountOnboardingReceiptVerifier.verify(tampered))
+        assertFalse(AccountOnboardingReceiptVerifier.verify(tampered, body.networkId, null))
 
         val wrongSigner = Ed25519PrivateKeyParameters(ByteArray(32) { 0x52.toByte() }, 0)
         val wrongAuthority = AccountAddress.fromAccount(
@@ -762,19 +815,20 @@ class AliasSetupModelsTest {
             "ed25519",
         ).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val wrongAuthorityReceipt = signedOnboardingReceipt(onboardingBody(wrongAuthority), signer)
-        assertFalse(AccountOnboardingReceiptVerifier.verify(wrongAuthorityReceipt))
+        assertFalse(AccountOnboardingReceiptVerifier.verify(wrongAuthorityReceipt, body.networkId, null))
 
         val substitutedSelfSignedReceipt = signedOnboardingReceipt(
             onboardingBody(wrongAuthority),
             wrongSigner,
         )
-        assertTrue(AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt))
+        assertTrue(AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt, body.networkId, null))
         assertFalse(
-            AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt, authority),
+            AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt, body.networkId, authority),
         )
         assertFailsWith<IllegalArgumentException> {
             AccountOnboardingReceiptVerifier.requireValid(
                 substitutedSelfSignedReceipt,
+                body.networkId,
                 authority,
             )
         }
@@ -811,6 +865,7 @@ class AliasSetupModelsTest {
         assertTrue(
             AccountOnboardingReceiptVerifier.verify(
                 receipt,
+                receipt.body.networkId,
                 vector.getValue("authority") as String,
             ),
         )
@@ -821,6 +876,7 @@ class AliasSetupModelsTest {
         assertFalse(
             AccountOnboardingReceiptVerifier.verify(
                 AccountOnboardingPlanReceiptV1(receipt.body, receipt.planHash, tamperedSignature),
+                receipt.body.networkId,
                 receipt.body.authority,
             ),
         )
@@ -847,7 +903,7 @@ class AliasSetupModelsTest {
         val body = AliasTransactionPlanBodyV1(
             1,
             valid.body.authority,
-            "test-chain",
+            valid.body.networkId,
             valid.body.anchor,
             listOf(conflictResource, dataspaceResource),
             emptyList(),
@@ -896,7 +952,7 @@ class AliasSetupModelsTest {
         val body = AliasTransactionPlanBodyV1(
             AliasTransactionPlanBodyV1.VERSION,
             account(0x11),
-            "test-chain",
+            TEST_NETWORK_ID,
             AliasPlanAnchorV1(9, "01".repeat(32)),
             listOf(AliasPlanResourceV1(intent, AliasPlanDispositionV1.CREATE, quote, 0L)),
             listOf(frame),
@@ -910,7 +966,7 @@ class AliasSetupModelsTest {
 
     private fun onboardingBody(
         authority: String,
-        chainId: String = "test-chain",
+        networkId: NetworkId = TEST_NETWORK_ID,
         disposition: AliasPlanDispositionV1 = AliasPlanDispositionV1.CREATE,
     ): AccountOnboardingPlanBodyV1 {
         val intent = AliasIntentV1.AccountAlias(
@@ -928,7 +984,7 @@ class AliasSetupModelsTest {
                 account(0x22),
             ),
             authority,
-            chainId,
+            networkId,
             AliasPlanAnchorV1(9, "01".repeat(32)),
             AliasPlanResourceV1(
                 intent,
@@ -1009,5 +1065,12 @@ class AliasSetupModelsTest {
             current = directory.parent
         }
         error("shared alias setup fixture not found")
+    }
+
+    private companion object {
+        private val TEST_NETWORK_ID = NetworkId.parse(
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+        )
+        private val OTHER_NETWORK_ID = NetworkId.fromBytes(ByteArray(NetworkId.BYTE_LENGTH) { 0xA5.toByte() })
     }
 }

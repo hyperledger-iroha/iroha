@@ -19,6 +19,7 @@ import java.util.TreeSet;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
 
 /** First-release-only Musubi package, SemVer, query, cursor, and page DTOs. */
@@ -1602,23 +1603,17 @@ public final class MusubiModelsV1 {
 
   /** Finalized paired home-dataspace and universal-index view of one exact release. */
   public static final class ExactReleaseSnapshot extends WireValue {
-    private final String chainId;
-    private final byte[] genesisHash;
+    private final NetworkId networkId;
     private final RegistrySnapshot snapshot;
     private final ReleaseRecord homeRelease;
     private final ResolverReleaseRow universalRelease;
 
     ExactReleaseSnapshot(
-        final String chainId,
-        final byte[] genesisHash,
+        final NetworkId networkId,
         final RegistrySnapshot snapshot,
         final ReleaseRecord homeRelease,
         final ResolverReleaseRow universalRelease) {
-      requireChainId(chainId, "Musubi exact release chain ID");
-      if (genesisHash == null || genesisHash.length != 32 || allZero(genesisHash)) {
-        throw new IllegalArgumentException(
-            "Musubi exact release genesis hash must be non-zero and 32 bytes");
-      }
+      this.networkId = Objects.requireNonNull(networkId, "networkId");
       this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
       this.homeRelease = Objects.requireNonNull(homeRelease, "homeRelease");
       this.universalRelease = Objects.requireNonNull(universalRelease, "universalRelease");
@@ -1633,14 +1628,11 @@ public final class MusubiModelsV1 {
       MusubiJsonV1.validateExactReleaseSnapshot(
           homeRelease.rawValue(),
           universalRelease.rawValue(),
-          genesisHash,
+          networkId,
           snapshot);
-      this.chainId = chainId;
-      this.genesisHash = genesisHash.clone();
     }
 
-    public String chainId() { return chainId; }
-    public byte[] genesisHash() { return genesisHash.clone(); }
+    public NetworkId networkId() { return networkId; }
     public RegistrySnapshot snapshot() { return snapshot; }
     public ReleaseRecord homeRelease() { return homeRelease; }
     public ResolverReleaseRow universalRelease() { return universalRelease; }
@@ -1657,8 +1649,7 @@ public final class MusubiModelsV1 {
 
     @Override Object toJsonValue() {
       return object(
-          "chain_id", chainId,
-          "genesis_hash", unsignedBytes(genesisHash),
+          "network_id", networkId.toString(),
           "snapshot", snapshot.toJsonValue(),
           "home_release", homeRelease.toJsonValue(),
           "universal_release", universalRelease.toJsonValue());
@@ -1986,8 +1977,7 @@ public final class MusubiModelsV1 {
 
   /** Exact deployment and CAR-body binding signed by seed ingress. */
   public static final class SeedIngressReceiptBinding extends WireValue {
-    private final String chainId;
-    private final byte[] genesisBlockHash;
+    private final NetworkId networkId;
     private final String publisher;
     private final String ingressBroker;
     private final String seedProvider;
@@ -1998,8 +1988,7 @@ public final class MusubiModelsV1 {
     private final byte[] nonce;
 
     public SeedIngressReceiptBinding(
-        final String chainId,
-        final byte[] genesisBlockHash,
+        final NetworkId networkId,
         final String publisher,
         final String ingressBroker,
         final String seedProvider,
@@ -2008,7 +1997,7 @@ public final class MusubiModelsV1 {
         final Digest32 carBodyDigest,
         final BigInteger carBodyLength,
         final byte[] nonce) {
-      requireChainId(chainId, "Musubi seed-ingress chain ID");
+      this.networkId = Objects.requireNonNull(networkId, "networkId");
       final String canonicalPublisher =
           AccountIdLiteral.requireCanonicalI105Address(publisher, "publisher");
       final String canonicalIngressBroker =
@@ -2017,9 +2006,8 @@ public final class MusubiModelsV1 {
       Objects.requireNonNull(archiveId, "archiveId");
       Objects.requireNonNull(carBodyDigest, "carBodyDigest");
       requireU64(carBodyLength, "seedIngress.carBodyLength");
-      if (genesisBlockHash == null || genesisBlockHash.length != 32
-          || nonce == null || nonce.length != 32
-          || allZero(genesisBlockHash) || allZero(nonce)
+      if (nonce == null || nonce.length != 32
+          || allZero(nonce)
           || seedProvider == null || !seedProvider.matches("[0-9A-F]{64}")
           || allZero(hexBytes(seedProvider))
           || carBodyLength.signum() <= 0
@@ -2028,8 +2016,6 @@ public final class MusubiModelsV1 {
           || allZero(archiveId.bytes()) || allZero(carBodyDigest.bytes())) {
         throw new IllegalArgumentException("Musubi seed-ingress binding is invalid");
       }
-      this.chainId = chainId;
-      this.genesisBlockHash = genesisBlockHash.clone();
       this.publisher = canonicalPublisher;
       this.ingressBroker = canonicalIngressBroker;
       this.seedProvider = seedProvider;
@@ -2040,8 +2026,7 @@ public final class MusubiModelsV1 {
       this.nonce = nonce.clone();
     }
 
-    public String chainId() { return chainId; }
-    public byte[] genesisBlockHash() { return genesisBlockHash.clone(); }
+    public NetworkId networkId() { return networkId; }
     public String publisher() { return publisher; }
     public String ingressBroker() { return ingressBroker; }
     public String seedProvider() { return seedProvider; }
@@ -2053,8 +2038,7 @@ public final class MusubiModelsV1 {
 
     @Override Object toJsonValue() {
       return object(
-          "chain_id", chainId,
-          "genesis_block_hash", unsignedBytes(genesisBlockHash),
+          "network_id", networkId.toString(),
           "publisher", publisher,
           "ingress_broker", ingressBroker,
           "seed_provider", Collections.singletonList(seedProvider),
@@ -2228,8 +2212,7 @@ public final class MusubiModelsV1 {
 
   /** Exact provider, completion, deployment, and parsed-bundle commitment binding. */
   public static final class ProviderBundleVerificationBinding extends WireValue {
-    private final String chainId;
-    private final byte[] genesisBlockHash;
+    private final NetworkId networkId;
     private final String providerId;
     private final String completedBy;
     private final ProviderCompletionAuthority completionAuthority;
@@ -2245,8 +2228,7 @@ public final class MusubiModelsV1 {
     private final Digest32 sourceTreeDigest;
 
     public ProviderBundleVerificationBinding(
-        final String chainId,
-        final byte[] genesisBlockHash,
+        final NetworkId networkId,
         final String providerId,
         final String completedBy,
         final ProviderCompletionAuthority completionAuthority,
@@ -2260,15 +2242,13 @@ public final class MusubiModelsV1 {
         final Digest32 semanticReleaseManifestDigest,
         final Digest32 verificationLockDigest,
         final Digest32 sourceTreeDigest) {
-      requireChainId(chainId, "Musubi provider bundle chain ID");
+      this.networkId = Objects.requireNonNull(networkId, "networkId");
       final String canonicalCompletedBy =
           AccountIdLiteral.requireCanonicalI105Address(completedBy, "completedBy");
       Objects.requireNonNull(completionAuthority, "completionAuthority");
       requireU64(assignmentRevision, "providerBundle.assignmentRevision");
       requireU64(completionEpoch, "providerBundle.completionEpoch");
-      if (genesisBlockHash == null || genesisBlockHash.length != 32
-          || allZero(genesisBlockHash)
-          || providerId == null || !providerId.matches("[0-9A-F]{64}")
+      if (providerId == null || !providerId.matches("[0-9A-F]{64}")
           || allZero(hexBytes(providerId))
           || !Arrays.equals(
               TransferWirePayloadEncoder.encodeAccountIdPayload(canonicalCompletedBy),
@@ -2287,8 +2267,6 @@ public final class MusubiModelsV1 {
       this.verificationLockDigest = requireNonZeroModelDigest(
           verificationLockDigest, "verificationLockDigest");
       this.sourceTreeDigest = requireNonZeroModelDigest(sourceTreeDigest, "sourceTreeDigest");
-      this.chainId = chainId;
-      this.genesisBlockHash = genesisBlockHash.clone();
       this.providerId = providerId;
       this.completedBy = canonicalCompletedBy;
       this.completionAuthority = completionAuthority;
@@ -2296,8 +2274,7 @@ public final class MusubiModelsV1 {
       this.completionEpoch = completionEpoch;
     }
 
-    public String chainId() { return chainId; }
-    public byte[] genesisBlockHash() { return genesisBlockHash.clone(); }
+    public NetworkId networkId() { return networkId; }
     public String providerId() { return providerId; }
     public String completedBy() { return completedBy; }
     public ProviderCompletionAuthority completionAuthority() { return completionAuthority; }
@@ -2314,8 +2291,7 @@ public final class MusubiModelsV1 {
 
     @Override Object toJsonValue() {
       return object(
-          "chain_id", chainId,
-          "genesis_block_hash", unsignedBytes(genesisBlockHash),
+          "network_id", networkId.toString(),
           "provider_id", Collections.singletonList(providerId),
           "completed_by", completedBy,
           "completion_authority", completionAuthority.toJsonValue(),
@@ -3487,29 +3463,22 @@ public final class MusubiModelsV1 {
     }
   }
 
-  /** Resolver page carrying the exact chain/genesis identity required by lockfiles. */
+  /** Resolver page carrying the exact network identity required by lockfiles. */
   public static final class ResolverIndexPage extends WireValue {
     private final ResolverIndexQuery query;
-    private final String chainId;
-    private final byte[] genesisHash;
+    private final NetworkId networkId;
     private final List<ResolverReleaseRow> items;
     private final FinalizedCursor nextCursor;
     private final RegistrySnapshot snapshot;
 
     ResolverIndexPage(
         final ResolverIndexQuery query,
-        final String chainId,
-        final byte[] genesisHash,
+        final NetworkId networkId,
         final List<ResolverReleaseRow> items,
         final FinalizedCursor nextCursor,
         final RegistrySnapshot snapshot) {
       this.query = Objects.requireNonNull(query, "query");
-      requireExactText(chainId, "Musubi resolver chain ID");
-      if (genesisHash == null || genesisHash.length != 32 || allZero(genesisHash)) {
-        throw new IllegalArgumentException("Musubi genesis hash must contain 32 bytes");
-      }
-      this.chainId = chainId;
-      this.genesisHash = genesisHash.clone();
+      this.networkId = Objects.requireNonNull(networkId, "networkId");
       this.items = immutableList(items);
       if (this.items.size() > 100) {
         throw new IllegalArgumentException("Musubi resolver page exceeds 100 items");
@@ -3529,8 +3498,7 @@ public final class MusubiModelsV1 {
     }
 
     public ResolverIndexQuery query() { return query; }
-    public String chainId() { return chainId; }
-    public byte[] genesisHash() { return genesisHash.clone(); }
+    public NetworkId networkId() { return networkId; }
     public List<ResolverReleaseRow> items() { return items; }
     public FinalizedCursor nextCursor() { return nextCursor; }
     public RegistrySnapshot snapshot() { return snapshot; }
@@ -3569,12 +3537,9 @@ public final class MusubiModelsV1 {
     @Override Object toJsonValue() {
       final List<Object> values = new ArrayList<>();
       for (final ResolverReleaseRow item : items) values.add(item.toJsonValue());
-      final List<Integer> genesis = new ArrayList<>();
-      for (final byte value : genesisHash) genesis.add(Integer.valueOf(value & 0xff));
       return object(
           "query", query.toJsonValue(),
-          "chain_id", chainId,
-          "genesis_hash", genesis,
+          "network_id", networkId.toString(),
           "items", values,
           "next_cursor", nextCursor == null ? null : nextCursor.toJsonValue(),
           "snapshot", snapshot.toJsonValue());
@@ -3583,30 +3548,23 @@ public final class MusubiModelsV1 {
 
   /** Archive-location page carrying deployment identity and the immutable commitment. */
   public static final class ArchiveLocationPage extends WireValue {
-    private final String chainId;
-    private final byte[] genesisHash;
+    private final NetworkId networkId;
     private final ArchiveRecord archive;
     private final List<ArchiveLocation> items;
     private final FinalizedCursor nextCursor;
     private final RegistrySnapshot snapshot;
 
     ArchiveLocationPage(
-        final String chainId,
-        final byte[] genesisHash,
+        final NetworkId networkId,
         final ArchiveRecord archive,
         final List<ArchiveLocation> items,
         final FinalizedCursor nextCursor,
         final RegistrySnapshot snapshot) {
-      requireExactText(chainId, "Musubi archive-location chain ID");
-      if (genesisHash == null || genesisHash.length != 32 || allZero(genesisHash)
-          || !archive.stagingReceipt().payload().binding().chainId().equals(chainId)
-          || !Arrays.equals(
-              archive.stagingReceipt().payload().binding().genesisBlockHash(), genesisHash)
+      this.networkId = Objects.requireNonNull(networkId, "networkId");
+      if (!archive.stagingReceipt().payload().binding().networkId().equals(networkId)
           || archive.registeredAtHeight().compareTo(snapshot.finalizedHeight()) > 0) {
         throw new IllegalArgumentException("Musubi archive page deployment identity is invalid");
       }
-      this.chainId = chainId;
-      this.genesisHash = genesisHash.clone();
       this.archive = archive;
       this.items = immutableList(items);
       if (this.items.size() > 4) {
@@ -3632,8 +3590,7 @@ public final class MusubiModelsV1 {
       this.snapshot = snapshot;
     }
 
-    public String chainId() { return chainId; }
-    public byte[] genesisHash() { return genesisHash.clone(); }
+    public NetworkId networkId() { return networkId; }
     public ArchiveRecord archive() { return archive; }
     public List<ArchiveLocation> items() { return items; }
     public FinalizedCursor nextCursor() { return nextCursor; }
@@ -3653,8 +3610,7 @@ public final class MusubiModelsV1 {
       final List<Object> values = new ArrayList<>();
       for (final ArchiveLocation item : items) values.add(item.toJsonValue());
       return object(
-          "chain_id", chainId,
-          "genesis_hash", unsignedBytes(genesisHash),
+          "network_id", networkId.toString(),
           "archive", archive.toJsonValue(),
           "items", values,
           "next_cursor", nextCursor == null ? null : nextCursor.toJsonValue(),
@@ -3664,25 +3620,18 @@ public final class MusubiModelsV1 {
 
   /** Exact finalized cache-retention decisions for one bounded request batch. */
   public static final class ArchiveRetentionPage extends WireValue {
-    private final String chainId;
-    private final byte[] genesisHash;
+    private final NetworkId networkId;
     private final List<ArchiveRetentionDecision> items;
     private final BigInteger finalizedTimeMs;
     private final RegistrySnapshot snapshot;
 
     ArchiveRetentionPage(
-        final String chainId,
-        final byte[] genesisHash,
+        final NetworkId networkId,
         final List<ArchiveRetentionDecision> items,
         final BigInteger finalizedTimeMs,
         final RegistrySnapshot snapshot) {
-      requireExactText(chainId, "Musubi archive-retention chain ID");
+      this.networkId = Objects.requireNonNull(networkId, "networkId");
       requireU64(finalizedTimeMs, "archiveRetention.finalizedTimeMs");
-      if (genesisHash == null || genesisHash.length != 32 || allZero(genesisHash)) {
-        throw new IllegalArgumentException("Musubi archive-retention genesis hash is invalid");
-      }
-      this.chainId = chainId;
-      this.genesisHash = genesisHash.clone();
       this.items = immutableList(items);
       this.finalizedTimeMs = finalizedTimeMs;
       this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
@@ -3711,8 +3660,7 @@ public final class MusubiModelsV1 {
       }
     }
 
-    public String chainId() { return chainId; }
-    public byte[] genesisHash() { return genesisHash.clone(); }
+    public NetworkId networkId() { return networkId; }
     public List<ArchiveRetentionDecision> items() { return items; }
     public BigInteger finalizedTimeMs() { return finalizedTimeMs; }
     public RegistrySnapshot snapshot() { return snapshot; }
@@ -3738,19 +3686,17 @@ public final class MusubiModelsV1 {
       final List<Object> values = new ArrayList<>();
       for (final ArchiveRetentionDecision item : items) values.add(item.toJsonValue());
       return object(
-          "chain_id", chainId,
-          "genesis_hash", unsignedBytes(genesisHash),
+          "network_id", networkId.toString(),
           "items", values,
           "finalized_time_ms", finalizedTimeMs,
           "snapshot", snapshot.toJsonValue());
     }
   }
 
-  /** Ordered-directory page carrying exact chain/genesis identity for lock creation. */
+  /** Ordered-directory page carrying exact network identity for lock creation. */
   public static final class OrderedPrefixPage extends WireValue {
     private final OrderedPrefixQuery query;
-    private final String chainId;
-    private final byte[] genesisHash;
+    private final NetworkId networkId;
     private final NamespaceBinding namespaceBinding;
     private final List<OrderedPackageEntry> items;
     private final FinalizedCursor nextCursor;
@@ -3758,19 +3704,13 @@ public final class MusubiModelsV1 {
 
     OrderedPrefixPage(
         final OrderedPrefixQuery query,
-        final String chainId,
-        final byte[] genesisHash,
+        final NetworkId networkId,
         final NamespaceBinding namespaceBinding,
         final List<OrderedPackageEntry> items,
         final FinalizedCursor nextCursor,
         final RegistrySnapshot snapshot) {
       this.query = Objects.requireNonNull(query, "query");
-      requireExactText(chainId, "Musubi directory chain ID");
-      if (genesisHash == null || genesisHash.length != 32 || allZero(genesisHash)) {
-        throw new IllegalArgumentException("Musubi genesis hash must contain 32 bytes");
-      }
-      this.chainId = chainId;
-      this.genesisHash = genesisHash.clone();
+      this.networkId = Objects.requireNonNull(networkId, "networkId");
       this.namespaceBinding = namespaceBinding;
       this.items = immutableList(items);
       if (this.items.size() > 100) {
@@ -3806,8 +3746,7 @@ public final class MusubiModelsV1 {
     }
 
     public OrderedPrefixQuery query() { return query; }
-    public String chainId() { return chainId; }
-    public byte[] genesisHash() { return genesisHash.clone(); }
+    public NetworkId networkId() { return networkId; }
     public NamespaceBinding namespaceBinding() { return namespaceBinding; }
     public List<OrderedPackageEntry> items() { return items; }
     public FinalizedCursor nextCursor() { return nextCursor; }
@@ -3850,12 +3789,9 @@ public final class MusubiModelsV1 {
     @Override Object toJsonValue() {
       final List<Object> values = new ArrayList<>();
       for (final OrderedPackageEntry item : items) values.add(item.toJsonValue());
-      final List<Integer> genesis = new ArrayList<>();
-      for (final byte value : genesisHash) genesis.add(Integer.valueOf(value & 0xff));
       return object(
           "query", query.toJsonValue(),
-          "chain_id", chainId,
-          "genesis_hash", genesis,
+          "network_id", networkId.toString(),
           "namespace_binding", namespaceBinding.toJsonValue(),
           "items", values,
           "next_cursor", nextCursor == null ? null : nextCursor.toJsonValue(),

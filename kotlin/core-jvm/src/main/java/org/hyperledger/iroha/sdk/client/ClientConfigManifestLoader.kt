@@ -14,6 +14,7 @@ import java.util.LinkedHashMap
 import java.util.function.BiConsumer
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.telemetry.Redaction
 import org.hyperledger.iroha.sdk.telemetry.TelemetryOptions
 
@@ -51,10 +52,20 @@ object ClientConfigManifestLoader {
     internal fun parse(manifestPath: Path, payload: ByteArray, digest: String, customizer: Customizer?): LoadedClientConfig {
         val root = parseRoot(payload)
         rejectNonAuthoritativePrivacyPolicyFields(root, "manifest")
+        rejectLegacyTransactionIdentityFields(root)
         val builder = ClientConfig.builder()
-        optionalString(root["chain_id"], "chain_id")?.let { chainId ->
-            check(chainId.isNotEmpty()) { "chain_id must be a non-empty string" }
-            builder.setLocalSigningContext(LocalSigningContext(chainId))
+        val networkId = optionalString(root["network_id"], "network_id")
+        if (networkId != null) {
+            check(networkId.isNotEmpty()) { "network_id must be a non-empty string" }
+            val parsed = try {
+                NetworkId.parse(networkId)
+            } catch (ex: IllegalArgumentException) {
+                throw IllegalStateException(
+                    "network_id must be an exact canonical network identity",
+                    ex,
+                )
+            }
+            builder.setLocalSigningContext(LocalSigningContext(parsed))
         }
         applyTorii(manifestPath, builder, root)
         applyRetry(builder, root)
@@ -63,6 +74,14 @@ object ClientConfigManifestLoader {
         val context = ManifestContext(manifestPath, digest, immutableCopy(root))
         customizer?.accept(builder, context)
         return LoadedClientConfig(builder.build(), context, Instant.now())
+    }
+
+    private fun rejectLegacyTransactionIdentityFields(root: Map<String, Any?>) {
+        for (field in listOf("chain", "chainId", "chain_id")) {
+            check(field !in root) {
+                "client config manifest contains retired transaction identity field `$field`"
+            }
+        }
     }
 
     private fun parseRoot(payload: ByteArray): MutableMap<String, Any?> {

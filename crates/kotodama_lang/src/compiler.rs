@@ -1882,6 +1882,8 @@ mod tests {
             manifest_view_root: vec![2; 32],
             expiry_slot: 1,
             max_clock_skew_ms: None,
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         }
     }
 
@@ -2374,6 +2376,8 @@ seiyaku AxtLiteralValidation {
             manifest_view_root: vec![2; 32],
             expiry_slot: 1,
             max_clock_skew_ms: None,
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let valid_handle_literal = literal(&valid_handle);
         assert!(
@@ -9722,7 +9726,9 @@ seiyaku Test {
     fn internal_lifecycle_access_derivation_decodes_typed_requests() {
         let code_hash = iroha_crypto::Hash::new(b"kotodama lifecycle access hints");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &sample_account_id(),
             0,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,

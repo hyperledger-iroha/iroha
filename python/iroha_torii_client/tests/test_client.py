@@ -18,10 +18,35 @@ from sumeragi_exact_json_test_support import (
     StubResponse,
     sumeragi_exact_json_response_cases,
 )
+from client_test_support import (
+    CANONICAL_OWNER,
+    app_api_transaction_draft as _app_api_transaction_draft,
+    authority_fee_payment as _authority_fee_payment,
+    canonical_hash as _canonical_hash,
+    sponsor_fee_payment as _sponsor_fee_payment,
+)
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
+
+from offline_test_support import (  # noqa: E402
+    OFFLINE_NETWORK_ID,
+    OFFLINE_OPERATION_BYTES,
+    OFFLINE_OPERATION_ID,
+    OFFLINE_OTHER_NETWORK_ID,
+    OFFLINE_STATUS_URI,
+    OFFLINE_TRANSACTION_HASH,
+    offline_applied_top_up_status as _offline_applied_top_up_status,
+    offline_capability_payload as _offline_capability_payload,
+    offline_fixed_bytes as _offline_fixed_bytes,
+    offline_operation_reference as _offline_operation_reference,
+    offline_redeem_request as _offline_redeem_request,
+    offline_rejected_status as _offline_rejected_status,
+    offline_top_up_anchor as _offline_top_up_anchor,
+    offline_top_up_finality_proof as _offline_top_up_finality_proof,
+    offline_top_up_request as _offline_top_up_request,
+)
 
 import iroha_torii_client as torii_module  # noqa: E402
 import iroha_torii_client.client as client_module  # noqa: E402
@@ -52,7 +77,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     VpnReceiptSubmitRequest,
     VpnSessionCreateRequest,
     build_canonical_request_headers,
-    canonical_request_signature_message,
+    canonical_network_request_signature_message,
     decode_pdp_commitment_header,
 )
 from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
@@ -63,7 +88,6 @@ from iroha_torii_client.native_amx import (  # noqa: E402
     compute_native_amx_validator_set_hash,
 )
 
-CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 CANONICAL_LARGE_FRACTION = "18446744073709551616.25"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
@@ -76,25 +100,6 @@ _NATIVE_AMX_VALIDATOR_SET = [
     "ea013099BA3FACE165941434D3238C4D5767059EBFFFB4120A9885A4EB2BAC9CD868F690660D2936B03C0214FBDAD36034D578",
     "ea0130B921EAC90D1A99EC9DA3FF8C8A29EBEE19DD1B659A4C6FC21BC8046EA30DE566668EDCCEAE4CB5932F4F860606A1E0E3",
 ]
-
-
-def _authority_fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:
-    return {
-        "payer": "authority",
-        "value": {"charge_limits": [], "gas_limit": gas_limit},
-    }
-
-
-def _sponsor_fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:
-    return {
-        "payer": "sponsor",
-        "value": {
-            "program_id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
-            "program_revision": 3,
-            "charge_limits": [],
-            "gas_limit": gas_limit,
-        },
-    }
 
 
 def _contract_operation_receipt(
@@ -123,16 +128,6 @@ def _contract_operation_receipt(
         "gas_used": None,
         "fee_payment": fee_payment or _sponsor_fee_payment(gas_limit),
         "payload_digest_hex": "66" * 32,
-    }
-
-
-def _app_api_transaction_draft(payload: bytes = b"\x01\x02\x03") -> Dict[str, Any]:
-    signing_message = bytearray(hashlib.blake2b(payload, digest_size=32).digest())
-    signing_message[-1] |= 1
-    return {
-        "submitted": False,
-        "transaction_payload_b64": base64.b64encode(payload).decode("ascii"),
-        "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
     }
 
 
@@ -172,16 +167,22 @@ def _contract_call_draft(
     }
 
 
-def _canonical_hash(seed: int) -> str:
-    body_bytes = bytearray([seed & 0xFF] * 32)
-    body_bytes[-1] |= 1
-    body = body_bytes.hex().upper()
-    crc = 0xFFFF
-    for byte in f"hash:{body}".encode("ascii"):
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
-    return f"hash:{body}#{crc:04X}"
+GOVERNANCE_NETWORK_ID = _canonical_hash(0xA5)
+
+
+def _governance_auth(captured: Optional[List[bytes]] = None) -> ToriiCanonicalRequestAuth:
+    def signer(message: bytes) -> bytes:
+        if captured is not None:
+            captured.append(message)
+        return b"\x44" * 64
+
+    return ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID,
+        account_id=CANONICAL_OWNER,
+        signer=signer,
+        timestamp_ms=4_102_444_801_000,
+        nonce="low-python-governance-test",
+    )
 
 
 
@@ -547,7 +548,7 @@ def _native_amx_receipt_payload(source_index: int = 0) -> Dict[str, Any]:
             "view": 2,
         },
         "epoch": 1,
-        "chain_id_hash": _canonical_hash(0x63),
+        "network_id": _canonical_hash(0x63),
         "source_id": source_id,
         "tx_entrypoint_hash": transaction_hash,
         "plan_digest": _canonical_hash(0x64),
@@ -589,7 +590,7 @@ def _native_amx_receipt_payload(source_index: int = 0) -> Dict[str, Any]:
     return _seal_native_amx_receipt_payload({
         "version": 2,
         "source_id": source_id,
-        "chain_id_hash": _canonical_hash(0x63),
+        "network_id": _canonical_hash(0x63),
         "plan_digest": _canonical_hash(0x64),
         "lane_id": 2,
         "dataspace_id": 7,
@@ -1312,6 +1313,7 @@ def _vpn_auth(captured: List[bytes]) -> ToriiCanonicalRequestAuth:
         return b"\x7a" * 64
 
     return ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID,
         account_id=VPN_ACCOUNT,
         signer=signer,
         timestamp_ms=1_700_000_001_000,
@@ -1496,7 +1498,8 @@ def test_create_vpn_quote_signs_body_and_parses_open_lease_instruction() -> None
         + b'"}'
     )
     assert captured == [
-        canonical_request_signature_message(
+        canonical_network_request_signature_message(
+            auth.network_id,
             "POST",
             "/v1/vpn/quotes",
             body,
@@ -1519,15 +1522,53 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
         return b"\x7a" * 64
 
     with pytest.raises(ValueError, match="surrounding whitespace"):
-        canonical_request_signature_message(
+        canonical_network_request_signature_message(
+            GOVERNANCE_NETWORK_ID,
             "POST",
             "/v1/vpn/quotes",
             b"{}",
             timestamp_ms=1,
             nonce=" nonce",
         )
+    with pytest.raises(ValueError, match="ASCII whitespace"):
+        canonical_network_request_signature_message(
+            GOVERNANCE_NETWORK_ID,
+            "POST",
+            "/v1/vpn/quotes",
+            b"{}",
+            timestamp_ms=1,
+            nonce="nonce value",
+        )
+    with pytest.raises(ValueError, match="ASCII whitespace"):
+        canonical_network_request_signature_message(
+            GOVERNANCE_NETWORK_ID,
+            "POST",
+            "/v1/vpn/quotes",
+            b"{}",
+            timestamp_ms=1,
+            nonce="nönce",
+        )
+    with pytest.raises(ValueError, match="at most 256"):
+        canonical_network_request_signature_message(
+            GOVERNANCE_NETWORK_ID,
+            "POST",
+            "/v1/vpn/quotes",
+            b"{}",
+            timestamp_ms=1,
+            nonce="n" * 257,
+        )
+    with pytest.raises((TypeError, ValueError), match="unsigned 64-bit"):
+        canonical_network_request_signature_message(
+            GOVERNANCE_NETWORK_ID,
+            "POST",
+            "/v1/vpn/quotes",
+            b"{}",
+            timestamp_ms=-1,
+            nonce="nonce",
+        )
     with pytest.raises(ValueError, match="non-empty string"):
         build_canonical_request_headers(
+            network_id=GOVERNANCE_NETWORK_ID,
             account_id=VPN_ACCOUNT,
             signer=signer,
             method="POST",
@@ -1538,6 +1579,7 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
         )
     with pytest.raises(ValueError, match="surrounding whitespace"):
         build_canonical_request_headers(
+            network_id=GOVERNANCE_NETWORK_ID,
             account_id=f"{VPN_ACCOUNT} ",
             signer=signer,
             method="POST",
@@ -1555,6 +1597,7 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
                 exit_class="standard",
             ),
             canonical_auth=ToriiCanonicalRequestAuth(
+                network_id=GOVERNANCE_NETWORK_ID,
                 account_id=VPN_ACCOUNT,
                 signer=signer,
                 timestamp_ms=1,
@@ -2071,6 +2114,7 @@ def test_list_peers_returns_typed_records() -> None:
             "headers": {},
             "data": None,
             "allow_redirects": True,
+            "stream": False,
         }
     ]
 
@@ -2091,6 +2135,7 @@ def test_fee_quote_posts_exact_payload_with_authority_signature() -> None:
     session.queue(StubResponse(payload=quote))
     signed_messages: List[bytes] = []
     auth = ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID,
         account_id=CANONICAL_OWNER,
         signer=lambda message: signed_messages.append(message) or b"signature",
         timestamp_ms=123,
@@ -2114,6 +2159,7 @@ def test_fee_quote_rejects_authority_substitution_before_dispatch() -> None:
     session = RecordingSession()
     client = ToriiClient("http://node.test", session=session)
     auth = ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID,
         account_id="another-account",
         signer=lambda _message: b"signature",
     )
@@ -2162,6 +2208,7 @@ def test_fee_quote_rejects_substituted_selection(
     )
     client = ToriiClient("https://node.test", session=session)
     auth = ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID,
         account_id=CANONICAL_OWNER,
         signer=lambda _message: b"signature",
     )
@@ -2179,11 +2226,13 @@ def test_fee_sponsor_program_lookup_is_account_signed_and_exact() -> None:
         StubResponse(
             payload={
                 "id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
+                "payout_account": CANONICAL_OWNER,
                 "lifecycle": "active",
             }
         )
     )
     auth = ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID,
         account_id=CANONICAL_OWNER,
         signer=lambda _message: b"signature",
         timestamp_ms=124,
@@ -2197,6 +2246,7 @@ def test_fee_sponsor_program_lookup_is_account_signed_and_exact() -> None:
     )
 
     assert result["lifecycle"] == "active"
+    assert result["payout_account"] == CANONICAL_OWNER
     assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
         "program_id": f"{CANONICAL_OWNER}/retail"
     }
@@ -2215,6 +2265,7 @@ def test_fee_sponsor_program_lookup_rejects_substituted_response_id() -> None:
     )
     client = ToriiClient("https://node.test", session=session)
     auth = ToriiCanonicalRequestAuth(
+        network_id=GOVERNANCE_NETWORK_ID,
         account_id=CANONICAL_OWNER,
         signer=lambda _message: b"signature",
     )
@@ -2266,6 +2317,90 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
         "payload": {"value": 1, "labels": ["alpha"]},
         "fee_payment": _authority_fee_payment(5000),
     }
+
+
+def test_pipeline_status_parser_exposes_only_public_metadata() -> None:
+    transaction_hash = "ab" * 32
+    parsed = ToriiClient._parse_pipeline_status_response(
+        {
+            "hash": transaction_hash,
+            "status": {"kind": "Applied", "block_height": 7},
+            "scope": "global",
+            "resolved_from": "state",
+        },
+        context="pipeline status",
+    )
+
+    assert parsed.hash == transaction_hash
+    assert parsed.status.kind == "Applied"
+    assert parsed.status.block_height == 7
+    assert parsed.scope == "global"
+    assert parsed.resolved_from == "state"
+    assert not hasattr(parsed, "diagnostics")
+    assert not hasattr(parsed, "summary")
+    assert not hasattr(parsed, "raw")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("summary", "Rejected: secret"),
+        ("diagnostics", [{"message": "secret"}]),
+        ("trigger_completions", []),
+        ("batch_transfer_outcomes", []),
+    ],
+)
+def test_pipeline_status_parser_rejects_retired_detail_fields(
+    field: str,
+    value: object,
+) -> None:
+    payload = {
+        "hash": "cd" * 32,
+        "status": {"kind": "Rejected"},
+        "scope": "global",
+        "resolved_from": "state",
+        field: value,
+    }
+
+    with pytest.raises(RuntimeError, match="unsupported fields"):
+        ToriiClient._parse_pipeline_status_response(
+            payload,
+            context="pipeline status",
+        )
+
+
+@pytest.mark.parametrize("block_height", [None, 0, -1, True, 1.5])
+def test_pipeline_status_parser_rejects_non_positive_or_non_integer_height(
+    block_height: object,
+) -> None:
+    payload = {
+        "hash": "cd" * 32,
+        "status": {"kind": "Applied", "block_height": block_height},
+        "scope": "global",
+        "resolved_from": "state",
+    }
+
+    with pytest.raises(RuntimeError, match="block_height"):
+        ToriiClient._parse_pipeline_status_response(
+            payload,
+            context="pipeline status",
+        )
+
+
+@pytest.mark.parametrize("transaction_hash", ["ab", "AB" * 32, "gg" * 32, " ab" * 32])
+def test_pipeline_status_parser_rejects_noncanonical_hash(transaction_hash: str) -> None:
+    payload = {
+        "hash": transaction_hash,
+        "status": {"kind": "Applied", "block_height": 1},
+        "scope": "global",
+        "resolved_from": "state",
+    }
+
+    with pytest.raises(RuntimeError, match="exact lowercase 32-byte hex"):
+        ToriiClient._parse_pipeline_status_response(
+            payload,
+            context="pipeline status",
+        )
 
 
 def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
@@ -2713,7 +2848,8 @@ def test_get_governance_contract_parses_response() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     result = client.get_governance_contract(
-        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+        canonical_auth=_governance_auth(),
     )
 
     assert isinstance(result, GovernanceContractResponse)
@@ -2744,24 +2880,26 @@ def test_governance_selectors_reject_before_transport(selector: str) -> None:
     client = ToriiClient("http://node.test", session=session)
 
     operations = [
-        lambda: client.get_governance_locks(selector),
-        lambda: client.get_governance_referendum(selector),
-        lambda: client.get_governance_tally(selector),
+        lambda: client.get_governance_locks(selector, canonical_auth=_governance_auth()),
+        lambda: client.get_governance_referendum(selector, canonical_auth=_governance_auth()),
+        lambda: client.get_governance_tally(selector, canonical_auth=_governance_auth()),
         lambda: client.submit_plain_ballot(
             authority=CANONICAL_OWNER,
-            chain_id="chain",
+            network_id=GOVERNANCE_NETWORK_ID,
             referendum_id=selector,
             owner=CANONICAL_OWNER,
             amount="1",
             duration_blocks=1,
             direction="Aye",
+            canonical_auth=_governance_auth(),
         ),
         lambda: client.submit_zk_ballot_v1(
             authority=CANONICAL_OWNER,
-            chain_id="chain",
+            network_id=GOVERNANCE_NETWORK_ID,
             election_id=selector,
             backend="halo2/ipa",
             envelope_b64="AAAA",
+            canonical_auth=_governance_auth(),
         ),
     ]
     for operation in operations:
@@ -2790,8 +2928,12 @@ def test_governance_proposal_ids_reject_before_transport(proposal_id: str) -> No
     client = ToriiClient("http://node.test", session=session)
 
     for operation in [
-        lambda: client.get_governance_proposal(proposal_id),
-        lambda: client.enact_proposal(proposal_id=proposal_id),
+        lambda: client.get_governance_proposal(
+            proposal_id, canonical_auth=_governance_auth()
+        ),
+        lambda: client.enact_proposal(
+            proposal_id=proposal_id, canonical_auth=_governance_auth()
+        ),
         lambda: client.finalize_referendum(
             referendum_id="a" * 64,
             proposal_id=proposal_id,
@@ -2837,7 +2979,7 @@ def test_get_governance_locks_returns_typed_lossless_quantity() -> None:
     result = ToriiClient(
         "http://node.test",
         session=session,
-    ).get_governance_locks("ref-1")
+    ).get_governance_locks("ref-1", canonical_auth=_governance_auth())
 
     record = result.locks[CANONICAL_OWNER] if result.locks is not None else None
     assert isinstance(record, GovernanceLockRecord)
@@ -2855,7 +2997,7 @@ def test_get_governance_locks_accepts_explicit_null_custody() -> None:
     session = RecordingSession()
     session.queue(StubResponse(payload=payload))
     result = ToriiClient("http://node.test", session=session).get_governance_locks(
-        "ref-1"
+        "ref-1", canonical_auth=_governance_auth()
     )
 
     record = result.locks[CANONICAL_OWNER] if result.locks is not None else None
@@ -2869,28 +3011,36 @@ def test_get_governance_locks_requires_strict_nullable_custody() -> None:
     session = RecordingSession()
     session.queue(StubResponse(payload=missing))
     with pytest.raises(RuntimeError, match="custody"):
-        ToriiClient("http://node.test", session=session).get_governance_locks("ref-1")
+        ToriiClient("http://node.test", session=session).get_governance_locks(
+            "ref-1", canonical_auth=_governance_auth()
+        )
 
     extra = _governance_locks_payload("1")
     extra["locks"][CANONICAL_OWNER]["custody"]["legacy"] = True
     session = RecordingSession()
     session.queue(StubResponse(payload=extra))
     with pytest.raises(RuntimeError, match="exactly"):
-        ToriiClient("http://node.test", session=session).get_governance_locks("ref-1")
+        ToriiClient("http://node.test", session=session).get_governance_locks(
+            "ref-1", canonical_auth=_governance_auth()
+        )
 
     incomplete = _governance_locks_payload("1")
     del incomplete["locks"][CANONICAL_OWNER]["custody"]["bond_escrow_account"]
     session = RecordingSession()
     session.queue(StubResponse(payload=incomplete))
     with pytest.raises(RuntimeError, match="exactly"):
-        ToriiClient("http://node.test", session=session).get_governance_locks("ref-1")
+        ToriiClient("http://node.test", session=session).get_governance_locks(
+            "ref-1", canonical_auth=_governance_auth()
+        )
 
     wrong = _governance_locks_payload("1")
     wrong["locks"][CANONICAL_OWNER]["custody"]["escrowed"] = 1
     session = RecordingSession()
     session.queue(StubResponse(payload=wrong))
     with pytest.raises(RuntimeError, match="escrowed"):
-        ToriiClient("http://node.test", session=session).get_governance_locks("ref-1")
+        ToriiClient("http://node.test", session=session).get_governance_locks(
+            "ref-1", canonical_auth=_governance_auth()
+        )
 
     padded = _governance_locks_payload("1")
     padded["locks"][CANONICAL_OWNER]["custody"]["asset_definition_id"] = (
@@ -2899,7 +3049,9 @@ def test_get_governance_locks_requires_strict_nullable_custody() -> None:
     session = RecordingSession()
     session.queue(StubResponse(payload=padded))
     with pytest.raises(RuntimeError, match="whitespace"):
-        ToriiClient("http://node.test", session=session).get_governance_locks("ref-1")
+        ToriiClient("http://node.test", session=session).get_governance_locks(
+            "ref-1", canonical_auth=_governance_auth()
+        )
 
 
 @pytest.mark.parametrize(
@@ -2912,7 +3064,7 @@ def test_get_governance_locks_rejects_noncanonical_quantity(amount: Any) -> None
     client = ToriiClient("http://node.test", session=session)
 
     with pytest.raises(RuntimeError, match="quantity|Quantity"):
-        client.get_governance_locks("ref-1")
+        client.get_governance_locks("ref-1", canonical_auth=_governance_auth())
 
 
 @pytest.mark.parametrize(
@@ -2929,7 +3081,7 @@ def test_get_governance_locks_rejects_noncanonical_slashed_quantity(
     client = ToriiClient("http://node.test", session=session)
 
     with pytest.raises(RuntimeError, match="quantity"):
-        client.get_governance_locks("ref-1")
+        client.get_governance_locks("ref-1", canonical_auth=_governance_auth())
 
 
 @pytest.mark.parametrize(
@@ -2942,6 +3094,7 @@ def test_propose_contract_deploy_rejects_noncanonical_voting_mode(alias: str) ->
 
     with pytest.raises(ValueError, match="exactly 'Zk' or 'Plain'"):
         client.propose_contract_deploy(
+            canonical_auth=_governance_auth(),
             contract_alias="router::universal",
             abi_version="1",
             code_hash="22" * 32,
@@ -3301,7 +3454,7 @@ def test_get_node_capabilities_parses_snapshot() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    capabilities = client.get_node_capabilities()
+    capabilities = client.get_node_capabilities(canonical_auth=_governance_auth())
 
     assert capabilities.abi_version == 1
     assert capabilities.data_model_version == 1
@@ -3344,7 +3497,9 @@ def test_contract_helpers_against_mock_server() -> None:
             payload={"value": 1},
             fee_payment=_authority_fee_payment(5000),
         )
-        governed = client.get_governance_contract(contract_address)
+        governed = client.get_governance_contract(
+            contract_address, canonical_auth=_governance_auth()
+        )
 
         assert call.contract_address == contract_address
         assert governed.contract_address == contract_address
@@ -4959,7 +5114,7 @@ def test_get_runtime_abi_active_parses_payload() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    snapshot = client.get_runtime_abi_active()
+    snapshot = client.get_runtime_abi_active(canonical_auth=_governance_auth())
 
     assert snapshot.abi_version == 1
 
@@ -4994,7 +5149,7 @@ def test_get_runtime_metrics_parses_payload() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    metrics = client.get_runtime_metrics()
+    metrics = client.get_runtime_metrics(canonical_auth=_governance_auth())
 
     assert metrics.abi_version == 1
     assert metrics.upgrade_events_total.proposed == 5
@@ -6320,6 +6475,7 @@ def test_enact_proposal_supports_preimage_and_window() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     draft = client.enact_proposal(
+        canonical_auth=_governance_auth(),
         proposal_id="b" * 64,
         preimage_hash="c" * 64,
         window=(10, 20),
@@ -6400,40 +6556,6 @@ def test_get_connect_status_parses_payload() -> None:
     assert snapshot.p2p_session_terminated_total == 12
     assert snapshot.policy.heartbeat_interval_ms == 5000
     assert session.calls[0]["url"].endswith("/v1/connect/status")
-
-
-def test_create_and_delete_connect_session() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "sid": "abc",
-                "wallet_uri": "iroha://wallet",
-                "app_uri": "iroha://app",
-                "token_app": "app-token",
-                "token_wallet": "wallet-token",
-                "token_management": "management-token",
-                "token_relay": "relay-token",
-                "ttl": 30,
-            }
-        )
-    )
-    session.queue(StubResponse(status_code=204))
-    client = ToriiClient("http://node.test", session=session)
-
-    session_info = client.create_connect_session({"scope": "demo"})
-    deleted = client.delete_connect_session("abc", session_info.token_management)
-
-    assert session_info.sid == "abc"
-    assert session_info.token_relay == "relay-token"
-    assert session_info.extra["ttl"] == 30
-    assert deleted is True
-    post_call = session.calls[0]
-    assert post_call["method"] == "POST"
-    assert post_call["url"].endswith("/v1/connect/session")
-    assert json.loads(post_call["data"]) == {"scope": "demo"}
-    delete_call = session.calls[1]
-    assert delete_call["headers"] == {"Authorization": "Bearer management-token"}
 
 
 def test_connect_app_registry_and_policy_helpers() -> None:
@@ -6670,259 +6792,6 @@ def test_trigger_registration_deletion_and_query() -> None:
     }
 
 
-def _offline_capability_payload(**overrides: Any) -> Dict[str, Any]:
-    payload = {
-        "mandatory": False,
-        "cash_handoff_capability": "cash_handoff_v1",
-        "required_bridge_abi_version": 21,
-        "max_hops": 8,
-        "ready": True,
-        "assets": [],
-        "blockers": [],
-    }
-    payload.update(overrides)
-    return payload
-
-
-OFFLINE_OPERATION_BYTES = [0x11] * 32
-OFFLINE_OPERATION_ID = "11" * 32
-OFFLINE_TRANSACTION_HASH = "22" * 32
-OFFLINE_STATUS_URI = f"/v1/offline/operations/{OFFLINE_OPERATION_ID}"
-
-
-def _offline_top_up_request(
-    *,
-    norito: bytes = b"kagemusha-top-up-v4\x00\x01\x02",
-    operation_id: str = OFFLINE_OPERATION_ID,
-) -> KagemushaTopUpRequestV4:
-    return KagemushaTopUpRequestV4(norito=norito, operation_id=operation_id)
-
-
-def _offline_redeem_request(
-    *,
-    norito: bytes = b"kagemusha-redeem-v4\x03\x04\x05",
-    operation_id: str = OFFLINE_OPERATION_ID,
-) -> KagemushaRedeemRequestV4:
-    return KagemushaRedeemRequestV4(norito=norito, operation_id=operation_id)
-
-
-def _offline_operation_reference(**overrides: Any) -> Dict[str, Any]:
-    reference = {
-        "operation_id": OFFLINE_OPERATION_ID,
-        "kind": {"kind": "top_up", "value": None},
-        "state": {"state": "pending", "value": None},
-        "transaction_hash": OFFLINE_TRANSACTION_HASH,
-        "status_uri": OFFLINE_STATUS_URI,
-        "submitted_at_ms": 1_725_000_000_123,
-    }
-    reference.update(overrides)
-    return reference
-
-
-def _offline_fixed_bytes(byte: int) -> List[int]:
-    return [byte] * 32
-
-
-def _offline_top_up_anchor(**overrides: Any) -> Dict[str, Any]:
-    amount = overrides.get("amount", {"atomic_units": 17, "scale": 4})
-    current_note = overrides.get(
-        "current_note",
-        {
-            "chain_id": "wonderland",
-            "asset": CANONICAL_ASSET_ID,
-            "note_commitment": _offline_fixed_bytes(0x41),
-            "spend_nullifier": _offline_fixed_bytes(0x51),
-            "amount": dict(amount),
-        },
-    )
-    anchor = {
-        "version": 4,
-        "chain_id": "wonderland",
-        "payer": CANONICAL_OWNER,
-        "asset": CANONICAL_ASSET_ID,
-        "asset_scale": amount["scale"],
-        "amount": amount,
-        "initial_root": _offline_fixed_bytes(0x10),
-        "finalized_root": _offline_fixed_bytes(0x20),
-        "shield_leaf_index": 7,
-        "current_note": current_note,
-        "topup_operation_id": list(OFFLINE_OPERATION_BYTES),
-        "shield_verifier_id": {
-            "backend": "halo2/ipa",
-            "name": "asset-topup-shield-v2",
-        },
-        "shield_verifier_commitment": _offline_fixed_bytes(0x61),
-        "artifact_binding": {
-            "version": 4,
-            "generation": "generation-1",
-            "manifest_sha256": _offline_fixed_bytes(0x81),
-        },
-        "finalized_height": 12,
-        "finalized_tx_hash": _offline_fixed_bytes(0x22),
-        "anchor_digest": _offline_fixed_bytes(0x71),
-    }
-    anchor.update(overrides)
-    return anchor
-
-
-def _offline_top_up_finality_proof(
-    anchor: Optional[Mapping[str, Any]] = None,
-    *,
-    finalized_height: int = 12,
-    **overrides: Any,
-) -> Dict[str, Any]:
-    bound_anchor = anchor if anchor is not None else _offline_top_up_anchor()
-    context_id = _canonical_hash(0xA0)
-
-    def execution_commitment(*, includes_top_up: bool, seed: int) -> Dict[str, Any]:
-        commitment = {
-            "parent_state_root": _canonical_hash(seed),
-            "post_state_root": _canonical_hash(seed + 1),
-            "ordinary_writes_root": _canonical_hash(seed + 2),
-            "topup_anchor_root": None,
-            "topup_anchor_count": 0,
-            "native_amx_application_manifest_version": 1,
-            "native_amx_application_manifest_root": (
-                _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
-            ),
-            "native_amx_application_manifest_count": 0,
-            "merge_carrier": None,
-            "executed_block_wire_len": 123,
-            "executed_block_wire_hash": _canonical_hash(seed + 3),
-        }
-        if includes_top_up:
-            commitment["topup_anchor_root"] = _canonical_hash(seed + 4)
-            commitment["topup_anchor_count"] = 1
-        return commitment
-
-    def certificate(
-        *,
-        height: int,
-        certificate_context_id: str,
-        includes_top_up: bool,
-        seed: int,
-    ) -> Dict[str, Any]:
-        round_ = {
-            "context_id": [certificate_context_id],
-            "height": height,
-            "view": 0,
-        }
-        return {
-            "round": round_,
-            "proposal_round": copy.deepcopy(round_),
-            "phase": {"phase": "commit", "details": None},
-            "subject": {
-                "parent_block_hash": (
-                    None if height == 1 else _canonical_hash(seed + 5)
-                ),
-                "block_hash": _canonical_hash(seed + 6),
-                "payload_hash": _canonical_hash(seed + 7),
-            },
-            "execution_commitment": execution_commitment(
-                includes_top_up=includes_top_up,
-                seed=seed + 8,
-            ),
-            "signers": [0],
-            "aggregate_signature": [seed] * 96,
-        }
-
-    parent_commit_qc = None
-    if finalized_height > 1:
-        parent_commit_qc = certificate(
-            height=finalized_height - 1,
-            certificate_context_id=_canonical_hash(0xA1),
-            includes_top_up=False,
-            seed=0x21,
-        )
-
-    proof = {
-        "version": 1,
-        "anchor": {
-            "topup_operation_id": list(
-                bound_anchor.get("topup_operation_id", OFFLINE_OPERATION_BYTES)
-            ),
-            "anchor_digest": list(
-                bound_anchor.get("anchor_digest", _offline_fixed_bytes(0x71))
-            ),
-        },
-        "commit_qc": {
-            "height_context": {
-                "context_id": [context_id],
-                "chain_id": "wonderland",
-                "protocol_version": 4,
-                "height": finalized_height,
-                "epoch": 0,
-                "epoch_end_height": max(100, finalized_height),
-                "next_epoch_snapshot": None,
-                "mode": {"mode": "permissioned", "details": None},
-                "parent_commit_qc": parent_commit_qc,
-                "snapshot_bootstrap": None,
-                "nexus_amx_context_hash": _canonical_hash(0xA2),
-                "execution_policy_hash": _canonical_hash(0xA3),
-                "da_layout": {
-                    "encoding": {
-                        "encoding": "reed_solomon16",
-                        "details": None,
-                    },
-                    "chunk_size_bytes": 4,
-                    "data_shards": 1,
-                    "parity_shards": 1,
-                    "max_payload_size_bytes": 4,
-                    "max_chunk_count": 2,
-                },
-                "leader_seed": _offline_fixed_bytes(0xA4),
-            },
-            "certificate": certificate(
-                height=finalized_height,
-                certificate_context_id=context_id,
-                includes_top_up=True,
-                seed=0x31,
-            ),
-        },
-        "anchor_path": {"leaf_index": 0, "leaf_count": 1, "siblings": []},
-    }
-    proof.update(overrides)
-    return proof
-
-
-def _offline_applied_top_up_status(
-    anchor: Optional[Mapping[str, Any]] = None,
-    **result_overrides: Any,
-) -> Dict[str, Any]:
-    finalized_height = result_overrides.get("finalized_block_height", 12)
-    bound_anchor = dict(anchor if anchor is not None else _offline_top_up_anchor())
-    result = {
-        "transaction_hash": OFFLINE_TRANSACTION_HASH,
-        "finalized_block_height": finalized_height,
-        "server_time_ms": 13,
-        "anchor": bound_anchor,
-        "finality_proof": _offline_top_up_finality_proof(
-            bound_anchor,
-            finalized_height=finalized_height,
-        ),
-    }
-    result.update(result_overrides)
-    return {
-        "state": "applied",
-        "value": {
-            "operation_id": OFFLINE_OPERATION_ID,
-            "result": {"kind": "top_up", "result": result},
-        },
-    }
-
-
-def _offline_rejected_status(error: Mapping[str, Any]) -> Dict[str, Any]:
-    return {
-        "state": "rejected",
-        "value": {
-            "operation_id": OFFLINE_OPERATION_ID,
-            "kind": {"kind": "redeem", "value": None},
-            "transaction_hash": OFFLINE_TRANSACTION_HASH,
-            "error": dict(error),
-        },
-    }
-
-
 def test_offline_public_request_annotations_are_closed_first_release_types() -> None:
     assert get_type_hints(ToriiClient.submit_kagemusha_top_up)["request"] is KagemushaTopUpRequestV4
     assert get_type_hints(ToriiClient.submit_kagemusha_redeem)["request"] is KagemushaRedeemRequestV4
@@ -6930,6 +6799,8 @@ def test_offline_public_request_annotations_are_closed_first_release_types() -> 
     assert "next_zero_leaf_index" in (
         client_module.OfflineRecursiveSpendStatementJson.__required_keys__
     )
+    assert "network_id" in client_module.OfflineSpendableNoteJson.__required_keys__
+    assert "chain_id" not in client_module.OfflineSpendableNoteJson.__required_keys__
 
 
 def test_offline_finality_execution_commitment_requires_executed_wire_identity() -> None:
@@ -7134,7 +7005,7 @@ def test_get_offline_capability_is_asset_neutral_and_exact() -> None:
     assert isinstance(capability, OfflineStatus)
     assert capability.mandatory is False
     assert capability.cash_handoff_capability == "cash_handoff_v1"
-    assert capability.required_bridge_abi_version == 21
+    assert capability.required_bridge_abi_version == 22
     assert capability.max_hops == 8
     assert capability.ready is True
     assert capability.assets == ()
@@ -7390,6 +7261,7 @@ def test_kagemusha_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
     # ABI-21 promotes the finalized anchor and its authenticated artifact
     # binding atomically to the V4 wire contract.
     assert typed_anchor.version == 4
+    assert typed_anchor.network_id == OFFLINE_NETWORK_ID
     assert typed_anchor.amount.scale == 4
     assert typed_anchor.shield_leaf_index == 7
     assert typed_anchor.shield_verifier_id.backend == "halo2/ipa"
@@ -7748,6 +7620,8 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
     missing_digest.pop("anchor_digest")
     invalid = [
         missing_digest,
+        _offline_top_up_anchor(chain_id="wonderland"),
+        _offline_top_up_anchor(network_id="wonderland"),
         _offline_top_up_anchor(version=1),
         _offline_top_up_anchor(asset_scale=29),
         _offline_top_up_anchor(asset_scale=3),
@@ -7784,7 +7658,7 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
         ),
         _offline_top_up_anchor(
             current_note={
-                "chain_id": "wonderland",
+                "network_id": OFFLINE_NETWORK_ID,
                 "asset": CANONICAL_ASSET_ID,
                 "note_commitment": _offline_fixed_bytes(0x41),
                 "spend_nullifier": _offline_fixed_bytes(0x41),
@@ -7793,7 +7667,7 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
         ),
         _offline_top_up_anchor(
             current_note={
-                "chain_id": "other-chain",
+                "network_id": OFFLINE_OTHER_NETWORK_ID,
                 "asset": CANONICAL_ASSET_ID,
                 "note_commitment": _offline_fixed_bytes(0x41),
                 "spend_nullifier": _offline_fixed_bytes(0x51),
@@ -7802,7 +7676,7 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
         ),
         _offline_top_up_anchor(
             current_note={
-                "chain_id": "wonderland",
+                "network_id": OFFLINE_NETWORK_ID,
                 "asset": "different-asset",
                 "note_commitment": _offline_fixed_bytes(0x41),
                 "spend_nullifier": _offline_fixed_bytes(0x51),
@@ -7811,7 +7685,7 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
         ),
         _offline_top_up_anchor(
             current_note={
-                "chain_id": "wonderland",
+                "network_id": OFFLINE_NETWORK_ID,
                 "asset": CANONICAL_ASSET_ID,
                 "note_commitment": _offline_fixed_bytes(0x41),
                 "spend_nullifier": _offline_fixed_bytes(0x51),
@@ -7944,8 +7818,8 @@ def test_offline_error_details_are_closed_and_typed() -> None:
                             "snapshot_version": 7,
                             "dataspace": 8,
                             "lane": 9,
-                            "next_min_handle_era": 10,
-                            "next_min_sub_nonce": 11,
+                            "active_handle_era": 10,
+                            "next_handle_counter": 11,
                             "unknown_axt_member": "ignored",
                         },
                     },
@@ -7968,7 +7842,8 @@ def test_offline_error_details_are_closed_and_typed() -> None:
     assert details.queue.saturated is True
     assert details.axt is not None
     assert details.axt.lane == 9
-    assert details.axt.next_min_sub_nonce == 11
+    assert details.axt.active_handle_era == 10
+    assert details.axt.next_handle_counter == 11
     assert not hasattr(details, "unknown_detail")
     assert not hasattr(details.queue, "unknown_queue_member")
     assert not hasattr(details.axt, "unknown_axt_member")
@@ -7976,6 +7851,8 @@ def test_offline_error_details_are_closed_and_typed() -> None:
 
 def test_offline_error_details_reject_malformed_nested_types_and_ranges() -> None:
     invalid_details = [
+        {"axt": {"next_min_handle_era": 1}},
+        {"axt": {"next_min_sub_nonce": 1}},
         {"queue": {"state": "healthy", "queued": 0, "capacity": 1}},
         {
             "queue": {

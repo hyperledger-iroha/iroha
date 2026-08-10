@@ -3,9 +3,9 @@
 use std::hint::black_box;
 
 use criterion::Criterion;
-use iroha_crypto::{PrivateKey, PublicKey};
+use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey};
 use iroha_data_model::{
-    ChainId, Level,
+    Level, NetworkId,
     account::{AccountController, AccountId, NewAccount},
     asset::{AssetDefinitionId, AssetId},
     block::{BlockHeader, SignedBlock, decode_framed_signed_block},
@@ -82,13 +82,30 @@ fn sample_instruction_box(kind: usize) -> InstructionBox {
 fn sample_transaction(instruction_count: usize) -> SignedTransaction {
     let private_key = fixed_private_key();
     let authority = AccountId::new(fixed_public_key());
-    let chain: ChainId = "norito-chain-wire-bench".parse().expect("chain id");
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"norito-chain-wire-bench-genesis"),
+    ));
     let instructions = (0..instruction_count)
         .map(sample_instruction_box)
         .collect::<Vec<_>>();
 
     TransactionBuilder::new(
-        chain,
+        network_id,
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .sign(&private_key)
+}
+
+fn sample_genesis_transaction(instruction_count: usize) -> SignedTransaction {
+    let private_key = fixed_private_key();
+    let authority = AccountId::new(fixed_public_key());
+    let instructions = (0..instruction_count)
+        .map(sample_instruction_box)
+        .collect::<Vec<_>>();
+
+    TransactionBuilder::new_genesis(
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -99,7 +116,7 @@ fn sample_transaction(instruction_count: usize) -> SignedTransaction {
 fn sample_block(transaction_count: usize, instruction_count: usize) -> SignedBlock {
     let private_key = fixed_private_key();
     let transactions = (0..transaction_count)
-        .map(|_| sample_transaction(instruction_count))
+        .map(|_| sample_genesis_transaction(instruction_count))
         .collect::<Vec<_>>();
 
     SignedBlock::genesis(transactions, &private_key, None, None)
@@ -109,7 +126,7 @@ fn sample_mixed_block() -> SignedBlock {
     let private_key = fixed_private_key();
     let transactions = MIXED_BLOCK_INSTRUCTION_COUNTS
         .iter()
-        .map(|&instruction_count| sample_transaction(instruction_count))
+        .map(|&instruction_count| sample_genesis_transaction(instruction_count))
         .collect::<Vec<_>>();
 
     SignedBlock::genesis(transactions, &private_key, None, None)

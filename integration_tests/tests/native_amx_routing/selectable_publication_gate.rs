@@ -11,10 +11,6 @@ fn musubi_selectable_fault_localnet_builder() -> NetworkBuilder {
     musubi_fault_localnet_builder()
         .with_consensus_message_control()
         .with_genesis_instruction(Grant::account_permission(
-            Permission::from(CanRegisterSorafsPin),
-            ALICE_ID.clone(),
-        ))
-        .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanIssueSorafsReplicationOrder),
             ALICE_ID.clone(),
         ))

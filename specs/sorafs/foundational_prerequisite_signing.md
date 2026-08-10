@@ -1,6 +1,6 @@
 ---
 title: SoraFS Foundational Prerequisite Signing
-summary: Two-phase external-HSM procedure for the payload-free V1 foundational prerequisite envelope.
+summary: Two-phase external-software-signer procedure for the payload-free V1 foundational prerequisite envelope.
 ---
 
 # SoraFS foundational prerequisite signing
@@ -8,7 +8,7 @@ summary: Two-phase external-HSM procedure for the payload-free V1 foundational p
 `scripts/build_sorafs_foundational_prerequisite.py` is the only repository
 builder for
 `sorafs.production_readiness.foundational_prerequisites.v1`. It does not accept
-a private key, seed, HSM credential, or signing command. The operator supplies
+a private key, seed, signer credential, or signing command. The operator supplies
 only a trusted Ed25519 public key and public evidence metadata.
 
 The flow has two phases:
@@ -29,7 +29,7 @@ The flow has two phases:
    `newest_generated_at_unix` across those summaries. The SHA-256 of the exact
    manifest bytes becomes the ordered `evidence_anchor_sha256` value, while
    the exact ordered `{gate, sha256}` rows become that signed prerequisite
-   row's `readiness_summary_sha256`. Both are covered by the external-HSM
+   row's `readiness_summary_sha256`. Both are covered by the external-software
    signature. There is no digest-only prerequisite input. It atomically
    creates a new binary signing-payload file. It also independently opens the
    exact 17 `--lane-summary GATE=PATH` inputs through no-follow directory
@@ -49,15 +49,32 @@ The flow has two phases:
    prerequisite ID or an eighteenth lane. The full aggregate gate rehashes all
    supplied bytes and rejects any missing, stale, unauthenticated, substituted,
    reordered, post-approval, topology-mismatched, or context-mismatched input.
-2. The external HSM signs those exact bytes with plain Ed25519. Do not hash,
-   wrap, re-encode, or use Ed25519ph. Export exactly 64 raw signature bytes.
+2. The isolated external software signer signs those exact bytes with plain
+   Ed25519. Its signed binding fixes the `software` backend, distinct service
+   and administrator identities, positive key and policy revisions, a non-zero
+   policy digest, and the operator-trusted public-key fingerprint. Do not hash,
+   wrap, re-encode, or use Ed25519ph. Export exactly 64 raw signature bytes and
+   the matching canonical public receipt under one non-zero operation ID.
    `finalize` revalidates the canonical payload against independently supplied
-   deployment and continuity expectations, verifies the detached signature
-   against the trusted public key, and atomically creates the final JSON
-   envelope. `finalize` independently takes the same
+   deployment and continuity expectations and verifies the detached signature
+   against the trusted public key. It then copies the independently pinned
+   `sorafs_external_software_signer` verifier plus the exact public Norito
+   binding, payload, signature, and receipt into a private temporary directory
+   and runs `verify-receipt` with a 30-second bound. Finalization fails unless
+   the verifier binary matches the reviewed SHA-256 and returns schema-closed,
+   canonical, payload-free validation for the exact operation, software
+   backend, distinct service and administrator identities, promotion role and
+   domain, Ed25519 key, positive key/policy revisions, policy SHA-256, payload,
+   signature, audit commit, live provenance and response attestations. Revoked,
+   substituted, stale-head, noisy, malformed, or unverifiable receipts block.
+   Only then does `finalize` atomically create the final JSON envelope.
+   `finalize` independently takes the same
    `--topology-qualification-summary`, resilience summary, and resilience
-   signer public key; it does not trust paths, digests, or authentication
-   claims copied from the signing request. For a sequence after 1, both phases also require
+   signer public key. It also reopens the independently signed L1 lane-evidence
+   inventory using its explicit trusted external-software Ed25519 tuple and
+   replays the same exact ordered 17 lane paths; it does not trust paths,
+   digests, or authentication claims copied from the signing request. For a
+   sequence after 1, both phases also require
    `--previous-envelope` and verify its deterministic encoding, SHA-256,
    deployment identity, trusted Ed25519 signature, immediately preceding
    sequence, and earlier timestamp.
@@ -92,8 +109,15 @@ release record before use:
 python3 scripts/build_sorafs_foundational_prerequisite.py \
   @/runtime/evidence/foundational-prepare.args
 
-# Sign the emitted file as exact bytes in the external HSM, producing a
-# 64-byte raw detached signature.
+# Sign the emitted file as exact bytes in the isolated external software signer.
+sorafs_external_software_signer sign \
+  --binding /runtime/signer/promotion.binding.norito \
+  --request-socket /run/sorafs-promotion-signer/request.sock \
+  --administrator-socket /run/sorafs-promotion-signer/admin.sock \
+  --operation-id <NONZERO-LOWERCASE-32-BYTE-OPERATION-ID> \
+  --payload /runtime/evidence/foundational-signing-payload.bin \
+  --signature-out /runtime/evidence/foundational-signature.bin \
+  --receipt-out /runtime/evidence/promotion-signature-receipt.json
 
 python3 scripts/build_sorafs_foundational_prerequisite.py \
   @/runtime/evidence/foundational-finalize.args
@@ -163,7 +187,10 @@ signed per-prerequisite mapping, cross-binds its grouped digest rows to the
 signed top-level `lane_summaries`, then rehashes the independently supplied 17
 aggregate inputs and requires every gate digest to match. A valid signature
 over an old singular package, a digest-only wrapper, or a mismapped lane cannot
-bypass these checks. Tests may exercise the path with fixture content, but
+bypass these checks. The payload-free aggregate reports
+`signer_qualification=software-key-qualified` only after this signed software
+binding is valid; `hsm-qualified` is not an admitted value. Tests may exercise
+the path with fixture content, but
 fixtures have no production evidentiary standing and must never be submitted
 as promotion evidence.
 
@@ -191,9 +218,10 @@ Pass the finalized envelope to
 release sequence, predecessor digest, deployment ID, environment, explicit
 clock, freshness window, exact `--topology-qualification-summary`, exact
 `--resilience-qualification-summary`, and its separately reviewed signer
-public key. Deterministic replay snapshots topology, resilience, foundation,
-and the 17 lanes as 20 inputs while aggregate summary counts remain exactly
-17/17. The
+public key. Deterministic replay snapshots the topology summary and envelope,
+resilience summary, signed lane inventory, foundational envelope, and the 17
+lanes as exactly 22 inputs. The inventory is an additional bound input, so
+aggregate summary counts remain exactly 17/17. The
 aggregate gate remains authoritative:
 creating or signing this envelope does not make any readiness lane ready and
 does not authorize Taira or Minamoto cutover. The repository currently

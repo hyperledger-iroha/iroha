@@ -36,6 +36,23 @@ ENVIRONMENT = "production"
 ARGS_EXAMPLE = (
     SCRIPT_DIR / "examples" / "sorafs_l1_resilience_qualification.args.example"
 )
+SIGNER_SERVICE_ID = "sorafs-resilience-signer-a"
+SIGNER_ADMINISTRATOR_ID = "sorafs-resilience-admin-b"
+SIGNER_KEY_REVISION = 5
+SIGNER_POLICY_REVISION = 8
+SIGNER_POLICY_DIGEST_SHA256 = "9a" * 32
+
+
+def taira_deployment() -> dict:
+    """Return the exact public Taira chain identity for test receipts."""
+
+    return {
+        "deployment_id": DEPLOYMENT_ID,
+        "environment": ENVIRONMENT,
+        "network": MODULE.taira_constants.NETWORK_NAME,
+        "chain_id": MODULE.taira_constants.CHAIN_ID,
+        "chain_discriminant": MODULE.taira_constants.CHAIN_DISCRIMINANT,
+    }
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -62,11 +79,8 @@ def topology_summary_path(tmp_path: Path) -> Path:
         "canonical_manifest_sha256": hashlib.sha256(
             b"canonical-topology-manifest"
         ).hexdigest(),
-        "deployment": {
-            "deployment_id": DEPLOYMENT_ID,
-            "environment": ENVIRONMENT,
-        },
-        "validator_count": 4,
+        "deployment": taira_deployment(),
+        "validator_count": 4, "validator_ids": ["taira-validator-1", "taira-validator-2", "taira-validator-3", "taira-validator-4"],
         "storage_provider_count": 2,
         "gateway_count": 2,
         "governance_dag_instance_count": 2,
@@ -107,18 +121,15 @@ def artifact_payload(
     if requirement == "identical_post_recovery_peer_state":
         peer_states = [
             {
-                "validator_id": f"validator-{suffix}",
+                "validator_id": validator_id,
                 "finalized_state_sha256": "ab" * 32,
             }
-            for suffix in ("a", "b", "c", "d")
+            for validator_id in MODULE.taira_constants.SLUGS
         ]
     return {
         "schema": MODULE.ARTIFACT_SCHEMA,
         "requirement": requirement,
-        "deployment": {
-            "deployment_id": DEPLOYMENT_ID,
-            "environment": ENVIRONMENT,
-        },
+        "deployment": taira_deployment(),
         "topology_qualification": dict(topology),
         "captured_at_unix": captured_at_unix,
         "result": "passed",
@@ -159,10 +170,7 @@ def local_receipt(
         )
     receipt = {
         "schema": MODULE.RECEIPT_SCHEMA,
-        "deployment": {
-            "deployment_id": DEPLOYMENT_ID,
-            "environment": ENVIRONMENT,
-        },
+        "deployment": taira_deployment(),
         "topology_qualification": dict(topology),
         "generated_at_unix": GENERATED_AT_UNIX,
         "artifacts": rows,
@@ -245,12 +253,18 @@ def sign(seed: bytes, message: bytes) -> bytes:
 
 
 def externally_sign(receipt: dict, seed: bytes) -> bytes:
-    """Replace local authentication with the trusted external signature."""
+    """Install the trusted external software-signer authentication."""
 
     public_key = public_key_from_seed(seed)
     receipt["authentication"] = {
         "kind": "external-ed25519",
         "algorithm": "ed25519",
+        "backend": "software",
+        "service_id": SIGNER_SERVICE_ID,
+        "administrator_id": SIGNER_ADMINISTRATOR_ID,
+        "key_revision": SIGNER_KEY_REVISION,
+        "policy_revision": SIGNER_POLICY_REVISION,
+        "policy_digest_sha256": SIGNER_POLICY_DIGEST_SHA256,
         "public_key_fingerprint_sha256": hashlib.sha256(public_key).hexdigest(),
         "signature_hex": "00" * 64,
     }
@@ -259,6 +273,15 @@ def externally_sign(receipt: dict, seed: bytes) -> bytes:
         MODULE.resilience_signing_payload(receipt),
     ).hex()
     return public_key
+
+
+def resign(receipt: dict, seed: bytes) -> None:
+    """Refresh a receipt signature after an intentional metadata mutation."""
+
+    receipt["authentication"]["signature_hex"] = sign(
+        seed,
+        MODULE.resilience_signing_payload(receipt),
+    ).hex()
 
 
 def rewrite_bound_artifact(
@@ -279,16 +302,19 @@ def rewrite_bound_artifact(
     row["artifact_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_local_receipt_is_configuration_qualified_and_not_a_lane(
+def test_local_receipt_is_rejected_and_not_a_lane(
     tmp_path: Path,
 ) -> None:
     _topology_path, topology, artifact_root, receipt = local_receipt(tmp_path)
 
     summary, errors = validate(receipt, artifact_root, topology)
 
-    assert errors == []
+    assert any(
+        "authentication.kind must be `external-ed25519`" in error
+        for error in errors
+    )
     assert set(summary) == MODULE.SUMMARY_FIELDS
-    assert summary["status"] == "configuration-qualified"
+    assert summary["status"] == "blocked"
     assert summary["qualification_scope"] == "holistic-deployment-resilience"
     assert summary["live_evidence_recognized"] is False
     assert summary["externally_authenticated"] is False
@@ -450,6 +476,38 @@ def test_peer_state_requires_four_unique_identical_digests(
     )
 
 
+def test_peer_state_must_use_exact_taira_validator_identities(tmp_path: Path) -> None:
+    _topology_path, topology, artifact_root, receipt = local_receipt(tmp_path)
+
+    def substitute(payload: dict) -> None:
+        payload["peer_state_digests"][3]["validator_id"] = "minamoto-validator-4"
+
+    rewrite_bound_artifact(
+        artifact_root,
+        receipt,
+        "identical_post_recovery_peer_state",
+        substitute,
+    )
+
+    summary, errors = validate(receipt, artifact_root, topology)
+
+    assert summary["status"] == "blocked"
+    assert any(
+        "must match the canonical Taira validator identities in order" in error
+        for error in errors
+    )
+
+
+def test_minamoto_receipt_context_is_rejected(tmp_path: Path) -> None:
+    _topology_path, topology, artifact_root, receipt = local_receipt(tmp_path)
+    receipt["deployment"]["network"] = "minamoto"
+
+    summary, errors = validate(receipt, artifact_root, topology)
+
+    assert summary["status"] == "blocked"
+    assert any("Minamoto evidence is not accepted" in error for error in errors)
+
+
 @pytest.mark.parametrize("requirement", ["repair_outcome", "settlement_outcome"])
 def test_repair_and_settlement_require_at_least_one_outcome(
     tmp_path: Path,
@@ -486,7 +544,85 @@ def test_external_receipt_without_trusted_key_is_not_recognized(
     )
 
 
-def test_cli_writes_local_non_promotable_summary(tmp_path: Path) -> None:
+def test_non_software_signer_is_rejected_even_with_valid_signature(
+    tmp_path: Path,
+) -> None:
+    _path, topology, artifact_root, receipt = local_receipt(tmp_path)
+    seed = os.urandom(32)
+    public_key = externally_sign(receipt, seed)
+    receipt["authentication"]["backend"] = "hsm"
+    resign(receipt, seed)
+
+    summary, errors = validate(
+        receipt, artifact_root, topology, trusted_public_key=public_key
+    )
+
+    assert summary["status"] == "blocked"
+    assert any("signer backend must be `software`" in error for error in errors)
+
+
+def test_signer_service_and_administrator_must_be_distinct(tmp_path: Path) -> None:
+    _path, topology, artifact_root, receipt = local_receipt(tmp_path)
+    seed = os.urandom(32)
+    public_key = externally_sign(receipt, seed)
+    receipt["authentication"]["administrator_id"] = SIGNER_SERVICE_ID
+    resign(receipt, seed)
+
+    summary, errors = validate(
+        receipt, artifact_root, topology, trusted_public_key=public_key
+    )
+
+    assert summary["status"] == "blocked"
+    assert any("service_id and administrator_id must differ" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("key_revision", 0, "key_revision must be in 1..2^63-1"),
+        ("policy_revision", 0, "policy_revision must be in 1..2^63-1"),
+        (
+            "policy_digest_sha256",
+            "00" * 32,
+            "policy_digest_sha256 must be non-zero",
+        ),
+    ],
+)
+def test_invalid_software_signer_policy_provenance_is_rejected(
+    tmp_path: Path,
+    field: str,
+    value,
+    expected: str,
+) -> None:
+    _path, topology, artifact_root, receipt = local_receipt(tmp_path)
+    seed = os.urandom(32)
+    public_key = externally_sign(receipt, seed)
+    receipt["authentication"][field] = value
+    resign(receipt, seed)
+
+    summary, errors = validate(
+        receipt, artifact_root, topology, trusted_public_key=public_key
+    )
+
+    assert summary["status"] == "blocked"
+    assert any(expected in error for error in errors)
+
+
+def test_signed_signer_identity_substitution_is_rejected(tmp_path: Path) -> None:
+    _path, topology, artifact_root, receipt = local_receipt(tmp_path)
+    seed = os.urandom(32)
+    public_key = externally_sign(receipt, seed)
+    receipt["authentication"]["service_id"] = "sorafs-resilience-signer-b"
+
+    summary, errors = validate(
+        receipt, artifact_root, topology, trusted_public_key=public_key
+    )
+
+    assert summary["status"] == "blocked"
+    assert "resilience receipt signature verification failed" in errors
+
+
+def test_cli_blocks_local_receipt(tmp_path: Path) -> None:
     topology_path, _topology, artifact_root, receipt = local_receipt(tmp_path)
     receipt_path = tmp_path / "resilience-receipt.json"
     summary_path = tmp_path / "resilience-summary.json"
@@ -508,14 +644,16 @@ def test_cli_writes_local_non_promotable_summary(tmp_path: Path) -> None:
             str(NOW_UNIX),
             "--max-evidence-age-secs",
             str(MAX_AGE_SECS),
+            "--trusted-public-key-hex",
+            public_key_from_seed(b"Q" * 32).hex(),
             "--summary-out",
             str(summary_path),
         ]
     )
 
-    assert result == 0
+    assert result == 1
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    assert summary["status"] == "configuration-qualified"
+    assert summary["status"] == "blocked"
     assert summary["promotion_eligible"] is False
     assert summary["recognized_requirement_count"] == 19
     assert summary["readiness_lane_count_delta"] == 0
@@ -530,10 +668,10 @@ def test_requirement_contract_is_closed_and_has_no_lane_slot() -> None:
     )
 
 
-def test_response_file_example_parses_as_local_template() -> None:
+def test_response_file_example_requires_external_software_signer() -> None:
     args = MODULE.parse_args([f"@{ARGS_EXAMPLE}"])
 
-    assert args.trusted_public_key_hex is None
+    assert args.trusted_public_key_hex == "12" * 32
     assert args.deployment_id == DEPLOYMENT_ID
     assert args.environment == ENVIRONMENT
     assert args.evidence == [

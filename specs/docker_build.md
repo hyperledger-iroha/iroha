@@ -86,7 +86,7 @@ docker build \
   --build-arg CONFIG_PROFILE=taira \
   --build-arg FEATURES=embedded-soracloud-runtime \
   --build-arg CARGO_BUILD_JOBS=1 \
-  --build-arg BINARIES=irohad \
+  --build-arg BINARIES=iroha3d \
   --build-arg VALIDATOR_LOCK_SHA256=<reviewed-lock-sha256> \
   --build-arg VALIDATOR_SOURCE_TREE_SHA256=<attested-source-tree-sha256> \
   -t hyperledger/iroha:taira-local .
@@ -96,12 +96,12 @@ The Taira image automatically includes `embedded-soracloud-runtime` and uses a
 Taira-aware entrypoint. With no command override it starts:
 
 ```bash
-irohad --sora --config /config/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json
+iroha3d --sora --config /config/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json
 ```
 
 Keep validator-specific runtime material out of the image. Generate
 `/config/config.toml` with a read-only bind mount; the image entrypoint copies
-it to `/storage/runtime-config.toml` before starting `irohad`.
+it to `/storage/runtime-config.toml` before starting `iroha3d`.
 `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ...`
 and mount it into the container together with persistent `/storage`.
 The runtime image also carries the bundled rANS tables under
@@ -111,7 +111,7 @@ The runtime image also carries the bundled rANS tables under
 For disconnected or one-node smoke starts, mount both a manifest JSON and a
 signed genesis payload. The entrypoint accepts `IROHA_TAIRA_SIGNED_GENESIS` and
 rewrites the copied runtime config so `genesis.file` points at the mounted
-payload path before `irohad` starts.
+payload path before `iroha3d` starts.
 
 For a local 4-validator container rollout proof, first render a fresh
 `kagami localnet` bundle into bridge-friendly configs/env files:

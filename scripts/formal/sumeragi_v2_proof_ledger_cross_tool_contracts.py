@@ -3603,15 +3603,17 @@ def _cross_tool_contract_errors() -> list[str]:
     if auxiliary_verus_theorems != [
         "production_ingress_reservation_materialization_refines_protected_ownership",
         "production_leader_wire_admission_trace_refines_lifecycle_ownership",
+        "production_effect_to_candidate_trace_refines_async_ownership",
     ]:
         errors.append(
             "cross-tool auxiliary Verus theorem inventory must contain exactly "
-            "the reservation-materialization and durable leader-wire proofs"
+            "the reservation-materialization, durable leader-wire, and "
+            "effect-to-candidate proofs"
         )
-    if len(total_gate_names) != 17 or len(set(total_gate_names)) != 17:
+    if len(total_gate_names) != 18 or len(set(total_gate_names)) != 18:
         errors.append(
             "cross-tool total checked-gate inventory must contain exactly "
-            "seventeen unique gates"
+            "eighteen unique gates"
         )
     return errors
 

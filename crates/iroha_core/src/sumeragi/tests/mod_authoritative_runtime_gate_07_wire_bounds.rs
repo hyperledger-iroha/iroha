@@ -88,11 +88,11 @@ fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
         "minimal DA geometry must retain the layout-neutral 64-KiB sidecar requirement"
     );
     let validator = validator_peers(1).pop().expect("validator fixture");
-    let chain_id = ChainId::from("minimal-sidecar-frame-test");
+    let network_id = crate::sumeragi::synthetic_network_id("minimal-sidecar-frame-test");
     let required_control_message = super::fair_v2_ingress_required_proposal_bytes(layout, 1)
         .max(super::fair_v2_ingress_required_commit_certificate_response_bytes(1));
     let required_consensus = super::fair_v2_ingress_required_p2p_frame_bytes(
-        super::fair_v2_ingress_required_recovery_request_bytes(&chain_id, 1),
+        super::fair_v2_ingress_required_recovery_request_bytes(&network_id, 1),
     )
     .max(super::fair_v2_ingress_required_lane_p2p_frame_bytes(
         super::MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES,
@@ -134,7 +134,7 @@ fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
 
     let exact = ingress_with_transport_caps(required_block_sync, required_outbound);
     exact
-        .configure_roster_for_context([validator.clone()], &chain_id, layout)
+        .configure_roster_for_context([validator.clone()], &network_id, layout)
         .expect("the exact transport frame caps must activate");
     exact.open().expect("the exact transport caps must open");
 
@@ -145,7 +145,7 @@ fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
         required_outbound,
     );
     let error = short
-        .configure_roster_for_context([validator.clone()], &chain_id, layout)
+        .configure_roster_for_context([validator.clone()], &network_id, layout)
         .expect_err("one byte below the exact BlockSync frame cap must fail closed");
     assert_eq!(error.configured(), required_block_sync - 1);
     assert_eq!(error.required(), required_block_sync);
@@ -157,7 +157,7 @@ fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
 
     let outbound_short = ingress_with_transport_caps(required_block_sync, required_outbound - 1);
     let outbound_error = outbound_short
-        .configure_roster_for_context([validator], &chain_id, layout)
+        .configure_roster_for_context([validator], &network_id, layout)
         .expect_err("one byte below the exact outbound-high cap must fail closed");
     assert_eq!(outbound_error.configured(), required_outbound - 1);
     assert_eq!(outbound_error.required(), required_outbound);

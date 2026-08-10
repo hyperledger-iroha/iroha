@@ -56,7 +56,7 @@ common supervisor settings. Use these flags instead of editing
 ```
 ./bin/mochi --data-root ./data --profile four-peer-bft \
     --torii-start 12000 --p2p-start 14000 \
-    --irohad /path/to/irohad --kagami /path/to/kagami
+    --irohad /path/to/iroha3d --kagami /path/to/kagami
 ```
 
 Any CLI value takes precedence over `config/local.toml` entries and environment

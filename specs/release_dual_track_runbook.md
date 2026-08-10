@@ -123,7 +123,7 @@ python3 scripts/run_release_pipeline.py \
   --trusted-git-cliff-sha256 <SHA256> \
   <REVIEWED_BUNDLE_AND_IMAGE_MATRIX_ARGUMENTS> \
   <REQUIRED_EVIDENCE_ARGUMENTS> \
-  --external-signer <ABSOLUTE_REVIEWED_HSM_WRAPPER> \
+  --external-signer <ABSOLUTE_AUTHENTICATED_EXTERNAL_SOFTWARE_SIGNER_ADAPTER> \
   --signing-public-key <RAW_ED25519_PUBLIC_KEY_FILE> \
   --trusted-signing-fingerprint <REVIEWED_SHA256> \
   --release-manifest-verifier <ABSOLUTE_REVIEWED_SORAFS_VALIDATE> \
@@ -132,10 +132,13 @@ python3 scripts/run_release_pipeline.py \
   --publish-target iroha3=<REVIEWED_TARGET_URI>
 ```
 
-The signer executable obtains its private-key handle and authentication from
-its runtime PKCS#11/HSM environment. Never place private keys, PINs, bearer
-tokens, or forwarded authentication headers in repository files, command
-arguments, or release artifacts.
+The signer adapter authenticates to the isolated software-signing service at
+runtime. V1 fixes `signing_provider=authenticated_external_signer` and
+`signing_backend=software`; a verified release reports
+`signer_qualification=software-key-qualified`. Never place private keys, PINs,
+bearer tokens, or forwarded authentication headers in repository files,
+command arguments, or release artifacts. A future HSM adapter requires new
+HSM-backed evidence and does not change this release's qualification.
 
 The output is created at `artifacts/releases/<X.Y.Z>/` unless another output
 root is supplied. Review at least:
@@ -164,7 +167,7 @@ ci/dual_profile_matrix.sh \
 ```
 
 The matrix verifies the bundle layout, executable inventory, profile metadata,
-version, checksums, and basic `irohad --version`/`kagami --help` execution.
+version, checksums, and basic `iroha3d --version`/`kagami --help` execution.
 Treat each target-specific matrix as part of the aggregate inventory.
 
 Follow the artifact-to-profile verification procedure in

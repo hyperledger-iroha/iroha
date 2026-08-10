@@ -196,7 +196,7 @@ fn fee_sponsor_revision_activation_materializes_at_scheduled_block_height() {
         rules: Vec::new(),
         asset_budgets: Vec::new(),
     };
-    let mut program = FeeSponsorProgram::new(program_id.clone());
+    let mut program = FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone());
     program.staged_revision = Some(1);
     program.scheduled_activation = Some(FeeSponsorProgramActivation {
         revision: 1,
@@ -252,7 +252,7 @@ fn fee_sponsor_revision_activation_waits_for_old_lease_to_drain() {
         rules: Vec::new(),
         asset_budgets: Vec::new(),
     };
-    let mut program = FeeSponsorProgram::new(program_id.clone());
+    let mut program = FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone());
     program.lifecycle = FeeSponsorProgramLifecycle::Active;
     program.active_revision = Some(1);
     program.staged_revision = Some(2);

@@ -55,10 +55,13 @@ _BASE64_RE_V1: Final = re.compile(r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[
 _PROOF_SYSTEM_AND_ENGINE_TAGS_V1: Final = (0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0)
 # The protocol enum variants carry closed structs, so accepting an arbitrary
 # number of compact fields would silently create a second schema in Python.
-_STATEMENT_FIELD_COUNTS_V1: Final = (10, 10, 6, 9, 15, 20, 4, 8, 8, 8, 12, 13)
+_STATEMENT_FIELD_COUNTS_V1: Final = (11, 10, 6, 9, 15, 20, 4, 8, 9, 8, 13, 13)
 # These statement fields are additionally zeroed by Rust intent projection.
 # Field zero is the shared statement context and is handled separately.
-_PROJECTION_DERIVED_STATEMENT_FIELD_V1: Final = {0: 9, 4: 10, 10: 4}
+_PROJECTION_DERIVED_STATEMENT_FIELD_V1: Final = {0: 10, 4: 10, 10: 5}
+# Reserve-backed statements carry the exact typed transparent balance scope at
+# these protocol-specific field indexes.
+_PUBLIC_BALANCE_SCOPE_STATEMENT_FIELD_V1: Final = {0: 7, 8: 2, 10: 2}
 
 _ROW_BYTE_FIELDS_V1: Final = (
     "statement_norito",
@@ -319,6 +322,33 @@ def _decode_fields_v1(payload: bytes, count: int, context: str, maximum: int) ->
     return fields
 
 
+def _decode_network_id_v1(payload: bytes, context: str) -> bytes:
+    """Decode one transparent exact NetworkId and reject unmarked hash bytes."""
+
+    if len(payload) != _HASH_BYTES_V1 or payload[-1] & 1 == 0:
+        raise PrivacyExact12FixtureErrorV1(
+            f"{context} must contain exactly 32 marked Iroha hash bytes"
+        )
+    return payload
+
+
+def _decode_network_transaction_domain_v1(payload: bytes, context: str) -> bytes:
+    """Require the first-release ordinary TransactionDomain::Network wire."""
+
+    reader = _ReaderV1(payload, context)
+    variant = reader.read_u32("variant")
+    if variant != 0:
+        raise PrivacyExact12FixtureErrorV1(
+            f"{context} must use TransactionDomain::Network; genesis is not client-signable"
+        )
+    network_id = reader.read_field("network_id", maximum=_HASH_BYTES_V1)
+    reader.require_end()
+    _decode_network_id_v1(network_id, f"{context}.network_id")
+    if struct.pack("<I", 0) + _encode_field_v1(network_id) != payload:
+        raise PrivacyExact12FixtureErrorV1(f"{context} is not canonical")
+    return network_id
+
+
 def _schema_hash_v1(type_name: str) -> bytes:
     return hashlib.sha256(_SCHEMA_HASH_DOMAIN_V1 + type_name.encode("utf-8")).digest()[:16]
 
@@ -430,6 +460,20 @@ def _decode_digest_wrapper_v1(payload: bytes, context: str, *, allow_zero: bool)
     return digest
 
 
+def _validate_public_balance_scope_v1(payload: bytes, context: str) -> None:
+    """Require the sole canonical Norito shape of a usable balance scope."""
+
+    if payload == struct.pack("<I", 0):
+        return
+    if len(payload) == 14 and payload[:6] == b"\x01\x00\x00\x00\x09\x08":
+        dataspace = struct.unpack_from("<Q", payload, 6)[0]
+        if dataspace != 0:
+            return
+    raise PrivacyExact12FixtureErrorV1(
+        f"{context} has an invalid or universal public balance scope"
+    )
+
+
 def _decode_statement_context_v1(
     statement_payload: bytes,
     expected_tag: int,
@@ -445,26 +489,19 @@ def _decode_statement_context_v1(
         f"{context}.variant",
         PRIVACY_EXACT12_MAX_STATEMENT_BYTES_V1,
     )
+    scope_index = _PUBLIC_BALANCE_SCOPE_STATEMENT_FIELD_V1.get(expected_tag)
+    if scope_index is not None:
+        _validate_public_balance_scope_v1(
+            statement_fields[scope_index],
+            f"{context}.public_balance_scope",
+        )
     context_fields = _decode_fields_v1(
         statement_fields[0],
         8,
         f"{context}.context",
         PRIVACY_EXACT12_MAX_STATEMENT_BYTES_V1,
     )
-    chain_reader = _ReaderV1(context_fields[0], f"{context}.context.chain_id")
-    chain_length = chain_reader.read_compact_length("utf8_length")
-    if chain_length == 0 or chain_length > 128 or chain_length != chain_reader.remaining:
-        raise PrivacyExact12FixtureErrorV1(f"{context} has an invalid chain identifier")
-    chain_bytes = chain_reader.read_bytes(chain_length, "utf8")
-    chain_reader.require_end()
-    try:
-        chain_id = chain_bytes.decode("utf-8", "strict")
-    except UnicodeDecodeError as error:
-        raise PrivacyExact12FixtureErrorV1(
-            f"{context} chain identifier is not canonical UTF-8"
-        ) from error
-    if chain_id.encode("utf-8") != chain_bytes:
-        raise PrivacyExact12FixtureErrorV1(f"{context} chain identifier is not canonical UTF-8")
+    _decode_network_id_v1(context_fields[0], f"{context}.context.network_id")
     if len(context_fields[1]) != 4 or struct.unpack("<I", context_fields[1])[0] != 0:
         raise PrivacyExact12FixtureErrorV1(f"{context} carries a substituted action index")
     intent = _decode_digest_wrapper_v1(
@@ -752,9 +789,10 @@ def _decode_transaction_payload_v1(
         expected_statement_archive=expected_statement_archive,
         context=f"{context}.executable",
     )
-    if fields[0] != statement_context[0]:
+    transaction_network_id = _decode_network_transaction_domain_v1(fields[0], f"{context}.domain")
+    if transaction_network_id != statement_context[0]:
         raise PrivacyExact12FixtureErrorV1(
-            f"{context} chain does not match the privacy statement context"
+            f"{context} NetworkId does not match the privacy statement context"
         )
     expected_creation_time = 1_700_000_000_000 + row_index
     if len(fields[2]) != 8 or struct.unpack("<Q", fields[2])[0] != expected_creation_time:

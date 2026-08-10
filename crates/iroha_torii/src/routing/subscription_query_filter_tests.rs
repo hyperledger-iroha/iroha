@@ -467,7 +467,7 @@ async fn handle_post_v1_subscription_plan_returns_unsigned_transaction_draft() {
     let subscriber = BOB_ID.clone();
     let state =
         state_with_plans_and_subscriptions(provider.clone(), subscriber, Vec::new(), Vec::new());
-    let (queue, chain_id, _telemetry) = test_queue_components();
+    let queue = test_queue();
     let plan_id: AssetDefinitionId =
         test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f8");
     let plan = sample_plan(provider.clone());
@@ -477,7 +477,7 @@ async fn handle_post_v1_subscription_plan_returns_unsigned_transaction_draft() {
         plan,
     };
 
-    let resp = handle_post_v1_subscription_plan(chain_id, queue.clone(), state, NoritoJson(req))
+    let resp = handle_post_v1_subscription_plan(queue.clone(), state, NoritoJson(req))
         .await
         .expect("handler ok")
         .into_response();
@@ -677,7 +677,7 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
         Some(9_000)
     );
 
-    let (queue, chain_id, _telemetry) = test_queue_components();
+    let queue = test_queue();
     let usage_req = SubscriptionUsageRequestDto {
         authority: subscriber,
         unit_key: "requests".parse().unwrap(),
@@ -685,7 +685,6 @@ async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
         usage_trigger_id: None,
     };
     let resp = handle_post_v1_subscription_usage(
-        chain_id,
         queue.clone(),
         state,
         active_id.clone(),

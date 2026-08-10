@@ -182,7 +182,7 @@ PY
 
 command_looks_like_peer_runtime() {
   local command_line="$1"
-  [[ "$command_line" =~ (^|[[:space:]/])(irohad|iroha3d|peer-runtime)([.][^[:space:]/]+)?([[:space:]]|$) ]]
+  [[ "$command_line" =~ (^|[[:space:]/])(iroha3d|peer-runtime)([.][^[:space:]/]+)?([[:space:]]|$) ]]
 }
 
 pid_exists() {

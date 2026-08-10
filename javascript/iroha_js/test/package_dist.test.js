@@ -30,6 +30,9 @@ const nexusFixture = JSON.parse(
     "utf8",
   ),
 );
+const nexusFixtureNetworkId = packageExports.NetworkId.parse(
+  nexusFixture.transfer_input.network_id,
+);
 
 const {
   PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES,
@@ -236,6 +239,7 @@ function mockNexusResponse(status, body = "", headers = {}) {
 test("package dist exposes the current general-purpose SDK entrypoint", () => {
   for (const name of [
     "AccountAddress",
+    "NetworkId",
     "ToriiClient",
     "ToriiBrowserClient",
     "buildTransaction",
@@ -349,11 +353,10 @@ test("package dist exposes strict CancelAssetLock V1 construction", () => {
   );
 });
 
-test("package dist rejects unmarked Iroha hashes in validation-fee ledger bindings", () => {
+test("package dist requires a typed NetworkId in validation-fee ledger bindings", () => {
   const binding = {
     schema: "cbsi.mobile-validation-fee-ledger-binding.v1",
-    chainId: "iroha3-nexus",
-    genesisHash: "12".repeat(32),
+    networkId: Buffer.from("13".repeat(32), "hex"),
     policyChainGenesisHash: "35".repeat(32),
     checkpoint: {
       height: 100,
@@ -362,7 +365,7 @@ test("package dist rejects unmarked Iroha hashes in validation-fee ledger bindin
   };
   assert.throws(
     () => packageExports.normalizeValidationFeeLedgerBindingV1(binding),
-    /canonical Iroha hash marker/u,
+    /must be a NetworkId/u,
   );
 });
 
@@ -585,7 +588,7 @@ test("package Nexus browser source and dist must remain exact", () => {
 test("package Nexus browser defaults build, finalize, and submit the shared canonical transfer", async () => {
   const submissions = [];
   const client = new PackageNexusAppClient({
-    chainId: nexusFixture.transfer_input.chain_id,
+    networkId: nexusFixtureNetworkId,
     authority: nexusFixture.transfer_input.authority,
     signingPublicKey: hexBytes(
       nexusFixture.connect.approval_frame.signing_public_key_hex,

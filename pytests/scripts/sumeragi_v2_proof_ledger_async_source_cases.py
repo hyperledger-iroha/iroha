@@ -359,8 +359,8 @@ def test_progress_witness_source_fidelity_seals_post_decision_timeout_boundary(
         ),
         (
             "validate_locked_commit_progress_witness",
-            "snapshot.height,\n            snapshot.view,",
-            "snapshot.last_committed_height,\n            snapshot.view,",
+            "| SumeragiV2LivenessBlocker::SuccessorActivationPending",
+            "",
         ),
     )
     for symbol, needle, replacement in integration_helper_mutations:
@@ -1224,8 +1224,8 @@ def test_progress_witness_source_fidelity_seals_historical_lock_restart_authorit
             "recovery must retain the exact pre-existing durable locked QC",
         ),
         (
-            "effects.push(self.ensure_body_fetch(&locked));",
-            "effects.push(self.ensure_body_fetch(&decision));",
+            "BodyState::Missing => Some(self.ensure_body_fetch(&locked)),",
+            "BodyState::Missing => Some(self.ensure_body_fetch(&decision)),",
             "retransmit must derive FetchBody from the exact durable lock",
         ),
         (

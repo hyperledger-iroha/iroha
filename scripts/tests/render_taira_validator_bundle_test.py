@@ -10,7 +10,10 @@ import sys
 from pathlib import Path
 
 import pytest
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.9/3.10
+    import tomli as tomllib
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "render_taira_validator_bundle.py"
 SPEC = importlib.util.spec_from_file_location(
@@ -387,9 +390,9 @@ def test_checked_in_taira_genesis_gas_parameters_are_structured_parameters() -> 
 
 BASE_CONFIG = """# baseline
 public_key = "peer-1-public"
-private_key = "peer-1-private"
+private_key_file = "/run/secrets/iroha/taira-validator-private-key"
 soranet_transport_public_key = "peer-1-soranet-public"
-soranet_transport_private_key = "peer-1-soranet-private"
+soranet_transport_private_key_file = "/run/secrets/iroha/taira-soranet-transport-private-key"
 
 trusted_peers = [
   "peer-1-public@taira-validator-1.sora.org:1337",
@@ -400,7 +403,7 @@ trusted_peers_pop = [
 
 [genesis]
 public_key = "genesis-public"
-expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"
+expected_hash_file = "/run/iroha/genesis.expected_hash"
 
 [network]
 address = "0.0.0.0:1337"
@@ -426,7 +429,7 @@ enabled = true
 
 [torii.kagemusha_commands]
 enabled = true
-private_key = "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
+private_key_file = "/run/secrets/iroha/taira-kagemusha-commands-private-key"
 
 [soracloud_runtime.submission.signer]
 handle = "REPLACE_WITH_SORACLOUD_RUNTIME_SIGNER_HANDLE"
@@ -458,7 +461,7 @@ private_key_file = "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY_FILE"
 
 [streaming]
 identity_public_key = "REPLACE_WITH_STREAMING_IDENTITY_PUBLIC_KEY"
-identity_private_key = "REPLACE_WITH_STREAMING_IDENTITY_PRIVATE_KEY"
+identity_private_key_file = "/run/secrets/iroha/taira-streaming-identity-private-key"
 
 [sorafs.discovery.admission]
 envelopes_dir = "configs/soranexus/taira/sorafs_admission"
@@ -575,10 +578,13 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
         encoding="utf-8"
     )
     assert 'public_key = "peer-3-public"' in config
-    assert 'private_key = "peer-3-private"' in config
+    assert 'private_key_file = "/etc/iroha/taira-validator/runtime/validator-signer.key"' in config
     assert 'soranet_transport_public_key = "peer-3-soranet-public"' in config
-    assert 'soranet_transport_private_key = "peer-3-soranet-private"' in config
-    assert 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' in config
+    assert (
+        'soranet_transport_private_key_file = '
+        '"/etc/iroha/taira-validator/runtime/soranet-transport.key"' in config
+    )
+    assert 'expected_hash_file = "/run/iroha/genesis.expected_hash"' in config
     assert 'public_address = "addr:taira-validator-3.sora.org:1337#99FF"' in config
     assert 'address = "addr:0.0.0.0:1337#BF18"' in config
     assert 'address = "addr:0.0.0.0:18080#2F16"' in config
@@ -586,7 +592,10 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert '{ public_key = "peer-2-public", pop_hex = "peer-2-pop" }' in config
     assert 'authority = "bootstrap-authority"' in config
     assert 'authority = "faucet-authority"' in config
-    assert 'private_key = "kagemusha-commands-private-key"' in config
+    assert (
+        'private_key_file = "/etc/iroha/taira-validator/runtime/'
+        'kagemusha-command-signer.key"' in config
+    )
     assert f'handle = "{SORACLOUD_SIGNER_HANDLE}"' in config
     assert f'authority = "{SORACLOUD_SIGNER_AUTHORITY}"' in config
     assert 'algorithm = "ed25519"' in config
@@ -599,10 +608,18 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert MODULE._blake3_token_hash(ONBOARDING_TOKEN) in config
     assert "bootstrap-private-key" not in config
     assert "faucet-private-key" not in config
+    assert "peer-3-private" not in config
+    assert "peer-3-soranet-private" not in config
+    assert "kagemusha-commands-private-key" not in config
+    assert "streaming-private-key" not in config
     assert ONBOARDING_TOKEN not in config
     runtime_dir = output_dir / "taira-validator-3" / "runtime"
+    validator_key = runtime_dir / "validator-signer.key"
+    soranet_key = runtime_dir / "soranet-transport.key"
     onboarding_key = runtime_dir / "onboarding-signer.key"
     faucet_key = runtime_dir / "faucet-signer.key"
+    kagemusha_key = runtime_dir / "kagemusha-command-signer.key"
+    streaming_key = runtime_dir / "streaming-identity.key"
     token_file = runtime_dir / "onboarding-token"
     assert (
         'private_key_file = "/etc/iroha/taira-validator/runtime/'
@@ -614,18 +631,32 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     )
     assert str(onboarding_key.resolve()) not in config
     assert str(faucet_key.resolve()) not in config
+    assert validator_key.read_text(encoding="utf-8") == "peer-3-private\n"
+    assert soranet_key.read_text(encoding="utf-8") == "peer-3-soranet-private\n"
     assert onboarding_key.read_text(encoding="utf-8") == "bootstrap-private-key\n"
     assert faucet_key.read_text(encoding="utf-8") == "faucet-private-key\n"
+    assert (
+        kagemusha_key.read_text(encoding="utf-8")
+        == "kagemusha-commands-private-key\n"
+    )
+    assert streaming_key.read_text(encoding="utf-8") == "streaming-private-key\n"
     assert token_file.read_text(encoding="utf-8") == ONBOARDING_TOKEN + "\n"
     assert stat.S_IMODE(output_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE((output_dir / "taira-validator-3").stat().st_mode) == 0o700
     assert stat.S_IMODE(runtime_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(validator_key.stat().st_mode) == 0o600
+    assert stat.S_IMODE(soranet_key.stat().st_mode) == 0o600
     assert stat.S_IMODE(onboarding_key.stat().st_mode) == 0o600
     assert stat.S_IMODE(faucet_key.stat().st_mode) == 0o600
+    assert stat.S_IMODE(kagemusha_key.stat().st_mode) == 0o600
+    assert stat.S_IMODE(streaming_key.stat().st_mode) == 0o600
     assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
     assert (output_dir / ".gitignore").read_text(encoding="utf-8") == "*\n!.gitignore\n"
     assert 'identity_public_key = "streaming-public-key"' in config
-    assert 'identity_private_key = "streaming-private-key"' in config
+    assert (
+        'identity_private_key_file = "/etc/iroha/taira-validator/runtime/'
+        'streaming-identity.key"' in config
+    )
     assert (
         f'trusted_council_keys = ["{COUNCIL_KEY_1}", "{COUNCIL_KEY_2}", "{COUNCIL_KEY_3}"]'
         in config
@@ -952,7 +983,7 @@ def test_render_bundle_rejects_a_template_without_expected_hash(
     _write_secrets(secrets_path)
     base_config_path.write_text(
         BASE_CONFIG.replace(
-            'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"\n', ""
+            'expected_hash_file = "/run/iroha/genesis.expected_hash"\n', ""
         ),
         encoding="utf-8",
     )

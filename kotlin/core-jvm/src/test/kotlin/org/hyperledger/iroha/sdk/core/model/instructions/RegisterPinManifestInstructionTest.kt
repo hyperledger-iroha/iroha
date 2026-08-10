@@ -31,7 +31,6 @@ class RegisterPinManifestInstructionTest {
             setOf(
                 "action",
                 "manifest_payload_base64",
-                "submitted_epoch",
                 "successor_of_hex",
                 "alias.name",
                 "alias.namespace",
@@ -51,7 +50,6 @@ class RegisterPinManifestInstructionTest {
         val expected = source.copyOf()
         val instruction = RegisterPinManifestInstruction.builder()
             .setManifestPayload(source)
-            .setSubmittedEpoch(1)
             .build()
         source.fill(0)
 
@@ -82,17 +80,14 @@ class RegisterPinManifestInstructionTest {
     }
 
     @Test
-    fun `builder requires payload and epoch`() {
+    fun `builder requires only the manifest payload`() {
         assertFailsWith<IllegalStateException> {
             RegisterPinManifestInstruction.builder()
-                .setSubmittedEpoch(1)
                 .build()
         }
-        assertFailsWith<IllegalStateException> {
-            RegisterPinManifestInstruction.builder()
-                .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
-                .build()
-        }
+        RegisterPinManifestInstruction.builder()
+            .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
+            .build()
     }
 
     @Test
@@ -110,12 +105,9 @@ class RegisterPinManifestInstructionTest {
     }
 
     @Test
-    fun `epoch must be nonnegative and numeric`() {
-        assertFailsWith<IllegalArgumentException> {
-            RegisterPinManifestInstruction.builder().setSubmittedEpoch(-1)
-        }
+    fun `from arguments rejects retired caller supplied epoch`() {
         val arguments = baseBuilder().build().arguments.toMutableMap()
-        arguments["submitted_epoch"] = "NaN"
+        arguments["submitted_epoch"] = "1"
         assertFailsWith<IllegalArgumentException> {
             RegisterPinManifestInstruction.fromArguments(arguments)
         }
@@ -173,7 +165,6 @@ class RegisterPinManifestInstructionTest {
         for (required in listOf(
             "action",
             "manifest_payload_base64",
-            "submitted_epoch",
         )) {
             val missing = baseBuilder().build().arguments.toMutableMap()
             missing.remove(required)
@@ -194,5 +185,4 @@ class RegisterPinManifestInstructionTest {
     private fun baseBuilder(): RegisterPinManifestInstruction.Builder =
         RegisterPinManifestInstruction.builder()
             .setManifestPayloadBase64(CANONICAL_MANIFEST_BASE64)
-            .setSubmittedEpoch(1)
 }

@@ -2204,12 +2204,7 @@ internal static class SccpJson
 
     internal static uint UInt32(JsonElement value, string field, uint minimum, uint maximum)
     {
-        var result = UInt64(value, field, minimum);
-        if (result > maximum)
-        {
-            throw new ArgumentOutOfRangeException(field);
-        }
-
+        var result = UInt64(value, field, minimum, maximum);
         return (uint)result;
     }
 }

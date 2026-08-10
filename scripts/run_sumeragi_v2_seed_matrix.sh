@@ -150,7 +150,7 @@ export IROHA_TEST_NETWORK_START_ATTEMPTS=1
 # Explicit binary paths bypass the test-network freshness check. Clear them in
 # this standalone runner as well as in the parent release gate. All binaries
 # are prebuilt and attested before Cargo starts a test process.
-unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_irohad CARGO_BIN_EXE_kagami
+unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
 export IROHA_TEST_SKIP_BUILD=1

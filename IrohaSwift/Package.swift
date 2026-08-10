@@ -9,7 +9,7 @@ import Glibc
 
 let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let bridgeRelativePath = "../dist/NoritoBridge.xcframework"
-let requiredBridgeAbiVersion = 21
+let requiredBridgeAbiVersion = 22
 let repositoryDirectory = packageDirectory.deletingLastPathComponent().standardizedFileURL
 let configuredArtifactDirectory = ProcessInfo.processInfo.environment[
     "MOBILE_SDK_APPLE_ARTIFACT_DIR"

@@ -6,15 +6,24 @@ use std::{
     sync::{Arc, Barrier},
 };
 
+use super::*;
+use crate::{
+    block::BlockBuilder,
+    query::store::LiveQueryStore,
+    state::{
+        AssetDefinitionAliasBindingRecord, ContractAliasBindingRecord, derive_validator_key_id,
+    },
+    sumeragi::consensus::{PERMISSIONED_TAG, Phase, Vote, default_chain_order_hash, vote_preimage},
+    tx::AcceptedTransaction,
+};
 use iroha_config::{
     base::WithOrigin,
     kura::{FsyncMode, InitMode},
     parameters::{
         actual::{Kura as KuraConfig, LaneConfig},
         defaults::kura::{
-            BLOCK_SYNC_ROSTER_RETENTION, FSYNC_INTERVAL,
-            MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY, ROSTER_SIDECAR_RETENTION,
-            REPLICA_ADVERT_POLICY,
+            BLOCK_SYNC_ROSTER_RETENTION, FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES,
+            MERGE_LEDGER_CACHE_CAPACITY, REPLICA_ADVERT_POLICY, ROSTER_SIDECAR_RETENTION,
         },
     },
 };
@@ -39,20 +48,16 @@ use iroha_data_model::{
     smart_contract::{ContractAddress, ContractAlias},
     transaction::TransactionBuilder,
 };
+use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 use tempfile::tempdir;
-use super::*;
-use crate::{
-    block::BlockBuilder,
-    query::store::LiveQueryStore,
-    state::{
-        AssetDefinitionAliasBindingRecord, ContractAliasBindingRecord, derive_validator_key_id,
-    },
-    sumeragi::consensus::{PERMISSIONED_TAG, Phase, Vote, default_chain_order_hash, vote_preimage},
-    tx::AcceptedTransaction,
-};
 
 const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
+
+fn dummy_block_hash(marker: u8) -> HashOf<BlockHeader> {
+    HashOf::from_untyped_unchecked(Hash::prehashed([marker; 32]))
+}
+
 const TEST_CHAIN_ID: &str = "test-chain";
 const SMALL_ORDER_ED25519_R: [u8; 32] = [
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -61,6 +66,14 @@ const NONCANONICAL_ED25519_R: [u8; 32] = [
     0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
 ];
+
+fn snapshot_test_network_id() -> NetworkId {
+    let mut genesis_hash = [0_u8; Hash::LENGTH];
+    genesis_hash[Hash::LENGTH - 1] = 1;
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed(genesis_hash),
+    ))
+}
 
 fn checked_seeded_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], algorithm)
@@ -146,7 +159,7 @@ fn assert_canonical_snapshot_generation(store_dir: &Path) {
 }
 
 fn signed_complete_wire_finality_for_snapshot_blocks(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     blocks: &[Arc<SignedBlock>],
 ) -> Vec<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact> {
     use iroha_data_model::block::consensus_v2::{
@@ -187,7 +200,7 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
     for block in blocks {
         let height = block.header().height().get();
         let context = HeightContext {
-            chain_id: chain_id.clone(),
+            network_id: network_id.clone(),
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,
@@ -284,7 +297,7 @@ fn snapshot_gate_fixture() -> (
     let block = signed_block_with_transaction(accepted_log_transaction("snapshot gate"));
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
     let artifact = signed_complete_wire_finality_for_snapshot_blocks(
-        &state.chain_id,
+        &state.network_id,
         std::slice::from_ref(&block),
     )
     .into_iter()
@@ -329,7 +342,7 @@ fn store_complete_snapshot_commit_evidence_for_blocks(
     kura: &Kura,
     blocks: &[Arc<SignedBlock>],
 ) {
-    let artifacts = signed_complete_wire_finality_for_snapshot_blocks(&state.chain_id, blocks);
+    let artifacts = signed_complete_wire_finality_for_snapshot_blocks(&state.network_id, blocks);
     let (terminal_artifact, historical_artifacts) = artifacts
         .split_last()
         .expect("snapshot commit evidence requires a terminal block");
@@ -376,6 +389,29 @@ async fn bounded_snapshot_reader_rechecks_the_opened_file_length() {
     let error = bounded_snapshot_read_capacity(9, 8)
         .expect_err("growth between path metadata and the opened descriptor must fail");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn authenticated_bound_payload_rejects_in_place_change_before_decode() {
+    let root = tempdir().expect("tempdir");
+    let path = root.path().join("snapshot.data");
+    std::fs::write(&path, b"canonical").expect("write canonical payload");
+    let binding = bind_snapshot_file_handle(&path, 9)
+        .expect("bind canonical payload")
+        .expect("payload exists");
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .and_then(|mut file| file.write_all(b"malicious"))
+        .expect("replace bytes in the already-open inode");
+
+    assert!(matches!(
+        read_bound_snapshot_payload(&binding),
+        Err(TryReadError::SnapshotBindingChanged(changed)) if changed == path
+    ));
 }
 
 #[cfg(unix)]
@@ -463,7 +499,7 @@ async fn snapshot_publication_defers_without_checkpoint_and_selects_nothing() {
             BlockCount(1),
             TEST_CHUNK_SIZE,
             signing_key.public_key(),
-            &state.chain_id,
+            &state.network_id,
             &state.zk_snapshot(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
@@ -522,7 +558,7 @@ async fn snapshot_publication_rejects_foreign_manifest_authority() {
     let (state, kura, block, artifact) = snapshot_gate_fixture();
     let foreign_block = signed_block_with_transaction(accepted_log_transaction("foreign"));
     let foreign = signed_complete_wire_finality_for_snapshot_blocks(
-        &state.chain_id,
+        &state.network_id,
         std::slice::from_ref(&foreign_block),
     )
     .into_iter()
@@ -574,7 +610,7 @@ async fn snapshot_publication_accepts_complete_authenticated_tuple() {
         BlockCount(state.committed_height()),
         TEST_CHUNK_SIZE,
         signing_key.public_key(),
-        state.chain_id_ref(),
+        state.network_id_ref(),
         &state.zk_snapshot(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -704,7 +740,7 @@ fn state_with_exact_pending_sccp_snapshot_fixture(
     let transaction_key = checked_seeded_keypair(0x34, Algorithm::Ed25519);
     let authority = AccountId::new(transaction_key.public_key().clone());
     let transaction = TransactionBuilder::new(
-        ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        snapshot_test_network_id(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -801,7 +837,7 @@ fn state_with_exact_pending_sccp_snapshot_fixture(
 
     let mut state = state_factory_with_kura_and_chain(
         Arc::clone(&kura),
-        ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
     );
     state.push_block_hash_for_testing(block.hash());
     let (_, source_identity, trust_anchor) =
@@ -893,6 +929,103 @@ fn install_active_space_directory_manifest(
     (uaid, dataspace, account_id)
 }
 
+fn resource_policy(
+    max_decode_depth: usize,
+    max_decode_items: usize,
+    max_string_bytes: usize,
+    max_blob_bytes: usize,
+    max_transient_bytes: usize,
+) -> SnapshotResourcePolicy {
+    SnapshotResourcePolicy {
+        max_decode_depth: NonZeroUsize::new(max_decode_depth).expect("non-zero depth"),
+        max_decode_items: NonZeroUsize::new(max_decode_items).expect("non-zero item limit"),
+        max_string_bytes: NonZeroUsize::new(max_string_bytes).expect("non-zero string limit"),
+        max_blob_bytes: NonZeroUsize::new(max_blob_bytes).expect("non-zero blob limit"),
+        max_transient_bytes: NonZeroUsize::new(max_transient_bytes)
+            .expect("non-zero transient limit"),
+    }
+}
+
+#[tokio::test]
+async fn snapshot_json_scanner_enforces_every_resource_budget() {
+    assert_eq!(
+        count_borrowed_json_array_items("[0,{\"nested\":true},[]]")
+            .expect("borrowed array item count"),
+        3
+    );
+    let generous = usize::MAX / 4;
+    let cases = [
+        (
+            b"[[0]]".as_slice(),
+            resource_policy(2, generous, generous, generous, generous),
+            "nesting depth",
+        ),
+        (
+            b"[0,1]".as_slice(),
+            resource_policy(8, 1, generous, generous, generous),
+            "aggregate items",
+        ),
+        (
+            br#""four""#.as_slice(),
+            resource_policy(8, generous, 3, generous, generous),
+            "JSON string",
+        ),
+        (
+            br#"{"encoded_hex":"000102030405060708090a0b0c"}"#.as_slice(),
+            resource_policy(8, generous, 12, 12, generous),
+            "decoded blob",
+        ),
+        (
+            b"[0,1,2,3,4,5,6,7,8,9,10,11,12]".as_slice(),
+            resource_policy(8, generous, 12, 12, generous),
+            "byte-vector blobs",
+        ),
+        (
+            b"[0]".as_slice(),
+            resource_policy(8, generous, generous, generous, 1),
+            "transient estimate",
+        ),
+    ];
+    for (payload, policy, expected) in cases {
+        let error = validate_snapshot_json_resources(payload, policy)
+            .expect_err("payload must exceed its configured resource budget");
+        match error {
+            TryReadError::SnapshotResourceLimit(message) => {
+                assert!(
+                    message.contains(expected),
+                    "unexpected resource error: {message}"
+                );
+            }
+            other => panic!("unexpected resource rejection: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn snapshot_json_scanner_rejects_noncanonical_spelling() {
+    let policy = SnapshotResourcePolicy::default();
+    for payload in [b"{ \"a\":0}".as_slice(), br#""\u0061""#.as_slice()] {
+        assert!(matches!(
+            validate_snapshot_json_resources(payload, policy),
+            Err(TryReadError::NonCanonicalSnapshotPayload)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn borrowed_snapshot_wsv_hash_matches_typed_canonical_surface() {
+    let state = state_factory();
+    let payload = exact_snapshot_payload_bytes(&state);
+    validate_snapshot_json_resources(&payload, SnapshotResourcePolicy::default())
+        .expect("generated snapshot must satisfy the default resource policy");
+    let tree_reference = Hash::new(canonical_state_snapshot_bytes(&state));
+    assert_eq!(
+        canonical_snapshot_wsv_hash(&payload).expect("borrowed canonical WSV hash"),
+        tree_reference,
+    );
+    assert_eq!(canonical_state_snapshot_hash(&state), tree_reference);
+}
+
 #[tokio::test]
 async fn canonical_wsv_hash_ignores_commit_qc_sidecars() {
     let mut state = state_factory();
@@ -937,6 +1070,11 @@ async fn canonical_wsv_hash_ignores_commit_qc_sidecars() {
         before, after,
         "commit-QC recovery evidence must not affect replay WSV checkpoints"
     );
+    assert_eq!(
+        canonical_snapshot_wsv_hash(restart_snapshot.as_bytes())
+            .expect("borrowed WSV hashing must redact commit-QC sidecars"),
+        Hash::new(&after),
+    );
     let canonical_json =
         String::from_utf8(after).expect("canonical state snapshot should be utf8 json");
     assert!(
@@ -961,6 +1099,11 @@ async fn canonical_wsv_hash_uses_current_mv_cell_values() {
     assert_eq!(
         before, after,
         "MV cell history must not affect replay WSV checkpoints when the current value is unchanged"
+    );
+    assert_eq!(
+        canonical_snapshot_wsv_hash(&exact_snapshot_payload_bytes(&state))
+            .expect("borrowed WSV hashing must unwrap MV cells"),
+        Hash::new(&after),
     );
 
     let value = canonical_state_snapshot_value(&state);
@@ -1011,6 +1154,11 @@ async fn canonical_wsv_hash_ignores_vrf_epoch_sidecars() {
         before, after,
         "VRF epoch sidecars must not affect replay WSV checkpoints"
     );
+    assert_eq!(
+        canonical_snapshot_wsv_hash(&exact_snapshot_payload_bytes(&state))
+            .expect("borrowed WSV hashing must redact VRF sidecars"),
+        Hash::new(&after),
+    );
 
     let value = canonical_state_snapshot_value(&state);
     let world = value
@@ -1043,6 +1191,12 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
         parameters.commit();
     }
     let first = canonical_state_snapshot_bytes_for_tests(&state);
+    let first_payload = exact_snapshot_payload_bytes(&state);
+    assert_eq!(
+        canonical_snapshot_wsv_hash(&first_payload)
+            .expect("borrowed WSV hashing must canonicalize set-like key policy fields"),
+        Hash::new(&first),
+    );
 
     {
         let mut parameters = state.world.parameters.block();
@@ -1055,6 +1209,12 @@ async fn canonical_wsv_hash_sorts_sumeragi_key_policy_sets() {
         parameters.commit();
     }
     let second = canonical_state_snapshot_bytes_for_tests(&state);
+    let second_payload = exact_snapshot_payload_bytes(&state);
+    assert_eq!(
+        canonical_snapshot_wsv_hash(&second_payload)
+            .expect("borrowed WSV hashing must preserve canonical key policy sets"),
+        Hash::new(&second),
+    );
 
     assert_eq!(
         first, second,
@@ -1181,7 +1341,7 @@ fn accepted_manifest_transaction() -> AcceptedTransaction<'static> {
     let key_pair = checked_seeded_keypair(0x31, Algorithm::Ed25519);
     let authority = AccountId::new(key_pair.public_key().clone());
     let transaction = TransactionBuilder::new(
-        ChainId::from(TEST_CHAIN_ID),
+        snapshot_test_network_id(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1196,7 +1356,7 @@ fn accepted_log_transaction(message: &str) -> AcceptedTransaction<'static> {
     let key_pair = checked_seeded_keypair(0x32, Algorithm::Ed25519);
     let authority = AccountId::new(key_pair.public_key().clone());
     let transaction = TransactionBuilder::new(
-        ChainId::from(TEST_CHAIN_ID),
+        snapshot_test_network_id(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1292,7 +1452,7 @@ fn store_block_and_mark_state_height(state: &mut State, kura: &Arc<Kura>, block:
 }
 
 fn signed_commit_qc_for_snapshot(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     block_hash: HashOf<BlockHeader>,
     height: u64,
     validator: &KeyPair,
@@ -1313,7 +1473,7 @@ fn signed_commit_qc_for_snapshot(
         signer: 0,
         bls_sig: Vec::new(),
     };
-    let preimage = vote_preimage(chain_id, PERMISSIONED_TAG, &vote);
+    let preimage = vote_preimage(network_id, PERMISSIONED_TAG, &vote);
     let signature = Signature::try_new(validator.private_key(), &preimage)
         .expect("snapshot commit vote signature");
     let aggregate = iroha_crypto::bls_normal_aggregate_signatures(&[signature.payload()])

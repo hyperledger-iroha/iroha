@@ -205,6 +205,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -222,6 +223,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -521,6 +523,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain-2"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso_rev,
                 cfg_rev.torii.clone(),
                 queue_rev,
@@ -538,6 +541,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain-2"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso_rev,
                 cfg_rev.torii.clone(),
                 queue_rev,
@@ -667,6 +671,7 @@ async fn space_directory_get_routes_reject_invalid_uaid_literals() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -684,6 +689,7 @@ async fn space_directory_get_routes_reject_invalid_uaid_literals() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -819,6 +825,7 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -836,6 +843,7 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -991,6 +999,7 @@ async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_pag
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -1008,6 +1017,7 @@ async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_pag
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -1126,6 +1136,7 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -1143,6 +1154,7 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -1195,22 +1207,17 @@ async fn manifest_publish_endpoint_returns_unsigned_transaction_draft() {
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
     let router = Router::new().route(
         "/v1/space-directory/manifests",
         post({
-            let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestPublishDto>| {
-                let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
                 async move {
-                    iroha_torii::handle_post_space_directory_manifest_publish(
-                        chain_id, queue, state, req,
-                    )
-                    .await
+                    iroha_torii::handle_post_space_directory_manifest_publish(queue, state, req)
+                        .await
                 }
             }
         }),
@@ -1279,22 +1286,17 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
     let router = Router::new().route(
         "/v1/space-directory/manifests",
         post({
-            let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestPublishDto>| {
-                let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
                 async move {
-                    iroha_torii::handle_post_space_directory_manifest_publish(
-                        chain_id, queue, state, req,
-                    )
-                    .await
+                    iroha_torii::handle_post_space_directory_manifest_publish(queue, state, req)
+                        .await
                 }
             }
         }),
@@ -1394,22 +1396,17 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
     let router = Router::new().route(
         "/v1/space-directory/manifests",
         post({
-            let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestPublishDto>| {
-                let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
                 async move {
-                    iroha_torii::handle_post_space_directory_manifest_publish(
-                        chain_id, queue, state, req,
-                    )
-                    .await
+                    iroha_torii::handle_post_space_directory_manifest_publish(queue, state, req)
+                        .await
                 }
             }
         }),
@@ -1484,22 +1481,17 @@ async fn manifest_revoke_endpoint_returns_unsigned_transaction_draft() {
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
     let router = Router::new().route(
         "/v1/space-directory/manifests/revoke",
         post({
-            let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>| {
-                let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
                 async move {
-                    iroha_torii::handle_post_space_directory_manifest_revoke(
-                        chain_id, queue, state, req,
-                    )
-                    .await
+                    iroha_torii::handle_post_space_directory_manifest_revoke(queue, state, req)
+                        .await
                 }
             }
         }),
@@ -1544,22 +1536,17 @@ async fn manifest_revoke_endpoint_canonicalizes_uaid_literal_in_queued_instructi
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
     let router = Router::new().route(
         "/v1/space-directory/manifests/revoke",
         post({
-            let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>| {
-                let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
                 async move {
-                    iroha_torii::handle_post_space_directory_manifest_revoke(
-                        chain_id, queue, state, req,
-                    )
-                    .await
+                    iroha_torii::handle_post_space_directory_manifest_revoke(queue, state, req)
+                        .await
                 }
             }
         }),
@@ -1615,22 +1602,17 @@ async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
     let router = Router::new().route(
         "/v1/space-directory/manifests/revoke",
         post({
-            let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>| {
-                let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
                 async move {
-                    iroha_torii::handle_post_space_directory_manifest_revoke(
-                        chain_id, queue, state, req,
-                    )
-                    .await
+                    iroha_torii::handle_post_space_directory_manifest_revoke(queue, state, req)
+                        .await
                 }
             }
         }),
@@ -1685,22 +1667,17 @@ async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "test-chain".parse().expect("chain id");
     let router = Router::new().route(
         "/v1/space-directory/manifests/revoke",
         post({
-            let chain_id = Arc::new(chain_id.clone());
             let queue = queue.clone();
             let state = state.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>| {
-                let chain_id = chain_id.clone();
                 let queue = queue.clone();
                 let state = state.clone();
                 async move {
-                    iroha_torii::handle_post_space_directory_manifest_revoke(
-                        chain_id, queue, state, req,
-                    )
-                    .await
+                    iroha_torii::handle_post_space_directory_manifest_revoke(queue, state, req)
+                        .await
                 }
             }
         }),
@@ -1781,6 +1758,7 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),
@@ -1798,6 +1776,7 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
         {
             Torii::new(
                 iroha_data_model::ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),

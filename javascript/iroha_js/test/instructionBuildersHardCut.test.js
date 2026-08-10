@@ -160,13 +160,6 @@ test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
         metadata: { purpose: "poc" },
         balance_scope_policy: "Global",
         owning_domain: null,
-        confidential_policy: {
-          mode: "TransparentOnly",
-          vk_set_hash: null,
-          poseidon_params_id: null,
-          pedersen_params_id: null,
-          pending_transition: null,
-        },
       },
     },
   });
@@ -185,6 +178,17 @@ test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
         owningDomain: null,
       }),
     /balanceScopePolicy is required/u,
+  );
+  assert.throws(
+    () =>
+      buildRegisterAssetDefinitionInstruction({
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        name: "demo",
+        owningDomain: null,
+        balanceScopePolicy: "Global",
+        confidentialPolicy: { mode: "TransparentOnly" },
+      }),
+    /cannot carry confidential policy/u,
   );
 });
 

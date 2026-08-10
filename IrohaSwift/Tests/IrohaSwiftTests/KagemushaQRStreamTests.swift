@@ -25,7 +25,7 @@ final class KagemushaQRStreamTests: XCTestCase {
     func testEveryFrameRoundTripsForEveryPeerPayloadAndReassemblesOutOfOrder() throws {
         try requireNativeTestCapability(
             KagemushaRecursiveSpend.hasRequiredNativeSymbols,
-            "ABI-21 Kagemusha bridge is not linked in this test host"
+            "ABI-22 Kagemusha bridge is not linked in this test host"
         )
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
         let request = try offer.project(

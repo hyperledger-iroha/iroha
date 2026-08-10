@@ -5288,8 +5288,8 @@ macro_rules! wal_header_accepted_body {
         $format_matches:expr,
         $actual_protocol:expr,
         $expected_protocol:expr,
-        $actual_chain:expr,
-        $expected_chain:expr,
+        $actual_network_id:expr,
+        $expected_network_id:expr,
         $actual_key:expr,
         $expected_key:expr,
         $checksum_matches:expr $(,)?
@@ -5298,7 +5298,7 @@ macro_rules! wal_header_accepted_body {
             && $magic_matches
             && $format_matches
             && $actual_protocol == $expected_protocol
-            && $actual_chain == $expected_chain
+            && $actual_network_id == $expected_network_id
             && $actual_key == $expected_key
             && $checksum_matches
     }};

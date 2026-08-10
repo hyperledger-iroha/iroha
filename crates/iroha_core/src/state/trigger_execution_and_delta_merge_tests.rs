@@ -2344,9 +2344,8 @@ fn delta_merge_execute_trigger_by_call_executes_and_chains() {
         .iter()
         .filter(|e| {
             if let EventBox::Data(ev) = e
-                && let data_pre::DataEvent::Account(
-                    data_pre::AccountEvent::MetadataInserted(mc),
-                ) = ev.as_ref()
+                && let data_pre::DataEvent::Account(data_pre::AccountEvent::MetadataInserted(mc)) =
+                    ev.as_ref()
             {
                 return *mc.target() == *ALICE_ID
                     && mc.key() == &key

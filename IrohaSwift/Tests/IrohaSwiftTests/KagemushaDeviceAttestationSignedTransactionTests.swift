@@ -9,7 +9,7 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
         let restored = try KagemushaDeviceAttestationSignedTransaction(
             canonicalNorito: fixture.envelope.norito,
             expectedRegistrationId: fixture.registration.canonicalRegistrationId,
-            expectedChainId: Self.chainId,
+            expectedNetworkId: Self.networkId,
             expectedAuthority: Self.authority,
             expectedTransactionHash: fixture.envelope.transactionHash
         )
@@ -19,7 +19,7 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
         XCTAssertEqual(restored.envelope.transactionHash, fixture.envelope.transactionHash)
         XCTAssertEqual(restored.envelope.hashHex, fixture.envelope.hashHex)
         XCTAssertEqual(restored.registrationId, fixture.registration.canonicalRegistrationId)
-        XCTAssertEqual(restored.chainId, Self.chainId)
+        XCTAssertEqual(restored.networkId, Self.networkId)
         XCTAssertEqual(restored.authority, Self.authority)
         XCTAssertNoThrow(try restored.validateStatusTransactionHash(fixture.envelope.hashHex))
     }
@@ -43,7 +43,7 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
             try KagemushaDeviceAttestationSignedTransaction(
                 canonicalNorito: fixture.envelope.norito,
                 expectedRegistrationId: fixture.registration.canonicalRegistrationId,
-                expectedChainId: Self.chainId,
+                expectedNetworkId: Self.networkId,
                 expectedAuthority: Self.authority,
                 expectedTransactionHash: fixture.envelope.transactionHash
             )
@@ -58,7 +58,8 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
         XCTAssertThrowsError(
             try KagemushaDeviceAttestationSignedTransaction(
                 canonicalNorito: wrongVersion,
-                expectedRegistrationId: fixture.registration.canonicalRegistrationId
+                expectedRegistrationId: fixture.registration.canonicalRegistrationId,
+                expectedNetworkId: Self.networkId
             )
         )
 
@@ -67,13 +68,15 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
         XCTAssertThrowsError(
             try KagemushaDeviceAttestationSignedTransaction(
                 canonicalNorito: trailing,
-                expectedRegistrationId: fixture.registration.canonicalRegistrationId
+                expectedRegistrationId: fixture.registration.canonicalRegistrationId,
+                expectedNetworkId: Self.networkId
             )
         )
 
         let restored = try KagemushaDeviceAttestationSignedTransaction(
             canonicalNorito: fixture.envelope.norito,
-            expectedRegistrationId: fixture.registration.canonicalRegistrationId
+            expectedRegistrationId: fixture.registration.canonicalRegistrationId,
+            expectedNetworkId: Self.networkId
         )
         var substitutedStatus = fixture.envelope.hashHex
         substitutedStatus.replaceSubrange(
@@ -95,7 +98,8 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
         XCTAssertThrowsError(
             try KagemushaDeviceAttestationSignedTransaction(
                 canonicalNorito: substitutedRegistration.envelope.norito,
-                expectedRegistrationId: fixture.registration.canonicalRegistrationId
+                expectedRegistrationId: fixture.registration.canonicalRegistrationId,
+                expectedNetworkId: Self.networkId
             )
         ) { error in
             XCTAssertEqual(
@@ -108,13 +112,19 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
             try KagemushaDeviceAttestationSignedTransaction(
                 canonicalNorito: fixture.envelope.norito,
                 expectedRegistrationId: fixture.registration.canonicalRegistrationId,
-                expectedChainId: "substituted-chain"
+                expectedNetworkId: TestNetworkIds.other
             )
-        )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaDeviceAttestationSignedTransactionError,
+                .networkIdMismatch
+            )
+        }
         XCTAssertThrowsError(
             try KagemushaDeviceAttestationSignedTransaction(
                 canonicalNorito: fixture.envelope.norito,
                 expectedRegistrationId: fixture.registration.canonicalRegistrationId,
+                expectedNetworkId: Self.networkId,
                 expectedAuthority: try alternateAuthority()
             )
         )
@@ -125,6 +135,7 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
             try KagemushaDeviceAttestationSignedTransaction(
                 canonicalNorito: fixture.envelope.norito,
                 expectedRegistrationId: fixture.registration.canonicalRegistrationId,
+                expectedNetworkId: Self.networkId,
                 expectedTransactionHash: wrongHash
             )
         )
@@ -159,6 +170,7 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
             try KagemushaDeviceAttestationSignedTransaction(
                 canonicalNorito: substitutedEnvelope.envelope.norito,
                 expectedRegistrationId: fixture.registration.canonicalRegistrationId,
+                expectedNetworkId: Self.networkId,
                 expectedTransactionHash: fixture.envelope.transactionHash
             )
         ) { error in
@@ -185,7 +197,7 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
         )
         let unsigned = try sdk.buildUnsignedRegisterKagemushaDeviceAttestation(
             request: RegisterKagemushaDeviceAttestationRequest(
-                chainId: Self.chainId,
+                networkId: Self.networkId,
                 authority: Self.authority,
                 registration: registration,
                 feePayment: feePayment,
@@ -235,7 +247,7 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
         )
     }
 
-    private static let chainId = "kagemusha-device-registration-test-chain"
+    private static let networkId = TestNetworkIds.canonical
     private static let authority = try! AccountAddress
         .fromAccount(publicKey: Data(repeating: 0x54, count: 32))
         .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)

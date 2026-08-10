@@ -1,7 +1,7 @@
-//! Process supervision primitives for managing local `irohad` peers.
+//! Process supervision primitives for managing local `iroha3d` peers.
 //!
 //! The supervisor prepares filesystem layouts, generates a Kagami-aligned
-//! default genesis manifest, and can launch or stop child `irohad` processes.
+//! default genesis manifest, and can launch or stop child `iroha3d` processes.
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -21,7 +21,6 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, bls_normal_pop_prove,
 };
@@ -29,10 +28,15 @@ use iroha_data_model::{
     block::BlockHeader,
     parameter::system::SumeragiConsensusMode,
     peer::PeerId,
-    prelude::{AccountId, ChainId},
+    prelude::{AccountId, ChainId, NetworkId},
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_version::build_line::BuildLine;
+#[cfg(any(test, feature = "test-support"))]
+use izanami::genesis_support::sign_prepared_genesis_from_config;
+use izanami::genesis_support::{
+    ManagedNodeConfig, UNRESOLVED_GENESIS_EXPECTED_HASH, validate_prepared_genesis_for_startup,
+};
 use norito::json::{self, Map, Value};
 use once_cell::sync::OnceCell;
 use rand::{TryRngCore as _, rngs::OsRng};
@@ -52,7 +56,10 @@ use crate::{
     },
     genesis,
     logs::{LifecycleEvent, LogStreamKind, PeerLogStream},
-    torii::{ManagedBlockStream, ManagedEventStream, ReadinessSmokePlan, ToriiClient, ToriiResult},
+    torii::{
+        ManagedBlockStream, ManagedEventStream, ReadinessSmokePlan, ToriiClient, ToriiError,
+        ToriiResult,
+    },
     vault::{SignerVault, SignerVaultError},
 };
 
@@ -73,7 +80,7 @@ const GENESIS_FILE_NAME: &str = "genesis.json";
 const GENESIS_SIGNED_FILE_NAME: &str = "genesis.signed.nrt";
 const GENESIS_EXPECTED_HASH_FILE_NAME: &str = "genesis.expected_hash";
 const GENESIS_PUBLIC_KEY_FILE_NAME: &str = "genesis.public_key";
-const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
+const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = UNRESOLVED_GENESIS_EXPECTED_HASH;
 #[cfg(any(test, feature = "test-support"))]
 const TEST_FINALIZE_KAGAMI_STUB_SIGNATURE: &str = "MOCHI_TEST_FINALIZE_KAGAMI_STUB_SIGNATURE";
 const SNAPSHOT_GENERATIONS_DIR_NAME: &str = "generations";
@@ -903,8 +910,8 @@ fn default_binary_entry(
 
 fn default_irohad_entry() -> (PathBuf, bool, BinarySource) {
     const ENV_OVERRIDE: &str = "MOCHI_IROHAD";
-    const CARGO_ENV: &str = "CARGO_BIN_EXE_irohad";
-    default_binary_entry(ENV_OVERRIDE, CARGO_ENV, "irohad")
+    const CARGO_ENV: &str = "CARGO_BIN_EXE_iroha3d";
+    default_binary_entry(ENV_OVERRIDE, CARGO_ENV, "iroha3d")
 }
 
 fn default_kagami_entry() -> (PathBuf, bool, BinarySource) {
@@ -955,7 +962,7 @@ fn resolve_iroha_cli_alias() -> Option<(PathBuf, BinarySource)> {
 }
 
 impl BinaryPaths {
-    /// Override the path to the `irohad` executable.
+    /// Override the path to the `iroha3d` executable.
     pub fn irohad(mut self, path: impl Into<PathBuf>) -> Self {
         self.irohad = path.into();
         self.irohad_verified = false;
@@ -1014,7 +1021,7 @@ impl BinaryPaths {
         let iroha_cli_source = self.iroha_cli_source.clone();
 
         let entries = [
-            ("irohad", irohad, irohad_source),
+            ("iroha3d", irohad, irohad_source),
             ("kagami", kagami, kagami_source),
             ("iroha_cli", iroha_cli, iroha_cli_source),
         ];
@@ -1098,20 +1105,20 @@ impl BinaryPaths {
 
         let message = if self.irohad_auto {
             format!(
-                "looked for `{}` and searched on PATH; run `cargo build -p irohad` \
+                "looked for `{}` and searched on PATH; run `cargo build -p irohad --bin iroha3d` \
                  or set `MOCHI_IROHAD`/`binaries.irohad` to the executable",
                 self.irohad.display()
             )
         } else {
             format!(
                 "configured path `{}` is not executable; adjust \
-                 `MOCHI_IROHAD`/`binaries.irohad` to point at a valid `irohad` binary",
+                 `MOCHI_IROHAD`/`binaries.irohad` to point at a valid `iroha3d` binary",
                 self.irohad.display()
             )
         };
 
         Err(SupervisorError::BinaryUnavailable {
-            binary: "irohad",
+            binary: "iroha3d",
             message,
         })
     }
@@ -1426,20 +1433,24 @@ fn try_build_irohad(workspace: &Path) -> Result<PathBuf> {
         .arg("build")
         .arg("-p")
         .arg("irohad")
+        .arg("--bin")
+        .arg("iroha3d")
         .stdout(Stdio::null());
 
     // Preserve stderr so build failures surface in the parent console.
     let status = command
         .status()
         .map_err(|err| SupervisorError::BinaryUnavailable {
-            binary: "irohad",
+            binary: "iroha3d",
             message: format!("failed to invoke `{}`: {err}", cargo.display()),
         })?;
 
     if !status.success() {
         return Err(SupervisorError::BinaryUnavailable {
-            binary: "irohad",
-            message: format!("`cargo build -p irohad` exited with status {status}"),
+            binary: "iroha3d",
+            message: format!(
+                "`cargo build -p irohad --bin iroha3d` exited with status {status}"
+            ),
         });
     }
 
@@ -1448,7 +1459,7 @@ fn try_build_irohad(workspace: &Path) -> Result<PathBuf> {
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.join("target"));
 
-    let exe_name = format!("irohad{}", env::consts::EXE_SUFFIX);
+    let exe_name = format!("iroha3d{}", env::consts::EXE_SUFFIX);
     let candidates = [
         target_root.join("debug").join(&exe_name),
         target_root.join("release").join(&exe_name),
@@ -1461,9 +1472,9 @@ fn try_build_irohad(workspace: &Path) -> Result<PathBuf> {
     }
 
     Err(SupervisorError::BinaryUnavailable {
-        binary: "irohad",
+        binary: "iroha3d",
         message: format!(
-            "built `irohad` but could not find an executable under `{}`",
+            "built `iroha3d` but could not find an executable under `{}`",
             target_root.display()
         ),
     })
@@ -1732,7 +1743,7 @@ impl SupervisorBuilder {
         self
     }
 
-    /// Override just the `irohad` binary path.
+    /// Override just the `iroha3d` binary path.
     pub fn irohad_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.binaries = self.binaries.clone().irohad(path);
         self
@@ -2645,6 +2656,24 @@ impl Supervisor {
         &self.chain_id
     }
 
+    /// Return the exact transaction replay-protection domain derived from the
+    /// validated genesis block hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns a generation-validation error if the supervisor has no validated
+    /// genesis hash from which to derive the network identity.
+    pub fn network_id(&self) -> Result<NetworkId> {
+        self.genesis
+            .expected_hash
+            .map(NetworkId::from_genesis_hash)
+            .ok_or_else(|| {
+                SupervisorError::GenerationValidation(
+                    "validated generation omitted its exact genesis hash".to_owned(),
+                )
+            })
+    }
+
     /// Return the immutable configuration/genesis generation identifier.
     pub fn generation_id(&self) -> &str {
         &self.genesis.generation_id
@@ -2743,7 +2772,7 @@ impl Supervisor {
         &self.genesis.manifest_path
     }
 
-    /// Path to the generated signed genesis wire file consumed by `irohad`.
+    /// Path to the generated signed genesis wire file consumed by `iroha3d`.
     pub fn genesis_block_file(&self) -> &Path {
         &self.genesis.block_path
     }
@@ -2805,8 +2834,9 @@ impl Supervisor {
         nonce_offset: usize,
     ) -> Result<ReadinessSmokePlan> {
         let signer = self.readiness_smoke_signer()?;
+        let network_id = self.network_id()?;
         ReadinessSmokePlan::for_signer_with_attempts_and_offset(
-            &self.chain_id,
+            network_id,
             &signer,
             attempts.max(1),
             nonce_offset,
@@ -2821,10 +2851,9 @@ impl Supervisor {
 
     /// Construct a Torii client for the specified peer alias.
     pub fn torii_client(&self, alias: &str) -> Option<ToriiClient> {
-        self.peers
-            .iter()
-            .find(|peer| peer.alias() == alias)
-            .and_then(|peer| peer.torii_client().ok())
+        let peer = self.peers.iter().find(|peer| peer.alias() == alias)?;
+        let network_id = self.network_id().ok()?;
+        ToriiClient::new_for_network(peer.spec.torii_base_http(), network_id).ok()
     }
 
     /// Produce an instantaneous, generation-validated snapshot of local
@@ -3433,7 +3462,7 @@ impl Drop for Supervisor {
     }
 }
 
-/// Lightweight metadata and state for a child `irohad` process.
+/// Lightweight metadata and state for a child `iroha3d` process.
 pub struct PeerHandle {
     spec: PeerSpec,
     log_path: PathBuf,
@@ -3576,7 +3605,14 @@ impl PeerHandle {
         if let Some(client) = self.torii_client.get() {
             return Ok(client.clone());
         }
-        let client = ToriiClient::new(self.spec.torii_base_http())?;
+        let config = ManagedNodeConfig::from_path(&self.spec.config_path).map_err(|error| {
+            ToriiError::SignedQueryContext(format!(
+                "failed to load exact network identity from managed peer config `{}`: {error}",
+                self.spec.config_path.display()
+            ))
+        })?;
+        let network_id = NetworkId::from_genesis_hash(config.genesis_expected_hash);
+        let client = ToriiClient::new_for_network(self.spec.torii_base_http(), network_id)?;
         if self.torii_client.set(client.clone()).is_ok() {
             Ok(client)
         } else {
@@ -3633,7 +3669,7 @@ impl PeerHandle {
             .arg("--config")
             .arg(config_path)
             // Mochi reserves managed-peer stdin for an inherited duplicate of
-            // the ownership descriptor. An orphaned `irohad` therefore keeps
+            // the ownership descriptor. An orphaned `iroha3d` therefore keeps
             // the network root fenced until that peer exits.
             .stdin(ownership_lock.child_stdin()?)
             .stdout(Stdio::piped())
@@ -3643,8 +3679,8 @@ impl PeerHandle {
             let source = match err.kind() {
                 io::ErrorKind::NotFound => {
                     let message = format!(
-                        "{} (looked for `{}`); build `irohad` with \
-                         `cargo build -p irohad` or set `MOCHI_IROHAD`/`binaries.irohad` \
+                        "{} (looked for `{}`); build `iroha3d` with \
+                         `cargo build -p irohad --bin iroha3d` or set `MOCHI_IROHAD`/`binaries.irohad` \
                          to an absolute path",
                         err,
                         irohad.display()
@@ -4697,6 +4733,64 @@ impl Drop for TemporaryGenesisKeyFile {
     }
 }
 
+/// Build the canonical signed genesis body used by Mochi's Kagami test stub.
+///
+/// This helper is intentionally available only to tests and consumers which
+/// opt into `test-support`; production supervision always invokes Kagami.
+///
+/// # Errors
+///
+/// Returns an error when the prepared manifest or node configuration cannot
+/// be parsed, their genesis bindings differ, or canonical signing fails.
+#[cfg(any(test, feature = "test-support"))]
+pub fn sign_kagami_stub_genesis_from_config(
+    manifest_path: &Path,
+    config_path: &Path,
+    key_pair: &KeyPair,
+    expected_consensus_mode: Option<SumeragiConsensusMode>,
+) -> Result<iroha_data_model::block::SignedBlock> {
+    sign_prepared_genesis_from_config(
+        manifest_path,
+        config_path,
+        key_pair,
+        expected_consensus_mode,
+    )
+    .map_err(|error| {
+        SupervisorError::KagamiInvocation(format!(
+            "test Kagami stub failed signing canonical genesis: {error:#}"
+        ))
+    })
+}
+
+/// Derive the exact genesis policies selected by a finalized node config.
+///
+/// This test-support companion keeps config parsing behind Mochi's existing
+/// orchestration dependency while allowing the Kagami mock to verify the
+/// canonical block it emitted.
+///
+/// # Errors
+///
+/// Returns an error when the node configuration cannot be parsed or omits a
+/// required genesis binding.
+#[cfg(any(test, feature = "test-support"))]
+pub fn kagami_stub_genesis_policies_from_config(
+    config_path: &Path,
+) -> Result<(
+    iroha_data_model::da::commitment::DaProofPolicyBundle,
+    [u8; 32],
+)> {
+    let config = ManagedNodeConfig::from_path(config_path).map_err(|error| {
+        SupervisorError::KagamiInvocation(format!(
+            "test Kagami stub failed loading config `{}`: {error:#}",
+            config_path.display()
+        ))
+    })?;
+    Ok((
+        config.da_proof_policies,
+        config.genesis_confidential_policy_hash,
+    ))
+}
+
 impl GenesisMaterial {
     fn create(binaries: &mut BinaryPaths, context: GenesisCreateContext<'_>) -> Result<Self> {
         let GenesisCreateContext {
@@ -4953,62 +5047,12 @@ impl GenesisMaterial {
         config_path: &Path,
         consensus_mode: SumeragiConsensusMode,
     ) -> Result<()> {
-        let manifest = RawGenesisTransaction::from_path(&self.manifest_path)?;
-        if manifest.consensus_mode() != consensus_mode {
-            return Err(SupervisorError::KagamiInvocation(format!(
-                "test Kagami stub manifest mode {} differs from requested mode {consensus_mode}",
-                manifest.consensus_mode()
-            )));
-        }
-        let mut source = TomlSource::from_file(config_path).map_err(|error| {
-            SupervisorError::KagamiInvocation(format!(
-                "test Kagami stub failed reading config `{}`: {error:?}",
-                config_path.display()
-            ))
-        })?;
-        if let Some(expected_hash) = source
-            .table_mut()
-            .get_mut("genesis")
-            .and_then(toml::Value::as_table_mut)
-            .and_then(|genesis| genesis.get_mut("expected_hash"))
-            && expected_hash.as_str() == Some(GENESIS_EXPECTED_HASH_PLACEHOLDER)
-        {
-            let hash_body = Hash::new(b"Mochi unit-test Kagami unresolved genesis hash")
-                .to_string()
-                .to_ascii_uppercase();
-            *expected_hash =
-                toml::Value::String(norito::literal::format("hash", hash_body.as_str()));
-        }
-        let config = actual::Root::from_toml_source(source).map_err(|error| {
-            SupervisorError::KagamiInvocation(format!(
-                "test Kagami stub failed parsing config `{}`: {error:?}",
-                config_path.display()
-            ))
-        })?;
-        if config.common.chain != *manifest.chain_id()
-            || *config.common.chain_discriminant.value() != manifest.chain_discriminant()
-            || config.genesis.public_key != *self.public_key()
-        {
-            return Err(SupervisorError::KagamiInvocation(
-                "test Kagami stub config differs from its manifest or signing key".to_owned(),
-            ));
-        }
-        let block = manifest
-            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
-                &self.key_pair,
-                Some(iroha_core::da::proof_policy_bundle(
-                    &config.nexus.lane_config,
-                )),
-                Some(iroha_core::state::compute_genesis_confidential_policy_hash(
-                    &config.zk,
-                )),
-            )
-            .map_err(|error| {
-                SupervisorError::KagamiInvocation(format!(
-                    "test Kagami stub failed signing canonical genesis: {error:#}"
-                ))
-            })?
-            .0;
+        let block = sign_kagami_stub_genesis_from_config(
+            &self.manifest_path,
+            config_path,
+            &self.key_pair,
+            Some(consensus_mode),
+        )?;
         let wire = block.encode_wire().map_err(|error| {
             SupervisorError::KagamiInvocation(format!(
                 "test Kagami stub failed encoding canonical genesis: {error}"
@@ -5056,25 +5100,16 @@ impl GenesisMaterial {
                 "candidate genesis public-key record is not exact and canonical".to_owned(),
             ));
         }
-        let validated = iroha_genesis::validate_prepared_genesis_bundle(
+        let validated = validate_prepared_genesis_for_startup(
             &signed,
             &manifest,
             self.public_key(),
             expected_hash,
-        )
-        .map_err(|error| {
-            SupervisorError::GenerationValidation(format!(
-                "independent signed-genesis validation failed: {error:#}"
-            ))
-        })?;
-        iroha_core::validate_genesis_block(
-            validated.block(),
-            &AccountId::new(self.public_key().clone()),
             &expected_chain,
         )
         .map_err(|error| {
             SupervisorError::GenerationValidation(format!(
-                "signed genesis failed full core validation: {error}"
+                "prepared signed-genesis startup validation failed: {error:#}"
             ))
         })?;
 
@@ -5091,89 +5126,56 @@ impl GenesisMaterial {
         let canonical_block = fs::canonicalize(&self.block_path)?;
         let canonical_manifest = fs::canonicalize(&self.manifest_path)?;
         for peer in peers {
-            let source = TomlSource::from_file(&peer.config_path).map_err(|error| {
+            let config = ManagedNodeConfig::from_path(&peer.config_path).map_err(|error| {
                 SupervisorError::GenerationValidation(format!(
-                    "candidate peer config `{}` failed reading: {error:?}",
-                    peer.config_path.display()
-                ))
-            })?;
-            let config = actual::Root::from_toml_source(source).map_err(|error| {
-                SupervisorError::GenerationValidation(format!(
-                    "candidate peer config `{}` failed parsing: {error:?}",
+                    "candidate peer config `{}` failed loading: {error:#}",
                     peer.config_path.display()
                 ))
             })?;
             validate_managed_peer_paths(&config, peer, peers.len())?;
-            if config.common.chain != expected_chain
-                || *config.common.chain_discriminant.value() != self.chain_discriminant
+            if config.chain_id != expected_chain
+                || config.chain_discriminant != self.chain_discriminant
             {
                 return Err(SupervisorError::GenerationValidation(format!(
                     "candidate peer config `{}` has the wrong chain or discriminant",
                     peer.config_path.display()
                 )));
             }
-            if config.genesis.public_key != *self.public_key()
-                || config.genesis.expected_hash != expected_hash
+            if config.genesis_public_key != *self.public_key()
+                || config.genesis_expected_hash != expected_hash
             {
                 return Err(SupervisorError::GenerationValidation(format!(
                     "candidate peer config `{}` has a different genesis key or hash",
                     peer.config_path.display()
                 )));
             }
-            let expected_da_policies =
-                iroha_core::da::proof_policy_bundle(&config.nexus.lane_config);
-            if validated.block().da_proof_policies() != Some(&expected_da_policies) {
+            if validated.block().da_proof_policies() != Some(&config.da_proof_policies) {
                 return Err(SupervisorError::GenerationValidation(format!(
                     "candidate peer config `{}` DA proof policy differs from the signed genesis header",
                     peer.config_path.display()
                 )));
             }
-            let expected_confidential_policy =
-                iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
             let signed_confidential_policy = validated
                 .block()
                 .header()
                 .confidential_features()
                 .and_then(|digest| digest.zk_policy_hash);
-            if signed_confidential_policy != Some(expected_confidential_policy) {
+            if signed_confidential_policy != Some(config.genesis_confidential_policy_hash) {
                 return Err(SupervisorError::GenerationValidation(format!(
                     "candidate peer config `{}` confidential policy differs from the signed genesis header",
                     peer.config_path.display()
                 )));
             }
-            let configured_block = config
-                .genesis
-                .file
-                .as_ref()
-                .ok_or_else(|| {
-                    SupervisorError::GenerationValidation(format!(
-                        "candidate peer config `{}` omitted genesis.file",
-                        peer.config_path.display()
-                    ))
-                })?
-                .resolve_relative_path();
-            let configured_manifest = config
-                .genesis
-                .manifest_json
-                .as_ref()
-                .ok_or_else(|| {
-                    SupervisorError::GenerationValidation(format!(
-                        "candidate peer config `{}` omitted genesis.manifest_json",
-                        peer.config_path.display()
-                    ))
-                })?
-                .resolve_relative_path();
-            if fs::canonicalize(configured_block)? != canonical_block
-                || fs::canonicalize(configured_manifest)? != canonical_manifest
+            if fs::canonicalize(&config.genesis_block_path)? != canonical_block
+                || fs::canonicalize(&config.genesis_manifest_path)? != canonical_manifest
             {
                 return Err(SupervisorError::GenerationValidation(format!(
                     "candidate peer config `{}` selects genesis outside its generation",
                     peer.config_path.display()
                 )));
             }
-            let trusted = config.common.trusted_peers.value();
-            if trusted.pops != expected_roster
-                || config.common.key_pair.public_key() != &peer.keys.public_key
+            if config.trusted_peer_pops != expected_roster
+                || config.local_public_key != peer.keys.public_key
             {
                 return Err(SupervisorError::GenerationValidation(format!(
                     "candidate peer config `{}` identity or PoP roster differs from signed genesis",
@@ -5357,7 +5359,7 @@ impl GenesisMaterial {
 }
 
 fn validate_managed_peer_paths(
-    config: &actual::Root,
+    config: &ManagedNodeConfig,
     peer: &PeerSpec,
     peer_count: usize,
 ) -> Result<()> {
@@ -5371,7 +5373,7 @@ fn validate_managed_peer_paths(
 }
 
 fn validate_managed_peer_paths_against(
-    config: &actual::Root,
+    config: &ManagedNodeConfig,
     config_path: &Path,
     storage_dir: &Path,
     rans_tables_path: &Path,
@@ -5382,52 +5384,58 @@ fn validate_managed_peer_paths_against(
     let managed_paths = [
         (
             "kura.store_dir",
-            config.kura.store_dir.resolve_relative_path(),
+            config.managed_paths.kura_store_dir.clone(),
             storage_dir.join("kura"),
         ),
         (
             "snapshot.store_dir",
-            config.snapshot.store_dir.resolve_relative_path(),
+            config.managed_paths.snapshot_store_dir.clone(),
             storage_dir.join("snapshot"),
         ),
         (
             "torii.data_dir",
-            config.torii.data_dir.clone(),
+            config.managed_paths.torii_data_dir.clone(),
             torii_dir.clone(),
         ),
         (
             "torii.da_ingest.replay_cache_store_dir",
-            config.torii.da_ingest.replay_cache_store_dir.clone(),
+            config.managed_paths.torii_da_replay_cache_store_dir.clone(),
             torii_dir.join("da_replay"),
         ),
         (
             "torii.da_ingest.manifest_store_dir",
-            config.torii.da_ingest.manifest_store_dir.clone(),
+            config.managed_paths.torii_da_manifest_store_dir.clone(),
             torii_dir.join("da_manifests"),
         ),
         (
             "torii.sorafs_storage.data_dir",
-            config.torii.sorafs_storage.data_dir.clone(),
+            config.managed_paths.torii_sorafs_storage_data_dir.clone(),
             storage_dir.join("sorafs"),
         ),
         (
             "streaming.session_store_dir",
-            config.streaming.session_store_dir.clone(),
+            config.managed_paths.streaming_session_store_dir.clone(),
             streaming_dir.clone(),
         ),
         (
             "streaming.soranet.provision_spool_dir",
-            config.streaming.soranet.provision_spool_dir.clone(),
+            config
+                .managed_paths
+                .streaming_soranet_provision_spool_dir
+                .clone(),
             streaming_dir.join("soranet_routes"),
         ),
         (
             "streaming.soravpn.provision_spool_dir",
-            config.streaming.soravpn.provision_spool_dir.clone(),
+            config
+                .managed_paths
+                .streaming_soravpn_provision_spool_dir
+                .clone(),
             streaming_dir.join("soravpn_routes"),
         ),
         (
             "streaming.codec.rans_tables_path",
-            config.streaming.codec.rans_tables_path.clone(),
+            config.managed_paths.streaming_rans_tables_path.clone(),
             rans_tables_path.to_path_buf(),
         ),
     ];
@@ -5443,16 +5451,9 @@ fn validate_managed_peer_paths_against(
     }
 
     if peer_count > 1 {
-        let configured = PathBuf::from(
-            config
-                .network
-                .soranet_handshake
-                .pow
-                .revocation_store_path
-                .as_ref(),
-        );
+        let configured = &config.managed_paths.soranet_pow_revocation_store_path;
         let expected = storage_dir.join("soranet/ticket_revocations.norito");
-        if configured != expected {
+        if configured != &expected {
             return Err(SupervisorError::GenerationValidation(format!(
                 "candidate peer config `{}` redirects Mochi-managed `network.soranet_handshake.pow.revocation_store_path` from `{}` to `{}`",
                 config_path.display(),

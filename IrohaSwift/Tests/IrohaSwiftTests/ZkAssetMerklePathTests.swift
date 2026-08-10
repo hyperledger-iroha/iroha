@@ -2,30 +2,46 @@ import XCTest
 @testable import IrohaSwift
 
 final class ZkAssetMerklePathTests: XCTestCase {
+    private let signingSeed = Data(repeating: 0x41, count: 32)
+    private var canonicalAuth: ToriiCanonicalRequestAuth {
+        ToriiCanonicalRequestAuth(
+            accountId: try! Keypair(privateKeyBytes: signingSeed)
+                .accountId(networkPrefix: AccountId.defaultNetworkPrefix),
+            privateKey: signingSeed,
+            timestampMs: 4_102_444_801_000,
+            nonce: "zk-merkle-path-test"
+        )
+    }
+
     override func tearDown() {
         ZkMerklePathStubURLProtocol.handler = nil
         super.tearDown()
     }
 
-    func testPathValidationUsesPastaPoseidonHasher() throws {
+    func testPathValidationUsesNativeCanonicalV3() throws {
         let commitment = scalar(7)
         let sibling = scalar(11)
-        let root = try PastaPoseidonNodeHasher().hashPair(left: commitment, right: sibling)
+        let native = try ConfidentialNoteNativeDerivation.deriveMerklePathV3(
+            commitments: [commitment, sibling],
+            leafIndex: 0
+        )
         let path = try ZkAssetMerklePath(
             leafIndex: 0,
-            siblings: [sibling],
-            directions: Data([0]),
-            rootAtHeight: root,
+            siblings: native.siblings,
+            directions: native.directions,
+            rootAtHeight: native.root,
             heightOrIndex: 1
         )
 
-        XCTAssertTrue(try path.verify(commitment: commitment, expectedRoot: root))
+        XCTAssertTrue(try path.verify(commitment: commitment, expectedRoot: native.root))
         XCTAssertFalse(try path.verify(commitment: commitment, expectedRoot: scalar(12)))
+        var wrongDirections = native.directions
+        wrongDirections[0] = 1
         XCTAssertThrowsError(try ZkAssetMerklePath(
-            leafIndex: 1,
-            siblings: [sibling],
-            directions: Data([0]),
-            rootAtHeight: root,
+            leafIndex: 0,
+            siblings: native.siblings,
+            directions: wrongDirections,
+            rootAtHeight: native.root,
             heightOrIndex: 1
         ))
     }
@@ -108,24 +124,20 @@ final class ZkAssetMerklePathTests: XCTestCase {
     func testToriiClientFetchesAndValidatesMerklePath() async throws {
         let commitment = scalar(7)
         let sibling = scalar(11)
-        let root = try PastaPoseidonNodeHasher().hashPair(left: commitment, right: sibling)
-        let response = """
-        {
-          "evaluated_block_height": 7,
-          "evaluated_block_hash": "\(String(repeating: "0a", count: 32))",
-          "root": "\(root.hexEncodedString())",
-          "frontier_len": 1,
-          "tree_depth": 1,
-          "paths": [{
-            "commitment": "\(commitment.hexEncodedString())",
-            "leaf_index": 0,
-            "siblings": ["\(sibling.hexEncodedString())"],
-            "directions": [0],
-            "witness_nodes": ["\(sibling.hexEncodedString())"],
-            "root": "\(root.hexEncodedString())"
-          }]
-        }
-        """.data(using: .utf8)!
+        let commitments = [commitment, sibling]
+        let root = try computeRoot(commitments)
+        let local = try LocalZkAssetMerklePathProvider(
+            rootHistory: [root],
+            commitmentHistory: commitments
+        )
+        let localPath = try await local.getMerklePathForCommitment(
+            asset: "usd#bank",
+            commitment: commitment
+        )
+        let response = merklePathResponse(
+            root: root,
+            entries: [(commitment, localPath, localPath.siblings)]
+        )
 
         ZkMerklePathStubURLProtocol.handler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
@@ -147,15 +159,17 @@ final class ZkAssetMerklePathTests: XCTestCase {
         config.protocolClasses = [ZkMerklePathStubURLProtocol.self]
         let client = ToriiClient(
             baseURL: URL(string: "https://torii.example")!,
-            session: URLSession(configuration: config)
+            session: URLSession(configuration: config),
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
         )
         let path = try await client.getMerklePathForCommitment(
             asset: "usd#bank",
-            commitment: commitment
+            commitment: commitment,
+            canonicalAuth: canonicalAuth
         )
         XCTAssertEqual(path.rootAtHeight, root)
-        XCTAssertEqual(path.siblings, [sibling])
-        XCTAssertEqual(path.directions, Data([0]))
+        XCTAssertEqual(path.siblings, localPath.siblings)
+        XCTAssertEqual(path.directions, localPath.directions)
     }
 
     func testToriiClientFetchesRootsBoundToCommittedSnapshot() async throws {
@@ -185,10 +199,13 @@ final class ZkAssetMerklePathTests: XCTestCase {
         config.protocolClasses = [ZkMerklePathStubURLProtocol.self]
         let client = ToriiClient(
             baseURL: URL(string: "https://torii.example")!,
-            session: URLSession(configuration: config)
+            session: URLSession(configuration: config),
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
         )
 
-        let roots = try await client.getZkAssetRoots(asset: "usd#bank", max: 3)
+        let roots = try await client.getZkAssetRoots(
+            asset: "usd#bank", max: 3, canonicalAuth: canonicalAuth
+        )
         XCTAssertEqual(roots.latest, root)
         XCTAssertEqual(roots.roots, [root])
         XCTAssertNoThrow(try roots.requireEvaluatedSnapshot(height: 7, blockHash: blockHash))
@@ -220,7 +237,8 @@ final class ZkAssetMerklePathTests: XCTestCase {
 
         let snapshot = try await client.getZkAssetMerklePathSnapshot(
             asset: "usd#bank",
-            commitments: [commitment]
+            commitments: [commitment],
+            canonicalAuth: canonicalAuth
         )
         XCTAssertEqual(snapshot.nextZeroPath?.leafIndex, 1)
         XCTAssertEqual(try snapshot.validatedNextZeroPath(), nextZeroPath)
@@ -251,7 +269,7 @@ final class ZkAssetMerklePathTests: XCTestCase {
             (commitments[0], first, first.siblings)
         ]))
         do {
-            _ = try await client.getZkAssetMerklePaths(asset: "usd#bank", commitments: commitments)
+            _ = try await client.getZkAssetMerklePaths(asset: "usd#bank", commitments: commitments, canonicalAuth: canonicalAuth)
             XCTFail("short response should fail")
         } catch ZkAssetMerklePathError.invalidField("paths") {}
 
@@ -261,7 +279,7 @@ final class ZkAssetMerklePathTests: XCTestCase {
             (commitments[0], first, first.siblings)
         ]))
         do {
-            _ = try await client.getZkAssetMerklePaths(asset: "usd#bank", commitments: commitments)
+            _ = try await client.getZkAssetMerklePaths(asset: "usd#bank", commitments: commitments, canonicalAuth: canonicalAuth)
             XCTFail("long response should fail")
         } catch ZkAssetMerklePathError.invalidField("paths") {}
 
@@ -270,7 +288,7 @@ final class ZkAssetMerklePathTests: XCTestCase {
             (commitments[0], first, first.siblings)
         ]))
         do {
-            _ = try await client.getZkAssetMerklePaths(asset: "usd#bank", commitments: commitments)
+            _ = try await client.getZkAssetMerklePaths(asset: "usd#bank", commitments: commitments, canonicalAuth: canonicalAuth)
             XCTFail("reordered response should fail")
         } catch ZkAssetMerklePathError.invalidField("paths[0].commitment") {}
     }
@@ -291,7 +309,7 @@ final class ZkAssetMerklePathTests: XCTestCase {
             (scalar(9), path, path.siblings)
         ]))
         do {
-            _ = try await client.getMerklePathForCommitment(asset: "usd#bank", commitment: commitments[1])
+            _ = try await client.getMerklePathForCommitment(asset: "usd#bank", commitment: commitments[1], canonicalAuth: canonicalAuth)
             XCTFail("commitment mismatch should fail")
         } catch ZkAssetMerklePathError.invalidField("paths[0].commitment") {}
 
@@ -301,7 +319,7 @@ final class ZkAssetMerklePathTests: XCTestCase {
             (commitments[1], path, badSiblings)
         ]))
         do {
-            _ = try await client.getMerklePathForCommitment(asset: "usd#bank", commitment: commitments[1])
+            _ = try await client.getMerklePathForCommitment(asset: "usd#bank", commitment: commitments[1], canonicalAuth: canonicalAuth)
             XCTFail("tampered sibling path should fail")
         } catch ZkAssetMerklePathError.verificationFailed("paths[0]") {}
     }
@@ -315,9 +333,9 @@ final class ZkAssetMerklePathTests: XCTestCase {
             root: root,
             commitment: commitment,
             leafIndex: "0",
-            siblings: [sibling],
-            directions: ["0"],
-            witnessNodes: [sibling],
+            siblings: Array(repeating: sibling, count: 16),
+            directions: Array(repeating: "0", count: 16),
+            witnessNodes: Array(repeating: sibling, count: 16),
             pathRoot: root
         )
         XCTAssertNoThrow(try ToriiZkMerklePathResponse.decodeStrict(canonical))
@@ -448,9 +466,9 @@ final class ZkAssetMerklePathTests: XCTestCase {
             root: root,
             commitment: String(repeating: "02", count: 32),
             leafIndex: "0",
-            siblings: [String(repeating: "00", count: 32)],
-            directions: ["0"],
-            witnessNodes: [String(repeating: "00", count: 32)],
+            siblings: Array(repeating: String(repeating: "00", count: 32), count: 16),
+            directions: Array(repeating: "0", count: 16),
+            witnessNodes: Array(repeating: String(repeating: "00", count: 32), count: 16),
             pathRoot: root
         ))
 
@@ -469,23 +487,10 @@ final class ZkAssetMerklePathTests: XCTestCase {
     }
 
     private func computeRoot(_ commitments: [Data]) throws -> Data {
-        var layer = commitments.map { Data($0) }
-        while layer.count < LocalZkAssetMerklePathProvider.confidentialTreeCapacityV2 {
-            layer.append(Data(repeating: 0, count: 32))
-        }
-        let hasher = PastaPoseidonNodeHasher()
-        for _ in 0..<LocalZkAssetMerklePathProvider.confidentialTreeDepthV2 {
-            var next: [Data] = []
-            next.reserveCapacity(layer.count / 2)
-            var index = 0
-            while index < layer.count {
-                next.append(try hasher.hashPair(left: layer[index], right: layer[index + 1]))
-                index += 2
-            }
-            layer = next
-        }
-        XCTAssertEqual(layer.count, 1)
-        return try XCTUnwrap(layer.first)
+        try ConfidentialNoteNativeDerivation.deriveMerklePathV3(
+            commitments: commitments,
+            leafIndex: 0
+        ).root
     }
 
     private func clientReturning(_ data: Data) -> ToriiClient {
@@ -504,7 +509,8 @@ final class ZkAssetMerklePathTests: XCTestCase {
         config.protocolClasses = [ZkMerklePathStubURLProtocol.self]
         return ToriiClient(
             baseURL: URL(string: "https://torii.example")!,
-            session: URLSession(configuration: config)
+            session: URLSession(configuration: config),
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
         )
     }
 

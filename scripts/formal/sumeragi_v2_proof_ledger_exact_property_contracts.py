@@ -297,7 +297,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "IndexedPostGstResponsiveActiveRosterCoherence",
     ): (
         "\\A initialContext \\in AdmissibleContextRecords: "
-        "IndexedAsync(initialContext)!gst "
+        "IndexedCore(initialContext, 7) "
         "=> Responsive \\subseteq "
         "IndexedAsync(initialContext)!AsyncActiveServiceNodes"
     ),
@@ -662,7 +662,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "specification => \\A target \\in ValidatorIds, "
         "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
         "leaderView \\in Views, subject \\in Subjects, "
-        "occurrenceRank \\in AdequateLeaderTargetOccurrenceRankCarrier, "
+        "occurrenceRank \\in AdequateLeaderTargetOccurrenceRankCarrier: \\A "
         "owner \\in AdequateLeaderFrozenCandidateOwnerUniverse( "
         "target, leaderContext, leader, leaderView, subject): "
         "/\\ AdequateLeaderTargetProtocolSubjectSource( "
@@ -1358,7 +1358,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "specification => \\A target \\in ValidatorIds, "
         "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
         "leaderView \\in Views, subject \\in Subjects, "
-        "occurrenceRank \\in AdequateLeaderTargetOccurrenceRankCarrier, "
+        "occurrenceRank \\in AdequateLeaderTargetOccurrenceRankCarrier: \\A "
         "retired \\in SUBSET AdequateLeaderFrozenSubjectSwitchOwnerUniverse( "
         "target, leaderContext, leader, leaderView), owner \\in "
         "AdequateLeaderFrozenCandidateOwnerUniverse( target, leaderContext, "
@@ -1391,7 +1391,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "\\/ /\\ currentBudget < anchorBudget "
         "/\\ \\E currentSubject \\in Subjects, "
         "currentOccurrenceRank \\in "
-        "AdequateLeaderTargetOccurrenceRankCarrier, currentOwner \\in "
+        "AdequateLeaderTargetOccurrenceRankCarrier: \\E currentOwner \\in "
         "AdequateLeaderFrozenCandidateOwnerUniverse( target, leaderContext, "
         "leader, leaderView, currentSubject), currentRetired \\in SUBSET "
         "AdequateLeaderFrozenSubjectSwitchOwnerUniverse( "
@@ -1423,7 +1423,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
         "leaderView \\in Views, anchorSubject \\in Subjects, "
         "anchorOccurrenceRank \\in "
-        "AdequateLeaderTargetOccurrenceRankCarrier, anchorOwner \\in "
+        "AdequateLeaderTargetOccurrenceRankCarrier: \\A anchorOwner \\in "
         "AdequateLeaderFrozenCandidateOwnerUniverse( target, leaderContext, "
         "leader, leaderView, anchorSubject), anchorRetired \\in SUBSET "
         "AdequateLeaderFrozenSubjectSwitchOwnerUniverse( target, "
@@ -1446,7 +1446,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
         "leaderView \\in Views, subject \\in Subjects, "
         "sourceOccurrenceRank \\in "
-        "AdequateLeaderTargetOccurrenceRankCarrier, "
+        "AdequateLeaderTargetOccurrenceRankCarrier: \\A "
         "known \\in SUBSET AdequateLeaderFrozenOwnerUniverse( "
         "target, leaderContext, leader, leaderView, subject), "
         "budget \\in Nat, owner \\in "
@@ -1485,7 +1485,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
         "leaderView \\in Views, subject \\in Subjects, "
         "sourceOccurrenceRank \\in "
-        "AdequateLeaderTargetOccurrenceRankCarrier, "
+        "AdequateLeaderTargetOccurrenceRankCarrier: \\A "
         "owner \\in AdequateLeaderFrozenCandidateOwnerUniverse( "
         "target, leaderContext, leader, leaderView, subject), "
         "known \\in SUBSET AdequateLeaderFrozenOwnerUniverse( "
@@ -1985,8 +1985,8 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
         "ExactDecisionRequestLifecycleRankCellClosureProperty",
     ): (
-        "specification => \\A node, qc, archive, request, "
-        "rank \\in ExactDecisionRequestLifecycleIngressRankCarrier: "
+        "specification => \\A node, qc, archive, request: "
+        "\\A rank \\in ExactDecisionRequestLifecycleIngressRankCarrier: "
         "ExactDecisionRequestLifecycleAtRank( "
         "node, qc, archive, request, rank) "
         "~> (ExactDecisionRequestLifecycleGoal( "
@@ -2047,8 +2047,8 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
         "ExactDecisionRequestLifecycleFiniteProducerEpisodeClosureProperty",
     ): (
-        "specification => \\A node, qc, archive, request, "
-        "rank \\in ExactDecisionRequestLifecycleIngressRankCarrier, "
+        "specification => \\A node, qc, archive, request: "
+        "\\A rank \\in ExactDecisionRequestLifecycleIngressRankCarrier, "
         "budget \\in Nat: "
         "ExactDecisionRequestLifecycleAtRankAndBudget( "
         "node, qc, archive, request, rank, budget) "
@@ -2064,8 +2064,8 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "ExactDecisionRequestLifecycleConcreteActionOriginProperty",
     ): (
         "/\\ specification => []("
-        "\\A node, qc, archive, request, "
-        "rank \\in ExactDecisionRequestLifecycleIngressRankCarrier, "
+        "\\A node, qc, archive, request: "
+        "\\A rank \\in ExactDecisionRequestLifecycleIngressRankCarrier, "
         "budget \\in Nat: "
         "/\\ ExactDecisionRequestLifecycleAtRankAndBudget( "
         "node, qc, archive, request, rank, budget) "
@@ -2078,9 +2078,9 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "/\\ ENABLED "
         "<<ExactDecisionRequestLifecycleSelectedConcreteFairAction( "
         "archive, request)>>_AsyncAllVars) "
-        "/\\ specification => []("
-        "\\A node, qc, archive, request, "
-        "rank \\in ExactDecisionRequestLifecycleIngressRankCarrier, "
+        "/\\ specification => [][("
+        "\\A node, qc, archive, request: "
+        "\\A rank \\in ExactDecisionRequestLifecycleIngressRankCarrier, "
         "budget \\in Nat: "
         "/\\ ExactDecisionRequestLifecycleAtRankAndBudget( "
         "node, qc, archive, request, rank, budget) "
@@ -2094,10 +2094,10 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "/\\ ExactDecisionRequestLifecycleConcreteFairOwner( "
         "archive, request)' "
         "= ExactDecisionRequestLifecycleConcreteFairOwner( "
-        "archive, request)) "
-        "/\\ specification => []("
-        "\\A node, qc, archive, request, "
-        "rank \\in ExactDecisionRequestLifecycleIngressRankCarrier, "
+        "archive, request))]_AsyncAllVars "
+        "/\\ specification => [][("
+        "\\A node, qc, archive, request: "
+        "\\A rank \\in ExactDecisionRequestLifecycleIngressRankCarrier, "
         "budget \\in Nat: "
         "/\\ ExactDecisionRequestLifecycleAtRankAndBudget( "
         "node, qc, archive, request, rank, budget) "
@@ -2107,16 +2107,16 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "/\\ <<ExactDecisionRequestLifecycleSelectedConcreteFairAction( "
         "archive, request)>>_AsyncAllVars "
         "=> ExactDecisionRequestLifecycleRankCellOutcome( "
-        "node, qc, archive, request, rank, budget)')"
+        "node, qc, archive, request, rank, budget)')]_AsyncAllVars"
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
         "ExactDecisionRequestLifecycleRankDescentProperty",
     ): (
-        "/\\ specification => []("
+        "/\\ specification => [][("
         "\\A node, qc, archive, request: "
         "ExactDecisionRequestLifecycleStepClassification( "
-        "node, qc, archive, request)) "
+        "node, qc, archive, request))]_AsyncAllVars "
         "/\\ ExactDecisionRequestLifecycleConcreteActionOriginProperty("
         "specification)"
     ),
@@ -3629,7 +3629,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
         "IndexedHistoricalCertificateReceivedQcLineageInvariantAt",
     ): (
-        "\\A node \\in Responsive, qc: "
+        "\\A qc: \\A node \\in Responsive: "
         "IndexedHistoricalCertificateReceivedQcLineageSource( "
         "initialContext, node, qc) => "
         "\\/ IndexedDecisionWitness(initialContext)!NodeHasDecision(node) "
@@ -3642,7 +3642,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
         "IndexedHistoricalCertificateDecisionWalLineageInvariantAt",
     ): (
-        "\\A node \\in Responsive, qc: "
+        "\\A qc: \\A node \\in Responsive: "
         "IndexedHistoricalCertificateDecisionWalLineageSource( "
         "initialContext, node, qc) => "
         "\\/ IndexedDecisionWitness(initialContext)!NodeHasDecision(node) "

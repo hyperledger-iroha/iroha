@@ -1277,10 +1277,8 @@ fn generated_peer_config_preserves_all_mochi_managed_paths() {
         &[],
     )
     .expect("write generated peer config");
-    let config = actual::Root::from_toml_source(
-        TomlSource::from_file(&spec.config_path).expect("read generated peer config"),
-    )
-    .expect("parse generated peer config");
+    let config =
+        ManagedNodeConfig::from_path(&spec.config_path).expect("parse generated peer config");
 
     validate_managed_peer_paths(&config, &spec, 1)
         .expect("generated config keeps every Mochi-managed path");
@@ -1301,27 +1299,23 @@ fn managed_peer_path_validation_rejects_runtime_root_redirects() {
         &[],
     )
     .expect("write generated peer config");
-    let load = || {
-        actual::Root::from_toml_source(
-            TomlSource::from_file(&spec.config_path).expect("read generated peer config"),
-        )
-        .expect("parse generated peer config")
-    };
+    let load =
+        || ManagedNodeConfig::from_path(&spec.config_path).expect("parse generated peer config");
 
     let mut config = load();
-    *config.kura.store_dir.value_mut() = temp.path().join("redirected-kura");
+    config.managed_paths.kura_store_dir = temp.path().join("redirected-kura");
     let error = validate_managed_peer_paths(&config, &spec, 1)
         .expect_err("redirected Kura root must fail generation validation");
     assert!(error.to_string().contains("kura.store_dir"));
 
     let mut config = load();
-    *config.snapshot.store_dir.value_mut() = temp.path().join("redirected-snapshot");
+    config.managed_paths.snapshot_store_dir = temp.path().join("redirected-snapshot");
     let error = validate_managed_peer_paths(&config, &spec, 1)
         .expect_err("redirected snapshot root must fail generation validation");
     assert!(error.to_string().contains("snapshot.store_dir"));
 
     let mut config = load();
-    config.torii.data_dir = temp.path().join("redirected-torii");
+    config.managed_paths.torii_data_dir = temp.path().join("redirected-torii");
     let error = validate_managed_peer_paths(&config, &spec, 1)
         .expect_err("redirected Torii root must fail generation validation");
     assert!(error.to_string().contains("torii.data_dir"));

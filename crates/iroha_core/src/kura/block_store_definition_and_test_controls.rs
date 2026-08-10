@@ -141,6 +141,7 @@ impl Kura {
     /// Remove only the reverse carrier record while retaining its committed full entry.
     ///
     /// This models the finalized block-first crash seam repaired at startup.
+    #[cfg(test)]
     pub(crate) fn remove_merge_carrier_record_for_testing(
         &self,
         block: &SignedBlock,
@@ -841,9 +842,7 @@ impl BlockStore {
             .swap(false, Ordering::AcqRel)
         {
             return Err(Error::IO(
-                std::io::Error::other(
-                    "injected crash after deterministic commit-marker temp sync",
-                ),
+                std::io::Error::other("injected crash after deterministic commit-marker temp sync"),
                 temporary_path.to_path_buf(),
             ));
         }

@@ -28,6 +28,9 @@ internal object ReplicationOrderInstructionValidation {
         return value
     }
 
+    fun requireMusubiArchiveId(value: String): String =
+        requireDigest(value, "musubiArchiveIdHex")
+
     fun requireDigest(value: String, fieldName: String): String {
         require(canonicalOrderIdPattern.matches(value)) {
             "$fieldName must contain exactly 64 lowercase hexadecimal characters"
@@ -39,11 +42,16 @@ internal object ReplicationOrderInstructionValidation {
     fun requireProviderOwner(value: String): String =
         requireCanonicalI105Address(value, "providerOwner")
 
-    fun encodeOrderId(value: ByteArray): String {
+    fun encodeOrderId(value: ByteArray): String = encodeIdentifier(value, "orderId")
+
+    fun encodeMusubiArchiveId(value: ByteArray): String =
+        encodeIdentifier(value, "musubiArchiveId")
+
+    private fun encodeIdentifier(value: ByteArray, fieldName: String): String {
         require(value.size == ORDER_ID_BYTES) {
-            "orderId must contain exactly $ORDER_ID_BYTES bytes, found ${value.size}"
+            "$fieldName must contain exactly $ORDER_ID_BYTES bytes, found ${value.size}"
         }
-        require(value.any { it.toInt() != 0 }) { "orderId must not be the zero identifier" }
+        require(value.any { it.toInt() != 0 }) { "$fieldName must not be the zero identifier" }
         val encoded = CharArray(value.size * 2)
         value.forEachIndexed { index, byte ->
             val unsigned = byte.toInt() and 0xff

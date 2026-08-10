@@ -65,11 +65,7 @@ impl Kura {
         lane_id: LaneId,
         lane_block_height: u64,
     ) -> Option<LaneBlockExecutionInputArtifact> {
-        self.read_lane_block_execution_input_with_repair_policy(
-            lane_id,
-            lane_block_height,
-            false,
-        )
+        self.read_lane_block_execution_input_with_repair_policy(lane_id, lane_block_height, false)
     }
 
     pub(crate) fn lane_block_execution_input_available_without_sidecar_repair(
@@ -121,10 +117,9 @@ impl Kura {
         if !self
             .lane_block_predecessor_application_receipt_available_without_sidecar_repair(proposal)
             || self.lane_block_application_receipt_available_without_sidecar_repair(proposal)
-            || self
-                .lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair(
-                    proposal,
-                )
+            || self.lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair(
+                proposal,
+            )
         {
             return None;
         }
@@ -331,8 +326,7 @@ impl Kura {
         if entry.epoch_id != epoch_id
             || self
                 .merge_carrier_for_entry_without_append_repair_under_prune_and_canonical_guards(
-                    entry_hash,
-                    &entry,
+                    entry_hash, &entry,
                 )
                 .ok()
                 .flatten()
@@ -423,7 +417,9 @@ impl Kura {
                 "lane block artifact",
             )
             .ok()?;
-            let mut pair = self.open_bound_progress_pair(&data_path, &index_path).ok()?;
+            let mut pair = self
+                .open_bound_progress_pair(&data_path, &index_path)
+                .ok()?;
             let candidates = match &mut pair {
                 BoundProgressPair::Absent(_) => Vec::new(),
                 BoundProgressPair::Present(bound) => {
@@ -513,8 +509,8 @@ impl Kura {
         let candidates = match &mut pair {
             BoundProgressPair::Absent(_) => Vec::new(),
             BoundProgressPair::Present(bound) => {
-                let Ok(heights) = self
-                    .bound_indexed_sidecar_height_range(bound, "certified lane block")
+                let Ok(heights) =
+                    self.bound_indexed_sidecar_height_range(bound, "certified lane block")
                 else {
                     return Vec::new();
                 };
@@ -547,5 +543,218 @@ impl Kura {
             .collect::<Vec<_>>();
         artifacts.reverse();
         artifacts
+    }
+}
+
+impl Kura {
+    fn validate_lane_new_view_certificate_for_artifact(
+        artifact: &AutonomousLaneBlockArtifact,
+        durable_certificate: &DurableLaneBlockNewViewCertificateV1,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+        slot_path: &Path,
+    ) -> Result<(LaneBlockProposalV1, LaneBlockProposalV1)> {
+        let current = Self::validate_autonomous_lane_block_artifact(
+            artifact,
+            expected_network_id,
+            expected_epoch,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(slot_path.to_path_buf(), message))?;
+        let target = crate::lane_consensus::retarget_lane_block_proposal_view(
+            &current,
+            durable_certificate.certificate.body.target_view,
+        )
+        .map_err(|err| {
+            Self::invalid_lane_artifact_error(
+                slot_path.to_path_buf(),
+                format!("invalid autonomous lane NewView target: {err}"),
+            )
+        })?;
+        crate::lane_consensus::validate_lane_block_new_view_transition(
+            &current,
+            &target,
+            &artifact.executable_payload,
+            durable_certificate,
+            expected_network_id,
+            expected_epoch,
+        )
+        .map_err(|err| {
+            Self::invalid_lane_artifact_error(
+                slot_path.to_path_buf(),
+                format!("invalid autonomous lane NewView certificate: {err}"),
+            )
+        })?;
+        Ok((current, target))
+    }
+
+    fn read_autonomous_lane_block_record_read_only_latest_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+    ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
+        if let Some(pointer) =
+            self.read_autonomous_lane_block_latest_attempt_locked(entry, lane_block_height)?
+        {
+            if pointer.lane_id != lane_id {
+                return Err(Self::invalid_lane_artifact_error(
+                    Self::autonomous_lane_block_latest_attempt_path_for_entry(
+                        entry,
+                        &self.store_root,
+                        lane_block_height,
+                    ),
+                    "autonomous lane latest attempt belongs to a different lane",
+                ));
+            }
+            return self
+                .read_autonomous_lane_block_attempt_artifact_with_view_state_mode_locked(
+                    entry,
+                    &pointer,
+                    expected_network_id,
+                    expected_epoch,
+                    AutonomousLaneBlockViewStateReadMode::LatestReadOnly,
+                )
+                .map(Some);
+        }
+        Ok(None)
+    }
+
+    /// Read one exact durability-attested receipt while the caller holds
+    /// `prune_lock`. This path never repairs progress-sidecar artifacts.
+    fn read_exact_lane_block_application_receipt_under_prune_guard(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(proposal)
+    }
+
+    /// Read one exact durability-attested receipt while the caller holds
+    /// `prune_lock` and `canonical_chain_lock`, in that order. This path never
+    /// repairs progress-sidecar artifacts or reacquires either outer lock.
+    fn read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        let descriptor = &proposal.descriptor;
+        let artifact = self.read_active_lane_block_application_receipt_structural(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            false,
+        )?;
+        if artifact.proposal != *proposal
+            || !self
+                .lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
+                    &artifact,
+                    false,
+                )
+        {
+            return None;
+        }
+        let confirmed = self.read_active_lane_block_application_receipt_structural(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            false,
+        )?;
+        (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
+    }
+
+    fn lane_block_application_receipt_available_under_prune_guard(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        self.read_exact_lane_block_application_receipt_under_prune_guard(proposal)
+            .is_some()
+    }
+
+    fn lane_block_application_receipt_available_under_prune_and_canonical_guards(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        self.read_exact_lane_block_application_receipt_under_prune_and_canonical_guards(proposal)
+            .is_some()
+    }
+
+    fn lane_block_application_receipt_matches_available_evidence(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+        repair_missing_sidecars: bool,
+    ) -> bool {
+        match artifact.format {
+            LaneBlockApplicationReceiptArtifactFormat::Current => self
+                .lane_block_application_receipt_matches_canonical_results(
+                    artifact,
+                    repair_missing_sidecars,
+                ),
+            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
+                .lane_block_application_receipt_matches_direct_preflight(
+                    artifact,
+                    repair_missing_sidecars,
+                ),
+            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
+                if repair_missing_sidecars {
+                    self.lane_block_application_receipt_matches_merge_log(artifact)
+                } else {
+                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair(
+                        artifact,
+                    )
+                }
+            }
+        }
+    }
+
+    fn lane_block_application_receipt_matches_available_evidence_under_prune_guard(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+        repair_missing_sidecars: bool,
+    ) -> bool {
+        match artifact.format {
+            LaneBlockApplicationReceiptArtifactFormat::Current => self
+                .lane_block_application_receipt_matches_canonical_results(
+                    artifact,
+                    repair_missing_sidecars,
+                ),
+            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
+                .lane_block_application_receipt_matches_direct_preflight(
+                    artifact,
+                    repair_missing_sidecars,
+                ),
+            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
+                if repair_missing_sidecars {
+                    self.lane_block_application_receipt_matches_merge_log_under_prune_guard(
+                        artifact,
+                    )
+                } else {
+                    self.lane_block_application_receipt_matches_merge_log_without_sidecar_repair_under_prune_guard(
+                        artifact,
+                    )
+                }
+            }
+        }
+    }
+
+    fn lane_block_application_receipt_matches_available_evidence_under_prune_and_canonical_guards(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+        repair_missing_sidecars: bool,
+    ) -> bool {
+        match artifact.format {
+            LaneBlockApplicationReceiptArtifactFormat::Current => self
+                .lane_block_application_receipt_matches_canonical_results(
+                    artifact,
+                    repair_missing_sidecars,
+                ),
+            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => self
+                .lane_block_application_receipt_matches_direct_preflight(
+                    artifact,
+                    repair_missing_sidecars,
+                ),
+            LaneBlockApplicationReceiptArtifactFormat::MergeExecution => self
+                .lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(
+                    artifact,
+                ),
+        }
     }
 }

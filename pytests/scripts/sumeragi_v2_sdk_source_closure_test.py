@@ -20,6 +20,8 @@ RESOLVER = ROOT / "ci" / "resolve_sumeragi_v2_sdk_source_closure.py"
 MANIFEST = ROOT / "ci" / "sumeragi_v2_sdk_source_closure.json"
 NATIVE_HARNESS = ROOT / "ci" / "run_native_amx_v2_grouped_sdk_parity.sh"
 DIAGNOSTICS_HARNESS = ROOT / "ci" / "run_sumeragi_v2_sdk_diagnostics.sh"
+NATIVE_FIXTURE = ROOT / "fixtures" / "sumeragi_v2" / "native_amx_v2_grouped.json"
+WIRE_FIXTURE = ROOT / "fixtures" / "sumeragi_v2" / "wire_v2.tsv"
 
 
 def _load_resolver():
@@ -59,6 +61,8 @@ def _fixture_manifest() -> dict[str, Any]:
             ],
             "diagnostics-suite": [
                 "ci/run_sumeragi_v2_sdk_diagnostics.sh",
+                "fixtures/sumeragi_v2/native_amx_v2_grouped.json",
+                "fixtures/sumeragi_v2/wire_v2.tsv",
             ],
             "native-suite": [
                 "ci/run_native_amx_v2_grouped_sdk_parity.sh",
@@ -96,6 +100,7 @@ def _git(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
 
 def _source_fixture(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     (tmp_path / "ci").mkdir()
+    (tmp_path / "fixtures" / "sumeragi_v2").mkdir(parents=True)
     (tmp_path / "sdk" / "javascript").mkdir(parents=True)
     (tmp_path / "sdk" / "python").mkdir(parents=True)
     shutil.copyfile(
@@ -109,6 +114,14 @@ def _source_fixture(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     (tmp_path / "ci" / "run_sumeragi_v2_sdk_diagnostics.sh").write_text(
         "#!/usr/bin/env bash\n",
         encoding="utf-8",
+    )
+    shutil.copyfile(
+        NATIVE_FIXTURE,
+        tmp_path / "fixtures" / "sumeragi_v2" / "native_amx_v2_grouped.json",
+    )
+    shutil.copyfile(
+        WIRE_FIXTURE,
+        tmp_path / "fixtures" / "sumeragi_v2" / "wire_v2.tsv",
     )
     (tmp_path / "sdk" / "javascript" / "client.js").write_text(
         "export const height = 1n;\n",
@@ -160,6 +173,15 @@ def _native_digest(root: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _diagnostics_digest(root: Path) -> subprocess.CompletedProcess[str]:
+    return _run_resolver(
+        root,
+        "--suite",
+        "sumeragi-v2-sdk-diagnostics",
+        "--manifest-sha256",
+    )
+
+
 def test_resolver_emits_sorted_paths_records_and_stable_content_digest(
     tmp_path: Path,
 ) -> None:
@@ -197,6 +219,33 @@ def test_resolver_emits_sorted_paths_records_and_stable_content_digest(
     assert dirty_first.returncode == dirty_second.returncode == 0
     assert dirty_first.stdout == dirty_second.stdout
     assert dirty_first.stdout != first.stdout
+
+
+def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
+    tmp_path: Path,
+) -> None:
+    grouped_records = _run_resolver(
+        ROOT,
+        "--suite",
+        "native-amx-v2-grouped",
+        "--print-records",
+    )
+    assert grouped_records.returncode == 0, grouped_records.stderr
+    assert len(grouped_records.stdout.splitlines()) == 1_317
+
+    _source_fixture(tmp_path)
+    grouped_before = _native_digest(tmp_path)
+    diagnostics_before = _diagnostics_digest(tmp_path)
+    assert grouped_before.returncode == diagnostics_before.returncode == 0
+
+    wire_fixture = tmp_path / "fixtures" / "sumeragi_v2" / "wire_v2.tsv"
+    wire_fixture.write_bytes(wire_fixture.read_bytes() + b"# tracked TSV drift\n")
+
+    grouped_after = _native_digest(tmp_path)
+    diagnostics_after = _diagnostics_digest(tmp_path)
+    assert grouped_after.returncode == diagnostics_after.returncode == 0
+    assert grouped_after.stdout == grouped_before.stdout
+    assert diagnostics_after.stdout != diagnostics_before.stdout
 
 
 def test_resolver_rejects_noncanonical_or_unsorted_manifest(tmp_path: Path) -> None:
@@ -316,6 +365,7 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
         module.PurePosixPath(
             "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
         ),
+        module.PurePosixPath("fixtures/sumeragi_v2/wire_v2.tsv"),
         module.PurePosixPath(
             "javascript/iroha_js/test/sumeragiBrowserFixtures.js"
         ),

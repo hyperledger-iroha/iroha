@@ -21,6 +21,7 @@ import org.hyperledger.iroha.android.client.stream.ToriiEventStreamOptions;
 import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.sorafs.SorafsReputationModels.EventStreamListener;
 import org.hyperledger.iroha.android.sorafs.SorafsReputationModels.EventsResponseV1;
 import org.hyperledger.iroha.android.sorafs.SorafsReputationModels.ProviderResponseV1;
@@ -48,22 +49,27 @@ public final class SorafsReputationClient {
   private static final byte[] EMPTY_BODY = new byte[0];
 
   private final URI baseUri;
+  private final NetworkId networkId;
   private final TransportExecutor transport;
   private final Duration timeout;
 
   /** Creates a client backed by the canonical platform transport. */
-  public SorafsReputationClient(final URI baseUri) {
-    this(baseUri, PlatformHttpTransportExecutor.createDefault(), null);
+  public SorafsReputationClient(final URI baseUri, final NetworkId networkId) {
+    this(baseUri, networkId, PlatformHttpTransportExecutor.createDefault(), null);
   }
 
   /** Creates a client with executor defaults for request timeouts. */
-  public SorafsReputationClient(final URI baseUri, final TransportExecutor transport) {
-    this(baseUri, transport, null);
+  public SorafsReputationClient(
+      final URI baseUri, final NetworkId networkId, final TransportExecutor transport) {
+    this(baseUri, networkId, transport, null);
   }
 
   /** Creates a client with an optional request timeout. */
   public SorafsReputationClient(
-      final URI baseUri, final TransportExecutor transport, final Duration timeout) {
+      final URI baseUri,
+      final NetworkId networkId,
+      final TransportExecutor transport,
+      final Duration timeout) {
     if (baseUri == null
         || !baseUri.isAbsolute()
         || baseUri.getRawQuery() != null
@@ -74,10 +80,14 @@ public final class SorafsReputationClient {
     if (transport == null) {
       throw new IllegalArgumentException("transport is required");
     }
+    if (networkId == null) {
+      throw new IllegalArgumentException("networkId is required");
+    }
     if (timeout != null && timeout.isNegative()) {
       throw new IllegalArgumentException("timeout must be non-negative");
     }
     this.baseUri = baseUri;
+    this.networkId = networkId;
     this.transport = transport;
     this.timeout = timeout;
   }
@@ -381,13 +391,20 @@ public final class SorafsReputationClient {
       throw new IllegalArgumentException("timestampMs and nonce must be provided together");
     }
     if (timestampMs == null) {
-      return CanonicalRequestSigner.buildHeaders("GET", target, EMPTY_BODY, canonicalAuth);
+      return CanonicalRequestSigner.buildHeaders(
+          networkId, "GET", target, EMPTY_BODY, canonicalAuth);
     }
     if (timestampMs.longValue() < 0L) {
       throw new IllegalArgumentException("timestampMs must be non-negative");
     }
     return CanonicalRequestSigner.buildHeaders(
-        "GET", target, EMPTY_BODY, canonicalAuth, timestampMs.longValue(), nonce);
+        networkId,
+        "GET",
+        target,
+        EMPTY_BODY,
+        canonicalAuth,
+        timestampMs.longValue(),
+        nonce);
   }
 
   private URI buildTarget(final String path, final Map<String, String> query) {

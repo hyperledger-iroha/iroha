@@ -63,10 +63,12 @@ private fun requireAliasText(value: String?, fieldName: String): String {
     return value
 }
 
-/** Typed first-release builder for the consensus `RegisterPinManifest` instruction. */
+/**
+ * Typed first-release builder for the consensus `RegisterPinManifest` instruction.
+ * The recorded submission epoch comes exclusively from the block consensus timestamp.
+ */
 class RegisterPinManifestInstruction private constructor(
     @JvmField val manifestPayloadBase64: String,
-    @JvmField val submittedEpoch: Long,
     @JvmField val successorOfHex: String?,
     @JvmField val aliasBinding: AliasBinding?,
     override val arguments: Map<String, String>,
@@ -81,14 +83,12 @@ class RegisterPinManifestInstruction private constructor(
         if (this === other) return true
         if (other !is RegisterPinManifestInstruction) return false
         return manifestPayloadBase64 == other.manifestPayloadBase64 &&
-            submittedEpoch == other.submittedEpoch &&
             successorOfHex == other.successorOfHex &&
             aliasBinding == other.aliasBinding
     }
 
     override fun hashCode(): Int {
         var result = manifestPayloadBase64.hashCode()
-        result = 31 * result + submittedEpoch.hashCode()
         result = 31 * result + (successorOfHex?.hashCode() ?: 0)
         result = 31 * result + (aliasBinding?.hashCode() ?: 0)
         return result
@@ -97,7 +97,6 @@ class RegisterPinManifestInstruction private constructor(
     /** Builder for a canonical register-pin instruction. */
     class Builder internal constructor() {
         private var manifestPayloadBase64: String? = null
-        private var submittedEpoch: Long? = null
         private var successorOfHex: String? = null
         private var aliasBinding: AliasBinding? = null
 
@@ -112,11 +111,6 @@ class RegisterPinManifestInstruction private constructor(
             this.manifestPayloadBase64 = Base64.encode(manifestPayload.copyOf())
         }
 
-        fun setSubmittedEpoch(submittedEpoch: Long) = apply {
-            require(submittedEpoch >= 0) { "submittedEpoch must be non-negative" }
-            this.submittedEpoch = submittedEpoch
-        }
-
         fun setSuccessorOfHex(successorOfHex: String?) = apply {
             this.successorOfHex = successorOfHex?.let {
                 requireNonzeroDigest(it, "successorOfHex")
@@ -129,16 +123,13 @@ class RegisterPinManifestInstruction private constructor(
 
         fun build(): RegisterPinManifestInstruction {
             val payload = checkNotNull(manifestPayloadBase64) { "manifestPayload must be set" }
-            val epoch = checkNotNull(submittedEpoch) { "submittedEpoch must be set" }
             val args = canonicalArguments(
                 payload,
-                epoch,
                 successorOfHex,
                 aliasBinding,
             )
             return RegisterPinManifestInstruction(
                 payload,
-                epoch,
                 successorOfHex,
                 aliasBinding,
                 args,
@@ -231,7 +222,6 @@ class RegisterPinManifestInstruction private constructor(
         private val mandatoryArgumentKeys = setOf(
             "action",
             "manifest_payload_base64",
-            "submitted_epoch",
         )
         private val optionalArgumentKeys = setOf(
             "successor_of_hex",
@@ -254,7 +244,6 @@ class RegisterPinManifestInstruction private constructor(
             }
             return builder()
                 .setManifestPayloadBase64(requireArgument(arguments, "manifest_payload_base64"))
-                .setSubmittedEpoch(requireLong(arguments, "submitted_epoch"))
                 .setSuccessorOfHex(arguments["successor_of_hex"])
                 .setAliasBinding(AliasBinding.fromArguments(arguments))
                 .build()
@@ -262,13 +251,11 @@ class RegisterPinManifestInstruction private constructor(
 
         private fun canonicalArguments(
             manifestPayloadBase64: String,
-            submittedEpoch: Long,
             successorOfHex: String?,
             aliasBinding: AliasBinding?,
         ): Map<String, String> = buildMap {
             put("action", ACTION)
             put("manifest_payload_base64", manifestPayloadBase64)
-            put("submitted_epoch", submittedEpoch.toString())
             successorOfHex?.let { put("successor_of_hex", it) }
             aliasBinding?.appendArguments(this)
         }
@@ -277,15 +264,6 @@ class RegisterPinManifestInstruction private constructor(
             val value = arguments[key]
             require(!value.isNullOrEmpty()) { "Instruction argument '$key' is required" }
             return value
-        }
-
-        private fun requireLong(arguments: Map<String, String>, key: String): Long {
-            val value = requireArgument(arguments, key)
-            return try {
-                value.toLong()
-            } catch (ex: NumberFormatException) {
-                throw IllegalArgumentException("Instruction argument '$key' must be a number: $value", ex)
-            }
         }
     }
 }

@@ -1445,9 +1445,13 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
     .expect("qualify stable signer");
     signer.qualification_revision.store(2, Ordering::SeqCst);
     let error = wrapped
-        .sign(b"canonical governance payload")
+        .sign(
+            GovernanceDagSigningPurposeV1::LogNode,
+            b"canonical governance payload",
+        )
         .expect_err("provider policy drift must fail closed");
     assert!(error.to_string().contains("policy changed"));
+    assert_eq!(signer.observed_purpose(), None);
 
     let signer = Arc::new(TestRuntimeDagSigner::new(
         "pkcs11:governance-dag:primary",
@@ -1464,9 +1468,16 @@ fn runtime_dag_signer_rejects_test_marked_stale_and_drifting_provider() {
     .expect("qualify stable signer");
     signer.drift_during_sign.store(true, Ordering::SeqCst);
     let error = wrapped
-        .sign(b"canonical governance payload")
+        .sign(
+            GovernanceDagSigningPurposeV1::LogNode,
+            b"canonical governance payload",
+        )
         .expect_err("provider policy drift during signing must discard the signature");
     assert!(error.to_string().contains("policy changed"));
+    assert_eq!(
+        signer.observed_purpose(),
+        Some(GovernanceDagSigningPurposeV1::LogNode)
+    );
 }
 
 #[test]
@@ -1553,14 +1564,21 @@ fn runtime_dag_signer_redacts_provider_error_and_rejects_wrong_signature() {
         peer_id.clone(),
         refusing.public_key(),
         test_runtime_dag_signer_qualification(),
-        refusing,
+        refusing.clone(),
     )
     .expect("bind refusing test provider");
     let error = wrapped
-        .sign(b"canonical governance payload")
+        .sign(
+            GovernanceDagSigningPurposeV1::LogNode,
+            b"canonical governance payload",
+        )
         .expect_err("provider outage must fail closed");
     assert!(error.to_string().contains("refused"));
     assert!(!error.to_string().contains("must-never-escape"));
+    assert_eq!(
+        refusing.observed_purpose(),
+        Some(GovernanceDagSigningPurposeV1::LogNode)
+    );
 
     let mut corrupt = TestRuntimeDagSigner::new("pkcs11:governance-dag:primary", &peer_id, 0x31);
     corrupt.corrupt_signature = true;
@@ -1570,13 +1588,20 @@ fn runtime_dag_signer_redacts_provider_error_and_rejects_wrong_signature() {
         peer_id,
         corrupt.public_key(),
         test_runtime_dag_signer_qualification(),
-        corrupt,
+        corrupt.clone(),
     )
     .expect("bind corrupt test provider");
     let error = wrapped
-        .sign(b"canonical governance payload")
+        .sign(
+            GovernanceDagSigningPurposeV1::LogNode,
+            b"canonical governance payload",
+        )
         .expect_err("wrong signature must fail closed");
     assert!(error.to_string().contains("another key or payload"));
+    assert_eq!(
+        corrupt.observed_purpose(),
+        Some(GovernanceDagSigningPurposeV1::LogNode)
+    );
 }
 
 #[test]

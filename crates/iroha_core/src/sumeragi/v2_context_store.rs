@@ -1096,10 +1096,16 @@ pub(crate) enum V2ContextStoreError {
 mod tests {
     use std::sync::{Arc, Barrier};
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::{ChainId, peer::PeerId};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{NetworkId, block::BlockHeader, peer::PeerId};
 
     use super::*;
+
+    fn test_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x93; Hash::LENGTH]),
+        ))
+    }
 
     fn record() -> PersistedHeightContext {
         let mut validators = (1_u8..=4)
@@ -1126,7 +1132,7 @@ mod tests {
             .map(|(_, entry)| entry)
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: ChainId::from("v2-context-store-test"),
+            network_id: test_network_id(),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,

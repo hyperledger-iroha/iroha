@@ -37,9 +37,9 @@ use iroha_core::{
     },
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    ChainId, Registrable, ValidationFail,
+    ChainId, NetworkId, Registrable, ValidationFail,
     account::{Account, AccountAlias, AccountId, OpaqueAccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::{
@@ -997,6 +997,26 @@ fn build_find_transactions_query_for_test() -> iroha_data_model::query::QueryWit
     executor.into_query()
 }
 
+fn build_exact_transaction_details_query_for_test(
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> iroha_data_model::query::QueryWithParams {
+    use iroha_data_model::query::{
+        CommittedTxFilters, builder::QueryBuilderExt, dsl::CompoundPredicate,
+    };
+
+    let executor = CapturingIterableQueryExecutor::default();
+    let _ = iroha_data_model::query::builder::QueryBuilder::new(
+        &executor,
+        iroha_data_model::query::transaction::prelude::FindTransactions::new(),
+    )
+    .filter(CompoundPredicate::from_filters(CommittedTxFilters {
+        entry_eq: Some(entrypoint_hash),
+        ..CommittedTxFilters::default()
+    }))
+    .execute();
+    executor.into_query()
+}
+
 fn assert_permissions_query_targets_account(
     query: &iroha_data_model::query::QueryWithParams,
     account_id: &AccountId,
@@ -1166,25 +1186,31 @@ fn signed_find_triggers_query_for_test(
     authority: AccountId,
     key_pair: &KeyPair,
 ) -> iroha_data_model::query::SignedQuery {
-    iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test())
-        .with_authority(authority)
-        .sign(key_pair)
+    authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test()),
+        authority,
+    )
+    .sign(key_pair)
 }
 
 fn signed_find_active_trigger_ids_query_for_test(
     authority: AccountId,
     key_pair: &KeyPair,
 ) -> iroha_data_model::query::SignedQuery {
-    iroha_data_model::query::QueryRequest::Start(build_find_active_trigger_ids_query_for_test())
-        .with_authority(authority)
-        .sign(key_pair)
+    authorize_query_for_test(
+        iroha_data_model::query::QueryRequest::Start(
+            build_find_active_trigger_ids_query_for_test(),
+        ),
+        authority,
+    )
+    .sign(key_pair)
 }
 
 fn request_for_test(
     authority: &AccountId,
     request: iroha_data_model::query::QueryRequest,
 ) -> iroha_data_model::query::QueryRequestWithAuthority {
-    request.with_authority(authority.clone())
+    authorize_query_for_test(request, authority.clone())
 }
 
 fn roundtrip_request_for_test(
@@ -1476,6 +1502,58 @@ pub(crate) fn signed_app_headers(
     uri: &axum::http::Uri,
     body: &[u8],
 ) -> HeaderMap {
+    signed_app_headers_for_network(
+        &crate::signed_query_test_network_id(),
+        account,
+        key_pair,
+        method,
+        uri,
+        body,
+    )
+}
+
+pub(crate) fn signed_network_app_headers(
+    network_id: &NetworkId,
+    account: &AccountId,
+    key_pair: &KeyPair,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+) -> HeaderMap {
+    signed_app_headers_for_network(network_id, account, key_pair, method, uri, body)
+}
+
+pub(crate) fn foreign_network_signed_app_fixture(
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+    key_seed: u8,
+    network_marker: u8,
+) -> (SharedAppState, HeaderMap) {
+    let key_pair = checked_torii_test_keypair_from_seed_byte(
+        key_seed,
+        Algorithm::Ed25519,
+        "derive foreign-network Torii auth fixture key",
+    );
+    let account = AccountId::new(key_pair.public_key().clone());
+    let app = mk_app_state_for_tests_with_world(world_with_account(&account));
+    let foreign_network =
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([network_marker; Hash::LENGTH]),
+        ));
+    let headers =
+        signed_network_app_headers(&foreign_network, &account, &key_pair, method, uri, body);
+    (app, headers)
+}
+
+fn signed_app_headers_for_network(
+    network_id: &NetworkId,
+    account: &AccountId,
+    key_pair: &KeyPair,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+) -> HeaderMap {
     static TEST_NONCE_SEQ: LazyLock<std::sync::atomic::AtomicU64> =
         LazyLock::new(|| std::sync::atomic::AtomicU64::new(0));
     let timestamp_ms = std::time::SystemTime::now()
@@ -1484,10 +1562,64 @@ pub(crate) fn signed_app_headers(
         .as_millis() as u64;
     let nonce_seq = TEST_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nonce = format!("lib-test-{timestamp_ms}-{nonce_seq}");
-    let message =
-        crate::canonical_request_signature_message(method, uri, body, timestamp_ms, &nonce);
+    let message = crate::canonical_network_request_signature_message(
+        network_id,
+        method,
+        uri,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
     let signature =
         checked_torii_test_signature(key_pair, &message, "sign Torii signed-app-header fixture");
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        crate::HEADER_ACCOUNT,
+        account.to_string().parse().expect("account header"),
+    );
+    headers.insert(
+        crate::HEADER_SIGNATURE,
+        crate::signature_header_value(&signature)
+            .parse()
+            .expect("signature header"),
+    );
+    headers.insert(
+        crate::HEADER_TIMESTAMP_MS,
+        timestamp_ms.to_string().parse().expect("timestamp header"),
+    );
+    headers.insert(crate::HEADER_NONCE, nonce.parse().expect("nonce header"));
+    headers
+}
+
+pub(crate) fn signed_network_app_headers(
+    network_id: &NetworkId,
+    account: &AccountId,
+    key_pair: &KeyPair,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+) -> HeaderMap {
+    static TEST_NONCE_SEQ: LazyLock<std::sync::atomic::AtomicU64> =
+        LazyLock::new(|| std::sync::atomic::AtomicU64::new(0));
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_millis() as u64;
+    let nonce_seq = TEST_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nonce = format!("lib-network-test-{timestamp_ms}-{nonce_seq}");
+    let message = crate::canonical_network_request_signature_message(
+        network_id,
+        method,
+        uri,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
+    let signature = checked_torii_test_signature(
+        key_pair,
+        &message,
+        "sign exact-network Torii request fixture",
+    );
     let mut headers = HeaderMap::new();
     headers.insert(
         crate::HEADER_ACCOUNT,
@@ -1639,11 +1771,12 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     let _ = &push;
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state_inner = iroha_core::state::State::new_with_chain_for_testing(
+    let state_inner = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
         world,
         kura.clone(),
         query_handle.clone(),
         chain_id.clone(),
+        crate::signed_query_test_network_id(),
     );
     {
         let mut topo_block = state_inner.commit_topology.block();
@@ -1767,6 +1900,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
         Vec::new(),
         telemetry::peers::GeoLookupConfig::disabled(),
+        *state.network_id_ref(),
         None,
     );
 
@@ -1795,6 +1929,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         operator_signatures::OperatorSignatures::new(
             iroha_config::parameters::actual::ToriiOperatorSignatures::default(),
             da_receipt_signer.public_key().clone(),
+            *state.network_id_ref(),
             defaults::torii::MAX_CONTENT_LEN.get(),
             telemetry.clone(),
         )
@@ -1839,6 +1974,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         events,
         kura,
         chain_id: Arc::new(chain_id),
+        signed_query_admission: signed_query_test_admission(),
         #[cfg(feature = "app_api")]
         transaction_max_content_len: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .unwrap_or(usize::MAX),
@@ -1945,6 +2081,12 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         zk_ivm_prove_inflight_total,
         zk_ivm_prove_job_ttl_ms: defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS * 1_000,
         zk_ivm_prove_job_max_entries: defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
+        zk_ivm_prove_job_max_entries_per_owner:
+            defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER,
+        zk_ivm_prove_job_max_retained_bytes_per_owner: usize::try_from(
+            defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER.get(),
+        )
+        .expect("default per-owner prove-job bytes fit usize"),
         ivm_tooling_timeout: Duration::from_millis(defaults::torii::ZK_IVM_TOOLING_TIMEOUT_MS),
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         peer_telemetry,
@@ -2088,7 +2230,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
         local_peer_id: None,
         #[cfg(feature = "connect")]
-        connect_bus: crate::connect::Bus::from_config(&connect_cfg),
+        connect_bus: crate::connect::Bus::from_config(
+            &connect_cfg,
+            crate::signed_query_test_network_id(),
+        ),
         #[cfg(feature = "connect")]
         connect_enabled: connect_cfg.enabled,
         #[cfg(feature = "push")]
@@ -2267,6 +2412,7 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
     let _ = peers_tx;
     let torii = Torii::new_with_handle(
         ChainId::from("tx-rate-test"),
+        signed_query_test_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
@@ -2323,6 +2469,7 @@ async fn torii_ram_lfe_uses_config_runtime() {
 
     let torii = Torii::new_with_handle(
         ChainId::from("identifier-resolver-config-test"),
+        signed_query_test_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
@@ -2442,16 +2589,16 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
         "derive post-transaction rate-limit fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "rate-limit-1".to_string())])
     .sign(keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2525,16 +2672,16 @@ async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
         "derive queue-before-rate-limit fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "queue-before-rate-1".to_string())])
     .sign(keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2598,16 +2745,16 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
         Algorithm::Ed25519,
         "derive second post-transaction API-token fixture key",
     );
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         AccountId::new(first_keypair.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "token-rate-limit-1".to_string())])
     .sign(first_keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         AccountId::new(second_keypair.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2653,7 +2800,7 @@ async fn handler_post_transaction_reuses_resolved_route_for_enqueue() {
     );
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2693,7 +2840,7 @@ async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
     );
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2738,7 +2885,7 @@ async fn handler_post_transaction_entrypoint_reuses_resolved_route_for_enqueue()
     );
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

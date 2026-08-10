@@ -91,24 +91,6 @@ func musubiRequireASCIILowerKebab(
     }
 }
 
-func musubiRequireChainIDV1(_ value: String, field: String) throws {
-    let bytes = Array(value.utf8)
-    let isAlphaNumeric: (UInt8) -> Bool = {
-        (0x30...0x39).contains($0) || (0x41...0x5a).contains($0)
-            || (0x61...0x7a).contains($0)
-    }
-    guard (1...128).contains(bytes.count),
-          bytes.first.map(isAlphaNumeric) == true,
-          bytes.last.map(isAlphaNumeric) == true,
-          bytes.allSatisfy({
-              isAlphaNumeric($0) || $0 == 0x2e || $0 == 0x5f || $0 == 0x3a || $0 == 0x2d
-          }) else {
-        throw MusubiV1Error.invalidValue(
-            "\(field) must be 1-128 bytes of canonical ASCII chain-id text."
-        )
-    }
-}
-
 private func musubiNormalizedSearchTerms(_ query: String) throws -> Set<String> {
     try musubiRequireExactText(query, field: "Musubi search query")
     guard query.utf8.count <= 256 else {
@@ -2469,20 +2451,17 @@ public struct MusubiResolverReleaseRowV1: Codable, Hashable, Sendable {
 
 /// Finalized paired view of one release from its home dataspace and universal index.
 public struct MusubiExactReleaseSnapshotV1: Codable, Hashable, Sendable {
-    public let chainId: String
-    public let genesisHash: [UInt8]
+    public let networkId: NetworkId
     public let snapshot: MusubiRegistrySnapshotV1
     public let homeRelease: MusubiReleaseRecordV1
     public let universalRelease: MusubiResolverReleaseRowV1
 
     public init(
-        chainId: String,
-        genesisHash: [UInt8],
+        networkId: NetworkId,
         snapshot: MusubiRegistrySnapshotV1,
         homeRelease: MusubiReleaseRecordV1,
         universalRelease: MusubiResolverReleaseRowV1
     ) throws {
-        try musubiRequireChainIDV1(chainId, field: "Musubi exact release chain ID")
         guard let manifestValue = homeRelease.raw["manifest"],
               let yankValue = homeRelease.raw["yank"],
               let governanceValue = homeRelease.raw["artifact_governance"],
@@ -2557,8 +2536,7 @@ public struct MusubiExactReleaseSnapshotV1: Codable, Hashable, Sendable {
             takedownHeight = 0
         }
 
-        guard genesisHash.count == 32, genesisHash.contains(where: { $0 != 0 }),
-              homeRelease.release == universalRelease.release,
+        guard homeRelease.release == universalRelease.release,
               homeRelease.raw["release_digest"] == universalRelease.raw["release_digest"],
               manifest["archive_id"] == universalRelease.raw["archive_id"],
               manifest["archive_id"] == storage["archive_id"],
@@ -2579,15 +2557,15 @@ public struct MusubiExactReleaseSnapshotV1: Codable, Hashable, Sendable {
               (takedownHeight == 0 || takedownHeight >= homeRelease.publishedAtHeight),
               takedownHeight <= snapshot.finalizedHeight,
               storageFinalizedHeight <= snapshot.finalizedHeight,
-              (snapshot.finalizedHeight != 1 || genesisHash == snapshot.finalizedBlockHash),
+              (snapshot.finalizedHeight != 1 ||
+                  Array(networkId.bytes) == snapshot.finalizedBlockHash),
               (storageFinalizedHeight != snapshot.finalizedHeight ||
                   storageFinalizedHash == snapshot.finalizedBlockHash) else {
             throw MusubiV1Error.invalidValue(
                 "Musubi exact release projections are inconsistent with finality."
             )
         }
-        self.chainId = chainId
-        self.genesisHash = genesisHash
+        self.networkId = networkId
         self.snapshot = snapshot
         self.homeRelease = homeRelease
         self.universalRelease = universalRelease
@@ -2596,12 +2574,11 @@ public struct MusubiExactReleaseSnapshotV1: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         try musubiRequireExactKeys(
             decoder,
-            ["chain_id", "genesis_hash", "snapshot", "home_release", "universal_release"]
+            ["network_id", "snapshot", "home_release", "universal_release"]
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
-            chainId: container.decode(String.self, forKey: .chainId),
-            genesisHash: container.decode([UInt8].self, forKey: .genesisHash),
+            networkId: container.decode(NetworkId.self, forKey: .networkId),
             snapshot: container.decode(MusubiRegistrySnapshotV1.self, forKey: .snapshot),
             homeRelease: container.decode(MusubiReleaseRecordV1.self, forKey: .homeRelease),
             universalRelease: container.decode(
@@ -2622,27 +2599,24 @@ public struct MusubiExactReleaseSnapshotV1: Codable, Hashable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case chainId = "chain_id"
-        case genesisHash = "genesis_hash"
+        case networkId = "network_id"
         case snapshot
         case homeRelease = "home_release"
         case universalRelease = "universal_release"
     }
 }
 
-/// Resolver page carrying exact chain/genesis identity for consumer lockfiles.
+/// Resolver page carrying exact network identity for consumer lockfiles.
 public struct MusubiResolverIndexPageV1: Codable, Hashable, Sendable {
     public let query: MusubiResolverIndexQueryV1
-    public let chainId: String
-    public let genesisHash: [UInt8]
+    public let networkId: NetworkId
     public let items: [MusubiResolverReleaseRowV1]
     public let nextCursor: MusubiFinalizedCursorV1?
     public let snapshot: MusubiRegistrySnapshotV1
 
     private enum CodingKeys: String, CodingKey {
         case query
-        case chainId = "chain_id"
-        case genesisHash = "genesis_hash"
+        case networkId = "network_id"
         case items
         case nextCursor = "next_cursor"
         case snapshot
@@ -2651,13 +2625,11 @@ public struct MusubiResolverIndexPageV1: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         try musubiRequireExactKeys(
             decoder,
-            ["query", "chain_id", "genesis_hash", "items", "next_cursor", "snapshot"]
+            ["query", "network_id", "items", "next_cursor", "snapshot"]
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         query = try container.decode(MusubiResolverIndexQueryV1.self, forKey: .query)
-        chainId = try container.decode(String.self, forKey: .chainId)
-        try musubiRequireExactText(chainId, field: "Musubi resolver chain ID")
-        genesisHash = try container.decode([UInt8].self, forKey: .genesisHash)
+        networkId = try container.decode(NetworkId.self, forKey: .networkId)
         items = try container.decode([MusubiResolverReleaseRowV1].self, forKey: .items)
         nextCursor = try container.decodeIfPresent(MusubiFinalizedCursorV1.self, forKey: .nextCursor)
         snapshot = try container.decode(MusubiRegistrySnapshotV1.self, forKey: .snapshot)
@@ -2667,8 +2639,7 @@ public struct MusubiResolverIndexPageV1: Codable, Hashable, Sendable {
         let firstVersion = items.first?.release.version
         let firstKey = firstVersion?.canonicalText
         let lastKey = items.last?.release.version.canonicalText
-        guard genesisHash.count == 32, genesisHash.contains(where: { $0 != 0 }),
-              items.count <= 100,
+        guard items.count <= 100,
               itemsAreSorted,
               items.allSatisfy({ row in
                   row.release.package == query.package
@@ -2686,19 +2657,15 @@ public struct MusubiResolverIndexPageV1: Codable, Hashable, Sendable {
               ),
               nextCursor == nil || nextCursor?.snapshot == snapshot else {
             throw MusubiV1Error.invalidValue(
-                "Musubi resolver page has an invalid genesis hash, size, or cursor."
+                "Musubi resolver page has an invalid size or cursor."
             )
         }
     }
 
     public func encode(to encoder: Encoder) throws {
-        guard genesisHash.count == 32, genesisHash.contains(where: { $0 != 0 }) else {
-            throw MusubiV1Error.invalidValue("Musubi genesis hash must contain 32 bytes.")
-        }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(query, forKey: .query)
-        try container.encode(chainId, forKey: .chainId)
-        try container.encode(genesisHash, forKey: .genesisHash)
+        try container.encode(networkId, forKey: .networkId)
         try container.encode(items, forKey: .items)
         if let nextCursor { try container.encode(nextCursor, forKey: .nextCursor) }
         else { try container.encodeNil(forKey: .nextCursor) }
@@ -3104,8 +3071,7 @@ public struct MusubiArchiveCommitmentV1: Codable, Hashable, Sendable {
 
 /// Exact deployment and CAR-body binding signed by seed ingress.
 public struct MusubiSeedIngressReceiptBindingV1: Codable, Hashable, Sendable {
-    public let chainId: String
-    public let genesisBlockHash: [UInt8]
+    public let networkId: NetworkId
     public let publisher: String
     public let ingressBroker: String
     public let seedProvider: String
@@ -3117,8 +3083,7 @@ public struct MusubiSeedIngressReceiptBindingV1: Codable, Hashable, Sendable {
     public let raw: [String: MusubiJSONValueV1]
 
     public init(
-        chainId: String,
-        genesisBlockHash: [UInt8],
+        networkId: NetworkId,
         publisher: String,
         ingressBroker: String,
         seedProvider: String,
@@ -3128,13 +3093,10 @@ public struct MusubiSeedIngressReceiptBindingV1: Codable, Hashable, Sendable {
         carBodyLength: UInt64,
         nonce: [UInt8]
     ) throws {
-        try musubiRequireChainIDV1(chainId, field: "Seed-ingress chain ID")
         _ = try CanonicalNorito.encodeCompactAccountId(publisher)
         _ = try CanonicalNorito.encodeCompactAccountId(ingressBroker)
         let providerBytes = Array(seedProvider.utf8)
-        guard genesisBlockHash.count == 32,
-              genesisBlockHash.contains(where: { $0 != 0 }),
-              nonce.count == 32, nonce.contains(where: { $0 != 0 }),
+        guard nonce.count == 32, nonce.contains(where: { $0 != 0 }),
               carBodyLength > 0, carBodyLength <= 96 << 20,
               [semanticReleaseManifestDigest, archiveId, carBodyDigest]
                   .allSatisfy({ $0.bytes.contains(where: { $0 != 0 }) }),
@@ -3144,8 +3106,7 @@ public struct MusubiSeedIngressReceiptBindingV1: Codable, Hashable, Sendable {
               }) else {
             throw MusubiV1Error.invalidValue("Musubi seed-ingress binding is invalid.")
         }
-        self.chainId = chainId
-        self.genesisBlockHash = genesisBlockHash
+        self.networkId = networkId
         self.publisher = publisher
         self.ingressBroker = ingressBroker
         self.seedProvider = seedProvider
@@ -3155,8 +3116,7 @@ public struct MusubiSeedIngressReceiptBindingV1: Codable, Hashable, Sendable {
         self.carBodyLength = carBodyLength
         self.nonce = nonce
         self.raw = [
-            "chain_id": .string(chainId),
-            "genesis_block_hash": musubiRawBytesValue(genesisBlockHash),
+            "network_id": .string(networkId.literal),
             "publisher": .string(publisher),
             "ingress_broker": .string(ingressBroker),
             "seed_provider": musubiRawNewtypeTextValue(seedProvider),
@@ -3172,16 +3132,15 @@ public struct MusubiSeedIngressReceiptBindingV1: Codable, Hashable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let keys: Set<String> = [
-            "chain_id", "genesis_block_hash", "publisher", "ingress_broker", "seed_provider",
+            "network_id", "publisher", "ingress_broker", "seed_provider",
             "semantic_release_manifest_digest", "archive_id", "car_body_digest",
             "car_body_length", "nonce"
         ]
         try musubiRequireExactKeys(decoder, keys)
         let value = try decoder.singleValueContainer().decode(MusubiJSONValueV1.self)
         raw = try musubiRawObject(value, field: "seed-ingress binding", exactKeys: keys)
-        chainId = try musubiRawString(raw["chain_id"], field: "binding.chain_id")
-        genesisBlockHash = try musubiRawBytes(
-            raw["genesis_block_hash"], field: "binding.genesis_block_hash", count: 32
+        networkId = try NetworkId(
+            literal: musubiRawString(raw["network_id"], field: "binding.network_id")
         )
         publisher = try musubiRawString(raw["publisher"], field: "binding.publisher")
         ingressBroker = try musubiRawString(
@@ -3205,7 +3164,6 @@ public struct MusubiSeedIngressReceiptBindingV1: Codable, Hashable, Sendable {
         nonce = try musubiRawBytes(raw["nonce"], field: "binding.nonce", count: 32)
         let providerBytes = Array(seedProvider.utf8)
         guard carBodyLength > 0, carBodyLength <= 96 << 20,
-              genesisBlockHash.contains(where: { $0 != 0 }),
               nonce.contains(where: { $0 != 0 }),
               [semanticReleaseManifestDigest, archiveId, carBodyDigest]
                   .allSatisfy({ $0.bytes.contains(where: { $0 != 0 }) }),
@@ -3215,7 +3173,6 @@ public struct MusubiSeedIngressReceiptBindingV1: Codable, Hashable, Sendable {
               }) else {
             throw MusubiV1Error.invalidValue("Musubi seed-ingress binding is invalid.")
         }
-        try musubiRequireChainIDV1(chainId, field: "Seed-ingress chain ID")
         _ = try CanonicalNorito.encodeCompactAccountId(publisher)
         _ = try CanonicalNorito.encodeCompactAccountId(ingressBroker)
     }
@@ -3494,16 +3451,14 @@ public struct MusubiArchiveLocationV1: Codable, Hashable, Sendable {
 
 /// Archive-location page carrying deployment identity and the immutable commitment.
 public struct MusubiArchiveLocationPageV1: Codable, Hashable, Sendable {
-    public let chainId: String
-    public let genesisHash: [UInt8]
+    public let networkId: NetworkId
     public let archive: MusubiArchiveRecordV1
     public let items: [MusubiArchiveLocationV1]
     public let nextCursor: MusubiFinalizedCursorV1?
     public let snapshot: MusubiRegistrySnapshotV1
 
     private enum CodingKeys: String, CodingKey {
-        case chainId = "chain_id"
-        case genesisHash = "genesis_hash"
+        case networkId = "network_id"
         case archive, items
         case nextCursor = "next_cursor"
         case snapshot
@@ -3512,16 +3467,14 @@ public struct MusubiArchiveLocationPageV1: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         try musubiRequireExactKeys(
             decoder,
-            ["chain_id", "genesis_hash", "archive", "items", "next_cursor", "snapshot"]
+            ["network_id", "archive", "items", "next_cursor", "snapshot"]
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        chainId = try container.decode(String.self, forKey: .chainId)
-        genesisHash = try container.decode([UInt8].self, forKey: .genesisHash)
+        networkId = try container.decode(NetworkId.self, forKey: .networkId)
         archive = try container.decode(MusubiArchiveRecordV1.self, forKey: .archive)
         items = try container.decode([MusubiArchiveLocationV1].self, forKey: .items)
         nextCursor = try container.decodeIfPresent(MusubiFinalizedCursorV1.self, forKey: .nextCursor)
         snapshot = try container.decode(MusubiRegistrySnapshotV1.self, forKey: .snapshot)
-        try musubiRequireExactText(chainId, field: "Archive-location chain ID")
         let itemsAreSorted = zip(items, items.dropFirst()).allSatisfy { pair in
             musubiCompareUnsignedBytes(pair.0.locationId.bytes, pair.1.locationId.bytes) < 0
         }
@@ -3532,9 +3485,7 @@ public struct MusubiArchiveLocationPageV1: Codable, Hashable, Sendable {
                 && location.finalizedHeight <= snapshot.finalizedHeight
                 && location.revision <= archive.locationRevision
         }
-        guard genesisHash.count == 32, genesisHash.contains(where: { $0 != 0 }),
-              archive.stagingReceipt.payload.binding.chainId == chainId,
-              archive.stagingReceipt.payload.binding.genesisBlockHash == genesisHash,
+        guard archive.stagingReceipt.payload.binding.networkId == networkId,
               archive.registeredAtHeight <= snapshot.finalizedHeight,
               items.count <= 4,
               itemsAreSorted,
@@ -3548,8 +3499,7 @@ public struct MusubiArchiveLocationPageV1: Codable, Hashable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(chainId, forKey: .chainId)
-        try container.encode(genesisHash, forKey: .genesisHash)
+        try container.encode(networkId, forKey: .networkId)
         try container.encode(archive, forKey: .archive)
         try container.encode(items, forKey: .items)
         if let nextCursor { try container.encode(nextCursor, forKey: .nextCursor) }
@@ -3576,27 +3526,23 @@ public struct MusubiArchiveLocationPageV1: Codable, Hashable, Sendable {
 
 /// Exact finalized cache-retention decisions for one bounded request batch.
 public struct MusubiArchiveRetentionPageV1: Codable, Hashable, Sendable {
-    public let chainId: String
-    public let genesisHash: [UInt8]
+    public let networkId: NetworkId
     public let items: [MusubiArchiveRetentionDecisionV1]
     public let snapshot: MusubiRegistrySnapshotV1
     public let finalizedTimeMs: UInt64
 
     private enum CodingKeys: String, CodingKey {
-        case chainId = "chain_id"
-        case genesisHash = "genesis_hash"
+        case networkId = "network_id"
         case items, snapshot
         case finalizedTimeMs = "finalized_time_ms"
     }
 
     public init(
-        chainId: String,
-        genesisHash: [UInt8],
+        networkId: NetworkId,
         items: [MusubiArchiveRetentionDecisionV1],
         snapshot: MusubiRegistrySnapshotV1,
         finalizedTimeMs: UInt64
     ) throws {
-        try musubiRequireExactText(chainId, field: "Musubi archive-retention chain ID")
         let canonicalItems = zip(items, items.dropFirst()).allSatisfy { pair in
             musubiCompareUnsignedBytes(pair.0.archiveId.bytes, pair.1.archiveId.bytes) < 0
         }
@@ -3607,14 +3553,12 @@ public struct MusubiArchiveRetentionPageV1: Codable, Hashable, Sendable {
                 && (storage.finalizedHeight != snapshot.finalizedHeight
                     || storage.finalizedBlockHash == snapshot.finalizedBlockHash)
         }
-        guard genesisHash.count == 32, genesisHash.contains(where: { $0 != 0 }),
-              !items.isEmpty, items.count <= 100, canonicalItems, anchoredItems else {
+        guard !items.isEmpty, items.count <= 100, canonicalItems, anchoredItems else {
             throw MusubiV1Error.invalidValue(
                 "Musubi archive-retention page has an invalid deployment or item bound."
             )
         }
-        self.chainId = chainId
-        self.genesisHash = genesisHash
+        self.networkId = networkId
         self.items = items
         self.snapshot = snapshot
         self.finalizedTimeMs = finalizedTimeMs
@@ -3623,12 +3567,11 @@ public struct MusubiArchiveRetentionPageV1: Codable, Hashable, Sendable {
     public init(from decoder: Decoder) throws {
         try musubiRequireExactKeys(
             decoder,
-            ["chain_id", "genesis_hash", "items", "snapshot", "finalized_time_ms"]
+            ["network_id", "items", "snapshot", "finalized_time_ms"]
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
-            chainId: container.decode(String.self, forKey: .chainId),
-            genesisHash: container.decode([UInt8].self, forKey: .genesisHash),
+            networkId: container.decode(NetworkId.self, forKey: .networkId),
             items: container.decode(
                 [MusubiArchiveRetentionDecisionV1].self,
                 forKey: .items
@@ -3847,11 +3790,10 @@ public struct MusubiOrderedPackageEntryV1: Codable, Hashable, Sendable {
     }
 }
 
-/// Ordered-directory page carrying exact chain/genesis identity for lock creation.
+/// Ordered-directory page carrying exact network identity for lock creation.
 public struct MusubiOrderedPrefixPageV1: Codable, Hashable, Sendable {
     public let query: MusubiOrderedPrefixQueryV1
-    public let chainId: String
-    public let genesisHash: [UInt8]
+    public let networkId: NetworkId
     public let namespaceBinding: MusubiNamespaceBindingV1
     public let items: [MusubiOrderedPackageEntryV1]
     public let nextCursor: MusubiFinalizedCursorV1?
@@ -3859,8 +3801,7 @@ public struct MusubiOrderedPrefixPageV1: Codable, Hashable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case query
-        case chainId = "chain_id"
-        case genesisHash = "genesis_hash"
+        case networkId = "network_id"
         case namespaceBinding = "namespace_binding"
         case items
         case nextCursor = "next_cursor"
@@ -3871,15 +3812,13 @@ public struct MusubiOrderedPrefixPageV1: Codable, Hashable, Sendable {
         try musubiRequireExactKeys(
             decoder,
             [
-                "query", "chain_id", "genesis_hash", "namespace_binding", "items",
+                "query", "network_id", "namespace_binding", "items",
                 "next_cursor", "snapshot"
             ]
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         query = try container.decode(MusubiOrderedPrefixQueryV1.self, forKey: .query)
-        chainId = try container.decode(String.self, forKey: .chainId)
-        try musubiRequireExactText(chainId, field: "Musubi directory chain ID")
-        genesisHash = try container.decode([UInt8].self, forKey: .genesisHash)
+        networkId = try container.decode(NetworkId.self, forKey: .networkId)
         namespaceBinding = try container.decode(
             MusubiNamespaceBindingV1.self, forKey: .namespaceBinding
         )
@@ -3902,8 +3841,7 @@ public struct MusubiOrderedPrefixPageV1: Codable, Hashable, Sendable {
             maxSplits: 1,
             omittingEmptySubsequences: false
         ).first.map(String.init)
-        guard genesisHash.count == 32, genesisHash.contains(where: { $0 != 0 }),
-              items.count <= 100,
+        guard items.count <= 100,
               requestedNamespace == namespaceBinding.namespace.value,
               items.allSatisfy({ item in
                   item.selector.namespace == namespaceBinding.namespace
@@ -3924,19 +3862,15 @@ public struct MusubiOrderedPrefixPageV1: Codable, Hashable, Sendable {
               ),
               nextCursor == nil || nextCursor?.snapshot == snapshot else {
             throw MusubiV1Error.invalidValue(
-                "Musubi ordered-prefix page has an invalid genesis hash, size, or cursor."
+                "Musubi ordered-prefix page has an invalid size or cursor."
             )
         }
     }
 
     public func encode(to encoder: Encoder) throws {
-        guard genesisHash.count == 32, genesisHash.contains(where: { $0 != 0 }) else {
-            throw MusubiV1Error.invalidValue("Musubi genesis hash must contain 32 bytes.")
-        }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(query, forKey: .query)
-        try container.encode(chainId, forKey: .chainId)
-        try container.encode(genesisHash, forKey: .genesisHash)
+        try container.encode(networkId, forKey: .networkId)
         try container.encode(namespaceBinding, forKey: .namespaceBinding)
         try container.encode(items, forKey: .items)
         if let nextCursor { try container.encode(nextCursor, forKey: .nextCursor) }

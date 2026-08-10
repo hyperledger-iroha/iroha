@@ -15916,7 +15916,7 @@ def test_successor_production_source_mapping_mutations_fail_closed(
     error_fragment: str,
 ) -> None:
     module = load_checker()
-    required_sources = (
+    for source_name in (
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "crates/iroha_core/src/sumeragi/status.rs",
         "crates/iroha_core/src/sumeragi/v2.rs",
@@ -15925,8 +15925,7 @@ def test_successor_production_source_mapping_mutations_fail_closed(
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
         "crates/iroha_core/src/sumeragi/v2_recovery.rs",
         "scripts/run_sumeragi_v2_release_gates.sh",
-    )
-    for source_name in required_sources:
+    ):
         destination = tmp_path / source_name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / source_name, destination)
@@ -18072,30 +18071,30 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
     (
         (
             "crates/iroha_core/src/torii_proxy.rs",
-            "pub fn queue_plan_synced_request_id_from_chain_digest(",
+            "pub fn queue_plan_synced_request_id_from_network_digest(",
             "    Hash::new(\n"
             "        norito::encode_canonical(&(\n"
             "            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5,\n"
-            "            chain_id_digest,\n"
+            "            network_id_digest,\n"
             "            entrypoint_hash,\n"
             "        ))\n"
             "        .expect(\"deterministic QueuePlanSynced request identity must encode\"),\n"
             "    )",
             "    Hash::prehashed([7; Hash::LENGTH])",
-            "exact nonconstant chain-digest and entrypoint projection",
+            "exact nonconstant network-digest and entrypoint projection",
         ),
         (
             "crates/iroha_core/src/torii_proxy.rs",
-            "pub fn queue_plan_synced_request_id_from_chain_digest(",
-            "            chain_id_digest,\n            entrypoint_hash,",
-            "            entrypoint_hash,\n            chain_id_digest,",
-            "exact nonconstant chain-digest and entrypoint projection",
+            "pub fn queue_plan_synced_request_id_from_network_digest(",
+            "            network_id_digest,\n            entrypoint_hash,",
+            "            entrypoint_hash,\n            network_id_digest,",
+            "exact nonconstant network-digest and entrypoint projection",
         ),
         (
             "crates/iroha_core/src/torii_proxy.rs",
-            "pub fn new(\n        chain_id: &ChainId,",
-            "request_id: queue_plan_synced_request_id_from_chain_digest(\n"
-            "                chain_id_digest,\n"
+            "pub fn new(\n        network_id: &NetworkId,",
+            "request_id: queue_plan_synced_request_id_from_network_digest(\n"
+            "                network_id_digest,\n"
             "                transaction.hash(),\n"
             "            ),",
             "request_id: Hash::new(b\"disconnected QueuePlan request\"),",
@@ -18105,8 +18104,8 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
             "crates/iroha_core/src/torii_proxy.rs",
             "pub fn validate_structure(&self)",
             "        if self.request_id\n"
-            "            != queue_plan_synced_request_id_from_chain_digest(\n"
-            "                self.chain_id_digest,\n"
+            "            != queue_plan_synced_request_id_from_network_digest(\n"
+            "                self.network_id_digest,\n"
             "                self.entrypoint_hash.clone(),\n"
             "            )\n"
             "        {\n"
@@ -18120,7 +18119,7 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/torii_proxy.rs",
-            "pub fn validate_queue_plan_admission_certificate_for_chain_digest_v2(",
+            "pub fn validate_queue_plan_admission_certificate_for_network_digest_v2(",
             "    certificate.binding.validate_structure()?;",
             "    let _ = &certificate.binding;",
             "certificate validation must invoke canonical semantic-request validation",
@@ -18128,7 +18127,7 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
         (
             "crates/iroha_core/src/queue.rs",
             "fn push_with_lane_internal_with_state_and_routing(",
-            "binding.validate_for_request(state.chain_id_ref(), tx.entrypoint(), &routing_plan)",
+            "binding.validate_for_request(state.network_id_ref(), tx.entrypoint(), &routing_plan)",
             "binding.validate_for_transaction_and_plan(tx.entrypoint(), &routing_plan)",
             "core strict QueuePlan admission must invoke request-bound semantic validation",
         ),
@@ -18142,11 +18141,14 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
         (
             "crates/iroha_torii/src/lib.rs",
             "fn queue_plan_synced_proxy_request_id_for_entrypoint(",
-            "    iroha_core::torii_proxy::queue_plan_synced_request_id(app.chain_id.as_ref(), entrypoint_hash)",
+            "    iroha_core::torii_proxy::queue_plan_synced_request_id(\n"
+            "        app.state.network_id_ref(),\n"
+            "        entrypoint_hash,\n"
+            "    )",
             "    Hash::new(\n"
             "        norito::to_bytes(&(\n"
             "            \"torii:proxy:queue-plan-synced:v5\",\n"
-            "            app.chain_id.as_ref(),\n"
+            "            app.state.network_id_ref(),\n"
             "            entrypoint_hash,\n"
             "        ))\n"
             "        .expect(\"encode local QueuePlan request projection\"),\n"
@@ -18156,7 +18158,7 @@ def test_queue_plan_semantic_request_production_source_is_bound() -> None:
         (
             "crates/iroha_torii/src/lib.rs",
             "async fn execute_torii_transaction_via_proxy(",
-            "binding.validate_for_request(app.chain_id.as_ref(), &transaction, &routing_plan)",
+            "binding.validate_for_request(app.state.network_id_ref(), &transaction, &routing_plan)",
             "binding.validate_for_transaction_and_plan(&transaction, &routing_plan)",
             "Torii QueuePlan execution must validate the shared semantic identity before dispatch",
         ),

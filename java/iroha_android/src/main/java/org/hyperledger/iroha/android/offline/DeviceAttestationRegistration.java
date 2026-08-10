@@ -16,12 +16,12 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
  * Strict first-release model for one finalized platform device attestation.
  *
  * <p>This type mirrors {@code OfflineDeviceAttestationRegistration} exactly. Native clients use
- * bridge ABI 21; the registration's on-chain format marker remains version 1.
+ * bridge ABI 22; the registration's on-chain format marker remains version 1.
  */
 public final class DeviceAttestationRegistration {
 
   /** Sole native bridge ABI supported by the first-release Kagemusha client. */
-  public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 21;
+  public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 22;
 
   /** Sole on-chain registration format marker. */
   public static final int REGISTRATION_VERSION = 1;

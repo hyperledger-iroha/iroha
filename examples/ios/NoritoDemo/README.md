@@ -22,9 +22,9 @@ Environment bootstrap
 - Copy `.env.example` to `.env` (or configure the scheme directly) to pre-fill Connect values.
 - Supported keys:
   - `TORII_NODE_URL` — base REST URL (the WebSocket endpoint is derived automatically).
-  - `CONNECT_SESSION_ID` — base64/base64url session identifier returned by `/v1/connect/session`.
-  - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — role tokens from the same endpoint.
-  - `CONNECT_CHAIN_ID` — chain identifier announced during control frames (defaults to `testnet`).
+  - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` / `CONNECT_TOKEN_RELAY` — role and relay tokens from the same endpoint.
+  - `CONNECT_NETWORK_ID` — exact canonical checksummed `NetworkId` bound into the SID and `Open` constraints.
+  - The app generates a fresh app key and non-zero 16-byte nonce, derives the SID from those inputs, and rejects substituted session responses; an arbitrary SID cannot be configured.
   - `CONNECT_ROLE` — default role in the picker (`app` or `wallet`).
   - Optional helpers: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
     `CONNECT_APPROVE_ACCOUNT_ID`, `CONNECT_APPROVE_PRIVATE_KEY_B64`, `CONNECT_APPROVE_SIGNATURE_B64`.
@@ -48,24 +48,24 @@ Next steps
 
 Key derivation (demo)
 - The SwiftUI demo includes X25519 + HKDF-SHA256 key derivation UI. Generate a local ephemeral key and paste the peer’s base64 public key to derive direction keys.
-- Derived keys are used automatically for encryption/decryption; the `AEAD Key` field is a fallback.
-- When NoritoBridge is linked and exports `connect_norito_blake2b_256`, the app uses `BLAKE2b-256("iroha-connect|salt|" || sid)` for salt; otherwise it falls back to SHA256.
+- Derived keys are used automatically for encryption/decryption; the `AEAD Key` field is a manual diagnostic input.
+- Connect key derivation requires NoritoBridge's `BLAKE2b-256("iroha-connect|salt|" || sid)` salt. The demo fails closed if the bridge primitive is unavailable.
 
 Control handshake + auto keying
-- App role auto-sends an `Open` control frame with its X25519 public key after WS connects (when the bridge provides control helpers).
+- App role auto-sends the one-shot, sequence-1 `Open` control frame bound to the exact `NetworkId`, app public key, and launch nonce after WS connects.
 - Wallet role derives keys on `Open` and can sign/send `Approve` with account_id and signature via the UI.
 - App role derives keys on `Approve`. The derived keys populate the demo’s AEAD fields automatically.
-- If control helpers are not available in the bridge, you can still derive keys via manual public-key paste.
+- The Connect handshake is disabled when the required bridge controls are unavailable.
 
 Approve UI (wallet)
 - Fields: Account ID, wallet Ed25519 private key (base64), signature output (base64).
-- "Sign Approve" signs `"iroha-connect|approve|" || sid || app_pk || wallet_pk || account_id` using Ed25519.
+- "Sign Approve" must use the SDK/native approval preimage, which binds the exact `NetworkId`, constraints, SID, app and wallet keys, canonical I105 account, accepted permissions/proof, and relay token.
 - "Send Approve" transmits the control with account_id and signature.
 
 Handshake banner
 - Displays state across WS connect and control exchange: Open sent/received, Approve sent/received, Keys ready.
 Session setup
-- Tap "Create Session" to compute `sid` client-side and POST `/v1/connect/session` to obtain per-role tokens.
+- Tap "Create Session" to derive `sid` from the exact `NetworkId`, app key, and fresh 16-byte nonce, then POST that full identity to `/v1/connect/session` to obtain role and relay tokens. Substituted response identity fields are rejected.
 - Tap "Join WS" to connect with `sid`, `role`, and the appropriate `token` in the query string.
 
 ## CI smoke coverage

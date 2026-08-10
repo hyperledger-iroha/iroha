@@ -47,7 +47,7 @@ The canonical references are:
 
 1. Use a staging Torii with the alias planner and authenticated onboarding
    readiness endpoint enabled. Verify static/bootstrap configuration with
-   `irohad --check-config` before the session.
+   `iroha3d --check-config` before the session.
 2. Give each trainee a runtime-only client configuration whose signer matches
    the transaction authority. If sponsored onboarding is exercised, distribute
    its API token through a protected token file; never place token or key values

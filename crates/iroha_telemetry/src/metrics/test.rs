@@ -39,6 +39,16 @@ fn metrics_lifecycle() {
 }
 
 #[test]
+fn sorafs_pin_resource_usage_exports_only_consensus_summary_values() {
+    let metrics = Metrics::default();
+    metrics.record_sorafs_pin_resource_usage(17, 4_096);
+
+    let exported = metrics.try_to_string().expect("metrics should serialize");
+    assert!(exported.contains("torii_sorafs_pin_retained_manifests 17"));
+    assert!(exported.contains("torii_sorafs_pin_live_content_bytes 4096"));
+}
+
+#[test]
 fn nexus_status_exports_optional_rule_dataspace() {
     let policy = iroha_config::parameters::actual::LaneRoutingPolicy {
         default_lane: iroha_data_model::LaneId::new(2),

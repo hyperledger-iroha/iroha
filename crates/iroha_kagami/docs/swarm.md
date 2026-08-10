@@ -63,7 +63,7 @@ kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-
     are mounted as dedicated Compose secrets; their bytes never appear in
     Compose YAML or environment variables. Byte-exact public policy assets,
     including binary Norito inputs, are interned by digest, stored as base64
-    Compose configs, and decoded into `/config/runtime` before `irohad` starts.
+    Compose configs, and decoded into `/config/runtime` before `iroha3d` starts.
   - The source peer configs, bundle directory, source manifest, genesis private
     signing key, and client credentials are never mounted. Prepared mode also
     fails closed when a requested transport, CIDR filter, or helper-service
@@ -96,8 +96,10 @@ docker compose -f ./my-configs/docker-compose.yml up
 
 `kagami localnet` emits and cross-checks the complete prepared bundle. An
 equivalent manually prepared bundle may use
-`kagami genesis sign --expected-hash-out`, but its `peerN.toml` identities and
-PoPs must match the signed roster exactly. Generated launchers reject an empty
+`kagami genesis sign --expected-hash-out`; that command also emits the paired
+`*.identity.toml` carrying one exact value for client `network_id` and
+validator `genesis.expected_hash`. Its `peerN.toml` identities and PoPs must
+match the signed roster exactly. Generated launchers reject an empty
 body, non-canonical one-line inputs, or a hash without Iroha's marker bit before
 invoking `irohad`; `irohad` then repeats body, signature, verifier-key, and exact
 hash validation.

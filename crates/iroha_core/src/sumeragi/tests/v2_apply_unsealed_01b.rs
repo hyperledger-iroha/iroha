@@ -39,7 +39,7 @@ v2_apply_test!(
                 .expect("install autonomous crash lane marker");
             fixture
                 .kura
-                .persist_lane_executable_payload(&payload, payload.chain_id_hash, payload.epoch)
+                .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
                 .expect("persist autonomous crash payload");
             let mut global_body_store = fixture.reopen_body_store();
             fixture
@@ -57,7 +57,7 @@ v2_apply_test!(
                         .kura
                         .persist_autonomous_lane_slot_retirement(
                             &retirement,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             payload.epoch,
                         )
                         .expect("persist Kura ReleasePending boundary");
@@ -67,7 +67,7 @@ v2_apply_test!(
                         .kura
                         .persist_autonomous_lane_slot_retirement(
                             &retirement,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             payload.epoch,
                         )
                         .expect("persist Kura retirement before Queue barrier");
@@ -77,7 +77,7 @@ v2_apply_test!(
                         .kura
                         .authorize_autonomous_lane_queue_release_preparation(
                             &retirement,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             payload.epoch,
                         )
                         .expect("authorize the exact Queue barrier before substitution");
@@ -94,7 +94,7 @@ v2_apply_test!(
                         .kura
                         .authorize_autonomous_lane_queue_release_preparation(
                             &retirement,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             payload.epoch,
                         )
                         .expect("authorize exact Queue prepared barrier");
@@ -110,7 +110,7 @@ v2_apply_test!(
                         .kura
                         .persist_autonomous_lane_slot_retirement(
                             &retirement,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             payload.epoch,
                         )
                         .expect("persist Kura retirement before released claims");
@@ -118,7 +118,7 @@ v2_apply_test!(
                         .kura
                         .authorize_autonomous_lane_queue_release_preparation(
                             &retirement,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             payload.epoch,
                         )
                         .expect("authorize Queue barrier before Kura Released");
@@ -136,7 +136,7 @@ v2_apply_test!(
                             .finalize_autonomous_lane_slot_release_with_authorization(
                                 &retirement,
                                 &substituted_barrier,
-                                payload.chain_id_hash,
+                                payload.network_id,
                                 payload.epoch,
                                 durable_queue_barrier,
                             )
@@ -152,7 +152,7 @@ v2_apply_test!(
                         .kura
                         .authorize_autonomous_lane_queue_release_preparation(
                             &retirement,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             payload.epoch,
                         )
                         .expect("reauthorize the exact prepared Queue barrier");
@@ -167,7 +167,7 @@ v2_apply_test!(
                         .finalize_autonomous_lane_slot_release_with_authorization(
                             &retirement,
                             &barrier,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             payload.epoch,
                             durable_queue_barrier,
                         )
@@ -179,7 +179,7 @@ v2_apply_test!(
                             fixture.kura.as_ref(),
                             queue.as_ref(),
                             &retirement,
-                            payload.chain_id_hash,
+                            payload.network_id,
                             payload.epoch,
                         )
                         .expect("complete production retirement hand-off"),
@@ -194,7 +194,7 @@ v2_apply_test!(
                     .read_autonomous_lane_slot_retirement(
                         descriptor.lane_id,
                         descriptor.lane_block_height,
-                        payload.chain_id_hash,
+                        payload.network_id,
                         payload.epoch,
                     )
                     .expect("read crash-boundary retirement"),
@@ -303,7 +303,7 @@ v2_apply_test!(
                     fixture.kura.as_ref(),
                     replayed_queue.as_ref(),
                     &retirement,
-                    payload.chain_id_hash,
+                    payload.network_id,
                     payload.epoch,
                 )
                 .expect("retry complete production retirement hand-off"),
@@ -457,7 +457,7 @@ v2_apply_test!(
             .expect("install missing-Queue-owner lane marker");
         fixture
             .kura
-            .persist_lane_executable_payload(&payload, payload.chain_id_hash, payload.epoch)
+            .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
             .expect("persist missing-Queue-owner payload");
         let mut global_body_store = fixture.reopen_body_store();
         fixture
@@ -471,7 +471,7 @@ v2_apply_test!(
             .kura
             .persist_autonomous_lane_slot_retirement(
                 &retirement,
-                payload.chain_id_hash,
+                payload.network_id,
                 payload.epoch,
             )
             .expect("persist missing-Queue-owner ReleasePending boundary");
@@ -490,7 +490,7 @@ v2_apply_test!(
             .kura
             .authorize_autonomous_lane_queue_release_preparation(
                 &retirement,
-                payload.chain_id_hash,
+                payload.network_id,
                 payload.epoch,
             )
             .expect("authenticate the still-pending Kura claims");
@@ -710,14 +710,15 @@ v2_apply_test!(
             .body
             .encode_wire()
             .expect("encode unchanged locked body");
-        let reproposal_manifest = wire::PayloadManifest::derive(
+        let reproposal_manifest = crate::sumeragi::v2_chunks::encode_payload(
             &fixture.context,
             later_round,
             fixture.task.subject(),
-            u64::try_from(canonical_wire.len()).expect("body length"),
-            std::slice::from_ref(&canonical_wire),
+            &canonical_wire,
         )
-        .expect("derive later-round manifest for unchanged locked body");
+        .expect("derive later-round manifest for unchanged locked body")
+        .into_parts()
+        .0;
         let durable = store
             .store(reproposal_manifest, canonical_wire.clone())
             .expect("persist later-round manifest for unchanged locked body");

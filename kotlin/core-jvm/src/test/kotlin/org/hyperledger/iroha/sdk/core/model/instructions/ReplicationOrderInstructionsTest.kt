@@ -8,6 +8,7 @@ import kotlin.test.assertFailsWith
 
 class ReplicationOrderInstructionsTest {
     private val orderId = "44".repeat(32)
+    private val archiveId = "45".repeat(32)
     private val providerId = "11".repeat(32)
     private val providerOwner =
         "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
@@ -37,7 +38,12 @@ class ReplicationOrderInstructionsTest {
     fun `issue arguments are canonical and roundtrip`() {
         val instruction = IssueReplicationOrderInstruction(orderId, "AQID", 20, 28)
         assertEquals("IssueReplicationOrder", instruction.arguments["action"])
+        assertEquals(null, instruction.arguments["musubi_archive_id_hex"])
         assertEquals(instruction, IssueReplicationOrderInstruction.fromArguments(instruction.arguments))
+
+        val bound = IssueReplicationOrderInstruction(orderId, "AQID", 20, 28, archiveId)
+        assertEquals(archiveId, bound.arguments["musubi_archive_id_hex"])
+        assertEquals(bound, IssueReplicationOrderInstruction.fromArguments(bound.arguments))
     }
 
     @Test
@@ -57,6 +63,9 @@ class ReplicationOrderInstructionsTest {
         assertFailsWith<IllegalArgumentException> {
             IssueReplicationOrderInstruction(orderId, "AQID", 29, 28)
         }
+        assertFailsWith<IllegalArgumentException> {
+            IssueReplicationOrderInstruction(orderId, "AQID", 20, 28, "00".repeat(32))
+        }
     }
 
     @Test
@@ -64,6 +73,14 @@ class ReplicationOrderInstructionsTest {
         val bytes = ByteArray(32) { 0x80.toByte() }
         val instruction = IssueReplicationOrderInstruction.fromOrderBytes(bytes, byteArrayOf(1), 1, 2)
         assertEquals("80".repeat(32), instruction.orderIdHex)
+        val bound = IssueReplicationOrderInstruction.fromOrderBytes(
+            bytes,
+            byteArrayOf(1),
+            1,
+            2,
+            ByteArray(32) { 0x7f },
+        )
+        assertEquals("7f".repeat(32), bound.musubiArchiveIdHex)
         assertFailsWith<IllegalArgumentException> {
             IssueReplicationOrderInstruction.fromOrderBytes(ByteArray(31) { 1 }, byteArrayOf(1), 1, 2)
         }

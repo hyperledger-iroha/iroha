@@ -371,7 +371,7 @@ if (candidateValidationJson.keys != candidateValidationFields ||
     generationMemoryLimitBytes > 64L * 1024 * 1024 * 1024 ||
     candidateValidationJson["generation_memory_enforcement_profile"] !=
     "self-physical-footprint-v1" ||
-    candidateValidationJson["bridge_abi_version"] != 21 ||
+    candidateValidationJson["bridge_abi_version"] != 22 ||
     candidateValidationJson["artifact_count"] != 8 ||
     candidateValidationJson["topup_finality_roster_file_name"] !=
     "topup-finality-roster-v4.norito"

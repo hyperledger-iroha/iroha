@@ -1420,10 +1420,11 @@ pub(crate) mod release_fixture;
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
         account::AccountId,
+        block::BlockHeader,
         privacy::{
             PrivacyChallengeV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
             PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyDigestV1,
@@ -2119,7 +2120,9 @@ pub(crate) mod tests {
             KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519).expect("wallet fixture key");
         let mut statement = IrohaZkX509StarkP256StatementV1 {
             context: PrivacyStatementContextV1 {
-                chain_id: ChainId::from("taira-zk-x509-reference-test"),
+                network_id: NetworkId::from_genesis_hash(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x91; 32])),
+                ),
                 action_index: 0,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x62; 32]),
                 parameter_id: PrivacyParameterIdV1::new([0x63; 32]),

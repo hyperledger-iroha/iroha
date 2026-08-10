@@ -28,8 +28,9 @@ mod tests {
 
     use super::{
         ExpectedFile, RootedDirectory, TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1, TWO_SLOT_NAMES_V1,
-        TWO_SLOT_ZERO_DIGEST, TwoSlotInitFileLockV1, TwoSlotSnapshotV1, TwoSlotStageV1,
-        TwoSlotStoreConfigV1, TwoSlotStoreV1, decode_two_slot_value, encode_two_slot_value,
+        TWO_SLOT_ZERO_DIGEST, TwoSlotCasOutcomeV1, TwoSlotInitFileLockV1,
+        TwoSlotInitializationWaitV1, TwoSlotSnapshotV1, TwoSlotStageV1, TwoSlotStoreConfigV1,
+        TwoSlotStoreV1, TwoSlotTryErrorV1, decode_two_slot_value, encode_two_slot_value,
         initialize_two_slot_stage, open_existing_two_slot_store, read_exact_file_region,
         two_slot_init_lock_name, two_slot_lost_found_name, two_slot_stage_prefix,
         write_exact_file_region, write_two_slot_record_unlocked,
@@ -503,6 +504,78 @@ mod tests {
     }
 
     #[test]
+    fn two_slot_try_operations_classify_process_and_os_lock_contention_as_busy() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let store = root
+            .open_or_create_two_slot_store_v1(two_slot_config("try-busy"), b"old")
+            .expect("initialize nonblocking store");
+        let expected = store.load().expect("load predecessor");
+
+        let process_guard = store.process_lock.lock().expect("hold process lock");
+        assert!(matches!(store.try_load(), Err(TwoSlotTryErrorV1::Busy)));
+        assert!(matches!(
+            store.try_compare_and_swap(&expected, b"new"),
+            Err(TwoSlotTryErrorV1::Busy)
+        ));
+        drop(process_guard);
+
+        let blocker = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(store.directory.display_path.join(TWO_SLOT_NAMES_V1[0]))
+            .expect("open independent blocker handle");
+        fs::File::lock(&blocker).expect("hold operating-system lock");
+        assert!(matches!(store.try_load(), Err(TwoSlotTryErrorV1::Busy)));
+        assert!(matches!(
+            store.try_compare_and_swap(&expected, b"new"),
+            Err(TwoSlotTryErrorV1::Busy)
+        ));
+        fs::File::unlock(&blocker).expect("release operating-system lock");
+        assert_eq!(store.try_load().expect("load after lock release"), expected);
+    }
+
+    #[test]
+    fn two_slot_try_compare_and_swap_distinguishes_exact_replay_from_conflict() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("try-conflict");
+        let first_store = root
+            .open_or_create_two_slot_store_v1(config.clone(), b"old")
+            .expect("initialize typed CAS store");
+        let second_store = root
+            .open_or_create_two_slot_store_v1(config, b"old")
+            .expect("open typed CAS store independently");
+        let expected = first_store.try_load().expect("load predecessor");
+        let committed = match first_store
+            .try_compare_and_swap(&expected, b"committed")
+            .expect("commit typed successor")
+        {
+            TwoSlotCasOutcomeV1::Stored(snapshot) => snapshot,
+            TwoSlotCasOutcomeV1::Conflict(_) => panic!("fresh predecessor must commit"),
+        };
+        assert_eq!(committed.generation(), 2);
+        assert_eq!(committed.payload(), b"committed");
+
+        assert_eq!(
+            second_store
+                .try_compare_and_swap(&expected, b"committed")
+                .expect("recognize exact replay"),
+            TwoSlotCasOutcomeV1::Stored(committed.clone())
+        );
+        assert_eq!(
+            second_store
+                .try_compare_and_swap(&expected, b"different")
+                .expect("report stale predecessor"),
+            TwoSlotCasOutcomeV1::Conflict(committed.clone())
+        );
+        assert_eq!(
+            first_store.try_load().expect("load after conflict"),
+            committed
+        );
+    }
+
+    #[test]
     fn two_slot_open_create_is_concurrent_and_canonical_wins() {
         let temp = tempdir().expect("tempdir");
         let root = test_root(temp.path());
@@ -583,6 +656,77 @@ mod tests {
             first_identity
         );
         waiter.join().expect("init-lock waiter did not panic");
+    }
+
+    #[test]
+    fn two_slot_bounded_initialization_times_out_and_recovers_after_lock_release() {
+        assert!(
+            TwoSlotInitializationWaitV1::try_new(Duration::ZERO, Duration::from_millis(1)).is_err()
+        );
+        assert!(
+            TwoSlotInitializationWaitV1::try_new(
+                Duration::from_secs(301),
+                Duration::from_millis(1),
+            )
+            .is_err()
+        );
+        assert!(
+            TwoSlotInitializationWaitV1::try_new(
+                Duration::from_millis(5),
+                Duration::from_millis(6),
+            )
+            .is_err()
+        );
+
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("bounded-init-timeout");
+        let blocker =
+            TwoSlotInitFileLockV1::acquire(&root, &config).expect("hold initializer lock");
+        let wait = TwoSlotInitializationWaitV1::try_new(
+            Duration::from_millis(40),
+            Duration::from_millis(5),
+        )
+        .expect("bounded wait");
+        let started = std::time::Instant::now();
+        let error = root
+            .open_or_create_two_slot_store_v1_bounded(config.clone(), b"initial", wait)
+            .expect_err("contended bounded initialization must expire");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        blocker.release().expect("release initializer lock");
+        let recovered = root
+            .open_or_create_two_slot_store_v1_bounded(config, b"initial", wait)
+            .expect("initialize after release");
+        assert_eq!(
+            recovered.load().expect("load recovered store").payload(),
+            b"initial"
+        );
+    }
+
+    #[test]
+    fn two_slot_bounded_initialization_acquires_before_deadline() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let config = two_slot_config("bounded-init-handoff");
+        let blocker =
+            TwoSlotInitFileLockV1::acquire(&root, &config).expect("hold initializer lock");
+        let releaser = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(25));
+            blocker.release().expect("release initializer lock");
+        });
+        let wait =
+            TwoSlotInitializationWaitV1::try_new(Duration::from_secs(1), Duration::from_millis(5))
+                .expect("bounded wait");
+        let store = root
+            .open_or_create_two_slot_store_v1_bounded(config, b"initial", wait)
+            .expect("bounded initializer acquires after handoff");
+        releaser.join().expect("releaser did not panic");
+        assert_eq!(
+            store.load().expect("load initialized store").payload(),
+            b"initial"
+        );
     }
 
     #[test]
@@ -1387,6 +1531,12 @@ mod tests {
             b"initial"
         );
         assert!(store.process_lock.is_poisoned());
+        match store.try_load() {
+            Err(TwoSlotTryErrorV1::Io(error)) => {
+                assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            }
+            other => panic!("nonblocking poisoned lock must fail closed, got {other:?}"),
+        }
 
         let init_temp = tempdir().expect("tempdir");
         let init_root = test_root(init_temp.path());
@@ -2254,6 +2404,28 @@ mod tests {
         root.remove_empty_directory_binding(retained)
             .expect("remove exact empty orphan");
         assert!(!temp.path().join("orphan").exists());
+    }
+
+    #[test]
+    fn rooted_empty_directory_removal_preserves_a_child_created_at_the_destructive_gap() {
+        let temp = tempdir().expect("tempdir");
+        let root = test_root(temp.path());
+        let retained = temp.path().join("orphan");
+        fs::create_dir(&retained).expect("seed empty orphan directory");
+        let binding = root
+            .open_directory(OsStr::new("orphan"))
+            .expect("retain empty orphan directory");
+
+        let error = root
+            .remove_empty_directory_binding_with(binding, || {
+                fs::write(retained.join("racing-child"), b"preserve me")
+            })
+            .expect_err("a child created after the emptiness check must block removal");
+        assert_eq!(error.kind(), io::ErrorKind::DirectoryNotEmpty);
+        assert_eq!(
+            fs::read(retained.join("racing-child")).expect("racing child remains"),
+            b"preserve me"
+        );
     }
 
     #[test]

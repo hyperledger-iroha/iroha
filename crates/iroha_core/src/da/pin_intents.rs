@@ -16,7 +16,7 @@ use iroha_data_model::{
     },
     nexus::LaneId,
 };
-use norito::decode_from_bytes;
+use norito::{decode_from_bytes, to_bytes};
 use thiserror::Error;
 
 use crate::da::ReplayFingerprint;
@@ -574,25 +574,17 @@ impl From<&DaPinIntent> for PinIntentKey {
 }
 
 fn sort_pin_intents(intents: &mut [DaPinIntent]) {
-    intents.sort_by(|a, b| {
+    intents.sort_by_cached_key(|intent| {
         (
-            a.lane_id.as_u32(),
-            a.epoch,
-            a.sequence,
-            *a.storage_ticket.as_bytes(),
-            *a.manifest_hash.as_bytes(),
-            a.alias.as_deref(),
-            a.owner.as_ref(),
+            intent.lane_id.as_u32(),
+            intent.epoch,
+            intent.sequence,
+            *intent.storage_ticket.as_bytes(),
+            *intent.manifest_hash.as_bytes(),
+            intent.alias.clone(),
+            to_bytes(&intent.authorization)
+                .expect("DA ingest authorization must have a canonical Norito encoding"),
         )
-            .cmp(&(
-                b.lane_id.as_u32(),
-                b.epoch,
-                b.sequence,
-                *b.storage_ticket.as_bytes(),
-                *b.manifest_hash.as_bytes(),
-                b.alias.as_deref(),
-                b.owner.as_ref(),
-            ))
     });
 }
 
@@ -612,7 +604,6 @@ mod tests {
         nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
-    use norito::to_bytes;
     use tempfile::tempdir;
 
     use super::*;
@@ -620,6 +611,14 @@ mod tests {
     fn sample_intent(lane: u32, seq: u64) -> DaPinIntent {
         let lane_byte = u8::try_from(lane).expect("lane id fits in byte for test intent");
         let seq_byte = u8::try_from(seq).expect("sequence fits in byte for test intent");
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xD1; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("valid deterministic DA pin spool key");
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xD2; 32]),
+        ));
         DaPinIntent {
             lane_id: LaneId::new(lane),
             epoch: 1,
@@ -627,7 +626,14 @@ mod tests {
             storage_ticket: StorageTicketId::new([lane_byte; 32]),
             manifest_hash: ManifestDigest::new([seq_byte; 32]),
             alias: Some(format!("alias-{lane}-{seq}")),
-            owner: None,
+            authorization: crate::da::signed_test_ingest_authorization(
+                network_id,
+                &key_pair,
+                LaneId::new(lane),
+                1,
+                seq,
+                1,
+            ),
         }
     }
 

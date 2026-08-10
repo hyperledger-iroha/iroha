@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import { getNativeBinding } from "./native.js";
+import { networkIdBytes } from "./networkId.js";
 
 export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA =
   "cbsi.mobile-validation-fee-ledger-binding.v1";
@@ -9,27 +10,25 @@ export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA =
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH =
   "/v1/validation-fee/policy/current/proof";
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
-export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION = 21;
+export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION = 22;
 
 const LOWER_HEX_32 = /^[0-9a-f]{64}$/u;
 const BINDING_KEYS = Object.freeze([
-  "chainId",
   "checkpoint",
-  "genesisHash",
+  "networkId",
   "policyChainGenesisHash",
   "schema",
 ]);
 const CHECKPOINT_KEYS = Object.freeze(["contextId", "height"]);
 const PROJECTION_KEYS = Object.freeze([
-  "chain_id",
   "current_policy",
   "evaluated_block_hash",
   "evaluated_block_height",
   "evaluated_context_id",
-  "genesis_hash",
   "head_policy_hash",
   "head_policy_version",
   "more_available",
+  "network_id",
   "observed_ledger_tip_height",
   "policy_chain_genesis_hash",
   "registry_hash",
@@ -188,19 +187,6 @@ function positiveU64(value, label) {
     throw new TypeError(`${label} must be a positive uint64`);
   }
   return parsed;
-}
-
-function exactChainId(value, label) {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > 256 ||
-    value.trim() !== value ||
-    /[\u0000-\u001f\u007f]/u.test(value)
-  ) {
-    throw new TypeError(`${label} must be canonical bounded text`);
-  }
-  return value;
 }
 
 function canonicalText(value, label) {
@@ -649,7 +635,7 @@ function validateCurrentPolicy(value, label) {
   }
 }
 
-/** Parse the exact immutable CBSI deployment binding. */
+/** Validate the exact immutable CBSI deployment binding. */
 export function normalizeValidationFeeLedgerBindingV1(value) {
   const binding = record(value, "validation-fee ledger binding");
   exactKeys(binding, BINDING_KEYS, "validation-fee ledger binding");
@@ -659,13 +645,10 @@ export function normalizeValidationFeeLedgerBindingV1(value) {
     );
   }
   const checkpoint = normalizeValidationFeeCheckpointV1(binding.checkpoint);
+  networkIdBytes(binding.networkId, "validation-fee ledger binding.networkId");
   return Object.freeze({
     schema: binding.schema,
-    chainId: exactChainId(binding.chainId, "validation-fee ledger binding.chainId"),
-    genesisHash: irohaHash32(
-      binding.genesisHash,
-      "validation-fee ledger binding.genesisHash",
-    ),
+    networkId: binding.networkId,
     policyChainGenesisHash: irohaHash32(
       binding.policyChainGenesisHash,
       "validation-fee ledger binding.policyChainGenesisHash",
@@ -758,8 +741,7 @@ export function verifyValidationFeeCurrentPolicyProofV1(
   }
   const json = nativeBinding().validationFeeVerifyCurrentPolicyProofV1(
     proof,
-    binding.chainId,
-    Buffer.from(binding.genesisHash, "hex"),
+    Buffer.from(networkIdBytes(binding.networkId, "validation-fee ledger binding.networkId")),
     Buffer.from(binding.policyChainGenesisHash, "hex"),
     checkpoint.height,
     Buffer.from(checkpoint.contextId, "hex"),
@@ -780,8 +762,7 @@ export function verifyValidationFeeCurrentPolicyProofV1(
   if (
     projection.schema !== VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA ||
     projection.version !== 1 ||
-    projection.chain_id !== binding.chainId ||
-    projection.genesis_hash !== binding.genesisHash ||
+    projection.network_id !== binding.networkId.toString() ||
     projection.policy_chain_genesis_hash !== binding.policyChainGenesisHash ||
     projection.trusted_checkpoint_context_id !== checkpoint.contextId ||
     projectedTrustedCheckpointHeight !== checkpoint.height

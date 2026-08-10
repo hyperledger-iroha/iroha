@@ -3,21 +3,39 @@ package org.hyperledger.iroha.sdk.privacy
 import java.math.BigInteger
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.security.KeyPairGenerator
+import java.security.Signature
+import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.ClientConfig
+import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
 import org.hyperledger.iroha.sdk.client.HttpClientTransport
 import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.LocalSigningContext
+import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
+import org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 class PrivacyCapabilitiesV1Test {
+    private val networkId = NetworkId.parse(
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    )
+    private val otherNetworkId = NetworkId.parse(
+        "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
+    )
+    private val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+
     @Test
     fun parsesClosedSnapshotWithoutLosingU64Height() {
         val snapshot = PrivacyCapabilitySnapshotJsonV1.parse(
@@ -93,21 +111,32 @@ class PrivacyCapabilitiesV1Test {
     }
 
     @Test
-    fun configuredClientUsesExactJsonRouteAndFailsClosedOnMediaType() {
+    fun configuredClientUsesExactNoritoRouteAndRejectsLegacySnapshot() {
         val response = TransportResponse.builder()
             .setStatusCode(200)
             .setBody(unavailableSnapshot("42").toByteArray(StandardCharsets.UTF_8))
-            .addHeader("Content-Type", "application/json")
+            .addHeader("Content-Type", "application/x-norito")
             .build()
         val executor = OneResponseExecutor(response)
         val client = HttpClientTransport.withExecutor(
             executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+            signedConfig(),
         )
-        assertEquals(42L, client.getPrivacyCapabilities().join().committedHeight.longValueExact())
+        val legacy = assertFailsWith<CompletionException> {
+            client.getPrivacyCapabilities(canonicalAuth()).join()
+        }
+        assertTrue(legacy.cause is RuntimeException)
         assertEquals("/v1/privacy/capabilities", executor.request.uri.rawPath)
-        assertEquals(listOf("application/json"), executor.request.headers["Accept"])
-        assertEquals(PrivacyCapabilitySnapshotJsonV1.MAX_RESPONSE_BYTES, executor.request.maximumResponseBytes)
+        assertEquals(listOf("application/x-norito"), executor.request.headers["Accept"])
+        assertEquals(RequestReplayPolicy.ONE_SHOT, executor.request.replayPolicy)
+        assertEquals(1, executor.requestCount)
+        assertEquals(0, executor.request.body.size)
+        assertCanonicalSignature(executor.request, networkId, true)
+        assertCanonicalSignature(executor.request, otherNetworkId, false)
+        assertEquals(
+            PrivacyExact12CapabilityManifestV1.MAX_ARCHIVE_BYTES.toLong(),
+            executor.request.maximumResponseBytes,
+        )
 
         val wrongMedia = response.let {
             TransportResponse.builder()
@@ -119,8 +148,8 @@ class PrivacyCapabilitiesV1Test {
         val error = assertFailsWith<CompletionException> {
             HttpClientTransport.withExecutor(
                 OneResponseExecutor(wrongMedia),
-                ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
-            ).getPrivacyCapabilities().join()
+                signedConfig(),
+            ).getPrivacyCapabilities(canonicalAuth()).join()
         }
         assertTrue(error.cause is RuntimeException)
     }
@@ -129,32 +158,36 @@ class PrivacyCapabilitiesV1Test {
     fun exactTransportRejectsHeaderAmbiguityLengthSmugglingAndHostileBodies() {
         val body = unavailableSnapshot("42").toByteArray(StandardCharsets.UTF_8)
         val canonicalHeaders = mapOf(
-            "Content-Type" to listOf("application/json"),
+            "Content-Type" to listOf("application/x-norito"),
             "Content-Length" to listOf(body.size.toString()),
         )
-        val canonical = response(body = body, headers = canonicalHeaders)
-        assertEquals(42L, clientFor(canonical).getPrivacyCapabilities().join().committedHeight.longValueExact())
+        val legacy = assertFailsWith<CompletionException> {
+            clientFor(response(body = body, headers = canonicalHeaders))
+                .getPrivacyCapabilities(canonicalAuth())
+                .join()
+        }
+        assertTrue(legacy.cause is RuntimeException)
 
         val hostile = buildList {
             add(response(statusCode = 206, body = body, headers = canonicalHeaders))
             add(response(body = body, headers = mapOf("Content-Type" to listOf("application/json; charset=utf-8"))))
-            add(response(body = body, headers = mapOf("Content-Type" to listOf("application/json", "application/json"))))
-            add(response(body = body, headers = mapOf("Content-Type" to listOf("application/json"), "Content-Length" to listOf(body.size.toString(), body.size.toString()))))
-            add(response(body = body, headers = mapOf("Content-Type" to listOf("application/json"), "Content-Length" to listOf((body.size + 1).toString()))))
+            add(response(body = body, headers = mapOf("Content-Type" to listOf("application/x-norito", "application/x-norito"))))
+            add(response(body = body, headers = mapOf("Content-Type" to listOf("application/x-norito"), "Content-Length" to listOf(body.size.toString(), body.size.toString()))))
+            add(response(body = body, headers = mapOf("Content-Type" to listOf("application/x-norito"), "Content-Length" to listOf((body.size + 1).toString()))))
             for (length in listOf("+${body.size}", "0${body.size}", "${body.size} ", "-1", "9".repeat(1_024))) {
-                add(response(body = body, headers = mapOf("Content-Type" to listOf("application/json"), "Content-Length" to listOf(length))))
+                add(response(body = body, headers = mapOf("Content-Type" to listOf("application/x-norito"), "Content-Length" to listOf(length))))
             }
-            add(response(body = ByteArray(0), headers = mapOf("Content-Type" to listOf("application/json"))))
+            add(response(body = ByteArray(0), headers = mapOf("Content-Type" to listOf("application/x-norito"))))
             add(
                 response(
-                    body = ByteArray(PrivacyCapabilitySnapshotJsonV1.MAX_RESPONSE_BYTES.toInt() + 1) { 0x20 },
-                    headers = mapOf("Content-Type" to listOf("application/json")),
+                    body = ByteArray(PrivacyExact12CapabilityManifestV1.MAX_ARCHIVE_BYTES + 1) { 0x20 },
+                    headers = mapOf("Content-Type" to listOf("application/x-norito")),
                 ),
             )
         }
         hostile.forEachIndexed { index, candidate ->
             val error = assertFailsWith<CompletionException>("hostile response $index must fail closed") {
-                clientFor(candidate).getPrivacyCapabilities().join()
+                clientFor(candidate).getPrivacyCapabilities(canonicalAuth()).join()
             }
             assertTrue(error.cause is RuntimeException, "unexpected hostile response $index cause: ${error.cause}")
         }
@@ -164,17 +197,18 @@ class PrivacyCapabilitiesV1Test {
     fun exactTransportRejectsCaseVariantDefaultAcceptBeforeDispatch() {
         val body = unavailableSnapshot("42").toByteArray(StandardCharsets.UTF_8)
         val executor = OneResponseExecutor(
-            response(body = body, headers = mapOf("Content-Type" to listOf("application/json"))),
+            response(body = body, headers = mapOf("Content-Type" to listOf("application/x-norito"))),
         )
         val client = HttpClientTransport.withExecutor(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))
-                .putDefaultHeader("aCcEpT", "application/json")
+                .setLocalSigningContext(LocalSigningContext(networkId))
+                .putDefaultHeader("aCcEpT", "application/x-norito")
                 .build(),
         )
         assertFailsWith<IllegalArgumentException> {
-            client.getPrivacyCapabilities()
+            client.getPrivacyCapabilities(canonicalAuth())
         }
     }
 
@@ -219,16 +253,57 @@ class PrivacyCapabilitiesV1Test {
     private fun clientFor(response: TransportResponse): HttpClientTransport =
         HttpClientTransport.withExecutor(
             OneResponseExecutor(response),
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+            signedConfig(),
         )
+
+    private fun signedConfig(): ClientConfig = ClientConfig.builder()
+        .setBaseUri(URI.create("https://torii.example"))
+        .setLocalSigningContext(LocalSigningContext(networkId))
+        .build()
+
+    private fun canonicalAuth(): ToriiCanonicalRequestAuth = ToriiCanonicalRequestAuth(
+        "alice",
+        keyPair.private,
+        1_700_000_000_000L,
+        "privacy-capabilities-1",
+    )
+
+    private fun assertCanonicalSignature(
+        request: TransportRequest,
+        expectedNetworkId: NetworkId,
+        expected: Boolean,
+    ) {
+        val encoded = assertNotNull(
+            request.headers[CanonicalRequestSigner.HEADER_SIGNATURE]?.singleOrNull(),
+        )
+        val verifier = Signature.getInstance("Ed25519")
+        verifier.initVerify(keyPair.public)
+        verifier.update(
+            CanonicalRequestSigner.canonicalRequestSignatureMessage(
+                expectedNetworkId,
+                request.method,
+                request.uri,
+                request.body,
+                1_700_000_000_000L,
+                "privacy-capabilities-1",
+            ),
+        )
+        if (expected) {
+            assertTrue(verifier.verify(Base64.getDecoder().decode(encoded)))
+        } else {
+            assertFalse(verifier.verify(Base64.getDecoder().decode(encoded)))
+        }
+    }
 
     private class OneResponseExecutor(
         private val response: TransportResponse,
     ) : HttpTransportExecutor {
         lateinit var request: TransportRequest
+        var requestCount: Int = 0
 
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
             this.request = request
+            requestCount++
             return CompletableFuture.completedFuture(response)
         }
     }

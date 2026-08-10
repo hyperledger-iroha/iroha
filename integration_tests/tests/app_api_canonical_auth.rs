@@ -2,7 +2,7 @@
 //! App API canonical request auth smoke test: GET + POST endpoints accept
 //! the canonical signed header set
 //! (`X-Iroha-Account`/`X-Iroha-Signature`/`X-Iroha-Timestamp-Ms`/`X-Iroha-Nonce`)
-//! over the canonical method/path/query/body envelope plus freshness metadata.
+//! over the exact-network canonical method/path/query/body envelope plus freshness metadata.
 
 use eyre::Result;
 use integration_tests::sandbox;
@@ -11,7 +11,7 @@ use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
-    canonical_request_signature_message,
+    canonical_network_request_signature_message,
     filter::{Pagination, QueryEnvelope},
     signature_header_value,
 };
@@ -41,6 +41,7 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         .peers()
         .first()
         .ok_or_else(|| eyre::eyre!("no peers available"))?;
+    let network_id = network.network_id();
     let http = integration_tests::http::client();
     let account_literal = ALICE_ID.to_string();
     let timestamp_ms: u64 = SystemTime::now()
@@ -64,7 +65,8 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     let assets_endpoint = assets_url.as_str().to_owned();
     let assets_uri = signing_uri(&assets_url)?;
     let assets_nonce = "app-api-canonical-auth-get";
-    let assets_msg = canonical_request_signature_message(
+    let assets_msg = canonical_network_request_signature_message(
+        &network_id,
         &Method::GET,
         &assets_uri,
         &[],
@@ -134,8 +136,14 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     }
     let tx_uri = signing_uri(&tx_url)?;
     let tx_nonce = "app-api-canonical-auth-post";
-    let tx_msg =
-        canonical_request_signature_message(&Method::POST, &tx_uri, &body, timestamp_ms, tx_nonce);
+    let tx_msg = canonical_network_request_signature_message(
+        &network_id,
+        &Method::POST,
+        &tx_uri,
+        &body,
+        timestamp_ms,
+        tx_nonce,
+    );
     let tx_sig =
         Signature::try_new(ALICE_KEYPAIR.private_key(), &tx_msg).expect("POST app-api signature");
 

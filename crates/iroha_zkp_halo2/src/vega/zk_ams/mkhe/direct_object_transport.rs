@@ -77,6 +77,10 @@ pub enum ZkAmsMkheDirectObjectKindV1 {
     CpkPartyB = 9,
     /// Exact native proof linking CPK membership commitments to `b_i`.
     CpkRelationProof = 10,
+    /// Exact canonical partial-decryption share polynomial.
+    DecryptionSharePolynomial = 11,
+    /// Exact canonical native `ZADP` decryption-relation proof.
+    DecryptionRelationProof = 12,
 }
 
 impl ZkAmsMkheDirectObjectKindV1 {
@@ -89,8 +93,11 @@ impl ZkAmsMkheDirectObjectKindV1 {
             | Self::GaloisB
             | Self::AggregateH0
             | Self::AggregateH1
-            | Self::CpkPartyB => DIRECT_RNS_POLYNOMIAL_MAX_BYTES_V1,
-            Self::ProofEnvelope | Self::CpkRelationProof => DIRECT_RELATION_PROOF_MAX_BYTES_V1,
+            | Self::CpkPartyB
+            | Self::DecryptionSharePolynomial => DIRECT_RNS_POLYNOMIAL_MAX_BYTES_V1,
+            Self::ProofEnvelope | Self::CpkRelationProof | Self::DecryptionRelationProof => {
+                DIRECT_RELATION_PROOF_MAX_BYTES_V1
+            }
         }
     }
 }
@@ -110,6 +117,8 @@ impl TryFrom<u8> for ZkAmsMkheDirectObjectKindV1 {
             8 => Ok(Self::ProofEnvelope),
             9 => Ok(Self::CpkPartyB),
             10 => Ok(Self::CpkRelationProof),
+            11 => Ok(Self::DecryptionSharePolynomial),
+            12 => Ok(Self::DecryptionRelationProof),
             _ => Err(ZkAmsMkheErrorV1::InvalidWireEncoding),
         }
     }
@@ -2303,6 +2312,8 @@ mod tests {
             ZkAmsMkheDirectObjectKindV1::ProofEnvelope,
             ZkAmsMkheDirectObjectKindV1::CpkPartyB,
             ZkAmsMkheDirectObjectKindV1::CpkRelationProof,
+            ZkAmsMkheDirectObjectKindV1::DecryptionSharePolynomial,
+            ZkAmsMkheDirectObjectKindV1::DecryptionRelationProof,
         ] {
             let pointer =
                 ZkAmsMkheDirectObjectPointerV1::from_payload(kind, &payload(257)).unwrap();

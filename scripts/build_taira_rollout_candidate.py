@@ -31,7 +31,9 @@ from pathlib import Path, PurePosixPath
 from typing import NoReturn
 
 try:
+    from . import build_privacy_v1_boi_handoff as boi_handoff
     from . import deploy_taira_v21_reset as deploy
+    from . import taira_privacy_protocol_receipt as privacy_evidence
     from . import taira_rollout_admission as admission
     from .release_artifact_contract import (
         ReleaseArtifactError,
@@ -55,7 +57,9 @@ try:
         verify_release_manifest,
     )
 except ImportError:
+    import build_privacy_v1_boi_handoff as boi_handoff
     import deploy_taira_v21_reset as deploy
+    import taira_privacy_protocol_receipt as privacy_evidence
     import taira_rollout_admission as admission
     from release_artifact_contract import (
         ReleaseArtifactError,
@@ -106,8 +110,36 @@ class PayloadMember:
     mode: int
 
 
+@dataclass(frozen=True)
+class BoiArtifactHandoffSnapshot:
+    """Stable identities for the independently parsed 13-artifact handoff."""
+
+    root: Path
+    manifest: StableFile
+    manifest_payload: bytes
+    artifacts: Mapping[str, StableFile]
+
+
 def _fail(message: str) -> NoReturn:
     raise TairaCandidateBuildError(message)
+
+
+def _require_privacy_protocol_controller_origin_authority() -> None:
+    """Translate the shared provisioning barrier into this command's error."""
+
+    try:
+        privacy_evidence.require_controller_origin_authority_provisioned()
+    except privacy_evidence.PrivacyProtocolEvidenceError as exc:
+        raise TairaCandidateBuildError(str(exc)) from exc
+
+
+def _require_independent_native_evidence_authority() -> None:
+    """Translate the Linux native-evidence provisioning barrier."""
+
+    try:
+        admission._require_independent_native_evidence_authority()
+    except admission.TairaRolloutAdmissionError as exc:
+        raise TairaCandidateBuildError(str(exc)) from exc
 
 
 def _sha256(value: object, label: str) -> str:
@@ -284,6 +316,110 @@ def _authority_members(authority_dir: Path) -> list[PayloadMember]:
     ]
 
 
+def _capture_boi_artifact_handoff(
+    root: Path,
+    *,
+    source: admission.SourceIdentity,
+    expected_exact12_matrix_sha256: str,
+) -> BoiArtifactHandoffSnapshot:
+    """Hash the exact BOI handoff and retain identities for a final recheck."""
+
+    root = _canonical_path(root, "Privacy v1 BOI artifact handoff", directory=True)
+    expected_paths = sorted(
+        [
+            admission.BOI_SOURCE_HANDOFF_MANIFEST,
+            *admission.BOI_SOURCE_ARTIFACT_PATHS,
+        ]
+    )
+    try:
+        actual_paths = scan_inventory_paths(root)
+        manifest, payload = stable_read_path(
+            root / admission.BOI_SOURCE_HANDOFF_MANIFEST,
+            max_size=admission.MAX_BOI_ARTIFACT_INVENTORY_BYTES,
+        )
+    except ReleaseArtifactError as exc:
+        raise TairaCandidateBuildError(
+            f"cannot inspect Privacy v1 BOI artifact handoff: {exc}"
+        ) from exc
+    if actual_paths != expected_paths:
+        _fail("Privacy v1 BOI artifact handoff inventory is not exact")
+    parsed = admission._validate_boi_artifact_inventory(
+        payload,
+        expected_source=source,
+        expected_exact12_matrix_sha256=expected_exact12_matrix_sha256,
+    )
+    rows = parsed["files"]
+    assert isinstance(rows, list)
+    captured: dict[str, StableFile] = {}
+    for row in rows:
+        assert isinstance(row, dict)
+        relative = str(row["path"])
+        try:
+            info = stable_hash_relative(
+                root,
+                relative,
+                max_size=admission.MAX_BOI_ARTIFACT_BYTES,
+            )
+        except ReleaseArtifactError as exc:
+            raise TairaCandidateBuildError(
+                f"cannot hash BOI artifact {relative!r}: {exc}"
+            ) from exc
+        if info.sha256 != row["sha256"] or info.size != row["size"]:
+            _fail(f"Privacy v1 BOI artifact differs from inventory: {relative!r}")
+        captured[relative] = info
+    try:
+        independently_validated = boi_handoff.validate_candidate_boi_artifact_handoff(
+            root,
+            source=source.as_dict(),
+            exact12_matrix_sha256=expected_exact12_matrix_sha256,
+            inventory_sha256=manifest.sha256,
+            inventory_payload=payload,
+        )
+    except boi_handoff.BoiHandoffError as exc:
+        raise TairaCandidateBuildError(
+            f"Privacy v1 BOI artifact rebind failed: {exc}"
+        ) from exc
+    if independently_validated != captured:
+        _fail("Privacy v1 BOI artifact identities changed during independent rebind")
+    return BoiArtifactHandoffSnapshot(root, manifest, payload, captured)
+
+
+def _recheck_boi_artifact_handoff(snapshot: BoiArtifactHandoffSnapshot) -> None:
+    """Reject any BOI inventory or artifact mutation across candidate signing."""
+
+    expected_paths = sorted(
+        [
+            admission.BOI_SOURCE_HANDOFF_MANIFEST,
+            *admission.BOI_SOURCE_ARTIFACT_PATHS,
+        ]
+    )
+    try:
+        if scan_inventory_paths(snapshot.root) != expected_paths:
+            _fail("Privacy v1 BOI artifact handoff inventory changed during signing")
+        manifest, payload = stable_read_path(
+            snapshot.root / admission.BOI_SOURCE_HANDOFF_MANIFEST,
+            max_size=admission.MAX_BOI_ARTIFACT_INVENTORY_BYTES,
+        )
+        if manifest != snapshot.manifest or payload != snapshot.manifest_payload:
+            _fail("Privacy v1 BOI artifact inventory changed during signing")
+        for relative, expected in snapshot.artifacts.items():
+            if (
+                stable_hash_relative(
+                    snapshot.root,
+                    relative,
+                    max_size=admission.MAX_BOI_ARTIFACT_BYTES,
+                )
+                != expected
+            ):
+                _fail(
+                    f"Privacy v1 BOI artifact changed during signing: {relative!r}"
+                )
+    except ReleaseArtifactError as exc:
+        raise TairaCandidateBuildError(
+            f"cannot recheck Privacy v1 BOI artifact handoff: {exc}"
+        ) from exc
+
+
 def _final_manifest(
     *,
     archive: Path,
@@ -321,6 +457,12 @@ def _final_manifest(
 
 
 def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
+    # This must precede argument/path inspection, output creation, and access to
+    # the candidate signer.  The current unsigned v2 self-hash chain cannot
+    # establish that the sealed qualification controller produced the bytes.
+    _require_privacy_protocol_controller_origin_authority()
+    _require_independent_native_evidence_authority()
+
     source = admission.SourceIdentity(
         _commit(args.source_commit, "source commit"),
         _commit(
@@ -363,7 +505,28 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
     linux_authority = _canonical_path(
         args.linux_authority_dir, "Linux authority directory", directory=True
     )
+    boi_artifact_handoff = _canonical_path(
+        args.boi_artifact_handoff_dir,
+        "Privacy v1 BOI artifact handoff",
+        directory=True,
+    )
     receipt_path = _canonical_path(args.macos_receipt, "macOS receipt")
+    privacy_protocol_evidence = _canonical_path(
+        args.privacy_protocol_evidence_dir,
+        "privacy protocol four-peer evidence directory",
+        directory=True,
+    )
+    try:
+        privacy_inventory = scan_inventory_paths(privacy_protocol_evidence)
+    except ReleaseArtifactError as exc:
+        raise TairaCandidateBuildError(
+            f"cannot scan privacy protocol evidence: {exc}"
+        ) from exc
+    if privacy_inventory != sorted(privacy_evidence.EVIDENCE_NAMES):
+        _fail("privacy protocol evidence directory inventory is not exact v2")
+    privacy_protocol_receipt_path = (
+        privacy_protocol_evidence / privacy_evidence.RECEIPT_NAME
+    )
     verifier = _canonical_path(
         args.release_manifest_verifier, "native release-manifest verifier"
     )
@@ -388,7 +551,14 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
             consumed_receipt_ids=set(),
             now_unix=now_unix,
         )
-
+        privacy_protocol_receipt_object = _load_canonical_object(
+            privacy_protocol_receipt_path,
+            "privacy protocol four-peer receipt",
+        )
+        privacy_protocol_receipt_id = _sha256(
+            privacy_protocol_receipt_object.get("receipt_id"),
+            "privacy protocol receipt ID",
+        )
         authority_rows = _authority_members(linux_authority)
         linux_info = stable_hash_path(
             linux_archive,
@@ -449,11 +619,52 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
                 trusted_signing_fingerprint=signer_fingerprint,
                 native_verifier_sha256=verifier_sha,
             )
+            boi_snapshot = _capture_boi_artifact_handoff(
+                boi_artifact_handoff,
+                source=source,
+                expected_exact12_matrix_sha256=str(
+                    nested["exact12_matrix_sha256"]
+                ),
+            )
+            admission._validate_privacy_protocol_receipt(
+                privacy_protocol_evidence,
+                expected_source=source,
+                expected_validator_binary_sha256=str(
+                    receipt_object["validator_binary_sha256"]
+                ),
+                expected_linux_release_archive_sha256=linux_info.sha256,
+                expected_exact12_matrix_sha256=str(
+                    nested["exact12_matrix_sha256"]
+                ),
+                expected_artifact_handoff_sha256=str(
+                    receipt_object["artifact_handoff_sha256"]
+                ),
+                expected_receipt_id=privacy_protocol_receipt_id,
+                now_unix=now_unix,
+            )
 
         linux_relative = f"linux/{linux_archive.name}"
         receipt_relative = admission.MACOS_RECEIPT_PATH
+        privacy_members = [
+            PayloadMember(
+                privacy_protocol_evidence,
+                name,
+                f"{admission.PRIVACY_PROTOCOL_EVIDENCE_DIRECTORY}/{name}",
+                stable_hash_relative(privacy_protocol_evidence, name),
+                0o600,
+            )
+            for name in sorted(privacy_evidence.EVIDENCE_NAMES)
+        ]
         members = [
             *authority_rows,
+            *privacy_members,
+            PayloadMember(
+                boi_snapshot.root,
+                admission.BOI_SOURCE_HANDOFF_MANIFEST,
+                admission.BOI_ARTIFACT_INVENTORY_PATH,
+                boi_snapshot.manifest,
+                0o600,
+            ),
             PayloadMember(
                 linux_archive.parent,
                 linux_archive.name,
@@ -486,6 +697,11 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
         ]
         admission_manifest = canonical_json_bytes(
             {
+                "boi_privacy_v1": {
+                    "artifact_count": len(admission.BOI_SOURCE_ARTIFACT_PATHS),
+                    "inventory_path": admission.BOI_ARTIFACT_INVENTORY_PATH,
+                    "inventory_sha256": boi_snapshot.manifest.sha256,
+                },
                 "controller": {
                     "digest": controller_digest,
                     "manifest_path": admission.CONTROLLER_MANIFEST_PATH,
@@ -504,6 +720,12 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
                 "macos_arm64": {
                     "arch": "arm64",
                     "os": "macos",
+                    "privacy_protocol_receipt_id": (
+                        privacy_protocol_receipt_id
+                    ),
+                    "privacy_protocol_receipt_path": (
+                        admission.PRIVACY_PROTOCOL_RECEIPT_PATH
+                    ),
                     "receipt_id": receipt_id,
                     "receipt_path": receipt_relative,
                 },
@@ -581,12 +803,15 @@ def assemble_candidate(args: argparse.Namespace) -> dict[str, object]:
             )
         finally:
             replay.unlink(missing_ok=True)
+        _recheck_boi_artifact_handoff(boi_snapshot)
         return {
             "archive": str(archive_path),
             "archive_sha256": archive_info.sha256,
             "authority_dir": str(authority_dir),
             "authority_manifest_sha256": signing["manifest_sha256"],
+            "boi_artifact_inventory_sha256": boi_snapshot.manifest.sha256,
             "receipt_id": receipt_object["receipt_id"],
+            "privacy_protocol_receipt_id": privacy_protocol_receipt_id,
             "controller_digest": controller_digest,
             "source": source.as_dict(),
             "verified": verified["verified"],
@@ -714,7 +939,7 @@ def pack_deploy_payload(args: argparse.Namespace) -> dict[str, object]:
     directories.extend(("bin", "supervisor"))
     members.extend(
         [
-            PayloadMember(binary.parent, binary.name, "bin/irohad", binary_info, 0o500),
+            PayloadMember(binary.parent, binary.name, "bin/iroha3d", binary_info, 0o500),
             PayloadMember(
                 supervisor.parent,
                 supervisor.name,
@@ -797,7 +1022,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _source_arguments(assemble)
     assemble.add_argument("--linux-archive", type=Path, required=True)
     assemble.add_argument("--linux-authority-dir", type=Path, required=True)
+    assemble.add_argument("--boi-artifact-handoff-dir", type=Path, required=True)
     assemble.add_argument("--macos-receipt", type=Path, required=True)
+    assemble.add_argument(
+        "--privacy-protocol-evidence-dir", type=Path, required=True
+    )
     assemble.add_argument("--expected-receipt-id", required=True)
     assemble.add_argument("--controller-manifest", type=Path, required=True)
     assemble.add_argument("--controller-digest", required=True)

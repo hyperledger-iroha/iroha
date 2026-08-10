@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using Hyperledger.Iroha.Norito;
 
 namespace Hyperledger.Iroha.Transactions;
@@ -74,7 +73,7 @@ public sealed class SignedTransactionEnvelope
 
     private static byte[] ComputeTransactionHash(ReadOnlySpan<byte> payloadBytes)
     {
-        var entrypoint = new OfflineNoritoWriter();
+        var entrypoint = new CanonicalNoritoWriter();
         entrypoint.WriteUInt32LittleEndian(0);
         entrypoint.WriteField(payloadBytes);
         return IrohaHash.Hash(entrypoint.ToArray());
@@ -82,18 +81,22 @@ public sealed class SignedTransactionEnvelope
 
     private static void ValidateSignedTransactionFields(byte[] signedTransactionBytes, byte[] payloadBytes)
     {
-        var offset = 0;
-        var signatureField = ReadField(signedTransactionBytes, ref offset);
-        var payloadField = ReadField(signedTransactionBytes, ref offset);
-        var multisigField = ReadField(signedTransactionBytes, ref offset);
-        if (offset != signedTransactionBytes.Length)
-        {
-            throw new ArgumentException(
-                "Signed transaction bytes must contain exactly signature, payload, and multisig fields.",
-                SignedTransactionBytesParameterName);
-        }
+        var transaction = new CanonicalNoritoReader(
+            signedTransactionBytes,
+            "Signed transaction",
+            SignedTransactionBytesParameterName);
+        var transactionSignature = transaction.ReadField("signature");
+        var payloadField = transaction.ReadField("payload");
+        var multisigField = transaction.ReadField("multisig_signatures");
+        transaction.RequireEnd();
 
-        ValidateSignatureConstVec(signatureField);
+        var signatureWrapper = new CanonicalNoritoReader(
+            transactionSignature,
+            "TransactionSignature",
+            SignedTransactionBytesParameterName);
+        var signatureOf = signatureWrapper.ReadField("signature");
+        signatureWrapper.RequireEnd();
+        ValidateSignatureConstVec(signatureOf);
         if (!payloadField.SequenceEqual(payloadBytes))
         {
             throw new ArgumentException("Payload bytes must match the signed transaction body.", nameof(payloadBytes));
@@ -107,41 +110,13 @@ public sealed class SignedTransactionEnvelope
         }
     }
 
-    private static ReadOnlySpan<byte> ReadField(ReadOnlySpan<byte> bytes, ref int offset)
-    {
-        if (bytes.Length - offset < sizeof(ulong))
-        {
-            throw new ArgumentException(
-                "Signed transaction bytes contain a truncated field header.",
-                SignedTransactionBytesParameterName);
-        }
-
-        var length = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(offset, sizeof(ulong)));
-        offset += sizeof(ulong);
-        if (length > int.MaxValue || length > (ulong)(bytes.Length - offset))
-        {
-            throw new ArgumentException(
-                "Signed transaction bytes contain a truncated field payload.",
-                SignedTransactionBytesParameterName);
-        }
-
-        var payload = bytes.Slice(offset, (int)length);
-        offset += (int)length;
-        return payload;
-    }
-
     private static void ValidateSignatureConstVec(ReadOnlySpan<byte> bytes)
     {
-        var offset = 0;
-        if (bytes.Length < sizeof(ulong))
-        {
-            throw new ArgumentException(
-                "Signed transaction signature field is truncated.",
-                SignedTransactionBytesParameterName);
-        }
-
-        var count = BinaryPrimitives.ReadUInt64LittleEndian(bytes[..sizeof(ulong)]);
-        offset += sizeof(ulong);
+        var signature = new CanonicalNoritoReader(
+            bytes,
+            "SignatureOf<TransactionPayload>",
+            SignedTransactionBytesParameterName);
+        var count = signature.ReadSequenceLength("bytes.count");
         if (count != Ed25519SignatureLength)
         {
             throw new ArgumentException(
@@ -151,30 +126,13 @@ public sealed class SignedTransactionEnvelope
 
         for (var index = 0; index < Ed25519SignatureLength; index++)
         {
-            if (bytes.Length - offset < sizeof(ulong) + 1)
-            {
-                throw new ArgumentException(
-                    "Signed transaction signature field is truncated.",
-                    SignedTransactionBytesParameterName);
-            }
-
-            var fieldLength = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(offset, sizeof(ulong)));
-            offset += sizeof(ulong);
-            if (fieldLength != 1)
+            if (signature.ReadField($"bytes[{index}]").Length != 1)
             {
                 throw new ArgumentException(
                     "Signed transaction signature bytes must be encoded as one-byte fields.",
                     SignedTransactionBytesParameterName);
             }
-
-            offset++;
         }
-
-        if (offset != bytes.Length)
-        {
-            throw new ArgumentException(
-                "Signed transaction signature field has trailing bytes.",
-                SignedTransactionBytesParameterName);
-        }
+        signature.RequireEnd();
     }
 }

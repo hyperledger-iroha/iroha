@@ -8,13 +8,19 @@ use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{ConfidentialTreeProfile, State, World, WorldReadOnly},
+    state::{ConfidentialTreeProfile, State, StateTransaction, World, WorldReadOnly},
     zk::confidential_v2,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    account::NewAccount, asset::definition::ConfidentialPolicyMode, name::Name,
-    permission::Permission, prelude::*, proof::VerifyingKeyId,
+    account::NewAccount,
+    asset::definition::{
+        AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
+    },
+    name::Name,
+    permission::Permission,
+    prelude::*,
+    proof::VerifyingKeyId,
 };
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
@@ -22,6 +28,20 @@ use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
 const HALO2_IPA_BACKEND: &str = "halo2/ipa";
+
+fn set_confidential_policy_mode(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    asset_definition_id: &AssetDefinitionId,
+    mode: ConfidentialPolicyMode,
+) {
+    let asset_definition = state_transaction
+        .world
+        .asset_definition_mut(asset_definition_id)
+        .expect("asset definition exists");
+    let mut policy = *asset_definition.confidential_policy();
+    policy.mode = mode;
+    asset_definition.set_confidential_policy(policy);
+}
 
 #[test]
 fn register_zk_asset_writes_policy_metadata() {
@@ -60,14 +80,7 @@ fn register_zk_asset_writes_policy_metadata() {
     }
 
     // Register zk policy
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-    );
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
     let ib: InstructionBox = reg.into();
     stx.world
         .executor()
@@ -86,7 +99,7 @@ fn register_zk_asset_writes_policy_metadata() {
         .unwrap();
     assert_eq!(
         def.confidential_policy().mode(),
-        ConfidentialPolicyMode::Convertible
+        ConfidentialPolicyMode::TransparentOnly
     );
     assert!(def.confidential_policy().vk_set_hash().is_none());
     assert_eq!(
@@ -145,14 +158,7 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
             .unwrap();
     }
 
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        false,
-        false,
-        None,
-        None,
-    );
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
     stx.world
         .executor()
         .clone()
@@ -243,9 +249,6 @@ fn register_zk_asset_rejects_noncanonical_shield_verifier() {
 
     let registration = iroha_data_model::isi::zk::RegisterZkAsset::new(
         asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        true,
-        false,
         None,
         Some(wrong_vk_id),
     );
@@ -301,19 +304,13 @@ fn schedule_confidential_policy_transition_records_pending() {
     }
 
     // Register asset with convertible policy (allow shield/unshield).
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-    );
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
     stx.world
         .executor()
         .clone()
         .execute_instruction(&mut stx, &owner, reg.into())
         .unwrap();
+    set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block.commit().expect("commit setup block");
 
@@ -377,6 +374,107 @@ fn schedule_confidential_policy_transition_records_pending() {
 }
 
 #[test]
+fn stale_confidential_downgrade_is_discarded_and_metadata_remains_coherent() {
+    let state = State::new_for_testing(
+        World::new(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let domain_id = DomainId::try_new("zkd", "universal").expect("valid domain");
+    let asset_def_id = AssetDefinitionId::derive_from_components(
+        domain_id.clone(),
+        "irreversible".parse().expect("valid asset name"),
+    );
+    let (owner, _owner_key) = gen_account_in("zkd");
+    for instruction in [
+        Register::domain(Domain::new(domain_id)).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "irreversible".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
+        .into(),
+        iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None).into(),
+    ] {
+        stx.world
+            .executor()
+            .clone()
+            .execute_instruction(&mut stx, &owner, instruction)
+            .expect("setup instruction succeeds");
+    }
+
+    let transition = ConfidentialPolicyTransition {
+        new_mode: ConfidentialPolicyMode::TransparentOnly,
+        effective_height: 2,
+        previous_mode: ConfidentialPolicyMode::Convertible,
+        transition_id: Hash::new(b"retired-confidential-downgrade"),
+        conversion_window: None,
+    };
+    let mut policy = AssetConfidentialPolicy::convertible();
+    policy.pending_transition = Some(transition);
+    stx.world
+        .asset_definition_mut(&asset_def_id)
+        .expect("asset definition exists")
+        .set_confidential_policy(policy);
+    stx.world.track_confidential_policy_transition_for_testing(
+        &asset_def_id,
+        transition.effective_height(),
+    );
+    stx.apply();
+    block.commit().expect("commit stale pending transition");
+
+    let transition_header =
+        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    state
+        .block(transition_header)
+        .commit()
+        .expect("commit defensive transition sweep");
+
+    let view = state.view();
+    let definition = view
+        .world
+        .asset_definitions()
+        .get(&asset_def_id)
+        .expect("asset definition remains");
+    assert_eq!(
+        definition.confidential_policy().mode(),
+        ConfidentialPolicyMode::Convertible,
+        "a stale transition must never disable confidentiality"
+    );
+    assert!(
+        definition
+            .confidential_policy()
+            .pending_transition()
+            .is_none(),
+        "the invalid pending transition must be cleared"
+    );
+    let policy_key = Name::from_str("zk.policy").expect("valid policy metadata key");
+    let policy_json: norito::json::Value = definition
+        .metadata()
+        .get(&policy_key)
+        .expect("policy metadata present")
+        .try_into_any_norito()
+        .expect("policy metadata decodes");
+    assert_eq!(
+        policy_json
+            .get("mode")
+            .and_then(norito::json::Value::as_str),
+        Some("Convertible")
+    );
+    assert!(
+        policy_json
+            .get("pending_transition")
+            .is_some_and(norito::json::Value::is_null),
+        "persisted metadata must clear the rejected transition"
+    );
+}
+
+#[test]
 fn confidential_policy_transition_applies_at_effective_height() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -409,19 +507,13 @@ fn confidential_policy_transition_applies_at_effective_height() {
             .execute_instruction(&mut stx, &owner, instr)
             .unwrap();
     }
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-    );
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
     stx.world
         .executor()
         .clone()
         .execute_instruction(&mut stx, &owner, reg.into())
         .unwrap();
+    set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block.commit().expect("commit setup block");
 
@@ -529,19 +621,13 @@ fn cancel_confidential_policy_transition_clears_pending() {
             .execute_instruction(&mut stx, &owner, instr)
             .unwrap();
     }
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-        true,
-        true,
-        None,
-        None,
-    );
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
     stx.world
         .executor()
         .clone()
         .execute_instruction(&mut stx, &owner, reg.into())
         .unwrap();
+    set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block.commit().expect("commit setup block");
 
@@ -678,6 +764,8 @@ fn zk_roots_are_bounded_in_world_state() {
             policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len: nonzero!(4_usize),
             tree_frontier_checkpoint_interval:
                 defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
@@ -719,15 +807,7 @@ fn zk_roots_are_bounded_in_world_state() {
         .into(),
         Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         // Register zk policy (Hybrid; allow shield)
-        iroha_data_model::isi::zk::RegisterZkAsset::new(
-            asset_def_id.clone(),
-            iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-            true,
-            true,
-            None,
-            None,
-        )
-        .into(),
+        iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None).into(),
     ] {
         stx.world
             .executor()
@@ -835,6 +915,8 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
             policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len: nonzero!(8_usize),
             tree_frontier_checkpoint_interval: 1,
             registry_max_vk_entries: defaults::confidential::REGISTRY_MAX_VK_ENTRIES,
@@ -876,15 +958,8 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
             .into(),
             Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone()))
                 .into(),
-            iroha_data_model::isi::zk::RegisterZkAsset::new(
-                asset_def_id.clone(),
-                iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-                true,
-                true,
-                None,
-                None,
-            )
-            .into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None)
+                .into(),
         ] {
             stx.world
                 .executor()

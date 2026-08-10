@@ -6,7 +6,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Mutex, MutexGuard, Once},
+    sync::{
+        Mutex, MutexGuard, Once,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -46,6 +49,38 @@ fn fixtures_dir() -> PathBuf {
             .expect("tests run relative to crate root");
     });
     PathBuf::from("tests/fixtures")
+}
+
+static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+struct TestDir(PathBuf);
+
+impl TestDir {
+    fn create(label: &str) -> Self {
+        for _ in 0..1024 {
+            let sequence = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "iroha-config-fixtures-{label}-{}-{sequence}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create test directory {}: {error}", path.display()),
+            }
+        }
+        panic!("could not allocate a unique configuration fixture directory");
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 fn parse_env(raw: impl AsRef<str>) -> HashMap<String, String> {
@@ -400,8 +435,6 @@ fn minimal_config_snapshot() {
                     exit_class: "standard",
                     meter_family: "soranet.vpn.standard",
                     helper_ticket_secret: None,
-                    fee_asset_id: "xor#universal.universal",
-                    escrow_account_id: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                     operator_account_id: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                     lease_fee: Quantity(
                         Numeric {
@@ -545,7 +578,7 @@ fn minimal_config_snapshot() {
                 ),
                 file: None,
                 manifest_json: None,
-                expected_hash: { iroha_crypto::hash::HashOf<iroha_data_model::block::BlockHeader> 0000000000000000000000000000000000000000000000000000000000000001 },
+                expected_hash: { iroha_crypto::hash::HashOf<iroha_data_model::block::header::model::BlockHeader> 0000000000000000000000000000000000000000000000000000000000000001 },
             },
             torii: Torii {
                 address: WithOrigin {
@@ -724,6 +757,10 @@ fn minimal_config_snapshot() {
                 zk_ivm_prove_job_max_entries: 1024,
                 zk_ivm_prove_job_max_retained_bytes: Bytes(
                     134217728,
+                ),
+                zk_ivm_prove_job_max_entries_per_owner: 32,
+                zk_ivm_prove_job_max_retained_bytes_per_owner: Bytes(
+                    33554432,
                 ),
                 connect: Connect {
                     enabled: true,
@@ -1376,21 +1413,6 @@ fn minimal_config_snapshot() {
                             29,
                             55,
                         ],
-                        projection: Some(
-                            AssetDefinitionProjection {
-                                domain: DomainId {
-                                    name: Name(
-                                        "sora",
-                                    ),
-                                    dataspace: Name(
-                                        "universal",
-                                    ),
-                                },
-                                name: Name(
-                                    "xor",
-                                ),
-                            },
-                        ),
                     },
                     asset_scale: 9,
                     pricing: SorafsAppealPricingPolicy {
@@ -1689,6 +1711,16 @@ fn minimal_config_snapshot() {
                 },
                 transport: ToriiTransport {
                     trusted_proxy_cidrs: [],
+                    http: ToriiHttpTransport {
+                        max_connections: 1024,
+                        max_connections_per_ip: 64,
+                        header_read_timeout: 10s,
+                        write_timeout: 30s,
+                        max_headers: 100,
+                        max_header_bytes: Bytes(
+                            65536,
+                        ),
+                    },
                     norito_rpc: NoritoRpcTransport {
                         enabled: true,
                         require_mtls: false,
@@ -1714,8 +1746,6 @@ fn minimal_config_snapshot() {
                     burst: Some(
                         120,
                     ),
-                    async_job_ttl_secs: 300,
-                    async_job_max_entries: 2000,
                 },
                 cors: ToriiCors {
                     enabled: false,
@@ -1915,7 +1945,7 @@ fn minimal_config_snapshot() {
                 queues: SumeragiQueues {
                     commands: 1024,
                     authenticated_non_validator_sources: 2,
-                    bodies: 130,
+                    bodies: 163,
                     body_bytes: 242221056,
                     body_source_bytes: 34603008,
                     chunks: 2048,
@@ -2261,6 +2291,9 @@ fn minimal_config_snapshot() {
                     sample_size_max: 96,
                     threshold_base: 43,
                     per_attester_shards: 25,
+                    ingest_quota_window_blocks: 100,
+                    ingest_quota_max_count_per_account: 1024,
+                    ingest_quota_max_bytes_per_account: 68719476736,
                     audit: DaAudit {
                         sample_size: 32,
                         window_count: 20,
@@ -2290,6 +2323,13 @@ fn minimal_config_snapshot() {
                 },
                 merkle_chunk_size_bytes: 1048576,
                 max_payload_bytes: 1073741824,
+                resources: SnapshotResourcePolicy {
+                    max_decode_depth: 128,
+                    max_decode_items: 10000000,
+                    max_string_bytes: 1048576,
+                    max_blob_bytes: 67108864,
+                    max_transient_bytes: 2147483648,
+                },
                 verification_public_key: None,
                 signing_private_key: None,
                 bootstrap: SnapshotBootstrapPolicy {
@@ -2672,6 +2712,7 @@ fn minimal_config_snapshot() {
                 reorg_depth_bound: 10000,
                 policy_transition_delay_blocks: 100,
                 policy_transition_window_blocks: 200,
+                policy_transition_max_per_height: 256,
                 tree_roots_history_len: 10000,
                 tree_frontier_checkpoint_interval: 100,
                 registry_max_vk_entries: 64,
@@ -2707,7 +2748,6 @@ fn minimal_config_snapshot() {
                         29,
                         55,
                     ],
-                    projection: None,
                 },
                 citizenship_asset_id: AssetDefinitionId {
                     aid_bytes: [
@@ -2728,7 +2768,6 @@ fn minimal_config_snapshot() {
                         29,
                         55,
                     ],
-                    projection: None,
                 },
                 citizenship_bond_amount: Quantity(
                     Numeric {
@@ -2797,7 +2836,6 @@ fn minimal_config_snapshot() {
                             29,
                             55,
                         ],
-                        projection: None,
                     },
                     follow_reward_amount: Quantity(
                         Numeric {
@@ -2839,6 +2877,12 @@ fn minimal_config_snapshot() {
                     require_council_signatures: false,
                     approval_quorum: 1,
                     approval_signers: [],
+                    max_global_manifests: 1000000,
+                    max_global_bytes: 1125899906842624,
+                    max_manifests_per_authority: 10000,
+                    max_bytes_per_authority: 1099511627776,
+                    max_lineage_depth: 64,
+                    max_successor_fanout: 32,
                 },
                 sorafs_pin_fee_asset_id: AssetDefinitionId {
                     aid_bytes: [
@@ -2859,7 +2903,6 @@ fn minimal_config_snapshot() {
                         55,
                         45,
                     ],
-                    projection: None,
                 },
                 sorafs_pin_fee_treasury_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                 sorafs_pricing: PricingScheduleRecord {
@@ -2995,7 +3038,6 @@ fn minimal_config_snapshot() {
                         123,
                         238,
                     ],
-                    projection: None,
                 },
                 parliament_alternate_size: None,
                 parliament_quorum_bps: 6667,
@@ -3064,6 +3106,7 @@ fn minimal_config_snapshot() {
                 reorg_depth_bound: 10000,
                 policy_transition_delay_blocks: 100,
                 policy_transition_window_blocks: 200,
+                policy_transition_max_per_height: 256,
                 tree_roots_history_len: 10000,
                 tree_frontier_checkpoint_interval: 100,
                 registry_max_vk_entries: 64,

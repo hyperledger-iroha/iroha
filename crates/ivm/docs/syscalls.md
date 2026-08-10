@@ -465,11 +465,11 @@ Hardware / Proofs
   - Writes a compact proof for the register commitment using the same layout as GET_MERKLE_COMPACT.
 
 VRF
-- 0x66 VRF_VERIFY — Args: `r10=&NoritoBytes(VrfVerifyRequest{variant:u8, pk:bytes, proof:bytes, chain_id:bytes, input:bytes})`, canonical frame at most 65,536 bytes → Return: `r10=ptr (&Blob(32-byte output))`, `r11=status:u64` — Gas: `64 + 250,000 × examined_items + 5 × canonical_request_bytes`
-  - Status codes: `0=ok`, `1=type_mismatch`, `2=decode_error`, `3=unknown_variant`, `4=bad_pk`, `5=bad_proof`, `6=verify_fail`, `8=missing_or_mismatched_host_chain`.
-  - Canonical-decode failures examine zero items. Every decoded request whose chain, variant, key, proof, or pairing validation begins examines one item. Output encoding/allocation failures trap after charging that item.
-  - The host must provide its chain identity. An absent host chain or a request claiming a different `chain_id` is rejected with `r11=8`; the guest claim is never used as fallback consensus context.
-  - Proof: BLS signature over `Hash("iroha:vrf:v1:input|" || chain_id || "|" || input)` using VRF-specific DSTs:
+- 0x66 VRF_VERIFY — Args: `r10=&NoritoBytes(VrfVerifyRequest{variant:u8, pk:bytes, proof:bytes, network_id:NetworkId, input:bytes})`, canonical frame at most 65,536 bytes → Return: `r10=ptr (&Blob(32-byte output))`, `r11=status:u64` — Gas: `64 + 250,000 × examined_items + 5 × canonical_request_bytes`
+  - Status codes: `0=ok`, `1=type_mismatch`, `2=decode_error`, `3=unknown_variant`, `4=bad_pk`, `5=bad_proof`, `6=verify_fail`, `8=missing_or_mismatched_host_network`.
+  - Canonical-decode failures examine zero items. Every decoded request whose network, variant, key, proof, or pairing validation begins examines one item. Output encoding/allocation failures trap after charging that item.
+  - The host must provide the exact genesis-derived `NetworkId`. An absent host network or a request claiming a different identity is rejected with `r11=8`; the guest claim is never used as fallback consensus context.
+  - Proof: BLS signature over `Hash("iroha:vrf:v1:input|" || network_id_bytes || "|" || input)` using VRF-specific DSTs:
     - G2 hash: `"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1"`
     - G1 hash: `"BLS12381G1_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1"`
     - Output: `Hash("iroha:vrf:v1:output" || canonical_proof_bytes)`.
@@ -480,15 +480,15 @@ VRF
 - 0x67 VRF_VERIFY_BATCH — Args: `r10=&NoritoBytes(VrfVerifyBatchRequest{items: [VrfVerifyRequest]})`, 1 through 16 items, canonical frame at most 65,536 bytes → Return: `r10=ptr (&NoritoBytes(Vec<[u8;32]>))`, `r11=status:u64`, `r12=fail_index?:u64` — Gas: `64 + 250,000 × examined_items + 5 × canonical_request_bytes`
   - Verifies each item; on success returns a Norito-encoded vector of 32‑byte outputs (order preserved). On failure, returns `r10=0`, `r11` = error code, `r12` = index (0‑based) of the first failing item.
   - Empty and over-16 batches fail with `r11=9 (batch_bound)` and `r12=u64::MAX` before backend or response-allocation work. Canonical-decode and batch-bound failures examine zero items. The VM reserves 16 items, then deterministically refunds every unexamined item, including the tail after the first failing item.
-  - The host must provide its chain identity and every item must match it. An absent host chain or mismatch fails with `r11=8` and `r12` set to the first affected index.
+  - The host must provide its exact `NetworkId` and every item must match it. An absent host network or mismatch fails with `r11=8` and `r12` set to the first affected index.
 
 - 0x7E VRF_EPOCH_SEED — Args: `r10=&NoritoBytes(VrfEpochSeedRequest{epoch:u64, fallback_to_latest:bool})` → Return: `r10=ptr (&NoritoBytes(VrfEpochSeedResponse{found:bool, epoch:u64, seed:[u8;32]}))`, `r11=status:u64` — Gas: G_vote_get + bytes
   - Reads a world-snapshot VRF epoch seed for governance/sortition use in smart contracts.
   - If `fallback_to_latest=true` and the requested epoch is missing, the host returns the latest known epoch seed.
   - Status codes: `0=ok`, `1=type_mismatch`, `2=decode_error`, `3=oom`.
 
-Host gating & chain binding
-- A host-owned `chain_id` is mandatory for VRF verification. Missing host
+Host gating and exact-network binding
+- A host-owned `NetworkId` is mandatory for VRF verification. Missing host
   context and guest/host mismatches both fail closed:
   - Single: `r11=8` and `r10=0`.
   - Batch: `r11=8`, `r12` set to the first affected index, and `r10=0`.

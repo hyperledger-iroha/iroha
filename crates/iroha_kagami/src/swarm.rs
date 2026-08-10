@@ -248,12 +248,8 @@ fn validate_prepared_genesis(
         expected_hash,
     )
     .wrap_err("independently validate prepared genesis bundle")?;
-    iroha_core::validate_genesis_block(
-        validated.block(),
-        &AccountId::new(public_key.clone()),
-        manifest.chain_id(),
-    )
-    .map_err(|error| eyre!("prepared genesis failed full core validation: {error}"))?;
+    iroha_core::validate_genesis_block(validated.block(), &AccountId::new(public_key.clone()))
+        .map_err(|error| eyre!("prepared genesis failed full core validation: {error}"))?;
 
     Ok(ValidatedGenesis {
         block: validated.block().clone(),
@@ -2764,7 +2760,6 @@ fn load_prepared_bundle(
     iroha_core::validate_genesis_block(
         &validated.block,
         &AccountId::new(validated.public_key.clone()),
-        &chain,
     )
     .map_err(|error| eyre!("prepared signed genesis failed full validation: {error}"))?;
 
@@ -3850,7 +3845,6 @@ mod tests {
         iroha_core::validate_genesis_block(
             &signed,
             &iroha_data_model::account::AccountId::new(genesis_key.public_key().clone()),
-            manifest.chain_id(),
         )
         .expect("resultful fixture must pass full core validation");
         fs::write(

@@ -5,7 +5,7 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 use crate::ErrorEnvelope;
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
     block::consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
@@ -57,8 +57,8 @@ pub const OFFLINE_RECIPIENT_OFFER_MAX_PEER_WIRE_BYTES: usize =
 )]
 #[norito(deny_unknown_fields)]
 pub struct OfflineRecipientLineageSelectorV2 {
-    /// Target chain.
-    pub chain_id: ChainId,
+    /// Exact genesis-derived target network.
+    pub network_id: NetworkId,
     /// Recipient account.
     pub recipient: AccountId,
     /// Platform device identifier.
@@ -154,7 +154,7 @@ impl OfflineRecipientRegistrationLineage {
         request
             .validate_at(verified_at_ms)
             .map_err(|error| format!("recipient request validation failed: {error}"))?;
-        if self.selector.chain_id != *request.chain_id()
+        if self.selector.network_id != *request.network_id()
             || self.selector.recipient != *request.recipient()
             || self.selector.receiver_device_id != request.receiver_device_id()
             || self.selector.asset != *request.asset()
@@ -203,8 +203,22 @@ impl OfflineRecipientRegistrationLineage {
                 "finality chain checkpoint does not match the caller's durable context".to_owned(),
             );
         }
+        // The caller-pinned context id authenticates the complete HeightContext,
+        // including its exact genesis-derived network identity. Read the identity
+        // only after that anchor comparison, then require the signed request and
+        // reusable selector to name that same finality security domain.
+        let trusted_network_id = self.finality_chain[trusted_index]
+            .finality_artifact
+            .height_context
+            .network_id;
+        if self.selector.network_id != trusted_network_id {
+            return Err(
+                "receiver-lineage selector network does not match the trusted finality network"
+                    .to_owned(),
+            );
+        }
         let mut verifier =
-            BridgeFinalityVerifier::with_context(request.chain_id().clone(), trusted_context);
+            BridgeFinalityVerifier::with_context(trusted_network_id, trusted_context);
         for proof in &self.finality_chain[trusted_index..] {
             verifier
                 .verify(proof)
@@ -356,7 +370,7 @@ impl OfflineRecipientReceiveOfferV2 {
         else {
             return Err("portable receiver offer contains an ambiguous receiver tuple".into());
         };
-        if self.lineage.selector.chain_id != *self.request.chain_id()
+        if self.lineage.selector.network_id != *self.request.network_id()
             || self.lineage.selector.recipient != *self.request.recipient()
             || self.lineage.selector.receiver_device_id != self.request.receiver_device_id()
             || self.lineage.selector.asset != *self.request.asset()

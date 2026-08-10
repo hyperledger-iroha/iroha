@@ -23,6 +23,9 @@ from check_sorafs_release_version_map import (  # noqa: E402
 
 
 SCHEMA = "sorafs.release.automation.v1"
+REQUIRED_RELEASE_SIGNING_PROVIDER = "authenticated_external_signer"
+REQUIRED_RELEASE_SIGNING_BACKEND = "software"
+REQUIRED_RELEASE_SIGNER_QUALIFICATION = "software-key-qualified"
 RELEASE_TARGET_RUNNERS: tuple[tuple[str, str], ...] = (
     ("ubuntu-24.04", "x86_64-unknown-linux-gnu"),
     ("ubuntu-24.04-arm", "aarch64-unknown-linux-gnu"),
@@ -52,6 +55,9 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
         "`sorafs-release-authentication` environment",
         "`scripts/release_manifest_signing.py verify`",
         "never receives a private key or invokes a signer",
+        REQUIRED_RELEASE_SIGNING_PROVIDER,
+        REQUIRED_RELEASE_SIGNING_BACKEND,
+        REQUIRED_RELEASE_SIGNER_QUALIFICATION,
     ),
     "specs/sorafs/runbooks/release_rollback_yank.md": (
         "# SoraFS Release Rollback and Yank",
@@ -70,7 +76,10 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
         "all five native candidate archives",
         "[SoraFS Release Rollback and Yank](../runbooks/release_rollback_yank.md)",
         "`SORAFS_RELEASE_MANIFEST_VERIFIER_PATH`",
-        "No private key or HSM signing operation",
+        "No private key or software-signing operation",
+        REQUIRED_RELEASE_SIGNING_PROVIDER,
+        REQUIRED_RELEASE_SIGNING_BACKEND,
+        REQUIRED_RELEASE_SIGNER_QUALIFICATION,
     ),
     "fixtures/documentation/sorafs_release_notes.md": (
         "## Rollback / Yank Record",
@@ -217,6 +226,9 @@ REFERENCE_SDK_RELEASE_EXAMPLE_REQUIRED_MARKERS: dict[str, tuple[str, ...]] = {
         "--provenance-certificate-identity",
         "--provenance-oidc-issuer",
         "--provenance-verification-public-key-hex",
+        REQUIRED_RELEASE_SIGNING_PROVIDER,
+        REQUIRED_RELEASE_SIGNING_BACKEND,
+        REQUIRED_RELEASE_SIGNER_QUALIFICATION,
     ),
     "scripts/examples/sorafs_reference_sdk_release_evidence.args.example": (
         "--require-kind release_archive,signed_manifest,supply_chain,"
@@ -226,6 +238,9 @@ REFERENCE_SDK_RELEASE_EXAMPLE_REQUIRED_MARKERS: dict[str, tuple[str, ...]] = {
         "--provenance-certificate-identity",
         "--provenance-oidc-issuer",
         "--provenance-verification-public-key-hex",
+        REQUIRED_RELEASE_SIGNING_PROVIDER,
+        REQUIRED_RELEASE_SIGNING_BACKEND,
+        REQUIRED_RELEASE_SIGNER_QUALIFICATION,
     ),
 }
 REFERENCE_SDK_RELEASE_EXAMPLE_FORBIDDEN_MARKERS: dict[str, tuple[str, ...]] = {
@@ -264,7 +279,7 @@ POP_BROKER_RETIRED_SECRET_MARKERS: tuple[str, ...] = (
 )
 POP_BROKER_WIRE_FIELD_INVENTORIES: dict[str, tuple[tuple[str, str], ...]] = {
     "PopRuntimeOpenResultWireV1": (
-        ("issuer_hsm_key_id", "String"),
+        ("issuer_signer_handle", "String"),
         ("issuer_public_key", "[u8;32]"),
         ("enrollment_recipient_key_id", "String"),
         ("enrollment_recipient_public_key_digest", "[u8;32]"),
@@ -283,7 +298,7 @@ POP_BROKER_WIRE_FIELD_INVENTORIES: dict[str, tuple[tuple[str, str], ...]] = {
     "PopCredentialRuntimeBindingWireV1": (
         ("issuer_policy_digest", "[u8;32]"),
         ("issuer_id", "String"),
-        ("issuer_hsm_key_id", "String"),
+        ("issuer_signer_handle", "String"),
         ("issuer_public_key", "[u8;32]"),
         ("enrollment_recipient_key_id", "String"),
         ("enrollment_recipient_public_key_digest", "[u8;32]"),
@@ -512,6 +527,9 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "scripts/check_sorafs_reference_sdk_release_evidence.py",
         "scripts/build_sorafs_reference_sdk_release_canary.py",
         '- "scripts/build_sorafs_reference_sdk_supply_chain_sources.py"',
+        '- "scripts/build_sorafs_foundational_prerequisite.py"',
+        '- "scripts/check_sorafs_production_readiness.py"',
+        '- "scripts/sorafs_software_signer_receipt.py"',
         '- "scripts/sorafs_reference_sdk_supply_chain.py"',
         '- "scripts/sorafs_topology_qualification.py"',
         "scripts/run_sorafs_reference_sdk_release_evidence.py",
@@ -540,6 +558,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "python3 scripts/check_workflow_action_pins.py",
         "scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py",
         '- "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py"',
+        '- "scripts/tests/build_sorafs_foundational_prerequisite_test.py"',
         '- "scripts/tests/sorafs_reference_sdk_supply_chain_test.py"',
         '- "scripts/tests/sorafs_topology_qualification_test.py"',
         "run: bash ci/check_sorafs_cli_release.sh",
@@ -567,6 +586,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "specs/release_dual_track_runbook*.md"',
         '- "specs/release_artifact_selection*.md"',
         '- "specs/sora_nexus_operator_onboarding*.md"',
+        '- "specs/sorafs/foundational_prerequisite_signing.md"',
         '- "CHANGELOG.md"',
         '- "LICENSE"',
         "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610",
@@ -614,7 +634,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "  prepare-release-manifest:",
         "name: Build the canonical foundational manifest twice",
         "python3 scripts/generate_sorafs_cli_release_manifest.py create",
-        "name: Upload unsigned foundational manifest for external HSM signing",
+        "name: Upload unsigned foundational manifest for external software signing",
         "  verify-release-auth:",
         "environment: sorafs-release-authentication",
         "runs-on: [self-hosted, linux, x64, sorafs-release-auth]",
@@ -657,8 +677,10 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "artifacts/reference-sdk-evidence/l1-topology-qualification.envelope.json",
         "sorafs.l1.deployment_qualification.trust.v1",
         "--topology-qualification-verification-public-key-hex",
-        "--topology-qualification-signer-identity",
+        "--topology-qualification-signer-service-id",
+        "--topology-qualification-signer-administrator-id",
         "--topology-qualification-signer-key-revision",
+        "--topology-qualification-signer-policy-revision",
         "--topology-qualification-signer-policy-digest-hex",
         "--max-topology-qualification-review-age-secs 1209600",
         "expected one aggregate offline provenance bundle",
@@ -678,8 +700,10 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH }}",
         "SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH }}",
         "SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX }}",
-        "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY }}",
+        "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID }}",
+        "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID }}",
         "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION }}",
+        "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_REVISION: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_REVISION }}",
         "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX }}",
         "--external-receipts-root \"$SORAFS_REFERENCE_SDK_RECEIPTS_ROOT\"",
         "--supply-chain-source-root sf11-source",
@@ -702,6 +726,11 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
     ),
     ".github/workflows/sorafs-orchestrator-sdk.yml": (
         'cron: "41 3 * * *"',
+        '- ".cargo/**"',
+        '- "codec/**"',
+        '- "scripts/package_mobile_sdk_artifacts.sh"',
+        '- "scripts/tests/deploy_localnet_test.py"',
+        '- "vendor/**"',
         "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
         'python-version: "3.12"',
@@ -768,17 +797,17 @@ NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
         *JAVA_GOVERNANCE_WORKFLOW_STEP_MARKERS,
     ),
     SWIFT_GOVERNANCE_VALIDATOR_TEST: (
-        "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
+        "ABI-22 connect_norito_bridge with Governance DAG symbols is required.",
         "guard try requireGovernanceDagNativeBridge() else",
         "XCTFail(\"\\(Self.nativeValidationRequiredMessage) \\(unavailableMessage)\")",
     ),
     KOTLIN_GOVERNANCE_VALIDATOR_TEST: (
-        "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
+        "ABI-22 connect_norito_bridge with Governance DAG symbols is required.",
         "        requireGovernanceDagNativeBridge()\n",
         "throw AssertionError(requiredMessage)",
     ),
     JAVA_GOVERNANCE_VALIDATOR_TEST: (
-        "ABI-21 connect_norito_bridge with all SoraFS reference symbols is required.",
+        "ABI-22 connect_norito_bridge with all SoraFS reference symbols is required.",
         "  private static void requireNativeBridge() {\n",
         (
             "  private static void "
@@ -1327,6 +1356,12 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
 
     if relative.endswith("sorafs-orchestrator-sdk.yml"):
         jobs_source = source[source.index("jobs:\n") + len("jobs:\n") :]
+        for forbidden_marker in ("continue-on-error:", "|| true"):
+            if forbidden_marker in jobs_source:
+                errors.append(
+                    f"{relative}: parity jobs must not contain fail-open marker "
+                    f"`{forbidden_marker}`"
+                )
         job_inventory = tuple(
             re.findall(r"(?m)^  ([A-Za-z0-9_-]+):\n", jobs_source)
         )
@@ -1350,20 +1385,30 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             "mobile-parity": (
                 "runs-on: ubuntu-latest",
                 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"',
+                "name: Bind the canonical mobile Python",
+                'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"',
                 "actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9",
+                'sdkmanager_status="${PIPESTATUS[1]}"',
+                'exit "$sdkmanager_status"',
                 "cargo fetch --locked",
                 'NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"',
                 'NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"',
+                "Require fresh ABI-22 JNI bridge in complete Kotlin and Java suites",
                 "bash ci/check_kagemusha_jvm_native_bridge.sh",
+                "if-no-files-found: error",
             ),
             "csharp-parity": (
                 "runs-on: ubuntu-24.04",
                 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"',
                 "actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9",
+                "Build and authenticate the exact ABI-22 C# bridge",
                 "cargo build --locked --release -p connect_norito_bridge",
-                "check_native_sdk_abi21_artifact.py record",
-                "check_native_sdk_abi21_artifact.py verify",
+                "native-sdk-abi22.json",
+                "check_native_sdk_abi22_artifact.py record",
+                "check_native_sdk_abi22_artifact.py verify",
+                "dotnet restore Hyperledger.Iroha.Sdk.sln",
                 "dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror",
+                "Run complete C# ABI-22 parity suite",
                 "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
             ),
         }
@@ -1635,10 +1680,14 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_ENVELOPE_PATH }}",
                 "SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX: "
                 "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_VERIFICATION_PUBLIC_KEY_HEX }}",
-                "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY: "
-                "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_IDENTITY }}",
+                "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID: "
+                "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID }}",
+                "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID: "
+                "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID }}",
                 "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION: "
                 "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_KEY_REVISION }}",
+                "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_REVISION: "
+                "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_REVISION }}",
                 "SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX: "
                 "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_POLICY_DIGEST_HEX }}",
             )
@@ -1870,8 +1919,10 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 "sorafs.l1.deployment_qualification.trust.v1",
                 "--topology-qualification-envelope",
                 "--topology-qualification-verification-public-key-hex",
-                "--topology-qualification-signer-identity",
+                "--topology-qualification-signer-service-id",
+                "--topology-qualification-signer-administrator-id",
                 "--topology-qualification-signer-key-revision",
+                "--topology-qualification-signer-policy-revision",
                 "--topology-qualification-signer-policy-digest-hex",
                 "--max-topology-qualification-review-age-secs 1209600",
             )
@@ -1894,6 +1945,15 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 errors.append(
                     f"{relative}: topology and provenance evidence must use "
                     "independently administered verification keys"
+                )
+            if (
+                '[[ "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_SERVICE_ID" '
+                '== "$SORAFS_L1_TOPOLOGY_QUALIFICATION_SIGNER_ADMINISTRATOR_ID" ]]'
+                not in supply_chain_job
+            ):
+                errors.append(
+                    f"{relative}: topology signer service and administrator "
+                    "identities must be independently administered"
                 )
             try:
                 download_signed = supply_chain_job.index(

@@ -17,17 +17,17 @@ public static class ToriiAccountOnboardingReceiptVerifier
     private static readonly byte[] HashDomain =
         "iroha:account-onboarding-plan-receipt:v1\0"u8.ToArray();
 
-    /// <summary>Validate a receipt against the configured authority and chain.</summary>
+    /// <summary>Validate a receipt against the configured authority and exact network.</summary>
     public static ToriiAccountOnboardingPlanReceipt RequirePinned(
         ToriiAccountOnboardingPlanReceipt receipt,
         string expectedAuthority,
-        string expectedChainId,
+        NetworkId expectedNetworkId,
         ToriiAccountOnboardingPlanBodyEncoder canonicalBodyEncoder)
     {
         ArgumentNullException.ThrowIfNull(receipt);
         ArgumentNullException.ThrowIfNull(canonicalBodyEncoder);
         var authority = RequireCanonicalAccountId(expectedAuthority, nameof(expectedAuthority));
-        var chainId = RequireExactText(expectedChainId, nameof(expectedChainId));
+        ArgumentNullException.ThrowIfNull(expectedNetworkId);
         var body = receipt.Body ?? throw new ArgumentException("Receipt body must not be null.", nameof(receipt));
         var request = body.Request ?? throw new ArgumentException("Receipt request must not be null.", nameof(receipt));
 
@@ -39,9 +39,9 @@ public static class ToriiAccountOnboardingReceiptVerifier
         {
             throw new ArgumentException("Receipt authority does not match the pinned authority.", nameof(receipt));
         }
-        if (!string.Equals(body.ChainId, chainId, StringComparison.Ordinal))
+        if (body.NetworkId != expectedNetworkId)
         {
-            throw new ArgumentException("Receipt chain does not match the pinned chain.", nameof(receipt));
+            throw new ArgumentException("Receipt network does not match the pinned NetworkId.", nameof(receipt));
         }
 
         _ = RequireCanonicalAccountId(request.AccountId, $"{nameof(receipt)}.body.request.account_id");

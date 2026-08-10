@@ -13,6 +13,7 @@ class IssueReplicationOrderInstruction(
     val orderPayloadBase64: String,
     val issuedEpoch: Long,
     val deadlineEpoch: Long,
+    val musubiArchiveIdHex: String? = null,
 ) : InstructionTemplate {
 
     init {
@@ -21,6 +22,7 @@ class IssueReplicationOrderInstruction(
         ReplicationOrderInstructionValidation.requireEpoch(issuedEpoch, "issuedEpoch")
         ReplicationOrderInstructionValidation.requireEpoch(deadlineEpoch, "deadlineEpoch")
         ReplicationOrderInstructionValidation.requireWindow(issuedEpoch, deadlineEpoch)
+        musubiArchiveIdHex?.let(ReplicationOrderInstructionValidation::requireMusubiArchiveId)
     }
 
     override val kind: InstructionKind = InstructionKind.CUSTOM
@@ -31,6 +33,7 @@ class IssueReplicationOrderInstruction(
         put("order_payload_base64", orderPayloadBase64)
         put("issued_epoch", issuedEpoch.toString())
         put("deadline_epoch", deadlineEpoch.toString())
+        musubiArchiveIdHex?.let { put("musubi_archive_id_hex", it) }
     }
 
     override fun equals(other: Any?): Boolean {
@@ -40,6 +43,7 @@ class IssueReplicationOrderInstruction(
             && deadlineEpoch == other.deadlineEpoch
             && orderIdHex == other.orderIdHex
             && orderPayloadBase64 == other.orderPayloadBase64
+            && musubiArchiveIdHex == other.musubiArchiveIdHex
     }
 
     override fun hashCode(): Int {
@@ -47,22 +51,35 @@ class IssueReplicationOrderInstruction(
         result = 31 * result + orderPayloadBase64.hashCode()
         result = 31 * result + issuedEpoch.hashCode()
         result = 31 * result + deadlineEpoch.hashCode()
+        result = 31 * result + (musubiArchiveIdHex?.hashCode() ?: 0)
         return result
     }
 
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): IssueReplicationOrderInstruction {
+            val fields = mutableSetOf(
+                "order_id_hex",
+                "order_payload_base64",
+                "issued_epoch",
+                "deadline_epoch",
+            )
+            if (arguments.containsKey("musubi_archive_id_hex")) {
+                fields += "musubi_archive_id_hex"
+            }
             ReplicationOrderInstructionValidation.requireArguments(
                 arguments,
                 ACTION,
-                setOf("order_id_hex", "order_payload_base64", "issued_epoch", "deadline_epoch"),
+                fields,
             )
             return IssueReplicationOrderInstruction(
                 orderIdHex = requireArg(arguments, "order_id_hex"),
                 orderPayloadBase64 = requireArg(arguments, "order_payload_base64"),
                 issuedEpoch = requireLong(arguments, "issued_epoch"),
                 deadlineEpoch = requireLong(arguments, "deadline_epoch"),
+                musubiArchiveIdHex = arguments["musubi_archive_id_hex"]?.let(
+                    ReplicationOrderInstructionValidation::requireMusubiArchiveId,
+                ),
             )
         }
 
@@ -72,10 +89,20 @@ class IssueReplicationOrderInstruction(
             orderPayload: ByteArray,
             issuedEpoch: Long,
             deadlineEpoch: Long,
+            musubiArchiveId: ByteArray? = null,
         ): IssueReplicationOrderInstruction {
             val hexId = ReplicationOrderInstructionValidation.encodeOrderId(orderId)
             val base64Payload = Base64.encode(orderPayload)
-            return IssueReplicationOrderInstruction(hexId, base64Payload, issuedEpoch, deadlineEpoch)
+            val archiveIdHex = musubiArchiveId?.let(
+                ReplicationOrderInstructionValidation::encodeMusubiArchiveId,
+            )
+            return IssueReplicationOrderInstruction(
+                hexId,
+                base64Payload,
+                issuedEpoch,
+                deadlineEpoch,
+                archiveIdHex,
+            )
         }
 
         private fun requireArg(arguments: Map<String, String>, key: String): String {
